@@ -8,6 +8,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs"
@@ -16,89 +17,16 @@ import (
 	"github.com/varveio/swath/go/reader"
 )
 
-// TestVersionsTableIncludesBooleans: The S3 versions table renders both is_latest
-// and is_delete_marker.
-func TestVersionsTableIncludesBooleans(t *testing.T) {
-	var buf bytes.Buffer
-	o, err := textout.Open(textout.Config{Format: textout.Table, Stdout: &buf})
-	if err != nil {
-		t.Fatal(err)
-	}
-	k, err := textout.NewSink(o, &s3.VersionsSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := [][]s3.VersionRow{{{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1}, VersionID: "vid", IsLatest: true}}}}
-	if err := k.Write(context.Background(), rows); err != nil {
-		t.Fatal(err)
-	}
-	if err := o.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), "true") || !strings.Contains(buf.String(), "false") {
-		t.Fatalf("table omitted IsLatest/IsDeleteMarker: %q", buf.String())
-	}
-}
-
-func TestVersionsTableFixtures(t *testing.T) {
-	t.Run("S3", func(t *testing.T) {
-		var buf bytes.Buffer
-		o, err := textout.Open(textout.Config{Format: textout.Table, Stdout: &buf})
-		if err != nil {
-			t.Fatal(err)
-		}
-		sink, err := textout.NewSink(o, &s3.VersionsSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rows := []s3.VersionRow{
-			{Key: "k", Data: s3.Version{Object: s3.Object{Size: 0}, VersionID: "new", IsLatest: true}},
-			{Key: "k", Data: s3.Version{VersionID: "null", DeleteMarker: true}},
-			{Key: "k", Data: s3.Version{Object: s3.Object{Size: 3}, VersionID: "old"}},
-		}
-		if err := sink.Write(context.Background(), [][]s3.VersionRow{rows}); err != nil {
-			t.Fatal(err)
-		}
-		if err := o.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		want := "1970-01-01 00:00:00          0 k new true false\n1970-01-01 00:00:00            k null false true\n1970-01-01 00:00:00          3 k old false false\n"
-		if buf.String() != want {
-			t.Fatalf("got %q want %q", buf.String(), want)
-		}
-	})
-	t.Run("GCS", func(t *testing.T) {
-		var buf bytes.Buffer
-		o, err := textout.Open(textout.Config{Format: textout.Table, Stdout: &buf})
-		if err != nil {
-			t.Fatal(err)
-		}
-		sink, err := textout.NewSink(o, &gcs.GenerationSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rows := []gcs.GenerationRow{
-			{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 1, Generation: 1}, TimeDeleted: 10}},
-			{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 2, Generation: 2}}},
-		}
-		if err := sink.Write(context.Background(), [][]gcs.GenerationRow{rows}); err != nil {
-			t.Fatal(err)
-		}
-		if err := o.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		want := "                             1 k 1 false\n                             2 k 2 true\n"
-		if buf.String() != want {
-			t.Fatalf("got %q want %q", buf.String(), want)
-		}
-	})
-}
-
-// versionsText writes rows through a sink bound to s in format f.
-func versionsText[P any](t *testing.T, f string, s *schema.Schema[P], rows []schema.Row[P]) string {
+// text writes rows through a sink bound to s on cfg (to a buffer) and
+// returns the output.
+func text[P any](t *testing.T, cfg textout.Config, s *schema.Schema[P], rows []schema.Row[P]) string {
 	t.Helper()
 	var buf bytes.Buffer
-	o, err := textout.Open(textout.Config{Format: f, Stdout: &buf})
+	cfg.Stdout = &buf
+	if cfg.Format == textout.Table && cfg.Loc == nil {
+		cfg.Loc = time.UTC
+	}
+	o, err := textout.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,36 +43,36 @@ func versionsText[P any](t *testing.T, f string, s *schema.Schema[P], rows []sch
 	return buf.String()
 }
 
-// TestVersionsJSONLAndTSV: the versions fields in JSONL and TSV: S3's
-// version ID verbatim (a delete marker without a size), IsLatest and
-// IsDeleteMarker; a GCS generation's in decimal and IsLatest from a null
-// time_deleted, with no IsDeleteMarker.
-func TestVersionsJSONLAndTSV(t *testing.T) {
-	s3rows := []s3.VersionRow{
-		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1, ETag: "e"}, VersionID: "new", IsLatest: true}},
-		{Key: "k", Data: s3.Version{VersionID: "null", DeleteMarker: true}},
+var (
+	s3versions = []s3.VersionRow{
+		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1, ETag: "e", Mtime: 1_700_000_000_000_000}, VersionID: "new", IsLatest: true}},
+		{Key: "k", Data: s3.Version{Object: s3.Object{Mtime: 1_700_000_000_000_000}, VersionID: "null", DeleteMarker: true}},
 	}
-	gcsrows := []gcs.GenerationRow{
-		{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 1, Generation: 1700000000000001}, TimeDeleted: 10}},
-		{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 2, Generation: 1700000000000002}}},
+	gcsGenerations = []gcs.GenerationRow{
+		{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 1, Generation: 1700000000000001, Mtime: 5}, TimeDeleted: 10}},
+		{Key: "k", Data: gcs.Generation{Object: gcs.Object{Size: 2, Generation: 1700000000000002, ContentType: "text/plain"}}},
 	}
+)
+
+// TestVersionsRows: a versions schema's rows keep its columns and order
+// under its own names: S3's delete marker with a null size, GCS's
+// generation as its integer and time_deleted null on the live one, with
+// no column named after another provider's.
+func TestVersionsRows(t *testing.T) {
 	for _, c := range []struct {
 		name, got, want string
 	}{
-		{"S3 JSONL", versionsText(t, textout.JSONL, &s3.VersionsSchema, s3rows),
-			`{"Key":"k","VersionId":"new","IsLatest":true,"IsDeleteMarker":false,"LastModified":"1970-01-01T00:00:00+00:00","ETag":"\"e\"","Size":1}` + "\n" +
-				`{"Key":"k","VersionId":"null","IsLatest":false,"IsDeleteMarker":true,"LastModified":"1970-01-01T00:00:00+00:00"}` + "\n"},
-		{"S3 TSV", versionsText(t, textout.TSV, &s3.VersionsSchema, s3rows),
-			"Key\tVersionId\tIsLatest\tIsDeleteMarker\tLastModified\tETag\tChecksumAlgorithm\tChecksumType\tSize\tStorageClass\tOwner.DisplayName\tOwner.ID\n" +
-				"k\tnew\ttrue\tfalse\t1970-01-01T00:00:00+00:00\t\"e\"\t\t\t1\t\t\t\n" +
-				"k\tnull\tfalse\ttrue\t1970-01-01T00:00:00+00:00\t\t\t\t\t\t\t\n"},
-		{"GCS JSONL", versionsText(t, textout.JSONL, &gcs.GenerationSchema, gcsrows),
-			`{"Key":"k","VersionId":"1700000000000001","IsLatest":false,"Size":1}` + "\n" +
-				`{"Key":"k","VersionId":"1700000000000002","IsLatest":true,"Size":2}` + "\n"},
-		{"GCS TSV", versionsText(t, textout.TSV, &gcs.GenerationSchema, gcsrows),
-			"Key\tVersionId\tIsLatest\tLastModified\tETag\tSize\tStorageClass\n" +
-				"k\t1700000000000001\tfalse\t\t\t1\t\n" +
-				"k\t1700000000000002\ttrue\t\t\t2\t\n"},
+		{"S3 TSV", text(t, textout.Config{Format: textout.TSV}, &s3.VersionsSchema, s3versions),
+			"key\tsize\tlast_modified\tetag\tstorage_class\towner_id\towner_display_name\tchecksum_algorithm\tchecksum_type\tversion_id\tis_latest\tis_delete_marker\n" +
+				"k\t1\t2023-11-14T22:13:20.000000Z\te\t\\N\t\\N\t\\N\t\\N\t\\N\tnew\ttrue\tfalse\n" +
+				"k\t\\N\t2023-11-14T22:13:20.000000Z\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\tnull\tfalse\ttrue\n"},
+		{"S3 JSONL", text(t, textout.Config{Format: textout.JSONL}, &s3.VersionsSchema, s3versions),
+			`{"key":"k","size":1,"last_modified":"2023-11-14T22:13:20.000000Z","etag":"e","storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null,"version_id":"new","is_latest":true,"is_delete_marker":false}` + "\n" +
+				`{"key":"k","size":null,"last_modified":"2023-11-14T22:13:20.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null,"version_id":"null","is_latest":false,"is_delete_marker":true}` + "\n"},
+		{"GCS TSV", text(t, textout.Config{Format: textout.TSV}, &gcs.GenerationSchema, gcsGenerations),
+			"key\tsize\tlast_modified\tetag\tgeneration\tmetageneration\tstorage_class\tmd5\tcrc32c\tcontent_type\ttime_created\ttime_deleted\n" +
+				"k\t1\t1970-01-01T00:00:00.000005Z\t\\N\t1700000000000001\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\t1970-01-01T00:00:00.000010Z\n" +
+				"k\t2\t\\N\t\\N\t1700000000000002\t\\N\t\\N\t\\N\t\\N\ttext/plain\t\\N\t\\N\n"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s:\n%q\nwant\n%q", c.name, c.got, c.want)
@@ -152,15 +80,32 @@ func TestVersionsJSONLAndTSV(t *testing.T) {
 	}
 }
 
-// TestVersionsFieldsFromRoles: the versions fields come from the schema's
-// version roles, not its grouping: grouped rows without roles are written
-// as objects, and roles that do not define the rows refuse the sink.
-func TestVersionsFieldsFromRoles(t *testing.T) {
-	rows := []s3.VersionRow{{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1}, VersionID: "v", IsLatest: true}}}
+// TestVersionsTable: the table shows a versions schema's roles from its
+// declaration: the version ID column under its own name, whether the row
+// is the latest, and a delete marker where the schema has them; a delete
+// marker's size is blank.
+func TestVersionsTable(t *testing.T) {
+	s3want := "last_modified (local)      size  version_id  latest  delete_marker  key\n" +
+		"2023-11-14 22:13:20         1 B  new         true    false          k\n" +
+		"2023-11-14 22:13:20              null        false   true           k\n"
+	if got := text(t, textout.Config{Format: textout.Table}, &s3.VersionsSchema, s3versions); got != s3want {
+		t.Errorf("S3:\n%q\nwant\n%q", got, s3want)
+	}
+	gcswant := "last_modified (local)      size  generation  latest  key\n" +
+		"1970-01-01 00:00:00         1 B  1700000000000001  false   k\n" +
+		"                            2 B  1700000000000002  true    k\n"
+	if got := text(t, textout.Config{Format: textout.Table}, &gcs.GenerationSchema, gcsGenerations); got != gcswant {
+		t.Errorf("GCS:\n%q\nwant\n%q", got, gcswant)
+	}
+}
+
+// TestVersionsRolesBindTheSink: roles that do not define the rows refuse
+// the sink; grouped rows without roles are written by their columns.
+func TestVersionsRolesBindTheSink(t *testing.T) {
 	plain := s3.VersionsSchema
 	plain.Versions = reader.VersionSpec{}
-	if got, want := versionsText(t, textout.JSONL, &plain, rows), `{"Key":"k","LastModified":"1970-01-01T00:00:00+00:00","Size":1}`+"\n"; got != want {
-		t.Errorf("grouped rows without roles: %q, want %q", got, want)
+	if got := text(t, textout.Config{Format: textout.Table}, &plain, s3versions[:1]); strings.Contains(got, "latest") {
+		t.Errorf("grouped rows without roles: %q", got)
 	}
 	bad := s3.VersionsSchema
 	bad.Versions.Latest = "size"

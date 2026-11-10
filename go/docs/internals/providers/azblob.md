@@ -4,7 +4,7 @@
 
 `az://account/container[/prefix]` lists current blobs in flat namespaces. Hierarchical
 namespaces, versions, snapshots and deleted blobs are unsupported. Namespace admission is
-required even for a public container; `--azblob-flat` only overrides an unknown result, never
+required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
 an account reported as hierarchical.
 [Shared object-store controls](../../operating.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
@@ -12,8 +12,12 @@ request timeout, retries and admission.
 Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
 There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
 `Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
-It applies the shared [endpoint validation](../clients.md#endpoint-validation); supply SAS credentials separately. `--anonymous` emits a note when it
-hides configured credentials detected by the Azure client.
+It applies the shared [endpoint validation](../clients.md#endpoint-validation) to `--endpoint-url`; supply SAS
+credentials separately. `--anonymous` with
+`--azure-sas-token` or a SAS in the root is refused (exit 2), as every provider refuses it beside an explicit
+credential; Azure credentials in the environment (`AZURE_STORAGE_SAS_TOKEN`, `AZURE_STORAGE_KEY`, the Entra ID
+variables) are ignored with the shared one-line warning naming them. `--storage-class` filters on the access
+tier (`access_tier`, the schema's declared storage-class column).
 
 Root parse errors keep clean roots, redact SAS queries and hide credential-bearing authorities.
 
@@ -32,11 +36,11 @@ The accepted success-body limit is 64 MiB; a listing page past it fails the requ
 (`client.ErrBodyCap`, not retried, not asked again with fewer entries). This does not bound buffer
 capacity or decoded-page allocations; see [shared body handling](../clients.md#what-swath-keeps).
 The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
-the shared `--endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
+the shared `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
 account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
 `http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--anonymous` (shared with S3 and GCS, and the only way a request goes
 unauthenticated); a SAS from
-`--azblob-sas`, else the root's query when it names a SAS parameter (`sig`, `sv`, `se`, `sp`, ...; found by
+`--azure-sas-token`, else the root's query when it names a SAS parameter (`sig`, `sv`, `se`, `sp`, ...; found by
 scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
 root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
 `AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
@@ -49,13 +53,14 @@ timeout retried; a refused grant stops the request). The chain is the SDK's, bui
 builds it (environment, workload identity, managed identity, the Azure CLI and Developer CLI logins), with no
 discovery of swath's own: a chain that will not build is an `objhttp.CredentialError` at construction; one that finds
 no credential (azidentity's own error) or whose grant is refused fails before sending the request.
-During namespace admission this can leave flatness unknown, producing `refused`, cause
-`unsupported` (exit 2), unless `--azblob-flat` asserts it. A credential failure during engine
-listing normally has class `auth`; transient token failures are retried per call
+A credential failure, during namespace admission as during engine listing, has class `auth` (`Azure Blob
+client: credentials (...)`, exit 1), as S3's and GCS's: admission returns it as it is rather than asking the
+Data Lake host, which would need the same token (`TestAdmissionKeepsCredentialFailure`); transient token
+failures are retried per call
 (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
 when no credentials were found. Endpoint admission follows the [shared check](../clients.md#endpoint-validation). A SAS never
-reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
-as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
+reaches a recorded file: `--azure-sas-token` is a secret flag (recorded as `[redacted]`), the root's query is recorded
+as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azure-sas-token` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that
 quote the query, redirect targets, transport errors and the SDK decoder's errors are scrubbed of every parameter
 the SAS names, found by name wherever the SDK sorted it into the query and however it is encoded (as sent,
@@ -73,11 +78,11 @@ the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) Wh
 which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
 account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
-with the configured account, no port and no path; with any other `--endpoint` there is no such host and
+with the configured account, no port and no path; with any other `--endpoint-url` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
 passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
 Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
-unless `--azblob-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
+unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
 `filesystem properties` or `asserted`, with a warning), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
@@ -138,7 +143,7 @@ from the reader. [dataset.md](../../dataset.md#schema-registry) owns column sema
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
-are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-flat`). Credentials may change, a SAS among them. A run with
+are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles`,
 `timeouts`, `parse_failures`, the admission's), `transport.pool_size` and `retry_after_capped` (a `Retry-After`

@@ -73,7 +73,7 @@ This small public NOAA prefix needs no cloud account:
 
 ```bash
 ./swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
-  --anonymous --region us-east-1
+  --anonymous --s3-region us-east-1
 ```
 
 Object-store listings go to the terminal or a pipe as text. GCS and Azure Blob use the

@@ -17,29 +17,30 @@ import (
 )
 
 // The per-prefix totals' fields (swath du): TSV columns and JSONL members,
-// the same for every source of a kind. PrefixBase64 replaces Prefix for a
-// prefix that is not UTF-8 (a local name's bytes), which a JSON string
-// cannot carry exactly; AllocatedSize replaces Size with --allocated; a
-// local tree's rows add Dirs and Unsized.
+// the same for every source. prefix_base64 replaces prefix for a prefix
+// that is not UTF-8 (a local name's bytes), which a JSON string cannot
+// carry exactly; allocated_size replaces size with --allocated; a local
+// tree's rows add dirs and unsized.
 const (
-	FieldDepth         = "Depth"
-	FieldPrefix        = "Prefix"
-	FieldPrefixBase64  = "PrefixBase64"
-	FieldObjects       = "Objects"
-	FieldDirs          = "Dirs"
-	FieldSize          = "Size"
-	FieldAllocatedSize = "AllocatedSize"
-	FieldUnsized       = "Unsized"
-	FieldLastModified  = "LastModified"
+	FieldDepth         = "depth"
+	FieldPrefix        = "prefix"
+	FieldPrefixBase64  = FieldPrefix + Base64Suffix
+	FieldObjects       = "objects"
+	FieldDirs          = "dirs"
+	FieldSize          = "size"
+	FieldAllocatedSize = "allocated_size"
+	FieldUnsized       = "unsized"
+	FieldLastModified  = "last_modified"
 )
 
-// The table's headings that differ from the fields: a local tree's objects
-// are files, and the table's times are the reader's local time.
+// The table's headings are the fields' names, as the rows table's are the
+// schema's, but for what people read differently: a local tree's objects
+// are files under paths, and the times are the reader's local time
+// (headingLocalTime).
 const (
-	headingFiles     = "Files"
-	headingAllocated = "Allocated"
-	headingModified  = "LastModified (local)"
-	headingTotal     = "(total)" // the total row's prefix in the table
+	headingFiles = "files"
+	headingPath  = "path"
+	headingTotal = "(total)" // the total row's prefix in the table
 )
 
 // TotalsLayout is what the totals' rows hold besides the prefix, objects,
@@ -59,18 +60,18 @@ type TotalsLayout struct {
 
 // WriteTotals writes per-prefix totals (swath du): TSV under a header line
 // and JSONL in the order given (byte order, the total first), each row's
-// Depth first (0: the total), TSV's prefix last as du prints its path; or
+// depth first (0: the total), TSV's prefix last as du prints its path; or
 // the table, the total last, as du's and wc's. A row includes its
 // descendants, so only rows of one depth may be summed. TSV and JSONL
-// carry exact bytes and microsecond UTC times; Size is the bytes of the
-// objects that had a size, and a local tree's Unsized counts those that
-// had none (as rclone size's sizeless); a time is left out (empty in TSV,
-// absent in JSONL) when no object under the prefix had one. Names take the
-// listing's escaping (appendEscaped), so TSV round-trips any bytes and
-// never sends a terminal a control byte; in JSONL a prefix that is not
-// UTF-8 is PrefixBase64, its exact bytes, instead of Prefix. The table is
+// carry exact bytes and the rows' times (appendTime); size is the bytes of
+// the objects that had a size, and a local tree's unsized counts those
+// that had none (as rclone size's sizeless); the time is null (\N in TSV)
+// when no object under the prefix had one. TSV takes the rows' grammar
+// (appendTSV), so any name round-trips; in JSONL a prefix that is not
+// UTF-8 is prefix_base64, its exact bytes, instead of prefix. The table is
 // for reading: sizes in binary units ("-" when one is unknown), local
-// times to the second, the prefix last as du prints it.
+// times to the second, the prefix (a local tree's path) last as du prints
+// it.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
@@ -107,13 +108,15 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 			}
 			b = append(b, '\t')
 			if r.HasNewest {
-				b = appendISO(b, r.Newest)
+				b = appendTime(b, r.Newest)
+			} else {
+				b = append(b, nullTSV...)
 			}
-			b = appendEscaped(append(b, '\t'), r.Prefix, false)
+			b = appendTSV(append(b, '\t'), r.Prefix)
 		case JSONL:
 			b = strconv.AppendInt(append(b, `{"`+FieldDepth+`":`...), int64(r.Depth), 10)
 			if utf8.ValidString(r.Prefix) {
-				b = appendJSON(append(b, `,"`+FieldPrefix+`":`...), r.Prefix)
+				b = appendJSONString(append(b, `,"`+FieldPrefix+`":`...), r.Prefix)
 			} else {
 				b = append(b, `,"`+FieldPrefixBase64+`":"`...)
 				b = append(base64.StdEncoding.AppendEncode(b, []byte(r.Prefix)), '"')
@@ -127,7 +130,9 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 				b = strconv.AppendInt(append(b, `,"`+FieldUnsized+`":`...), r.Unsized, 10)
 			}
 			if r.HasNewest {
-				b = append(appendISO(append(b, `,"`+FieldLastModified+`":"`...), r.Newest), '"')
+				b = append(appendTime(append(b, `,"`+FieldLastModified+`":"`...), r.Newest), '"')
+			} else {
+				b = append(b, `,"`+FieldLastModified+`":null`...)
 			}
 			b = append(b, '}')
 		case Table:
@@ -179,25 +184,18 @@ func (l TotalsLayout) sizeField() string {
 // heading's or its widest value's.
 type tableWidths struct{ size, objects, dirs int }
 
-// tableTime is the table's time layout; timeWidth its column, as wide as
-// the heading.
-const (
-	tableTime = "2006-01-02 15:04:05"
-	timeWidth = max(len(tableTime), len(headingModified))
-)
+// timeWidth is the table's time column, as wide as the heading.
+const timeWidth = max(len(tableTime), len(headingLocalTime))
 
 func widths(l TotalsLayout, rows []totals.Prefix) tableWidths {
-	w := tableWidths{size: len(FieldSize), objects: len(headingFiles), dirs: len(FieldDirs)}
-	if l.Allocated {
-		w.size = len(headingAllocated)
-	}
+	w := tableWidths{size: len(l.sizeField()), objects: len(headingFiles), dirs: len(FieldDirs)}
 	if !l.Local {
 		w.objects = len(FieldObjects)
 	}
 	var num [24]byte
 	for i := range rows {
 		r := &rows[i]
-		w.size = max(w.size, len(appendIEC(num[:0], r)))
+		w.size = max(w.size, len(appendPrefixSize(num[:0], r)))
 		w.objects = max(w.objects, len(strconv.AppendInt(num[:0], r.Objects, 10)))
 		w.dirs = max(w.dirs, len(strconv.AppendInt(num[:0], r.Dirs, 10)))
 	}
@@ -205,28 +203,25 @@ func widths(l TotalsLayout, rows []totals.Prefix) tableWidths {
 }
 
 func (w tableWidths) header(b []byte, l TotalsLayout) []byte {
-	size, objects := FieldSize, FieldObjects
-	if l.Allocated {
-		size = headingAllocated
-	}
+	size, objects, prefix := l.sizeField(), FieldObjects, FieldPrefix
 	if l.Local {
-		objects = headingFiles
+		objects, prefix = headingFiles, headingPath
 	}
 	b = appendPadded(b, []byte(size), w.size)
 	b = appendPadded(append(b, "  "...), []byte(objects), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), []byte(FieldDirs), w.dirs)
 	}
-	b = append(b, "  "+headingModified...)
-	for range timeWidth - len(headingModified) {
+	b = append(b, "  "+headingLocalTime...)
+	for range timeWidth - len(headingLocalTime) {
 		b = append(b, ' ')
 	}
-	return append(b, "  "+FieldPrefix+"\n"...)
+	return append(append(b, "  "...), prefix+"\n"...)
 }
 
 func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix) []byte {
 	var num [24]byte
-	b = appendPadded(b, appendIEC(num[:0], r), w.size)
+	b = appendPadded(b, appendPrefixSize(num[:0], r), w.size)
 	b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Objects, 10), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Dirs, 10), w.dirs)
@@ -237,7 +232,7 @@ func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix) []byte {
 		if loc == nil {
 			loc = time.Local
 		}
-		b = time.UnixMicro(r.Newest).In(loc).AppendFormat(b, tableTime)
+		b = appendLocal(b, r.Newest, loc)
 		for range timeWidth - len(tableTime) {
 			b = append(b, ' ')
 		}
@@ -250,7 +245,7 @@ func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix) []byte {
 	if r.Depth == 0 {
 		return append(b, headingTotal...)
 	}
-	return appendEscaped(b, r.Prefix, false)
+	return appendTSV(b, r.Prefix)
 }
 
 // appendPadded appends s right-aligned in width columns.
@@ -261,21 +256,30 @@ func appendPadded(b, s []byte, width int) []byte {
 	return append(b, s...)
 }
 
-// iecUnits are the binary units a table's sizes are given in.
-var iecUnits = [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
-
-// appendIEC appends a prefix's size for reading: bytes below 1 KiB, else
-// at most three significant digits in binary units (5.88 MiB, 695 KiB,
-// 0.98 MiB for 1000 KiB), as du -h and rclone size do; "-" when an object
-// under it had no size.
-func appendIEC(b []byte, r *totals.Prefix) []byte {
+// appendPrefixSize appends a prefix's size for the table: appendIEC, or
+// "-" when an object under it had no size.
+func appendPrefixSize(b []byte, r *totals.Prefix) []byte {
 	if !r.Sized() {
 		return append(b, '-')
 	}
-	if r.Bytes < 1024 {
-		return append(strconv.AppendInt(b, r.Bytes, 10), " B"...)
+	return appendIEC(b, r.Bytes)
+}
+
+// iecUnits are the binary units a table's sizes are given in.
+var iecUnits = [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+
+// Size is n bytes for people to read, appendIEC's form: the tables', and
+// every size the command prints on the terminal.
+func Size(n int64) string { return string(appendIEC(nil, n)) }
+
+// appendIEC appends a size for reading, the tables' one form: bytes below
+// 1 KiB, else at most three significant digits in binary units (5.88 MiB,
+// 695 KiB, 0.98 MiB for 1000 KiB), as du -h and rclone size do.
+func appendIEC(b []byte, n int64) []byte {
+	if n < 1024 {
+		return append(strconv.AppendInt(b, n, 10), " B"...)
 	}
-	v, u := float64(r.Bytes), 0
+	v, u := float64(n), 0
 	for v >= 1024 && u < len(iecUnits)-1 {
 		v /= 1024
 		u++

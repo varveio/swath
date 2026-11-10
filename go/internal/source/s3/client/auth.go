@@ -4,17 +4,22 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -34,7 +39,7 @@ type auth struct {
 	source      string                  // where the credentials come from (never the secret)
 	region      string                  // the signing region
 	anonymous   bool
-	bearer      *tokensource.Shared // --bearer-token-command: sent instead of a signature
+	bearer      *tokensource.Shared // --s3-bearer-token-command: sent instead of a signature
 	note        string              // a one-time warning for the user, or ""
 }
 
@@ -52,7 +57,25 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
-	// The bucket's region (--region) is the signing region only. The
+	// The trust the listing has (--ca-bundle over AWS_CA_BUNDLE,
+	// --no-verify-ssl) is the credential chain's too: STS, SSO, web
+	// identity.
+	tc, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
+	}
+	if tc != nil {
+		opts = append(opts, config.WithHTTPClient(awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.TLSClientConfig = tc })))
+	}
+	if cfg.Trust.CABundle != "" && !cfg.Trust.NoVerify {
+		// Given, it replaces the SDK's own read of AWS_CA_BUNDLE.
+		pem, err := os.ReadFile(cfg.Trust.CABundle)
+		if err != nil {
+			return nil, source.Unsupported(fmt.Errorf("CA bundle: %w", err))
+		}
+		opts = append(opts, config.WithCustomCABundle(bytes.NewReader(pem)))
+	}
+	// The bucket's region (--s3-region) is the signing region only. The
 	// credential chain (STS for web identity and assumed roles) keeps the
 	// environment's or the profile's region, else us-east-1, so a bucket in
 	// another region never moves the STS endpoint.
@@ -183,13 +206,18 @@ func partialEnvCredentials() string {
 	return ""
 }
 
-// anonymousNote warns once when -anonymous hides credentials the
+// credentialVars are the environment variables that give the AWS SDK's
+// chain a credential: Anonymous ignores them (anonymousNote).
+var credentialVars = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
+	"AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"}
+
+// anonymousNote warns once when Anonymous hides credentials the
 // environment holds.
 func anonymousNote(cfg Config) string {
-	if cfg.Anonymous && (os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_PROFILE") != "" || os.Getenv("AWS_SESSION_TOKEN") != "") {
-		return "-anonymous: ignoring the AWS_* credentials in the environment"
+	if !cfg.Anonymous {
+		return ""
 	}
-	return ""
+	return source.AnonymousNote("S3", credentialVars...)
 }
 
 // ready fetches what a request needs before it is sent: the bearer token
@@ -201,7 +229,7 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 	case a.bearer != nil:
 		tok, err := a.bearer.Token(ctx)
 		if err != nil {
-			return "", creds, &objhttp.CredentialError{Source: "--bearer-token-command", Err: err}
+			return "", creds, &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: err}
 		}
 		return tok.AccessToken, creds, nil
 	case a.anonymous:

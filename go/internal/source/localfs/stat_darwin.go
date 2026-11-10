@@ -30,12 +30,22 @@ func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
 	return nil
 }
 
-// fillSys fills the root device from os.FileInfo for the filesystem check.
+// fillSys fills the stat fields an os.FileInfo carries on darwin, birth
+// time included, as statEntry does.
 func fillSys(r *Entry, fi fs.FileInfo) {
 	s, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return
 	}
-	r.Dev = int64(s.Dev)
-	r.Present |= HasDev
+	r.UID, r.GID, r.Nlink = s.Uid, s.Gid, uint32(s.Nlink)
+	r.Inode, r.Dev, r.Blocks = int64(s.Ino), int64(s.Dev), s.Blocks*512
+	r.Mtime = schema.Micros(s.Mtimespec.Unix())
+	r.Ctime = schema.Micros(s.Ctimespec.Unix())
+	r.Atime = schema.Micros(s.Atimespec.Unix())
+	r.Mode = uint32(s.Mode) & 0o7777
+	r.Present |= HasStat
+	if s.Birthtimespec.Sec != 0 || s.Birthtimespec.Nsec != 0 {
+		r.Btime = schema.Micros(s.Birthtimespec.Unix())
+		r.Present |= HasBtime
+	}
 }

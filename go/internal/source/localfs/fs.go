@@ -92,6 +92,10 @@ func (s *Stats) Errors() int64 {
 	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe
 }
 
+// ErrorSamples are the first entries the listing could not read, each
+// "path: cause": the command names them on stderr.
+func (s *Stats) ErrorSamples() []string { return s.Samples }
+
 const maxSamples = 8
 
 func (s *Stats) note(counter *int64, path string, err error) {
@@ -144,6 +148,7 @@ type Provider struct {
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
+	file     bool // the root is not a directory (expandFile)
 	mu       sync.Mutex
 	stats    Stats
 	// warn tells the user of a directory left out (registry.Request.Warn);
@@ -164,22 +169,18 @@ func (p *Provider) warnf(format string, a ...any) {
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)
 
-// ErrNotDir is returned by New when the root is not a directory.
-var ErrNotDir = errors.New("not a directory")
-
-// New validates root and returns a provider for it.
+// New validates root and returns a provider for it. A root that is not a
+// directory (a file, as du and ls take one) lists as its one entry, keyed
+// by its name.
 func New(root string, opt Options) (*Provider, error) {
 	fi, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
-	if !fi.IsDir() {
-		return nil, fmt.Errorf("%s: %w", root, ErrNotDir)
-	}
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
-	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable}
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir()}
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err
@@ -215,7 +216,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	}
 	var st Stats
 	var err error
-	if p.native {
+	if p.file {
+		err = p.expandFile(e, &st)
+	} else if p.native {
 		err = p.expandNative(ctx, r, e, &st)
 	} else {
 		err = p.expandPortable(ctx, r, e, &st)
@@ -277,6 +280,41 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		}
 	}
 	return e.Rows(rows[start:])
+}
+
+// expandFile lists a root that is not a directory: its one row, keyed by
+// its name, read as its directory's listing reads the entry: at the run's
+// tier, a symbolic link as itself (New's stat followed it only to find
+// that it does not name a directory).
+func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
+	row := Row{Key: filepath.Base(p.root)}
+	var err error
+	switch fi := fs.FileInfo(nil); {
+	case p.opt.Fields == Names:
+		if fi, err = os.Lstat(p.root); err == nil {
+			row.Data.Kind = kindOf(fi.Mode().Type())
+		}
+	case p.native:
+		err = statPath(p.root, p.opt.Fields, &row.Data)
+	default:
+		if fi, err = os.Lstat(p.root); err == nil {
+			fromFileInfo(&row.Data, fi)
+		}
+	}
+	if err != nil {
+		st.note(&st.StatErrors, p.root, err)
+		return nil
+	}
+	if row.Data.Kind == KindSymlink && p.opt.LinkTarget && p.opt.Fields != Names {
+		if t, err := os.Readlink(p.root); err == nil {
+			row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink
+		} else {
+			st.note(&st.ReadlinkErrors, p.root, err)
+		}
+	}
+	st.Files++
+	st.Bytes += row.Data.Size
+	return e.Rows([]Row{row})
 }
 
 func sortRows(rows []Row) {

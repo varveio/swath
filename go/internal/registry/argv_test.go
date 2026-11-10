@@ -11,7 +11,7 @@ import (
 )
 
 // TestRedactEndpointArgv: the URL flags of the registered providers'
-// shared groups (source.FlagGroup.URLs, the store group's --endpoint) are
+// shared groups (source.FlagGroup.URLs, the store group's --endpoint-url) are
 // redacted when they carry userinfo, a query or fragment, or do not parse; kept as given
 // otherwise.
 func TestRedactEndpointArgv(t *testing.T) {

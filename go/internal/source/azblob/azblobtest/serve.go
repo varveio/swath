@@ -28,7 +28,7 @@ const Container = "corpus"
 type Replay struct {
 	// Endpoint is the Azure endpoint with the account path,
 	// http://127.0.0.1:PORT/ACCOUNT (no trailing slash), as Azurite's is:
-	// the value --endpoint takes. The container's listing is
+	// the value --endpoint-url takes. The container's listing is
 	// Endpoint/Container?restype=container&comp=list.
 	Endpoint string
 	// Account and Container name the listing.

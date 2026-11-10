@@ -129,7 +129,7 @@ func (c *Client) services(bodyCap int64) error {
 // (objhttp.Do), and validates the page (objhttp.ErrInvalidPage). A page past the
 // body cap is ErrBodyCap, not retried.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*ListOutput, error) { return c.list(ctx, in) })
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*ListOutput, error) { return c.list(ctx, in) })
 }
 
 // list is one List Blobs attempt: a fresh pager seeded with the marker,
@@ -187,7 +187,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 // "false"; anything else is ErrHNSUnknown, never flat). A refused call is
 // an error the caller takes for "unknown", never for flat.
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
 		s := &sent{}
 		actx, cancel, err := c.begin(ctx, s)
 		if err != nil {

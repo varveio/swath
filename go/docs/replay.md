@@ -20,7 +20,7 @@ cd go
   --host 127.0.0.1 --port 19090 --metrics-port 19192 &
 until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 0.2; done
 curl 'http://127.0.0.1:19090/noaa-normals-pds?list-type=2&max-keys=10&encoding-type=url'
-./swath list s3://noaa-normals-pds -endpoint http://127.0.0.1:19090 -path-style -anonymous -o /tmp/ds
+./swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style -anonymous -o /tmp/ds
 kill %1
 ```
 
@@ -482,7 +482,7 @@ walk starts at its own row group's routing key; a walk that reaches the end star
 
 ```bash
 go build -o /tmp/replayload ./bench/replayload
-/tmp/replayload -endpoint http://127.0.0.1:19090 -bucket synth -fixture /data/synthetic-1m/sorted-rolled \
+/tmp/replayload --endpoint-url http://127.0.0.1:19090 -bucket synth -fixture /data/synthetic-1m/sorted-rolled \
   -walks 64 -max-keys 1000 -warmup 10s -duration 50s -metrics http://127.0.0.1:19192/metrics
 ```
 
@@ -631,7 +631,7 @@ previous server, `noaa-normals-pds` with `-live-scripted -max-prefixes 40` diffe
 scripted 41, every S3 error and the control characters); after the change, provider cases 67 passed and 5
 differing, scripted 345 / 1, walks 10 / 0 (1,926 requests), the same six differences as above.
 
-Owner's place (2026-11-07): over a recording of `noaa-normals-pds` made with `--fetch-owner` the same day, the
+Owner's place (2026-11-07): over a recording of `noaa-normals-pds` made with `--s3-fetch-owner` the same day, the
 replay wrote `Owner` after `StorageClass`, and `s3-11a` and the scripted `fetch-owner=true` differed on the
 `Contents` field sequence; it now writes it before, as live S3 does (The S3 route), and both pass. With
 `-live-scripted -max-prefixes 40`: provider cases 68 passed and 4 differing, scripted 345 / 1, walks 10 / 0
@@ -703,10 +703,10 @@ decoded first):
 ```bash
 go build -o /tmp/faultproxy ./bench/faultproxy
 /tmp/faultproxy -target https://s3.us-east-1.amazonaws.com -listen 127.0.0.1:19401 -record /tmp/capture.jsonl &
-./swath list s3://noaa-normals-pds/ -o /tmp/rec --anonymous --endpoint http://127.0.0.1:19401 --region us-east-1 --workers 16
+./swath list s3://noaa-normals-pds/ -o /tmp/rec --anonymous --endpoint-url http://127.0.0.1:19401 --s3-region us-east-1 --workers 16
 kill -INT %1
 /tmp/replaydiff -capture /tmp/capture.jsonl -go ./swath-replay -fixture /tmp/rec -bucket noaa-normals-pds
-# GCS: -target https://storage.googleapis.com and swath list gs://B/P --anonymous --endpoint http://127.0.0.1:19401/storage/v1/
+# GCS: -target https://storage.googleapis.com and swath list gs://B/P --anonymous --endpoint-url http://127.0.0.1:19401/storage/v1/
 ```
 
 The capture is read and replayed one exchange at a time (`TestCaptureStreams`): one exchange, the token map and
@@ -835,7 +835,7 @@ differences of that size between single runs mean nothing.
 ### Throughput and memory
 
 Each run: `swath-replay serve --fixture F --bucket B --port P --metrics-port M --serving-mode sorted
---parquet-connections 8 --max-concurrent-requests 1024`, then `replayload -endpoint http://127.0.0.1:P -bucket B
+--parquet-connections 8 --max-concurrent-requests 1024`, then `replayload --endpoint-url http://127.0.0.1:P -bucket B
 -fixture F -walks W -max-keys 1000 -warmup 10s -duration D -metrics http://127.0.0.1:M/metrics` (D 30 s for 16
 walks, 50 s for 64), with the server's `VmRSS` read from `/proc/PID/status` every second from the client's start.
 RSS mean is the median over the three runs of each run's mean; RSS max is the highest sample of the three runs.

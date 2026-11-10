@@ -12,12 +12,14 @@ package registry
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/filter"
@@ -41,7 +43,7 @@ type Factory struct {
 	// (comparison modes and policy toggles, for swath diag list only).
 	// shared holds the values of the groups the provider names (Shared),
 	// read with source.Shared.
-	Flags func(fs *flag.FlagSet, diag bool, shared source.SharedValues) any
+	Flags func(fs *pflag.FlagSet, diag bool, shared source.SharedValues) any
 	// Shared are the flag groups the provider shares with others (the
 	// store's, the range engine's): the command registers each once and
 	// passes its value to every provider naming it.
@@ -50,9 +52,16 @@ type Factory struct {
 	// requests are authenticated, which no identity holds. Secrets are
 	// operational without being listed here.
 	Operational []string
-	// Hints are every flag the provider registers itself, in help order
-	// (source.Hint).
-	Hints []source.Hint
+	// Example is a root of the provider's for the help's examples
+	// ("s3://bucket/logs/", "/data").
+	Example string
+	// Title names the provider for people: the help group of its own flags
+	// ("S3", "Local") and the messages that name it.
+	Title string
+	// FromURL, if set, returns the provider's root for a source given in
+	// another form (a service URL a console shows), and whether root is
+	// one; Canonical tries it.
+	FromURL func(root string) (string, bool)
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must
@@ -62,10 +71,6 @@ type Factory struct {
 	// "logs/"): the keys it lists start with it. Without it the keys are
 	// relative to the root (a local tree's).
 	KeyPrefix func(root string) (string, error)
-	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
-	// so its rows cannot be written as text; the command refuses a text run
-	// of it before opening it.
-	BinaryKeys bool
 	// EncoderBytes is the working set admitted per Parquet encoder of the
 	// provider's schema (parquetout.EncoderBytes), known before the source
 	// is opened; 0 prices it as parquetout.DefaultEncoderBytes.
@@ -93,6 +98,9 @@ type Factory struct {
 	// CheckTotals, if set, refuses per-prefix totals (swath du) that the
 	// provider's options value cannot give, before the source is opened.
 	CheckTotals func(options any, t totals.Options) error
+	// CheckFilter, if set, refuses filters on columns the provider's
+	// options do not fill (filter.Spec.Reads), before the source is opened.
+	CheckFilter func(options any, f *filter.Spec) error
 	// WithPrefix, if set, returns root naming the key prefix prefix
 	// instead of its own (KeyPrefix): an anchored --include narrows the
 	// listed prefix through it. Without it the root is listed as given.
@@ -103,7 +111,7 @@ type Factory struct {
 // set of this provider alone (a test's, a benchmark's), and returns its
 // options value. The command instead registers each group once for every
 // provider (Groups).
-func (f Factory) RegisterFlags(fs *flag.FlagSet, diag bool) any {
+func (f Factory) RegisterFlags(fs *pflag.FlagSet, diag bool) any {
 	shared := source.SharedValues{}
 	for _, g := range f.Shared {
 		shared[g] = g.Flags(fs, diag)
@@ -372,20 +380,45 @@ func Register(f Factory) {
 }
 
 // Redact is root as it may be shown or recorded (Factory.Redact): with its
-// provider's credential redacted; refused credential-bearing roots are omitted.
-func Redact(root string) string {
+// provider's credential redacted, or as it is. A root whose authority holds
+// user information, ? or # is SCHEME://[redacted] (source.RedactRoot), as is
+// a URL of a scheme no provider takes, which none can tell a literal prefix
+// from a credential in, when it has a query or a fragment or does not parse.
+func Redact(root string) string { return RedactPlace(Canonical(root)) }
+
+// RedactPlace is a URL-valued flag's value (source.ShownURL) as it may be
+// shown or recorded: redacted as Redact redacts a root, in the form given.
+func RedactPlace(root string) string {
 	if rootCredentials(root) {
 		return source.RedactRoot(root)
 	}
-	if f, err := Lookup(root); err == nil && f.Redact != nil {
+	f, err := Lookup(root)
+	switch {
+	case err == nil && f.Redact != nil:
 		return f.Redact(root)
-	}
-	if strings.Contains(root, "://") && strings.ContainsAny(root, "?#") {
-		if _, err := Lookup(root); err != nil {
-			return "[redacted]"
+	case err != nil && urlScheme(root):
+		if _, perr := url.Parse(root); perr != nil || strings.ContainsAny(root, "?#") {
+			return root[:strings.Index(root, "://")+3] + redactedValue
 		}
 	}
 	return root
+}
+
+// redactedValue replaces a credential in a recorded or shown argument.
+const redactedValue = "[redacted]"
+
+// urlScheme says s starts with a URL scheme and "://".
+func urlScheme(s string) bool {
+	i := strings.Index(s, "://")
+	if i <= 0 || !('a' <= s[0] && s[0] <= 'z' || 'A' <= s[0] && s[0] <= 'Z') {
+		return false
+	}
+	for _, c := range s[1:i] {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '+' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // rootCredentials checks the authority only: a listing prefix is a literal key.
@@ -393,10 +426,13 @@ func rootCredentials(root string) bool {
 	return source.RedactRoot(root) != root
 }
 
-// RedactArgv copies a command line for reports and journals: registered
-// secret flags, credential-bearing URL flags (source.FlagGroup.URLs) and
-// credentials in source roots are redacted. Both --flag VALUE and
-// --flag=VALUE are accepted.
+// RedactArgv copies a canonical command line (each flag --name=value or
+// --name, then the operands) for reports and journals: registered secret
+// flags, credential-bearing URL flags (source.FlagGroup.URLs) and
+// credentials in the operands (source roots) are redacted; any other
+// flag's value is data (a filter), kept as given. The command redacts by
+// each flag's table entry (source.Flag.Shown) as it records the line;
+// this is the second pass of a caller that hands one on.
 func RedactArgv(argv []string) []string {
 	secrets, urls := map[string]bool{}, map[string]bool{}
 	for _, f := range Factories() {
@@ -425,11 +461,11 @@ func RedactArgv(argv []string) []string {
 			hide = RedactURL(value) != value
 		}
 		if !hide {
-			out = append(out, Redact(a))
+			out = append(out, a)
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
-		out = append(out, dashes+name+"=[redacted]")
+		out = append(out, dashes+name+"="+redactedValue)
 		if !eq && i+1 < len(argv) {
 			i++
 		}
@@ -441,7 +477,7 @@ func RedactArgv(argv []string) []string {
 // ones whose parse errors would quote the input.
 func RedactURL(value string) string {
 	if source.UnsafeURL(value) {
-		return "[redacted]"
+		return redactedValue
 	}
 	return value
 }
@@ -458,28 +494,41 @@ func Factories() []Factory {
 	return out
 }
 
-// Lookup returns the factory for root's scheme.
+// Canonical is root as its provider takes it: a scheme in lower case
+// (S3://b is s3://b), or a provider's root for a source given in another
+// form (Factory.FromURL); any other root as given.
+func Canonical(root string) string {
+	if i := strings.Index(root, "://"); i > 0 {
+		root = strings.ToLower(root[:i]) + root[i:]
+	}
+	for _, f := range Factories() {
+		if f.FromURL != nil {
+			if r, ok := f.FromURL(root); ok {
+				return r
+			}
+		}
+	}
+	return root
+}
+
+// Lookup returns the factory for root's scheme, in any case.
 func Lookup(root string) (Factory, error) {
 	if rootCredentials(root) {
 		return Factory{}, fmt.Errorf("root %q: user information, a query or a fragment in the authority is refused; use the provider's credential settings", source.RedactRoot(root))
 	}
 	scheme := ""
 	if i := strings.Index(root, "://"); i > 0 {
-		scheme = root[:i]
+		scheme = strings.ToLower(root[:i])
 	}
 	regMu.Lock()
 	defer regMu.Unlock()
 	f, ok := factories[scheme]
 	if !ok {
+		// The root is not quoted: no provider can redact it (Redact).
 		if scheme == "" {
-			return f, fmt.Errorf("no provider for local paths is registered (root %q)", root)
+			return f, errors.New("no provider for local paths is registered")
 		}
-		// Unknown schemes have no provider to distinguish a literal prefix from credentials.
-		shown := root
-		if strings.ContainsAny(root, "?#") {
-			shown = "[redacted]"
-		}
-		return f, fmt.Errorf("unsupported root %q: no provider for %s://", shown, scheme)
+		return f, fmt.Errorf("unsupported source: no provider for %s://", scheme)
 	}
 	return f, nil
 }

@@ -119,15 +119,15 @@ func TestVersionReportFollowsDeclaration(t *testing.T) {
 		{"deletedat", map[string]int64{"versions": 5, "noncurrent": 3, "live_objects": 2, "distinct_keys": 3, "rows_emitted": 5}, "delete_markers"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "rows.jsonl")
+			out := filepath.Join(t.TempDir(), "rows.txt")
 			rep, err := Run(context.Background(), Config{Source: SourceConfig{URI: "versionroles://" + c.name},
-				Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.JSONL}}, Limits: Limits{Workers: 1}})
+				Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.Table}}, Limits: Limits{Workers: 1}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			checkVersionReport(t, rep, c.want, c.absent)
 			b, err := os.ReadFile(out)
-			if err != nil || strings.Contains(string(b), "decoy") || strings.Count(string(b), "\n") != len(roleRows) {
+			if err != nil || strings.Contains(string(b), "decoy") || strings.Count(string(b), "\n") != len(roleRows)+1 { // the table's header, then the rows
 				t.Fatalf("text %q, %v", b, err)
 			}
 		})

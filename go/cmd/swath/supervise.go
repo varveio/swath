@@ -8,14 +8,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
@@ -110,7 +114,7 @@ func classify(err, cause error, dir string) outcome {
 	var se *signalError
 	var ue *journal.UnresumableError
 	switch {
-	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
+	case errors.As(err, &u), errors.Is(err, pflag.ErrHelp):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassUsage, exitUsage, false
 	case refusal(err):
 		// The caller's to fix (another output, --overwrite, the original
@@ -254,10 +258,10 @@ func committedAccount(dir string, r *listing.Report) {
 // alreadyComplete accounts for a resume that found its output committed
 // and complete (exit 0): the report says so from the manifest's coverage,
 // and the text report says it in one line.
-func alreadyComplete(stdout io.Writer, format, dir string, r *listing.Report) {
+func alreadyComplete(stdout io.Writer, report, dir string, r *listing.Report) {
 	r.Outcome.Error, r.Outcome.Unrecorded = "", listing.UnrecordedComplete
 	committedAccount(dir, r)
-	if format != "json" {
+	if report != "-" { // else stdout carries the report
 		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
 	}
 }
@@ -271,10 +275,12 @@ type classified struct {
 func (c *classified) Class() string { return c.class }
 func (c *classified) Unwrap() error { return c.error }
 
-// exitError carries the exit code main uses.
+// exitError carries the exit code main uses, and the outcome it ends with
+// (conclude).
 type exitError struct {
 	error
 	code int
+	out  outcome
 }
 
 func (e *exitError) Unwrap() error { return e.error }
@@ -329,15 +335,14 @@ func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded strin
 	return why == "", why
 }
 
-// reportUnrecorded puts on stderr, as one JSON line, an outcome that the
-// output's error.json does not hold (another owner's outcome stands there,
-// or the write failed), with the reason.
-func reportUnrecorded(dir string, o outcome, why string) {
+// reportUnrecorded warns that the output's error.json does not hold the
+// outcome (another owner's outcome stands there, or the write failed),
+// with the reason; the report holds it, and -v or --log-format json print
+// it (conclude).
+func reportUnrecorded(dir, why string) {
 	if why != "" {
-		fmt.Fprintf(errOut, "swath: the outcome is not recorded in %s: %s\n", filepath.Join(dir, errorName), why)
+		elog().warn(fmt.Sprintf("the outcome is not recorded in %s: %s", filepath.Join(dir, errorName), why))
 	}
-	b, _ := json.Marshal(o)
-	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
 }
 
 // diagWait bounds one diagnostic write to stderr: a pipe nobody drains
@@ -349,17 +354,171 @@ const diagWait = 250 * time.Millisecond
 // (diagWait each) fit in it; os.Exit follows at the latest then.
 const forcedAllowance = 5 * time.Second
 
-// note writes s to w, waiting at most diagWait; past that the line is
-// dropped (the write goes on in the background, and is lost at exit).
-func note(w io.Writer, s string) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.WriteString(w, s)
-	}()
+// diagQueue bounds the lines waiting for one writer (stderr) that does not
+// drain: past it a line is dropped, and counted (dropped).
+const diagQueue = 256
+
+// dropped counts the lines note dropped (the report's
+// requests.log_dropped).
+var dropped atomic.Int64
+
+// lineClass is what a stderr line may become when stderr does not drain.
+type lineClass uint8
+
+const (
+	// disposable: progress records and the request log (-vv, -vvv),
+	// dropped first.
+	disposable lineClass = iota
+	// kept: warnings, errors and the statistics, which a reader needs:
+	// bounded apart (diagQueue of them, the oldest dropped past it), and
+	// written before the outcome.
+	kept
+	// final: the command's last lines (its outcome).
+	final
+)
+
+// diagLine is a line waiting for its writer; done closes once it is
+// written.
+type diagLine struct {
+	s     string
+	class lineClass
+	done  chan struct{}
+}
+
+// diagSink is one writer's queue, drained in order by one goroutine while
+// it holds lines. stuck: a line waited diagWait unwritten, and no write
+// has completed since.
+type diagSink struct {
+	queue []diagLine
+	stuck bool
+}
+
+var (
+	diagMu    sync.Mutex
+	diagSinks = map[io.Writer]*diagSink{}
+)
+
+// note writes s, a disposable line, to w through w's one writer
+// goroutine, waiting at most diagWait. While a write to w is stuck, lines
+// queue without waiting; past diagQueue of them a disposable one is
+// dropped. A queued line is lost at exit.
+func note(w io.Writer, s string) { send(w, s, disposable) }
+
+// noteKept is note for a warning, an error or the statistics: queued past
+// diagQueue disposable lines, up to diagQueue kept ones.
+func noteKept(w io.Writer, s string) { send(w, s, kept) }
+
+// noteFinal is note for a command's last lines (its outcome). The queued
+// disposable lines are dropped (counted) so that a slow reader's backlog
+// does not hold the outcome past its wait (the process exits after it);
+// the kept ones are written before it, within its wait, and dropped
+// (counted) if that wait ends first, when the outcome gets one more.
+func noteFinal(w io.Writer, s string) { send(w, s, final) }
+
+// shed drops k's queued lines below class keep (diagMu held), counted.
+func (k *diagSink) shed(keep lineClass) {
+	q := k.queue[:0]
+	for _, l := range k.queue {
+		if l.class >= keep {
+			q = append(q, l)
+		} else {
+			dropped.Add(1)
+			close(l.done)
+		}
+	}
+	clear(k.queue[len(q):])
+	k.queue = q
+}
+
+// bound makes room for one more kept line (diagMu held): past diagQueue
+// of them the oldest is dropped, counted.
+func (k *diagSink) bound() {
+	n := 0
+	for _, l := range k.queue {
+		if l.class == kept {
+			n++
+		}
+	}
+	if n < diagQueue {
+		return
+	}
+	i := slices.IndexFunc(k.queue, func(l diagLine) bool { return l.class == kept })
+	dropped.Add(1)
+	close(k.queue[i].done)
+	k.queue = slices.Delete(k.queue, i, i+1)
+}
+
+func send(w io.Writer, s string, class lineClass) {
+	if c, ok := w.(*stderrCoord); ok {
+		c.put(s, class) // the line keeps its class through the progress line
+		return
+	}
+	l := diagLine{s, class, make(chan struct{})}
+	diagMu.Lock()
+	k := diagSinks[w]
+	if k == nil {
+		k = &diagSink{}
+		diagSinks[w] = k
+		go drain(w, k)
+	}
+	full, stuck := len(k.queue) >= diagQueue, k.stuck
+	switch class {
+	case final:
+		k.shed(kept)
+	case kept:
+		k.bound()
+	}
+	if !full || class != disposable {
+		k.queue = append(k.queue, l)
+	}
+	diagMu.Unlock()
+	switch {
+	case full && class == disposable:
+		dropped.Add(1)
+		return
+	case stuck && class != final:
+		return
+	}
+	t := time.NewTimer(diagWait)
+	defer t.Stop()
 	select {
-	case <-done:
-	case <-time.After(diagWait):
+	case <-l.done:
+		return
+	case <-t.C:
+	}
+	diagMu.Lock()
+	k.stuck = true
+	if class == final {
+		k.shed(final)
+	}
+	diagMu.Unlock()
+	if class == final {
+		t.Reset(diagWait)
+		select {
+		case <-l.done:
+		case <-t.C:
+		}
+	}
+}
+
+// drain writes k's lines to w in order, and ends once none waits.
+func drain(w io.Writer, k *diagSink) {
+	for {
+		diagMu.Lock()
+		if len(k.queue) == 0 {
+			delete(diagSinks, w)
+			diagMu.Unlock()
+			return
+		}
+		l := k.queue[0]
+		k.queue[0] = diagLine{}
+		k.queue = k.queue[1:]
+		diagMu.Unlock()
+		_, _ = io.WriteString(w, l.s)
+		diagMu.Lock()
+		k.stuck = false
+		diagMu.Unlock()
+		close(l.done)
 	}
 }
 
@@ -396,7 +555,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 		select {
 		case ok := <-done:
 			if ok {
-				note(errOut, fmt.Sprintf("swath: goroutine dump written to %s\n", path))
+				elog().warn("goroutine dump written to " + path)
 				return path
 			}
 		case <-time.After(stacksWait):
@@ -405,8 +564,17 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	if len(buf) > stacksMax {
 		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
 	}
-	note(errOut, head+string(buf)+"\n")
+	if l := elog(); l.json {
+		l.print(lvWarn, evWarning, "goroutine dump: "+why+" ("+detail+")", stacksFields{string(buf)})
+	} else {
+		note(errOut, head+string(buf)+"\n")
+	}
 	return "stderr"
+}
+
+// stacksFields are a goroutine dump's event under --log-format json.
+type stacksFields struct {
+	Stacks string `json:"stacks"`
 }
 
 // forcedErr is the error of a run forced to exit (it did not stop within
@@ -467,12 +635,12 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		if f.dir != "" {
 			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
 		}
-		writeReport(f.report, r)
+		_ = writeReport(f.report, r, nil)
 	}()
 	select {
 	case <-done:
 	case <-time.After(stacksWait):
-		note(errOut, "swath: the forced exit's outcome could not be written in time\n")
+		elog().warn("the forced exit's outcome could not be written in time")
 	}
 }
 

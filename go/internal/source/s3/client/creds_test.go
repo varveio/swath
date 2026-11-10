@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -303,5 +305,42 @@ func TestRetrieveWaitsForTokenAppearingDuringLookup(t *testing.T) {
 	c, err := retrieve(context.Background(), p, p.token)
 	if err != nil || c.AccessKeyID != "AKWEB" || p.calls != 2 {
 		t.Fatalf("credentials %+v, err %v, calls %d; want AKWEB after 2 calls", c, err, p.calls)
+	}
+}
+
+// TestCredentialChainTrust: the listing's trust is the credential
+// chain's too. Web identity against an STS with a self-signed certificate
+// fails without it, and succeeds with --no-verify-ssl or with the
+// certificate in --ca-bundle.
+func TestCredentialChainTrust(t *testing.T) {
+	dir := t.TempDir()
+	isolate(t, dir)
+	tokenFile := filepath.Join(dir, "token")
+	os.WriteFile(tokenFile, []byte("jwt"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile web]\nrole_arn = arn:aws:iam::111111111111:role/web\nweb_identity_token_file = "+tokenFile+"\n"), 0o600)
+	sts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
+<AccessKeyId>AKWEB</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
+</Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, exp)
+	}))
+	t.Cleanup(sts.Close)
+	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
+	t.Setenv("AWS_MAX_ATTEMPTS", "1")
+	bundle := filepath.Join(dir, "ca.pem")
+	os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: sts.Certificate().Raw}), 0o600)
+	for _, c := range []struct {
+		name  string
+		trust source.Trust
+		ok    bool
+	}{
+		{"system roots", source.Trust{}, false},
+		{"no-verify-ssl", source.Trust{NoVerify: true}, true},
+		{"ca-bundle", source.Trust{CABundle: bundle}, true},
+	} {
+		a, err := loadAuth(context.Background(), Config{Profile: "web", Region: "us-east-1", Trust: c.trust})
+		if c.ok != (err == nil) || c.ok && a.credentials == nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
 	}
 }

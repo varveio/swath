@@ -68,7 +68,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
-  its exact bytes, like any other. Mount points are crossed unless `--one-filesystem` (`Options.OneFilesystem`):
+  its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on Windows), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
   (counter `other_device_dirs`); `Report` adds `one_filesystem` to the coverage's filters, so a dataset says it

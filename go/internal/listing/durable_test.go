@@ -531,7 +531,7 @@ func TestDurableNewAncestorsLost(t *testing.T) {
 
 // TestDurableCompressionFlip: the crashed run's durable files hold delta
 // zstd frames (the default, Y); a resume with another frame format
-// (--spill-compress=false: D, --spill-plain: Z, both: R) replays them all
+// (--no-spill-compress: D, --spill-plain: Z, both: R) replays them all
 // the same: a durable file's frames are self-describing, and the header's
 // row codec version covers all four rows frame types.
 func TestDurableCompressionFlip(t *testing.T) {

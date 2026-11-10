@@ -34,7 +34,7 @@ func TestServicePool(t *testing.T) {
 // index while using one service would fail too.
 func TestServicePoolRoundRobin(t *testing.T) {
 	srv := newRecorder(t)
-	pool := objhttp.Pool(64, nil, nil)
+	pool := objhttp.Pool(64, nil, nil, nil)
 	seen := make(chan int, len(pool)*2)
 	for i, hc := range pool {
 		tr := hc.Transport.(*http.Transport)

@@ -22,7 +22,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// TestBearerToken: --bearer-token-command authenticates every request
+// TestBearerToken: --s3-bearer-token-command authenticates every request
 // with "Authorization: Bearer" instead of SigV4; the command is never
 // recorded (journal, report), a resume without it is refused with a clear
 // message (exit 2) and continues with it; a failing command fails the run
@@ -41,7 +41,7 @@ func TestBearerToken(t *testing.T) {
 	t.Cleanup(srv.Close)
 	secret := "printf tok-SECRET"
 	dir := filepath.Join(t.TempDir(), "ds")
-	args := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", secret, "-o", dir, "--part-size", "4KiB", "--part-interval", "0", "--workers", "2"}
+	args := []string{"s3://bkt", "--endpoint-url", srv.URL, "--s3-bearer-token-command", secret, "-o", dir, "--part-size", "4KiB", "--part-interval", "0", "--workers", "2"}
 	crashRun(t, args, 2)
 	mu.Lock()
 	for a := range auths {
@@ -54,15 +54,15 @@ func TestBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(st.Header.Argv, " "), "SECRET") || !slices.Contains(st.Header.Argv, "--bearer-token-command=[redacted]") {
+	if strings.Contains(strings.Join(st.Header.Argv, " "), "SECRET") || !slices.Contains(st.Header.Argv, "--s3-bearer-token-command=[redacted]") {
 		t.Fatalf("recorded argv %q", st.Header.Argv)
 	}
 	err = dispatch(context.Background(), []string{"resume", dir}, io.Discard)
-	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "--bearer-token-command, which is never recorded") {
+	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "--s3-bearer-token-command, which is never recorded") {
 		t.Fatalf("resume without the command: %v", err)
 	}
 	report := filepath.Join(t.TempDir(), "r.json")
-	if err := dispatch(context.Background(), []string{"resume", dir, "--bearer-token-command", secret, "--report", report}, io.Discard); err != nil {
+	if err := dispatch(context.Background(), []string{"resume", dir, "--s3-bearer-token-command", secret, "--report", report}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(report)
@@ -70,7 +70,7 @@ func TestBearerToken(t *testing.T) {
 		t.Fatalf("report: %s", raw)
 	}
 	// A failing command: no request goes out, the run fails closed.
-	bad := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "echo nope >&2; exit 4", "--report", report}
+	bad := []string{"s3://bkt", "--endpoint-url", srv.URL, "--s3-bearer-token-command", "echo nope >&2; exit 4", "--report", report}
 	err = runCount(context.Background(), bad, io.Discard)
 	if exitCode(t, err) != exitFatal || !strings.Contains(err.Error(), "exited 4: nope") {
 		t.Fatalf("failing command: %v", err)
@@ -78,14 +78,14 @@ func TestBearerToken(t *testing.T) {
 	if raw, _ := os.ReadFile(report); !bytes.Contains(raw, []byte(`"cause": "auth"`)) {
 		t.Fatalf("failing command report: %s", raw)
 	}
-	if err := runCount(context.Background(), []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "x", "--anonymous"}, io.Discard); exitCode(t, err) != exitUsage {
+	if err := runCount(context.Background(), []string{"s3://bkt", "--endpoint-url", srv.URL, "--s3-bearer-token-command", "x", "--anonymous"}, io.Discard); exitCode(t, err) != exitUsage {
 		t.Fatalf("--anonymous with a token: %v", err)
 	}
 }
 
 func TestRedactArgv(t *testing.T) {
-	got := redactArgv([]string{"list", "--bearer-token-command", "a b", "-bearer-token-command=c", "--x", "--bearer-token-refresh-interval", "1m"})
-	want := []string{"list", "--bearer-token-command=[redacted]", "-bearer-token-command=[redacted]", "--x", "--bearer-token-refresh-interval", "1m"}
+	got := redactArgv([]string{"list", "--s3-bearer-token-command", "a b", "--s3-bearer-token-command=c", "--x", "--s3-bearer-token-refresh-interval", "1m"})
+	want := []string{"list", "--s3-bearer-token-command=[redacted]", "--s3-bearer-token-command=[redacted]", "--x", "--s3-bearer-token-refresh-interval", "1m"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("%q", got)
 	}

@@ -52,7 +52,7 @@ func TestCommand(t *testing.T) {
 	}
 	_ = os.Remove(counter)
 	for _, tc := range []struct{ cmd, want string }{
-		{"echo 'denied\x1b[2J' >&2; exit 3", `--bearer-token-command exited 3: denied\x1b[2J`},
+		{"echo 'denied\x1b[2J' >&2; exit 3", `--s3-bearer-token-command exited 3: denied\x1b[2J`},
 		{"true", "produced no output"},
 		{"printf 'a\\nb\\n'", "more than one line"},
 	} {

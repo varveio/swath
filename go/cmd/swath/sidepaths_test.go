@@ -10,10 +10,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/listing"
 )
 
 // exitOf is the exit code main gives err.
@@ -653,4 +656,45 @@ func listOrCount(args []string, stdout io.Writer) error {
 		return runCount(context.Background(), args[1:], stdout)
 	}
 	return run(context.Background(), args, stdout, false)
+}
+
+// TestReportDestination: --report naming a directory, or a name whose
+// directory does not exist, is refused before listing (exit 2); a report
+// that cannot be written at the end fails a run that succeeded (exit 1),
+// its error shown under -q; a refusal of a command line that parsed (a
+// provider flag on another provider's source) writes its report.
+func TestReportDestination(t *testing.T) {
+	stderr := captureStderr(t)
+	src := localSource(t)
+	base := t.TempDir()
+	for _, report := range []string{base, filepath.Join(base, "missing", "r.json")} {
+		if err := run(context.Background(), []string{src, "--columns", "key", "--report", report}, io.Discard, false); exitOf(err) != exitUsage {
+			t.Errorf("--report %s: %v", report, err)
+		}
+	}
+	report := filepath.Join(base, "r.json")
+	err := run(context.Background(), []string{src, "--s3-region", "x", "--report", report}, io.Discard, false)
+	var rep listing.Report
+	if exitOf(err) != exitUsage {
+		t.Fatalf("--s3-region on a local source: %v", err)
+	}
+	readJSON(t, report, &rep)
+	if rep.Outcome.ExitCode != exitUsage || !strings.Contains(rep.Outcome.Error, "--s3-region") {
+		t.Errorf("report outcome %+v", rep.Outcome)
+	}
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return // a read-only directory is writable there
+	}
+	ro := filepath.Join(base, "ro")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o700) })
+	stderr.Reset()
+	setLog(termOptions{quiet: 1}, "")
+	t.Cleanup(func() { logs.Store(nil) })
+	err = run(context.Background(), []string{src, "--columns", "key", "-q", "--report", filepath.Join(ro, "r.json")}, io.Discard, false)
+	if code := conclude(err); code != exitFatal || !strings.Contains(stderr.String(), "is not written to") {
+		t.Errorf("unwritable report: exit %d (%v), stderr %q", code, err, stderr.String())
+	}
 }

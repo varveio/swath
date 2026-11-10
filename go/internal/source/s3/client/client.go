@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -66,7 +67,10 @@ type Config struct {
 	Anonymous      bool          // never sign
 	RequestPayer   bool          // send x-amz-request-payer: requester (signed): the caller pays for a requester-pays bucket
 	RequestTimeout time.Duration // per attempt, headers and body; default 30 s
-	HTTPClient     *http.Client
+	// Trust verifies the service's certificate; its CA bundle defaults to
+	// AWS_CA_BUNDLE's, as the AWS CLI's. A supplied HTTPClient keeps its own.
+	Trust      source.Trust
+	HTTPClient *http.Client
 	// Bearer, if set, authenticates every request with its token
 	// ("Authorization: Bearer") instead of SigV4; no credential is looked up.
 	Bearer *tokensource.Shared
@@ -89,6 +93,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
+	if cfg.Trust.CABundle == "" {
+		cfg.Trust.CABundle = os.Getenv("AWS_CA_BUNDLE")
+	}
+	trust, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
+	}
 	a, err := loadAuth(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -105,7 +116,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Meter: objhttp.NewMeter(cfg.Retry),
 	}
 
-	hc := objhttp.Pool(1, cfg.HTTPClient, func(next http.RoundTripper) http.RoundTripper {
+	hc := objhttp.Pool(1, cfg.HTTPClient, trust, func(next http.RoundTripper) http.RoundTripper {
 		guard := &objhttp.Guard{Next: next, Validate: validate}
 		if a.bearer != nil {
 			guard.Header = bearerHeader
@@ -196,7 +207,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*Page, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) {
 		return attempt(c, ctx, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
@@ -224,7 +235,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*VersionPage, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*VersionPage, error) {
 		return attempt(c, ctx, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err
@@ -246,7 +257,7 @@ type tokenKey struct{}
 func bearerHeader(req *http.Request) error {
 	tok, ok := req.Context().Value(tokenKey{}).(string)
 	if !ok {
-		return &objhttp.CredentialError{Source: "--bearer-token-command", Err: errors.New("no token for the request")}
+		return &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: errors.New("no token for the request")}
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	return nil

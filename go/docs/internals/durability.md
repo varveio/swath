@@ -148,7 +148,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--limiter-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
@@ -204,8 +204,8 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
-   is the provider, the source (bucket and prefix), the recorded endpoint inputs and `-fetch-owner`: the
-   endpoint as given (`--endpoint`, empty for AWS's own), the signing region (`--region`, else what the
+   is the provider, the source (bucket and prefix), the recorded endpoint inputs and `--s3-fetch-owner`: the
+   endpoint as given (`--endpoint-url`, empty for AWS's own), the signing region (`--s3-region`, else what the
    environment or profile resolves, so a resume that resolves another region is refused even when the flag was
    not given), and the addressing flags (path-style, FIPS, dual-stack), compared as given, not resolved to a
    URL. A field added, dropped or changed is a typed `*journal.MismatchError`. The endpoint's canonical form is

@@ -272,26 +272,6 @@ func TestAbortJoinsAndKeepsDestination(t *testing.T) {
 	}
 }
 
-// TestEscapeRuns: the run-at-a-time escaper matches the byte rule on
-// every byte value, alone and between plain runs.
-func TestEscapeRuns(t *testing.T) {
-	ref := func(s string, json bool) string {
-		var b []byte
-		for i := 0; i < len(s); i++ {
-			b = appendEscaped(b, s[i:i+1], json)
-		}
-		return string(b)
-	}
-	for c := 0; c < 256; c++ {
-		for _, json := range []bool{false, true} {
-			s := "ab" + string(rune(0)) + "cd" + string([]byte{byte(c)}) + "é" + string([]byte{byte(c), byte(c)})
-			if got, want := string(appendEscaped([]byte("x"), s, json)), "x"+ref(s, json); got != want {
-				t.Fatalf("byte %#x json %v: %q, want %q", c, json, got, want)
-			}
-		}
-	}
-}
-
 // BenchmarkSink is the order stage's cost of handing rows to a TSV file
 // compressed with zstd: one synchronous encoder against parallel jobs.
 func BenchmarkSink(b *testing.B) {

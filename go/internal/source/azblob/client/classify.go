@@ -42,7 +42,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	s := fmt.Sprintf("Azure %d", e.Status)
+	s := fmt.Sprintf("Azure Blob %d", e.Status)
 	if e.Code != "" {
 		s += " " + e.Code
 	}

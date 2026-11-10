@@ -79,9 +79,9 @@ var spillEncoderOptions = []zstd.EOption{
 
 // Frame types: the payload's first byte.
 const (
-	frameRows      = 'R' // plain rows (appendRows): --spill-plain --spill-compress=false
+	frameRows      = 'R' // plain rows (appendRows): --spill-plain --no-spill-compress
 	frameRowsZstd  = 'Z' // plain rows, zstd: --spill-plain
-	frameDelta     = 'D' // delta rows (appendDelta): --spill-compress=false
+	frameDelta     = 'D' // delta rows (appendDelta): --no-spill-compress
 	frameDeltaZstd = 'Y' // delta rows, zstd: the CLI's default
 	frameTrailer   = 'T' // the row count, at the range's end
 )

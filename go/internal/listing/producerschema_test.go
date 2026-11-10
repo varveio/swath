@@ -28,7 +28,7 @@ var typeNames = map[schema.Type]string{
 // encoding, value cap and accessor.
 func describeSchema[P any](s *schema.Schema[P]) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "schema_id %s\nmessage %s\nkey_unique %v\nmax_key_bytes %d\nquoted_etag %v\n", s.ID, s.Name, !s.Groups, s.MaxKeyBytes, s.QuotedETag)
+	fmt.Fprintf(&b, "schema_id %s\nmessage %s\nkey_unique %v\nmax_key_bytes %d\n", s.ID, s.Name, !s.Groups, s.MaxKeyBytes)
 	fmt.Fprintf(&b, "column key %s required delta\n", typeNames[s.Key])
 	for _, c := range s.Columns {
 		nullable, delta, accessor := "optional", "", "str"

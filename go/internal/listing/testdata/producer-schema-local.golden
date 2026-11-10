@@ -2,7 +2,6 @@ schema_id swath/local-entries/v1
 message swath_listing
 key_unique true
 max_key_bytes 0
-quoted_etag false
 column key BYTE_ARRAY required delta
 column size INT64 INT(64,true) optional max_bytes 0 accessor int
 column last_modified INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int

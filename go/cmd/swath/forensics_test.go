@@ -56,7 +56,7 @@ func TestStuckCause(t *testing.T) {
 			t.Cleanup(srv.Close)
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
-			args := append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "2",
+			args := append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "2",
 				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
 			args = append(args, unjournaled...)
 			if code := exitCode(t, run(context.Background(), args, io.Discard, diagList)); code != exitStuck {
@@ -167,7 +167,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		url := s3test.Bucket(t, keys)
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, []string{"s3://bkt", "--endpoint", url, "--path-style", "--anonymous", "--sequential", "--max-keys", "10",
+		err := run(ctx, []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--sequential", "--max-keys", "10",
 			"--report", report, "-o", dir}, io.Discard, true)
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("exit %d (%v)", c, err)
@@ -201,7 +201,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		t.Cleanup(srv.Close)
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, []string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
+		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "-o", dir}, io.Discard, false)
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("exit %d (%v)", c, err)
@@ -255,7 +255,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		start := time.Now()
-		err := run(ctx, []string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
+		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--max-duration", deadline.String(), "--report", report, "-o", dir}, io.Discard, false)
 		if time.Since(start) < deadline || failedAt.Sub(start) >= deadline {
 			t.Fatalf("the run failed after %s and the command returned after %s: not across the %s deadline",

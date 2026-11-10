@@ -244,6 +244,20 @@ func (r *Retry) Defaults() {
 	}
 }
 
+// failed tells the watch (source.SetWatch), if any, of a failed attempt
+// and the request it sent last (t).
+func failed(n int, f *Failure, retry bool, wait time.Duration, t *target) {
+	if w := source.Watching(); w != nil && w.Failed != nil {
+		w.Failed(source.Failed{Attempt: n, Class: string(f.Class), Status: f.Status, Code: f.Code, Cause: f.Cause, Retry: retry, Wait: wait, URL: t.url.Load()})
+	}
+}
+
+// target is the URL of the request an attempt sent last: Do hands it to
+// the attempt on its context, and the Guard sets it.
+type target struct{ url atomic.Pointer[url.URL] }
+
+type targetKey struct{}
+
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
 // full-jitter exponential backoff between attempts (or the service's own
@@ -251,11 +265,15 @@ func (r *Retry) Defaults() {
 // throttles and timeouts (every throttled or timed-out attempt, the last
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
-// during a backoff. The caller's cancellation ends it at once.
-func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
+// during a backoff. The caller's cancellation ends it at once. A watch
+// (source.SetWatch) is told of each failed attempt, its request (the
+// attempt sends on the context it is given) and whether it is retried.
+func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func(ctx context.Context) (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, admitted, f := admit(ctx, r, attempt)
+		t := &target{}
+		actx := context.WithValue(ctx, targetKey{}, t)
+		v, admitted, f := admit(ctx, r, func() (T, error) { return attempt(actx) })
 		if f == nil {
 			c.answered.Add(1)
 			return v, nil
@@ -279,6 +297,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 			c.parseFailures.Add(1)
 		}
 		if !f.Transient || n >= r.MaxAttempts {
+			failed(n, f, false, 0, t)
 			if f.Transient {
 				return zero, &ExhaustedError{Attempts: n, Err: f}
 			}
@@ -288,12 +307,13 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
 		wait := rand.N(d) + 1
 		wait = max(wait, f.Wait)
-		t := time.NewTimer(wait)
+		failed(n, f, true, wait, t)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			t.Stop()
+			timer.Stop()
 			return zero, Normalize(ctx.Err())
-		case <-t.C:
+		case <-timer.C:
 		}
 	}
 }
@@ -557,9 +577,9 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
 	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
 	d[CLimiterDepth] = counters.Def{Key: "limiter.max_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
-	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
-	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
-	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
+	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
+	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
+	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping)"}
 	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: FeatureRequestRate, Help: "attempts that waited for a --request-rate token"}
 	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: FeatureRequestRate, Help: "time those attempts waited, summed"}
 	return d

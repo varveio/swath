@@ -14,7 +14,7 @@ import (
 // TestSchemaBinding pins the producer's specification and accessors, so
 // reader binding cannot silently change the columns written to a dataset.
 func TestSchemaBinding(t *testing.T) {
-	wantInfo := schema.Info{Name: "swath_listing", ID: "swath/azblob-objects/v1", Key: schema.String, MaxKeyBytes: 3072}
+	wantInfo := schema.Info{Name: "swath_listing", ID: "swath/azblob-objects/v1", Key: schema.String, MaxKeyBytes: 3072, StorageClass: "access_tier"}
 	if !reflect.DeepEqual(Schema.Info, wantInfo) || Schema.MaxKeyBytes != MaxKeyBytes {
 		t.Fatalf("info: %+v, want %+v", Schema.Info, wantInfo)
 	}

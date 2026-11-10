@@ -11,15 +11,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // duTree is a small tree with what du's flags are about: hard links within
@@ -156,7 +161,7 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 // TestDuMatchesLstat: swath du over a real tree, with each combination of
 // --allocated and --count-links-once, at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
-// in JSONL (a name that is not UTF-8 as PrefixBase64).
+// in JSONL (a name that is not UTF-8 as prefix_base64).
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
@@ -171,9 +176,9 @@ func TestDuMatchesLstat(t *testing.T) {
 						args = append(args, "--count-links-once")
 					}
 					want := duOracle(t, root, depth, allocated, once)
-					size := "Size"
+					size := "size"
 					if allocated {
-						size = "AllocatedSize"
+						size = "allocated_size"
 					}
 					check := func(prefix string, objects, dirs, bytes int64, modified string, prev *string, first bool) {
 						t.Helper()
@@ -199,7 +204,7 @@ func TestDuMatchesLstat(t *testing.T) {
 						t.Fatal(err)
 					}
 					lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-					if lines[0] != "Depth\tObjects\tDirs\t"+size+"\tUnsized\tLastModified\tPrefix" || len(lines)-1 != len(want) {
+					if lines[0] != "depth\tobjects\tdirs\t"+size+"\tunsized\tlast_modified\tprefix" || len(lines)-1 != len(want) {
 						t.Fatalf("%d rows for %d prefixes:\n%s", len(lines)-1, len(want), out.String())
 					}
 					prev := ""
@@ -209,7 +214,12 @@ func TestDuMatchesLstat(t *testing.T) {
 							t.Fatalf("row %q", l)
 						}
 						n := func(s string) int64 { v, _ := strconv.ParseInt(s, 10, 64); return v }
-						check(f[6], n(f[1]), n(f[2]), n(f[3]), f[5], &prev, i == 0)
+						prefix, _, err := textout.UnescapeTSV(f[6])
+						if err != nil {
+							t.Fatal(err)
+						}
+						modified, _, _ := textout.UnescapeTSV(f[5]) // "" for a null
+						check(prefix, n(f[1]), n(f[2]), n(f[3]), modified, &prev, i == 0)
 					}
 					// JSONL: the same rows, each line JSON; the prefix as
 					// text when it is UTF-8, else its exact bytes in base64.
@@ -224,21 +234,21 @@ func TestDuMatchesLstat(t *testing.T) {
 						if err := json.Unmarshal([]byte(l), &r); err != nil {
 							t.Fatalf("%q: %v", l, err)
 						}
-						prefix, text := r["Prefix"].(string)
-						if b64, ok := r["PrefixBase64"].(string); ok == text {
-							t.Fatalf("%q: one of Prefix and PrefixBase64", l)
+						prefix, text := r["prefix"].(string)
+						if b64, ok := r["prefix_base64"].(string); ok == text {
+							t.Fatalf("%q: one of prefix and prefix_base64", l)
 						} else if ok {
 							raw, err := base64.StdEncoding.DecodeString(b64)
 							if err != nil || utf8.Valid(raw) {
-								t.Fatalf("%q: PrefixBase64 of %q (%v)", l, raw, err)
+								t.Fatalf("%q: prefix_base64 of %q (%v)", l, raw, err)
 							}
 							prefix = string(raw)
 						}
-						modified, _ := r["LastModified"].(string)
-						if r["Unsized"] != 0.0 || r["Depth"] != float64(strings.Count(prefix, "/")) {
-							t.Fatalf("%q: Unsized or Depth", l)
+						modified, _ := r["last_modified"].(string)
+						if r["unsized"] != 0.0 || r["depth"] != float64(strings.Count(prefix, "/")) {
+							t.Fatalf("%q: unsized or depth", l)
 						}
-						check(prefix, int64(r["Objects"].(float64)), int64(r["Dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
+						check(prefix, int64(r["objects"].(float64)), int64(r["dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
 						rows++
 					}
 					if rows != len(want) {
@@ -263,7 +273,7 @@ func TestDuMatchesLstat(t *testing.T) {
 
 // TestDuLocalRefusals: du's local flags need each entry's stat, and an
 // object store refuses them as it refuses the local provider's own flags;
-// --one-filesystem is the local provider's.
+// --one-file-system is the local provider's.
 func TestDuLocalRefusals(t *testing.T) {
 	root := duTree(t)
 	for _, tc := range []struct {
@@ -271,15 +281,15 @@ func TestDuLocalRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to local sources, not to s3://"},
-		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to local sources, not to gs://"},
-		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to local sources, not to az://"},
-		{true, []string{"s3://bkt", "--one-filesystem"}, "--one-filesystem applies to local sources, not to s3://"},
-		{false, []string{"az://acct/ctr", "--one-filesystem"}, "--one-filesystem applies to local sources, not to az://"},
+		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to Local sources, not to S3 sources"},
+		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to Local sources, not to GCS sources"},
+		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to Local sources, not to Azure Blob sources"},
+		{true, []string{"s3://bkt", "--one-file-system"}, "--one-file-system applies to Local sources, not to S3 sources"},
+		{false, []string{"az://acct/ctr", "--one-file-system"}, "--one-file-system applies to Local sources, not to Azure Blob sources"},
 		{false, []string{root, "--allocated"}, "--allocated has no meaning for swath list"},
 		{false, []string{root, "--count-links-once"}, "--count-links-once has no meaning for swath list"},
 		{true, []string{root, "--allocated", "--metadata", "names"}, "not with --metadata names"},
-		{true, []string{root, "--one-filesystem", "--metadata", "names"}, "names metadata tier"},
+		{true, []string{root, "--one-file-system", "--metadata", "names"}, "names metadata tier"},
 	} {
 		var out bytes.Buffer
 		var err error
@@ -292,16 +302,16 @@ func TestDuLocalRefusals(t *testing.T) {
 			t.Errorf("du=%v %v: exit %d (%v), want %q", tc.du, tc.args, exitOf(err), err, tc.want)
 		}
 	}
-	// --one-filesystem lists the tree it stays on, and the manifest says the
+	// --one-file-system lists the tree it stays on, and the manifest says the
 	// listing stopped there.
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--allocated", "--one-filesystem", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "Depth\tObjects\tDirs\tAllocatedSize\tUnsized\tLastModified\tPrefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
+	if err := runDu(context.Background(), []string{root, "--allocated", "--one-file-system", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
 	out.Reset()
-	if err := run(context.Background(), []string{root, "-o", ds, "--one-filesystem", "--no-stats"}, &out, false); err != nil {
+	if err := run(context.Background(), []string{root, "-o", ds, "--one-file-system", "--no-stats"}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	var m struct {
@@ -336,17 +346,88 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	stderr := captureStderr(t)
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, &out); err != nil {
+	report := filepath.Join(t.TempDir(), "report.json")
+	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out.String(), "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t1\t1\t2\t0\t") ||
-		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read") {
+	// D7: the entry is named with its cause, and the report says the
+	// totals are short although the listing completed.
+	if !strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
+		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read: the totals leave them out\n  "+locked+": ") ||
+		!strings.Contains(stderr.String(), "permission denied") {
 		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if !rep.Outcome.Unreadable || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
+		t.Fatalf("report outcome %+v", rep.Outcome)
+	}
+	// A listing names them too.
+	stderr.Reset()
+	if err := run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false); err != nil ||
+		!strings.Contains(stderr.String(), "1 entry could not be read: the output leaves them out\n  "+locked+": ") {
+		t.Fatalf("list: %v, stderr %q", err, stderr.String())
 	}
 	for _, q := range []string{"-q", "-qq"} {
 		stderr.Reset()
 		if err := runDu(context.Background(), []string{root, "--format=tsv", q}, &out); err != nil || stderr.Len() != 0 {
 			t.Fatalf("%s: %v, stderr %q", q, err, stderr.String())
 		}
+	}
+}
+
+// gatedWriter is a stderr pipe that is full: writes wait until open
+// closes, then go through.
+type gatedWriter struct {
+	open chan struct{}
+	mu   sync.Mutex
+	b    bytes.Buffer
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	<-g.open
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.b.Write(p)
+}
+
+// TestWarningOutlastsBacklog: with stderr full while a du run with an
+// unreadable entry ends, and drained once its report is written, the
+// "could not be read" warning and the outcome both arrive, in that order:
+// the outcome's priority drops the disposable lines only.
+func TestWarningOutlastsBacklog(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory of mode 000")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(filepath.Join(locked, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	g := &gatedWriter{open: make(chan struct{})}
+	errOut = g
+	t.Cleanup(func() { errOut = os.Stderr; logs.Store(nil) })
+	report := filepath.Join(t.TempDir(), "report.json")
+	go func() {
+		for {
+			if _, err := os.Stat(report); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(10 * time.Millisecond)
+		close(g.open)
+	}()
+	conclude(runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "-v", "--log-format=json", "--report", report}, io.Discard))
+	g.mu.Lock()
+	got := g.b.String()
+	g.mu.Unlock()
+	w, o := strings.Index(got, "could not be read"), strings.Index(got, `"event":"outcome"`)
+	if w < 0 || o < 0 || w > o {
+		t.Fatalf("stderr %q", got)
 	}
 }

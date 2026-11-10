@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,19 @@ func textDest(path string) (format, compression string) {
 	return textExts[strings.ToLower(filepath.Ext(p))], compression
 }
 
+// unwritten are the data-file extensions swath does not write: an -o name
+// ending in one is refused rather than taken for a dataset directory.
+var unwritten = []string{".csv", ".json", ".ndjson", ".txt", ".bz2", ".xz", ".gz", ".zst"}
+
+// outputForms names what -o takes, for its refusals.
+const outputForms = "-o takes a dataset directory (any other name, or one ending in /), NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
+
+// hasScheme reports whether path starts with a URL scheme (s3://).
+func hasScheme(path string) bool {
+	i := strings.Index(path, "://")
+	return i > 0 && !strings.ContainsAny(path[:i], `/\.`)
+}
+
 // resolveOutput decides what a run writes. The -o name decides alone:
 //
 //   - no -o, or -o -: rows on stdout, in --format (auto, the default, is
@@ -38,21 +52,57 @@ func textDest(path string) (format, compression string) {
 //     a pipe (| zstd);
 //   - -o NAME.tsv or NAME.jsonl, optionally .gz or .zst: that format and
 //     compression, one file;
-//   - any other -o: the Parquet dataset directory.
+//   - -o NAME/, or another name: the Parquet dataset directory; a name
+//     ending in a data-file extension swath does not write (unwritten),
+//     and a URL (an object-store destination), are refused.
 //
-// --format is for stdout only: a file's name already says its format, so
-// a second way to say it could only conflict.
+// With -o FILE a --format that agrees with the file's name is accepted,
+// one that does not is refused, as is --format with a dataset directory.
+// --columns chooses TSV or JSONL columns: refused with the table and with a
+// dataset, and auto on a terminal is then TSV.
 func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
+	c, err := resolveText(o, stdoutTTY && len(o.columns) == 0)
+	switch {
+	case err != nil || len(o.columns) == 0:
+		return c, err
+	case c == nil:
+		return nil, fmt.Errorf("--columns: -o %s is a dataset directory, which holds every column; the columns are chosen for TSV and JSONL", registry.Redact(o.out))
+	case c.Format == textout.Table:
+		return nil, errors.New("--columns: the table's columns are fixed; the columns are chosen for --format tsv or jsonl")
+	}
+	c.Columns = o.columns
+	return c, nil
+}
+
+func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	toStdout := o.out == "" || o.out == "-"
 	switch {
 	case o.countOnly: // swath du and swath diag count write no rows (placement refuses -o; du's --format is resolveTotals')
 		return nil, nil
-	case !toStdout && o.format != "":
-		return nil, fmt.Errorf("--format is for stdout: -o %s decides by its name (.tsv or .jsonl, optionally .gz or .zst, is one text file; any other name, the dataset directory)", o.out)
+	case !toStdout && hasScheme(o.out):
+		return nil, fmt.Errorf("-o %s: an object-store destination is not supported; %s", registry.Redact(o.out), outputForms)
 	case !toStdout:
 		format, comp := textDest(o.out)
-		if format == "" {
+		dir := strings.HasSuffix(o.out, "/") || strings.HasSuffix(o.out, string(filepath.Separator))
+		if dir {
+			format = ""
+		}
+		lower := strings.ToLower(o.out)
+		for _, ext := range unwritten {
+			if format == "" && !dir && strings.HasSuffix(lower, ext) {
+				return nil, fmt.Errorf("-o %s: swath does not write %s files; %s", registry.Redact(o.out), ext, outputForms)
+			}
+		}
+		switch {
+		case format == "" && o.format != "":
+			return nil, fmt.Errorf("--format %s: -o %s is a dataset directory, not text rows", o.format, registry.Redact(o.out))
+		case format != "" && o.format != "" && o.format != "auto" && o.format != format:
+			return nil, fmt.Errorf("--format %s: -o %s names %s; %s", o.format, registry.Redact(o.out), format, outputForms)
+		case format == "":
 			return nil, nil
+		}
+		if parent := filepath.Dir(o.out); !isDir(parent) {
+			return nil, fmt.Errorf("-o %s: its directory %s does not exist", o.out, parent)
 		}
 		return &textout.Config{Format: format, Path: o.out, Compression: comp}, nil
 	}
@@ -76,14 +126,6 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	if !o.du {
 		return nil
 	}
-	switch {
-	case o.depth < 0:
-		return fmt.Errorf("--depth %d: negative", o.depth)
-	case o.maxPrefixes < 1:
-		return fmt.Errorf("--max-prefixes %d: want at least 1", o.maxPrefixes)
-	case o.maxInodes < 1:
-		return fmt.Errorf("--max-inodes %d: want at least 1", o.maxInodes)
-	}
 	format := o.format
 	switch format {
 	case "", "auto":
@@ -94,6 +136,9 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	case textout.TSV, textout.Table, textout.JSONL:
 	default:
 		return fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+	}
+	if o.sortBy != sortName && o.sortBy != sortSize {
+		return fmt.Errorf("--sort %q: want name or size", o.sortBy)
 	}
 	origin, err := keyOrigin(root)
 	if err != nil {
@@ -108,7 +153,7 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			return err
 		}
 	}
-	o.totals = &totalsOut{format: format, tally: totals.New(opt)}
+	o.totals = &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}
 	return nil
 }
 

@@ -52,7 +52,7 @@ func newSchema(keyLimit int) *schema.Schema[Object] {
 	}
 	number := func(get func(*Object) (int64, bool)) func(*Object) (int64, bool) { return get }
 	return &schema.Schema[Object]{
-		Info: schema.Info{Name: "swath_listing", ID: SchemaID, Key: schema.String, MaxKeyBytes: keyLimit, QuotedETag: true},
+		Info: schema.Info{Name: "swath_listing", ID: SchemaID, Key: schema.String, MaxKeyBytes: keyLimit},
 		Columns: []schema.Column[Object]{
 			{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: number(func(o *Object) (int64, bool) { return o.Size, o.HasSize })},
 			{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: number(func(o *Object) (int64, bool) { return o.Mtime, o.HasMtime })},

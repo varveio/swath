@@ -157,7 +157,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	env := append(os.Environ(), "GOMAXPROCS=4")
 	runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", "12MiB", "--spill-budget", "512MiB"}
 	args := func(out string, extra ...string) []string {
-		a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32", "-part-size", "16KiB", "-o", out}
+		a := []string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32", "--part-size", "16KiB", "-o", out}
 		return append(append(a, runtime...), extra...)
 	}
 	run := func(at string, cmd *exec.Cmd, kill string, extra ...string) {

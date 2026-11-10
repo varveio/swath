@@ -217,6 +217,58 @@ func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	}
 }
 
+// TestFileRoot: a root that is not a directory lists as its one entry,
+// keyed by its name, with both engines and at the names tier.
+func TestFileRoot(t *testing.T) {
+	root := t.TempDir()
+	mk(t, root, "d/f", false)
+	file := filepath.Join(root, "d", "f")
+	for _, opt := range []Options{{}, {Portable: true}, {Fields: Names}} {
+		rows, st := list(t, file, opt, 2, 100)
+		if len(rows) != 1 || rows[0].Key != "f" || rows[0].Data.Kind != KindFile || st.Files != 1 || st.Dirs != 0 {
+			t.Fatalf("%+v: rows %+v, stats %+v", opt, rows, st)
+		}
+		if _, sized := Schema.Columns[0].Int(&rows[0].Data); sized == (opt.Fields == Names) {
+			t.Fatalf("%+v: size present %v", opt, sized)
+		}
+	}
+}
+
+// TestFileRootAsListed: a file root's row is the row its directory's
+// listing gives the same entry, at every tier and with both engines: the
+// statx tier's birth time included, and a symbolic link as itself, with
+// its target, not followed.
+func TestFileRootAsListed(t *testing.T) {
+	root := t.TempDir()
+	mk(t, root, "d/f", false)
+	names := []string{"f"}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink("f", filepath.Join(root, "d", "l")); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, "l")
+	}
+	for _, portable := range []bool{false, true} {
+		for _, fields := range []Fields{Names, Stat, Statx} {
+			if fields == Statx && (portable || !nativeEngine) {
+				continue
+			}
+			opt := Options{Portable: portable, Fields: fields, LinkTarget: true}
+			dir, _ := list(t, filepath.Join(root, "d"), opt, 2, 100)
+			for _, name := range names {
+				rows, _ := list(t, filepath.Join(root, "d", name), opt, 2, 100)
+				i := slices.IndexFunc(dir, func(r Row) bool { return r.Key == name })
+				if len(rows) == 1 && i >= 0 {
+					rows[0].Data.Atime = dir[i].Data.Atime // reading a link's target touches it
+				}
+				if len(rows) != 1 || i < 0 || rows[0] != dir[i] {
+					t.Errorf("portable=%v %v %s: file root %+v, listed %+v", portable, fields, name, rows, dir)
+				}
+			}
+		}
+	}
+}
+
 func TestSkipDirectory(t *testing.T) {
 	root := t.TempDir()
 	for _, f := range []string{"a/1", "a/out/data/x", "b"} {

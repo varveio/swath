@@ -288,7 +288,7 @@ func prepareError(out string, err error) error {
 	if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(out) {
 		err = fmt.Errorf("%w: %w", err, ErrInterrupted)
 	}
-	return fmt.Errorf("prepare output: %w", err)
+	return err
 }
 
 // openLocked does openJournal's work with the lock held.

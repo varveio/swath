@@ -86,13 +86,14 @@ Use the provider's supported credential sources; do not put secrets in shell his
 Azure also accepts a SAS flag or source query and redacts it from records; see the
 [Azure credential and namespace reference](internals/providers/azblob.md).
 Without `--anonymous`, missing or unusable credentials stop the run before listing; swath never
-falls back to unsigned requests. Credential failures normally have cause `auth` (exit 1). During
-Azure namespace admission, failed Entra token acquisition can instead leave the namespace unknown:
-without `--azblob-flat`, this is `refused`, cause `unsupported` (exit 2). See
-[Azure admission](internals/providers/azblob.md#provider-implementation).
+falls back to unsigned requests. Credential failures have cause `auth` (exit 1) for every provider,
+Azure's during namespace admission included. `--anonymous` beside an explicit credential
+(`--s3-profile`, `--s3-bearer-token-command`, `--gcs-credentials-file`, `--azure-sas-token`, a SAS in the
+source URL) is refused (exit 2); credentials only the environment holds are ignored with one warning that
+names the variables.
 
 **S3.** The AWS SDK's default chain: environment keys, the shared `config` and `credentials` files
-(`--profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
+(`--s3-profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
 profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMDSv2).
 
 - Requests go unsigned only with `--anonymous`, which ignores every credential: a public bucket needs it.
@@ -102,45 +103,51 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
 - Refused before any request as configured but broken: an access key without its secret or the reverse, a
   session token without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`, a profile that does
   not exist.
-- Region: `--region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
-  wrong region is an error that names the bucket's region. Redirects are not followed. STS calls use the
-  environment's or profile's region, not `--region`.
-- Requester-pays buckets: `--request-payer`. Endpoint variants: `--fips`, `--dualstack`; S3-compatible stores:
-  `--endpoint URL`, addressed path-style unless `--path-style=false`.
+- Region: `--s3-region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
+  wrong region is an error that names the bucket's region and the flag to give (`--s3-region eu-west-1`). Redirects are not followed. STS calls use the
+  environment's or profile's region, not `--s3-region`.
+- Requester-pays buckets: `--s3-requester-pays`. Endpoint variants: `--s3-fips`, `--s3-dualstack` (else
+  `AWS_USE_FIPS_ENDPOINT`, `AWS_USE_DUALSTACK_ENDPOINT`); S3-compatible stores: `--endpoint-url URL`, else
+  `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` (not with `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true`), addressed
+  path-style unless `--no-s3-path-style`. FIPS or dual-stack with a custom endpoint is refused (exit 2).
+  `AWS_CA_BUNDLE` is the CA bundle when `--ca-bundle` is not given. The CA bundle and `--no-verify-ssl` apply to
+  the credential chain (STS, SSO, web identity) as to the listing.
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
-  `--bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
-  (`--bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
+  `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
+  (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
   recorded, so give it again to `swath resume DIR` ([cli.md](cli.md), "Bearer tokens").
 - Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
   in `--x-s3` is refused, exit 2).
 
-**GCS.** `--gcs-credentials FILE` (Google credential JSON, including service-account and authorized-user
+**GCS.** `--gcs-credentials-file FILE` (Google credential JSON, including service-account and authorized-user
 files), else Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
 Requests go unauthenticated only with `--anonymous` (a public bucket needs it). Credentials that cannot be
 found or loaded (no ADC anywhere, a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file) are refused
 (`auth`) before any listing request. The token scope is
-`devstorage.read_only`. Requester-pays buckets: `--gcs-user-project PROJECT` bills that project; it is part of
+`devstorage.read_only`. Requester-pays buckets: `--gcs-billing-project PROJECT` bills that project; it is part of
 the resume identity.
 
 S3 uses one transport; GCS and Azure Blob use a pool sized by workers. HTTP/2 is available where
 the endpoint and transport support it. HTTP/1.1 at an S3 endpoint is endpoint behavior, not a client
 guarantee, including for S3-compatible stores. See [pool construction](internals/clients.md#pool-construction).
 
-The report's `source.stats` records `anonymous`, `credentials` (where they came from) and, for S3, `region`.
+The report's `source.stats` records `anonymous`, `credentials` (where they came from), `no_verify_ssl` when
+`--no-verify-ssl` was in force and, for S3, `region`.
 
 ## Object-store requests
 
-S3, GCS and Azure Blob share `--anonymous`, `--endpoint`, `--request-timeout`, `--limiter`
-and `--request-rate`. Without `--anonymous`, missing or unusable credentials stop the run;
-see [credentials](#credentials) for the Azure admission exception to cause `auth`. `--anonymous`
-ignores configured credentials. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
+S3, GCS and Azure Blob share `--anonymous`, `--endpoint-url`, `--ca-bundle`, `--no-verify-ssl`,
+`--request-timeout`, `--no-adaptive-limit` and `--request-rate`. Without `--anonymous`, missing or unusable
+credentials stop the run (cause `auth`); `--anonymous` ignores ambient credentials and refuses explicit ones.
+`--ca-bundle FILE` adds a PEM file's certificates to the system roots (a private certificate authority);
+`--no-verify-ssl` checks no certificate and warns on every run that has it, a resume included. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
 no user information. Provider pages describe additional endpoint rules and credential diagnostics.
 
 A request has a 30 s timeout by default. Retryable failures get up to nine attempts with
 exponential backoff (100 ms base, 5 s maximum). For engine listing calls, retry exhaustion
 returns the page to the range engine for requeue. Azure namespace admission runs before the
 engine exists: exhausted admission checks can refuse the run when flatness remains unknown,
-unless `--azblob-flat` asserts it. `--stall-timeout` and `--max-duration` bound a run that cannot
+unless `--azure-assume-flat` asserts it. `--stall-timeout` and `--max-duration` bound a run that cannot
 make progress. Retryable status codes and server-directed waits differ by provider.
 
 The adaptive limiter starts at `--workers` (64 by default). `--request-rate N` adds a
@@ -237,7 +244,7 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
   the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  `--report-format json` also prints the report on stdout; the default prints one line.
+  `--report -` also prints the report on stdout; the default prints one line.
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
   The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
   that keeps returning rows or pages forever. Give every unattended attempt one.
@@ -302,7 +309,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | `resources.peak_heap_live_bytes` against `invocation.row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
 | `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
 | `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
-| `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
+| `rows` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
 | `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
@@ -320,9 +327,9 @@ reduces concurrency under sustained throttling and recovers as answers improve.
 [Request admission](internals/clients.md#request-admission) owns its window, growth rules,
 timeout and latency brakes, and counters.
 
-- `--limiter=false` removes that limit. Seed listings and structure probes can run beside the
+- `--no-adaptive-limit` removes that limit. Seed listings and structure probes can run beside the
   workers, so more than `--workers` requests can be in flight.
-- `swath diag list --limiter-slow-start` enables an experimental ramp from a small initial limit;
+- `swath diag list --adaptive-limit-slow-start` enables an experimental ramp from a small initial limit;
   it is off by default.
 - `--request-rate N` adds an aggregate rate cap for a quota shared across a fleet. Reservations
   are spaced; scheduling delays can bunch actual sends.
@@ -335,7 +342,7 @@ throttle answers no longer move the limit, and a 300 requests/s cap holds it at 
 throttling have been measured only under the earlier per-answer rule ([history](measurements.md#throttling-through-the-fault-proxy)).
 If a run crawls with `throttles` rising and the report's
 `limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), use
-`--limiter=false` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
+`--no-adaptive-limit` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
 fit for live provider throttling; [request admission](internals/clients.md#request-admission) describes the tuning limits.
 
 ## Stopping and resuming
@@ -359,11 +366,11 @@ OOM kill loses nothing durable: the journal is crash-safe and the resume reconci
 
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
 value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
-`--spill-reserve`, `--spill-compress` and `--spill-plain`, `--part-interval`, `--report-format`, `--report`,
+`--spill-reserve`, `--no-spill-compress` and `--spill-plain`, `--part-interval`, `--report`,
 `--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and the operational ones: the shared
-`--anonymous`, `--request-timeout`, `--limiter`, `--limiter-slow-start` and `--request-rate`, and each
-provider's credential flags (`--azblob-sas`, `--gcs-credentials`, `--profile`, `--bearer-token-command`,
-`--bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
+`--anonymous`, `--request-timeout`, `--no-adaptive-limit`, `--adaptive-limit-slow-start` and `--request-rate`, and each
+provider's credential flags (`--azure-sas-token`, `--gcs-credentials-file`, `--s3-profile`, `--s3-bearer-token-command`,
+`--s3-bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
@@ -388,8 +395,8 @@ later (this build writes and resumes version 9 only), spill on, `--spill-budget`
 not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
-billed project), `--fetch-owner`, the schema and the part size are frozen. A resume whose environment or
-`--profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
+billed project), `--s3-fetch-owner`, the schema and the part size are frozen. A resume whose environment or
+`--s3-profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
 was. Restore the original environment, or start over.
 
 **Refused resumes** and what they mean:
@@ -512,9 +519,10 @@ our measurements, and pages of old versions are slow to first byte; history mult
 lists generations at the cost of live objects.
 
 **Permissions and refusals.** S3 needs `s3:ListBucketVersions` (`s3:ListBucket` alone answers 403, and swath
-never falls back to a current-object listing); GCS needs the same `storage.objects.list`. Text output adds
-`VersionId` (a GCS generation in decimal), `IsLatest` (GCS: no `time_deleted`) and, on S3, `IsDeleteMarker`, and
-omits a delete marker's `Size` and `ETag`. `--min-size` and `--max-size` never match a delete marker. A resume
+never falls back to a current-object listing); GCS needs the same `storage.objects.list`. Text rows carry the
+versions schema's columns: S3's `version_id`, `is_latest` and `is_delete_marker` (a delete marker's `size` and
+`etag` null), GCS's `generation` and `time_deleted` (null on the live generation); the table shows the version
+ID, `latest` and, on S3, `delete_marker`. `--min-size` and `--max-size` never match a delete marker. A resume
 continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
 no versions and stay refused.
 
@@ -551,8 +559,8 @@ and for S3 the delete-marker state, in wire order.
    (`auth`, `access_denied`, `throttle`, `timeout`, `parse`, `protocol`, `unsupported`), `no_space`, or
    a `stuck_*` cause. `outcome.unrecorded`, when set, says why `error.json` was not updated.
 2. **`DIR/error.json`**: the same outcome inside the dataset, current only when its `attempt.id` matches the
-   report's. Without a report, only the exit code is current. A refused command that could not record its
-   outcome prints it on stderr as `swath: outcome: {...}`.
+   report's. Without a report, only the exit code is current. A command that could not record its outcome
+   says why on stderr, and prints the outcome as `swath: outcome: {...}` with `-v` (the `outcome` event under `--log-format json`).
 3. **Goroutine dumps.** At a stall, and at a forced exit, every goroutine's stack and the progress counts go
    whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time), else to stderr,
    cut at 1 MiB.

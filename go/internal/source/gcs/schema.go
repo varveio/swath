@@ -30,7 +30,7 @@ type Row = schema.Row[Object]
 // Schema is the GCS listing schema. Object names are at most 1,024 bytes
 // of UTF-8.
 var Schema = schema.Bind(reader.GCSObjectsV1, schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing"},
+	Info: schema.Info{Name: "swath_listing", StorageClass: "storage_class"},
 	Columns: []schema.Column[Object]{
 		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},

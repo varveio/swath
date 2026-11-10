@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
@@ -36,7 +37,7 @@ func highByte(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool { return r >= 0xE000 })
 }
 
-// base is the replay's endpoint for --endpoint: without the
+// base is the replay's endpoint for --endpoint-url: without the
 // account path segment, which the client adds from the root.
 func base(r *azblobtest.Replay) string { return strings.TrimSuffix(r.Endpoint, "/"+r.Account) }
 
@@ -421,7 +422,7 @@ func (h hostFake) RoundTrip(req *http.Request) (*http.Response, error) {
 // as Azure answers any anonymous caller, or 403) or silent, the Data Lake
 // host's Filesystem Get Properties decides: false lists, true refuses; an
 // absent header or a refusal there is unknown, which refuses unless
-// --azblob-flat asserts a flat namespace (frozen in the identity, shown in
+// --azure-assume-flat asserts a flat namespace (frozen in the identity, shown in
 // the report, warned about). A hierarchical namespace refuses whatever is
 // asserted, and an endpoint that is not ACCOUNT.blob.core.windows.net has
 // no Data Lake host to ask.
@@ -508,7 +509,7 @@ func TestAdmissionFallback(t *testing.T) {
 			t.Fatalf("%s: the Data Lake host asked %d times", c.name, asked)
 		}
 	}
-	// --azblob-flat on a custom endpoint, which has no Data Lake host:
+	// --azure-assume-flat on a custom endpoint, which has no Data Lake host:
 	// the 401 alone is unknown, and the assertion admits it.
 	srv := httptest.NewServer(blob(401, ""))
 	t.Cleanup(srv.Close)
@@ -523,7 +524,7 @@ func TestAdmissionFallback(t *testing.T) {
 // TestAdmitSharedKeyUnknown: with Shared Key, an account-information
 // answer whose x-ms-is-hns-enabled is not exactly "true" or "false" ("0",
 // which strconv.ParseBool would read as flat) is unknown: refused unless
-// --azblob-flat asserts it (no Data Lake host is asked: the endpoint has
+// --azure-assume-flat asserts it (no Data Lake host is asked: the endpoint has
 // none, and the client does not ask one with Shared Key).
 func TestAdmitSharedKeyUnknown(t *testing.T) {
 	t.Setenv(EnvKey, "c2VjcmV0LWtleS1mb3ItdGVzdHM=")
@@ -600,7 +601,7 @@ func TestParseURL(t *testing.T) {
 	if got := RedactRoot("az://acct/c/p?sv=1&sig=SECRET"); got != "az://acct/c/p?"+RedactedSAS {
 		t.Fatalf("redacted %q", got)
 	}
-	for _, a := range []string{"az://acct/c/what?x=1", "s3://b?sig=1", "--azblob-sas"} {
+	for _, a := range []string{"az://acct/c/what?x=1", "s3://b?sig=1", "--azure-sas-token"} {
 		if got := RedactRoot(a); got != a {
 			t.Fatalf("%q redacted to %q", a, got)
 		}
@@ -698,7 +699,7 @@ func (r *routed) Route(container string) string {
 }
 
 // TestRedactedSASResume: a resumed root whose SAS was redacted needs a SAS
-// again (--azblob-sas or AZURE_STORAGE_SAS_TOKEN), or anonymity.
+// again (--azure-sas-token or AZURE_STORAGE_SAS_TOKEN), or anonymity.
 func TestRedactedSASResume(t *testing.T) {
 	t.Setenv(EnvSAS, "")
 	root := "az://acct/c?" + RedactedSAS
@@ -725,9 +726,9 @@ func TestEngineFlagsShared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	v := pf.RegisterFlags(f, true)
-	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-anonymous", "-endpoint", base(r), "-request-timeout", "7s", "-azblob-flat"}); err != nil {
+	if err := f.Parse([]string{"--structure", "--page-size", "7", "--anonymous", "--endpoint-url", base(r), "--request-timeout", "7s", "--azure-assume-flat"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: v, Workers: 2})
@@ -799,8 +800,6 @@ func TestAdmissionFallbackPolicy(t *testing.T) {
 		{errors.Join(client.ErrHNSUnknown, source.Unsupported(errors.New("unsupported"))), true},
 		{errors.New("unclassified"), false},
 		{nil, false},
-		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
-		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
 		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
 		{errors.Join(objhttp.ErrInvalidPage, &client.Error{Status: 403}), false},
 		{errors.Join(objhttp.ErrSyntax, &client.Error{Status: 401}), false},

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +15,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // localSource is a directory with two files.
@@ -46,8 +48,8 @@ func TestHelpGroupsCoverFlags(t *testing.T) {
 func TestMovedFlagsNameDiag(t *testing.T) {
 	src := localSource(t)
 	moved := map[string]string{
-		"--seed=false": "s3", "--structure=off": "s3", "--floors": "s3", "--sequential": "s3", "--max-keys=5": "s3",
-		"--limiter-slow-start": "s3", "--spill-plain": "", "--spill-compress=false": "", "--spill-reserve=1GiB": "",
+		"--no-seed": "s3", "--structure=off": "s3", "--floors": "s3", "--sequential": "s3", "--max-keys=5": "s3",
+		"--adaptive-limit-slow-start": "s3", "--spill-plain": "", "--no-spill-compress": "", "--spill-reserve=1GiB": "",
 		"--no-spill": "", "--no-journal": "",
 	}
 	for fl, scheme := range moved {
@@ -67,7 +69,7 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 			}
 			want := "swath diag " + cmd.name()
 			switch {
-			case cmd.count && slices.Contains(notCounted, strings.TrimLeft(name, "-")):
+			case cmd.count && !takes(strings.TrimLeft(name, "-"), cmdDiagCount):
 				want = "swath diag list takes it" // no count command takes an output flag
 			case cmd.du:
 				want = "swath diag count or swath diag list" // swath du has no diagnostic form
@@ -82,11 +84,18 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 		}
 	}
 	// The flags that stayed on swath list are not diagnostic.
-	for _, n := range []string{"workers", "row-budget", "spill-budget", "encoders", "part-size", "seed-from", "limiter", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-rotation-max-rows"} {
+	for _, n := range []string{"workers", "row-budget", "spill-budget", "encoders", "part-size", "seed-from", "no-adaptive-limit", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-rotation-max-rows"} {
 		if diagOnly()[n] {
 			t.Errorf("--%s is diagnostic", n)
 		}
 	}
+}
+
+// takes reports whether the list command cmd takes flag name (its table
+// entry's Commands).
+func takes(name, cmd string) bool {
+	cmds := source.Described(newFlags(&options{}, true).Lookup(name)).Commands
+	return cmds == nil || slices.Contains(cmds, cmd)
 }
 
 // TestCountRefusesOutputFlags: swath du and swath diag count write no
@@ -120,7 +129,7 @@ func TestCountRefusesOutputFlags(t *testing.T) {
 			}
 		}
 	}
-	for _, fl := range []string{"--spill-compress=false", "--spill-plain", "--spill-reserve=1GiB", "--no-spill", "--no-journal", "--part-interval=1s"} {
+	for _, fl := range []string{"--no-spill-compress", "--spill-plain", "--spill-reserve=1GiB", "--no-spill", "--no-journal", "--part-interval=1s"} {
 		var buf bytes.Buffer
 		err := runCount(context.Background(), []string{src, fl}, &buf)
 		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath") || strings.Contains(err.Error(), "count takes it") {
@@ -165,24 +174,24 @@ func TestCount(t *testing.T) {
 // them, the runtime does not.
 func TestOldNamesRejected(t *testing.T) {
 	src := localSource(t)
-	for _, fl := range []string{"--concurrency=7", "--spill-max=2GiB", "--force", "--output=x", "--count-only", "--quiet", "--endpoint-url=http://x"} {
+	for _, fl := range []string{"--concurrency=7", "--spill-max=2GiB", "--force", "--count-only", "--endpoint=http://x", "--report-format=json", "--one-filesystem", "--limiter=false", "--region=x", "--azblob-sas=x"} {
 		var buf bytes.Buffer
 		err := run(context.Background(), []string{src, "-o", filepath.Join(t.TempDir(), "ds"), fl}, &buf, false)
 		name, _, _ := strings.Cut(strings.TrimLeft(fl, "-"), "=")
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "unknown flag --"+name) {
 			t.Errorf("%s: exit %d (%v)", fl, exitOf(err), err)
 		}
 	}
 }
 
 // TestEveryHelpExitsZero: --help on every command, diag included, prints
-// to stdout and exits 0 (main treats flag.ErrHelp as success).
+// to stdout and exits 0 (main treats pflag.ErrHelp as success).
 func TestEveryHelpExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"help"}, {"list", "--help"}, {"du", "--help"}, {"resume", "--help"}, {"show", "--help"},
 		{"diag", "--help"}, {"diag", "list", "--help"}, {"diag", "count", "-h"}} {
 		var out bytes.Buffer
 		err := dispatch(context.Background(), args, &out)
-		if err != nil && !errors.Is(err, flag.ErrHelp) {
+		if err != nil && !errors.Is(err, pflag.ErrHelp) {
 			t.Errorf("%v: %v", args, err)
 		}
 		if out.Len() == 0 {
@@ -190,15 +199,15 @@ func TestEveryHelpExitsZero(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if err := dispatch(context.Background(), []string{"list", "--help"}, &out); !errors.Is(err, flag.ErrHelp) {
+	if err := dispatch(context.Background(), []string{"list", "--help"}, &out); !errors.Is(err, pflag.ErrHelp) {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Source and output:", "Performance:", "Limits:", "Output and reporting:", "change it:", "--workers int"} {
+	for _, want := range []string{"Output:", "Filters:", "Object stores:", "S3:", "GCS:", "Azure Blob:", "Local:", "Performance:", "Limits:", "Reporting:", "Raise it (128, 256)", "-j, --workers N", "-o, --output PATH", "Examples:"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("swath list --help lacks %q", want)
 		}
 	}
-	for _, hidden := range []string{"--spill-max", "--count-only", "--concurrency", "--seed\n", "Diagnostics:"} {
+	for _, hidden := range []string{"--spill-max", "--count-only", "--concurrency", "--no-seed", "Diagnostics:", "=false", "Java"} {
 		if strings.Contains(out.String(), hidden) {
 			t.Errorf("swath list --help shows %q", hidden)
 		}

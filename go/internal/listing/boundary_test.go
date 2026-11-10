@@ -222,7 +222,7 @@ func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 					return
 				case <-time.After(10 * time.Millisecond):
 				}
-				if s := pr.Snapshot(); s.Objects > 0 && s.Objects < int64(len(keys)) {
+				if s := pr.Snapshot(); s.Rows > 0 && s.Rows < int64(len(keys)) {
 					ages[i] = max(ages[i], s.PartAgeMs)
 				}
 			}

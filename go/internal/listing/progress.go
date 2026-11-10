@@ -77,7 +77,7 @@ func (p *Progress) own(l *journal.Lock) {
 
 // ProgressSnapshot is Progress at one moment.
 type ProgressSnapshot struct {
-	Objects int64 `json:"objects"` // rows listed so far
+	Rows    int64 `json:"rows"`    // rows listed so far (directories and versions included)
 	Ordered int64 `json:"ordered"` // rows handed to the encoders
 	Encoded int64 `json:"encoded"` // rows written into parts
 	Parts   int64 `json:"parts"`   // parts published
@@ -101,7 +101,7 @@ type ProgressSnapshot struct {
 	Throttles int64 `json:"throttles"`
 	Timeouts  int64 `json:"timeouts"`
 	// Retained is the rows a resume kept from the interrupted run (not
-	// listed by this attempt, so not in Objects).
+	// listed by this attempt, so not in Rows).
 	Retained int64 `json:"rows_retained"`
 	// Requests, Retries, Inflight and Limit are the source's HTTP account
 	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
@@ -141,7 +141,7 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		return s
 	}
 	if f := p.listed.Load(); f != nil {
-		s.Objects = (*f)()
+		s.Rows = (*f)()
 	}
 	if f := p.answered.Load(); f != nil {
 		s.Answered = (*f)()
@@ -168,7 +168,7 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	s.Retained = p.retained.Load()
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()
-	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts + s.Verified
+	s.Advance = s.Rows + s.Ordered + s.Encoded + s.Parts + s.Verified
 	if g := p.gauges.Load(); g != nil {
 		o := g.Snapshot()
 		s.Order = &o

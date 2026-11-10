@@ -3,7 +3,10 @@
 
 package reader
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 // SchemaID is a dataset's schema id: the manifest's schema_id and every
 // part footer's seekparquet.schema_id.
@@ -116,6 +119,11 @@ func Schema(id SchemaID) (SchemaSpec, bool) {
 	}
 	s.Columns = slices.Clone(s.Columns)
 	return s, true
+}
+
+// SchemaIDs returns every schema id swath writes, sorted.
+func SchemaIDs() []SchemaID {
+	return slices.Sorted(maps.Keys(schemas))
 }
 
 // maxObjectKeyBytes is the longest S3 key and Cloud Storage object name;

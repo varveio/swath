@@ -4,7 +4,6 @@
 package registry
 
 import (
-	"fmt"
 	"slices"
 	"testing"
 )
@@ -23,7 +22,7 @@ func TestRegisterDuplicate(t *testing.T) {
 
 func TestLookupUnknownScheme(t *testing.T) {
 	const root = "unknown-registry-test://bucket/prefix"
-	if _, err := Lookup(root); err == nil || err.Error() != fmt.Sprintf("unsupported root %q: no provider for unknown-registry-test://", root) {
+	if _, err := Lookup(root); err == nil || err.Error() != "unsupported source: no provider for unknown-registry-test://" {
 		t.Fatalf("unknown scheme: %v", err)
 	}
 }
