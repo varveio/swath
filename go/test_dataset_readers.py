@@ -72,12 +72,14 @@ class DuckDBComparison(unittest.TestCase):
 
     def test_actual_sql_on_both_schemas(self):
         for fixture in fixtures():
-            for mutation in ("same", "reorder", "duplicate", "null", "metadata"):
+            for mutation in ("same", "reorder", "unordered", "duplicate", "null", "metadata"):
                 with self.subTest(schema=fixture["schema_id"], mutation=mutation), tempfile.TemporaryDirectory() as td:
                     rows = fixture["rows"]
                     changed = copy.deepcopy(rows)
                     if mutation == "reorder":
                         changed[0], changed[1] = changed[1], changed[0]
+                    elif mutation == "unordered":
+                        changed[2], changed[3] = changed[3], changed[2]
                     elif mutation == "duplicate":
                         changed.insert(0, changed[0].copy())
                     elif mutation == "null":
@@ -87,11 +89,18 @@ class DuckDBComparison(unittest.TestCase):
                     a, b = Path(td) / "a", Path(td) / "b"
                     self.dataset(a, fixture, rows)
                     self.dataset(b, fixture, changed)
-                    result = compare(str(a), str(b))
+                    result = compare(str(a), str(b), method="sql")
                     self.assertEqual(result["identical"], mutation == "same", result)
-                    if mutation == "reorder":
+                    if mutation in ("reorder", "unordered"):
                         self.assertEqual(result["only_in_a"], 0)
                         self.assertGreater(result["sequence_differences"][0], 0)
+                    if mutation == "unordered":
+                        self.assertGreater(result["not_ascending"][1], 0)
+                    # The streaming method gives the SQL method's answer, every count included.
+                    streamed = compare(str(a), str(b), method="stream")
+                    self.assertEqual(streamed.pop("method"), "stream")
+                    result.pop("method")
+                    self.assertEqual(streamed, result)
 
 
 @unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")

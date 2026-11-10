@@ -23,7 +23,10 @@
 #   replaydiff/FIXTURE-ROUTE*  bench/replaydiff's JSON and text reports, S3, GCS
 #                              and Azure, the Go server with -go-fixture
 #   listing/FIXTURE/           a full swath list through each server: the run
-#                              reports, diffds.json (bench/diffds.py)
+#                              reports, diffds.json (bench/diffds.py, run in
+#                              WORK: past 20 million rows it streams both
+#                              listings in bounded memory, and any spill of
+#                              its second pass goes under WORK)
 #   startup.tsv                exec to a 200 from /healthz, and RSS then, per
 #                              server and fixture; listing.tsv adds the server's
 #                              peak RSS (VmHWM) over its start and the listing

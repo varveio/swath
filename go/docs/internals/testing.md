@@ -552,10 +552,18 @@ python3 verify.py /tmp/go-ds                                         # the swath
 
 - `bench/diffds.py A B` compares two datasets with DuckDB. It checks:
   - the row sets on the 13 canonical columns, in both directions;
+  - the ordered row sequences, in manifest part and file-row order;
   - that both datasets are strictly ascending by key bytes;
   - the dataset's minimum and maximum key.
 
-  It also prints part counts and sizes side by side. Replay's S3 route renders `LastModified` in
+  It also prints part counts and sizes side by side. Two methods give the same answer (`test_dataset_readers`
+  `DuckDBComparison` runs both): `--sql` runs each check as a query over both whole datasets, and its
+  `EXCEPT ALL` holds every row in memory (143 million rows exhausted 50 GiB); `--stream` reads the two
+  datasets once in sequence order, each part's order checked against `file_row_number`, and compares them row
+  by row in bounded memory (two 12-million-row datasets: 0.3 GB, 49 s on the 4-vCPU dev VM), counting the
+  multiset differences exactly in a second pass only when the sequences differ. Without either flag, inputs of
+  more than 20 million rows together stream. `DIFFDS_MEMORY` bounds each streaming scan (default `4GB`); a
+  side out of key order is sorted by DuckDB for that second pass, spilling under the working directory. Replay's S3 route renders `LastModified` in
   milliseconds; datasets listed through replay therefore agree at that precision, and `--ts-ms` compares a
   replayed listing with a direct one.
 - **Java's reader on Go datasets:** not a gate since Go builds stopped writing format 1 (2026-11-05). Replay's
