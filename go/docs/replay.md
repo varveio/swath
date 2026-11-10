@@ -1104,7 +1104,7 @@ The Go jobs of `.github/workflows/ci.yml` each always run and do their work only
   of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
   `swath-go:ci` and `swath-replay-go:ci` and smoked on data written in the job, so none needs network or a
   recording. The lister image lists a `bench/s3fake` bucket of 2,000 keys into a dataset
-  (`scripts/ci/smoke-container.sh` in `go` mode: read back with DuckDB, resumed as a no-op); the replay image
+  (`scripts/ci/smoke-container.sh`: read back with DuckDB, resumed as a no-op); the replay image
   serves that dataset (sorted, served as it is) and an unsorted
   capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
   refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.

@@ -684,7 +684,7 @@ jobs:
           trap 'kill "$fake"' EXIT
           for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
           SWATH_SMOKE_BUCKET=s3://smoke SWATH_SMOKE_ENDPOINT=http://127.0.0.1:19400 \
-            ../scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister" go
+            ../scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/lister/data" sorted
           go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |

@@ -39,15 +39,16 @@ them by digest, smokes the digests, and only then applies tags and signs.
 ## Registry and artifacts
 
 GHCR is written by `release.yml` only. Pull requests, `main` pushes and dispatches build and smoke
-both Java images in `docker-check` and throw them away; nothing outside a release pushes a tag, so
-the registry holds release versions and nothing else. An unreleased commit's image is built
-locally from the checkout (`docker build .`).
+both Java images in `docker-check` and both Go images in `go-build`, and throw them away; nothing
+outside a release pushes a tag, so the registry holds release versions and nothing else. An
+unreleased commit's image is built locally from the checkout (`docker build -f Dockerfile.go .`).
 
-The artifact uploads of `ci.yml`, `nightly.yml` and `go-stress.yml` set their own `retention-days`
+The artifact uploads of `ci.yml`, `nightly.yml`, `go-stress.yml` and `release.yml` set their own `retention-days`
 instead of taking the repository default:
 
 - 14 days for the per-commit test reports and `go test -json` streams in `ci.yml`;
-- 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`;
+- 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`, and the release's
+  `go test -json` stream;
 - 1 day for an artifact that only hands files from one job to another in the same run.
 
 ## One required check: `ci-gate`

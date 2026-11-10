@@ -348,7 +348,7 @@ maintainers' tooling, never on a schedule; results that are kept go to [measurem
 the run, date and command. The replay server's live matrix is recorded once and replayed offline ([replay
 server oracle](#replay-server-oracle)). The one automatic real-bucket listing is the image smoke,
 `scripts/ci/smoke-container.sh`, an anonymous listing of a small public prefix: of the Go release image in
-`release.yml` `publish` (`go` mode, against the pushed digest); `go-build` runs the same `go` mode offline,
+`release.yml` `publish` (against the pushed digest); `go-build` runs the same smoke offline,
 against `bench/s3fake`.
 
 ## Invariant tests

@@ -74,7 +74,7 @@ SHA, from a cold cache:
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
 - `build`: the static builds for all four targets and their `--version` stamp;
 - `publish`, before any tag exists: both images' `--version` against the pushed digests,
-  the image smoke (`scripts/ci/smoke-container.sh` in `go` mode: an anonymous listing of a
+  the image smoke (`scripts/ci/smoke-container.sh`: an anonymous listing of a
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's
   part list, then resumed as a no-op), and the replay image serving that dataset.
 
@@ -134,8 +134,8 @@ against a real bucket, and whether the verification commands below actually work
   user-facing changes, evidence, and limits.
 - Choosing the version is manual by design; `just release` wraps the guards so the tag
   names a commit the workflow will accept.
-- Artifacts the jobs hand each other (`release-assets`) are kept 1 day; the test stream
-  (`go-race-release`) 30 days.
+- Artifact retention follows the [registry and artifacts](docs/ops/dev/CI.md#registry-and-artifacts)
+  policy: `release-assets`, a hand-off between jobs, 1 day; the `go-race-release` stream 30 days.
 
 ## Verifying a release
 

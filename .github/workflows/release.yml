@@ -334,7 +334,7 @@ jobs:
       # same script — here against a real public bucket over HTTPS, and against the pushed
       # digest, so what is verified is exactly what the tags will name.
       - name: Smoke — Parquet write + read + resume against the pushed digest
-        run: ./scripts/ci/smoke-container.sh "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" releasesmoke go
+        run: ./scripts/ci/smoke-container.sh "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" releasesmoke
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
           SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}

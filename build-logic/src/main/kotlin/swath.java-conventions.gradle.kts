@@ -233,10 +233,7 @@ tasks.withType<JavaCompile>().configureEach {
 
 // Byte-for-byte reproducible archives. Without these, every Jar/Zip/Tar embeds the
 // build's wall-clock timestamps and the filesystem's directory order, so two builds
-// of the same commit produce different bytes. That matters here specifically: the
-// container-promotion contract carries the tested uber-jar into the image and
-// `cmp`s it, and the release pipeline's "the image ships exactly what was tested"
-// claim is only as strong as the build being deterministic.
+// of the same commit produce different bytes.
 tasks.withType<AbstractArchiveTask>().configureEach {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
