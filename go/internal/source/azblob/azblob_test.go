@@ -143,6 +143,11 @@ func TestListReplay(t *testing.T) {
 		if v("order_splits") == 0 || v("order_seeks") == 0 {
 			t.Fatalf("%s: order_splits %d, order_seeks %d: the adapter did not engage", c.name, v("order_splits"), v("order_seeks"))
 		}
+		// The client asks for Arrow; the replay answers XML, the fallback.
+		if v("list_format.arrow_pages") != 0 || v("list_format.xml_pages") == 0 || v("list_format.xml_items") < int64(len(keys)) {
+			t.Fatalf("%s: arrow pages %d, xml pages %d, xml items %d", c.name, v("list_format.arrow_pages"),
+				v("list_format.xml_pages"), v("list_format.xml_items"))
+		}
 		if c.pol.Seed && v("seed.requests") == 0 || c.pol.Structure == keyrange.StructureOn && v("structure.requests") == 0 {
 			t.Fatalf("%s: seed requests %d, structure requests %d: the delimiter listings did not engage", c.name, v("seed.requests"), v("structure.requests"))
 		}

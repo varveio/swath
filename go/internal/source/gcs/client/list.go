@@ -109,7 +109,7 @@ func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 // decoder matches keys case-insensitively); without either, no key can
 // decode as error, so the pre-filter has no false negatives. A body that
 // does not parse is the decoder's to refuse.
-func validate(_ *http.Request, status int, body []byte) error {
+func validate(_ *http.Request, status int, _ http.Header, body []byte) error {
 	if status != http.StatusOK || !mayHoldError(body) {
 		return nil
 	}

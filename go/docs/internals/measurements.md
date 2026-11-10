@@ -885,9 +885,34 @@ v1.8.3 change (azcore v1.24.0, explicit XML response format), both with Go 1.27.
 | hierarchy | 12.54 ± 0 % | 12.57 ± 3 % | ~ (p=0.10) | 485.3k, unchanged | 22.14 MiB, unchanged |
 
 The XML path costs the same. v1.8's `container` package imports `apache/arrow-go` for its Arrow listing format with no
-build tag to leave it out, so `cmd/swath` links it although swath never selects Arrow: stripped static binaries
+build tag to leave it out, so `cmd/swath` linked it before swath used Arrow (next section): stripped static binaries
 40,194,208 to 45,015,200 bytes (+4.8 MB), 727 to 767 packages, 34 of the 40 from Arrow and its dependencies. Arrow's
 `arrow_json_stdlib` tag would save 1.4 MB of that; it is not used. Package initialisation grows by about 0.3 ms.
+
+### Arrow listing format (2026-11-10)
+
+Live, anonymous, `swath list --anonymous az://azureopendatastorage/citydatacontainer/Crime/ -o FILE.tsv` (468,557
+blobs, 64 workers, the default 5,000-entry pages) on a 4-vCPU GCP VM, `/usr/bin/time`. Azure never compresses List
+Blobs; an Arrow page is about 2.2 times smaller than its XML. First measurement (issue #226, an experiment build
+that switched the format by environment variable):
+
+| Format | Wall | CPU | Peak RSS |
+|---|---:|---:|---:|
+| XML | 33–47 s | about 58 s | 1.5–1.9 GB |
+| Arrow | 3–5 s | about 3.4 s | 0.2–0.5 GB |
+
+Re-run with the change that made Arrow the default (one run each, the XML arm built from main before it, which
+names the XML format):
+
+| Format | Wall | User + sys CPU | Peak RSS | Attempts | Pages by format |
+|---|---:|---:|---:|---:|---|
+| XML (main `b546596a`) | 29.50 s | 55.72 + 2.50 s | 1,483,416 KB | 293 | (no counters) |
+| Arrow | 3.36 s | 3.10 + 0.77 s | 468,212 KB | 289 | `list_format.arrow_pages` 287, `xml_pages` 0 |
+
+The two TSV files were byte-identical (`cmp`), in both measurements. The Arrow arm's `list_format.arrow_items`
+(1,271,822) exceeds the objects because it counts every listed item, the seed's and probes' and the adapter's
+discarded overlap included. The CPU saved is the XML decoder's per-element work: the Arrow decoder reads typed
+columns.
 
 ## Local filesystem walker
 

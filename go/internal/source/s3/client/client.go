@@ -357,11 +357,11 @@ func statusCode(status int) string { return strings.ReplaceAll(http.StatusText(s
 
 // validate is the Guard's check of a 2xx answer. One other than 200 is an
 // answer: the code, message and request ID an <Error> body names, else the
-// status text as the code (the response headers are not seen here, so no
-// request ID or region from them). A 200's body is the scanner's to check:
+// status text as the code (no request ID or region from the response
+// headers). A 200's body is the scanner's to check:
 // it requires the operation's envelope and refuses an empty or cut
 // document (objhttp.ErrSyntax, retried, never an empty final page).
-func validate(_ *http.Request, status int, body []byte) error {
+func validate(_ *http.Request, status int, _ http.Header, body []byte) error {
 	if status == http.StatusOK {
 		return nil
 	}

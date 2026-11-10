@@ -69,8 +69,8 @@ const testKey = "c2VjcmV0LWtleS1mb3ItdGVzdHM="
 // can go when it stops refusing), so the client's flat, hierarchy and
 // account-information requests carry exactly one x-ms-version, Version,
 // set by pin, with swath's User-Agent product token once, before the SDK's
-// own, signed under Shared Key; the listings ask for XML (Accept; account
-// information sends none, TestWireSnapshot).
+// own, signed under Shared Key; the listings ask for Arrow, then XML
+// (Accept; account information sends none, TestWireSnapshot).
 func TestServiceVersionPinned(t *testing.T) {
 	over, err := container.NewClientWithNoCredential("http://127.0.0.1:1/acct/c", &container.ClientOptions{ClientOptions: azcore.ClientOptions{
 		APIVersion: Version, Retry: policy.RetryOptions{MaxRetries: -1}}})
@@ -124,7 +124,7 @@ func TestServiceVersionPinned(t *testing.T) {
 				!strings.Contains(agent, "azsdk-go-azblob/") || strings.Count(agent, token) != 1 {
 				t.Errorf("%+v %s: x-ms-version %q, User-Agent %q", cfg, req.URL.RawQuery, versions, agent)
 			}
-			if accept := req.Header.Values("Accept"); call.listing && !slices.Equal(accept, []string{"application/xml"}) {
+			if accept := req.Header.Values("Accept"); call.listing && !slices.Equal(accept, []string{arrowType + ",application/xml"}) {
 				t.Errorf("%+v %s: Accept %q", cfg, req.URL.RawQuery, accept)
 			}
 			if cfg.SharedKey != "" {

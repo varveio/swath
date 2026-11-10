@@ -134,6 +134,7 @@ type Client struct {
 
 	*objhttp.Meter
 	retryAfterCapped atomic.Int64
+	formats          formats
 }
 
 // MaxBody is the body cap: the memory one in-flight response may hold.

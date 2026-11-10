@@ -413,10 +413,15 @@ func TestAcceptRule(t *testing.T) {
 		{"", true}, {"  ", true}, {"application/xml", true}, {"*/*", true}, {"APPLICATION/XML;Q=1E0", true},
 		{"text/plain, application/xml;q=0.5", true}, {"application/xml,", true}, {"application/xml;q=0x1p-1", true},
 		{",", false}, {"application/json", false}, {"application/xml;q=0", false}, {"application/xml;q=2", false},
-		{"application/xml;q=abc", false}, {"application/xml, application/vnd.apache.arrow.stream;q=0", false},
-		{"application/xml;q=NaN", false},
+		{"application/xml;q=abc", false}, {"application/xml;q=NaN", false},
+		{"application/vnd.apache.arrow.stream, application/xml", true}, {"application/vnd.apache.arrow.stream,application/xml", true},
+		{"application/xml, application/vnd.apache.arrow.stream;q=0", true},
+		{"application/vnd.apache.arrow.stream", false}, {"application/vnd.apache.arrow.stream, application/xml;q=0", false},
+		// the most specific range matching application/xml sets its quality
+		{"application/vnd.apache.arrow.stream, application/xml;q=0, */*;q=1", false}, {"*/*;q=0, application/xml", true},
+		{"application/*", true}, {"application/*;q=0, */*", false}, {"application/xml;q=0.5, application/*;q=0", true},
 	} {
-		if got := acceptsXMLOnly(c.accept); got != c.ok {
+		if got := acceptsXML(c.accept); got != c.ok {
 			t.Errorf("%q: %v", c.accept, got)
 		}
 	}
