@@ -12,7 +12,7 @@ import (
 
 // TestRedactEndpointArgv: the URL flags of the registered providers'
 // shared groups (source.FlagGroup.URLs, the store group's --endpoint) are
-// redacted when they carry userinfo or do not parse, and kept as given
+// redacted when they carry userinfo, a query or fragment, or do not parse; kept as given
 // otherwise.
 func TestRedactEndpointArgv(t *testing.T) {
 	if _, err := Lookup("argvtest://x"); err != nil { // registered once per process (-count)
@@ -25,6 +25,7 @@ func TestRedactEndpointArgv(t *testing.T) {
 		for _, endpoint := range []string{
 			"https://user:password@host/base/", "https://user@host/",
 			"https://user:password@[broken", "https://user:pass%ZZ@host/",
+			"https://host/?sig=SECRET", "https://host/#SECRET", "https://host?", "https://host#",
 		} {
 			for _, argv := range [][]string{
 				{"list", "--" + flag, endpoint, "--anonymous"},

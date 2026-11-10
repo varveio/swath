@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // Identity is what must not change between a run and its resume: anything
@@ -29,6 +31,20 @@ type Identity struct {
 	// Filters are the row filters' descriptions (package filter), in
 	// order; none for an unfiltered run.
 	Filters []string `json:"filters,omitempty"`
+}
+
+// Redacted returns a diagnostic copy, including for journals written before
+// credential-bearing endpoints were refused. Identity comparison uses the original.
+func (id Identity) Redacted() Identity {
+	id.Source = slices.Clone(id.Source)
+	for i := range id.Source {
+		f := &id.Source[i]
+		switch f.Name {
+		case "endpoint", "source":
+			f.Value, f.Canonical = redactValue(f.Value), redactValue(f.Canonical)
+		}
+	}
+	return id
 }
 
 // Field is one frozen source setting. Two values are the same setting when
@@ -53,7 +69,12 @@ type MismatchError struct {
 }
 
 func (e *MismatchError) Error() string {
-	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, e.Stored, e.Requested)
+	// Older journals may have recorded credentials in endpoint or root URLs.
+	stored, requested := e.Stored, e.Requested
+	if e.Field == "endpoint" || e.Field == "source" {
+		stored, requested = redactValue(fmt.Sprint(stored)), redactValue(fmt.Sprint(requested))
+	}
+	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, stored, requested)
 }
 
 // Check compares a stored identity with a requested one. It is a pure
@@ -136,4 +157,15 @@ func (id Identity) Hash() string {
 		put("filter=", f)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// redactValue protects diagnostics from credentials recorded by older
+// builds. A root with ? or # is hidden whole: in an Azure root they begin a
+// shared access signature, and this package cannot tell the provider.
+func redactValue(value string) string {
+	u, err := url.Parse(value)
+	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") {
+		return "[redacted]"
+	}
+	return value
 }

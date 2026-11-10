@@ -89,7 +89,7 @@ Source and output:
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --endpoint URL
-        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); user information, a query and a fragment are refused; part of the resume identity
   --all-versions
         list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --metadata tier
@@ -224,7 +224,7 @@ Source and output:
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --endpoint URL
-        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); user information, a query and a fragment are refused; part of the resume identity
   --all-versions
         list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --metadata tier
@@ -386,7 +386,7 @@ Source and output:
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --endpoint URL
-        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); user information, a query and a fragment are refused; part of the resume identity
   --all-versions
         list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --metadata tier
@@ -514,7 +514,8 @@ Diagnostics:
   one given for another source (`gs://... --profile`, where GCS takes `--gcs-credentials`; an S3 flag on a local
   tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same
   for S3, GCS and Azure Blob and refused for a local tree: `--endpoint` (an emulator or a compatible store in
-  place of the provider's own service), `--request-timeout` and `--anonymous`, beside the range engine's
+  place of the provider's own service;
+  [endpoint validation](internals/clients.md#endpoint-validation) refuses user information, a query or a fragment), `--request-timeout` and `--anonymous`, beside the range engine's
   (`--all-versions`, `--limiter`, `--request-rate` and the diagnostic policy flags).
 - **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--endpoint URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
@@ -951,7 +952,7 @@ never zero.
 | `report_version` | 3 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `invocation` | what was asked: `argv` (secret flags and endpoint values that cannot parse or carry user information, a query or a fragment `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 

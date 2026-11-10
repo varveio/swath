@@ -13,6 +13,17 @@ Neither format is a superset of the other: there are no aliases, so a reader of 
 Java reader cannot open a SeekParquet dataset by design. DuckDB, the SeekParquet conformance suite and the
 downstream reader are the acceptance gates ([Gates](#gates)).
 
+## Endpoint validation
+
+S3 and GCS endpoints with a query or fragment are now refused; Azure Blob already refused
+nonempty queries and fragments. All three also refuse empty `?` and `#` delimiters and user
+information. Supply credentials through the provider's credential settings instead of
+`--endpoint`. Refused endpoint messages use fixed rule text; recorded URL arguments with
+credentials become `[redacted]`. Clean roots and endpoint values remain visible in diagnostics,
+including resume mismatches. `swath show` and `swath show --journal` redact credentials
+recorded by older builds without rewriting the journal or changing identity comparisons.
+See [endpoint validation](internals/clients.md#endpoint-validation).
+
 ## SeekParquet
 
 SeekParquet is a sorted-key format for Apache Parquet: ordinary Parquet parts, sorted by one byte-string key

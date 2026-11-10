@@ -242,6 +242,9 @@ func TestOpenRefusesCredentialEndpoint(t *testing.T) {
 		{"AWS_ENDPOINT_URL_S3", "s3://bkt/ds", "https://s3.example.com/?token=" + secret},
 		{"STORAGE_EMULATOR_HOST", "gs://bkt/ds", "http://user:" + secret + "@localhost:9000"},
 		{"STORAGE_EMULATOR_HOST", "gs://bkt/ds", "localhost:9000/?key=" + secret},
+		{"AWS_ENDPOINT_URL", "s3://bkt/ds", "https://s3.example.com/#"},
+		{"AWS_ENDPOINT_URL_S3", "s3://bkt/ds", "https://s3.example.com/#"},
+		{"STORAGE_EMULATOR_HOST", "gs://bkt/ds", "localhost:9000/#"},
 	} {
 		t.Setenv(c.env, c.endpoint)
 		s, err := Open(context.Background(), c.location)

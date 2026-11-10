@@ -10,8 +10,10 @@ request timeout, retries and admission.
 An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a
 reference Class A request-cost estimate; custom endpoints have none. GCS does not honor
 `Retry-After`. `--anonymous` overrides ambient and explicit credentials silently: it prints no
-ignored-credentials note. Endpoint validation rejects user information and URI-template braces
-in the path, but does not reject queries or fragments.
+ignored-credentials note. Endpoint admission follows the shared
+[validation rule](../clients.md#endpoint-validation), with GCS path rules below.
+
+Root parse errors keep clean roots and hide credential-bearing authorities.
 
 ## Provider implementation
 
@@ -19,8 +21,8 @@ in the path, but does not reject queries or fragments.
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
 `userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
-(the shared `--endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
-no user information (a password would be recorded; `source` `TestRegisteredEndpointRefusals`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
+(the shared `--endpoint`, default `https://storage.googleapis.com/storage/v1/`): a URL accepted by the
+[shared endpoint check](../clients.md#endpoint-validation), with no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
 template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
 client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
 escapes are kept, so `…/tenant%2F` is the base `…/tenant%2F/`. The generated client then resolves `b/BUCKET/o`

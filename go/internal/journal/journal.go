@@ -710,6 +710,11 @@ func Dump(w io.Writer, out string) error {
 	if err != nil {
 		return err
 	}
+	return st.Dump(w)
+}
+
+// Dump writes this state as JSON lines, allowing callers to prepare a display copy.
+func (st *State) Dump(w io.Writer) error {
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(st.Header); err != nil {
 		return err

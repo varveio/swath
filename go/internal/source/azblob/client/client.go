@@ -182,7 +182,11 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	if !accountName.MatchString(cfg.Account) {
-		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", cfg.Account)
+		shown := cfg.Account
+		if strings.ContainsAny(shown, "@?#:") {
+			shown = "[redacted]" // a mistyped root can put a credential here
+		}
+		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", shown)
 	}
 	base, err := baseURL(cfg.Endpoint, cfg.Account)
 	if err != nil {
@@ -223,14 +227,9 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 	if endpoint == "" {
 		return &url.URL{Scheme: "https", Host: account + blobSuffix, Path: "/"}, nil
 	}
-	u, err := url.Parse(endpoint)
-	switch {
-	case err != nil:
-		return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
-	case u.User != nil:
-		return nil, errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
-	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "":
-		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", endpoint)
+	u, err := objhttp.ParseEndpoint(endpoint, "http(s)://host[:port][/path]")
+	if err != nil {
+		return nil, err
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + account + "/"
 	u.RawPath = ""

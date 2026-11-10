@@ -373,16 +373,29 @@ func Register(f Factory) {
 }
 
 // Redact is root as it may be shown or recorded (Factory.Redact): with its
-// provider's credential redacted, or as it is.
+// provider's credential redacted; refused credential-bearing roots are omitted.
 func Redact(root string) string {
+	if rootCredentials(root) {
+		return "[redacted]"
+	}
 	if f, err := Lookup(root); err == nil && f.Redact != nil {
 		return f.Redact(root)
+	}
+	if strings.Contains(root, "://") && strings.ContainsAny(root, "?#") {
+		if _, err := Lookup(root); err != nil {
+			return "[redacted]"
+		}
 	}
 	return root
 }
 
+// rootCredentials checks the authority only: a listing prefix is a literal key.
+func rootCredentials(root string) bool {
+	return source.RedactRoot(root) != root
+}
+
 // RedactArgv copies a command line for reports and journals: registered
-// secret flags, the userinfo of URL flags (source.FlagGroup.URLs) and
+// secret flags, credential-bearing URL flags (source.FlagGroup.URLs) and
 // credentials in source roots are redacted. Both --flag VALUE and
 // --flag=VALUE are accepted.
 func RedactArgv(argv []string) []string {
@@ -410,10 +423,7 @@ func RedactArgv(argv []string) []string {
 			if !eq && i+1 < len(argv) {
 				value = argv[i+1]
 			}
-			u, err := url.Parse(value)
-			// A malformed URL may carry userinfo too; its parse error
-			// quotes it, so do not retain it for diagnostics.
-			hide = err != nil || u.User != nil
+			hide = RedactURL(value) != value
 		}
 		if !hide {
 			out = append(out, Redact(a))
@@ -426,6 +436,16 @@ func RedactArgv(argv []string) []string {
 		}
 	}
 	return out
+}
+
+// RedactURL omits URL values that may carry credentials, including malformed
+// ones whose parse errors would quote the input.
+func RedactURL(value string) string {
+	u, err := url.Parse(value)
+	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") {
+		return "[redacted]"
+	}
+	return value
 }
 
 // Factories returns the registered factories, by scheme.
@@ -442,6 +462,9 @@ func Factories() []Factory {
 
 // Lookup returns the factory for root's scheme.
 func Lookup(root string) (Factory, error) {
+	if rootCredentials(root) {
+		return Factory{}, fmt.Errorf("root: user information, a query or a fragment in the authority is refused; use the provider's credential settings")
+	}
 	scheme := ""
 	if i := strings.Index(root, "://"); i > 0 {
 		scheme = root[:i]
@@ -453,7 +476,12 @@ func Lookup(root string) (Factory, error) {
 		if scheme == "" {
 			return f, fmt.Errorf("no provider for local paths is registered (root %q)", root)
 		}
-		return f, fmt.Errorf("unsupported root %q: no provider for %s://", root, scheme)
+		// Unknown schemes have no provider to distinguish a literal prefix from credentials.
+		shown := root
+		if strings.ContainsAny(root, "?#") {
+			shown = "[redacted]"
+		}
+		return f, fmt.Errorf("unsupported root %q: no provider for %s://", shown, scheme)
 	}
 	return f, nil
 }

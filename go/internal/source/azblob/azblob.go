@@ -109,7 +109,7 @@ const RedactedSAS = "sig=[redacted]"
 // otherwise '?' belongs to the prefix. A SAS query must parse and carry a
 // signature, or the root is refused. Errors never quote the SAS.
 func ParseURL(u string) (account, container, prefix, sas string, err error) {
-	shown := RedactRoot(u)
+	shown := source.RedactRoot(RedactRoot(u))
 	rest, ok := strings.CutPrefix(u, "az://")
 	if !ok || rest == "" {
 		return "", "", "", "", fmt.Errorf("not an az://ACCOUNT/CONTAINER[/PREFIX] URL: %q", shown)

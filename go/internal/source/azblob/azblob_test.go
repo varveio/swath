@@ -919,3 +919,17 @@ func TestFallbackMatchesAdmissionPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"az://", `not an az://ACCOUNT/CONTAINER[/PREFIX] URL: "az://"`},
+		{"az://acct", `no account or container in "az://acct": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+		{"az://acct/c?sv=SECRET", `az://acct/c?sig=[redacted]: the query names shared access signature parameters but is not a signed query string`},
+		{"az://user:SECRET@acct", `no account or container in "az://[redacted]": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+	} {
+		_, _, _, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
+		}
+	}
+}

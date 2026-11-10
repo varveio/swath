@@ -117,7 +117,7 @@ func (s *Store) at(endpoint string) error {
 		raw = "http://" + raw // STORAGE_EMULATOR_HOST may be a bare host, as the SDK takes it
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	if err != nil || u.Host == "" || u.User != nil || strings.ContainsAny(endpoint, "?#") {
 		return errors.New("remote: the endpoint the environment sets is not a URL without user information, query or fragment; build the client with its own settings instead")
 	}
 	s.scope += " at " + endpoint

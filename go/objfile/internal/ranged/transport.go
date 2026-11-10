@@ -40,7 +40,7 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if err := served(res, first, last); err != nil {
 		res.Body.Close()
-		return nil, fmt.Errorf("objfile: %s %s: %w", req.Method, req.URL.Redacted(), err)
+		return nil, fmt.Errorf("objfile: %s %s://%s%s: %w", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath(), err)
 	}
 	res.Body = endOnFailure{res.Body}
 	return res, nil

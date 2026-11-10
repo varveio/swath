@@ -12,8 +12,10 @@ request timeout, retries and admission.
 Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
 There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
 `Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
-It rejects a nonempty query or fragment in `--endpoint`; supply SAS credentials separately. `--anonymous` emits a note when it
+It applies the shared [endpoint validation](../clients.md#endpoint-validation); supply SAS credentials separately. `--anonymous` emits a note when it
 hides configured credentials detected by the Azure client.
+
+Root parse errors keep clean roots, redact SAS queries and hide credential-bearing authorities.
 
 ## Provider implementation
 
@@ -51,7 +53,7 @@ During namespace admission this can leave flatness unknown, producing `refused`,
 `unsupported` (exit 2), unless `--azblob-flat` asserts it. A credential failure during engine
 listing normally has class `auth`; transient token failures are retried per call
 (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
-when no credentials were found. An endpoint with user information is refused (`source` `TestRegisteredEndpointRefusals`). A SAS never
+when no credentials were found. Endpoint admission follows the [shared check](../clients.md#endpoint-validation). A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that

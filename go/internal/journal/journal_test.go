@@ -347,3 +347,52 @@ func TestPartMaxRowsIsIdentity(t *testing.T) {
 		t.Fatal("part max rows not frozen")
 	}
 }
+
+func TestEndpointMismatchSecrecy(t *testing.T) {
+	for _, ep := range []string{"https://host/?sig=SECRET", "https://host/#SECRET", "https://user:SECRET@host"} {
+		stored := Identity{Source: []Field{{Name: "endpoint", Value: ep}}}
+		requested := Identity{Source: []Field{{Name: "endpoint", Value: "https://clean"}}}
+		for _, pair := range [][2]Identity{{stored, requested}, {requested, stored}} {
+			if err := Check(pair[0], pair[1]); err == nil || strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("Check error %v, want refusal without endpoint", err)
+			}
+		}
+	}
+}
+
+func TestEndpointIdentityRedaction(t *testing.T) {
+	const endpoint = "https://host/?sig=SECRET"
+	original := Identity{Source: []Field{{Name: "endpoint", Value: endpoint, Canonical: endpoint}}}
+	before := original.Hash()
+	shown := original.Redacted()
+	if strings.Contains(fmt.Sprint(shown), "SECRET") {
+		t.Fatalf("credential in diagnostic identity: %+v", shown)
+	}
+	if original.Source[0].Value != endpoint || original.Source[0].Canonical != endpoint || original.Hash() != before {
+		t.Fatal("diagnostic redaction changed the identity used for resume")
+	}
+}
+
+func TestSourceMismatchSecrecy(t *testing.T) {
+	err := Check(Identity{Source: []Field{{Name: "source", Value: "az://acct/c?sig=SECRET"}}}, Identity{Source: []Field{{Name: "source", Value: "az://acct/c"}}})
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("Check error %v, want refusal without root", err)
+	}
+}
+
+func TestMismatchDiagnostics(t *testing.T) {
+	for _, c := range []struct{ field, stored, requested, want string }{
+		{"endpoint", "https://old:9000/a", "https://new:9000/b", "cannot resume: endpoint was https://old:9000/a, now https://new:9000/b"},
+		{"source", "s3://old/p", "s3://new/p", "cannot resume: source was s3://old/p, now s3://new/p"},
+		{"endpoint", "https://old/?sig=SECRET", "https://new/", "cannot resume: endpoint was [redacted], now https://new/"},
+		{"endpoint", "https://old/", "https://user:SECRET@new/", "cannot resume: endpoint was https://old/, now [redacted]"},
+		{"source", "az://old/c?sig=SECRET", "az://new/c", "cannot resume: source was [redacted], now az://new/c"},
+		{"source", "s3://old/p", "s3://user:SECRET@new/p", "cannot resume: source was s3://old/p, now [redacted]"},
+		{"region", "old", "new", "cannot resume: region was old, now new"},
+	} {
+		err := &MismatchError{Field: c.field, Stored: c.stored, Requested: c.requested}
+		if got := err.Error(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.field, got, c.want)
+		}
+	}
+}

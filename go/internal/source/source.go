@@ -10,6 +10,7 @@ package source
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -113,4 +114,14 @@ type Span struct {
 // and lists only the gaps between them.
 type Reusing interface {
 	Reuse(spans []Span)
+}
+
+// RedactRoot keeps literal prefixes intact and hides credential-bearing authorities.
+func RedactRoot(root string) string {
+	scheme, rest, ok := strings.Cut(root, "://")
+	authority, _, _ := strings.Cut(rest, "/")
+	if ok && strings.ContainsAny(authority, "@?#") {
+		return scheme + "://[redacted]"
+	}
+	return root
 }

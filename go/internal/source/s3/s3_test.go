@@ -233,3 +233,18 @@ func TestS3BoundPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"s3://", `not an s3://bucket[/prefix] URL: "s3://"`},
+		{"s3:///prefix", `no bucket in "s3:///prefix"`},
+		{"other://user:SECRET@bucket/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket?sig=SECRET/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket#SECRET/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+	} {
+		_, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
+		}
+	}
+}
