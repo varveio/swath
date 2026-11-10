@@ -20,6 +20,16 @@ GET https://acct.blob.core.windows.net/c
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
   body 0 bytes
+== anonymous: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
 == anonymous: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
   query comp=list
@@ -76,6 +86,22 @@ GET https://acct.blob.core.windows.net/c
   query srt=co
   query ss=b
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  query sv=2026-10-06
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
   query sv=2026-10-06
   header Accept: application/xml
   header Accept-Encoding: gzip
@@ -154,6 +180,18 @@ GET https://acct.blob.core.windows.net/c
   header X-Ms-Date: <date>
   header X-Ms-Version: 2026-10-06
   body 0 bytes
+== Shared Key: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
 == Shared Key: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
   query comp=list
@@ -198,6 +236,17 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
   header Accept: application/xml
   header Accept-Encoding: gzip
   header Authorization: Bearer tok

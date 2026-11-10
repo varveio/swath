@@ -84,6 +84,7 @@ func TestWireSnapshot(t *testing.T) {
 		}{
 			{"flat", func() error { _, err := c.List(ctx, &ListInput{Container: "c"}); return err }},
 			{"flat, every option", func() error { _, err := c.List(ctx, &full); return err }},
+			{"hierarchy", func() error { _, err := c.List(ctx, &ListInput{Container: "c", Delimiter: "/"}); return err }},
 			{"hierarchy, every option", func() error { _, err := c.List(ctx, &hier); return err }},
 			{"account information", func() error { _, err := c.AccountInfo(ctx, "c"); return err }},
 			{"filesystem properties", func() error { _, err := c.NamespaceInfo(ctx, "c"); return err }},
