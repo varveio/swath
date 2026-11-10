@@ -107,7 +107,7 @@ func TestGlob(t *testing.T) {
 		{"/a.txt", "", []string{"a.txt"}, []string{"d/a.txt", "/a.txt"}},
 		{"logs/", "", []string{"logs/"}, []string{"logs", "logs/a", "x/logs/"}},
 		// ** is whole segments, newlines included.
-		{"logs/**", "", []string{"logs/", "logs/a", "logs/a/b", "logs/a\n/b\n"}, []string{"logs", "logsx/a", "x/logs/a"}},
+		{"logs/**", "", []string{"logs/a", "logs/a/b", "logs/a/", "logs/a\n/b\n"}, []string{"logs/", "logs", "logsx/a", "x/logs/a"}},
 		{"**/x", "", []string{"x", "a/x", "a/b\n/x", "a/x/"}, []string{"ax", "x/a", "a/bx"}},
 		{"a/**/b", "", []string{"a/b", "a/x/b", "a/x/y/b"}, []string{"ab", "a/xb", "x/a/b"}},
 		{"**", "", []string{"", "a", "a/b\nc/d"}, nil},
@@ -138,6 +138,13 @@ func TestGlob(t *testing.T) {
 		got := kept(t, s, keyRows(append(slices.Clone(tc.match), tc.miss...)...))
 		if !slices.Equal(got, tc.match) {
 			t.Errorf("%q (base %q) kept %q, want %q", tc.pattern, tc.base, got, tc.match)
+		}
+	}
+	// --exclude dir/** drops what is below dir/ and keeps its row; dir/
+	// drops the row.
+	for pattern, want := range map[string][]string{"2025/**": {"2025/", "x"}, "2025/": {"2025/a", "2025/b/", "2025/b/c", "x"}} {
+		if got := kept(t, Spec{Exclude: []string{pattern}}, keyRows("2025/", "2025/a", "2025/b/", "2025/b/c", "x")); !slices.Equal(got, want) {
+			t.Errorf("--exclude %s kept %q, want %q", pattern, got, want)
 		}
 	}
 }
