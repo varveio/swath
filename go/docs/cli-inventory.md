@@ -116,7 +116,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
+| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on): ×0.7 at most once per round trip while 15 % or more of the last 4 × workers answers (at least 256) are throttles, +1/s while under 7.5 % are or after 10 s without one; `--limiter=false` removes the limit (the workers' page requests, with the seed's listings and the structure probes beside them) | changed | 2026-11-07: Java's rule held the limit at its floor under 1 % random throttles ([providers/s3.md](internals/providers/s3.md)) |
 | Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` (moved to `swath diag` 2026-11-07: off by default and unmeasured, an experiment): the limit starts at 4 and doubles each second up to `--workers` until the first cut or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |

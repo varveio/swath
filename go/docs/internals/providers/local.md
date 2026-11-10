@@ -20,6 +20,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
   directory's buffers rather than copies. Offsets are 32-bit: a directory whose names, or keys, pass 4 GiB is
   skipped and counted in `read_errors`.
+- **Workers: 4 per CPU, at most 64.** Without `--workers` a local tree gets `min(64, 4 × GOMAXPROCS)`
+  (GOMAXPROCS follows the CPU affinity and the cgroup quota), not the object stores' 64: a stat waits on the
+  disk or the inode cache, not on a round trip. On a 1-CPU, 512 MiB cgroup (ext4 on a persistent disk, cold;
+  issue #388) 4 workers were the fastest or tied on every tree (~1M nested entries 28.3 s, 28.6 s at 64; 32
+  directories of 60,000 files 19.9 s and 90 MiB against 49.1 s and 261 MiB at 64), and a program sharing the
+  CPU waited less. On 16 CPUs, 1M files in one directory on XFS, ext4, btrfs and ZFS plateau from 4 to 16
+  workers, warm and cold. Storage that waits per request (network filesystems) may want more.
 - **A count runs with more processors.** A stat or a directory read that waits on the disk holds its Go
   processor until the scheduler hands it off, so one processor per CPU leaves CPUs idle on a cold tree. A count
   (`swath du`, `swath diag count`) raises GOMAXPROCS for the run, at most `--workers`, and restores it

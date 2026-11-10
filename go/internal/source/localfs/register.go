@@ -22,10 +22,27 @@ import (
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", BinaryKeys: true, Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, CheckTotals: checkTotals,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", BinaryKeys: true, Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
 		Hints: []source.Hint{{Flag: "metadata"}, {Flag: "no-dirs"}, {Flag: "no-link-target"}, {Flag: "one-filesystem"}},
 		Usage: "a local directory"})
 }
+
+// workersPerCPU and maxWorkers bound the default --workers for a local tree:
+// workersPerCPU per processor (GOMAXPROCS, which follows the CPU affinity and
+// cgroup quota), at most maxWorkers, the object stores' default. On a 1-CPU,
+// 512 MiB cgroup (ext4 on a persistent disk, cold, issue #388) 4 workers
+// were the fastest or tied on every tree: a nested tree of ~1M entries
+// 28.3 s against 28.6 s at 64, 32 directories of 60,000 files 19.9 s and
+// 90 MiB peak against 49.1 s and 261 MiB at 64, and a probe sharing the CPU
+// waited less. On 16 CPUs, sweeps of 1M files in one directory on XFS, ext4,
+// btrfs and ZFS plateau from 4 to 16 workers, warm and cold.
+const (
+	workersPerCPU = 4
+	maxWorkers    = 64
+)
+
+// defaultWorkers is the default --workers for a local tree.
+func defaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPROCS(0)) }
 
 // Set and String make Fields a flag value.
 func (f *Fields) Set(s string) error {

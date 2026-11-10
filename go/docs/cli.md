@@ -144,7 +144,7 @@ Source and output:
 
 Performance:
   --workers int
-        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        listing goroutines, the most requests in flight (default 64 for an object store, whatever the CPU count; for a local path 4 per CPU, at most 64)
         change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
   --row-budget bytes
         bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
@@ -279,7 +279,7 @@ Source and output:
 
 Performance:
   --workers int
-        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        listing goroutines, the most requests in flight (default 64 for an object store, whatever the CPU count; for a local path 4 per CPU, at most 64)
         change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
 
 Limits:
@@ -441,7 +441,7 @@ Source and output:
 
 Performance:
   --workers int
-        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        listing goroutines, the most requests in flight (default 64 for an object store, whatever the CPU count; for a local path 4 per CPU, at most 64)
         change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
 
 Limits:
