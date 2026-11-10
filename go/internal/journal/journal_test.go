@@ -19,14 +19,14 @@ func TestCheck(t *testing.T) {
 	src := func(endpoint, canon string) []Field {
 		return []Field{{Name: "source", Value: "s3://b/"}, {Name: "endpoint", Value: endpoint, Canonical: canon}, {Name: "region", Value: ""}}
 	}
-	base := Identity{Tool: "swath-go", Format: 1, SchemaID: "swath/canonical", Provider: "s3", Source: src("http://h:9000", "http://h:9000"), Writer: "w1", PartSize: 64 << 20}
+	base := Identity{Tool: "swath", Format: 1, SchemaID: "swath/canonical", Provider: "s3", Source: src("http://h:9000", "http://h:9000"), Writer: "w1", PartSize: 64 << 20}
 	for _, c := range []struct {
 		name  string
 		edit  func(*Identity)
 		field string
 	}{
 		{"same", func(*Identity) {}, ""},
-		{"tool", func(i *Identity) { i.Tool = "swath" }, "tool"},
+		{"tool", func(i *Identity) { i.Tool = "other" }, "tool"},
 		{"format", func(i *Identity) { i.Format = 2 }, "format"},
 		{"schema", func(i *Identity) { i.SchemaID = "swath/local-entries/v0" }, "schema"},
 		{"provider", func(i *Identity) { i.Provider = "gcs" }, "provider"},
@@ -59,7 +59,7 @@ func TestCheck(t *testing.T) {
 // boundaries; a torn tail is ignored and truncated on reopen.
 func TestJournalRoundTripAndTornTail(t *testing.T) {
 	out := t.TempDir()
-	id := Identity{Tool: "swath-go", Format: 1, Provider: "s3", Source: []Field{{Name: "source", Value: "s3://b/"}}}
+	id := Identity{Tool: "swath", Format: 1, Provider: "s3", Source: []Field{{Name: "source", Value: "s3://b/"}}}
 	j, err := Create(out, id, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 // damaged over the records after it is corruption, never "no journal".
 func TestDamagedHeader(t *testing.T) {
 	out := t.TempDir()
-	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	j, err := Create(out, Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestDamagedHeader(t *testing.T) {
 // cannot take the lock.
 func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	out := t.TempDir()
-	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	j, err := Create(out, Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func rec(i int) Record {
 // to Read. Before, Append wrote any record and Read accepted it.
 func TestAppendRefusesNonAdjacentRecord(t *testing.T) {
 	out := t.TempDir()
-	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	j, err := Create(out, Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestAppendRefusesNonAdjacentRecord(t *testing.T) {
 	}
 	// Written past the check (as an earlier build could): Read refuses.
 	out2 := t.TempDir()
-	j, _ = Create(out2, Identity{Tool: "swath-go"}, nil)
+	j, _ = Create(out2, Identity{Tool: "swath"}, nil)
 	j.Append(rec(0))
 	j.append(Record{Type: "part", Ordinal: 1, Part: dataset.PartInfo{Rows: 10, MinKey: "a", MaxKey: "c"}, RowsTotal: 20})
 	j.Close()
@@ -283,7 +283,7 @@ func TestAppendRefusesNonAdjacentRecord(t *testing.T) {
 // frame after it is corruption.
 func TestUnresumableMark(t *testing.T) {
 	out := t.TempDir()
-	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	j, err := Create(out, Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

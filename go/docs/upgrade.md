@@ -159,7 +159,7 @@ Format 1 had one version string. Five identifiers now move independently:
 The policy for each is in [dataset.md](dataset.md#evolution). This build reads journal
 version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
 before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
-that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath-go/parquet-r3`
+that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r3`
 since SeekParquet) and the dataset format are in the resume identity: a build of another recipe or format
 refuses the journal. `created_by` names the real build, so parts are byte-identical within a build only. A part
 claimed but not recorded when a run stopped is reproduced on resume with its own footer's columns and

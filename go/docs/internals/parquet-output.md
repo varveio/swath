@@ -37,7 +37,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
 | Key length | per schema (`schema.Info.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | the key's column-index bounds are exact at any length (above); `TestKeyLimits` covers both. |
 | `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | SeekParquet RG-1; generic readers learn the order without the stamps; metadata only, rows already arrive sorted. |
-| `created_by` | `swath-go version <release version or devel> (build <revision>[-dirty])`, from the build itself (`internal/buildinfo`: the version and revision `build.sh` links in, else the toolchain's VCS stamp; shortened to 12 hex digits) | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath-go/parquet-r3`: r2 was format 2's stamps and shortened key bounds) is promised. A part a resume reproduces (claimed, never recorded) keeps the claimed part's own `created_by` and columns. |
+| `created_by` | `swath version <release version or devel> (build <revision>[-dirty])`, from the build itself (`internal/buildinfo`: the version and revision `build.sh` links in, else the toolchain's VCS stamp; shortened to 12 hex digits) | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath/parquet-r3`: r2 was format 2's stamps and shortened key bounds) is promised. A part a resume reproduces (claimed, never recorded) keeps the claimed part's own `created_by` and columns. |
 
 ## Writer buffers and admission
 
@@ -123,7 +123,7 @@ golden (written by the 2026-11-05 layout) for its rows and requires them unchang
 bounds of keys over 1,024 bytes. That is shown for those rows only: the switch to SeekParquet raised
 klauspost/compress from v1.19.1 to v1.20.3, whose zstd encoder may choose its entropy tables differently on
 other data of more than one block, so parts of builds before and after need not be byte-identical in general
-(the writer recipe, `swath-go/parquet-r3`, keeps their resumes apart).
+(the writer recipe, `swath/parquet-r3`, keeps their resumes apart).
 
 ## Part router and deterministic boundaries
 

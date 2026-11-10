@@ -48,7 +48,7 @@ value is a `parse` failure, retried, never an empty final page), every item must
 `int64` and a time must be RFC 3339. Any 2xx other than 200 is an answer, not a page (class `other`, or
 `throttle` by its reason). An answer is a `client.Error` by the HTTP status sent (never the body's `code`), with
 the first reason and the message; a 400 names its query. The User-Agent is swath's product token
-(`swath-go/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
+(`swath/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
 the client: class, retry decision, attempts and counters, the answer, every body closed once, no redirect
 followed. Credentials: `--anonymous` (shared with S3 and Azure Blob) sends none, and is the only way a request goes
 unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials-file FILE` loads Google credential JSON through the pinned OAuth library; otherwise Application Default Credentials, found by the client library's own search

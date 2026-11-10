@@ -38,7 +38,7 @@ func newLayoutRun(t *testing.T, records int) *layoutRun {
 	}
 	base := t.TempDir()
 	lr := &layoutRun{out: filepath.Join(base, "dataset"), foreign: filepath.Join(base, "unrelated"),
-		id: journal.Identity{Tool: "swath-go", Format: 2, SchemaID: "layout"}}
+		id: journal.Identity{Tool: "swath", Format: 2, SchemaID: "layout"}}
 	if err := os.MkdirAll(lr.foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}

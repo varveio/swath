@@ -64,14 +64,14 @@ func TestCutReproducesClaimedFooter(t *testing.T) {
 	older.Columns = slices.Delete(slices.Clone(testSchema.Columns), 1, 2)
 	claimed := route(&older, "older", nil)[0]
 	ft := footer(claimed)
-	if ft.Rows != 4000 || len(ft.Columns) != len(testSchema.Columns) || ft.Columns[0] != "key" || ft.CreatedBy != "swath-go version "+createdVersion+"(build older)" {
+	if ft.Rows != 4000 || len(ft.Columns) != len(testSchema.Columns) || ft.Columns[0] != "key" || ft.CreatedBy != "swath version "+createdVersion+"(build older)" {
 		t.Fatalf("claimed footer %+v", ft)
 	}
 	parts := route(&testSchema, "newer", &Cut{Ordinal: 0, Rows: ft.Rows, Columns: ft.Columns, CreatedBy: ft.CreatedBy})
 	if parts[0].SHA256 != claimed.SHA256 || parts[0].Bytes != claimed.Bytes {
 		t.Fatalf("part 0 is %d bytes, sha256 %s; the claimed part %d bytes, sha256 %s", parts[0].Bytes, parts[0].SHA256, claimed.Bytes, claimed.SHA256)
 	}
-	if next := footer(parts[1]); len(next.Columns) != len(testSchema.Columns)+1 || next.CreatedBy != "swath-go version "+createdVersion+"(build newer)" {
+	if next := footer(parts[1]); len(next.Columns) != len(testSchema.Columns)+1 || next.CreatedBy != "swath version "+createdVersion+"(build newer)" {
 		t.Fatalf("part 1 footer %+v", next)
 	}
 	reversed := slices.Clone(ft.Columns[1:])

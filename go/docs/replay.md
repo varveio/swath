@@ -1057,16 +1057,16 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 
 The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an image that holds the static binary
 and its legal files (`LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` in `/licenses/`) and nothing else:
-`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
+`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `65532:65532`, and the runtime stage is
 `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
 as `ghcr.io/varveio/swath-replay` ([operating.md](operating.md#install-and-verify)). Fixtures are never baked in:
 mount one read-only and pass its container path to `--fixture`.
 
 ```bash
 docker build -f Dockerfile.go --target swath-replay --build-arg SWATH_REVISION="$(git rev-parse HEAD)" \
-  -t swath-replay-go:dev .
+  -t swath-replay:dev .
 docker run --rm -p 127.0.0.1:19090:19090 -p 127.0.0.1:19192:19192 -v /data/sorted:/fixtures:ro \
-  swath-replay-go:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
+  swath-replay:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
 ```
 
 The server must bind `0.0.0.0` for a published port to reach it; it has no authentication, so bind the host
@@ -1083,13 +1083,13 @@ output removable by that user:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v /data/capture:/capture:ro -v /data/out:/out \
-  swath-replay-go:dev sort-fixture --capture /capture --output /out/sorted
+  swath-replay:dev sort-fixture --capture /capture --output /out/sorted
 ```
 
 `scripts/ci/smoke-replay-container.sh IMAGE FIXTURE sorted` smokes the image: it serves `FIXTURE` (a directory
 of sorted parts, or a dataset directory) as bucket `smoke` with a metrics port, waits for `/healthz` to answer
 `ok`, requires a `ListBucketResult` naming the bucket and holding a key, `/metrics` with `schema_version` 2,
-and the container's user `10001:10001`. When the server refuses the fixture as not servable sorted (a capture,
+and the container's user `65532:65532`. When the server refuses the fixture as not servable sorted (a capture,
 or a format-1 dataset written unsorted), the smoke sorts it with the image's own `sort-fixture` into a temporary
 directory and serves that.
 

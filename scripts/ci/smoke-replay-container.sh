@@ -6,10 +6,10 @@
 # The serving mode selects the image: `duckdb` (the default) for the Java image, which
 # queries any capture through DuckDB; `sorted` for the Go image, which serves sorted
 # fixtures only. Both modes check a listing page (a ListBucketResult naming the bucket and
-# holding a key) and that the container runs as 10001:10001. In `sorted` mode the server
-# also gets a metrics port, and the smoke polls `/healthz` before listing and requires
-# `/metrics` to report schema_version 2; its fixture may also be a dataset directory (the
-# parts under data/, as `swath list` writes it).
+# holding a key) and the container's user: 10001:10001 for the Java image, 65532:65532 for
+# Go. In `sorted` mode the server also gets a metrics port, and the smoke polls `/healthz`
+# before listing and requires `/metrics` to report schema_version 2; its fixture may also be
+# a dataset directory (the parts under data/, as `swath list` writes it).
 #
 # A `sorted`-mode fixture may be an unsorted capture (a `swath list` dataset written without
 # --sort, for one): when the server refuses it as not servable sorted, the smoke sorts it
@@ -152,5 +152,6 @@ if [[ "$mode" = sorted ]]; then
     fail "/metrics does not report schema_version 2: $(head -c 400 <<< "$metrics")"
 fi
 
-test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = "10001:10001"
+if [[ "$mode" == sorted ]]; then expected_user=65532:65532; else expected_user=10001:10001; fi
+test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = "$expected_user"
 echo "replay container smoke passed ($mode): $image"
