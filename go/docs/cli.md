@@ -853,8 +853,8 @@ table changes.
     size in binary units as `swath du`'s table, then `kind` where the schema has it (a local tree), the version
     columns where the schema describes versions (`--all-versions`: the version ID column under its own name,
     `latest`, and `delete_marker` where the source has delete markers), and the key last, escaped as in TSV. A
-    missing value is blank. The time and size columns have fixed widths; `kind` and the version ID are as wide
-    as their widest value so far.
+    missing value is blank. The time and size columns have fixed widths, `kind` the width of its widest name
+    (`BLOCK_DEVICE`), so the key does not move; the version ID is as wide as its widest value so far.
 
     ```text
     last_modified (local)      size  key

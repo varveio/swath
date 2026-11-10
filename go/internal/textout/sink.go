@@ -260,8 +260,10 @@ func appendNumber(b []byte, t schema.Type, v int64) []byte {
 
 // table is the table's layout: the time and size, the kind and version
 // columns when the schema has them, the key last, two blanks apart. The
-// time and size have fixed widths; the kind and version ID columns are as
-// wide as their heading or the widest value written so far.
+// time and size have fixed widths, the kind column its widest name
+// (schema.Column.Values), so the key never moves; the version ID column is
+// as wide as its heading or the widest ID written so far (IDs have no
+// fixed width across providers).
 type table[P any] struct {
 	mtime, size func(*P) (int64, bool)
 	kind        func(*P) (string, bool)
@@ -294,6 +296,9 @@ func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Lo
 			t.size = c.Int
 		case kindColumn:
 			t.kind = c.Str
+			for _, v := range c.Values {
+				t.kindW = max(t.kindW, len(v))
+			}
 		}
 	}
 	if vers != nil {

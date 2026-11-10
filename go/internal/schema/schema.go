@@ -64,6 +64,9 @@ type Column[P any] struct {
 	// Delta writes a byte-array column DELTA_BYTE_ARRAY instead of
 	// dictionary-then-PLAIN (unique values such as ETags).
 	Delta bool
+	// Values are every value a column of names holds (a local entry's
+	// kind): a text table reserves the widest.
+	Values []string
 }
 
 // NonEmpty makes an optional string accessor: an empty value is null.
