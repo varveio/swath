@@ -40,7 +40,7 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved (`swath verify`, #391), not for reading it.
+after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
