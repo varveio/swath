@@ -67,7 +67,7 @@ Five fields to check in the `--report` file of a sorted listing of a million key
 
 | Field | Normal |
 |---|---|
-| `outcome.class` | `completed` (exit 0), with `outcome.complete` true |
+| `outcome.class` | `completed` (exit 0), with `outcome.complete` true; for the whole source, also the dataset's coverage ([check](getting-started.md#5-check-that-it-is-complete)) |
 | `efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
 | `resources.spill.refused` | 0 |
 | `resources.budget_wait_ns` | 0 or close to it |
@@ -106,9 +106,11 @@ directory listing keeps no journal and starts over.
   247 to 376 MiB/s with a cold page cache and 511 MiB/s warm on a 4-vCPU VM
   ([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
   minutes.
-- **Listed again:** everything after the last published key. On a large sorted run that is most of the
-  listing: a kill at 40 % listed 90 to 100 % of the keys again on every list of 20M keys or more (candidate 3,
-  `c48ea228`, run `cand3`), because the output waits for the leftmost range while the rest is spilled.
+- **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
+  the output), read back from `DIR/.swath/spill/durable/` instead of listed again.
+- **Listed again:** the keys after the last published key that no certified file holds. The report's
+  `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
+  [running.md](running.md#stopping-and-resuming) owns the rules.
 
 The resume replays the recorded command. Only the resource, reporting and request options may change
 ([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
@@ -116,7 +118,9 @@ The resume replays the recorded command. Only the resource, reporting and reques
 ## Where things are
 
 The output directory's layout is in [swath-list](commands/swath-list.md#files). Spill lives under
-`DIR/.swath/spill/`, on the output's filesystem, and is removed when the run ends; text on stdout spills under
+`DIR/.swath/spill/`, on the output's filesystem: disposable spill is removed by the next run, and certified
+spill (`spill/durable/`) is kept after a stop for the resume and removed when the dataset commits
+([running.md](running.md#stopping-and-resuming)); text on stdout spills under
 `$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the run
 warns at start.
 

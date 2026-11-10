@@ -118,7 +118,8 @@ Performance:
       --seed-from PATH        start from a previous listing's key distribution, not the seed
                                 A committed dataset of the same source and scope, or a cut file (one
                                 key per line, ascending bytewise, optionally TAB and the keys
-                                expected up to it); the engine still splits adaptively.
+                                expected since the previous cut); the engine still splits
+                                adaptively.
 
 Limits:
       --max-duration DURATION

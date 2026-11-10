@@ -20,9 +20,10 @@ receives a [swath dataset](../dataset.md): sorted Parquet parts and a `manifest.
 A name ending in an extension swath does not write (`.csv`, `.json`, `.txt`, a bare `.gz`, ...) and a URL
 (`s3://...`) are refused.
 
-Every row has `key` first, then the source's columns under the dataset's names: `size`, `last_modified` and
-the columns of the source's schema ([output.md](../output.md#text-rows)). Every format and every source
-lists in ascending byte order of the key. A local tree lists its directories too (kind `DIR`, the key ending
+TSV and JSONL rows carry the source's columns under the dataset's names, by default `key` first, then `size`,
+`last_modified` and the rest of the source's schema; `--columns` chooses them and their order, and the table
+puts `key` last ([output.md](../output.md#text-rows)). Every format and every source lists in ascending byte
+order of the key. A local tree lists its directories too (kind `DIR`, the key ending
 in `/`) unless `--no-dirs`. A local SOURCE that is a file lists as its one row, read as the same entry would be
 in a listing of its parent: at the `--metadata` tier, and a symbolic link as the link, not its target.
 
@@ -42,11 +43,10 @@ so in its manifest.
 ```text
 Output:
   -o, --output PATH           a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
-                                A trailing / names a directory whatever its name.
+                                A trailing / names a directory whatever its name. A file's name says
+                                its format; a --format that agrees with it is accepted.
       --format auto|table|tsv|jsonl
-                              text rows: auto is the table on a terminal, TSV otherwise
-                                With -o FILE the file's name says the format; a --format that agrees
-                                with it is accepted.
+                              on stdout: auto is the table on a terminal, TSV otherwise
       --columns NAME[,NAME...]
                               TSV and JSONL: these columns, in order (repeatable)
                                 By the dataset's column names; a name the source's schema lacks is
@@ -184,7 +184,8 @@ Performance:
       --seed-from PATH        start from a previous listing's key distribution, not the seed
                                 A committed dataset of the same source and scope, or a cut file (one
                                 key per line, ascending bytewise, optionally TAB and the keys
-                                expected up to it); the engine still splits adaptively.
+                                expected since the previous cut); the engine still splits
+                                adaptively.
 
 Limits:
       --max-duration DURATION

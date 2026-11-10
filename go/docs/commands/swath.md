@@ -92,8 +92,9 @@ A DURATION is a number with a unit: `90s`, `1h30m`, and `d` (24 hours) and `w` (
 
 ### stdout and stderr
 
-stdout carries data only: text rows, totals, or the run report with `--report -`. A dataset run (`-o DIR`)
-prints nothing on stdout. Everything else goes to stderr:
+stdout carries data only: text rows, totals, or the run report with `--report -`. A run that writes a dataset
+(`-o DIR`) or a text file (`-o FILE`) prints nothing on stdout unless `--report -` puts the report there; `-o -`
+sends the rows to stdout. Everything else goes to stderr:
 
 - **Errors and warnings**, each one line starting `swath:`. A usage error adds the help to read.
 - **The progress line**, on a terminal that does not also show the rows, redrawn every second:

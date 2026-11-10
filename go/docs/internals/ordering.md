@@ -453,7 +453,9 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   consecutive rows in what is left, so a cluster of long keys is priced as such (`segmentShare`); the
   workers are as many as that fits in the budget, less what the encoders' queues already hold
   (`budgetWorkers`), and one only leaves the tail serial (`row_budget`). The report names what decided
-  (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`). Measured: at 16 vCPU 8 workers
+  (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`): when `workers_by` is `row_budget`, a
+  `--row-budget` larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders
+  and cores allow. Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
   cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
 - **What bounds the tail.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing

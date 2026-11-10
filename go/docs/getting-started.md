@@ -25,6 +25,9 @@ on your `PATH`, or write `./swath`. [install.md](install.md) has the requirement
 
 ## 2. Total a local directory
 
+The local steps use a directory called `photos`: replace it with a directory of yours. The output shown is from
+a small tree of four files.
+
 ```bash
 swath du -d 1 photos
 ```
@@ -83,29 +86,36 @@ coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
 A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that commits them, in the
 SeekParquet format, with one of swath's registered schema ids and valid swath metadata
 ([the swath dataset profile](dataset.md)). The manifest is written last: until it exists, the directory is not
-a dataset. `coverage complete=true` with `filters=0` says the dataset holds the whole tree as listed.
+a dataset. The `coverage` line says how much of the tree it holds; the next step reads it.
 
-The output directory must be new or empty, and outside the tree you list. A local tree's rows include its
-directories (`kind` `DIR`), so the dataset holds 7 rows for 4 files.
+The output directory must be new or empty. It may lie inside the tree you list: the walk then skips it and the
+dataset records it in `exclusions`. A local tree's rows include its directories (`kind` `DIR`), so the dataset
+holds 7 rows for 4 files.
 
 ## 5. Check that it is complete
 
 A program that needs the whole source reads the manifest's coverage first:
 
 ```bash
-duckdb -c "SELECT extensions.swath.coverage.complete AS complete,
-                  len(extensions.swath.coverage.filters) AS filters
-           FROM read_json('photos.parquet/manifest.json')"
+duckdb -c "SELECT c.complete, c.stop_reason, c.skipped_entries AS skipped,
+                  len(c.filters) AS filters, len(c.exclusions) AS exclusions
+           FROM (SELECT extensions.swath.coverage AS c FROM read_json('photos.parquet/manifest.json'))"
 ```
 
 ```text
-┌──────────┬─────────┐
-│ complete │ filters │
-│ boolean  │  int64  │
-├──────────┼─────────┤
-│ true     │       0 │
-└──────────┴─────────┘
+┌──────────┬─────────────┬─────────┬─────────┬────────────┐
+│ complete │ stop_reason │ skipped │ filters │ exclusions │
+│ boolean  │   varchar   │  int64  │  int64  │   int64    │
+├──────────┼─────────────┼─────────┼─────────┼────────────┤
+│ true     │ completed   │       0 │       0 │          0 │
+└──────────┴─────────────┴─────────┴─────────┴────────────┘
 ```
+
+`complete` alone says only that the listing reached the end of its scope. Entries it could not read are left
+out and counted in `skipped`, and a filtered run is complete over what its filters kept. The dataset holds the
+whole source as listed when `complete` is true, `stop_reason` is `completed`, `skipped` is 0 and `filters` is
+empty; `exclusions` names what was left out by design, such as an output directory inside the tree
+([dataset.md](dataset.md#the-swath-extension)).
 
 ## 6. Query it with DuckDB
 
@@ -193,13 +203,14 @@ credentials: [sources.md](sources.md).
 
 ## Cost and consistency
 
-Each listing request returns up to 1,000 keys, and providers charge per request. A run sends about one request
-per 1,000 keys, plus the requests that divide the work between workers and any retries. The run report counts
+An S3 or GCS listing request returns up to 1,000 keys, an Azure Blob one up to 5,000, and providers charge per
+request. A run sends about one request per page of keys, plus the requests that divide the work between workers
+and any retries. The run report counts
 them (`requests.http_attempts`) and, on AWS S3 and GCS, estimates their cost at the provider's reference list
 rate (`cost.cost_usd`):
 
 ```bash
-swath list s3://my-bucket -o my-inventory --report attempt-1.json
+swath list s3://my-bucket -o my-inventory-2 --report attempt-1.json
 jq '.requests.http_attempts, .cost.cost_usd' attempt-1.json
 ```
 

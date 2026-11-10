@@ -32,10 +32,11 @@ is the table on a terminal and TSV otherwise, or `table`, `tsv`, `jsonl`. Compre
 (`| zstd`). The file's directory must exist; the file is written beside its name and renamed into place when
 complete, replacing a previous file.
 
-Every row has the dataset's columns under the dataset's names: `key`, then `size`, `last_modified` and the rest
-of the source's schema, in the schema's order ([dataset.md](dataset.md#schema-registry)). Columns after
-`last_modified` differ between sources: read them by name, not by position. `--columns key,size` prints only
-those columns, in that order, in TSV and JSONL.
+TSV and JSONL rows have the dataset's columns under the dataset's names, by default `key`, then `size`,
+`last_modified` and the rest of the source's schema, in the schema's order
+([dataset.md](dataset.md#schema-registry)). Columns after `last_modified` differ between sources: read them by
+name, not by position. `--columns size,key` prints only those columns, in that order. The table shows a few
+columns for people, with `key` last.
 
 Values are as the dataset stores them: S3's `etag` without its quotes, integers exact, booleans `true` and
 `false`, every time in UTC with six fraction digits (`2026-01-01T00:00:00.123000Z`). A null is neither an

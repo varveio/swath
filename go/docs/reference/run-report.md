@@ -15,7 +15,7 @@ The fields most runs need:
 | Field | What it says |
 |---|---|
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([exit-codes.md](exit-codes.md)) |
-| `outcome.complete` | the output holds the whole source as listed |
+| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.skipped_entries` and `coverage.filters`: [whole-source check](../getting-started.md#5-check-that-it-is-complete)) |
 | `attempt.id` | this attempt; `error.json` carries the same |
 | `output.rows_committed`, `output.object_bytes` | the dataset's rows, and the bytes of the objects this attempt listed |
 | `output.totals` | `swath du`'s totals (the rows themselves are only on stdout) |
@@ -87,12 +87,14 @@ engine's seed, from its first delimiter request to its tiles (absent where none 
 `sys_cpu_ms` are the process's CPU times (absent where the platform does not measure them).
 
 **Rows and bytes** (`output`). `rows_fetched` is what this invocation listed from the source, `rows_filtered`
-what the filters dropped of it, `rows_emitted` what was handed on in order (swath du, swath diag count: counted). On a run that
-succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`; a run that stopped has also fetched rows ahead of
-the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
+what the filters dropped of it, `rows_emitted` what was handed on in order (swath du, swath diag count: counted). On a fresh run
+that succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`. A resume also hands on the rows it replays
+from certified spill files, which it did not list: on a resume that succeeded, `rows_fetched` − `rows_filtered`
++ `resources.spill.durable.resume.replayed_rows` = `rows_emitted`. A run that stopped has also fetched rows
+ahead of the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
 the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `parts_retained` count parts.
-`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files accepted after the filters): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
+`object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a

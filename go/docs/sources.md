@@ -181,7 +181,8 @@ or `one_filesystem`). `--one-file-system`, `--allocated` and `--count-links-once
 they are refused with `--metadata names`.
 
 The output may not be the listed tree itself or contain it. A new or empty directory inside the tree is
-accepted as the output, and the walk skips it.
+accepted as the output: the walk skips it and the dataset records it in `coverage.exclusions`. `--overwrite`
+of an output inside the listed tree is refused (exit 2).
 
 Entries that cannot be read (permissions, entries removed during the walk) are left out: swath names up to
 five of them with their cause on stderr, counts the rest, and still exits 0; the report's

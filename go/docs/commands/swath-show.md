@@ -22,9 +22,12 @@ coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
 1 part, 7 rows, 3832 bytes, keys "2025/" .. "notes.txt"
 ```
 
-`coverage complete=true` with `filters=0` means the dataset holds the whole source as listed. A filtered
-dataset counts its filters there; [dataset.md](../dataset.md#the-swath-extension) says what each coverage
-field means.
+`complete=true` says the listing reached the end of its scope, not that it holds every entry: `skipped` counts
+entries that could not be read, `filters` the rules that left rows out, `exclusions` what was left out by
+design (an output directory inside the tree). The dataset holds the whole source as listed when it shows
+`complete=true stop=completed skipped=0 filters=0`
+([getting-started.md](../getting-started.md#5-check-that-it-is-complete),
+[dataset.md](../dataset.md#the-swath-extension)).
 
 For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts committed
 so far and where `swath resume` will continue:

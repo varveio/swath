@@ -20,8 +20,9 @@ Notable changes per release. The full human summary for the current release is i
   every source, chosen with `--columns`; `swath du` sorts with `--sort`. `-h` prints a command's short help,
   `--help` all of it; `swath completion bash|zsh|fish` prints a completion script; `--log-format json` writes
   stderr as JSON events. An unknown option names the nearest one, older spellings included (`--region`: did
-  you mean `--s3-region`?). `swath list -o` prints nothing on stdout. The removed names are unknown flags,
-  without aliases; a run recorded by an earlier build is finished with it or started over.
+  you mean `--s3-region`?). `swath list -o DIR` and `-o FILE` print nothing on stdout, except the report
+  with `--report -`. The removed names are unknown flags, without aliases; a run recorded by an earlier
+  build is finished with it or started over.
 
 - Go port: refuse credential-bearing endpoint URLs before recording a run, redact query and
   fragment endpoint arguments, and redact credentials in location errors and older journal

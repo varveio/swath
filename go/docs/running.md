@@ -16,7 +16,7 @@ swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
 | Resource | Flag | Default | What to know |
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling. A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
-| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
+| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by the schema's calculated working set and the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
@@ -58,16 +58,11 @@ A run holds:
   names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`, `swath diag count`) does not
   sort, and on Linux reads large directories a slab at a time; the portable engine (macOS, Windows) reads
   each directory whole for a count too.
-- **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
-  (default GOMAXPROCS, lowered to what 16 MiB each of an allowance equal to `--row-budget` carries; one
-  job compresses synchronously on the order stage). A job is a 4 MiB input section (four 1 MiB windows:
-  sorted listings match between neighboring keys, and a 1 MiB window measured the ratio and speed of
-  the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
-  encoder; measured at 5 to 13 MiB a job. Gzip is one stream. The report's `output.text.compressor`
-  names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`). A file's
-  rows are also formatted by `--encoders` goroutines (`output.text.formatters`) into one ordered stream;
-  their queued batches are rows in flight, charged to `--row-budget`, and the chunks they format are about
-  the same size.
+- **A `.zst` text file's compressor, outside it:** as many parallel jobs as `--encoders`, about 5 to 13 MiB
+  each; lower `--encoders` to lower it. Gzip is one stream. The report's `output.text.compressor` names the
+  jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`); the rows being
+  formatted for the file are rows in flight, charged to `--row-budget`
+  ([how](internals/run-lifecycle.md#encoder-sizing)).
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
   report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
@@ -119,14 +114,16 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
 
 ## Cost
 
-Object stores charge per listing request, and each returns up to 1,000 keys. A run sends about one request
-per 1,000 keys, plus the seed's delimiter listings, the probes that pick split points, and retries; a run
-seeded from a previous dataset (`--seed-from`) comes close to one per 1,000. The run report counts every HTTP
+Object stores charge per listing request. An S3 or GCS request returns up to 1,000 keys, an Azure Blob one up
+to 5,000. A run sends about one request per page of keys, plus the seed's delimiter listings, the probes that
+pick split points, and retries; a run seeded from a previous dataset (`--seed-from`) comes close to one per
+page. The run report counts every HTTP
 attempt in `requests.http_attempts`, and on AWS S3 and GCS's own endpoints estimates their cost in
 `cost.cost_usd` at the provider's reference list rate (0.005 USD per 1,000 requests); a custom endpoint and
 Azure Blob have no estimate. The progress line shows the same estimate as the run goes. Pricing varies by
 provider, region and time: check the provider's current price for a budget. A resume lists again what was
-not yet published, so an interrupted run costs more than an uninterrupted one.
+not yet published, except what it replays from certified spill, so an interrupted run costs more than an
+uninterrupted one.
 
 ## Watching a run
 
@@ -310,8 +307,8 @@ none), at most 262,144 lines and 16 MiB (thin a larger one: every nth line, its 
 replaces). An unsorted or repeated cut, a cut outside the scope, a cut file past those bounds, `--seed-from`
 on a local tree, and a prior that is the output directory are refused (exit 2).
 
-The prior changes only how the work is first divided, into up to `min(1000, 4 × --workers)` ranges of about
-equal expected keys; the splits stay adaptive and the rows are the same. `swath resume` reads `--seed-from`
+The prior changes only how the work is first divided, into ranges of about equal expected keys
+([warm start](internals/range-engine.md)); the splits stay adaptive and the rows are the same. `swath resume` reads `--seed-from`
 again and may change or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without
 it. The report's `invocation.prior` names what was used.
 
