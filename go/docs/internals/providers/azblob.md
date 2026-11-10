@@ -27,7 +27,7 @@ Root parse errors keep clean roots, redact SAS queries and hide credential-beari
 clients ([clients.md](../clients.md)). Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.8.3), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
-decodes it, in the format its `Content-Type` names. A per-call policy pins `x-ms-version` to `2026-10-06`. Every
+decodes it, in the format its `Content-Type` names. A per-call policy pins `x-ms-version` to `2026-06-06`, the oldest version with the Arrow format, which the live service, swath-replay and Azurite all answer. Every
 listing asks for the Arrow response format, then XML (`Accept: application/vnd.apache.arrow.stream,application/xml`),
 and the service picks: an account or endpoint without Arrow listings (a hierarchical namespace, Azurite, the replay
 server) answers XML, and so may an account whose eligibility changes mid-run. There is no option: XML is the
