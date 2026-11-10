@@ -60,9 +60,17 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := map[string]bool{}
+	deleted := 0
 	// A current and a generations listing (versions=true, and on Google's
 	// endpoint the generations field mask).
 	for _, start := range []client.ListInput{{MaxResults: 7}, {Versions: true, MaxResults: 9}} {
+		f.Resource = func(i int, k string) map[string]any {
+			o := gcstest.Object(i, k)
+			if start.Versions && i == 0 {
+				o["timeDeleted"] = "2026-11-09T01:02:03.123456Z"
+			}
+			return o
+		}
 		in := start
 		in.Bucket = "bkt"
 		for pages := 0; ; pages++ {
@@ -103,6 +111,7 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 					Generation: g.Generation, Metageneration: g.Metageneration, StorageClass: g.StorageClass,
 					MD5: g.Md5Hash, CRC32C: g.Crc32c, ContentType: g.ContentType}
 				if g.TimeDeleted != "" {
+					deleted++
 					d, err := time.Parse(time.RFC3339Nano, g.TimeDeleted)
 					if err != nil {
 						t.Fatal(err)
@@ -119,6 +128,9 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 			}
 			in.PageToken = a.NextPageToken
 		}
+	}
+	if deleted != 1 {
+		t.Fatalf("compared %d deleted generations, want 1", deleted)
 	}
 	for _, k := range keys {
 		if !listed[k] {

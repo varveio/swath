@@ -11,56 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
-
-// closeCounter is a RoundTripper that counts each original response
-// body's Close calls.
-type closeCounter struct {
-	next   http.RoundTripper
-	mu     sync.Mutex
-	bodies []*countedBody
-}
-
-type countedBody struct {
-	io.ReadCloser
-	closes atomic.Int32
-}
-
-func (b *countedBody) Close() error {
-	b.closes.Add(1)
-	return b.ReadCloser.Close()
-}
-
-func (c *closeCounter) RoundTrip(r *http.Request) (*http.Response, error) {
-	resp, err := c.next.RoundTrip(r)
-	if err != nil {
-		return nil, err
-	}
-	b := &countedBody{ReadCloser: resp.Body}
-	c.mu.Lock()
-	c.bodies = append(c.bodies, b)
-	c.mu.Unlock()
-	resp.Body = b
-	return resp, nil
-}
-
-// closedOnce fails unless every body was closed exactly once.
-func (c *closeCounter) closedOnce(t *testing.T) {
-	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for i, b := range c.bodies {
-		if n := b.closes.Load(); n != 1 {
-			t.Errorf("body %d closed %d times", i, n)
-		}
-	}
-}
 
 const maxBody = 16 << 20
 
@@ -160,7 +117,7 @@ func TestAnswers(t *testing.T) {
 			cfg := testConfig(srv.URL)
 			cfg.MaxAttempts = 3
 
-			rt := &closeCounter{next: http.DefaultTransport}
+			rt := &objhttptest.BodyCloses{Next: http.DefaultTransport}
 			cl := newTest(t, withHTTP(cfg, rt))
 			_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 			var ex *objhttp.ExhaustedError
@@ -176,7 +133,7 @@ func TestAnswers(t *testing.T) {
 					t.Fatalf("answer %#v, want %#v", got, *c.answer)
 				}
 			}
-			rt.closedOnce(t)
+			rt.Check(t, int(cl.Counters().Attempts))
 		})
 	}
 }
@@ -208,7 +165,7 @@ func TestCutThrottleFeedsLimiter(t *testing.T) {
 	cfg := testConfig(srv.URL)
 	cfg.MaxAttempts = 3
 	cfg.Limiter = objhttp.NewLimiter(64)
-	rt := &closeCounter{next: http.DefaultTransport}
+	rt := &objhttptest.BodyCloses{Next: http.DefaultTransport}
 	cl := newTest(t, withHTTP(cfg, rt))
 	_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 	if objhttp.Classify(err) != objhttp.ClassThrottle {
@@ -219,7 +176,7 @@ func TestCutThrottleFeedsLimiter(t *testing.T) {
 	if n.Throttles != 3 || l.ThrottlePermille == 0 || l.Decreases+l.FloorThrottles+l.Stale+l.Tolerated != 3 {
 		t.Fatalf("counters %+v, limiter %+v: want 3 throttles recorded", requests(n), l)
 	}
-	rt.closedOnce(t)
+	rt.Check(t, int(cl.Counters().Attempts))
 }
 
 // withHTTP supplies an HTTP client over rt whose policy follows redirects

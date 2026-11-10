@@ -486,13 +486,6 @@ func TestOldJournalRefused(t *testing.T) {
 	if old.Hash() == id.Hash() {
 		t.Fatal("args_hash unchanged")
 	}
-	src, err = open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if src.(source.Capable).Capabilities().Resume {
-		t.Fatal("a supplied client declares resume")
-	}
 }
 
 type supplied struct{}

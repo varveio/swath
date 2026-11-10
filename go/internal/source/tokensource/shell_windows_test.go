@@ -19,7 +19,4 @@ func TestWindowsShell(t *testing.T) {
 	if _, err := (&Command{Cmd: "echo denied 1>&2 & exit /b 3"}).Token(); err == nil || !strings.Contains(err.Error(), "exited 3: denied") {
 		t.Fatalf("failure: %v", err)
 	}
-	if !strings.HasPrefix(shell, "cmd.exe") {
-		t.Fatal(shell)
-	}
 }

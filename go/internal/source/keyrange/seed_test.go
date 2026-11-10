@@ -52,7 +52,7 @@ func seedShapes() map[string][]string {
 		}),
 		// More top-level folders than one page.
 		"wide top":            gen(2600, func(i int) string { return fmt.Sprintf("d%05d/x", i) }),
-		"date":                dateLayout(),
+		"date":                dateLayout(10),
 		"nbm-like":            nbmLike(),
 		"mass under the last": massUnderLast(),
 		"100 deep":            deepChain(100, 6),
@@ -102,20 +102,6 @@ func TestSeedListsEveryKey(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("prefix: %d keys, want %d", len(got), len(want))
 	}
-}
-
-// dateLayout is the single-root date layout: one root folder, four levels
-// to 336 day folders of 10 parts each.
-func dateLayout() []string {
-	var keys []string
-	for m := 1; m <= 12; m++ {
-		for d := 1; d <= 28; d++ {
-			for i := range 10 {
-				keys = append(keys, fmt.Sprintf("warehouse/events/year=2025/month=%02d/day=%02d/part-%05d.parquet", m, d, i))
-			}
-		}
-	}
-	return keys
 }
 
 // nbmLike is a top level wider than one page: 2,300 day folders.
@@ -243,7 +229,7 @@ func TestSeedDescent(t *testing.T) {
 		want    want
 	}{
 		// 1 + 1 + 1 + 1 + 12 requests in five waves; 336 days >= 64.
-		{"date", dateLayout(), 64, 0, want{4, 16, 5, 1, cSeedStopWide, []int64{1, 1, 1, 12, 336}, 1}},
+		{"date", dateLayout(10), 64, 0, want{4, 16, 5, 1, cSeedStopWide, []int64{1, 1, 1, 12, 336}, 1}},
 		// Three pages of the top level, no descent.
 		{"nbm-like", nbmLike(), 64, 0, want{0, 3, 3, 3, cSeedStopWide, []int64{2300}, 1}},
 		// Eight top folders < 16 workers: one level under all of them.
@@ -362,7 +348,7 @@ func TestSeedResume(t *testing.T) {
 	// A resume inside the date layout's tenth day of March tiles the rest
 	// of the year: the folders above K list its later days and months, and
 	// the seed descends into them.
-	keys := slices.Sorted(slices.Values(dateLayout()))
+	keys := slices.Sorted(slices.Values(dateLayout(10)))
 	k := "warehouse/events/year=2025/month=03/day=10/part-00004.parquet"
 	tiles, st := seedTiles(t, "date resume", keys, fetchFrom(newSorted(keys, false, 1)), false, Options{Seed: true, Workers: 64, Resume: &Resume{After: k}})
 	n := tileKeys(keys, tiles)
@@ -384,7 +370,7 @@ func TestSeedResumeAfterCrash(t *testing.T) {
 }
 
 func seedResumeAfterCrash(t *testing.T, firstPage bool) {
-	spaces := map[string][]string{"date": dateLayout(), "mass under the last": massUnderLast(), "nbm-like": nbmLike()}
+	spaces := map[string][]string{"date": dateLayout(10), "mass under the last": massUnderLast(), "nbm-like": nbmLike()}
 	for k, v := range hostile() {
 		spaces["hostile "+k] = v
 	}
@@ -635,7 +621,7 @@ func TestSeedFirstPage(t *testing.T) {
 				st.Get(cSeedStopOnePage), st.Get(cSeedRoundTrips), st.Get(cRequests))
 		}
 	}
-	keys := dateLayout() // 3,360 keys: the first page is a third of a month
+	keys := dateLayout(10) // 3,360 keys: the first page is a third of a month
 	rec, st := expand(keys, Options{Seed: true, SeedFirstPage: true, Workers: 64}, nil)
 	plain, _ := expand(keys, Options{Seed: true, Workers: 64}, nil)
 	if len(rec.rows) != 0 || st.Get(cSeedFirstPageDiscarded) != 1 || st.Get(cSeedFirstPageKeys) != 0 || st.Get(cSeedStopWide) != 1 {

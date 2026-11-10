@@ -12,9 +12,6 @@ import (
 	"syscall"
 )
 
-// shell is the command interpreter the token command runs under.
-const shell = "cmd.exe /d /s /c"
-
 // shellCommand runs command with cmd.exe (%ComSpec%) /d /s /c "command":
 // /d skips AutoRun, /s takes the quoted command verbatim. cmd.exe does not
 // parse the escaping Go applies to arguments, so the command line is set

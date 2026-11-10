@@ -375,7 +375,7 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 					dropped++
 				}
 				out.Rows = out.Rows[dropped:]
-				if dropped > 0 && p.d.Groups && p.d.Detach != nil {
+				if dropped > 0 && p.d.Groups {
 					out.Rows = p.d.Detach(out.Rows)
 				}
 				// A delimiter page from an inclusive start also rolls the
@@ -503,7 +503,7 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			dropped++
 		}
 		out.Rows = out.Rows[dropped:]
-		if dropped > 0 && p.d.Groups && p.d.Detach != nil {
+		if dropped > 0 && p.d.Groups {
 			out.Rows = p.d.Detach(out.Rows)
 		}
 		n := len(out.Rows)
@@ -515,7 +515,7 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			}
 		}
 		rows := out.Rows[:n]
-		if p.d.Groups && n < len(out.Rows) && p.d.Detach != nil {
+		if p.d.Groups && n < len(out.Rows) {
 			rows = p.d.Detach(rows)
 		}
 		if p.d.Groups {

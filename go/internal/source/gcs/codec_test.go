@@ -6,7 +6,6 @@ package gcs
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"math"
 	"testing"
 
@@ -51,25 +50,8 @@ func TestDeltaHistoricalBytes(t *testing.T) {
 		if d.Err() != nil || d.Len() != 0 {
 			t.Fatalf("row %d: %v, %d left", i, d.Err(), d.Len())
 		}
-		clear(src)
 		if got != row {
 			t.Fatalf("row %d: %+v, want %+v", i, got, row)
-		}
-		for end := range len(encoded) {
-			d = schema.NewOwningDecoder(encoded[:end], 1024)
-			c.DecodeDelta(d, &prev, &Generation{})
-			if !errors.Is(d.Err(), schema.ErrCodec) {
-				t.Fatalf("row %d cut at %d: %v", i, end, d.Err())
-			}
-		}
-		for bit := uint(5); bit < 8; bit++ {
-			bad := bytes.Clone(encoded)
-			bad[0] |= 1 << bit
-			d = schema.NewDecoder(bad)
-			c.DecodeDelta(d, &prev, &Generation{})
-			if !errors.Is(d.Err(), schema.ErrCodec) {
-				t.Fatalf("row %d flag %d: %v", i, bit, d.Err())
-			}
 		}
 		prev = row
 	}

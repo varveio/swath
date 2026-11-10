@@ -56,6 +56,9 @@ type pooled interface{ Transports() int }
 // (client.Client: retry_after_capped).
 type capped interface{ RetryAfterCapped() int64 }
 
+var _ capped = (*client.Client)(nil)
+var _ pooled = (*client.Client)(nil)
+
 // Routed is implemented by clients that can name the route a container's
 // requests go to, which resume identity freezes (client.Client). A
 // supplied client that cannot is listed, but the run declines resume.

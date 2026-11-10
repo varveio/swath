@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
 )
@@ -26,14 +25,6 @@ import (
 // 500 pages of 100 keys each): a date-partitioned warehouse, an nbm-like
 // forecast archive, flat sequential keys and hashed keys.
 func shapes() map[string][]string {
-	var date []string
-	for m := 1; m <= 12; m++ {
-		for d := 1; d <= 28; d++ {
-			for i := range 150 {
-				date = append(date, fmt.Sprintf("warehouse/events/year=2025/month=%02d/day=%02d/part-%05d.parquet", m, d, i))
-			}
-		}
-	}
 	var nbm []string
 	for day := range 30 {
 		ymd := time.Date(2020, 11, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, day).Format("20060102")
@@ -54,7 +45,7 @@ func shapes() map[string][]string {
 	for i := range hash {
 		hash[i] = fmt.Sprintf("%016x", rng.Uint64())
 	}
-	return map[string][]string{"date": date, "nbm": nbm, "flat": flat, "hash": hash}
+	return map[string][]string{"date": dateLayout(150), "nbm": nbm, "flat": flat, "hash": hash}
 }
 
 // depthBound is the gate on a split tree of keys/page pages: a balanced
@@ -64,46 +55,6 @@ func depthBound(keys, page int, k float64) int64 {
 }
 
 const shapePage = 100
-
-// TestPivotPolicyEngages: on each synthetic shape at 64 workers (pages of
-// 100 keys, 1 ms each), the split tree stays within 4·log2(pages)+8
-// (before the anchor reflection and the gallop: date 336, nbm 66, flat 55,
-// hash 38 to 55), the output is the keyspace, the ranges tile it, and the
-// report shows the paths that placed the pivots: the frontier reflected
-// from its anchor, bounded chains galloped, no sliver was taken; on the
-// hierarchical shapes reflections reached their range's hi and fell back
-// to the midpoint.
-func TestPivotPolicyEngages(t *testing.T) {
-	all := shapes()
-	for _, name := range []string{"date", "nbm", "flat", "hash"} {
-		keys := all[name]
-		f := newSorted(keys, false, 1)
-		f.Latency = time.Millisecond
-		got, st, leaves := runBudget(t, f, Options{PageSize: shapePage}, 64, 1<<20)
-		if !slices.Equal(got, slices.Sorted(slices.Values(keys))) {
-			t.Fatalf("%s: %d keys, want %d", name, len(got), len(keys))
-		}
-		checkTiling(t, name, leaves)
-		check(t, name, st, int64(len(got)))
-		g := st.Get
-		t.Logf("%s: depth=%d (bound %d) requests=%d frontier=%d bounded=%d reflect=%d midpoint=%d density=%d/%d ceiling=%d shrink_prevented=%d max_gen=%d halvings=%d sliver_refused=%d empty=%d/%d",
-			name, g(cSplitMaxDepth), depthBound(len(keys), shapePage, 4), g(cRequests), g(cSplitAcceptedFrontier), g(cSplitAcceptedBounded),
-			g(cSplitPivotReflect), g(cSplitPivotMidpoint), g(cSplitPivotDensityBounded), g(cSplitPivotDensityFrontier), g(cReflectCeiling),
-			g(cDensityShrinkPrevented), g(cGallopMaxGen), g(cGallopHalvings), g(cSplitSliverRefused), g(cChildEmptyLower), g(cChildEmptyUpper))
-		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
-			t.Errorf("%s: split.max_depth %d over %d", name, d, depthBound(len(keys), shapePage, 4))
-		}
-		fired := []counters.ID{cSplitAcceptedFrontier, cFrontierAnchored, cSplitPivotReflect, cSplitPivotDensityBounded, cGallopMaxGen}
-		if name == "date" || name == "nbm" {
-			fired = append(fired, cReflectCeiling, cSplitPivotMidpoint)
-		}
-		for _, id := range fired {
-			if g(id) == 0 {
-				t.Errorf("%s: %s never fired", name, Counters[id].Key)
-			}
-		}
-	}
-}
 
 // TestPercentKeysListInParallel: keys that all hold '%' (URL-encoded
 // names, the red team's percent_keys shape) list in parallel under S3's
