@@ -141,10 +141,11 @@ func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func
 			columns = append(columns, all[i+1])
 		}
 	}
-	return d.scan(ctx, ScanRequest{Prefix: req.Prefix, Workers: req.Workers, Stats: req.Stats}, columns,
-		func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error {
+	return d.scan(ctx, ScanRequest{Prefix: req.Prefix, Workers: req.Workers, Stats: req.Stats}, columns, func() shardScan {
+		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error {
 			return d.scanBatchShard(ctx, shard, st, req.Fields, columns, fn)
-		})
+		}
+	})
 }
 
 func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {

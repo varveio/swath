@@ -407,7 +407,7 @@ func TestScanBatchesStatsAndSourceError(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := plan.Stats()
-		shards, err := plan.Split(ctx, workers)
+		shards, err := plan.Split(ctx, scanShards(workers))
 		if err != nil {
 			t.Fatal(err)
 		}
