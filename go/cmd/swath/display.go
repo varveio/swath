@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,41 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 	source.Define(f, source.Flag{Name: "log-format", Value: source.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
 		Usage: "stderr as text, or json: one JSON object per line",
 		Long:  "json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block."})
+}
+
+// registerGlobal defines the global flags alone (globalFlags), for a
+// command that takes no other terminal flag (show, completion).
+func (t *termOptions) registerGlobal(f *pflag.FlagSet) {
+	all := pflag.NewFlagSet("", pflag.ContinueOnError)
+	t.register(all)
+	all.VisitAll(func(fl *pflag.Flag) {
+		if slices.Contains(globalFlags, fl.Name) {
+			f.AddFlag(fl)
+		}
+	})
+}
+
+// askedFormat is the last --log-format value args give before --
+// (--log-format json, --log-format=json), "" for none or one that is not
+// a format: a command line that is refused, perhaps before the flag is
+// read, reports in it.
+func askedFormat(args []string) string {
+	v := ""
+	for i, a := range args {
+		if a == "--" {
+			break
+		}
+		switch x, found := strings.CutPrefix(a, "--log-format="); {
+		case found:
+			v = x
+		case a == "--log-format" && i+1 < len(args):
+			v = args[i+1]
+		}
+	}
+	if v != logText && v != logJSON {
+		return ""
+	}
+	return v
 }
 
 func (t *termOptions) validate() error {

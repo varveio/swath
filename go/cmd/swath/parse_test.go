@@ -417,3 +417,32 @@ func TestResumeDecidesByDisk(t *testing.T) {
 		t.Errorf("resume of a text file's name: %v", err)
 	}
 }
+
+// TestGlobalFlagsEverywhere: --log-format, --color, -v and -q are taken
+// after the command word by every command, and a command line refused
+// before --log-format is read still reports in the format it asks for.
+func TestGlobalFlagsEverywhere(t *testing.T) {
+	src := localSource(t)
+	for _, args := range [][]string{
+		{"list", src, "--bogus", "--log-format", "json"},
+		{"list", src, "--bogus", "--log-format=json"},
+		{"show", filepath.Join(t.TempDir(), "nosuchdir"), "--log-format", "json"},
+		{"completion", "nosuchshell", "-q", "--log-format", "json"},
+		{"resume", filepath.Join(t.TempDir(), "nosuchdir"), "--bogus", "--log-format", "json"},
+		{"lst", "--log-format", "json"},
+	} {
+		stderr := captureStderr(t)
+		t.Cleanup(func() { logs.Store(nil) })
+		code := conclude(dispatch(context.Background(), args, io.Discard))
+		var ev map[string]any
+		if code == exitCompleted || json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &ev) != nil || ev["event"] != "outcome" {
+			t.Errorf("%q: exit %d, stderr %q", args, code, stderr.String())
+		}
+	}
+	if err := dispatch(context.Background(), []string{"completion", "bash", "--color", "never", "-v"}, io.Discard); err != nil {
+		t.Errorf("completion with global flags: %v", err)
+	}
+	if err := dispatch(context.Background(), []string{"show", t.TempDir(), "--color", "sometimes"}, io.Discard); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--color") {
+		t.Errorf("show --color sometimes: %v", err)
+	}
+}

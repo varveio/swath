@@ -171,10 +171,13 @@ func completionSchemes() []string {
 func completion(args []string, stdout io.Writer) error {
 	f := pflag.NewFlagSet("completion", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	var t termOptions
+	t.registerGlobal(f)
 	p, err := parseFlags(f, "completion", args, nil)
+	setLog(t, "")
 	if errors.Is(err, pflag.ErrHelp) {
 		var b strings.Builder
-		completionHelp.write(&b, styleFor(stdout, "auto", p.longHelp))
+		completionHelp.write(&b, styleFor(stdout, t.color, p.longHelp))
 		fmt.Fprint(stdout, b.String())
 		return err
 	}
@@ -185,6 +188,9 @@ func completion(args []string, stdout io.Writer) error {
 		return seeHelp{usageError{errors.New("missing SHELL (bash, zsh or fish)")}, "completion"}
 	case len(p.operands) > 1:
 		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", registry.Redact(p.operands[1]))}, "completion"}
+	}
+	if err := t.validate(); err != nil {
+		return usageError{err}
 	}
 	return writeCompletion(stdout, p.operands[0])
 }

@@ -15,8 +15,9 @@ swath version, swath -V, --version        print swath VERSION (REVISION)
 prints its flags one line each, `--help` adds each flag's further text (when to change it, its constraints);
 both go to stdout and exit 0. Flags are parsed GNU-style: short flags bundle (`-vq`) and take attached values
 (`-d1`, `-oPATH`), long ones take `--name value` or `--name=value`, flags and operands interleave, `--` ends the
-flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--include -verbose`, is a value). `-v`, `-q` and `--color` may also come before the
-command word. An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
+flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--include -verbose`, is a value). `-v`, `-q`, `--color` and `--log-format` are taken
+by every command (`show` and `completion` too), before or after the command word; a command line refused
+before `--log-format` is read still reports in the format it names. An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
 --s3-region?)`) and the help to read; an error never repeats a typed value it cannot tell from a credential
 (an unknown flag's value, a SAS in `-o` or an extra argument). A default-on switch is turned off by `--no-NAME`; the help never shows
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
@@ -1232,7 +1233,7 @@ table changes.
   and the statistics (headline cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless
   `NO_COLOR` is set and not empty or `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width:
   `golang.org/x/term`.
-- **Log format.** `--log-format text|json` (before or after the command word, and again on `swath resume`)
+- **Log format.** `--log-format text|json` (before or after the command word, on every command, and again on `swath resume`)
   chooses how those lines are written: `text`, the prose above; `json`, one JSON object per line and nothing
   else, no colour, no redrawn line and no statistics block (the `outcome` event and `--report` stand for it),
   with progress records appended at `--progress-interval` (30 s by default) whether or not stderr is a

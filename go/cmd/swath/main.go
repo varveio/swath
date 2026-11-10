@@ -271,6 +271,9 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return nil
 	})
+	if v := askedFormat(args); v != "" && !g.Changed("log-format") {
+		t.logFormat = v // the command's: an unknown command is reported as asked
+	}
 	setLog(t, "")
 	switch {
 	case errors.Is(err, pflag.ErrHelp):
@@ -308,9 +311,9 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	case "resume":
 		return resume(ctx, with(rest), stdout)
 	case "show":
-		return show(rest, stdout)
+		return show(with(rest), stdout)
 	case "completion":
-		return completion(rest, stdout)
+		return completion(with(rest), stdout)
 	case "version":
 		printVersion(stdout)
 		return nil

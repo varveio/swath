@@ -375,6 +375,9 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		return nil
 	})
 	p.operands = f.Args()
+	if v := askedFormat(args); err != nil && v != "" && f.Lookup("log-format") != nil {
+		_ = f.Set("log-format", v) // the refusal is reported as asked
+	}
 	var ne *pflag.NotExistError
 	var ve *pflag.ValueRequiredError
 	var ie *pflag.InvalidValueError

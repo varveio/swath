@@ -238,10 +238,13 @@ func show(args []string, stdout io.Writer) error {
 	f := pflag.NewFlagSet("show", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var raw bool
+	var t termOptions
+	t.registerGlobal(f)
 	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(&raw), Usage: "dump the journal's header and records as JSON lines"})
 	p, err := parseFlags(f, "show", args, nil)
+	setLog(t, "")
 	if errors.Is(err, pflag.ErrHelp) {
-		s := styleFor(stdout, "auto", p.longHelp)
+		s := styleFor(stdout, t.color, p.longHelp)
 		var b strings.Builder
 		showHelp.write(&b, s)
 		s.heading(&b, "Options")
@@ -254,6 +257,9 @@ func show(args []string, stdout io.Writer) error {
 		return err
 	case len(p.operands) != 1:
 		return seeHelp{usageError{errors.New("swath show takes one DIR")}, "show"}
+	}
+	if err := t.validate(); err != nil {
+		return usageError{err}
 	}
 	dir := p.operands[0]
 	if raw {
