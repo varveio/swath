@@ -146,26 +146,16 @@ themselves in `gradle/libs.versions.toml` so Dependabot maintains them. A
 constraint raises a floor without capping anything that legitimately needs
 newer.
 
-Two guards keep this honest. Every application distribution is checked to ship
+A guard keeps this honest: every application distribution is checked to ship
 at most one version of each module (`verifyNoDuplicateModuleVersions`, part of
 `check`) — the replay distribution packs a second dependency closure for its
 conformance launcher into the same `lib/`, and before the floors were pinned it
-shipped two complete Jackson generations at once. And a nightly job scans both
-distributions and both runtime images against the OSV database
-(`scripts/ci/osv-scan.sh`). The shipped Java closures are zero-tolerance except
-for the narrowly argued, expiring Java findings in
-`config/osv/osv-scanner.toml`.
-
-Image scans also cover the JRE base's Ubuntu packages. Their raw OSV JSON is
-retained as a workflow artifact and evaluated by
-`scripts/ci/osv-image-policy.py`: every non-Ubuntu finding outside the same
-expiring Java exceptions fails, as does Canonical priority high, critical,
-missing, or unknown. Canonical medium, low, and negligible priorities are
-reported with advisory-group and package-occurrence counts and whether the
-advisory lists a fixed version, but do not fail the nightly. A USN's
-classification comes from the worst Canonical
-priority among its member `UBUNTU-CVE` records, not its numeric CVSS maximum.
-Malformed or ambiguous scanner output fails closed.
+shipped two complete Jackson generations at once. The nightly OSV scan
+(`scripts/ci/osv-scan.sh`) no longer covers these distributions or the Java
+images: no release ships them since v0.3.2, and it scans the Go release images
+instead ([Go testing](../go/docs/testing.md#nightly)). The script can still scan
+a Java distribution's `lib/` directory against the argued, expiring Java
+exceptions in `config/osv/osv-scanner.toml`.
 
 ## 5. Docker images
 

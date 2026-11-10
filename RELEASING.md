@@ -29,18 +29,21 @@ no release publishes it; v0.3.2 was its last.
 
 For each `vX.Y.Z` tag, once the environment is approved:
 
-- one archive per target, each holding `swath`, `swath-replay`, `LICENSE` and `NOTICE` under
-  a `swath-X.Y.Z-OS-ARCH/` directory: `swath-X.Y.Z-linux-amd64.tar.gz`,
+- one archive per target, each holding `swath`, `swath-replay`, `LICENSE`, `NOTICE` and
+  `THIRD_PARTY_NOTICES` under a `swath-X.Y.Z-OS-ARCH/` directory: `swath-X.Y.Z-linux-amd64.tar.gz`,
   `swath-X.Y.Z-linux-arm64.tar.gz`, `swath-X.Y.Z-darwin-arm64.tar.gz` and
   `swath-X.Y.Z-windows-amd64.zip` (`.exe` binaries). The binaries are static
-  (`CGO_ENABLED=0`, `-trimpath`), built once by `scripts/ci/release-assets.sh build`;
+  (`CGO_ENABLED=0`, `-trimpath`), built once by `scripts/ci/release-assets.sh build`, which
+  also generates `THIRD_PARTY_NOTICES` with `go/notices.sh`: the license of every module
+  linked into the binaries, and the Go distribution's;
 - `swath-X.Y.Z.spdx.json`, an SPDX SBOM of the modules linked into every shipped binary;
 - `SHA256SUMS` over all of them, and a keyless (cosign) signature bundle per asset;
 - multi-arch (`linux/amd64`, `linux/arm64`) images `ghcr.io/varveio/swath` (the lister, on
   distroless static, for its CA certificates) and `ghcr.io/varveio/swath-replay` (on
   `scratch`), both from `Dockerfile.go`, signed and attested. They carry the archived linux
-  binaries byte for byte: the publish job replaces the Dockerfile's build stage with the
-  binaries unpacked from the verified archives (`release-assets.sh image-context`);
+  binaries byte for byte, and the archives' three legal files in `/licenses/`: the publish job
+  replaces the Dockerfile's build stage with the binaries and notices unpacked from the
+  verified archives (`release-assets.sh image-context`);
 - build provenance for the archives, `SHA256SUMS` and both images, and an SBOM attestation
   for the archives;
 - a GitHub release led by the repository-owned human summary, followed by generated notes
@@ -72,7 +75,11 @@ SHA, from a cold cache:
 
 - `go-tests`: `go vet ./...` and `go test -race ./...` of the main module unsharded on
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
-- `build`: the static builds for all four targets and their `--version` stamp;
+- `build`: the static builds for all four targets and their `--version` stamp, and the
+  license gate: `go/notices.sh` fails on a linked module whose license go-licenses does not
+  recognize or that is not on its allow-list (the Java build's, as SPDX identifiers), or when
+  the targets link different modules
+  ([license gate](go/docs/testing.md#license-gate));
 - `publish`, before any tag exists: both images' `--version` against the pushed digests,
   the image smoke (`scripts/ci/smoke-container.sh`: an anonymous listing of a
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's
@@ -97,6 +104,44 @@ you cannot cleanly reuse.
 `X.Y.Z` would contradict the tag. The final tag is a fresh build. What the rehearsal proves
 is the *pipeline*: credentials, signing identity, attestation subjects, the image smoke
 against a real bucket, and whether the verification commands below actually work.
+
+### Release candidate checklist
+
+The steps for `v0.4.0-rc.1`, the first release from this pipeline; for a later candidate,
+substitute its version.
+
+1. Merge the release-notes pull request first: `docs/ops/dev/RELEASE_NOTES.md` titled
+   `# swath 0.4.0-rc.1`. Wait for `ci.yml` on `main` to be green at that commit, macOS legs
+   included.
+2. Before the first publish, check the repository settings the `publish` job reads: the
+   `PUBLIC_RELEASE_ENABLED` variable is `true`, `SWATH_SMOKE_BUCKET` is unset (the image
+   smoke's default public prefix) or names a prefix it can list anonymously, and the
+   `public-release` environment has its reviewers.
+3. On a clean checkout of `main` at that commit, tag and push:
+   ```sh
+   just release 0.4.0-rc.1
+   git push origin v0.4.0-rc.1
+   ```
+4. Approve the `public-release` environment when the `Release` run waits on it.
+5. Check that the SBOM lists the Go modules, not Java artifacts: the names include `stdlib`
+   and module paths such as `github.com/aws/aws-sdk-go-v2/service/s3`, and no Maven
+   coordinates.
+   ```sh
+   gh release download v0.4.0-rc.1 --repo varveio/swath --dir rc
+   jq -r '.packages[].name' rc/swath-0.4.0-rc.1.spdx.json | sort -u
+   ```
+6. Check that each archive holds `THIRD_PARTY_NOTICES` beside the binaries
+   (`tar -tzf rc/swath-0.4.0-rc.1-linux-amd64.tar.gz`), then run every command under
+   [Verifying a release](#verifying-a-release) with `TAG=v0.4.0-rc.1`, the archive
+   `swath-0.4.0-rc.1-linux-amd64.tar.gz`, and the digests from the run's summary.
+7. Set the new `ghcr.io/varveio/swath-replay` package public and connect it to this
+   repository ([Container tags](#container-tags)), then confirm both images pull
+   anonymously and name the tag:
+   `docker run --rm ghcr.io/varveio/swath:0.4.0-rc.1 --version` and the same for
+   `ghcr.io/varveio/swath-replay:0.4.0-rc.1`.
+
+If a step fails, fix it through a pull request and cut `v0.4.0-rc.2`, retitling the notes;
+do not repair the published candidate by hand.
 
 ## Cutting a release
 

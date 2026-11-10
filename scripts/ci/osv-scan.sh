@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# Supply-chain scan of what swath actually ships: the jars in each application distribution,
-# and the runtime container image (its JRE base carries OS packages no Gradle constraint
-# reaches). Jar findings are checked against the argued Java exceptions in
-# config/osv/osv-scanner.toml. Image findings are written as raw JSON and passed to the
-# checked-in Ubuntu-priority policy in osv-image-policy.py.
-#
-# The distributions are scanned rather than the source tree because the source tree has no
-# lockfile — the shipped `lib/` directory IS the resolved closure, and reading it means the
-# scan can never disagree with what a user downloads. `--no-ignore` is required: `lib/` lives
-# under build/, which .gitignore excludes and the scanner honours by default.
+# Supply-chain scan of what swath actually ships. The nightly job passes the release images
+# (Dockerfile.go): the scanner reads the Go version and module list embedded in each binary,
+# and the OS packages of the image's base. Image findings are written as raw JSON and passed to
+# the checked-in policy in osv-image-policy.py. A directory target scans the jars in it (a Java
+# application distribution's `lib/`, its resolved closure) against the argued Java exceptions
+# in config/osv/osv-scanner.toml; `--no-ignore` is required because `lib/` lives under build/,
+# which .gitignore excludes and the scanner honors by default.
 #
 # Usage: scripts/ci/osv-scan.sh <target>...
 #   target  a directory of jars, or `image:<name>` for a local container image
@@ -46,7 +43,7 @@ for target in "$@"; do
     case "$target" in
         image:*)
             # `scan image` reads the image's OS package database and the language artifacts
-            # inside it, which is the only way the JRE base layer gets looked at at all.
+            # inside it, here the Go binaries' embedded module lists.
             # Keep unfiltered scanner output as an audit artifact. The policy reads the
             # Java-only exception file itself, so OS-package findings cannot be hidden in it.
             mkdir -p "$REPORT_DIR"

@@ -13,9 +13,12 @@
 #
 # The build stage runs on the build platform and cross-compiles both commands for
 # TARGETOS/TARGETARCH (CGO_ENABLED=0 through go/build.sh), so a foreign-architecture image
-# needs no emulation. It writes them to /out/TARGETOS-TARGETARCH/. The release workflow
-# replaces the stage with the binaries of its release archives (`build-contexts: build=DIR`,
-# DIR holding out/linux-amd64/ and out/linux-arm64/), so the images carry the archived bytes.
+# needs no emulation. It writes them to /out/TARGETOS-TARGETARCH/, and their third-party notices
+# (go/notices.sh, which fails on a disallowed license) to /out/THIRD_PARTY_NOTICES. The release
+# workflow replaces the stage with the contents of its release archives (`build-contexts:
+# build=DIR`, DIR holding out/linux-amd64/, out/linux-arm64/ and out/THIRD_PARTY_NOTICES), so the
+# images carry the archived bytes. Each image holds LICENSE, NOTICE and THIRD_PARTY_NOTICES in
+# /licenses/.
 #
 # Neither runtime stage has a RUN, so a multi-architecture build pulls nothing and emulates
 # nothing. Both run as the numeric user 10001:10001, and the binary is owned by root and not
@@ -47,11 +50,13 @@ ARG GOPROXY=https://proxy.golang.org,direct
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY go/ ./
+ARG GOFLAGS=
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out && ./notices.sh /out/THIRD_PARTY_NOTICES
 ARG TARGETOS
 ARG TARGETARCH
 ARG SWATH_VERSION=
 ARG SWATH_REVISION=
-ARG GOFLAGS=
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     for cmd in swath swath-replay; do \
       GOOS=$TARGETOS GOARCH=$TARGETARCH ./build.sh -o "/out/$TARGETOS-$TARGETARCH/$cmd" "./cmd/$cmd" || exit; \
@@ -61,6 +66,8 @@ FROM scratch AS swath-replay
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=build --chmod=0555 /out/${TARGETOS}-${TARGETARCH}/swath-replay /opt/swath-replay/swath-replay
+COPY --chmod=0444 LICENSE NOTICE /licenses/
+COPY --from=build --chmod=0444 /out/THIRD_PARTY_NOTICES /licenses/
 USER 10001:10001
 WORKDIR /opt/swath-replay
 ENTRYPOINT ["/opt/swath-replay/swath-replay"]
@@ -69,6 +76,8 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=build --chmod=0555 /out/${TARGETOS}-${TARGETARCH}/swath /opt/swath/swath
+COPY --chmod=0444 LICENSE NOTICE /licenses/
+COPY --from=build --chmod=0444 /out/THIRD_PARTY_NOTICES /licenses/
 USER 10001:10001
 WORKDIR /opt/swath
 ENTRYPOINT ["/opt/swath/swath"]

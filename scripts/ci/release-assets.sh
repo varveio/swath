@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build, stage and verify the exact public release asset set: one archive per target holding
-# swath and swath-replay with the legal files, the SPDX SBOM and SHA256SUMS. No release-facing
+# swath and swath-replay with the legal files and the third-party notices, the SPDX SBOM and
+# SHA256SUMS. No release-facing
 # glob belongs here: the set is named in full, so a stray file can never be published.
 set -euo pipefail
 
@@ -11,6 +12,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TARGETS=(linux/amd64 linux/arm64 darwin/arm64 windows/amd64)
 COMMANDS=(swath swath-replay)
 LEGAL=(LICENSE NOTICE)
+# Generated beside the binaries by go/notices.sh, which fails on a disallowed license.
+NOTICES=THIRD_PARTY_NOTICES
 
 usage() {
   echo "usage: $0 build <version> <binary-directory>" >&2
@@ -94,7 +97,8 @@ assert_exact() {
 }
 
 # build: every command for every target through go/build.sh, stamped with the version (and
-# $SWATH_REVISION, or the checkout's HEAD), into BINARIES/OS-ARCH/.
+# $SWATH_REVISION, or the checkout's HEAD), into BINARIES/OS-ARCH/, and their third-party
+# notices into BINARIES/THIRD_PARTY_NOTICES.
 build() {
   local version=$1 binaries=$2 target cmd out
   [[ ! -e $binaries ]] || { echo "binary directory already exists: $binaries" >&2; exit 1; }
@@ -108,10 +112,11 @@ build() {
         "$REPO_ROOT/go/build.sh" -o "$out" "./cmd/$cmd"
     done
   done
+  "$REPO_ROOT/go/notices.sh" "$binaries/$NOTICES"
 }
 
 # stage: one archive per target, a top-level swath-VERSION-OS-ARCH/ directory holding the
-# commands and the legal files, owned by root and with the commands executable.
+# commands, the legal files and the notices, owned by root and with the commands executable.
 stage() {
   local version=$1 binaries=$2 directory=$3 root=${SWATH_RELEASE_ROOT:-$REPO_ROOT}
   local target cmd file name tree work
@@ -125,6 +130,10 @@ stage() {
   for file in "${LEGAL[@]}"; do
     [[ -f $root/$file && -s $root/$file ]] || { echo "legal file missing or empty: $root/$file" >&2; exit 1; }
   done
+  [[ -f $binaries/$NOTICES && -s $binaries/$NOTICES ]] || {
+    echo "third-party notices missing or empty: $binaries/$NOTICES" >&2
+    exit 1
+  }
   mkdir -p "$directory"
   directory=$(cd "$directory" && pwd)
   work=$(mktemp -d)
@@ -138,6 +147,7 @@ stage() {
     for file in "${LEGAL[@]}"; do
       install -m 0644 "$root/$file" "$tree/"
     done
+    install -m 0644 "$binaries/$NOTICES" "$tree/"
     if [[ ${target%/*} == windows ]]; then
       (cd "$work" && python3 -m zipfile -c "$directory/$(archive_name "$version" "$target")" "$name")
     else
@@ -149,7 +159,8 @@ stage() {
 }
 
 # image-context: the linux commands out of the staged archives, as Dockerfile.go's build stage
-# would have written them (out/linux-ARCH/), for `build-contexts: build=DIRECTORY`.
+# would have written them (out/linux-ARCH/, and the notices at out/), for
+# `build-contexts: build=DIRECTORY`.
 image_context() {
   local version=$1 assets=$2 context=$3 target name
   [[ ! -e $context ]] || { echo "image context already exists: $context" >&2; exit 1; }
@@ -160,6 +171,8 @@ image_context() {
     tar -xzf "$assets/$(archive_name "$version" "$target")" -C "$context/out/$(platform "$target")" \
       --strip-components=1 "${COMMANDS[@]/#/$name/}"
   done
+  tar -xzf "$assets/$(archive_name "$version" linux/amd64)" -C "$context/out" --strip-components=1 \
+    "swath-${version}-$(platform linux/amd64)/$NOTICES"
 }
 
 self_test() {
@@ -176,6 +189,12 @@ self_test() {
   done
   for name in "${LEGAL[@]}"; do printf '%s' "$name" > "$scratch/$name"; done
 
+  if SWATH_RELEASE_ROOT=$scratch "$0" stage "$version" "$scratch/bin" "$assets" >/dev/null 2>&1; then
+    echo "self-test failed: release assets were staged without third-party notices" >&2
+    exit 1
+  fi
+  printf notices > "$scratch/bin/$NOTICES"
+
   mv "$scratch/bin/linux-arm64/swath" "$scratch/swath.moved"
   if SWATH_RELEASE_ROOT=$scratch "$0" stage "$version" "$scratch/bin" "$assets" >/dev/null 2>&1; then
     echo "self-test failed: a missing binary was staged" >&2
@@ -188,15 +207,25 @@ self_test() {
   "$0" checksums "$version" "$assets"
   "$0" verify-unsigned "$version" "$assets"
 
-  # The archives hold the commands and legal files under one directory, executable.
+  # The archives hold the commands, legal files and notices under one directory, executable.
   tar -tvzf "$assets/swath-${version}-linux-amd64.tar.gz" |
     grep -q "^-rwxr-xr-x 0/0 .* swath-${version}-linux-amd64/swath-replay$" || {
       echo "self-test failed: the linux archive lacks an executable swath-replay" >&2
       exit 1
     }
+  tar -tzf "$assets/swath-${version}-darwin-arm64.tar.gz" |
+    grep -qx "swath-${version}-darwin-arm64/$NOTICES" || {
+      echo "self-test failed: the darwin archive lacks $NOTICES" >&2
+      exit 1
+    }
   python3 -m zipfile -l "$assets/swath-${version}-windows-amd64.zip" |
     grep -q "^swath-${version}-windows-amd64/swath.exe " || {
       echo "self-test failed: the windows archive lacks swath.exe" >&2
+      exit 1
+    }
+  python3 -m zipfile -l "$assets/swath-${version}-windows-amd64.zip" |
+    grep -q "^swath-${version}-windows-amd64/$NOTICES " || {
+      echo "self-test failed: the windows archive lacks $NOTICES" >&2
       exit 1
     }
 
@@ -210,6 +239,10 @@ self_test() {
       }
     done
   done
+  cmp -s "$scratch/bin/$NOTICES" "$scratch/context/out/$NOTICES" || {
+    echo "self-test failed: the image context lacks the archived $NOTICES" >&2
+    exit 1
+  }
 
   while IFS= read -r name; do
     printf bundle > "${name}.sigstore.json"
