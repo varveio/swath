@@ -25,7 +25,7 @@ func TestRedactEndpointArgv(t *testing.T) {
 		for _, endpoint := range []string{
 			"https://user:password@host/base/", "https://user@host/",
 			"https://user:password@[broken", "https://user:pass%ZZ@host/",
-			"https://host/?sig=SECRET", "https://host/#SECRET", "https://host?", "https://host#", "https://host/%3Fsig=SECRET%0A",
+			"https://host/?sig=SECRET", "https://host/#SECRET", "https://host?", "https://host#", "https://host/%3Fsig=SECRET%0A", "https://host/%253Fsig=SECRET%25",
 		} {
 			for _, argv := range [][]string{
 				{"list", "--" + flag, endpoint, "--anonymous"},

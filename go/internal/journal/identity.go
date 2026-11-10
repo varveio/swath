@@ -44,6 +44,8 @@ func (id Identity) Redacted() Identity {
 			f.Value, f.Canonical = redactEndpoint(f.Value), redactEndpoint(f.Canonical)
 		case "source":
 			f.Value, f.Canonical = redactSource(f.Value), redactSource(f.Canonical)
+		case "account", "container":
+			f.Value, f.Canonical = redactName(f.Value), redactName(f.Canonical)
 		}
 	}
 	return id
@@ -78,6 +80,8 @@ func (e *MismatchError) Error() string {
 		stored, requested = redactEndpoint(fmt.Sprint(stored)), redactEndpoint(fmt.Sprint(requested))
 	case "source":
 		stored, requested = redactSource(fmt.Sprint(stored)), redactSource(fmt.Sprint(requested))
+	case "account", "container":
+		stored, requested = redactName(fmt.Sprint(stored)), redactName(fmt.Sprint(requested))
 	}
 	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, stored, requested)
 }
@@ -171,7 +175,7 @@ func (id Identity) Hash() string {
 func redactEndpoint(value string) string {
 	u, err := url.Parse(value)
 	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") ||
-		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r < 0x20 || r == 0x7f }) {
+		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) {
 		return "[redacted]"
 	}
 	return value
@@ -186,8 +190,20 @@ func redactSource(value string) string {
 	if ok && strings.ContainsAny(authority, "@?#") {
 		return scheme + "://[redacted]"
 	}
-	if i := strings.IndexByte(value, '?'); i >= 0 && strings.Contains(value[i:], "sig=") {
-		return value[:i] + "?[redacted]"
+	if i := strings.IndexByte(value, '?'); i >= 0 {
+		q, err := url.QueryUnescape(value[i:])
+		if err != nil || strings.Contains(strings.ToLower(q), "sig=") {
+			return value[:i] + "?[redacted]"
+		}
+	}
+	return value
+}
+
+// redactName hides an account or container that an older build took from a
+// root with a credential-bearing authority.
+func redactName(value string) string {
+	if strings.ContainsAny(value, "@?#") {
+		return "[redacted]"
 	}
 	return value
 }

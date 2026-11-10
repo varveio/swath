@@ -389,7 +389,11 @@ func TestMismatchDiagnostics(t *testing.T) {
 		{"endpoint", "https://old/%3Fsig=SECRET%0A", "https://new/", "cannot resume: endpoint was [redacted], now https://new/"},
 		{"source", "az://old/c?sig=SECRET", "az://new/c", "cannot resume: source was az://old/c?[redacted], now az://new/c"},
 		{"source", "s3://old/p", "s3://user:SECRET@new/p", "cannot resume: source was s3://old/p, now s3://[redacted]"},
-		{"source", "s3://old/p?literal#key", "s3://new/100%", "cannot resume: source was s3://old/p?literal#key, now s3://new/100%"},
+		{"source", "s3://old/p?literal#key", "s3://new/100", "cannot resume: source was s3://old/p?literal#key, now s3://new/100"},
+		{"source", "az://old/c?sv=1&%73ig=SECRET", "az://new/c?SIG=SECRET", "cannot resume: source was az://old/c?[redacted], now az://new/c?[redacted]"},
+		{"endpoint", "https://old/%253Fsig=SECRET%25", "https://new/", "cannot resume: endpoint was [redacted], now https://new/"},
+		{"container", "u:SECRET@b", "clean", "cannot resume: container was [redacted], now clean"},
+		{"account", "acct", "u:SECRET@acct", "cannot resume: account was acct, now [redacted]"},
 		{"region", "old", "new", "cannot resume: region was old, now new"},
 	} {
 		err := &MismatchError{Field: c.field, Stored: c.stored, Requested: c.requested}
