@@ -7,18 +7,20 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// streamPageRows is the most rows one Range request of Stream returns.
-const streamPageRows = 1024
-
 // StreamStats is the work of the Streams on a Dataset, summed over every
-// Range request they made: the requests, the objects handed to fn, and the
-// module's counts (seekparquet.ReadStats), which are diagnostics, not a
-// contract.
+// request they made: the requests (the seekparquet.Dataset.RangeBatches
+// calls: one for each Stream that reaches the read, whether it succeeds,
+// fails or finds its context ended, none for one refused before it; only
+// a dataset of more than math.MaxInt rows, where int is 32 bits, takes
+// more, floor(rows/math.MaxInt)+1), the objects handed to fn, and the
+// module's counts (seekparquet.ReadStats, including a failed read's),
+// which are diagnostics, not a contract.
 type StreamStats struct {
 	Requests int64
 	Objects  int64
@@ -26,7 +28,9 @@ type StreamStats struct {
 }
 
 // StreamStats returns the work of every Stream on the Dataset so far,
-// including those that failed, up to where they stopped.
+// including those that failed, up to where they stopped. A Stream's work,
+// every field of it, is added once, when it returns: nothing of a Stream
+// still running is in it.
 func (d *Dataset) StreamStats() StreamStats {
 	d.statsMu.Lock()
 	defer d.statsMu.Unlock()
@@ -35,10 +39,11 @@ func (d *Dataset) StreamStats() StreamStats {
 
 // Stream hands fn every current object of the dataset (an S3, Cloud
 // Storage or Azure Blob object) in dataset order: ascending unsigned byte
-// order of the keys. It reads the dataset with seekparquet.Range in pages,
-// each continuing after the last row of the one before (its Cursor),
-// projecting only the columns Object holds. Each Object owns its memory
-// (its Key is a copy), so fn may keep or change it.
+// order of the keys. It reads the dataset in one ordered pass of borrowed
+// batches (seekparquet.Dataset.RangeBatches, with no plan), projecting
+// only the columns Object holds, and opens each part, row group and
+// projected column chunk as the pass reaches it. Each Object owns its
+// memory (its Key and strings are copies), so fn may keep or change it.
 //
 // A versions schema (swath/s3-versions/v1, swath/gcs-generations/v1) holds
 // history, not current objects, and a filesystem's entries are
@@ -51,20 +56,57 @@ func (d *Dataset) StreamStats() StreamStats {
 //
 // Stream stops at the first error: fn's, returned unchanged; the module's
 // (a *seekparquet.RefusalError for data that breaks the specification, an
-// error of the storage), returned unchanged; or the context's, checked
-// before every object. The module checks every key page it decodes; the
-// rows' other values are checked as decoded, and the parts' digests are
-// not checked (seekparquet.Validate at LevelDigest checks them).
+// error of the storage, ErrClosed), returned unchanged; or the context's,
+// checked before every object. Objects already handed to fn stay handed:
+// every object before a row that fails, and those of the pages before a
+// part, page or read that fails. The module checks every key page it
+// decodes; the rows' other values are checked as decoded, and the parts'
+// digests are not checked (seekparquet.Validate at LevelDigest checks
+// them).
+//
+// fn runs inside the read, which holds the Dataset open: Close from
+// another goroutine waits for fn to return; if fn returns nil, the rest of
+// its batch is still handed on and the stream then ends with ErrClosed.
+// fn must not call Close, nor wait for a goroutine that does: that would
+// deadlock.
 func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 	columns, err := d.currentColumns()
 	if err != nil {
 		return err
 	}
-	return streamRows(ctx, d, columns, func(r seekparquet.Row) (Object, error) {
-		o, err := decodeObject(d.spec.ID, r)
-		o.Key = bytes.Clone(o.Key)
-		return o, err
+	values := make([]seekparquet.Value, len(columns))
+	return streamRows(ctx, d, columns, func(b *seekparquet.Batch, i int) (Object, error) {
+		return d.batchObject(b, i, columns, values)
 	}, fn)
+}
+
+// batchObject decodes and checks row i of b as an owning Object, values
+// its scratch. It decodes a borrowed view of the row: the decoder copies
+// every value it keeps but the key, cloned here. An error's Position would
+// borrow the key too, so a failing row is decoded again from an owning
+// copy, giving the same error with its own key.
+func (d *Dataset) batchObject(b *seekparquet.Batch, i int, columns []string, values []seekparquet.Value) (Object, error) {
+	o, err := decodeObject(d.spec.ID, batchRow(b, i, columns, values))
+	if err != nil {
+		_, err = decodeObject(d.spec.ID, b.Row(i))
+		return Object{}, err
+	}
+	o.Key = bytes.Clone(o.Key)
+	return o, nil
+}
+
+// batchRow returns row i of b as a seekparquet.Row borrowing the batch's
+// key and values (b.Row(i) without the copies), its Values in values.
+func batchRow(b *seekparquet.Batch, i int, columns []string, values []seekparquet.Value) seekparquet.Row {
+	for c := range values {
+		col, ok := b.Column(c)
+		if ok {
+			values[c] = seekparquet.Value{Value: col[i]}
+		} else {
+			values[c] = seekparquet.Value{Absent: true}
+		}
+	}
+	return seekparquet.Row{Key: b.Key(i), Offset: b.Offset(i), Columns: columns, Values: values}
 }
 
 // StreamLocal hands fn every entry of a swath/local-entries/v1 dataset in
@@ -81,46 +123,66 @@ func (d *Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) er
 	if d.spec.ID != LocalV1 {
 		return semantic(KindSchema, "", nil, "%s holds no filesystem entries", d.spec.ID)
 	}
-	return streamRows(ctx, d, d.spec.ColumnNames(), func(r seekparquet.Row) (LocalEntry, error) {
-		e, err := decodeLocal(r)
-		e.Key = bytes.Clone(e.Key)
-		return e, err
+	return streamRows(ctx, d, d.spec.ColumnNames(), func(b *seekparquet.Batch, i int) (LocalEntry, error) {
+		return decodeLocal(b.Row(i)) // an owning row: the entry owns its key and link target
 	}, fn)
 }
 
-// streamRows reads the dataset in Range pages projecting columns, and
-// hands fn each row decode returns.
-func streamRows[T any](ctx context.Context, d *Dataset, columns []string, decode func(seekparquet.Row) (T, error), fn func(T) error) error {
-	var objects int64
+// streamLimit is the Limit of one Stream request: RangeBatches' largest,
+// so a pass reads the whole dataset, unless it has more rows (int of 32
+// bits); a test lowers it.
+var streamLimit = math.MaxInt
+
+// streamRows reads the dataset in one ordered pass of batches projecting
+// columns, and hands fn what decode returns for each row. A pass that
+// stops at streamLimit continues in another request after its last row.
+// An error of the callback (the context's, decode's or fn's) is returned
+// as it is, never wrapped by the module's ErrClosed. The stream's
+// statistics are summed here and added to the Dataset's once, on return.
+func streamRows[T any](ctx context.Context, d *Dataset, columns []string, decode func(*seekparquet.Batch, int) (T, error), fn func(T) error) error {
+	var stats StreamStats
 	defer func() {
 		d.statsMu.Lock()
 		defer d.statsMu.Unlock()
-		d.stats.Objects += objects
+		d.stats.Requests += stats.Requests
+		d.stats.Objects += stats.Objects
+		addStats(&d.stats.ReadStats, stats.ReadStats)
 	}()
 	var cursor *seekparquet.Cursor
-	for {
-		var st seekparquet.ReadStats
-		rows, err := d.sp.Range(ctx, seekparquet.Range{Cursor: cursor, Limit: streamPageRows, Columns: columns, Stats: &st})
-		d.addRead(&st)
+	var stop error
+	each := func(b *seekparquet.Batch, i int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		v, err := decode(b, i)
 		if err != nil {
 			return err
 		}
-		if len(rows) == 0 {
-			return nil
+		stats.Objects++
+		return fn(v)
+	}
+	for {
+		var st seekparquet.ReadStats
+		rows := 0
+		err := d.sp.RangeBatches(ctx, seekparquet.Range{Cursor: cursor, Limit: streamLimit, Columns: columns, Stats: &st},
+			func(b *seekparquet.Batch) error {
+				for i := range b.Len() {
+					if stop = each(b, i); stop != nil {
+						return stop
+					}
+				}
+				if rows += b.Len(); rows == streamLimit {
+					cursor = b.Cursor(b.Len() - 1)
+				}
+				return nil
+			})
+		stats.Requests++
+		addStats(&stats.ReadStats, st)
+		if stop != nil {
+			return stop
 		}
-		cursor = rows[len(rows)-1].Cursor()
-		for _, r := range rows {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			v, err := decode(r)
-			if err != nil {
-				return err
-			}
-			objects++
-			if err := fn(v); err != nil {
-				return err
-			}
+		if err != nil || rows < streamLimit {
+			return err
 		}
 	}
 }
@@ -200,14 +262,6 @@ const endObjectMicros int64 = 253402300800000000
 // a time.Time for each borrowed row. Owning rows use the same bounds.
 func objectMicrosInRange(micros int64) bool {
 	return micros >= minObjectMicros && micros < endObjectMicros
-}
-
-// addRead adds one request's statistics to the Dataset's.
-func (d *Dataset) addRead(st *seekparquet.ReadStats) {
-	d.statsMu.Lock()
-	defer d.statsMu.Unlock()
-	d.stats.Requests++
-	addStats(&d.stats.ReadStats, *st)
 }
 
 // addStats adds a request's statistics to s, when s is not nil.

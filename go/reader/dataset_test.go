@@ -317,9 +317,9 @@ func TestStreamObjects(t *testing.T) {
 		}
 	}
 	st := d.StreamStats()
-	if want := int64((len(rows)+streamPageRows-1)/streamPageRows + 1); st.Requests != want || st.Objects != int64(len(rows)) ||
+	if st.Requests != 1 || st.Objects != int64(len(rows)) ||
 		st.KeysDecoded < int64(len(rows)) || st.ValuePagesDecoded == 0 || st.SourceReads == 0 || st.PartsOpened != 1 {
-		t.Fatalf("stats %+v, want %d requests", st, want)
+		t.Fatalf("stats %+v, want one request", st)
 	}
 }
 
@@ -425,8 +425,8 @@ func TestStreamRefusalUnchanged(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Code != seekparquet.CodeMissingPart {
 		t.Fatalf("stream with a part missing: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("%d objects before a page that failed", len(got))
+	if len(got) != 5 {
+		t.Fatalf("%d objects before the part that failed, want the 5 before it", len(got))
 	}
 	if err := d.CheckSchema(context.Background()); seekparquet.CodeOf(err) != seekparquet.CodeMissingPart {
 		t.Fatalf("check schema with a part missing: %v", err)

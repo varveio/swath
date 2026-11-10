@@ -37,7 +37,7 @@ func scanAll(t *testing.T, d *Dataset, req ScanRequest) ([]Object, error) {
 	var mu sync.Mutex
 	var out []Object
 	err := d.Scan(context.Background(), req, func(batch []Object) error {
-		if len(batch) == 0 || len(batch) > streamPageRows {
+		if len(batch) == 0 || len(batch) > scanBatchObjects {
 			return fmt.Errorf("a batch of %d objects", len(batch))
 		}
 		for i := 1; i < len(batch); i++ {

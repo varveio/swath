@@ -46,6 +46,12 @@ manifest declaring `key_unique: false`, all of which `Scan` accepts (optional co
 selected). Part schema errors name the part and have `Row == nil`; value errors name the bad row.
 The borrowed batch lifetime, null semantics and errors are defined by the [reader API](../reader/README.md).
 
+`reader.Stream` (and `StreamLocal`) reads the whole dataset in one ordered pass of SeekParquet's limited
+batch reads (`Dataset.RangeBatches`, no plan) and hands on complete owning Objects, decoded and checked by the
+schema's row decoder. It opens and checks each part when the pass reaches it, not before the first object, so a
+part or page that fails ends the stream after the objects of the pages before it. Its errors, cancellation,
+`Close` rule and `StreamStats` are defined by the [reader API](../reader/README.md).
+
 Whether a dataset suits a purpose is the application's decision. The manifest records how the listing ran (its
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it

@@ -67,7 +67,7 @@ func sameObjects(t *testing.T, got, want []reader.Object) {
 }
 
 // TestReaderStreamsS3Objects: the current objects of a dataset over
-// several parts and Range pages, in key order, with their nulls.
+// several parts, in key order, with their nulls.
 func TestReaderStreamsS3Objects(t *testing.T) {
 	var rows []s3.Row
 	for i := range 3000 {
