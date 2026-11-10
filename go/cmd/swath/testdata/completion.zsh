@@ -39,6 +39,8 @@ _swath_list() {
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
+        '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
+        '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -96,6 +98,8 @@ _swath_du() {
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
+        '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
+        '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -165,6 +169,8 @@ _swath_diag_count() {
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
+        '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
+        '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -222,6 +228,8 @@ _swath_resume() {
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
+        '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
+        '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[turn off the adaptive concurrency limit that throttle answers lower]' \

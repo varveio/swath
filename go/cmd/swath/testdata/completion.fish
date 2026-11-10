@@ -82,6 +82,8 @@ complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l stats -d
 complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l no-stats -d 'no end-of-run statistics on stderr'
 complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l anonymous -d 'send no credentials (a public bucket or container)'
 complete -c swath -n '__swath_cmd "list" "du" "diag count"' -l endpoint-url -x -d 'the service URL in place of the provider\'s own (emulators, MinIO)'
+complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l ca-bundle -r -F -d 'trust the certificates in this PEM file besides the system\'s'
+complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l no-verify-ssl -d 'do not verify the service\'s TLS certificate (warns)'
 complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l request-timeout -x -d 'per-request timeout; a request over it is retried'
 complete -c swath -n '__swath_cmd "list" "du" "diag count"' -l all-versions -d 'list every version of every key, not only the current objects'
 complete -c swath -n '__swath_cmd "list" "du" "diag count" "resume"' -l request-rate -x -d 'cap every HTTP attempt at N per second (0: no cap)'
