@@ -1,6 +1,6 @@
 # swath replay toolkit image — fixture data is supplied at runtime.
 #
-# A local build compiles :swath-replay:installDist from source. CI and release builds
+# A local build compiles :swath-replay:installDist from source. Release builds
 # replace the `build` stage with the promotion payload produced from the already-tested
 # installDist tree, preserving the same build-once/promote-exact-bytes contract as the
 # main swath image. The distribution is architecture-neutral; only the JRE base varies.
@@ -25,6 +25,8 @@ COPY swath-sim/build.gradle.kts swath-sim/build.gradle.kts
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon help >/dev/null 2>&1 || true
 
 COPY . .
+# The commit stamped into the jar manifests; .git is not in the build context.
+ARG GITHUB_SHA
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-replay:installDist
 
 # RUN-free runtime stage keeps foreign-architecture builds free of emulation. The Gradle
