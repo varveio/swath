@@ -23,8 +23,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `presized`). The sort compares keys after the directory's shared prefix; a directory of 32,768 entries or
   more is sorted in runs of at least 16,384, concurrently (up to GOMAXPROCS), then merged pairwise
   (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
-  directory's buffers rather than copies. Offsets are 32-bit: a directory whose names, or keys, pass 4 GiB is
-  skipped and counted in `read_errors`.
+  directory's buffers rather than copies. Offsets are 32-bit: a listing skips a directory whose names, or
+  keys, pass 4 GiB, counts it in `read_errors` and warns (a count reads in slabs and has no such limit).
 - **Workers: 4 per CPU, at most 64.** Without `--workers` a local tree gets `min(64, 4 × GOMAXPROCS)`
   (GOMAXPROCS follows the CPU affinity and the cgroup quota), not the object stores' 64: a stat waits on the
   disk or the inode cache, not on a round trip. On a 1-CPU, 512 MiB cgroup (ext4 on a persistent disk, cold;
@@ -50,10 +50,19 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   client: 199,722 LOOKUPs to none, 5.85 s to 2.42 s ([measurements](../../measurements.md)). The heuristic is
   the kernel's and can change; the client's first reads are short (19, then 5 entries) and are not hinted, as
   hinting after them measured worse (3,277 LOOKUPs).
-- **A count does not sort.** Nothing consumes a count's order, so both engines skip each directory's sort
-  (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
-  (`TestUnsortedCountEqualsSortedListing`). getdents engine, warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
-  −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../../measurements.md)).
+- **A count does not sort, nor hold a directory.** Nothing consumes a count's order, so both engines skip each
+  directory's sort (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
+  (`TestUnsortedCountEqualsSortedListing`). getdents engine, warm, 4 vCPU, paired: ~1M entries −10.6 % at the
+  `names` tier and −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../../measurements.md)).
+  The getdents engine also reads a count's directory in slabs of about 8,192 entries (`count_slabs`): a slab
+  that ends the directory within 4,096 entries is statted by its reader; otherwise its entries go to other
+  workers as chunks, followed by a continuation range on the same fd that reads the next slab once the
+  chunks are taken (`order.Count` pops last-pushed first and pushes a range's children in reverse). A
+  directory then holds about one slab beyond the chunks being statted instead of all its entries (about
+  140 MiB for 1M files, which made a count thrash the page cache in 512 MiB; issue #388), and keeps the
+  chunks' parallel stats, which a single reader statting batch by batch (as `find` does) lost: 1.6× slower
+  cold, 2× warm, on 1M files in one directory on a 4-CPU runner. A listing still reads a directory whole: it
+  sorts it.
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort

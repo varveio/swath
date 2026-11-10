@@ -84,27 +84,19 @@ jmh:
 ci-drift:
     ./scripts/ci/check-instrumentation-drift.sh
 
-# Prepare a release: set the canonical version, commit, tag, and open the next dev cycle.
-# Accepts X.Y.Z or a X.Y.Z-rc.N release candidate; no other pre-release identifiers and
-# no build metadata, matching what the release build enforces.
+# Prepare a release: tag main's HEAD as vVERSION. Accepts X.Y.Z or a X.Y.Z-rc.N release
+# candidate; no other pre-release identifiers and no build metadata, matching what the
+# release workflow enforces.
 #
-# Produces TWO commits and tags the first:
-#   1. "Release vX.Y.Z"        <- tagged; this is what the release workflow builds
-#   2. "Begin <next> development"  <- restores a -SNAPSHOT version on main
-# so `main` can never be left sitting on a released version. That happened after v0.1.0:
-# every dev build, including the container image published on each merge, then reports the
-# released version string. Nothing breaks (this recipe overwrites the version at the next
-# release regardless) but X.Y.Z should mean exactly one thing.
+# The tag is the version's one source: the release workflow stamps it into every binary
+# (go/build.sh, $SWATH_VERSION), the archive names and the image tags, so there is no version
+# file to bump and no commit to make. The tagged commit must already be on origin/main, as the
+# workflow's ancestry guard requires.
 #
-# NEXT defaults sensibly and can be overridden:
-#   just release 0.1.1            -> next dev cycle 0.1.2-SNAPSHOT   (patch + 1)
-#   just release 0.2.0-rc.1       -> next dev cycle 0.2.0-SNAPSHOT   (still working TOWARD 0.2.0)
-#   just release 0.1.1 0.2.0      -> next dev cycle 0.2.0-SNAPSHOT   (explicit)
-#
-# Does NOT push — review, then `git push origin main vX.Y.Z`, which sends both commits and
-# the tag together. An -rc.N tag publishes only its own container tag and a GitHub
-# pre-release, and is NOT promoted: the final tag is a fresh build. See RELEASING.md.
-release VERSION NEXT="":
+# Does NOT push — review, then `git push origin vX.Y.Z`. An -rc.N tag publishes only its own
+# container tags and a GitHub pre-release, and is NOT promoted: the final tag is a fresh build.
+# See RELEASING.md.
+release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ ! "{{VERSION}}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
@@ -112,10 +104,14 @@ release VERSION NEXT="":
     fi
     current_branch="$(git branch --show-current)"
     if [[ "$current_branch" != "main" ]]; then
-        echo "error: must be run from main (currently on '${current_branch:-detached HEAD}') -- the documented push is 'git push origin main vX.Y.Z', so preparing the release anywhere else can tag the release while leaving remote main without the snapshot commit" >&2; exit 2
+        echo "error: must be run from main (currently on '${current_branch:-detached HEAD}') -- the release workflow builds only a commit on origin/main" >&2; exit 2
     fi
     if [[ -n "$(git status --porcelain)" ]]; then
         echo "error: working tree is not clean; commit or stash first" >&2; exit 2
+    fi
+    git fetch --quiet origin main
+    if ! git merge-base --is-ancestor HEAD origin/main; then
+        echo "error: HEAD is not on origin/main; push or pull first -- the release workflow refuses a tag outside main" >&2; exit 2
     fi
     if git rev-parse -q --verify "refs/tags/v{{VERSION}}" >/dev/null; then
         echo "error: tag v{{VERSION}} already exists locally" >&2; exit 2
@@ -123,36 +119,14 @@ release VERSION NEXT="":
     if git ls-remote --exit-code --tags origin "refs/tags/v{{VERSION}}" >/dev/null 2>&1; then
         echo "error: tag v{{VERSION}} already exists on origin" >&2; exit 2
     fi
-    base="{{VERSION}}"; base="${base%%-rc.*}"
-    next="{{NEXT}}"
-    if [[ -z "$next" ]]; then
-        if [[ "{{VERSION}}" == *-rc.* ]]; then
-            # An RC is a rehearsal for X.Y.Z, so development continues toward the SAME
-            # version -- not the next patch.
-            next="$base"
-        else
-            IFS='.' read -r ma mi pa <<< "$base"
-            next="${ma}.${mi}.$((pa + 1))"
-        fi
-    fi
-    if [[ ! "$next" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-        echo "error: NEXT must be a stable X.Y.Z (the -SNAPSHOT suffix is added for you); got '$next'" >&2; exit 2
-    fi
     ./scripts/ci/verify-release-notes.sh "{{VERSION}}" docs/ops/dev/RELEASE_NOTES.md
-    sed -i -E 's/^version=.*/version={{VERSION}}/' gradle.properties
-    git add gradle.properties
-    git commit -m "Release v{{VERSION}}"
     git tag -a "v{{VERSION}}" -m "swath v{{VERSION}}"
-    sed -i -E "s/^version=.*/version=${next}-SNAPSHOT/" gradle.properties
-    git add gradle.properties
-    git commit -m "Begin ${next} development"
     echo
-    echo "Prepared v{{VERSION}}, and reopened development at ${next}-SNAPSHOT."
-    echo "The tag points at the release commit; main ends on the snapshot."
-    echo "Review both commits, then: git push origin main v{{VERSION}}"
+    echo "Tagged v{{VERSION}} at $(git rev-parse --short HEAD)."
+    echo "Review it, then: git push origin v{{VERSION}}"
     if [[ "{{VERSION}}" == *-rc.* ]]; then
         echo
-        echo "This is a PRE-RELEASE: it publishes the X.Y.Z-rc.N container tag only —"
+        echo "This is a PRE-RELEASE: it publishes the X.Y.Z-rc.N container tags only —"
         echo "no :latest, no :X.Y — and creates a GitHub pre-release. It is a rehearsal of"
         echo "the publish path; the final tag is a separate, fresh build."
     fi

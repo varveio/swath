@@ -1,0 +1,43 @@
+name: Cache maintenance
+
+# CodeQL default setup writes PR dependency caches outside our CI workflow. Clean them
+# after each scan; the schedule also catches interrupted runs. Never execute the triggering
+# branch or download its artifacts: workflow_run has a privileged token even for fork PRs.
+on:
+  workflow_run:
+    workflows: [CI, CodeQL]
+    types: [completed]
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cache-prune:
+    # PR CI completion intentionally leaves a skipped maintenance run: filtering branches
+    # at the trigger would also exclude the CodeQL PR completion events we want.
+    # PR CI runs save no Go caches. Main CI completion also covers CodeQL default setups
+    # that do not emit workflow_run; the hourly pass catches late writes and interruptions.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.name == 'CodeQL' ||
+      (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: cache-prune
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Prune superseded Go and CodeQL caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/ci/cache-prune.sh

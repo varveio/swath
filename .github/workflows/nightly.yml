@@ -12,8 +12,9 @@ name: Nightly deep verification
 # The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
 # this workflow is the exhaustive/timing-realistic backstop.
 #
-# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos is
-# the Go default tier on macOS, which ci.yml runs on main and dispatch but not on pull requests.
+# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos
+# and go-xos-windows run the Go default tier on macOS and Windows, which ci.yml runs on main
+# and dispatch but not on pull requests.
 #
 # ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
 # outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos or go-shapes"
+        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos, go-xos-windows or go-shapes"
         required: false
         default: all
 
@@ -107,18 +108,20 @@ jobs:
           name: test-reports-nightly
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 30
 
-  # Supply-chain scan of the artifacts a user actually receives: the resolved jar closure of
-  # each application distribution, and the runtime image whose JRE base carries OS packages no
-  # Gradle constraint can reach. Nightly rather than per-commit because it is time, not the
-  # commit, that turns a green closure red — an advisory published against a dependency that
-  # has not moved. That is also why it belongs beside the deep tier: both are backstops
-  # against drift the per-commit gate cannot see.
+  # Supply-chain scan of the artifacts a user actually receives: the two release images, built
+  # from Dockerfile.go. osv-scanner reads the Go version and module list embedded in each static
+  # binary, so this covers the Go standard library and every module linked into swath and
+  # swath-replay (the archives carry the same binaries), plus the few Debian packages of the
+  # lister's distroless base; the replay image is `scratch` and holds only its binary. Nightly
+  # rather than per-commit because it is time, not the commit, that turns a green image red: an
+  # advisory published against a module that has not moved. That is also why it belongs beside
+  # the deep tier: both are backstops against drift the per-commit gate cannot see.
   #
-  # config/osv/osv-scanner.toml carries only the argued Java exceptions, each with an expiry.
-  # The checked-in image policy fails every unexpected non-Ubuntu advisory and Ubuntu
-  # high/critical/unknown priority while reporting lower Canonical priorities. See
-  # scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
+  # The checked-in image policy fails every advisory that is neither an Ubuntu package's
+  # (the images have none) nor an argued exception in config/osv/osv-scanner.toml, which lists
+  # Java and Go findings. See scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
   osv-scan:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'osv-scan'
     runs-on: ubuntu-latest
@@ -126,48 +129,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
-      - name: Set up JDK 25
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v4
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
-
-      # installDist, not the shadow jar: the install `lib/` directory is the resolved closure
-      # with each module still a separately identifiable artifact, which is what the scanner
-      # reads. Shading flattens that into one jar and loses the coordinates.
-      - name: Assemble the shipped distributions
-        run: ./gradlew :swath-cli:installDist :swath-replay:installDist --no-daemon --stacktrace
-
-      - name: Scan the shipped jar closures
-        run: |
-          ./scripts/ci/osv-scan.sh \
-            swath-cli/build/install/swath/lib \
-            swath-replay/build/install/swath-replay/lib
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
-      # Builder-native arch only, and no push: this scans the base layer's OS packages, which
-      # are the same image for both arches' JRE bases in every way this scan looks at.
-      - name: Build the runtime images (builder-native arch)
+      # Builder-native arch only, and no push: both architectures link the same modules, and the
+      # lister's base carries the same packages for each.
+      - name: Build the lister image (builder-native arch)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
+          file: Dockerfile.go
+          target: swath
           load: true
           tags: swath:osv
-          cache-from: type=gha,scope=swath
+          cache-from: type=gha,scope=swath-go
 
-      - name: Build the replay runtime image (builder-native arch)
+      - name: Build the replay image (builder-native arch)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.replay
+          file: Dockerfile.go
+          target: swath-replay
           load: true
           tags: swath-replay:osv
-          cache-from: type=gha,scope=swath-replay
+          cache-from: type=gha,scope=swath-go
 
       - name: Scan the runtime images
         env:
@@ -181,6 +166,7 @@ jobs:
           name: osv-image-reports
           path: build/reports/osv/*.json
           if-no-files-found: ignore
+          retention-days: 30
 
   # The Go race tests in one unsharded run on amd64. Per push, ci.yml races internal/listing and
   # cmd/swath on arm64 only (go-race, scripts/ci/go-race-shards.sh): this is their amd64 race
@@ -230,6 +216,7 @@ jobs:
           name: go-race-nightly
           path: ${{ runner.temp }}/go-race-nightly.json
           if-no-files-found: ignore
+          retention-days: 30
 
   # The Go default tier on macOS, as ci.yml go-xos runs it: vet and the whole suite without
   # -race. ci.yml runs it on main and dispatch but not on pull requests, so a macOS-only break in
@@ -245,6 +232,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       # Restores the shared module cache and ci.yml's macOS build cache (go-xos); saves nothing
+      # off a push to main.
+      - name: Set up Go (version from go/go.mod)
+        uses: ./.github/actions/setup-go
+        with:
+          key: go-xos
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (no -race)
+        run: go test -count=1 -timeout 25m ./...
+
+  # The Go default tier on Windows, as ci.yml go-xos runs it: vet and the whole suite without
+  # -race. ci.yml runs it on main and dispatch but not on pull requests, so a Windows-only break in
+  # a pull request shows on its merge to main at the latest; this run is the scheduled backstop.
+  go-xos-windows:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-windows'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: go
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      # Restores the shared module cache and ci.yml's Windows build cache (go-xos); saves nothing
       # off a push to main.
       - name: Set up Go (version from go/go.mod)
         uses: ./.github/actions/setup-go
@@ -290,3 +304,4 @@ jobs:
           name: go-shapes-summary
           path: ${{ runner.temp }}/shapes.json
           if-no-files-found: ignore
+          retention-days: 30

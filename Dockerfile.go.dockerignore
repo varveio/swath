@@ -1,14 +1,17 @@
-# Build context for Dockerfile.replay-go only. BuildKit uses this file in place of a root
+# Build context for Dockerfile.go only. BuildKit uses this file in place of a root
 # .dockerignore for this Dockerfile, so it carries every rule the build needs.
 #
 # The context is the Go module's source: go/ (go.mod, go.sum, build.sh, the packages, their
-# committed testdata, docs and bench scripts) and nothing else from the repository. Inside go/
+# committed testdata, docs and bench scripts) plus the root LICENSE and NOTICE the images
+# carry in /licenses/, and nothing else from the repository. Inside go/
 # it leaves out what a working tree accumulates and the build never reads: built binaries,
 # listing output (Parquet parts, dataset data/ directories, run.json and error.json,
 # checkpoints and the lister's .swath/ state), databases, logs, caches, editor and OS files,
 # and private or agent working material. The rules mirror the repository .gitignore.
 *
 !go/
+!LICENSE
+!NOTICE
 
 # Built binaries (go/build.sh -o swath, swath-<os>-<arch>, swath-replay, swath-replay-<os>-<arch>)
 go/swath

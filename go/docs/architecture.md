@@ -65,7 +65,7 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
-| `internal/buildinfo` | the binary's identity (tool, module version, VCS revision, the linker's `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
+| `internal/buildinfo` | the binary's identity (tool, version, VCS revision; the linker's `Version` and `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
 The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
 [internals/clients.md](internals/clients.md).

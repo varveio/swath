@@ -118,6 +118,7 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	case err != nil:
 		return nil, err
 	}
+	p.warn = req.Warn
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
 

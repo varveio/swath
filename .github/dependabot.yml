@@ -70,8 +70,13 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # Keeps the digest-pinned eclipse-temurin base images current — the pin that would
-  # otherwise leave a stale JRE in every published image.
+  # Keeps the digest-pinned base images current: eclipse-temurin in the Java Dockerfiles
+  # (a stale JRE in every published image) and golang and distroless in Dockerfile.go.
+  # Dependabot reads every file in the directory whose name contains "dockerfile", so
+  # Dockerfile.go and Dockerfile.replay need no entry of their own.
+  #
+  # The golang tag moves independently of the `toolchain` line in go/go.mod, which
+  # Dependabot never raises on its own; raise them together (see Dockerfile.go).
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -81,5 +86,45 @@ updates:
     groups:
       base-images:
         patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # The Go modules are separate (no go.work), so each directory needs its own entry.
+  - package-ecosystem: gomod
+    directory: /go
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      go:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: gomod
+    directory: /go/reader
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      go-reader:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: gomod
+    directory: /go/objfile
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      go-objfile:
+        patterns: ["*"]
+        update-types: [minor, patch]
     commit-message:
       prefix: "deps"

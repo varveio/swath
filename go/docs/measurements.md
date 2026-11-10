@@ -1518,3 +1518,31 @@ above 10 GB after the Go caches shrank because `docker-check` and `go-build` wro
 requests, scoped to each pull request's ref (0.4–0.8 GB each, 1.8 GB over three open pull requests), and
 GitHub's CodeQL setup keeps a 672 MiB dependency cache per pull request head. #361 writes the BuildKit
 caches from `main` only; its own pull-request run left no `buildkit-blob` entry under its ref.
+
+### Parallel CLI crash tests and Java input filtering, 2026-11-10
+
+PR #410 lets seven isolated CLI crash/recovery tests overlap after their private binary builds,
+bounded by Go's normal `-parallel` limit. Their crash arms and assertions are unchanged. Java now runs
+for its source, build, image and fixture inputs; ordinary prose, site layout and Go-only scripts no
+longer trigger it ([testing.md](testing.md)).
+
+One successful hosted run before and after, job wall time including setup:
+
+| Job | [Before, 42821964692](https://github.com/varveio/swath/actions/runs/42821964692) | [After, 42825002980](https://github.com/varveio/swath/actions/runs/42825002980) |
+|---|---:|---:|
+| `go-race (cmd-kill)` | 4m34s | 3m20s |
+| `go-xos (ubuntu-24.04-arm)` | 5m22s | 3m58s |
+| `go-race (rest-source)` (unchanged) | 4m45s | 4m33s |
+| Java `fast-tests` (unchanged) | 4m57s | 5m11s |
+| CI run, creation through completion | 5m43s | 5m29s |
+
+The revisions are `4c1dd429` and `67189d1b`, both with Go 1.26.10. These are observational runs, not
+an interleaved benchmark: runner/cache variation and unrelated changes can affect the comparison.
+The two targeted jobs were 27% and 26% shorter, but the full run only 4% shorter because Java became
+the critical path. The workflow edit intentionally triggers Java; this run does not measure the
+benefit of skipping it on ordinary documentation changes.
+
+A local focused before/after run passed the same 15 test/subtest cases, with no failures. Its timing
+is unsuitable for comparison: other workloads heavily loaded the shared host during the second run.
+The focused command was `GOMAXPROCS=4 go test -count=1 -timeout 12m -json
+-run '^(TestSIGKILL.*|TestForcedExit.*)$' ./cmd/swath` from `go/`.

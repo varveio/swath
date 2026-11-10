@@ -27,6 +27,10 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
+// These tests isolate their processes, fake services and datasets. Build before
+// t.Parallel so compiler processes do not compete with the running crash arms;
+// go test -parallel bounds the concurrent tests.
+
 // TestSIGKILLResume kills a real swath process with SIGKILL once parts are
 // published, resumes it with swath resume, and requires the dataset to be
 // byte-identical to an uninterrupted run's.
@@ -38,6 +42,7 @@ func TestSIGKILLResume(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	// Slow enough to kill mid-run.
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
 	args := func(out string, extra ...string) []string {
@@ -116,6 +121,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	b := s3test.Backend(t, s3test.Keys(4000, 7))
 	url := s3test.Serve(t, s3test.Handler(b))
 	slowURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 3*time.Millisecond))
@@ -249,6 +255,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(30000)))
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -386,6 +393,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
 	env := append(os.Environ(), "GOMAXPROCS=4")
 	for _, arm := range []struct {

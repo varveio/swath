@@ -905,6 +905,9 @@ func parseTime(t []byte) (int64, error) {
 	return tm.UnixMicro(), nil
 }
 
+// fastTime parses the common form in about 35 ns against about 68 ns for
+// time.Time.UnmarshalText (BenchmarkFastTime). TestFastTimeMatchesStandard and
+// FuzzFastTime pin it to the standard parser: it declines what it is unsure of.
 func fastTime(t []byte) (int64, bool) {
 	if len(t) < 20 || t[4] != '-' || t[7] != '-' || t[10] != 'T' || t[13] != ':' || t[16] != ':' || t[len(t)-1] != 'Z' {
 		return 0, false

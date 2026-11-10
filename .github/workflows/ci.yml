@@ -4,8 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Manual trigger so maintainers can run the full pipeline — including the
-  # image build + GHCR push (docker-publish) — from any branch on demand.
+  # Manual trigger so maintainers can run the full pipeline from any branch on demand.
   workflow_dispatch:
 
 permissions:
@@ -14,20 +13,17 @@ permissions:
 # Top-level concurrency ONLY coalesces PRs: a new push to a PR cancels the
 # superseded run (saves minutes). main/dispatch runs each get a UNIQUE group
 # (github.run_id), so they are NEVER serialized/cancelled here — every merge runs
-# its full test suite. Publish serialization is a separate concern handled at the
-# docker-publish job level (a single global group), so no two publishes can race
-# the shared GHCR tags even though the runs themselves run in parallel.
+# its full test suite. Nothing here pushes to GHCR; release.yml alone publishes images.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  # Shared change detection for the Java tiers and the Go jobs. java=false ONLY when every changed
-  # file is Go-only (go/**, Dockerfile.replay-go and its ignore file); anything else -- this
-  # workflow, root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
-  # tiers. go=true when go/**, this workflow, Dockerfile.replay-go (and its ignore file), the
-  # replay smoke script, the race shard table or the SeekParquet conformance scripts changed. The
-  # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
+  # Java runs for its source/build/image inputs and runtime fixtures. Prose changes use the
+  # site checks; Java's documentation assertions run when its suite otherwise runs. Keep
+  # docs/configuration.md: TuneOptionsTest checks that table against the Java implementation.
+  # Go has its own dependency list below. Dispatch and unknown/empty diffs run both tiers.
+  # The jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
   # requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
   # its own, wider detection. go_shards is the go-race matrix, from the shard table; go_xos is the
@@ -61,20 +57,31 @@ jobs:
             # --no-renames: a rename reports only its destination, so moving a Java file under go/
             # would otherwise read as Go-only. Listing both paths keeps the source path visible.
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.replay-go)' >/dev/null <<<"$changed"; then
+            java_inputs='^swath-[^/]+/'
+            java_inputs+='|^(build-logic|gradle|config)/'
+            java_inputs+='|^scripts/(legal|benchmarks/replay|provider-conformance)/'
+            java_inputs+='|^scripts/ci/(check-instrumentation-drift\.(sh|py)|osv-image-policy\.py|report-test-counts\.sh)$'
+            java_inputs+='|^\.github/workflows/(ci|nightly)\.yml$'
+            java_inputs+='|^(docs/assets|site/data/runs)/'
+            java_inputs+='|^docs/(configuration\.md|replay-provider-(evidence\.tar\.gz|expectations\.json))$'
+            java_inputs+='|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?|Dockerfile(\.replay)?|\.dockerignore|LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$'
+            if [ -z "$changed" ] || grep -E "$java_inputs" >/dev/null <<<"$changed"; then
               echo "java=true" >> "$GITHUB_OUTPUT"
             else
               echo "java=false" >> "$GITHUB_OUTPUT"
             fi
             # grep reads every line rather than exiting at the first match while git still writes
             # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.go|scripts/ci/smoke-container\.sh$|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
             fi
           fi
           echo "changes: $(cat "$GITHUB_OUTPUT")"
+
+      - name: CI policy regression tests
+        run: python3 scripts/ci/test-ci-policy.py
 
       # Always computed: go-race expands it before its steps can skip. When go=false it is one
       # step-skipped leg on ubuntu-latest, not every shard's (arm64) runner.
@@ -94,8 +101,8 @@ jobs:
 
       # Always computed, for the same reason: go-xos's runners are chosen before its steps can
       # skip, and a job-level `if` would make it `skipped`, which fails ci-gate on a pull request.
-      # A pull request runs Windows and linux/arm64: the macOS runner queue set the pull request's
-      # wall time, so macOS runs on main and dispatch here and nightly in nightly.yml. Without a Go
+      # A pull request runs linux/arm64. Windows setup/tests and the macOS runner queue set
+      # the pull request wall time; both run on main and dispatch here and nightly in nightly.yml. Without a Go
       # change, one step-skipped leg on ubuntu-latest, so no macOS, Windows or arm64 runner is
       # queued.
       - name: Go cross-OS matrix
@@ -108,7 +115,7 @@ jobs:
           if [ "$GO_CHANGED" != true ]; then
             matrix='[{"os":"off","runner":"ubuntu-latest"}]'
           elif [ "$EVENT" = pull_request ]; then
-            matrix='[{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+            matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
           else
             matrix='[{"os":"macos-latest","runner":"macos-latest"},{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
           fi
@@ -166,8 +173,8 @@ jobs:
         if: needs.changes.outputs.java == 'true'
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
 
-      # The CLI jar and replay installDist are built here so docker-publish ships the EXACT
-      # artifacts that passed this job's tests — "test what you built".
+      # The CLI uber-jar and replay installDist are the artifacts release.yml promotes into the
+      # images; building them on every change keeps their packaging from breaking unseen.
       - name: Build + fast tests (no integration) + container artifacts
         if: needs.changes.outputs.java == 'true'
         run: ./gradlew build -PnoIntegration :swath-cli:shadowJar :swath-replay:installDist --no-daemon --stacktrace
@@ -180,24 +187,6 @@ jobs:
         if: needs.changes.outputs.java == 'true'
         run: ./gradlew checkLicense --no-daemon --stacktrace
 
-      # On main/manual runs, publish the tested uber-jar so docker-publish can ship THIS
-      # artifact (the one that just passed the fast tier + license gate) instead of a third
-      # from-source recompile inside the Docker build. docker-publish promotes it via a
-      # BuildKit --build-context override of the Dockerfile's `build` stage — ship exactly
-      # what was tested. PR runs do not publish an image, so they do not need this artifact.
-      - name: Prepare container-promotion payload
-        if: (github.event_name != 'pull_request') && needs.changes.outputs.java == 'true'
-        run: ./scripts/ci/prepare-container-promotion.sh promote
-
-      - name: Upload checked container-promotion payload
-        if: (github.event_name != 'pull_request') && needs.changes.outputs.java == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: swath-container-payload
-          path: promote.tar
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Upload test reports
         if: always() && needs.changes.outputs.java == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -207,13 +196,12 @@ jobs:
           # not under a single root build/.
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
   # Slow tier: Docker/LocalStack integration tests. Runs on every event, PRs included:
   # real-store coverage that only runs after merge cannot block the bad merge, and at
   # ~170 s this tier is affordable on the PR gate (`ci-gate` needs it). Revisit once the
-  # HAR-driven replay corridor lets these 13 LocalStack ITs retire (WP6.8). It also gates
-  # the image publish (docker-publish `needs` it), so it must run on every event that can
-  # publish; otherwise a skipped `needs` would silently skip the publish. Docker is on the
+  # HAR-driven replay corridor lets these 13 LocalStack ITs retire (WP6.8). Docker is on the
   # ubuntu-latest runner.
   integration-tests:
     needs: changes
@@ -261,12 +249,13 @@ jobs:
           name: test-reports-integration
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
   # Deep tier: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/
   # timeout tests, demoted OFF the per-commit fast gate (they are slow and/or flaky-under-
   # contention). Runs on `main` (merges) + dispatch — NOT on PRs, so a slow/flaky deep test
   # never blocks a PR — and again nightly (see nightly.yml). Runs SERIALLY (-PtestMaxParallelForks=1)
-  # so the probe budgets are asserted without cross-fork CPU contention. Gates the publish.
+  # so the probe budgets are asserted without cross-fork CPU contention.
   # The invariants these guard are pinned on every PR by fast deterministic smokes.
   deep-tests:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -334,16 +323,17 @@ jobs:
           name: test-reports-deep
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
-  # PR-only Docker build gate: validate the root Dockerfile builds multi-arch and
-  # the image runs, on pull requests. It does NOT run on `main`/dispatch — there,
-  # docker-publish builds+smokes+pushes the image itself, so a separate validation
-  # build would just be a redundant second multi-arch build per merge. No push, no
-  # credentials, no network — fork-safe.
+  # Docker build gate on every event: both images build for both arches from source and the
+  # builder-native image runs offline. Nothing is pushed (GHCR is written by release.yml only;
+  # see docs/ops/dev/CI.md) and no credentials are used — fork-safe. On `main` it is what
+  # catches a break that appears only in the merge result (a semantic conflict between two
+  # green PRs, a RUN added to the runtime stage) before a tag is cut.
   #
   # Named `docker-check`, not `docker-image`: it is a gate that builds and smokes
   # an image and throws it away, so the name says what it does rather than what it
-  # touches, and pairs with `docker-publish` as validate/publish.
+  # touches.
   #
   # Deliberately NO docker/setup-qemu-action: the runtime stage only pulls the
   # JRE base and COPYs the arch-neutral uber-jar (no RUN), so building the foreign
@@ -351,7 +341,6 @@ jobs:
   # That also makes this job a guard -- add a RUN to the runtime stage and the
   # arm64 build here starts needing QEMU and fails, flagging the regression.
   docker-check:
-    if: github.event_name == 'pull_request'
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -380,11 +369,12 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: false
-          # Read only: this job runs on pull requests alone, and a cache a pull request writes is
-          # scoped to its own ref, so it would serve no other run while costing the repository's
-          # cache quota (about 400 MiB per image). docker-publish writes these scopes from main;
-          # a pull request reads the base branch's caches.
+          build-args: GITHUB_SHA=${{ github.sha }}
+          # Written from a push to main only: a cache a pull request or a dispatched branch writes
+          # is scoped to its own ref, so it would serve no other run while costing the
+          # repository's cache quota (about 400 MiB per image). Pull requests read main's caches.
           cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,scope={0},mode=max', matrix.cache_scope) || '' }}
 
       - name: Build image (builder-native arch) + load for smoke
         if: needs.changes.outputs.java == 'true'
@@ -394,11 +384,23 @@ jobs:
           file: ${{ matrix.dockerfile }}
           load: true
           tags: ${{ matrix.image }}
+          build-args: GITHUB_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.cache_scope }}
 
       - name: Smoke — image runs and entrypoint passes arguments
         if: needs.changes.outputs.java == 'true'
         run: docker run --rm "${{ matrix.image }}" --help
+
+      # The CLI reports the version in gradle.properties and the commit under test, offline.
+      - name: Smoke — CLI image reports its version and commit
+        if: needs.changes.outputs.java == 'true' && matrix.dockerfile == 'Dockerfile'
+        run: |
+          version=$(sed -n 's/^version=//p' gradle.properties)
+          out=$(docker run --rm "${{ matrix.image }}" --version)
+          echo "$out"
+          grep -qxF "swath $version" <<<"$out"
+          grep -qF "${GITHUB_SHA:0:12}" <<<"$out"
+          docker run --rm "${{ matrix.image }}" --help | grep -q 'Parallel, resumable S3 object lister'
 
   # Go port (go/, see AGENTS.md "Go port"), in four jobs that run side by side, so a vet error
   # reports in a minute and the race tests' wall is their slowest shard instead of their sum
@@ -518,6 +520,7 @@ jobs:
           name: go-race-${{ matrix.shard }}
           path: ${{ runner.temp }}/go-race.json
           if-no-files-found: ignore
+          retention-days: 14
 
   # The tests that measure the process and so must not run under -race, which distorts heap and
   # time: each opted in by its own gate, one step per tier.
@@ -560,11 +563,12 @@ jobs:
         run: ../scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
 
   # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
-  # Windows test compile, and the Go replay image built and smoked.
+  # Windows test compile, and the Go images (Dockerfile.go: the lister and the replay server)
+  # built and smoked.
   go-build:
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: go
@@ -596,51 +600,92 @@ jobs:
             "$RUNNER_TEMP/$cmd-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           done
 
-      # The Go replay image, built like docker-check builds the Java ones: both architectures
-      # (no push), then the builder-native one loaded for the smoke. No QEMU: the build stage
-      # cross-compiles and the scratch runtime stage has no RUN, so the arm64 build here also
-      # guards against a runtime stage that would need emulation.
+      # The Go images, built as release.yml builds them but compiled here rather than promoted
+      # from release archives: both architectures of each target (no push), then the
+      # builder-native ones loaded for the smokes. No QEMU: the build stage cross-compiles and
+      # neither runtime stage has a RUN, so the arm64 builds here also guard against a runtime
+      # stage that would need emulation. The two targets share the build stage, so the second
+      # build reuses the first's layers from the builder and only the first writes the cache.
       - name: Set up Docker Buildx
         if: needs.changes.outputs.go == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build Go lister image (both architectures, no push)
+        if: needs.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.go
+          target: swath
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-go
+          # Written from main only: a pull request's cache is scoped to its own ref and serves no
+          # other run, while costing the repository's cache quota (about 600 MiB per pull
+          # request); a pull request reads main's.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=swath-go,mode=max' || '' }}
 
       - name: Build Go replay image (both architectures, no push)
         if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.replay-go
+          file: Dockerfile.go
+          target: swath-replay
           platforms: linux/amd64,linux/arm64
           push: false
           build-args: SWATH_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=swath-replay-go
-          # Written from main only: a pull request's cache is scoped to its own ref and serves no
-          # other run, while costing the repository's cache quota (about 600 MiB per pull
-          # request); a pull request reads main's.
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=swath-replay-go,mode=max' || '' }}
+          cache-from: type=gha,scope=swath-go
+
+      - name: Build Go lister image (builder-native arch) + load for smoke
+        if: needs.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.go
+          target: swath
+          load: true
+          tags: swath-go:ci
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-go
 
       - name: Build Go replay image (builder-native arch) + load for smoke
         if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.replay-go
+          file: Dockerfile.go
+          target: swath-replay
           load: true
           tags: swath-replay-go:ci
           build-args: SWATH_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=swath-replay-go
+          cache-from: type=gha,scope=swath-go
 
-      # Two smokes, both on fixtures written here, so they need no network, no Java and no
-      # recording. The Go lister's dataset of a fake bucket (bench/s3fake) is sorted, so the
-      # server opens it as it is. The unsorted capture from bench/replay/capture is refused as
-      # not servable sorted, so the smoke's fallback sorts it with the image's own sort-fixture
-      # first; the step requires that the fallback ran.
-      - name: Smoke — Go replay image serves a Go lister dataset and a sorted capture
+      # The lister smoke reads the dataset back with DuckDB, checksum-verified before it runs.
+      - name: Install DuckDB CLI
         if: needs.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
-          docker run --rm swath-replay-go:ci --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
-          smoke="$RUNNER_TEMP/replay-smoke"
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+
+      # Three smokes on data written here, so they need no network, no Java and no recording.
+      # The lister image runs the release's smoke script against a fake bucket (bench/s3fake):
+      # list into a dataset, read it back with DuckDB, resume it as a no-op. Its dataset is
+      # sorted, so the replay server opens it as it is. The unsorted capture from
+      # bench/replay/capture is refused as not servable sorted, so the replay smoke's fallback
+      # sorts it with the image's own sort-fixture first; the step requires that the fallback ran.
+      - name: Smoke — Go lister image writes a dataset; Go replay image serves it and a sorted capture
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          for image in swath-go:ci swath-replay-go:ci; do
+            docker run --rm "$image" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          done
+          smoke="$RUNNER_TEMP/image-smoke"
           mkdir -p "$smoke"
           go build -o "$smoke/s3fake" ./bench/s3fake
           awk 'BEGIN { for (i = 0; i < 2000; i++) printf "logs/p%02d/obj-%05d.json\t%d\n", i % 37, i, 1767225600000000 + i * 1000000 }' >"$smoke/keys.tsv"
@@ -648,9 +693,9 @@ jobs:
           fake=$!
           trap 'kill "$fake"' EXIT
           for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
-          "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke --endpoint-url http://127.0.0.1:19400 --s3-path-style --anonymous \
-            -o "$smoke/dataset"
-          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/dataset" sorted
+          SWATH_SMOKE_BUCKET=s3://smoke SWATH_SMOKE_ENDPOINT=http://127.0.0.1:19400 \
+            ../scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister"
+          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/lister/data" sorted
           go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |
             tee "$smoke/capture-smoke.log"
@@ -718,8 +763,8 @@ jobs:
   # The Go default tier on the other platforms the port ships for: plain `go test` (no -race:
   # slow on macOS, and the Windows race detector needs cgo) on Windows, linux/arm64 and macOS.
   # Only vet and the tests: gofmt, the shard check, the heap gates, the cross-builds and the
-  # image stay in the jobs above. The legs are the changes job's go_xos: Windows and linux/arm64
-  # on every Go change, macOS on main and dispatch only (and nightly, nightly.yml go-xos-macos),
+  # image stay in the jobs above. The legs are the changes job's go_xos: linux/arm64
+  # on every Go change, Windows and macOS on main, dispatch and nightly only,
   # and without a Go change one go-xos (off) leg on ubuntu-latest whose steps skip.
   #
   # The linux/arm64 leg is what keeps arm64 before merge: the go-race arm64 shards cover only
@@ -874,30 +919,6 @@ jobs:
             exit 1
           fi
 
-  # Bounded retention for the Go build caches: after the Go jobs of a push to main, every
-  # `go-build-` cache except the newest of its family is deleted (scripts/ci/go-cache-prune.sh),
-  # so main keeps one generation per job instead of filling the repository's cache quota. It runs
-  # when a Go job failed too, since the caches of the jobs that passed were saved. Housekeeping,
-  # not a gate: ci-gate does not need it. The only job with `actions: write`.
-  go-cache-prune:
-    needs: [go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    concurrency:
-      group: go-cache-prune
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-
-      - name: Delete all but the newest Go build cache per job
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/ci/go-cache-prune.sh
-
   # The single required status check on `main`, and the only job here that exists for the
   # branch rule rather than for what it runs.
   #
@@ -918,8 +939,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
-      # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
+      # A skipped dependency passes the gate only OFF pull_request, where a job may legitimately
+      # be event-gated. On a pull request
       # every dependency runs (the Java and Go jobs do their work only when their inputs changed), so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
@@ -947,241 +968,3 @@ jobs:
             exit 1
           fi
           echo "CI gate passed."
-
-  # Dev-image GHCR publish + offline runtime smoke (deep public-bucket smoke on manual dispatch only). Runs on every `main` merge that touches Java and on
-  # manual dispatch from any branch. Tagged releases publish through release.yml
-  # instead; `latest` and the semver tags are owned solely by that workflow, so this
-  # job can never regress a release pointer.
-  #
-  # Running on merges is what gives `main` any Docker coverage at all: docker-check
-  # is PR-only, so without this a merge would build no image, and a break that only
-  # appears in the merge result (a semantic conflict between two green PRs, a RUN
-  # added to the runtime stage) would stay invisible until someone cut a tag.
-  #
-  # Gated on ALL test jobs (`needs` fast-tests + integration-tests + deep-tests), so an image
-  # is never published from code that fails any tier. It also promotes the tested uber-jar
-  # from fast-tests into the image (see the build-context step below) rather than recompiling.
-  # Pushes the multi-arch manifest to this repository's GHCR namespace via the
-  # built-in GITHUB_TOKEN. Package visibility is managed in the repository/package
-  # settings; the workflow itself does not assume private or public visibility.
-  docker-publish:
-    needs: [changes, fast-tests, integration-tests, deep-tests]
-    # A Go-only merge publishes no Java image: `main` stays on the last Java-changing commit.
-    if: >-
-      needs.changes.outputs.java == 'true'
-      && (github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-    # Serialize ALL publishes globally (main + any dispatched branch share this one
-    # group) so two publishes can never race the shared GHCR tags (main/sha-).
-    # cancel-in-progress: false — never kill a publish mid-push; queue instead. If
-    # publishes stack, only a superseded commit's *publish* is dropped (its tests
-    # still ran, since the test jobs are not in this group), and the `main`/`sha-`
-    # tags still converge to the newest commit.
-    concurrency:
-      group: ghcr-publish
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
-
-      # Download the EXACT uber-jar that passed fast-tests and lay it out at the path the
-      # Dockerfile's `build` stage emits (/src/swath-cli/build/libs/swath.jar). The
-      # `build-contexts: build=promote` below then substitutes this directory for the
-      # Dockerfile's compile-from-source `build` stage, so the image ships the tested bytes
-      # and skips a third Gradle compile. Local `docker build .` is unaffected (no override).
-      # NOTE: the promote layout mirrors the Dockerfile's `COPY --from=build /src/...` path —
-      # keep them in sync if that COPY path ever changes.
-      - name: Download checked container-promotion payload
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: swath-container-payload
-          path: promotion-download
-
-      - name: Restore and verify container-promotion payload
-        run: ./scripts/ci/unpack-container-promotion.sh promotion-download/promote.tar promote
-
-      # Smoke BEFORE push: build the builder-native-arch image, run the deep runtime smoke,
-      # and only push if it passes — so a shading/exclude/runtime regression can
-      # never reach the GHCR tags (`branch`/`sha-`).
-      - name: Build image (builder-native arch) + load for deep smoke
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          build-contexts: |
-            build=promote
-          load: true
-          tags: swath:ci
-          cache-from: type=gha,scope=swath
-          cache-to: type=gha,scope=swath,mode=max
-
-      - name: Build replay image (builder-native arch) + load for smoke
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          file: Dockerfile.replay
-          build-contexts: |
-            build=promote
-          load: true
-          tags: swath-replay:ci
-          cache-from: type=gha,scope=swath-replay
-          cache-to: type=gha,scope=swath-replay,mode=max
-
-      - name: Smoke — replay toolkit launcher and runtime classpath
-        run: docker run --rm swath-replay:ci --help
-
-      # Offline smoke, on every publish: the image starts, the entrypoint passes arguments
-      # and the CLI answers without touching any network. This is what gates the push on a
-      # main merge. The real-bucket smoke below is manual-only (owner policy: no automatic
-      # runs against real buckets; the release workflow still runs it before `latest`).
-      - name: Smoke — image starts offline (--version and --help)
-        run: |
-          version=$(sed -n 's/^version=//p' gradle.properties)
-          out=$(docker run --rm swath:ci --version)
-          echo "$out"
-          grep -qxF "swath $version" <<<"$out"
-          grep -qF "${GITHUB_SHA:0:12}" <<<"$out"
-          docker run --rm swath:ci --help | grep -q 'Parallel, resumable S3 object lister'
-
-      - name: Install DuckDB CLI
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
-          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
-          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
-          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
-          duckdb --version
-
-      # Deep runtime smoke (shared with release.yml — see the script header). Reaches a real
-      # public bucket, so it runs ONLY on manual dispatch (owner policy: no automatic runs
-      # against real buckets). When dispatched it gates the push below.
-      - name: Smoke — container Parquet write + read + resume (public bucket)
-        if: github.event_name == 'workflow_dispatch'
-        run: ./scripts/ci/smoke-container.sh swath:ci dockersmoke
-        env:
-          SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
-
-      - name: Smoke — replay serves the captured Parquet through DuckDB and Jetty
-        if: github.event_name == 'workflow_dispatch'
-        run: ./scripts/ci/smoke-replay-container.sh swath-replay:ci dockersmoke/data/data
-
-      # Only now — after the smoke passed — log in and push the multi-arch
-      # manifest to this repository's GHCR namespace.
-      - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Image metadata (tags + labels + annotations)
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
-        env:
-          # Emit OCI annotations at the INDEX level too (default is manifest-only).
-          # A multi-arch push renders its top-level image INDEX in the GHCR package
-          # page; without index annotations, org.opencontainers.image.{source,
-          # description,…} live only inside the per-arch config blobs (via `labels`),
-          # which GHCR's UI/repo-auto-link don't read — so the package shows a bare
-          # digest list. Index+manifest annotations give GHCR the repo link + desc.
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
-        with:
-          images: ghcr.io/${{ github.repository }}
-          # Dev images only. The mutable `latest` tag belongs to published releases
-          # and is owned solely by release.yml, so a dev publish can never regress
-          # it to an unversioned main build.
-          #
-          # `sha-<gitsha>` is emitted for every publish — immutable and bisectable,
-          # and enough to pull any branch's image for testing.
-          #
-          # The branch-name tag is deliberately restricted to `main`. A dispatch can
-          # run on ANY ref, and type=ref,event=branch would otherwise paint the
-          # branch name onto a public registry: dispatching `sim/streaming-tier`
-          # would publish ghcr.io/varveio/swath:sim-streaming-tier, leaking internal
-          # branch names to anyone listing the package. That was harmless while the
-          # repository was private; it is not now.
-          tags: |
-            type=sha,prefix=sha-
-            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Replay image metadata (tags + labels + annotations)
-        id: replay-meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
-        with:
-          images: ghcr.io/${{ github.repository }}-replay
-          tags: |
-            type=sha,prefix=sha-
-            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
-
-      # Provenance note: the deep smoke above ran the `--load`ed builder-native amd64 image;
-      # this step rebuilds the multi-arch manifest from the SAME build cache in the
-      # SAME job seconds later, so the pushed amd64 is effectively the smoked amd64.
-      # Two residual facts, accepted as low-risk for an arch-neutral RUN-free jar:
-      # (1) if the BuildKit cache ever misses between the two builds, shadowJar is
-      #     not guaranteed byte-reproducible, so the pushed bytes could differ;
-      # (2) arm64 is validated to build + start but is NOT runtime-smoked (no arm64
-      #     runner / no QEMU) — it is the same arch-neutral jar on the arm64 JRE.
-      # Exact image-digest promotion would require build-once → smoke →
-      # `imagetools create`; the current workflow instead promotes the exact tested
-      # jar and rebuilds the image manifest from the same cache.
-      - name: Build + push multi-arch image to GHCR
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          # Promote the SAME tested uber-jar (see the smoke build above): substitute the
-          # Dockerfile's compile-from-source `build` stage with the prebuilt jar. The jar is
-          # arch-neutral bytecode, so one artifact serves both linux/amd64 and linux/arm64.
-          build-contexts: |
-            build=promote
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # OCI annotations on the index/manifest (not just the per-arch config
-          # `labels` above) so the GHCR package page shows the description and
-          # auto-links back to this repo for the multi-arch manifest.
-          annotations: ${{ steps.meta.outputs.annotations }}
-          # Provenance kept ON (buildx default): the extra `unknown/unknown` entry in
-          # the GHCR package is the SLSA build-provenance attestation manifest (a
-          # supply-chain attestation, NOT a broken arch — it references the real
-          # amd64/arm64 images and is ignored by `docker pull`/`run`. Set
-          # `provenance: false` here to drop it.
-          cache-from: type=gha,scope=swath
-          cache-to: type=gha,scope=swath,mode=max
-
-      - name: Build + push multi-arch replay image to GHCR
-        id: replay-build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          file: Dockerfile.replay
-          build-contexts: |
-            build=promote
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.replay-meta.outputs.tags }}
-          labels: ${{ steps.replay-meta.outputs.labels }}
-          annotations: ${{ steps.replay-meta.outputs.annotations }}
-          cache-from: type=gha,scope=swath-replay
-          cache-to: type=gha,scope=swath-replay,mode=max
-
-      # Surface the pushed manifest's digest so consumers can pin
-      # `ghcr.io/…@sha256:…` without relying on a mutable tag.
-      - name: Report pushed image digest
-        run: |
-          {
-            echo "### swath images pushed to GHCR"
-            echo '```'
-            echo "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
-            echo "ghcr.io/${{ github.repository }}-replay@${{ steps.replay-build.outputs.digest }}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"

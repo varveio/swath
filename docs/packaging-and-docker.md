@@ -1,10 +1,12 @@
 # Packaging and release engineering
 
-This is the contributor reference for building, packaging, testing, and publishing the
-self-contained jar, application archives, and container images. It is not the installation or
-container-usage guide. To run a release, use [Installation](install.md); for credentials,
-output mounts, and production object-store access, use
-[Operating swath](operating.md).
+This is the contributor reference for building, packaging, and testing the Java
+implementation's self-contained jar, application archives, and container images. Releases no
+longer publish them: from 0.4 a release ships the Go binaries and images
+([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/operating.md#install-and-verify)),
+and v0.3.2 was the last Java release. It is not the installation or container-usage guide. To
+run the Java release, use [Installation](install.md); for credentials, output mounts, and
+production object-store access, use [Operating swath](operating.md).
 
 For the module and dependency graph behind the artifacts, see
 [`build-and-modules.md`](internals/build-and-modules.md).
@@ -144,26 +146,16 @@ themselves in `gradle/libs.versions.toml` so Dependabot maintains them. A
 constraint raises a floor without capping anything that legitimately needs
 newer.
 
-Two guards keep this honest. Every application distribution is checked to ship
+A guard keeps this honest: every application distribution is checked to ship
 at most one version of each module (`verifyNoDuplicateModuleVersions`, part of
 `check`) — the replay distribution packs a second dependency closure for its
 conformance launcher into the same `lib/`, and before the floors were pinned it
-shipped two complete Jackson generations at once. And a nightly job scans both
-distributions and both runtime images against the OSV database
-(`scripts/ci/osv-scan.sh`). The shipped Java closures are zero-tolerance except
-for the narrowly argued, expiring Java findings in
-`config/osv/osv-scanner.toml`.
-
-Image scans also cover the JRE base's Ubuntu packages. Their raw OSV JSON is
-retained as a workflow artifact and evaluated by
-`scripts/ci/osv-image-policy.py`: every non-Ubuntu finding outside the same
-expiring Java exceptions fails, as does Canonical priority high, critical,
-missing, or unknown. Canonical medium, low, and negligible priorities are
-reported with advisory-group and package-occurrence counts and whether the
-advisory lists a fixed version, but do not fail the nightly. A USN's
-classification comes from the worst Canonical
-priority among its member `UBUNTU-CVE` records, not its numeric CVSS maximum.
-Malformed or ambiguous scanner output fails closed.
+shipped two complete Jackson generations at once. The nightly OSV scan
+(`scripts/ci/osv-scan.sh`) no longer covers these distributions or the Java
+images: no release ships them since v0.3.2, and it scans the Go release images
+instead ([Go testing](../go/docs/testing.md#nightly)). The script can still scan
+a Java distribution's `lib/` directory against the argued, expiring
+exceptions in `config/osv/osv-scanner.toml`.
 
 ## 5. Docker images
 
@@ -261,108 +253,43 @@ addition to the JVM-native `JAVA_TOOL_OPTIONS`.
 
 ## 6. Container images (GHCR)
 
-The tag-driven release workflow publishes multi-arch images at
-`ghcr.io/varveio/swath` and `ghcr.io/varveio/swath-replay`. Their exact paths and digests are printed in the
-workflow run summary. Package visibility is controlled by the repository's GHCR
-settings; build from source (§3–§5) if the package is not available to your
-account.
-
-Prefer pinning by **digest** over a mutable tag — the digest is the only
-immutable reference:
-
-```bash
-docker pull ghcr.io/varveio/swath@sha256:<digest>
-docker pull ghcr.io/varveio/swath-replay@sha256:<digest>
-```
-
-The release workflow prints the pushed manifest's digest to its run summary, so
-a consumer can copy the exact digest to pin against; each GitHub release also
-ships the signed, attested assets to verify against
-([verify a release](install.md#verify-a-release)).
-
-### Tags & versioning
-
-Each release image carries the same release-cadence tags:
-
-| Tag | Meaning | Mutable? |
-|---|---|---|
-| `<version>` (e.g. `0.3.0`) | The release tag's canonical Gradle version | Intended immutable |
-| `<major>.<minor>` (e.g. `0.3`) | Newest patch of that minor line | Moves |
-| `latest` | Most recently published release | Moves |
-| `<major>` (e.g. `1`) | Newest release of that major line. **Not published while the version is `0.x`** — a bare `0` would imply a stability contract 0.x disclaims | Moves |
-
-A pre-release (`X.Y.Z-rc.N`) publishes its own immutable tag and nothing else:
-
-| Tag | Meaning | Mutable? |
-|---|---|---|
-| `<version>-rc.<n>` (e.g. `0.4.0-rc.1`) | The pre-release tag's canonical Gradle version | Intended immutable |
-
-No `latest`, no rolling `<major>.<minor>`, no bare `<major>`, and the GitHub release is
-marked as a pre-release — so a rehearsal cannot move a tag that a consumer of the last
-real release is following. `.github/workflows/release.yml` classifies the tag once and
-every downstream step reads that classification.
-
-The replay image shares the repository's canonical Gradle version and release cadence but is
-not a GitHub release archive or part of the CLI image. The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
-output keeps the fixed `swath.jar` name — the image promotion depends on it).
-Release tags must exactly match the canonical
-Gradle version (`v0.1.0` ↔ `0.1.0`). **For anything that must not shift under
-it — for example a downstream image built `FROM` this one — pin the digest, not
-`latest`/`<version>`.**
+Releases up to v0.3.2 published the Java images at `ghcr.io/varveio/swath` and
+`ghcr.io/varveio/swath-replay`, with the uber-jar as the release asset
+`swath-<version>.jar`. From 0.4 the same packages carry the Go images, built from
+`Dockerfile.go`; [`RELEASING.md`](../RELEASING.md) owns their tags, assets and verification.
+Pin a Java image by the digest its release printed, or by its version tag (`0.3.2`).
 
 ## 7. CI image checks and release publication
 
-Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
-builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
-no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
-**`docker-publish`** runs an offline smoke before pushing both dev images to GHCR: `swath --version`
-(asserting the Gradle version and the 12-character commit) and `--help` on the CLI image, and
-`--help` on the replay image. Its deep smoke (Parquet write, read and resume against the
-public smoke bucket, then the replay image serving that capture through DuckDB and Jetty) reaches
-a real bucket, so it runs only on manual dispatch; no pull request or `main` merge does; release-tag pushes and manual dispatch still run the public-bucket smoke. The
-release workflow runs the same deep smoke against the pushed digest before it applies `latest`. Tagged publication belongs
-to `.github/workflows/release.yml`, behind the protected `public-release`
-environment.
+One job in `.github/workflows/ci.yml`, **`docker-check`**, handles both CI images on every
+pull request, push to `main` and manual dispatch that touches Java. It builds each multi-arch
+image from source (validating both `linux/amd64` and `linux/arm64`, no QEMU per §5), loads the
+native-arch builds and smoke-tests them offline: `swath --version` (asserting the Gradle version
+and the 12-character commit) and `--help` on the CLI image, `--help` on the replay image. It never
+pushes: GHCR is written only by `.github/workflows/release.yml`, behind the protected
+`public-release` environment (see [CI architecture](ops/dev/CI.md#registry-and-artifacts)). To
+run an unreleased commit, build the image from its checkout with `docker build .`.
+
+The Java images' deep smoke (Parquet write, read and resume against the public smoke bucket)
+no longer runs: releases publish the Go images, which `release.yml` smokes against the pushed
+digests ([`RELEASING.md`](../RELEASING.md#what-gates-a-release)).
 
 Which jobs run depends on the trigger:
 
-| Event | fast-tests | integration-tests | deep-tests | docker-check | docker-publish |
-|---|:--:|:--:|:--:|:--:|:--:|
-| **Pull request** (feature branch) | ✅ | — | — | ✅ (build + smoke, no push) | — |
-| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`, offline smoke) |
-| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only, plus the public-bucket smoke) |
+| Event | fast-tests | integration-tests | deep-tests | docker-check |
+|---|:--:|:--:|:--:|:--:|
+| **Pull request** (feature branch) | ✅ | ✅ | — | ✅ (build + smoke, no push) |
+| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
+| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 
-A merge that changes only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
-tiers: the Java jobs report success with their steps skipped and no Java image is published,
-so `main` on GHCR stays on the last Java-changing commit.
-`docker-check` is the **PR-only** build gate — it validates the multi-arch build
-and runs `--help`, but never pushes. On a merge or dispatch it doesn't run,
-because `docker-publish` builds the image itself (running both would just be a
-redundant second multi-arch build).
+A change that touches only the Go port (`go/**`, `Dockerfile.go`) runs none of the Java
+tiers and builds no Java image: the Java jobs report success with their steps skipped.
 
-A dispatch can run on any branch, so it publishes the immutable `sha-<gitsha>`
-tag **only** — the mutable branch-name tag is restricted to `main`, keeping
-internal branch names off the public package. Pull a branch build by its
-`sha-` tag.
+The release publish job requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository variable,
+which acts as a publish kill-switch.
 
-`docker-publish` is gated on all three test tiers, so no image is published from
-code that failed any of them. The release publish job is separately protected by
-the `public-release` environment and requires the explicit
-`PUBLIC_RELEASE_ENABLED=true` repository variable, which acts as a publish
-kill-switch.
-
-The multi-arch **CI image build and smoke checks** have no scheduled run — they
-fire only on pull requests, pushes to `main`, and manual dispatch. A separate
-`nightly` workflow runs the deep and perf tiers and builds builder-native copies
-of both runtime images solely for OSV scanning; it never publishes those
-images. Top-level workflow concurrency cancels superseded runs of the same PR;
-`main` and manual runs have unique top-level groups and are not
-serialized there. The `docker-publish` job has its own global concurrency group,
-which queues publishes so shared tags cannot race. The `push` trigger is scoped
-to `main`, so
-**pushing a feature branch by itself runs nothing** — a feature branch is
-exercised through its **pull request**, which builds and smoke-tests the image
-but does not push it. Merges to `main` publish development tags; manual dispatch is a
-maintainer decision. Public tagged releases require the guarded release
-workflow described above. PRs from forks never push and never touch registry
+A separate `nightly` workflow runs the deep and perf tiers and builds builder-native copies of
+both runtime images solely for OSV scanning; it never publishes those images. The `push` trigger
+is scoped to `main`, so **pushing a feature branch by itself runs nothing** — a feature branch is
+exercised through its **pull request**. PRs from forks never push and never touch registry
 credentials.

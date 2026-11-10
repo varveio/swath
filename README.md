@@ -73,7 +73,7 @@ This small public NOAA prefix needs no cloud account:
 
 ```bash
 ./swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
-  --anonymous --region us-east-1
+  --anonymous --s3-region us-east-1
 ```
 
 Object-store listings go to the terminal or a pipe as text. GCS and Azure Blob use the
@@ -179,5 +179,7 @@ The evidence behind the published large-scale runs is in the
 
 ## License
 
-[Apache-2.0](LICENSE). Bundled third-party dependencies and their licenses are listed in
+[Apache-2.0](LICENSE). The Go release archives and images carry `THIRD_PARTY_NOTICES`, the
+licenses of every module linked into the binaries, generated at release by
+[`go/notices.sh`](go/notices.sh). The Java build's bundled dependencies are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,8 +1,9 @@
-# Accepted Java findings for the nightly supply-chain scan (scripts/ci/osv-scan.sh).
+# Accepted findings for the nightly supply-chain scan (scripts/ci/osv-scan.sh): Java ones, and Go
+# module advisories against a package the Go binaries do not link.
 #
 # The jar-closure scan has zero tolerance for anything not listed here, so every entry is an
 # argued exception with an expiry rather than a mute: on `ignoreUntil` the finding comes
-# back and has to be argued again. The image policy recognizes these same Java exceptions
+# back and has to be argued again. The image policy recognizes these same exceptions
 # after retaining the scanner's unfiltered JSON, but it never applies them to Ubuntu
 # packages. OS-package results must never be added here. Nothing is listed because it is
 # inconvenient — everything reachable by a version constraint is pinned in
@@ -69,3 +70,18 @@ reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a c
 id = "GHSA-rmj7-2vxq-3g9f"
 ignoreUntil = 2026-11-30
 reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+# ---------------------------------------------------------------------------------------
+# golang.org/x/crypto/openpgp (GO-2026-5932, no fixed version)
+#
+# The advisory covers only the openpgp packages. The image scan reads the module list
+# embedded in the Go binaries, so any build linking golang.org/x/crypto reports it. swath
+# links pkcs12, chacha20poly1305, cryptobyte and hkdf from that module and no openpgp
+# package: `go list -deps ./cmd/swath ./cmd/swath-replay | grep openpgp` is empty.
+# Revisit at the date below, or if a dependency starts importing openpgp.
+# ---------------------------------------------------------------------------------------
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-02-10
+reason = "golang.org/x/crypto/openpgp is not linked into swath or swath-replay; the binary scan reports the module, not the package"
