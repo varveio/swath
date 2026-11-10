@@ -4,11 +4,13 @@
 package keyrange
 
 import (
-	"flag"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -16,14 +18,14 @@ import (
 // the command's defaults and fills the policy and the admission apart.
 func TestFlags(t *testing.T) {
 	for _, diag := range []bool{false, true} {
-		f := flag.NewFlagSet("t", flag.ContinueOnError)
+		f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 		c := Flags(f, diag)
 		if !c.Admission.Limiter || !c.Policy.Seed || c.Policy.Floors || c.Policy.Structure != StructureAuto {
 			t.Fatalf("defaults: %+v", *c)
 		}
-		args := []string{"-limiter=false", "-request-rate", "5"}
+		args := []string{"--no-adaptive-limit", "--request-rate", "5"}
 		if diag {
-			args = append(args, "-seed=false", "-limiter-slow-start", "-floors", "-sequential", "-max-keys", "9", "-structure=off")
+			args = append(args, "--no-seed", "--adaptive-limit-slow-start", "--floors", "--sequential", "--max-keys", "9", "--structure=off")
 		}
 		if err := f.Parse(args); err != nil {
 			t.Fatal(err)
@@ -47,33 +49,33 @@ func TestStructureFlag(t *testing.T) {
 	for _, c := range []struct {
 		args []string
 		want Structure
-	}{{nil, StructureAuto}, {[]string{"-structure"}, StructureOn}, {[]string{"-structure=on"}, StructureOn},
-		{[]string{"-structure=false"}, StructureOff}, {[]string{"-structure=off"}, StructureOff}, {[]string{"-structure=auto"}, StructureAuto}} {
-		f := flag.NewFlagSet("t", flag.ContinueOnError)
+	}{{nil, StructureAuto}, {[]string{"--structure"}, StructureOn}, {[]string{"--structure=on"}, StructureOn},
+		{[]string{"--structure=false"}, StructureOff}, {[]string{"--structure=off"}, StructureOff}, {[]string{"--structure=auto"}, StructureAuto}} {
+		f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 		p := Flags(f, true)
 		if err := f.Parse(c.args); err != nil || p.Policy.Structure != c.want {
 			t.Fatalf("%q: %v %v", c.args, p.Policy.Structure, err)
 		}
 	}
-	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	Flags(f, true)
-	if err := f.Parse([]string{"-structure=sometimes"}); err == nil {
-		t.Fatal("-structure=sometimes accepted")
+	if err := f.Parse([]string{"--structure=sometimes"}); err == nil {
+		t.Fatal("--structure=sometimes accepted")
 	}
 }
 
 // TestStructureFlagSyntax: the bare flag means on, so a mode needs '=':
-// the usage shows --structure=auto|on|off and no separate argument, and
-// "-structure off" leaves off as the next argument (the command's SOURCE).
+// the help shows --structure[=auto|on|off] (an optional value), and
+// "--structure off" leaves off as the next argument (the command's SOURCE).
 func TestStructureFlagSyntax(t *testing.T) {
-	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	p := Flags(f, true)
-	name, usage := flag.UnquoteUsage(f.Lookup("structure"))
-	if name != "" || !strings.Contains(usage, "--structure=auto|on|off") {
-		t.Fatalf("usage -structure %s: %s", name, usage)
+	fl := f.Lookup("structure")
+	if d := source.Described(fl); fl.NoOptDefVal != "on" || d.Metavar != "auto|on|off" || !strings.Contains(d.Long, "needs '='") {
+		t.Fatalf("--structure: optional value %q, placeholder %q, %q", fl.NoOptDefVal, d.Metavar, d.Long)
 	}
-	if err := f.Parse([]string{"-structure", "off", "s3://bkt"}); err != nil || p.Policy.Structure != StructureOn || f.Arg(0) != "off" {
+	if err := f.Parse([]string{"--structure", "off", "s3://bkt"}); err != nil || p.Policy.Structure != StructureOn || f.Arg(0) != "off" {
 		t.Fatalf("%v %v %q", err, p.Policy.Structure, f.Args())
 	}
 }

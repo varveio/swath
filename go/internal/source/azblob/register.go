@@ -6,11 +6,12 @@ package azblob
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -22,9 +23,8 @@ import (
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
-		Secrets: []registry.Secret{{Flag: "azblob-sas", Env: EnvSAS}},
-		Hints:   []source.Hint{{Flag: "azblob-sas"}, {Flag: "azblob-flat"}},
-		Usage:   "az://account/container[/prefix]"})
+		Secrets: []registry.Secret{{Flag: "azure-sas-token", Env: EnvSAS}},
+		FromURL: fromURL, Title: "Azure Blob", Example: "az://account/container", Usage: "az://account/container[/prefix]"})
 }
 
 // flagged is the Azure flag group's value: the Azure options, the store
@@ -40,16 +40,37 @@ func defaults() any { return &flagged{} }
 
 // flags registers the Azure flag group beside the shared groups' values.
 // The flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	f.StringVar(&o.SAS, "azblob-sas", "", "Azure Blob: shared access signature `TOKEN` (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else "+EnvSAS+"; with none, an account key in "+EnvKey+" (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none")
-	f.BoolVar(&o.Flat, "azblob-flat", false, "Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report")
+	source.Define(f, source.Flag{Name: "azure-sas-token", Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
+		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
+	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
+		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent; a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	return o
+}
+
+// blobHost is the host suffix of an account's blob service URL.
+const blobHost = ".blob.core.windows.net"
+
+// fromURL is the az:// root of a blob service URL, as the portal and
+// azcopy show it (registry.Factory.FromURL):
+// https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX][?SAS].
+func fromURL(root string) (string, bool) {
+	rest, ok := strings.CutPrefix(root, "https://")
+	if !ok {
+		return "", false
+	}
+	host, path, _ := strings.Cut(rest, "/")
+	account, ok := strings.CutSuffix(strings.ToLower(host), blobHost)
+	if !ok || account == "" || strings.Contains(account, ".") {
+		return "", false
+	}
+	return "az://" + account + "/" + path, true
 }
 
 // errSASNotRecorded: a resumed run whose root held a SAS, which the
 // journal never records, given none again.
-var errSASNotRecorded = errors.New("azblob: the run's root carried a SAS, which is never recorded: give it again with --azblob-sas or " + EnvSAS)
+var errSASNotRecorded = errors.New("azblob: the run's root carried a SAS, which is never recorded: give it again with --azure-sas-token or " + EnvSAS)
 
 func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	account, container, prefix, sas, err := ParseURL(req.Root)
@@ -109,7 +130,7 @@ func (o *opened) endpoint() string {
 // Identity freezes what a resume must list the same: the source (account,
 // container, prefix), the endpoint requests go to (scheme and host case
 // are the only equivalence), the account and the container. Credentials
-// may change, a SAS among them. flat_asserted is --azblob-flat, so a
+// may change, a SAS among them. flat_asserted is --azure-assume-flat, so a
 // resume cannot add or drop the assertion. A supplied client must name its
 // route (Routed), or the run declines resume.
 func (o *opened) Identity() source.Identity {

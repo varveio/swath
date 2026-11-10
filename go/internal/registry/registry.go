@@ -12,13 +12,14 @@ package registry
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/filter"
@@ -42,7 +43,7 @@ type Factory struct {
 	// (comparison modes and policy toggles, for swath diag list only).
 	// shared holds the values of the groups the provider names (Shared),
 	// read with source.Shared.
-	Flags func(fs *flag.FlagSet, diag bool, shared source.SharedValues) any
+	Flags func(fs *pflag.FlagSet, diag bool, shared source.SharedValues) any
 	// Shared are the flag groups the provider shares with others (the
 	// store's, the range engine's): the command registers each once and
 	// passes its value to every provider naming it.
@@ -51,9 +52,16 @@ type Factory struct {
 	// requests are authenticated, which no identity holds. Secrets are
 	// operational without being listed here.
 	Operational []string
-	// Hints are every flag the provider registers itself, in help order
-	// (source.Hint).
-	Hints []source.Hint
+	// Example is a root of the provider's for the help's examples
+	// ("s3://bucket/logs/", "/data").
+	Example string
+	// Title names the provider for people: the help group of its own flags
+	// ("S3", "Local") and the messages that name it.
+	Title string
+	// FromURL, if set, returns the provider's root for a source given in
+	// another form (a service URL a console shows), and whether root is
+	// one; Canonical tries it.
+	FromURL func(root string) (string, bool)
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must
@@ -104,7 +112,7 @@ type Factory struct {
 // set of this provider alone (a test's, a benchmark's), and returns its
 // options value. The command instead registers each group once for every
 // provider (Groups).
-func (f Factory) RegisterFlags(fs *flag.FlagSet, diag bool) any {
+func (f Factory) RegisterFlags(fs *pflag.FlagSet, diag bool) any {
 	shared := source.SharedValues{}
 	for _, g := range f.Shared {
 		shared[g] = g.Flags(fs, diag)
@@ -375,6 +383,7 @@ func Register(f Factory) {
 // Redact is root as it may be shown or recorded (Factory.Redact): with its
 // provider's credential redacted, or as it is.
 func Redact(root string) string {
+	root = Canonical(root)
 	if f, err := Lookup(root); err == nil && f.Redact != nil {
 		return f.Redact(root)
 	}
@@ -440,11 +449,28 @@ func Factories() []Factory {
 	return out
 }
 
-// Lookup returns the factory for root's scheme.
+// Canonical is root as its provider takes it: a scheme in lower case
+// (S3://b is s3://b), or a provider's root for a source given in another
+// form (Factory.FromURL); any other root as given.
+func Canonical(root string) string {
+	if i := strings.Index(root, "://"); i > 0 {
+		root = strings.ToLower(root[:i]) + root[i:]
+	}
+	for _, f := range Factories() {
+		if f.FromURL != nil {
+			if r, ok := f.FromURL(root); ok {
+				return r
+			}
+		}
+	}
+	return root
+}
+
+// Lookup returns the factory for root's scheme, in any case.
 func Lookup(root string) (Factory, error) {
 	scheme := ""
 	if i := strings.Index(root, "://"); i > 0 {
-		scheme = root[:i]
+		scheme = strings.ToLower(root[:i])
 	}
 	regMu.Lock()
 	defer regMu.Unlock()

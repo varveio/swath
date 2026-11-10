@@ -19,7 +19,7 @@ in the path, but does not reject queries or fragments.
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
 `userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
-(the shared `--endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
+(the shared `--endpoint-url`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
 no user information (a password would be recorded; `source` `TestRegisteredEndpointRefusals`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
 template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
 client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
@@ -48,7 +48,7 @@ the first reason and the message; a 400 names its query. The User-Agent is swath
 (`swath-go/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
 the client: class, retry decision, attempts and counters, the answer, every body closed once, no redirect
 followed. Credentials: `--anonymous` (shared with S3 and Azure Blob) sends none, and is the only way a request goes
-unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials FILE` loads Google credential JSON through the pinned OAuth library; otherwise Application Default Credentials, found by the client library's own search
+unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials-file FILE` loads Google credential JSON through the pinned OAuth library; otherwise Application Default Credentials, found by the client library's own search
 (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud). Credentials that
 cannot be found or do not load refuse the run before any listing request (`objhttp.CredentialError`, class
 `auth`), never anonymity. The token source lives as long as the client, built on a context that is never
@@ -101,7 +101,7 @@ a comparison needs a hash from elsewhere
 ([object resource](https://cloud.google.com/storage/docs/json_api/v1/objects),
 [ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume is the recorded inputs: the source (bucket and prefix), the endpoint (as
 `client.Endpoint` normalizes it for the client, above; scheme and host case are the only other equivalence) and the billed project
-(`--gcs-user-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
+(`--gcs-billing-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
 supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume. A journal from a
 build that recorded the resolved route instead of the endpoint is refused (`endpoint` not recorded;
 [upgrade.md](../../upgrade.md), "Changes between Go builds"; `TestOldJournalRefused`).

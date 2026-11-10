@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"runtime/pprof"
 	"syscall"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
@@ -110,7 +111,7 @@ func classify(err, cause error, dir string) outcome {
 	var se *signalError
 	var ue *journal.UnresumableError
 	switch {
-	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
+	case errors.As(err, &u), errors.Is(err, pflag.ErrHelp):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassUsage, exitUsage, false
 	case refusal(err):
 		// The caller's to fix (another output, --overwrite, the original
@@ -254,10 +255,10 @@ func committedAccount(dir string, r *listing.Report) {
 // alreadyComplete accounts for a resume that found its output committed
 // and complete (exit 0): the report says so from the manifest's coverage,
 // and the text report says it in one line.
-func alreadyComplete(stdout io.Writer, format, dir string, r *listing.Report) {
+func alreadyComplete(stdout io.Writer, report, dir string, r *listing.Report) {
 	r.Outcome.Error, r.Outcome.Unrecorded = "", listing.UnrecordedComplete
 	committedAccount(dir, r)
-	if format != "json" {
+	if report != "-" { // else stdout carries the report
 		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
 	}
 }
@@ -467,7 +468,7 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		if f.dir != "" {
 			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
 		}
-		writeReport(f.report, r)
+		_ = writeReport(f.report, r, nil)
 	}()
 	select {
 	case <-done:

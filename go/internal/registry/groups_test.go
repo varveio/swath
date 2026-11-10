@@ -4,11 +4,12 @@
 package registry
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -27,7 +28,7 @@ func panicOf(f func()) (msg string) {
 
 // group is a shared flag group registering one string flag, name.
 func group(title, name string) *source.FlagGroup {
-	return &source.FlagGroup{Name: title, Flags: func(fs *flag.FlagSet, _ bool) any {
+	return &source.FlagGroup{Name: title, Flags: func(fs *pflag.FlagSet, _ bool) any {
 		return fs.String(name, "", "")
 	}}
 }
@@ -38,8 +39,8 @@ func group(title, name string) *source.FlagGroup {
 // shadowing the other.
 func TestGroupIdentity(t *testing.T) {
 	a, b := group("same", "dup"), group("same", "dup")
-	f := Factory{Shared: []*source.FlagGroup{a, b}, Flags: func(*flag.FlagSet, bool, source.SharedValues) any { return nil }}
-	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	f := Factory{Shared: []*source.FlagGroup{a, b}, Flags: func(*pflag.FlagSet, bool, source.SharedValues) any { return nil }}
+	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if msg := panicOf(func() { f.RegisterFlags(fs, false) }); !strings.Contains(msg, "dup") {
 		t.Fatalf("two groups registering --dup: panic %q, want one naming the flag", msg)
@@ -59,21 +60,21 @@ func TestSharedAccessorRefuses(t *testing.T) {
 		{"unnamed group", func(v source.SharedValues) { source.Shared[string](v, other) }, `"other" is not among`},
 		{"wrong type", func(v source.SharedValues) { source.Shared[int](v, named) }, `"named" holds *string, not *int`},
 	} {
-		f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(_ *flag.FlagSet, _ bool, v source.SharedValues) any {
+		f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(_ *pflag.FlagSet, _ bool, v source.SharedValues) any {
 			c.flags(v)
 			return nil
 		}}
-		if msg := panicOf(func() { f.RegisterFlags(flag.NewFlagSet("", flag.ContinueOnError), false) }); !strings.Contains(msg, c.want) {
+		if msg := panicOf(func() { f.RegisterFlags(pflag.NewFlagSet("", pflag.ContinueOnError), false) }); !strings.Contains(msg, c.want) {
 			t.Errorf("%s: panic %q, want %q", c.why, msg, c.want)
 		}
 	}
 	// The value of a named group of the right type is the group's own.
-	f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(fs *flag.FlagSet, _ bool, v source.SharedValues) any {
+	f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(fs *pflag.FlagSet, _ bool, v source.SharedValues) any {
 		return source.Shared[string](v, named)
 	}}
-	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 	got := f.RegisterFlags(fs, false).(*string)
-	if err := fs.Parse([]string{"-x", "v"}); err != nil || *got != "v" {
+	if err := fs.Parse([]string{"--x", "v"}); err != nil || *got != "v" {
 		t.Fatalf("named group: %q, %v", *got, err)
 	}
 }

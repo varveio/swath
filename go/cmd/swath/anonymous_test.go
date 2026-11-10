@@ -51,9 +51,9 @@ func TestPublicBucketHint(t *testing.T) {
 		args     []string
 		requests *atomic.Int64
 	}{
-		{"s3", []string{"s3://bkt", "--endpoint", s3.URL}, &s3Requests},
+		{"s3", []string{"s3://bkt", "--endpoint-url", s3.URL}, &s3Requests},
 		{"azblob normal endpoint", []string{"az://replay/corpus"}, &azRequests},
-		{"azblob", []string{"az://replay/corpus", "--endpoint", azProxy.URL}, &azRequests},
+		{"azblob", []string{"az://replay/corpus", "--endpoint-url", azProxy.URL}, &azRequests},
 	} {
 		out := filepath.Join(t.TempDir(), "ds")
 		err := run(context.Background(), append(append(c.args, "-o", out), unjournaled...), io.Discard, diagList)
@@ -66,7 +66,7 @@ func TestPublicBucketHint(t *testing.T) {
 	}
 	// The hint is right: the public container lists with --anonymous.
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint", azEndpoint(az), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
+	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint-url", azEndpoint(az), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
 		t.Fatalf("--anonymous: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {

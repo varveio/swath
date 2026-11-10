@@ -4,15 +4,15 @@
 package s3
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
@@ -21,7 +21,7 @@ import (
 )
 
 // TestEndpointURLDefaultsPathStyle: a custom endpoint addresses buckets
-// path-style unless --path-style=false, as Java's --force-path-style
+// path-style unless --no-s3-path-style, as Java's --force-path-style
 // default; the flag's outcome is what the identity records, and what the
 // request is sent with.
 func TestEndpointURLDefaultsPathStyle(t *testing.T) {
@@ -35,7 +35,7 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 	}))
 	opened := func(args ...string) *opened[Object] {
 		t.Helper()
-		f := flag.NewFlagSet("t", flag.ContinueOnError)
+		f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 		o := factory(t).RegisterFlags(f, false)
 		if err := f.Parse(append(args, "--anonymous")); err != nil {
 			t.Fatal(err)
@@ -46,17 +46,17 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 		}
 		return src.(*opened[Object])
 	}
-	if o := opened("--endpoint", "http://store.example:9000"); !o.p.opt.PathStyle {
+	if o := opened("--endpoint-url", "http://store.example:9000"); !o.p.opt.PathStyle {
 		t.Fatal("a custom endpoint is not path-style by default")
 	}
-	if o := opened("--endpoint", "http://store.example:9000", "--path-style=false"); o.p.opt.PathStyle {
-		t.Fatal("--path-style=false is not virtual-host addressing")
+	if o := opened("--endpoint-url", "http://store.example:9000", "--no-s3-path-style"); o.p.opt.PathStyle {
+		t.Fatal("--no-s3-path-style is not virtual-host addressing")
 	}
 	if o := opened(); o.p.opt.PathStyle {
 		t.Fatal("AWS's endpoint is path-style by default")
 	}
 	// The default reaches the request: the bucket in the path.
-	o := opened("--endpoint", srv)
+	o := opened("--endpoint-url", srv)
 	if _, err := o.p.client.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "bkt"}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,25 +71,26 @@ func TestPathStyleFlag(t *testing.T) {
 		value, set, bad bool
 	}{
 		{nil, false, false, false},
-		{[]string{"--path-style"}, true, true, false},
-		{[]string{"--path-style=false"}, false, true, false},
-		{[]string{"--path-style=true", "--path-style=false"}, false, true, false},
-		{[]string{"--path-style=false", "--path-style"}, true, true, false},
-		{[]string{"--path-style=invalid"}, false, false, true},
-		{[]string{"--path-style", "--path-style=invalid"}, true, true, true},
+		{[]string{"--s3-path-style"}, true, true, false},
+		{[]string{"--no-s3-path-style"}, false, true, false},
+		{[]string{"--s3-path-style=true", "--no-s3-path-style"}, false, true, false},
+		{[]string{"--no-s3-path-style", "--s3-path-style"}, true, true, false},
+		{[]string{"--s3-path-style=invalid"}, false, false, true},
+		{[]string{"--s3-path-style", "--s3-path-style=invalid"}, true, true, true},
 	} {
-		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		opt := factory(t).RegisterFlags(fs, false).(*flagged)
 		err := fs.Parse(c.args)
 		if (err != nil) != c.bad || opt.PathStyle != c.value || opt.pathStyleSet != c.set {
 			t.Errorf("%q: value=%v set=%v err=%v", c.args, opt.PathStyle, opt.pathStyleSet, err)
 		}
-		var help bytes.Buffer
-		fs.SetOutput(&help)
-		fs.PrintDefaults()
-		if !strings.Contains(help.String(), "  -path-style\n    \tS3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)\n") {
-			t.Fatalf("path-style help changed: %s", help.String())
+		// Both spellings are switches: the help shows neither =true nor
+		// =false.
+		for _, n := range []string{"s3-path-style", "no-s3-path-style"} {
+			if fl := fs.Lookup(n); fl == nil || fl.NoOptDefVal != "true" || source.Described(fl).Metavar != "" {
+				t.Fatalf("--%s is not a switch", n)
+			}
 		}
 	}
 }
@@ -99,11 +100,11 @@ func TestBearerFlagConflicts(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--bearer-token-refresh-interval=1m"}, "--bearer-token-refresh-interval requires --bearer-token-command"},
-		{[]string{"--bearer-token-command=unused", "--profile=work"}, "--bearer-token-command excludes --anonymous and --profile"},
+		{[]string{"--s3-bearer-token-refresh-interval=1m"}, "--s3-bearer-token-refresh-interval requires --s3-bearer-token-command"},
+		{[]string{"--s3-bearer-token-command=unused", "--s3-profile=work"}, "--s3-bearer-token-command excludes --anonymous and --s3-profile"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
-			f := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 			opt := factory(t).RegisterFlags(f, false)
 			if err := f.Parse(tc.args); err != nil {
 				t.Fatal(err)

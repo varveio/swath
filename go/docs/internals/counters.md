@@ -18,12 +18,12 @@ a boolean, `gauge` a value derived when the provider snapshots (the attempt late
 a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
-- absent, feature `false`: the policy was off for this run (for S3: `seed` with `swath diag list --seed=false` or `--sequential`,
+- absent, feature `false`: the policy was off for this run (for S3: `seed` with `swath diag list --no-seed` or `--sequential`,
   `split` with `--sequential`, `floors` without `--floors`, `structure` with `--structure=off` (`--sequential`,
   `--floors` and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
-  without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Admission` or a supplied client, `slow_start` without
-  `--limiter-slow-start` or without the limiter, `request_rate` without `--request-rate`);
+  without `-max-keys`, `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
+  `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
@@ -65,7 +65,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `budget_wait_ns` | ns | emitters, and workers with ranges queued, waited on a full reorder budget (the reorder cost); summed over goroutines |
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
 | `spill.rows`, `spill.bytes`, `spill.ranges` | rows, bytes, ranges | rows written to spill and replayed, bytes written, ranges that spilled |
-| `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--spill-compress=false`), `plain+zstd` or `plain` (`--spill-plain`) |
+| `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--no-spill-compress`), `plain+zstd` or `plain` (`--spill-plain`) |
 | `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and the run warns at start |
@@ -279,9 +279,9 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
 | `limiter.max_depth` | max | permits | limiter | most permits the limit stood below the worker count |
-| `slow_start.doubles` | count | steps | slow_start | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
-| `slow_start.ramp_ns` | max | ns | slow_start | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
-| `slow_start.end_limit` | max | permits | slow_start | --limiter-slow-start: the limit the ramp ended at (0: still ramping) |
+| `slow_start.doubles` | count | steps | slow_start | --adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
+| `slow_start.ramp_ns` | max | ns | slow_start | --adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
+| `slow_start.end_limit` | max | permits | slow_start | --adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping) |
 | `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 <!-- s3:end -->

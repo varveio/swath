@@ -263,7 +263,7 @@ func TestDuMatchesLstat(t *testing.T) {
 
 // TestDuLocalRefusals: du's local flags need each entry's stat, and an
 // object store refuses them as it refuses the local provider's own flags;
-// --one-filesystem is the local provider's.
+// --one-file-system is the local provider's.
 func TestDuLocalRefusals(t *testing.T) {
 	root := duTree(t)
 	for _, tc := range []struct {
@@ -271,15 +271,15 @@ func TestDuLocalRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to local sources, not to s3://"},
-		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to local sources, not to gs://"},
-		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to local sources, not to az://"},
-		{true, []string{"s3://bkt", "--one-filesystem"}, "--one-filesystem applies to local sources, not to s3://"},
-		{false, []string{"az://acct/ctr", "--one-filesystem"}, "--one-filesystem applies to local sources, not to az://"},
+		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to Local sources, not to S3 sources"},
+		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to Local sources, not to GCS sources"},
+		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to Local sources, not to Azure Blob sources"},
+		{true, []string{"s3://bkt", "--one-file-system"}, "--one-file-system applies to Local sources, not to S3 sources"},
+		{false, []string{"az://acct/ctr", "--one-file-system"}, "--one-file-system applies to Local sources, not to Azure Blob sources"},
 		{false, []string{root, "--allocated"}, "--allocated has no meaning for swath list"},
 		{false, []string{root, "--count-links-once"}, "--count-links-once has no meaning for swath list"},
 		{true, []string{root, "--allocated", "--metadata", "names"}, "not with --metadata names"},
-		{true, []string{root, "--one-filesystem", "--metadata", "names"}, "names metadata tier"},
+		{true, []string{root, "--one-file-system", "--metadata", "names"}, "names metadata tier"},
 	} {
 		var out bytes.Buffer
 		var err error
@@ -292,16 +292,16 @@ func TestDuLocalRefusals(t *testing.T) {
 			t.Errorf("du=%v %v: exit %d (%v), want %q", tc.du, tc.args, exitOf(err), err, tc.want)
 		}
 	}
-	// --one-filesystem lists the tree it stays on, and the manifest says the
+	// --one-file-system lists the tree it stays on, and the manifest says the
 	// listing stopped there.
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--allocated", "--one-filesystem", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+	if err := runDu(context.Background(), []string{root, "--allocated", "--one-file-system", "--format", "tsv", "--no-stats"}, &out); err != nil ||
 		!strings.HasPrefix(out.String(), "Depth\tObjects\tDirs\tAllocatedSize\tUnsized\tLastModified\tPrefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
 	out.Reset()
-	if err := run(context.Background(), []string{root, "-o", ds, "--one-filesystem", "--no-stats"}, &out, false); err != nil {
+	if err := run(context.Background(), []string{root, "-o", ds, "--one-file-system", "--no-stats"}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	var m struct {

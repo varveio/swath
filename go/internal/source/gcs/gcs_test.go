@@ -6,7 +6,6 @@ package gcs
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
@@ -509,9 +510,9 @@ func TestEngineFlagsShared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	v := pf.RegisterFlags(f, true)
-	if err := f.Parse([]string{"-seed", "-structure", "-anonymous", "-endpoint", "http://127.0.0.1:1/storage/v1/", "-request-timeout", "7s"}); err != nil {
+	if err := f.Parse([]string{"--structure", "--anonymous", "--endpoint-url", "http://127.0.0.1:1/storage/v1/", "--request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2})

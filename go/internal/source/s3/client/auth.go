@@ -34,7 +34,7 @@ type auth struct {
 	source      string                  // where the credentials come from (never the secret)
 	region      string                  // the signing region
 	anonymous   bool
-	bearer      *tokensource.Shared // --bearer-token-command: sent instead of a signature
+	bearer      *tokensource.Shared // --s3-bearer-token-command: sent instead of a signature
 	note        string              // a one-time warning for the user, or ""
 }
 
@@ -52,7 +52,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
-	// The bucket's region (--region) is the signing region only. The
+	// The bucket's region (--s3-region) is the signing region only. The
 	// credential chain (STS for web identity and assumed roles) keeps the
 	// environment's or the profile's region, else us-east-1, so a bucket in
 	// another region never moves the STS endpoint.
@@ -201,7 +201,7 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 	case a.bearer != nil:
 		tok, err := a.bearer.Token(ctx)
 		if err != nil {
-			return "", creds, &objhttp.CredentialError{Source: "--bearer-token-command", Err: err}
+			return "", creds, &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: err}
 		}
 		return tok.AccessToken, creds, nil
 	case a.anonymous:

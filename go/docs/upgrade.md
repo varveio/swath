@@ -88,7 +88,7 @@ extension; a reader that needs swath's coverage refuses it.
 |---|---|---|
 | `key`, `size`, `last_modified`, `etag`, `storage_class` | present | unchanged |
 | `size` | INT64, unannotated | INT64 with the standard `INT(64,true)` annotation (physical type unchanged) |
-| `owner_id`, `owner_display_name` | present | unchanged; null unless the run used `-fetch-owner` |
+| `owner_id`, `owner_display_name` | present | unchanged; null unless the run used `--s3-fetch-owner` |
 | `checksum_algorithm`, `checksum_type` | present | unchanged; null when S3 omits them |
 | `version_id` | always null for current objects | removed |
 | `is_latest` | always null | removed |
@@ -203,11 +203,11 @@ The report's changes from version 1 to version 2 are in [Changes from 0.3 to 0.4
 
 Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE -o DIR`;
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
-`--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
+`--report -`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
 `-no-spill` → `swath diag list …`; `swath list --count-only` → `swath diag count` (`swath count` from 2026-11-07 to 2026-11-09; its per-prefix totals are `swath du`); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count;
-`--encoders` stays CPU-derived. Java's `--tune seed.mode=none` is `swath diag list --seed=false` (the seed is on
+`--encoders` stays CPU-derived. Java's `--tune seed.mode=none` is `swath diag list --no-seed` (the seed is on
 by default, as Java's `shallow` is), and `--format discard` is `swath diag count`, which counts without ordering or
 spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
@@ -219,10 +219,10 @@ shape, so they are read with what already reads S3 listings ([cli.md](cli.md), "
 `row_type` is gone; control bytes use JSON's escapes, not `\xNN`; the table is the `aws s3 ls` line. Not
 ported: `--output-type` and `--format parquet` (the `-o` name decides), `--compression` (the name compresses a
 file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`, `--text-writers`, the
-`.parquet` one-writer file. Text runs are not resumable: they keep no journal. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
+`.parquet` one-writer file. Text runs are not resumable: they keep no journal. Java's `--bearer-token-command` and `--bearer-token-refresh-interval` are `--s3-bearer-token-command` and `--s3-bearer-token-refresh-interval`; the command is
 never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
-is not, instead of failing on its first request. Java's `--endpoint-url` and `--force` are `--endpoint` and
-`--overwrite`, and Java's `--output` is `-o`; a custom endpoint is path-style by default, as Java's. The seven filters are
+is not, instead of failing on its first request. Java's `--endpoint-url` keeps its name, its `--force` is `--overwrite`, and its `--output` is
+`-o, --output`; a custom endpoint is path-style by default, as Java's. The seven filters are
 Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
@@ -236,12 +236,12 @@ the list below is the earlier history of the unreleased builds.
   unknown flag). A source with no usable credentials, an empty AWS chain, no Application Default Credentials,
   or an Entra ID chain that finds none, stops the run before listing. Credential failures normally
   have cause `auth`; failed Entra acquisition during Azure namespace admission can instead yield
-  `refused`, cause `unsupported` (exit 2), without `--azblob-flat`
+  `refused`, cause `unsupported` (exit 2), without `--azure-assume-flat`
   ([credentials](operating.md#credentials)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
   with "(a public bucket needs --anonymous)".
-- An endpoint URL with user information (`http://user:password@host/`, through `--endpoint`, then
+- An endpoint URL with user information (`http://user:password@host/`, through `--endpoint-url`, then
   also `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
   its password recorded in the journal identity; give credentials through the provider's own configuration.
 - S3 journals written by an earlier build do not resume. The S3 resume identity now records the listing's inputs
@@ -250,7 +250,7 @@ the list below is the earlier history of the unreleased builds.
   is touched (`cannot resume: endpoint was (not recorded)`), whatever the region or endpoint; the interrupted
   dataset is left as it was. Finish the run with the build that started it, or start it over with `--overwrite`.
 - GCS listings use Google's generated JSON API client only, and a GCS journal records the endpoint
-  (`--endpoint`, then `--gcs-endpoint`, as the client sends to it) where it recorded the resolved route (`ENDPOINT/b/BUCKET/o`).
+  (`--endpoint-url`, then `--gcs-endpoint`, as the client sends to it) where it recorded the resolved route (`ENDPOINT/b/BUCKET/o`).
   A GCS run interrupted under an earlier build does not resume, even with unchanged flags: `swath resume`
   refuses it with `cannot resume: endpoint was (not recorded), now …`, and the run report's `args_hash` of a
   GCS run differs from an earlier build's. Finish such a run with the build that started it, or start it over
@@ -258,8 +258,8 @@ the list below is the earlier history of the unreleased builds.
   one that named its route could).
 - `--workers` defaults to 64 whatever the CPU count for an object store (it was `min(64, max(4, 3*GOMAXPROCS))`);
   a local path defaults to `min(64, 4 × GOMAXPROCS)`.
-- A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
-  and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it
+- A custom `--endpoint-url` is path-style by default: an interrupted run started with `--endpoint-url` on a host name
+  and no `--s3-path-style` resolves the path-style route on resume, so the identity check refuses it; start it
   over with `--overwrite`.
 - Sizes are binary in every unit (`64MB` is 64 MiB); `KB`, `MB` and `GB` were decimal for the resource sizes,
   so a run started that way sees a different part size on resume and is refused.
@@ -279,7 +279,7 @@ the list below is the earlier history of the unreleased builds.
   and `max_buffered_bytes` is 0.
 - `swath diag list --seed-descent` was removed with the seed descent. The `seed.probes`, `seed.levels.*` and
   other counters of that descent are gone.
-- `--seed` is on by default (`swath diag list --seed=false` turns it off) and no longer one delimiter page: it paginates the top
+- `--seed` is on by default (`swath diag list --no-seed` turns it off) and no longer one delimiter page: it paginates the top
   level up to 4 pages and descends levels narrower than `--workers` up to 4 deep, in parallel waves (at most 64
   requests in 6 round trips, the empty pages it follows included), and it also tiles a resumed scope. Its new
   counters are `seed.pages`, `seed.requests`, `seed.round_trips`, `seed.levels`, `seed.level.<n>.cuts`,
@@ -294,7 +294,7 @@ the list below is the earlier history of the unreleased builds.
 - `--spill-max` (now `--spill-budget`) is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
   encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
   `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
-- Spill frames are delta-coded and zstd-compressed (level 1) by default; `--spill-compress=false` (on `swath diag list` and `swath resume`)
+- Spill frames are delta-coded and zstd-compressed (level 1) by default; `--no-spill-compress` (on `swath diag list` and `swath resume`)
   writes them uncompressed and `--spill-plain` without delta coding. The report's `resources.spill` adds
   `logical_bytes`, `format` and `decode_refused`.
 
@@ -314,16 +314,15 @@ information: a binary built from a source checkout reads `devel`, and the revisi
 **If you built from `main` before 0.4.** The Go port was on `main` (from `a2efe16e`) before it was released,
 without a version and without a compatibility promise. Against those builds, 0.4 renames or moves these flags
 (a removed name is an unknown flag, exit 2; there are no aliases, and a run interrupted under such a build is
-finished with it or started over): `--output` is `-o`; `--force` is `--overwrite`; `--endpoint-url` is
-`--endpoint`; `--quiet` is `-q`; `--spill-max` is `--spill-budget`; `swath list --count-only` is the command
+finished with it or started over): `--force` is `--overwrite`; `--spill-max` is `--spill-budget`; `swath list --count-only` is the command
 `swath diag count` (it refuses the output flags with exit 2; the builds of `main` from 2026-11-07 to 2026-11-09
 called it `swath count`, and `swath count` is now an unknown command: `swath du` totals a source, `swath diag
-count` measures its listing); `--seed=false` and `--limiter-slow-start` moved to `swath diag list`, and `swath
+count` measures its listing); `--no-seed` and `--adaptive-limit-slow-start` moved to `swath diag list`, and `swath
 list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`; the GCS and Azure copies
 of the flags every object store has are gone, one shared flag serving S3, GCS and Azure Blob alike:
-`--gcs-endpoint` and `--azblob-endpoint` are `--endpoint`, `--gcs-request-timeout` and
+`--gcs-endpoint` and `--azblob-endpoint` are `--endpoint-url`, `--gcs-request-timeout` and
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
-is refused naming it. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
 **Run report: version 3.** Version 3 adds fields, and a version 2 reader reads version 3 by ignoring them; one
@@ -346,7 +345,7 @@ meaning is narrowed, a local tree's `output.object_bytes` (the last item):
   filters): a directory's own size is no longer summed (it is no object's). On an unfiltered complete run it equals
   the local counters' `bytes`, and `swath du`'s total of the same run without `--allocated` or
   `--count-links-once`. Object stores are unchanged. The local provider's counters add `other_device_dirs`
-  (`--one-filesystem`).
+  (`--one-file-system`).
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`

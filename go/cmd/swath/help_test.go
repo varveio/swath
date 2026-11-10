@@ -7,9 +7,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 // TestSubcommandHelp: every command's --help prints usable help on stdout
@@ -20,14 +21,14 @@ func TestSubcommandHelp(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"diag", "--help"}, []string{"swath diag list SOURCE"}},
-		{[]string{"show", "--help"}, []string{"swath show [--journal] DIR", "-journal"}},
-		{[]string{"resume", "--help"}, []string{"swath resume DIR", "-workers", "-bearer-token-command", "-progress"}},
+		{[]string{"diag", "--help"}, []string{"swath diag list SOURCE", "swath diag count SOURCE"}},
+		{[]string{"show", "--help"}, []string{"swath show DIR", "--journal"}},
+		{[]string{"resume", "--help"}, []string{"swath resume DIR", "-workers", "--s3-bearer-token-command", "-progress"}},
 		{[]string{"list", "--help"}, []string{"SOURCE"}},
 	} {
 		var out bytes.Buffer
 		err := dispatch(context.Background(), c.args, &out)
-		if !errors.Is(err, flag.ErrHelp) {
+		if !errors.Is(err, pflag.ErrHelp) {
 			t.Errorf("%v: err %v, want a help request", c.args, err)
 		}
 		var u usageError

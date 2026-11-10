@@ -45,9 +45,9 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					u.User = url.UserPassword("PRIVATE_USER", "PRIVATE_PASSWORD")
 					flagArgs := func(ep string) []string {
 						if eq {
-							return []string{"--endpoint=" + ep}
+							return []string{"--endpoint-url=" + ep}
 						}
-						return []string{"--endpoint", ep}
+						return []string{"--endpoint-url", ep}
 					}
 					dir := filepath.Join(t.TempDir(), "ds")
 					report := filepath.Join(t.TempDir(), "report.json")

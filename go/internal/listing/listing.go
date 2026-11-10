@@ -176,7 +176,7 @@ type Spill struct {
 	// LogicalBytes is the spilled rows' logical size (key and column
 	// values, as the part router counts them): Bytes against it is what
 	// the frame coding saved. Format names the frames: "delta" or "plain",
-	// "+zstd" unless --spill-compress=false.
+	// "+zstd" unless --no-spill-compress.
 	LogicalBytes int64  `json:"logical_bytes"`
 	Format       string `json:"format"`
 	// DecodeRefused counts frames refused at read for decoding past their

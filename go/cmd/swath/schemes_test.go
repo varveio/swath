@@ -22,15 +22,15 @@ import (
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
 // engine flags: by default 64 workers whatever the CPU count, the seed (seed.prefixes counted), splits on,
-// the limiter on, no structure probes or floors; swath diag list -seed=false reaches the
+// the limiter on, no structure probes or floors; swath diag list --no-seed reaches the
 // selected provider, and swath list refuses it (a diagnostic flag).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	keys := gcstest.Keys(3000)
 	s3url := s3test.Bucket(t, keys)
 	gcs := gcstest.Bucket(t, keys, 0)
 	schemes := map[string][]string{
-		"s3":  {"s3://bkt", "--endpoint", s3url, "--path-style", "--anonymous"},
-		"gcs": {"gs://bkt", "--endpoint", gcs, "--anonymous"},
+		"s3":  {"s3://bkt", "--endpoint-url", s3url, "--s3-path-style", "--anonymous"},
+		"gcs": {"gs://bkt", "--endpoint-url", gcs, "--anonymous"},
 	}
 	type report struct {
 		Invocation struct{ Workers int }
@@ -52,7 +52,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 	runJSON := func(diag bool, args ...string) report {
 		t.Helper()
 		var out bytes.Buffer
-		args = append(args, "--report-format", "json", "-o", filepath.Join(t.TempDir(), "ds"))
+		args = append(args, "--report", "-", "-o", filepath.Join(t.TempDir(), "ds"))
 		args = append(args, unjournaled...)
 		if err := run(context.Background(), args, &out, diag || diagList); err != nil {
 			t.Fatalf("%v: %v", args, err)
@@ -84,15 +84,15 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 			t.Fatalf("%s: not seeded by default: %v", name, r.Source.Stats.Counters.Values)
 		}
 		// --seed is diagnostic: swath list refuses it, naming swath diag.
-		if err := run(context.Background(), append([]string{"--seed=false"}, src...), io.Discard, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath diag list") {
-			t.Fatalf("%s swath list --seed=false: %v", name, err)
+		if err := run(context.Background(), append([]string{"--no-seed"}, src...), io.Discard, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath diag list") {
+			t.Fatalf("%s swath list --no-seed: %v", name, err)
 		}
-		r = runJSON(true, append([]string{"--seed=false"}, src...)...)
+		r = runJSON(true, append([]string{"--no-seed"}, src...)...)
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
 		}
 		if seeded(r) || r.Output.RowsEmitted != int64(len(keys)) {
-			t.Fatalf("%s diag --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsEmitted)
+			t.Fatalf("%s diag --no-seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsEmitted)
 		}
 		t.Logf("%s: %s", name, fmt.Sprint(r.Source.Stats.Counters.Features))
 	}

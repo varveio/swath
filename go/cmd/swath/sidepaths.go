@@ -35,7 +35,7 @@ func checkSidePaths(o *options) error {
 		{"SWATH_CPUPROFILE", &o.cpuProfile},
 		{"SWATH_MEMPROFILE", &o.memProfile},
 	} {
-		if *side.path == "" {
+		if *side.path == "" || side.what == "--report" && *side.path == "-" { // - is stdout
 			continue
 		}
 		dest, err := checkSidePath(*o, *side.path)

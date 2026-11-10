@@ -305,10 +305,10 @@ func TestRecordedEndpointUserinfo(t *testing.T) {
 	ep := gcsBucket(t, 2)
 	cfg := gcsConfig(ep, filepath.Join(t.TempDir(), "ds"), false)
 	cfg.Argv = []string{"list", "gs://bkt",
-		"--endpoint", "http://private-user:private-password@s3.example/",
-		"--endpoint=http://private-user:private-password@s3.example/",
-		"-endpoint", "http://private-user:private-password@gcs.example/",
-		"-endpoint=http://private-user:private-password@gcs.example/"}
+		"--endpoint-url", "http://private-user:private-password@s3.example/",
+		"--endpoint-url=http://private-user:private-password@s3.example/",
+		"--endpoint-url", "http://private-user:private-password@gcs.example/",
+		"--endpoint-url=http://private-user:private-password@gcs.example/"}
 	original := strings.Join(cfg.Argv, " ")
 	rep, err := Run(context.Background(), cfg)
 	if err != nil {

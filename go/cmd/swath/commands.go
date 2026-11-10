@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -16,9 +15,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/pflag"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 )
 
@@ -30,44 +32,30 @@ var errNoCommand = errors.New("the interrupted run stopped before recording its 
 // recorded; only the runtime flags may be given again.
 func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	var o options
-	f := flag.NewFlagSet("resume", flag.ContinueOnError)
-	f.SetOutput(io.Discard)
-	all := newFlags(&o, true)
-	all.VisitAll(func(fl *flag.Flag) {
-		if slices.Contains(resumeFlags, fl.Name) {
-			f.Var(fl.Value, fl.Name, fl.Usage)
+	f := newFlags(&o, true)
+	p, err := parseFlags(f, "resume", args, func(fl *pflag.Flag) error {
+		if !mayChange(fl.Name) {
+			return usageError{fmt.Errorf("--%s is fixed for the run and cannot change on resume (see 'swath resume --help')", fl.Name)}
 		}
+		return nil
 	})
-	var dir string
-	var overrides []string
-	for rest := args; ; {
-		before := len(rest)
-		if err := f.Parse(rest); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				resumeUsage(stdout, f)
-				return err
-			}
-			return usageError{fmt.Errorf("resume: %w (only %s may change)", err, strings.Join(resumeFlags, ", "))}
-		}
-		overrides = append(overrides, rest[:before-len(f.Args())]...)
-		if f.NArg() == 0 {
-			break
-		}
-		if dir != "" {
-			return usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
-		}
-		dir, rest = f.Arg(0), f.Args()[1:]
+	if errors.Is(err, pflag.ErrHelp) {
+		resumeUsage(stdout, f, styleFor(stdout, o.term.color, p.longHelp))
+		return err
 	}
-	if dir == "" {
-		return usageError{errors.New("usage: swath resume DIR [runtime flags]")}
+	switch {
+	case err != nil:
+		return err
+	case len(p.operands) == 0:
+		return seeHelp{usageError{errors.New("missing DIR")}, "resume"}
+	case len(p.operands) > 1:
+		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", p.operands[1])}, "resume"}
 	}
+	dir, overrides := p.operands[0], p.given
 	// Every refusal below settles: it writes the report (--report). Its
-	// destination, and the given durations, are checked first, as a list
-	// command checks them, so no settlement replaces the dataset's own
-	// files or the text file being refused.
-	if err := nonNegativeDurations(f); err != nil {
-		return usageError{err}
-	}
+	// destination is checked first, as a list command checks it, so no
+	// settlement replaces the dataset's own files or the text file being
+	// refused.
 	target := resumeTarget(o, dir)
 	if err := checkSidePaths(&target); err != nil {
 		return usageError{err}
@@ -78,7 +66,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	seen := journal.Witness(dir)
 	att := newAttempt()
 	stop := func(err error) error {
-		return refuse(stdout, dir, seen, err, att, o.report, o.reportFormat, redactArgv(append([]string{"resume"}, args...)))
+		return refuse(stdout, dir, seen, err, att, o.report, redactArgv(append([]string{"resume"}, args...)))
 	}
 	if f, _ := textDest(dir); f != "" || dir == "-" || isFile(dir) {
 		// A text run keeps no journal: there is nothing to continue.
@@ -113,28 +101,34 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	default:
 		return stop(fmt.Errorf("resume: the journal in %s records no command (written by an older build): finish it with that build or start over", dir))
 	}
-	if name := unknownFlag(all, base); name != "" {
-		return stop(usageError{fmt.Errorf("resume: the run in %s was recorded with %s, which this build does not take (renamed or removed): finish it with the build that started it, or start over with swath list --overwrite", dir, dashed(name))})
+	// The recorded command is canonical (parseList): its flags, each one
+	// argument (--name=value, or --name), then SOURCE, after "--" when it
+	// looks like a flag.
+	flags, operand := base, []string(nil)
+	if i := slices.IndexFunc(base, func(a string) bool { return a == "--" || !strings.HasPrefix(a, "--") }); i >= 0 {
+		flags, operand = base[:i], base[i:]
 	}
-	// The recorded command without --overwrite (the output is resumed, not
+	if name := unknownFlag(f, flags); name != "" {
+		return stop(usageError{fmt.Errorf("resume: the run in %s was recorded with --%s, which this build does not take (renamed or removed): finish it with the build that started it, or start over with swath list --overwrite", dir, name)})
+	}
+	// The recorded flags without --overwrite (the output is resumed, not
 	// replaced), then the overrides, then the directory as given (it may
-	// have moved).
+	// have moved), then SOURCE.
 	var cmd []string
 	var secrets []string // secret flags the run had, whose values were not recorded
-	for _, a := range base {
-		n := strings.TrimLeft(a, "-")
-		if name, v, _ := strings.Cut(n, "="); a != n && name == "overwrite" && (v == "" || v == "true") {
+	for _, a := range flags {
+		name, v, eq := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if name == "overwrite" && (!eq || v == "true") {
 			continue
 		}
-		if name, v, ok := strings.Cut(n, "="); a != n && ok && v == redacted && slices.Contains(secretFlags, name) {
+		if eq && v == redacted && slices.Contains(secretFlags, name) {
 			secrets = append(secrets, name)
 			continue
 		}
 		cmd = append(cmd, a)
 	}
 	for _, name := range secrets {
-		given := false
-		f.Visit(func(fl *flag.Flag) { given = given || fl.Name == name })
+		given := f.Changed(name)
 		// The provider reads the credential from its variable when the
 		// flag is absent (registry.Secret.Env), so a rotated secret may
 		// come from either source.
@@ -149,52 +143,25 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, dir, name, hint)})
 		}
 	}
-	cmd = append(append(cmd, overrides...), "-o", dir)
+	cmd = append(append(append(cmd, overrides...), "--output="+dir), operand...)
 	// Parsed with the diagnostic flag set, a superset of swath list's: the
 	// runtime overrides include diagnostic ones (--spill-reserve,
-	// --spill-compress), and a recorded swath list command holds none
+	// --no-spill-compress), and a recorded swath list command holds none
 	// that could change meaning.
 	return runWith(ctx, command{diag: true}, cmd, stdout, argv, true, att)
 }
 
-// unknownFlag is the first flag in args that f does not define ("" if
-// none): a recorded command from a build whose flags were since renamed or
-// removed. It walks args as parseList parses them: the value of a flag
-// given as a separate argument is skipped, and "--" ends the flags only
-// until the argument after it (SOURCE), after which flags parse again.
-func unknownFlag(f *flag.FlagSet, args []string) string {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			i++ // SOURCE, whatever it looks like
-			continue
-		}
-		if len(a) < 2 || a[0] != '-' {
-			continue
-		}
-		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		fl := f.Lookup(name)
-		if fl == nil {
+// unknownFlag is the first of the canonical flags (--name=value, --name)
+// that f does not define ("" if none): a recorded command from a build
+// whose flags were since renamed or removed.
+func unknownFlag(f *pflag.FlagSet, flags []string) string {
+	for _, a := range flags {
+		name, _, _ := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if f.Lookup(name) == nil {
 			return name
-		}
-		if b, ok := fl.Value.(interface{ IsBoolFlag() bool }); !eq && !(ok && b.IsBoolFlag()) {
-			i++
 		}
 	}
 	return ""
-}
-
-// resumeUsage prints swath resume's help: the flags it takes again.
-func resumeUsage(w io.Writer, f *flag.FlagSet) {
-	fmt.Fprintln(w, "usage: swath resume DIR [flags]")
-	fmt.Fprintln(w, "  continues the interrupted run in DIR with the command its journal recorded; only these flags")
-	fmt.Fprintln(w, "  may be given again (the last value wins), the runtime ones and the operational ones:")
-	fmt.Fprintln(w)
-	for _, n := range resumeFlags {
-		if fl := f.Lookup(n); fl != nil {
-			fmt.Fprint(w, flagHelp(fl, helpFlag{name: n}))
-		}
-	}
 }
 
 // resumeTarget is o (the resume's flags) with the output a resume of dir
@@ -225,7 +192,7 @@ func resumeTarget(o options, dir string) options {
 //
 // A dataset already committed and complete is no refusal: the resume
 // exits 0 (idempotent, as Java's), its report saying complete.
-func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report, format string, argv []string) error {
+func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report string, argv []string) error {
 	o := classify(err, nil, dir)
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
@@ -236,19 +203,14 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	}
 	done := o.ExitCode == exitCompleted
 	if done {
-		alreadyComplete(stdout, format, dir, &r)
+		alreadyComplete(stdout, report, dir, &r)
 	} else if recorded, why := settleOutside(dir, seen, o); !recorded {
 		r.Outcome.Unrecorded = why
 		reportUnrecorded(dir, o, why)
 	}
-	writeReport(report, r)
+	rerr := writeReport(report, r, stdout)
 	if done {
-		if format == "json" {
-			enc := json.NewEncoder(stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(r)
-		}
-		return nil
+		return rerr
 	}
 	return &exitError{err, o.ExitCode}
 }
@@ -256,24 +218,28 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 // show prints what an output directory holds: a committed dataset or an
 // interrupted run; --journal dumps the journal's records as JSON lines.
 func show(args []string, stdout io.Writer) error {
-	f := flag.NewFlagSet("show", flag.ContinueOnError)
+	f := pflag.NewFlagSet("show", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	raw := f.Bool("journal", false, "dump the journal's header and records as JSON lines")
-	if err := f.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stdout, "usage: swath show [--journal] DIR")
-			fmt.Fprintln(stdout, "  prints a committed dataset's manifest summary, or an interrupted run's recorded command,")
-			fmt.Fprintln(stdout, "  identity and committed parts")
-			fmt.Fprint(stdout, flagHelp(f.Lookup("journal"), helpFlag{name: "journal"}))
-			return err
-		}
-		return usageError{err}
+	var raw bool
+	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(&raw), Usage: "dump the journal's header and records as JSON lines"})
+	p, err := parseFlags(f, "show", args, nil)
+	if errors.Is(err, pflag.ErrHelp) {
+		s := styleFor(stdout, "auto", p.longHelp)
+		var b strings.Builder
+		showHelp.write(&b, s)
+		s.heading(&b, "Options")
+		writeFlags(&b, []*pflag.Flag{f.Lookup("journal")}, s, column([]*pflag.Flag{f.Lookup("journal")}))
+		fmt.Fprint(stdout, b.String())
+		return err
 	}
-	if f.NArg() != 1 {
-		return usageError{errors.New("usage: swath show [--journal] DIR")}
+	switch {
+	case err != nil:
+		return err
+	case len(p.operands) != 1:
+		return seeHelp{usageError{errors.New("swath show takes one DIR")}, "show"}
 	}
-	dir := f.Arg(0)
-	if *raw {
+	dir := p.operands[0]
+	if raw {
 		return journal.Dump(stdout, dir)
 	}
 	if dataset.Committed(dir) {

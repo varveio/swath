@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scale tier measured run: the Go binary lists a lazy synthetic keyspace (bench/scalefake: no dataset on
-# disk) through the S3 route at W workers with the shipped defaults plus --seed, sampled every INTERVAL
+# disk) through the S3 route at W workers with the shipped defaults, sampled every INTERVAL
 # seconds. Synthetic: label every number from it so, with the shape line from OUTDIR/meta.txt.
 #
 # usage: scale_run.sh OUTDIR KEYS WORKERS PORT
@@ -39,8 +39,8 @@ until curl -sf "$EP/__scalefake/stats" > /dev/null; do
   sleep 0.2
 done
 rm -rf "$DATA"
-ARGV=(list s3://bkt --endpoint "$EP" --path-style --anonymous --region us-east-1 --workers "$W" --seed
-  -o "$DATA" --report "$OUT/report.json" --report-format json)
+ARGV=(list s3://bkt --endpoint-url "$EP" --s3-path-style --anonymous --s3-region us-east-1 --workers "$W"
+  -o "$DATA" --report "$OUT/report.json")
 # shellcheck disable=SC2206
 ARGV+=(${SWATH_FLAGS:-})
 {
@@ -57,7 +57,7 @@ ${SWATH_WRAP:-} "$SWATH" "${ARGV[@]}" > "$OUT/stdout.json" 2> "$OUT/swath.log" <
 PID=$!
 if [ -n "${SWATH_WRAP:-}" ]; then # sample swath itself, not the wrapper
   for _ in $(seq 50); do
-    P=$(pgrep -n -f -- "$SWATH list s3://bkt --endpoint $EP") && { [ "$P" = "$PID" ] || PID_RSS=$P; break; } # an exec keeps the pid
+    P=$(pgrep -n -f -- "$SWATH list s3://bkt --endpoint-url $EP") && { [ "$P" = "$PID" ] || PID_RSS=$P; break; } # an exec keeps the pid
     sleep 0.1
   done
 fi

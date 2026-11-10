@@ -253,7 +253,7 @@ type tokenKey struct{}
 func bearerHeader(req *http.Request) error {
 	tok, ok := req.Context().Value(tokenKey{}).(string)
 	if !ok {
-		return &objhttp.CredentialError{Source: "--bearer-token-command", Err: errors.New("no token for the request")}
+		return &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: errors.New("no token for the request")}
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	return nil

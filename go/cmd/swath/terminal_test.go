@@ -218,7 +218,7 @@ func TestReportContinuity(t *testing.T) {
 		t.Helper()
 		var out bytes.Buffer
 		file := filepath.Join(t.TempDir(), "r.json")
-		args := append([]string{src, "--endpoint", url, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
+		args := append([]string{src, "--endpoint-url", url, "--s3-path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
 		args = append(args, unjournaled...)
 		if err := run(context.Background(), args, &out, diagList); err != nil {
 			t.Fatal(err)
@@ -234,7 +234,7 @@ func TestReportContinuity(t *testing.T) {
 	if r.Efficiency == nil || r.Efficiency.Per1k == nil || *r.Efficiency.Per1k <= 0 || len(r.ArgsHash) != 64 || r.Timings.SessionMs < r.Timings.WallMs {
 		t.Fatalf("report %+v", r)
 	}
-	if !strings.Contains(out, " rows=3 ") || !strings.Contains(stderr.String(), "3 objects in ") || !strings.Contains(stderr.String(), "API calls") {
+	if out != "" || !strings.Contains(stderr.String(), "3 objects in ") || !strings.Contains(stderr.String(), "API calls") {
 		t.Fatalf("stdout %q stderr %q", out, stderr.String())
 	}
 	again, _ := list("s3://bkt")

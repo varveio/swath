@@ -52,15 +52,15 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		args []string
 		flag string
 	}{
-		{[]string{"gs://bucket", "--region", "eu-west-1"}, "--region"},
-		{[]string{"az://acct/c", "--path-style"}, "--path-style"},
-		{[]string{"s3://bucket", "--gcs-user-project", "p"}, "--gcs-user-project"},
-		{[]string{src, "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
+		{[]string{"gs://bucket", "--s3-region", "eu-west-1"}, "--s3-region"},
+		{[]string{"az://acct/c", "--s3-path-style"}, "--s3-path-style"},
+		{[]string{"s3://bucket", "--gcs-billing-project", "p"}, "--gcs-billing-project"},
+		{[]string{src, "--endpoint-url", "http://127.0.0.1:1"}, "--endpoint-url"},
 		{[]string{src, "--request-timeout", "5s"}, "--request-timeout"},
-		{[]string{"s3://bucket", "--gcs-credentials", "f.json"}, "--gcs-credentials"},
-		{[]string{"gs://bucket", "--azblob-sas", "sv=1&sig=x"}, "--azblob-sas"},
+		{[]string{"s3://bucket", "--gcs-credentials-file", "f.json"}, "--gcs-credentials-file"},
+		{[]string{"gs://bucket", "--azure-sas-token", "sv=1&sig=x"}, "--azure-sas-token"},
 		{[]string{src, "--anonymous"}, "--anonymous"},
-		{[]string{src, "--region", "eu-west-1"}, "--region"},
+		{[]string{src, "--s3-region", "eu-west-1"}, "--s3-region"},
 		{[]string{src, "--request-rate", "10"}, "--request-rate"},
 	} {
 		var buf bytes.Buffer
@@ -72,13 +72,13 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	// The flag set knows each provider flag's owners.
 	var o options
 	newFlags(&o, false)
-	for name, want := range map[string]string{"anonymous": "az,gs,s3", "endpoint": "az,gs,s3", "request-timeout": "az,gs,s3", "profile": "s3", "gcs-credentials": "gs", "azblob-sas": "az", "request-rate": "az,gs,s3"} {
+	for name, want := range map[string]string{"anonymous": "az,gs,s3", "endpoint-url": "az,gs,s3", "request-timeout": "az,gs,s3", "s3-profile": "s3", "gcs-credentials-file": "gs", "azure-sas-token": "az", "request-rate": "az,gs,s3"} {
 		if got := strings.Join(o.owners[name], ","); got != want {
 			t.Errorf("owners of --%s: %q, want %q", name, got, want)
 		}
 	}
 	for _, root := range []string{"s3://bucket", "gs://bucket", "az://acct/c"} {
-		if _, _, err := parseList([]string{root, "--endpoint", "http://127.0.0.1:1", "--request-timeout", "5s", "--anonymous", "--request-rate", "10"}, io.Discard, command{}); err != nil {
+		if _, _, err := parseList([]string{root, "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "5s", "--anonymous", "--request-rate", "10"}, io.Discard, command{}); err != nil {
 			t.Errorf("%s with the shared flags: %v", root, err)
 		}
 	}

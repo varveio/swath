@@ -210,7 +210,7 @@ func versionsInput(bucket string, q *keyrange.Query) (*client.VersionsInput, err
 // deleted keys is seen), the common prefixes, and, when truncated, a token
 // of the response's own markers. A truncated page without a NextKeyMarker
 // is invalid: a marker is never made up from the last row. Owners are
-// kept when owner is set (--fetch-owner); ETags lose their quotes as
+// kept when owner is set (--s3-fetch-owner); ETags lose their quotes as
 // Object's do.
 func versionsPage(out *client.VersionPage, owner bool) (*keyrange.Page[Version], error) {
 	if err := out.Validate(); err != nil {
@@ -252,7 +252,7 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		return nil, fmt.Errorf("%w: %w", objhttp.ErrInvalidPage, err)
 	}
 	// ListObjectVersions always returns owners (no fetch-owner
-	// parameter); --fetch-owner decides whether they are kept.
+	// parameter); --s3-fetch-owner decides whether they are kept.
 	out, err := api.ListObjectVersions(ctx, in)
 	if err != nil {
 		if versionsPermission(err) {

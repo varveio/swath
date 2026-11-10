@@ -6,11 +6,12 @@ package localfs
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/order"
@@ -23,8 +24,7 @@ import (
 // The local filesystem takes roots without a scheme.
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", BinaryKeys: true, Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
-		Hints: []source.Hint{{Flag: "metadata"}, {Flag: "no-dirs"}, {Flag: "no-link-target"}, {Flag: "one-filesystem"}},
-		Usage: "a local directory"})
+		Title: "Local", Example: "/data", Usage: "a local directory"})
 }
 
 // workersPerCPU and maxWorkers bound the default --workers for a local tree:
@@ -46,7 +46,7 @@ const (
 // defaultWorkers is the default --workers for a local tree.
 func defaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPROCS(0)) }
 
-// Set and String make Fields a flag value.
+// Set, String and Type make Fields a flag value.
 func (f *Fields) Set(s string) error {
 	v, err := ParseFields(s)
 	if err == nil {
@@ -55,12 +55,16 @@ func (f *Fields) Set(s string) error {
 	return err
 }
 
-func flags(f *flag.FlagSet, _ bool, _ source.SharedValues) any {
+func (f *Fields) Type() string { return "string" }
+
+func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 	o := &Options{LinkTarget: true}
-	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat, statx (adds birth_time; Linux)")
-	f.BoolVar(&o.NoDirs, "no-dirs", false, "local: omit kind=DIR rows")
-	f.BoolFunc("no-link-target", "local: do not read symlink targets", func(string) error { o.LinkTarget = false; return nil })
-	f.BoolVar(&o.OneFilesystem, "one-filesystem", false, "local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev")
+	source.Define(f, source.Flag{Name: "metadata", Value: &o.Fields, Metavar: "names|stat|statx", Default: o.Fields.String(),
+		Usage: "what is read per entry (statx adds birth_time; Linux)"})
+	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind DIR)"})
+	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
+	source.Define(f, source.Flag{Name: "one-file-system", Value: source.Switch(&o.OneFilesystem),
+		Usage: "do not walk into a mount point below the root, as du -x"})
 	return o
 }
 
@@ -96,7 +100,7 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
 
-// oneFilesystemFilter and noDirsFilter are --one-filesystem and --no-dirs
+// oneFilesystemFilter and noDirsFilter are --one-file-system and --no-dirs
 // in the manifest's coverage.filters.
 const (
 	oneFilesystemFilter = "one_filesystem"

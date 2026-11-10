@@ -13,15 +13,15 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--region REGION` | `--region` (default chain ends at `us-east-1`) | kept | – |
-| `--profile NAME` | `--profile` | kept | – |
-| `--endpoint-url URL` | `--endpoint URL` (one flag for S3, GCS and Azure Blob; `--gcs-endpoint` and `--azblob-endpoint` removed; also `--request-timeout`, default 30 s, for all three, `--gcs-request-timeout` and `--azblob-request-timeout` removed) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); shared by every object store 2026-11-09 (issue 338) |
-| `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
+| `--region REGION` | `--s3-region` (default chain ends at `us-east-1`) | renamed | – |
+| `--profile NAME` | `--s3-profile` | renamed | – |
+| `--endpoint-url URL` | `--endpoint-url URL` (one flag for S3, GCS and Azure Blob; `--gcs-endpoint` and `--azblob-endpoint` removed; also `--request-timeout`, default 30 s, for all three, `--gcs-request-timeout` and `--azblob-request-timeout` removed) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); shared by every object store 2026-11-09 (issue 338) |
+| `--force-path-style` / `--no-force-path-style` | `--s3-path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
 | `--no-sign-request` | `--anonymous` (one flag for S3, GCS and Azure Blob; `--gcs-anonymous` and `--azblob-anonymous` removed) | renamed | shared 2026-11-09 (owner: anonymity is explicit) |
-| `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
-| `--fetch-owner` | `--fetch-owner` | kept | – |
-| `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--requester-pays requester` | `--s3-requester-pays` (boolean) | renamed | – |
+| `--fetch-owner` | `--s3-fetch-owner` | renamed | – |
+| `--bearer-token-command CMD` | `--s3-bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--bearer-token-refresh-interval` (45 m) | `--s3-bearer-token-refresh-interval` (45 m; one refresh in flight) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](operating.md#credentials) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
@@ -117,8 +117,8 @@ decision to add it later).
 |---|---|---|---|
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
-| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on) adapts concurrency to sustained throttling and recovery; `--limiter=false` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
-| Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
+| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | the adaptive limit (default on) adapts concurrency to sustained throttling and recovery; `--no-adaptive-limit` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
+| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
@@ -173,7 +173,7 @@ decision to add it later).
 | `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
-| `--tune seed.mode=none\|shallow` | `swath diag list --seed=false` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
+| `--tune seed.mode=none\|shallow` | `swath diag list --no-seed` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
 | none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [internals/range-engine.md](internals/range-engine.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |

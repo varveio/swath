@@ -5,8 +5,9 @@ package gcs
 
 import (
 	"context"
-	"flag"
 	"fmt"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -19,9 +20,8 @@ import (
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
-		Operational: []string{"gcs-credentials"},
-		Hints:       []source.Hint{{Flag: "gcs-credentials"}, {Flag: "gcs-user-project"}},
-		Usage:       "gs://bucket[/prefix]"})
+		Operational: []string{"gcs-credentials-file"},
+		Title:       "GCS", Example: "gs://bucket", Usage: "gs://bucket[/prefix]"})
 }
 
 // flagged is the GCS flag group's value: the GCS options, the store
@@ -37,10 +37,13 @@ func defaults() any { return &flagged{} }
 
 // flags registers the GCS flag group beside the shared groups' values.
 // The GCS flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
-	f.StringVar(&o.UserProject, "gcs-user-project", "", "GCS: bill a requester-pays bucket's requests to this `project`")
+	source.Define(f, source.Flag{Name: "gcs-credentials-file", Value: source.Text(&o.CredentialsFile), Metavar: "FILE",
+		Usage: "a service-account or authorized-user JSON file (default: ADC)",
+		Long:  "Without it, Application Default Credentials."})
+	source.Define(f, source.Flag{Name: "gcs-billing-project", Value: source.Text(&o.UserProject), Metavar: "NAME",
+		Usage: "bill a requester-pays bucket's requests to this project"})
 	return o
 }
 

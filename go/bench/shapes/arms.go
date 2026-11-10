@@ -63,7 +63,7 @@ func suite() []arm {
 		b("jitter", func(o *scalefake.Options) { o.Latency, o.Jitter = d/2, 10*d-d/2 }, 0)
 		b("throttle1", func(o *scalefake.Options) { o.Fail503, o.FaultSeed = 0.01, 1 }, 0)
 		b("throttle5", func(o *scalefake.Options) { o.Fail503, o.FaultSeed = 0.05, 1 }, 0)
-		b("throttle5.nolimiter", func(o *scalefake.Options) { o.Fail503, o.FaultSeed = 0.05, 1 }, 0, "-limiter=false")
+		b("throttle5.nolimiter", func(o *scalefake.Options) { o.Fail503, o.FaultSeed = 0.05, 1 }, 0, "--no-adaptive-limit")
 		b("rate300", func(o *scalefake.Options) { o.Rate = 300 }, 0)
 		b("slowprefix.half", func(o *scalefake.Options) { o.Slow = []scalefake.Slow{{Prefix: "d/0", Latency: 10 * d}} }, d*55/10)
 		b("slowprefix.narrow", func(o *scalefake.Options) { o.Slow = []scalefake.Slow{{Prefix: "d/000", Latency: 10 * d}} }, 0)
@@ -74,11 +74,11 @@ func suite() []arm {
 	a = append(a,
 		arm{name: "tokenslow.counter.d50", shape: "counter", workers: 64, fake: scalefake.Options{Latency: 50 * ms, TokenLatency: 200 * ms}},
 		arm{name: "throttle5.w16.d50", shape: "baseline", workers: 16, fake: scalefake.Options{Latency: 50 * ms, Fail503: 0.05, FaultSeed: 1}},
-		arm{name: "tiny100.noseed", shape: "tiny100", workers: 64, fake: at(50 * ms), flags: []string{"-seed=false"}},
-		arm{name: "tiny1k.noseed", shape: "tiny1k", workers: 64, fake: at(50 * ms), flags: []string{"-seed=false"}},
-		arm{name: "slowsplit.slowprefix.narrow.d200", shape: "baseline", workers: 64, flags: []string{"-slow-split"},
+		arm{name: "tiny100.noseed", shape: "tiny100", workers: 64, fake: at(50 * ms), flags: []string{"--no-seed"}},
+		arm{name: "tiny1k.noseed", shape: "tiny1k", workers: 64, fake: at(50 * ms), flags: []string{"--no-seed"}},
+		arm{name: "slowsplit.slowprefix.narrow.d200", shape: "baseline", workers: 64, flags: []string{"--slow-split"},
 			fake: scalefake.Options{Latency: 200 * ms, Slow: []scalefake.Slow{{Prefix: "d/000", Latency: 2 * time.Second}}}},
-		arm{name: "slowsplit.zipf_folders.d200", shape: "zipf_folders", workers: 64, fake: at(200 * ms), flags: []string{"-slow-split"}},
+		arm{name: "slowsplit.zipf_folders.d200", shape: "zipf_folders", workers: 64, fake: at(200 * ms), flags: []string{"--slow-split"}},
 	)
 	// Parquet: the dataset is the shape's keys, byte for byte.
 	for _, s := range []string{"baseline", "highbytes", "maxlen", "percent_keys", "punct_siblings", "trailing_variants",

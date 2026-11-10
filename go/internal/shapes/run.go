@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	pq "github.com/parquet-go/parquet-go"
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
@@ -38,8 +38,8 @@ type Arm struct {
 	// ignored.
 	Fake scalefake.Options
 	// Flags are the S3 provider's and the engine's flags, as on the
-	// command line (diagnostic ones included: "-seed=false",
-	// "-limiter=false", "-slow-split"); the rest is the command's defaults.
+	// command line (diagnostic ones included: "--no-seed",
+	// "--no-adaptive-limit", "--slow-split"); the rest is the command's defaults.
 	Flags []string
 	// Out, if set, is a dataset directory to write (it must not exist),
 	// whose keys are then read back; otherwise the rows go to an ordered
@@ -97,10 +97,10 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	if err != nil {
 		return Result{}, err
 	}
-	fs := flag.NewFlagSet(a.Name, flag.ContinueOnError)
+	fs := pflag.NewFlagSet(a.Name, pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	opts := f.RegisterFlags(fs, true)
-	args := append([]string{"-endpoint", srv.URL, "-anonymous", "-region", "us-east-1"}, a.Flags...)
+	args := append([]string{"--endpoint-url", srv.URL, "--anonymous", "--s3-region", "us-east-1"}, a.Flags...)
 	if err := fs.Parse(args); err != nil {
 		return Result{}, fmt.Errorf("%s: flags %q: %w", a.Name, a.Flags, err)
 	}

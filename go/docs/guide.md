@@ -26,7 +26,7 @@ needs no cloud account. `-d 2` prints totals down to two levels below the root.
 
 Sizes default to apparent bytes in listed metadata. For local sources, `--allocated`
 uses allocated bytes and `--count-links-once` counts hard-linked files once, where the
-platform supplies the required metadata. `--one-filesystem` keeps a local walk on the
+platform supplies the required metadata. `--one-file-system` keeps a local walk on the
 root's filesystem where supported. See [CLI details](cli.md) for metadata tiers,
 unsupported combinations and missing-size reporting.
 
@@ -36,7 +36,7 @@ Print the objects in a small public prefix:
 
 ```bash
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
-  --anonymous --region us-east-1
+  --anonymous --s3-region us-east-1
 ```
 
 Use the same source with `du` for prefix totals, or select machine-readable output:
@@ -82,14 +82,14 @@ before choosing columns.
 | Source | Input and authentication | Scope |
 | --- | --- | --- |
 | Local and mounted filesystem | A directory path; the OS mount and its permissions | Files and directories; direct summaries or dataset output. No local scan resume. Not a native NFS or SMB client. |
-| Amazon S3 | `s3://bucket/prefix/`; AWS credential chain, `--profile`, or `--anonymous` | General-purpose buckets. `--all-versions` includes versions and delete markers. No directory buckets. |
-| Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
+| Amazon S3 | `s3://bucket/prefix/`; AWS credential chain, `--s3-profile`, or `--anonymous` | General-purpose buckets. `--all-versions` includes versions and delete markers. No directory buckets. |
+| Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials-file`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
 | Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
 
 Authentication: [credentials](operating.md#credentials). Shared timeouts, retries and request controls:
 [object-store requests](operating.md#object-store-requests).
 Azure credential precedence and namespace checks: [Azure provider](internals/providers/azblob.md).
-Use `--azblob-flat` only when you know the account has a flat namespace and the provider
+Use `--azure-assume-flat` only when you know the account has a flat namespace and the provider
 cannot confirm it. S3-compatible endpoints need their own compatibility checks.
 
 ## Operate a large scan

@@ -44,8 +44,8 @@ for rep in $(seq 1 "$REPS"); do
       go)
         read -r bin flags <<< "$args"
         # shellcheck disable=SC2086
-        /usr/bin/time -f '%e' -o "$W/t" "$bin" diag list "s3://$B" --endpoint "$EP" --path-style --anonymous \
-          --region us-east-1 --workers 64 --seed -o "$out" --report-format json $flags \
+        /usr/bin/time -f '%e' -o "$W/t" "$bin" diag list "s3://$B" --endpoint-url "$EP" --s3-path-style --anonymous \
+          --s3-region us-east-1 --workers 64 -o "$out" --report - $flags \
           > "$W/$name-$rep.json" 2> "$W/$name-$rep.log" < /dev/null ;;
       *) echo "unknown arm kind $kind" >&2; exit 2 ;;
     esac

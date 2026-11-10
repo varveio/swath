@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
@@ -137,11 +137,15 @@ func main() {
 	}()
 	testHooks()
 	err := dispatch(ctx, os.Args[1:], os.Stdout)
-	if err == nil || errors.Is(err, flag.ErrHelp) {
+	if err == nil || errors.Is(err, pflag.ErrHelp) {
 		return
 	}
 	if !silentErrors.Load() { // -qq: the exit code and the reports stand alone
 		fmt.Fprintln(os.Stderr, "swath:", err)
+		var sh seeHelp
+		if errors.As(err, &sh) {
+			fmt.Fprintln(os.Stderr, sh.see())
+		}
 	}
 	var u usageError
 	var ee *exitError
@@ -196,13 +200,21 @@ var reported sync.Map
 //
 // An attempt has one terminal report: the first of its writers (the
 // graceful path or the forced exit) claims it and a later one leaves it.
-func writeReport(path string, r listing.Report) {
-	if path == "" {
-		return
+//
+// --report - prints it on stdout instead (nil: an account with no stdout
+// of its own, a forced exit's, writes none).
+func writeReport(path string, r listing.Report, stdout io.Writer) error {
+	switch {
+	case path == "-" && stdout != nil:
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(r)
+	case path == "" || path == "-":
+		return nil
 	}
 	if r.Attempt != nil {
 		if _, taken := reported.LoadOrStore(r.Attempt.ID, true); taken {
-			return
+			return nil
 		}
 	}
 	if err := dataset.ReplaceJSON(path, r, dataset.Durable); err != nil {
@@ -214,6 +226,7 @@ func writeReport(path string, r listing.Report) {
 		}
 		fmt.Fprintf(errOut, "swath: the report of attempt %s is not written to %s: %v\n", id, path, err)
 	}
+	return nil
 }
 
 // stopEarly ends an attempt that stopped before a run began (an unknown
@@ -222,7 +235,7 @@ func stopEarly(report string, argv []string, dir string, att *listing.Attempt, e
 	o := classify(err, nil, "")
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
-	writeReport(report, r)
+	_ = writeReport(report, r, nil)
 	return &exitError{err, o.ExitCode}
 }
 
@@ -232,72 +245,107 @@ var errText = errors.New("text output (table, tsv, jsonl) is not resumable: it k
 // usageError is a malformed command line.
 type usageError struct{ error }
 
-// dispatch runs one command: list, du, resume, show, diag list or diag
-// count.
+// dispatch runs one command: list (ls), du, resume, show, diag list or
+// diag count, help or version. The global flags (globalFlags) may come
+// before the command word; they are handed to the command after it.
 func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
-	if len(args) == 0 {
-		commands(os.Stderr)
-		return usageError{errors.New("no command")}
+	g := pflag.NewFlagSet("swath", pflag.ContinueOnError)
+	g.SetInterspersed(false)
+	g.SortFlags = false
+	g.SetOutput(io.Discard)
+	var t termOptions
+	t.register(g)
+	var version bool
+	source.Define(g, source.Flag{Name: "version", Short: "V", Value: source.Switch(&version)})
+	p, err := parseFlags(g, "", args, func(fl *pflag.Flag) error {
+		if fl.Name != "version" && !slices.Contains(globalFlags, fl.Name) {
+			return usageError{fmt.Errorf("--%s goes after the command (swath list ... --%s)", fl.Name, fl.Name)}
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, pflag.ErrHelp):
+		rootHelp(stdout, styleFor(stdout, t.color, p.longHelp))
+		return err
+	case err != nil:
+		return err
+	case version:
+		printVersion(stdout)
+		return nil
+	case len(p.operands) == 0:
+		return seeHelp{usageError{errors.New("no command")}, ""}
 	}
-	switch args[0] {
-	case "list":
-		return run(ctx, args[1:], stdout, false)
+	word, rest := p.operands[0], p.operands[1:]
+	with := func(args []string) []string { return append(slices.Clone(p.given), args...) }
+	switch word {
+	case "list", "ls":
+		return run(ctx, with(rest), stdout, false)
 	case "du":
-		return runDu(ctx, args[1:], stdout)
+		return runDu(ctx, with(rest), stdout)
 	case "diag":
 		switch {
-		case len(args) == 2 && isHelp(args[1]):
-			fmt.Fprint(stdout, diagUsage)
-			return flag.ErrHelp
-		case len(args) >= 2 && args[1] == "list":
-			return run(ctx, args[2:], stdout, true)
-		case len(args) >= 2 && args[1] == "count":
-			return runCount(ctx, args[2:], stdout)
+		case len(rest) == 0:
+		case rest[0] == "-h" || rest[0] == "--help":
+			var b strings.Builder
+			diagHelp.write(&b, styleFor(stdout, t.color, false))
+			fmt.Fprint(stdout, b.String())
+			return pflag.ErrHelp
+		case rest[0] == "list":
+			return run(ctx, with(rest[1:]), stdout, true)
+		case rest[0] == "count":
+			return runCount(ctx, with(rest[1:]), stdout)
 		}
-		return usageError{errors.New(strings.TrimSpace(diagUsage))}
+		return seeHelp{usageError{errors.New("swath diag takes list or count")}, "diag"}
 	case "resume":
-		return resume(ctx, args[1:], stdout)
+		return resume(ctx, with(rest), stdout)
 	case "show":
-		return show(args[1:], stdout)
-	case "version", "-version", "--version":
-		b := listing.BuildInfo()
-		fmt.Fprintf(stdout, "%s %s", b.Tool, b.Version)
-		if b.Revision != "" {
-			fmt.Fprintf(stdout, " (%s)", b.Revision)
+		return show(rest, stdout)
+	case "version":
+		printVersion(stdout)
+		return nil
+	case "help":
+		if len(rest) == 0 {
+			rootHelp(stdout, styleFor(stdout, t.color, true))
+			return nil
 		}
-		fmt.Fprintln(stdout)
-		return nil
-	case "help", "-h", "-help", "--help":
-		commands(stdout)
-		return nil
+		return dispatch(ctx, append(with(rest), "--help"), stdout)
 	}
-	commands(os.Stderr)
-	return usageError{fmt.Errorf("unknown command %q", args[0])}
+	return seeHelp{usageError{fmt.Errorf("unknown command %q%s", registry.Redact(word), suggestCommand(word))}, ""}
 }
 
-// isHelp reports a help request flag.
-func isHelp(a string) bool { return a == "-h" || a == "-help" || a == "--help" }
+// suggestCommand is the " (did you mean ...?)" of an unknown command
+// word: a source given without a command (a URL, an existing directory)
+// suggests swath list of it; another word the command within two edits.
+func suggestCommand(word string) string {
+	if strings.Contains(word, "://") || isDir(word) {
+		return fmt.Sprintf(" (did you mean %q?)", "swath list "+registry.Redact(word))
+	}
+	best, dist := "", 3
+	for _, c := range commandWords {
+		if d := editDistance(word, c); d < dist {
+			best, dist = c, d
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (did you mean %q?)", best)
+}
 
-// diagUsage is swath diag's own help.
-const diagUsage = `usage: swath diag list SOURCE [flags]    swath list with the diagnostic flags
-       swath diag count SOURCE [flags]   list SOURCE and count it, writing nothing: a throughput measurement
-The diagnostic flags exist to run an experiment or a comparison, not to operate the tool.
-swath diag list --help and swath diag count --help list them.
-`
+// isDir reports whether path is an existing directory.
+func isDir(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
 
-// commands prints the command summary.
-func commands(w io.Writer) {
-	fmt.Fprint(w, `usage:
-  swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
-  swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
-  swath du SOURCE [-d N] [flags]          total SOURCE's objects and bytes, per key prefix down to N levels
-  swath resume DIR [flags]                continue the interrupted run in DIR
-  swath show [--journal] DIR              show a dataset or an interrupted run
-  swath diag list|count SOURCE [flags]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
-  swath --version                         print the build (tool, module version, VCS revision)
-SOURCE is `+sourceForms()+`.
-swath COMMAND --help lists a command's flags.
-`)
+// printVersion prints swath VERSION (REVISION).
+func printVersion(w io.Writer) {
+	b := listing.BuildInfo()
+	fmt.Fprintf(w, "swath %s", b.Version)
+	if b.Revision != "" {
+		fmt.Fprintf(w, " (%s)", b.Revision)
+	}
+	fmt.Fprintln(w)
 }
 
 // testHooks installs the test hooks the environment asks for: on the
@@ -429,10 +477,11 @@ type options struct {
 	diag                   bool // swath diag list or count: the diagnostic flags too
 	out                    string
 	overwrite              bool
-	countOnly              bool // swath du or swath diag count: rows counted, none written
-	du                     bool // swath du: the per-prefix totals
-	reportFormat, report   string
-	cpuProfile, memProfile string // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
+	countOnly              bool     // swath du or swath diag count: rows counted, none written
+	du                     bool     // swath du: the per-prefix totals
+	report                 string   // --report: a file, or - for stdout
+	argv                   []string // the command line as recorded: canonical flags, then SOURCE
+	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
@@ -473,7 +522,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-budget", "spill-reserve", "spill-compress", "spill-plain", "part-interval", "report-format", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -547,140 +596,17 @@ func redactArgv(argv []string) []string { return registry.RedactArgv(argv) }
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
 
-// newFlags is the flag set of swath list (diag false) or swath diag list
-// (diag true). Both hold every flag, the diagnostic ones included, so that
-// one given to swath list is refused with a message naming swath diag
-// (placement) rather than as unknown; the help shows only the command's own
-// (helpGroups).
-func newFlags(o *options, diag bool) *flag.FlagSet {
-	f := flag.NewFlagSet("list", flag.ContinueOnError)
-	o.diag = diag
-	registerFlags(f, o, true)
-	return f
-}
-
-// registerFlags registers the list flags on f, with the diagnostic ones
-// when diag.
-func registerFlags(f *flag.FlagSet, o *options, diag bool) {
-	f.StringVar(&o.out, "o", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default)")
-	f.StringVar(&o.format, "format", "", "the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead")
-	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in -o")
-	o.partSize = listing.DefaultPartSize
-	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
-	o.rowBudget = listing.DefaultRowBudget
-	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
-	f.StringVar(&o.seedFrom, "seed-from", "", "start from a previous listing's key distribution instead of the delimiter seed: a committed dataset `path` of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively")
-	f.IntVar(&o.workers, "workers", 0, "listing goroutines, the most requests in flight (default 64 for an object store, whatever the CPU count; for a local path 4 per CPU, at most 64)")
-	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
-	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full (a rotation target: the part is then encoded and published in order, so the recovery point can be older, and a stalled frontier leaves no part to close); 0: parts close by size only")
-	f.Int64Var(&o.partMaxRows, "part-rotation-max-rows", 0, "also close a part at `N` rows (Java's flag; 0: by size and --part-interval only); part of the resume identity")
-	f.Var(&o.spillBudget, "spill-budget", "cap on spill `bytes` on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling")
-	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
-	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
-	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
-	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
-	o.term.register(f)
-	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing")
-	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
-	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects (a local tree's entries, directories too) of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
-	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects or entries of at most this `size`")
-	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects (a local tree's entries, directories too) modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
-	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects or entries modified at or before this `time`")
-	depthUsage := "also total each key prefix down to `N` levels below SOURCE (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du"
-	f.IntVar(&o.depth, "depth", 0, depthUsage)
-	f.IntVar(&o.depth, "d", 0, depthUsage)
-	f.BoolVar(&o.allocated, "allocated", false, "local: total the files' allocated bytes (st_blocks x 512, as du; a directory's own blocks are not counted) instead of their apparent size")
-	f.BoolVar(&o.linksOnce, "count-links-once", false, "local: count a file with several hard links once, under the first of its names in byte order, as du does by default")
-	f.IntVar(&o.maxPrefixes, "max-prefixes", totals.DefaultMaxPrefixes, "fail rather than hold more than `N` distinct prefixes (memory grows with them, never with the objects)")
-	f.IntVar(&o.maxInodes, "max-inodes", totals.DefaultMaxInodes, "local, --count-links-once: fail rather than remember more than `N` hard-linked files")
-	f.Func("storage-class", "keep objects in these storage `classes` (STANDARD,GLACIER; repeatable)", func(v string) error {
-		for _, c := range strings.Split(v, ",") {
-			if c = strings.TrimSpace(c); c != "" {
-				o.filter.StorageClasses = append(o.filter.StorageClasses, c)
-			}
-		}
-		return nil
-	})
-	o.spillCompress = true
-	if diag {
-		// The spill frame format is a runtime choice (and on resume: spill
-		// is disposable, so a resume's frames never meet the crashed run's).
-		f.BoolVar(&o.spillCompress, "spill-compress", true, "compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
-		f.BoolVar(&o.spillPlain, "spill-plain", false, "write spill frames without delta coding (each key and payload whole; a comparison arm)")
-		f.BoolVar(&o.noJournal, "no-journal", false, "publish parts only at the end, without the journal that swath resume needs")
-		f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
-		f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
-	}
-	// Each provider owns its flag group; a group several share (the
-	// store's, the range engine's) is registered once and passed to each
-	// of them. owners records which providers each provider flag applies
-	// to (the flags a registration adds), so a flag given for another
-	// provider is refused rather than ignored (foreignFlags).
-	o.sources, o.owners = map[string]any{}, map[string][]string{}
-	added := func(register func()) []string {
-		before := map[string]bool{}
-		f.VisitAll(func(fl *flag.Flag) { before[fl.Name] = true })
-		register()
-		var names []string
-		f.VisitAll(func(fl *flag.Flag) {
-			if !before[fl.Name] {
-				names = append(names, fl.Name)
-			}
-		})
-		return names
-	}
-	shared, groupFlags := source.SharedValues{}, map[*source.FlagGroup][]string{}
-	for _, g := range registry.Groups() {
-		groupFlags[g] = added(func() { shared[g] = g.Flags(f, diag) })
-	}
-	for _, p := range registry.Factories() {
-		named := source.SharedValues{}
-		for _, g := range p.Shared {
-			named[g] = shared[g]
-			for _, n := range groupFlags[g] {
-				o.owners[n] = append(o.owners[n], p.Scheme)
-			}
-		}
-		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, named) }) {
-			o.owners[n] = append(o.owners[n], p.Scheme)
-		}
-	}
-	// The totals' du flags read columns only the local schema has
-	// (allocated_bytes; nlink, dev and inode), so another source refuses
-	// them as it refuses the local provider's own flags.
-	for _, n := range localTotalsFlags {
-		o.owners[n] = []string{""}
-	}
-	f.SetOutput(io.Discard)
-}
-
-// nonNegativeDurations refuses a negative value of any duration flag given
-// (the command's and every provider's): a negative deadline or timeout
-// would otherwise read as "off". Zero keeps its documented meaning.
-func nonNegativeDurations(f *flag.FlagSet) (err error) {
-	f.Visit(func(fl *flag.Flag) {
-		g, ok := fl.Value.(flag.Getter)
-		if !ok {
-			return
-		}
-		if d, ok := g.Get().(time.Duration); ok && d < 0 && err == nil {
-			err = fmt.Errorf("--%s %s: negative", fl.Name, d)
-		}
-	})
-	return err
-}
-
 // foreignFlags refuses a provider flag given explicitly for a root of
 // another provider (one provider's credential flag with another's root,
 // which that provider would ignore), and a shared group's flag for a
 // provider that names no such group. A root no provider takes is left to
 // the lookup's own refusal.
-func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
+func foreignFlags(f *pflag.FlagSet, owners map[string][]string, root string) (err error) {
 	pf, lerr := registry.Lookup(root)
 	if lerr != nil {
 		return nil
 	}
-	f.Visit(func(fl *flag.Flag) {
+	f.Visit(func(fl *pflag.Flag) {
 		own, ok := owners[fl.Name]
 		if !ok || slices.Contains(own, pf.Scheme) || err != nil {
 			return
@@ -689,17 +615,20 @@ func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err
 		for i, s := range own {
 			names[i] = schemeName(s)
 		}
-		err = fmt.Errorf("--%s applies to %s sources, not to %s", fl.Name, strings.Join(names, " and "), schemeName(pf.Scheme))
+		err = fmt.Errorf("--%s applies to %s sources, not to %s sources", fl.Name, strings.Join(names, " and "), schemeName(pf.Scheme))
 	})
 	return err
 }
 
-// schemeName names a provider by its root form.
+// schemeName names the provider of scheme as the help does
+// (registry.Factory.Title).
 func schemeName(scheme string) string {
-	if scheme == "" {
-		return "local"
+	for _, f := range registry.Factories() {
+		if f.Scheme == scheme {
+			return f.Title
+		}
 	}
-	return scheme + "://"
+	return scheme
 }
 
 // rateFitsStall refuses a --request-rate whose spacing between attempts
@@ -707,7 +636,7 @@ func schemeName(scheme string) string {
 // while an attempt waits for its token, so a healthy listing at that rate
 // would stop as stuck (exit 75). Half leaves the other half for the
 // request itself.
-func rateFitsStall(f *flag.FlagSet, stall time.Duration) error {
+func rateFitsStall(f *pflag.FlagSet, stall time.Duration) error {
 	fl := f.Lookup("request-rate")
 	if fl == nil || stall <= 0 {
 		return nil
@@ -762,32 +691,26 @@ func (c command) name() string {
 func parseList(args []string, stdout io.Writer, cmd command) (o options, root string, err error) {
 	f := newFlags(&o, cmd.diag)
 	o.countOnly, o.du = cmd.count, cmd.du
-	for rest := args; ; {
-		if err := f.Parse(rest); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				usage(stdout, f, cmd)
-				return o, "", err
-			}
-			return o, "", usageError{err}
-		}
-		if f.NArg() == 0 {
-			break
-		}
-		if root != "" {
-			return o, "", usageError{fmt.Errorf("unexpected argument %q", registry.Redact(f.Arg(0)))}
-		}
-		root, rest = f.Arg(0), f.Args()[1:]
+	p, err := parseFlags(f, cmd.name(), args, nil)
+	if errors.Is(err, pflag.ErrHelp) {
+		usage(stdout, f, cmd, styleFor(stdout, o.term.color, p.longHelp))
+		return o, "", err
 	}
 	switch {
-	case root == "":
-		return o, "", usageError{errors.New("missing SOURCE")}
-	case o.reportFormat != "text" && o.reportFormat != "json":
-		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	case err != nil:
+		return o, "", err
+	case len(p.operands) == 0:
+		return o, "", seeHelp{usageError{errors.New("missing SOURCE")}, cmd.name()}
+	case len(p.operands) > 1:
+		return o, "", seeHelp{usageError{fmt.Errorf("unexpected argument %q", registry.Redact(p.operands[1]))}, cmd.name()}
 	}
+	root = registry.Canonical(p.operands[0])
+	o.argv = append(strings.Fields(cmd.name()), p.given...)
+	if strings.HasPrefix(root, "-") {
+		o.argv = append(o.argv, "--")
+	}
+	o.argv = append(o.argv, root)
 	if err := placement(f, cmd); err != nil {
-		return o, "", usageError{err}
-	}
-	if err := nonNegativeDurations(f); err != nil {
 		return o, "", usageError{err}
 	}
 	if err := foreignFlags(f, o.owners, root); err != nil {
@@ -798,9 +721,6 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	}
 	if err := o.term.validate(); err != nil {
 		return o, "", usageError{err}
-	}
-	if o.partMaxRows < 0 {
-		return o, "", usageError{fmt.Errorf("--part-rotation-max-rows %d: negative", o.partMaxRows)}
 	}
 	if err := o.filter.Validate(); err != nil {
 		return o, "", usageError{err}
@@ -814,13 +734,13 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err}
 	}
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
-		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath du: its keys are bytes, which text rows cannot carry", schemeName(pf.Scheme))}
+		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath du: its keys are bytes, which text rows cannot carry", strings.ToLower(schemeName(pf.Scheme)))}
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
-	if (text != nil && text.Path == "" || o.totals != nil) && o.reportFormat == "json" {
-		return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
+	if (text != nil && text.Path == "" || o.totals != nil) && o.report == "-" {
+		return o, "", usageError{errors.New("--report - prints the report on stdout, which carries the rows: give --report FILE")}
 	}
 	if text != nil && text.Path == "" {
 		text.Stdout = stdout
@@ -845,7 +765,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
-		argv = append(strings.Fields(cmd.name()), args...)
+		argv = o.argv
 	}
 	argv = redactArgv(argv)
 	pf, err := registry.Lookup(root)
@@ -946,14 +866,8 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
 		account(&sum.Outcome, out)
-		alreadyComplete(stdout, o.reportFormat, dir, &sum)
-		writeReport(o.report, sum)
-		if o.reportFormat == "json" {
-			enc := json.NewEncoder(stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(sum)
-		}
-		return nil
+		alreadyComplete(stdout, o.report, dir, &sum)
+		return writeReport(o.report, sum, stdout)
 	}
 	if dir != "" && !settled && (err != nil || unrecorded != "") {
 		// Refused before ownership (another owner's outcome stands, the
@@ -972,21 +886,16 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		committedAccount(dir, &sum)
 	}
 	sum.Outcome.Unrecorded = unrecorded
-	writeReport(o.report, sum)
+	// The report goes out on failure too: its outcome names the error.
+	rerr := writeReport(o.report, sum, stdout)
 	tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
-	if o.reportFormat == "json" {
-		// The report goes out on failure too: its outcome names the error.
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if jerr := enc.Encode(sum); err == nil {
-			return jerr
-		}
-	}
-	if err != nil {
+	switch {
+	case err != nil:
 		return &exitError{explain(err), out.ExitCode}
-	}
-	if o.text != nil && o.text.Path == "" {
-		return nil // stdout carries the rows; --stats prints the account on stderr
+	case o.report == "-":
+		return rerr // stdout carries the report
+	case !o.countOnly:
+		return nil // stdout carries the rows, or nothing: the data went to -o; --stats prints the account on stderr
 	}
 	if o.du {
 		// stdout carried the rows (Deliver). Totals that leave entries
@@ -1006,15 +915,8 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
 		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
 		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
-	if o.countOnly {
-		fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
-		return nil
-	}
-	parts, outBytes := sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.OutputBytes
-	if t := sum.Output.Text; t != nil {
-		parts, outBytes = 1, t.Bytes // one text file
-	}
-	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d %s max_buffered=%d\n", sum.Output.RowsEmitted, parts, outBytes, cpu, sum.Resources.MaxBufferedBytes)
+	// swath diag count's output is its one line of counts.
+	fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
 	return nil
 }
 
@@ -1126,6 +1028,10 @@ func (s *zsize) Set(v string) error {
 }
 
 func (s *size) String() string { return strconv.FormatInt(int64(*s), 10) }
+
+func (s *size) Type() string { return "size" }
+
+func (s *zsize) Type() string { return "size" }
 
 func (s *size) Set(v string) error {
 	n, err := filter.ParseSize(v)

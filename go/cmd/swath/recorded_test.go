@@ -22,7 +22,7 @@ import (
 // TestResumeRefusesRemovedFlag: a journal whose recorded command names a
 // flag this build no longer has (an earlier build's: --probe,
 // --seed-descent, --memory before --row-budget, the prefixed GCS and Azure
-// store flags before the shared --endpoint and --request-timeout) is
+// store flags before the shared --endpoint-url and --request-timeout) is
 // refused on resume as a usage error naming it, and the interrupted run is left resumable by the build
 // that started it: before the first release no build promises to resume
 // another's runs.
@@ -31,24 +31,14 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
-	for _, c := range []struct {
-		removed string
-		late    bool // recorded after "-- SOURCE", where the parse goes on
-	}{
-		{"--probe", false}, {"--seed-descent=false", false}, {"--memory=1MiB", false},
-		{"--gcs-endpoint=http://127.0.0.1:1/storage/v1/", false}, {"--azblob-request-timeout=5s", false},
-		{"--azblob-request-timeout=5s", true},
-	} {
-		removed := c.removed
-		t.Run(removed+map[bool]string{true: "/after-source"}[c.late], func(t *testing.T) {
+	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB", "--gcs-endpoint=http://127.0.0.1:1/storage/v1/",
+		"--azblob-request-timeout=5s", "--endpoint=http://127.0.0.1:1", "--limiter=false", "--report-format=json"} {
+		t.Run(removed, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
-			args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
-			// The command an earlier build recorded: the same run with a
-			// flag since removed.
-			recorded := append([]string{"diag", "list", removed}, args...)
-			if c.late {
-				recorded = append(append([]string{"diag", "list", "--"}, args...), removed)
-			}
+			args := []string{"s3://bkt", "--endpoint-url", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
+			// The command an earlier build recorded (canonical: the flags,
+			// then SOURCE): the same run with a flag since removed.
+			recorded := []string{"diag", "list", "--endpoint-url=" + url, removed, "--anonymous", "--workers=2", "--part-size=4KiB", "--output=" + dir, "s3://bkt"}
 			err := runWith(ctx, command{diag: true}, append(args, "--max-duration", "200ms"), io.Discard, recorded, false, nil)
 			if c := exitCode(t, err); c != exitDeadline {
 				t.Fatalf("first attempt: exit %d", c)
@@ -80,12 +70,12 @@ func TestResumeTakesDiagnosticDiskFlags(t *testing.T) {
 	url := slowBucket(t)
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "ds")
-	args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
+	args := []string{"s3://bkt", "--endpoint-url", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
 	if c := exitCode(t, run(ctx, append(args, "--max-duration", "200ms"), io.Discard, false)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
 	}
 	var out bytes.Buffer
-	if err := resume(ctx, []string{dir, "--spill-reserve", "3MiB", "--spill-compress", "--max-duration", "0", "--report-format", "json"}, &out); err != nil {
+	if err := resume(ctx, []string{dir, "--spill-reserve", "3MiB", "--spill-compress", "--max-duration", "0", "--report", "-"}, &out); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	var r struct {

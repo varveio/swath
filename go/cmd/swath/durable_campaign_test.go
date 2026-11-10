@@ -346,14 +346,14 @@ func campaign(t *testing.T, fx campaignFixture) {
 	px := &campaignProxy{}
 	srv := httptest.NewServer(px.handler(up))
 	defer srv.Close()
-	src := []string{"s3://" + fx.bucket, "--endpoint", srv.URL, "--path-style", "--region", "us-east-1"}
+	src := []string{"s3://" + fx.bucket, "--endpoint-url", srv.URL, "--s3-path-style", "--s3-region", "us-east-1"}
 	if fx.anonymous {
 		src = append(src, "--anonymous")
 	}
 	partSize := "2MiB"
 	listArgsSized := func(out, size string, runtime []string) []string {
 		a := append([]string{"diag", "list"}, src...) // diag: --spill-reserve
-		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-budget", "256MiB", "--report-format", "json", "-o", out)
+		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-budget", "256MiB", "--report", "-", "-o", out)
 		return append(a, runtime...)
 	}
 	listArgs := func(out string, runtime []string) []string { return listArgsSized(out, partSize, runtime) }
@@ -425,7 +425,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 				if arm.damage != nil {
 					arm.damage(t, out)
 				}
-				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json")
+				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report", "-")
 				if arm.seedFrom {
 					resumeArgs = append(resumeArgs, "--seed-from", ref)
 				}
@@ -515,7 +515,7 @@ func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref
 	if n := eligibleCerts(certs, k); n < 2 {
 		t.Fatalf("%d certificates above K after the crash; the composition needs two", n)
 	}
-	resume := append(append([]string{"resume"}, runtime...), "--report-format", "json")
+	resume := append(append([]string{"resume"}, runtime...), "--report", "-")
 	for n := 1; n <= 12; n++ {
 		try := filepath.Join(t.TempDir(), "try")
 		if err := os.CopyFS(try, os.DirFS(crashed)); err != nil {
@@ -987,7 +987,7 @@ func TestCampaignRunnerFaults(t *testing.T) {
 	}
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))))
 	args := func() []string {
-		return []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--part-interval=0", "-o", filepath.Join(t.TempDir(), "ds")}
+		return []string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--part-interval=0", "-o", filepath.Join(t.TempDir(), "ds")}
 	}
 	var keys atomic.Int64
 	rn := &campaignRunner{bin: bin, env: os.Environ(), keys: &keys, timeout: time.Minute}

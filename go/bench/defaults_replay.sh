@@ -54,8 +54,8 @@ for rep in $(seq 1 "$REPS"); do
           af=""
           [ "$arm" = measured ] && af="--workers 64"
           # shellcheck disable=SC2086
-          "${gmp[@]}" "${pin[@]}" /usr/bin/time -f '%e %U %S' -o "$W/t" "$SW" list "s3://$B" --endpoint "$EP" --path-style \
-            --anonymous --region us-east-1 -o "$out" --report-format json $af $GO_FLAGS \
+          "${gmp[@]}" "${pin[@]}" /usr/bin/time -f '%e %U %S' -o "$W/t" "$SW" list "s3://$B" --endpoint-url "$EP" --s3-path-style \
+            --anonymous --s3-region us-east-1 -o "$out" --report - $af $GO_FLAGS \
             > "$W/$id.json" 2> "$W/$id.log" < /dev/null ;;
         java)
           [ -n "$JSW" ] || { echo "JAVA_SWATH unset: skipping the java arm" >&2; continue; }

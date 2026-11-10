@@ -128,7 +128,7 @@ another build), `*dataset.InvariantError` (the publication gate or the row count
 nothing is published), `*dataset.ReportError` (the report failed after the commit: the dataset stands),
 `listing.ErrComplete`, `ErrNothingToResume`, `ErrInterrupted`, and the S3 client's `*client.Error` (status,
 code, request id, the bucket's region). `cmd/swath`'s `explain` adds actionable flag advice. `Run`
-returns the run report with every error, and `--report-format json` prints it on failure too (outcome
+returns the run report with every error, and `--report -` prints it on failure too (outcome
 `failed` with the error).
 
 ## How a provider plugs in

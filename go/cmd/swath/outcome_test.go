@@ -69,7 +69,7 @@ func TestOutcomeIsCurrent(t *testing.T) {
 		return o
 	}
 	ctx := context.Background()
-	err := run(ctx, []string{"gs://bkt", "--endpoint", gcs.URL + "/storage/v1/", "--stall-timeout", "1s", "-o", dir}, io.Discard, false)
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", gcs.URL + "/storage/v1/", "--stall-timeout", "1s", "-o", dir}, io.Discard, false)
 	if c := code(err); c != exitStuck {
 		t.Fatalf("stuck run: exit %d (%v)", c, err)
 	}
@@ -132,7 +132,7 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", broken)
 	stderr.Reset()
 	var out bytes.Buffer
-	if c := code(resume(ctx, []string{dir, "--report-format", "json"}, &out)); c != exitFatal {
+	if c := code(resume(ctx, []string{dir, "--report", "-"}, &out)); c != exitFatal {
 		t.Fatalf("failed write: exit %d", c)
 	}
 	var rep listing.Report
@@ -263,7 +263,7 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 	stderr := captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	args := func(dir string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--endpoint", ep, "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
+		return append([]string{"gs://bkt", "--endpoint-url", ep, "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
 	}
 	ctx := context.Background()
 	for _, failing := range []string{"damaged journal", "source does not open"} {
@@ -365,7 +365,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
-		err := runWith(ctx, command{}, []string{"gs://bkt", "--endpoint", ep, "--anonymous", "-o", dir}, io.Discard, nil, true, nil)
+		err := runWith(ctx, command{}, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "-o", dir}, io.Discard, nil, true, nil)
 		if !errors.Is(err, listing.ErrNothingToResume) {
 			t.Fatalf("%s: resumed run: %v", layout, err)
 		}
@@ -412,7 +412,7 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 	}
 	ctx := context.Background()
 	r1 := filepath.Join(reports, "1.json")
-	err := run(ctx, []string{"gs://bkt", "--endpoint", gcs.URL + "/storage/v1/", "--anonymous", "--stall-timeout", "1s", "-o", dir, "--report", r1}, io.Discard, false)
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", gcs.URL + "/storage/v1/", "--anonymous", "--stall-timeout", "1s", "-o", dir, "--report", r1}, io.Discard, false)
 	if c := exitCode(t, err); c != exitStuck {
 		t.Fatalf("first attempt: exit %d (%v)", c, err)
 	}
@@ -465,7 +465,7 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 	ctx := context.Background()
 	srv := gcstest.Bucket(t, gcstest.Keys(50), 0)
 	done := filepath.Join(t.TempDir(), "done")
-	if err := run(ctx, []string{"gs://bkt", "--endpoint", srv, "--anonymous", "-o", done}, io.Discard, false); err != nil {
+	if err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv, "--anonymous", "-o", done}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	empty := t.TempDir()
@@ -494,7 +494,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(200), 0)
-	args := []string{"gs://bkt", "--endpoint", ep, "--anonymous", "--part-size", "4KiB"}
+	args := []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--part-size", "4KiB"}
 	dir := filepath.Join(t.TempDir(), "ds")
 	if err := run(ctx, append(slices.Clone(args), "-o", dir), io.Discard, false); err != nil {
 		t.Fatal(err)
@@ -522,12 +522,12 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	readJSON(t, report, &rep)
 	check("resume", rep)
 	out.Reset()
-	if err := dispatch(ctx, []string{"resume", "--report-format", "json", dir}, &out); err != nil {
-		t.Fatalf("resume --report-format json: %v", err)
+	if err := dispatch(ctx, []string{"resume", "--report", "-", dir}, &out); err != nil {
+		t.Fatalf("resume --report -: %v", err)
 	}
 	rep = listing.Report{}
 	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
-		t.Fatalf("resume --report-format json: %v %q", err, out.String())
+		t.Fatalf("resume --report -: %v %q", err, out.String())
 	}
 	check("resume json", rep)
 	// A resumed run that meets the committed dataset (the race the
@@ -554,7 +554,7 @@ func TestRefusalsExit2(t *testing.T) {
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	gcs := func(dir string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--endpoint", ep, "--anonymous", "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
+		return append([]string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
 	}
 	foreign := t.TempDir()
 	os.WriteFile(filepath.Join(foreign, "notes.txt"), []byte("mine"), 0o644)
@@ -626,21 +626,16 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
-		err := run(ctx, append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, diagList)
+		err := run(ctx, append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "-o", dir}, unjournaled...), &out, diagList)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)
 		}
-		var rep, printed listing.Report
+		var rep listing.Report
 		readJSON(t, report, &rep)
-		if json.Unmarshal(out.Bytes(), &printed) != nil {
-			t.Fatalf("%d: stdout %q", status, out.String())
-		}
-		for how, o := range map[string]listing.Outcome{"report": rep.Outcome, "stdout": printed.Outcome} {
-			if o.Complete || o.StopReason != "fatal" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
-				t.Fatalf("%d %s: outcome %+v", status, how, o)
-			}
+		if o := rep.Outcome; o.Complete || o.StopReason != "fatal" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
+			t.Fatalf("%d: outcome %+v", status, o)
 		}
 		if _, err := os.Stat(filepath.Join(dir, dataset.ManifestName)); err == nil {
 			t.Fatalf("%d: a manifest after the failure", status)
@@ -650,7 +645,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 	for name, extra := range map[string][]string{"complete": nil, "key limit": {"--sequential", "--max-keys", "10"}} {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, append(append([]string{"gs://bkt", "--endpoint", ep, "--anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
+		err := run(ctx, append(append([]string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
 		if (err == nil) != (extra == nil) {
 			t.Fatalf("%s: %v", name, err)
 		}

@@ -5,7 +5,7 @@
 // requests: golang.org/x/oauth2's ReuseTokenSource caches it
 // until it expires, and golang.org/x/sync/singleflight lets one refresh run
 // while the other callers wait on it or on their own context. Command is a
-// token source that runs a shell command (--bearer-token-command).
+// token source that runs a shell command (--s3-bearer-token-command).
 package tokensource
 
 import (
@@ -50,7 +50,7 @@ func (s *Shared) Token(ctx context.Context) (*oauth2.Token, error) {
 	}
 }
 
-// DefaultRefresh is Java swath's --bearer-token-refresh-interval default:
+// DefaultRefresh is Java swath's --s3-bearer-token-refresh-interval default:
 // under a typical one-hour OAuth token lifetime.
 const DefaultRefresh = 45 * time.Minute
 
@@ -125,13 +125,13 @@ func run(command string, timeout time.Duration) (string, error) {
 	err := cmd.Run()
 	switch {
 	case ctx.Err() != nil:
-		return "", fmt.Errorf("--bearer-token-command did not exit within %s", timeout)
+		return "", fmt.Errorf("--s3-bearer-token-command did not exit within %s", timeout)
 	case err != nil:
 		var ee *exec.ExitError
 		if !errors.As(err, &ee) {
-			return "", fmt.Errorf("--bearer-token-command failed to start: %v", err)
+			return "", fmt.Errorf("--s3-bearer-token-command failed to start: %v", err)
 		}
-		msg := fmt.Sprintf("--bearer-token-command exited %d", ee.ExitCode())
+		msg := fmt.Sprintf("--s3-bearer-token-command exited %d", ee.ExitCode())
 		if d := diagText(strings.TrimSpace(errb.String())); d != "" {
 			msg += ": " + d
 		}
@@ -140,14 +140,14 @@ func run(command string, timeout time.Duration) (string, error) {
 		}
 		return "", errors.New(msg)
 	case out.overflow:
-		return "", fmt.Errorf("--bearer-token-command stdout exceeded %d bytes", cmdMaxCapture)
+		return "", fmt.Errorf("--s3-bearer-token-command stdout exceeded %d bytes", cmdMaxCapture)
 	}
 	tok := strings.TrimSpace(out.String())
 	if tok == "" {
-		return "", errors.New("--bearer-token-command produced no output")
+		return "", errors.New("--s3-bearer-token-command produced no output")
 	}
 	if strings.ContainsAny(tok, "\r\n") {
-		return "", errors.New("--bearer-token-command printed more than one line")
+		return "", errors.New("--s3-bearer-token-command printed more than one line")
 	}
 	return tok, nil
 }
