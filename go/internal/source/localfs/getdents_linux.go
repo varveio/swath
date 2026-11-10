@@ -152,6 +152,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	if !fitsOffsets(len(r.prefix), sc) {
 		unix.Close(fd)
 		st.note(&st.ReadErrors, r.path, errTooLarge)
+		p.warnf("%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.path, errTooLarge)
 		return nil
 	}
 	p.resolveUnknown(fd, sc)

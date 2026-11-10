@@ -146,6 +146,20 @@ type Provider struct {
 	unsorted bool
 	mu       sync.Mutex
 	stats    Stats
+	// warn tells the user of a directory left out (registry.Request.Warn);
+	// nil outside a run. warnMu serialises the workers' calls.
+	warn   func(string)
+	warnMu sync.Mutex
+}
+
+// warnf passes a warning to the user, if the run takes them.
+func (p *Provider) warnf(format string, a ...any) {
+	if p.warn == nil {
+		return
+	}
+	p.warnMu.Lock()
+	defer p.warnMu.Unlock()
+	p.warn(fmt.Sprintf(format, a...))
 }
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)

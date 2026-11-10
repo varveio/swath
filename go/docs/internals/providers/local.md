@@ -23,8 +23,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `presized`). The sort compares keys after the directory's shared prefix; a directory of 32,768 entries or
   more is sorted in runs of at least 16,384, concurrently (up to GOMAXPROCS), then merged pairwise
   (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
-  directory's buffers rather than copies. Offsets are 32-bit: a directory whose names, or keys, pass 4 GiB is
-  skipped and counted in `read_errors`.
+  directory's buffers rather than copies. Offsets are 32-bit: a listing skips a directory whose names, or
+  keys, pass 4 GiB, counts it in `read_errors` and warns (a count reads in slabs and has no such limit).
 - **Workers: 4 per CPU, at most 64.** Without `--workers` a local tree gets `min(64, 4 × GOMAXPROCS)`
   (GOMAXPROCS follows the CPU affinity and the cgroup quota), not the object stores' 64: a stat waits on the
   disk or the inode cache, not on a round trip. On a 1-CPU, 512 MiB cgroup (ext4 on a persistent disk, cold;
