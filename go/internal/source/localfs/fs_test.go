@@ -217,6 +217,23 @@ func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	}
 }
 
+// TestFileRoot: a root that is not a directory lists as its one entry,
+// keyed by its name, with both engines and at the names tier.
+func TestFileRoot(t *testing.T) {
+	root := t.TempDir()
+	mk(t, root, "d/f", false)
+	file := filepath.Join(root, "d", "f")
+	for _, opt := range []Options{{}, {Portable: true}, {Fields: Names}} {
+		rows, st := list(t, file, opt, 2, 100)
+		if len(rows) != 1 || rows[0].Key != "f" || rows[0].Data.Kind != KindFile || st.Files != 1 || st.Dirs != 0 {
+			t.Fatalf("%+v: rows %+v, stats %+v", opt, rows, st)
+		}
+		if _, sized := Schema.Columns[0].Int(&rows[0].Data); sized == (opt.Fields == Names) {
+			t.Fatalf("%+v: size present %v", opt, sized)
+		}
+	}
+}
+
 func TestSkipDirectory(t *testing.T) {
 	root := t.TempDir()
 	for _, f := range []string{"a/1", "a/out/data/x", "b"} {
