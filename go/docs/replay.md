@@ -1056,8 +1056,9 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 ## Container image
 
 The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an image that holds the static binary
-and nothing else: `/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the
-runtime stage is `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
+and its legal files (`LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` in `/licenses/`) and nothing else:
+`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
+`scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
 as `ghcr.io/varveio/swath-replay` ([operating.md](operating.md#install-and-verify)). Fixtures are never baked in:
 mount one read-only and pass its container path to `--fixture`.
 

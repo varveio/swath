@@ -45,8 +45,9 @@ revision with any run you may need to investigate.
 
 From 0.4 each [GitHub release](https://github.com/varveio/swath/releases) carries one archive per target,
 `swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-arm64.tar.gz` and `-windows-amd64.zip`, each
-holding `swath`, `swath-replay`, `LICENSE` and `NOTICE` in a `swath-X.Y.Z-OS-ARCH/` directory, built as above
-with the release's version and commit stamped; an SPDX SBOM; and `SHA256SUMS`, signed. Verify before running
+holding `swath`, `swath-replay`, `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` (the licenses of every module
+linked into the binaries, generated at release by `go/notices.sh`) in a `swath-X.Y.Z-OS-ARCH/` directory, built as
+above with the release's version and commit stamped; an SPDX SBOM; and `SHA256SUMS`, signed. Verify before running
 ([RELEASING.md](../../RELEASING.md#verifying-a-release) has the cosign and attestation commands):
 
 ```bash
@@ -56,7 +57,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 ```
 
 The same release publishes multi-arch (linux/amd64, linux/arm64) images, built from `Dockerfile.go` with the
-archives' linux binaries:
+archives' linux binaries, and the archives' three legal files in `/licenses/`:
 
 | Image | Entrypoint | Base |
 |---|---|---|
@@ -75,7 +76,9 @@ docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:X.Y.Z \
 
 `docker build -f Dockerfile.go -t swath:dev .` builds the lister image from a checkout (`--target swath-replay`
 for the replay server); `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the context
-carries no `.git`.
+carries no `.git`. The build needs the network: it downloads the modules and generates `THIRD_PARTY_NOTICES`
+with go-licenses, which fails the build on a module whose license is not allowed
+([license gate](testing.md#license-gate)).
 
 ## Credentials
 

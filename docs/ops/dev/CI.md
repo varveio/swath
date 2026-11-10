@@ -24,7 +24,8 @@ runners are owned elsewhere and are only summarized here:
 
 The split follows one question: what does a failure mean? A red `ci.yml` means this commit broke
 something and must not merge. A red nightly means an invariant broke outside the per-commit gate,
-or time passed (a new advisory in the OSV scan) without any commit at all. A red release means the
+or time passed (a new advisory in the OSV scan of the Go release images, built from `Dockerfile.go`)
+without any commit at all. A red release means the
 tag must not be published. `site.yml` keeps its checks and its deploy in one file so the deploy's
 gate is the file itself, not a branch rule someone has to remember. `go-stress.yml` is a tool, not a
 gate: it exists so a suspected flake is measured by repetition instead of being retried until green.
@@ -159,7 +160,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-lint` | `gofmt`, `go vet`, `go mod tidy -diff`, and the shard table's self-test and coverage check |
 | `go-race (SHARD)` | `go test -race` on one shard of the main module |
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
-| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes |
+| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes; the image build runs the Go license gate (`go/notices.sh`) |
 | `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)` | `go vet` and the whole suite without `-race` on other platforms |
 | `go-fixtures` | the replay fixture tier on Java-written fixtures |

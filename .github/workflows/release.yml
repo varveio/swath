@@ -118,8 +118,10 @@ jobs:
           retention-days: 30
 
   # Builds the release once: every target's binaries, stamped with the tag's version and
-  # commit, packed into the archives the release publishes, with an SBOM of the binaries
-  # and SHA256SUMS. The publish job takes the images' binaries out of these archives.
+  # commit, and their third-party notices (go/notices.sh, which fails on a linked module whose
+  # license is not allowed or not recognized), packed into the archives the release publishes,
+  # with an SBOM of the binaries and SHA256SUMS. The publish job takes the images' binaries and
+  # notices out of these archives.
   build:
     needs: source
     runs-on: ubuntu-latest
@@ -139,7 +141,7 @@ jobs:
           go-version-file: go/go.mod
           cache: false
 
-      - name: Build every target (CGO_ENABLED=0, version and commit stamped)
+      - name: Build every target (CGO_ENABLED=0, version and commit stamped) and the notices
         env:
           VERSION: ${{ needs.source.outputs.version }}
           SWATH_REVISION: ${{ github.sha }}
