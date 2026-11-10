@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -120,7 +121,7 @@ func TestDispatch(t *testing.T) {
 	for word, want := range map[string]string{
 		"lst":    `unknown command "lst" (did you mean "list"?)`,
 		"s3://b": `unknown command "s3://b" (did you mean "swath list s3://b"?)`,
-		src:      `(did you mean "swath list ` + src + `"?)`,
+		src:      "(did you mean " + strconv.Quote("swath list "+src) + "?)", // quoted: a Windows path's backslashes are escaped
 		"zzzzz":  `unknown command "zzzzz"`,
 	} {
 		err := dispatch(ctx, []string{word}, io.Discard)
