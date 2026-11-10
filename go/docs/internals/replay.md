@@ -21,6 +21,7 @@ and why.
 | `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts) and `legacytest` (writes them for tests) | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
+| `bench/replay/adoptfixture` | a one-off converter of the study's sorted Java-era fixtures into SeekParquet datasets of `swath/s3-objects/v1`: each part's bytes before its footer are copied unchanged and only the footer is replaced, by the same Thrift fields with the key's `STRING` annotation, `sorting_columns`, the stamps and (if absent) `column_orders` spliced in; then the manifest. Deleted with `legacy` (#353) | legacy/javaera, seekparquet; store, reader, legacytest (tests) |
 | `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
 
 `internal/replay` imports nothing from the lister's pipeline; the lister imports nothing from it.
