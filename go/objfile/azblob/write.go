@@ -64,12 +64,17 @@ type WriteOptions struct {
 	// 429, 500, 502, 503 and 504. The writer's requests take their retry
 	// policy from these options, not from the client's.
 	MaxAttempts int
-	// RetryDelay is the delay before the first retry, doubled for each
-	// later one up to MaxRetryDelay, unless the service asks for another
-	// (0: azcore's, 800 ms and 60 s).
+	// RetryDelay and MaxRetryDelay shape azcore's backoff (0: azcore's,
+	// 800 ms and 60 s): the n-th retry waits about (2^n - 1) × RetryDelay,
+	// with jitter, at most MaxRetryDelay. A Retry-After the service sends
+	// is waited instead, unless it exceeds MaxRetryDelay: then the request
+	// is not retried.
 	RetryDelay, MaxRetryDelay time.Duration
-	// Retried, if set, is called with each failed attempt that is retried,
-	// and the operation it belongs to. It must return quickly.
+	// Retried, if set, is called with each failed attempt that was retried,
+	// and the operation it belongs to, once the attempt the retry made has
+	// ended: a retry azcore declines (a Retry-After over MaxRetryDelay), or
+	// one cancelled before its attempt ends, is not counted. It must return
+	// quickly.
 	Retried func(op string, err error)
 }
 
@@ -106,25 +111,32 @@ var retryStatus = []int{http.StatusRequestTimeout, http.StatusTooManyRequests, h
 	http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout}
 
 // call is ctx carrying the retry policy of one request of op: at most
-// MaxAttempts attempts, each retry told to Retried. uncertain, if set, is
-// set when an attempt is retried: every failure retried may have reached
-// the service, which a later refusal does not undo (completionError).
+// MaxAttempts attempts, each retry told to Retried. azcore asks
+// ShouldRetry once each attempt has ended, and may still decline a retry
+// it was told to make (a Retry-After over MaxRetryDelay, a cancellation
+// during the backoff), so a retry is told to Retried at the next call,
+// when its own attempt has ended. uncertain, if set, is set when a retry
+// is asked for: every failure retried may have reached the service, which
+// a later refusal does not undo (completionError); a declined retry
+// leaves that failure the request's own, unresolved either way.
 func (w *writer) call(ctx context.Context, op string, uncertain *atomic.Bool) context.Context {
 	tries := 0
+	var pending error // the failure a retry was asked for, until its attempt ends
 	return policy.WithRetryOptions(ctx, policy.RetryOptions{
 		MaxRetries: int32(max(w.o.MaxAttempts-1, -1)), RetryDelay: w.o.RetryDelay, MaxRetryDelay: w.o.MaxRetryDelay,
 		ShouldRetry: func(resp *http.Response, err error) bool {
+			if pending != nil && w.o.Retried != nil {
+				w.o.Retried(op, pending)
+			}
+			pending = nil
 			if err == nil && !slices.Contains(retryStatus, resp.StatusCode) {
 				return false
 			}
 			if tries++; tries >= w.o.MaxAttempts {
 				return false
 			}
-			if err == nil {
-				err = runtime.NewResponseError(resp)
-			}
-			if w.o.Retried != nil {
-				w.o.Retried(op, err)
+			if pending = err; err == nil {
+				pending = runtime.NewResponseError(resp)
 			}
 			if uncertain != nil {
 				uncertain.Store(true)

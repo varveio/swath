@@ -277,7 +277,10 @@ is taken the same way); the service serializes conditional writes of a name, so 
 another 409 (a lease, an immutability policy) is a refusal. The creating request is `ErrUnresolved` as S3's is
 (a transport failure, a timeout, a cancellation, 5xx, 408, 429, or a refusal after an ambiguous attempt was
 retried). Retries take the writer's options per request (azcore's per-call retry options, which replace the
-client's for that call): `MaxAttempts`, `RetryDelay` and `MaxRetryDelay`, and what azcore retries by default.
+client's for that call): `MaxAttempts`, azcore's exponential backoff from `RetryDelay` up to `MaxRetryDelay`,
+and what azcore retries by default; a `Retry-After` over `MaxRetryDelay` is not retried. `Retried` is told of a
+retry once the attempt it made has ended, so a retry azcore declines, or one cancelled in its backoff, is not
+counted.
 `DeleteIf` sends the ETag as `If-Match`; in an account with versioning or soft delete the deleted blob is kept
 as the account says. Every error passes through `RedactError`, and the upload's block ids (their shared
 prefix, raw or URL-escaped) are removed wherever else its text holds them.

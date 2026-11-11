@@ -369,6 +369,23 @@ func TestTransient(t *testing.T) {
 			})
 		}
 	}
+	// A Retry-After over MaxRetryDelay: azcore does not retry, and no retry
+	// is counted; the server error leaves the creation unresolved.
+	t.Run("retry-after", func(t *testing.T) {
+		var requests atomic.Int32
+		x := newFixture(t, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Retry-After", "120")
+				w.Header().Set("x-ms-error-code", "ServerBusy")
+				w.WriteHeader(http.StatusServiceUnavailable)
+			})
+		}, azblob.WriteOptions{})
+		_, err := x.w.PutIfAbsent(context.Background(), "m", []byte("x"))
+		if !errors.Is(err, objfile.ErrUnresolved) || requests.Load() != 1 || x.retries.Load() != 0 {
+			t.Fatalf("%v; %d requests, %d retries counted; want an unresolved failure, 1 and 0", err, requests.Load(), x.retries.Load())
+		}
+	})
 	t.Run("bounded", func(t *testing.T) {
 		x := newFixture(t, nil, azblob.WriteOptions{MaxAttempts: 3})
 		x.f.SetFault(func(op, _ string, after bool) int {
