@@ -274,3 +274,26 @@ func TestNullVersionIdentity(t *testing.T) {
 		t.Fatalf("Identity of version v3 = %q", id)
 	}
 }
+
+// TestBudget: the requests a sized, batched and whole-object read make.
+func TestBudget(t *testing.T) {
+	objfiletest.RunBudget(t, objfiletest.Budget{
+		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f := newFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+			return objfiletest.Store{Opener: s3.New(f.client, bucket), Put: f.put}
+		},
+		Classify: func(r *http.Request) (objfiletest.Kind, bool) {
+			pinned := r.Header.Get("If-Match") != ""
+			switch {
+			case r.Method == http.MethodHead:
+				return objfiletest.Metadata, pinned
+			case r.Method == http.MethodGet && r.Header.Get("Range") != "":
+				return objfiletest.Ranged, pinned
+			case r.Method == http.MethodGet:
+				return objfiletest.Whole, pinned
+			}
+			return objfiletest.Other, pinned
+		},
+		UnknownTotalOK: true,
+	})
+}

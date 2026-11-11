@@ -52,3 +52,27 @@ func TestOpener(t *testing.T) {
 			Delete: func(_ testing.TB, name string) { f.Remove(name) }}
 	})
 }
+
+// TestBudget: the requests a sized, batched and whole-object read make.
+func TestBudget(t *testing.T) {
+	objfiletest.RunBudget(t, objfiletest.Budget{
+		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f, client := fakeClient(t, wrap)
+			return objfiletest.Store{Opener: azblob.New(client, containerName),
+				Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
+		},
+		Classify: func(r *http.Request) (objfiletest.Kind, bool) {
+			pinned := r.Header.Get("If-Match") != ""
+			switch {
+			case r.Method == http.MethodHead:
+				return objfiletest.Metadata, pinned
+			case r.Method == http.MethodGet && (r.Header.Get("x-ms-range") != "" || r.Header.Get("Range") != ""):
+				return objfiletest.Ranged, pinned
+			case r.Method == http.MethodGet:
+				return objfiletest.Whole, pinned
+			}
+			return objfiletest.Other, pinned
+		},
+		UnknownTotalOK: true,
+	})
+}

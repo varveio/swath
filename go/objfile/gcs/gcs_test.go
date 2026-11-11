@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -39,5 +40,28 @@ func TestOpener(t *testing.T) {
 		return objfiletest.Store{Opener: gcs.New(c, bucket),
 			Put:    func(_ testing.TB, name string, data []byte) { f.Put(name, data) },
 			Delete: func(_ testing.TB, name string) { f.Remove(name) }}
+	})
+}
+
+// TestBudget: the requests a sized, batched and whole-object read make.
+func TestBudget(t *testing.T) {
+	objfiletest.RunBudget(t, objfiletest.Budget{
+		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f, c := client(t, wrap)
+			return objfiletest.Store{Opener: gcs.New(c, bucket),
+				Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
+		},
+		Classify: func(r *http.Request) (objfiletest.Kind, bool) {
+			pinned := r.URL.Query().Get("generation") != ""
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/storage/v1/"):
+				return objfiletest.Metadata, pinned
+			case r.Method == http.MethodGet && r.Header.Get("Range") != "":
+				return objfiletest.Ranged, pinned
+			case r.Method == http.MethodGet:
+				return objfiletest.Whole, pinned
+			}
+			return objfiletest.Other, pinned
+		},
 	})
 }

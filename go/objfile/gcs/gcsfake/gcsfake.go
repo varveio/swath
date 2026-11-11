@@ -3,7 +3,8 @@
 
 // Package gcsfake is an in-process fake of the Google Cloud Storage calls
 // the objfile packages make, for tests: object metadata and deletion on the
-// JSON API, ranged reads on the XML API, and uploads on the JSON upload API,
+// JSON API, reads on the XML API (of the whole object, of one closed byte
+// range, or of the rest from a byte), and uploads on the JSON upload API,
 // single-request (multipart) and resumable, with the generation
 // preconditions (ifGenerationMatch) evaluated atomically when an object is
 // created. It keeps each object's live generation only, as a bucket without
@@ -465,15 +466,29 @@ func (s *Server) read(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "NoSuchKey", http.StatusNotFound)
 		return
 	}
-	var start, end int
-	if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil || start >= len(o.Data) {
+	w.Header().Set("X-Goog-Generation", strconv.FormatInt(o.Gen, 10))
+	rng := r.Header.Get("Range")
+	if rng == "" { // the whole object
+		w.Header().Set("Content-Length", strconv.Itoa(len(o.Data)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(o.Data)
+		return
+	}
+	start, end := 0, len(o.Data)-1
+	if open, ok := strings.CutSuffix(rng, "-"); ok { // to the end
+		if _, err := fmt.Sscanf(open, "bytes=%d", &start); err != nil {
+			start = len(o.Data)
+		}
+	} else if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil {
+		start = len(o.Data)
+	}
+	if start >= len(o.Data) || end < start {
 		http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 		return
 	}
 	end = min(end, len(o.Data)-1) // a range past the end is clipped, as the store does
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(o.Data)))
 	w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
-	w.Header().Set("X-Goog-Generation", strconv.FormatInt(o.Gen, 10))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = w.Write(o.Data[start : end+1])
 }

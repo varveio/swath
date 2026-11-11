@@ -285,3 +285,149 @@ func TestSnapshotDeterministic(t *testing.T) {
 		t.Fatalf("Restore of a snapshot: %v", err)
 	}
 }
+
+// sizedStore is memStore with OpenSized, ReadObject and counting: an
+// OpenSized Object pins at its first read, and reports that version's
+// size; opens counts metadata requests (Open), reads every other request.
+type sizedStore struct {
+	*memStore
+	reads atomic.Int32
+}
+
+func (s *sizedStore) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	return &lazyFile{s: s, name: name, size: size}, nil
+}
+
+func (s *sizedStore) ReadObject(_ context.Context, name string, limit int64) ([]byte, string, error) {
+	s.reads.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[name]
+	if !ok {
+		return nil, "", &fs.PathError{Op: "read", Path: name, Err: fs.ErrNotExist}
+	}
+	if int64(len(o.data)) > limit {
+		return nil, fmt.Sprint(o.gen), objfile.ErrTooLarge
+	}
+	return bytes.Clone(o.data), fmt.Sprint(o.gen), nil
+}
+
+// lazyFile reads the live object; its first read pins it (a size other
+// than the one given is ErrObjectChanged), later ones must find it.
+type lazyFile struct {
+	s    *sizedStore
+	name string
+	size int64
+	mu   sync.Mutex
+	id   string
+}
+
+func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
+	f.s.reads.Add(1)
+	f.s.mu.Lock()
+	o, ok := f.s.objects[f.name]
+	f.s.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case !ok && f.id == "":
+		return 0, &fs.PathError{Op: "read", Path: f.name, Err: fs.ErrNotExist}
+	case !ok, f.id != "" && f.id != fmt.Sprint(o.gen), int64(len(o.data)) != f.size:
+		return 0, objfile.ErrObjectChanged
+	}
+	f.id = fmt.Sprint(o.gen)
+	return bytes.NewReader(o.data).ReadAt(p, off)
+}
+
+func (f *lazyFile) Identity() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.id
+}
+func (f *lazyFile) Size() int64                             { return f.size }
+func (f *lazyFile) Close() error                            { return nil }
+func (f *lazyFile) WithContext(context.Context) io.ReaderAt { return f }
+
+// TestPinOpenSized: Pinned.OpenSized makes no request; the first read
+// records the pin, or must find the recorded one, before any byte is
+// returned; a recorded pin of another size fails at once.
+func TestPinOpenSized(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("data/p", []byte("part"))
+	p := objfile.Pin(s, scope)
+	f, err := p.OpenSized(ctx, "data/p", 4)
+	if err != nil || s.opens.Load() != 0 || s.reads.Load() != 0 {
+		t.Fatalf("OpenSized: %v after %d opens, %d reads", err, s.opens.Load(), s.reads.Load())
+	}
+	b := make([]byte, 4)
+	if _, err := f.ReadAt(b, 0); err != nil || string(b) != "part" {
+		t.Fatalf("first read: %v, %q", err, b)
+	}
+	if snap, _ := p.Snapshot(); !strings.Contains(string(snap), `"data/p":{"size":4,"identity":"1"}`) {
+		t.Fatalf("Snapshot after a sized read: %s", snap)
+	}
+
+	// A reopen re-proves the current object: a replacement of the same
+	// size fails its first read, and returns no bytes.
+	s.put("data/p", []byte("PART"))
+	g, err := p.OpenSized(ctx, "data/p", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(b)
+	if n, err := g.ReadAt(b, 0); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 {
+		t.Fatalf("read of a replaced object = %d, %v; want 0, ErrObjectChanged", n, err)
+	}
+	rs := []objfile.Range{{Off: 0, Buf: make([]byte, 2)}}
+	if err := objfile.ReadRanges(ctx, g, rs); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("batch of a replaced object = %v; want ErrObjectChanged", err)
+	}
+	if _, err := p.OpenSized(ctx, "data/p", 5); !errors.Is(err, objfile.ErrObjectChanged) || s.reads.Load() != 3 {
+		t.Fatalf("OpenSized of a pinned name at another size = %v", err)
+	}
+
+	// Deleted: changed, and not-exist.
+	s.mu.Lock()
+	delete(s.objects, "data/p")
+	s.mu.Unlock()
+	h, _ := p.OpenSized(ctx, "data/p", 4)
+	if _, err := h.ReadAt(b, 0); !errors.Is(err, objfile.ErrObjectChanged) || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("read of a deleted pinned object = %v", err)
+	}
+
+	// Sealed: an unrecorded name fails without a request.
+	snap, _ := p.Snapshot()
+	r, err := objfile.Restore(s, scope, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.OpenSized(ctx, "data/q", 4); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("OpenSized of a name a sealed snapshot lacks = %v", err)
+	}
+}
+
+// TestPinReadObject: a whole-object read through Pinned records the pin,
+// re-proves it, and keeps ErrTooLarge distinct from a change.
+func TestPinReadObject(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("manifest.json", []byte("m1"))
+	p := objfile.Pin(objfile.Root(objfile.Limit(s, 2), ""), scope)
+	for range 2 {
+		b, id, err := objfile.ReadObject(ctx, p, "manifest.json", 10)
+		if err != nil || string(b) != "m1" || id != "1" {
+			t.Fatalf("ReadObject = %q, %q, %v", b, id, err)
+		}
+	}
+	if s.opens.Load() != 0 || s.reads.Load() != 2 {
+		t.Fatalf("%d metadata requests and %d reads, want 0 and 2", s.opens.Load(), s.reads.Load())
+	}
+	if _, id, err := objfile.ReadObject(ctx, p, "manifest.json", 1); !errors.Is(err, objfile.ErrTooLarge) || id != "1" {
+		t.Fatalf("ReadObject over the limit of a pinned object = %q, %v", id, err)
+	}
+	s.put("manifest.json", []byte("m2"))
+	if _, _, err := objfile.ReadObject(ctx, p, "manifest.json", 10); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("ReadObject of a replaced object = %v", err)
+	}
+}
