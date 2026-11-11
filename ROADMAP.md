@@ -58,6 +58,6 @@ operation. Ordinary `swath resume` keeps source and destination identity fixed.
 
 The CLI is the product entry point. Internal engine packages are not a stable embedding
 API. The existing [Go dataset reader](go/reader/README.md) and
-[object-store file reader](go/objfile/README.md) document their own interfaces; they are
+[object-store I/O library](go/objfile/README.md) document their own interfaces; they are
 not a promise of an embeddable listing engine. A curated engine API needs a separate
 contract after the CLI and lifecycle settle.

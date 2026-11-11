@@ -64,7 +64,7 @@ type RemoteOutput struct {
 	// (orphan cleanup, the run report; 0: DefaultFinalizeTimeout). A commit
 	// that runs out of time is unresolved, and keeps everything.
 	CommitTimeout, FinalizeTimeout time.Duration
-	// Open, if set, opens the destination instead of remote.Create (tests:
+	// Open, if set, opens the destination instead of remote.OpenDestination (tests:
 	// a fake's client); stats takes the uploads' retries.
 	Open func(ctx context.Context, stats *dataset.UploadStats) (*dataset.Remote, func() error, error)
 }
@@ -233,9 +233,9 @@ func openRemote(ctx context.Context, r *RemoteOutput) (*remoteState, error) {
 	if l.Scheme == "gs" {
 		endpoint, emulator = remote.ResolveEndpoint(r.Endpoint)
 	}
-	dst, err := remote.Create(ctx, r.Location, remote.CreateOptions{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
+	dst, err := remote.OpenDestination(ctx, r.Location, remote.DestinationOptions{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
 		Region: r.Region, Profile: r.Profile, SAS: r.SAS,
-		Write:      gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
+		GCSWrite:   gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
 		S3Write:    s3.WriteOptions{PartSize: int64(r.ChunkSize), Retried: rs.stats.Retried},
 		AzureWrite: azblob.WriteOptions{BlockSize: int64(r.ChunkSize), Retried: rs.stats.Retried}})
 	if err != nil {
