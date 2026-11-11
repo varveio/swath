@@ -159,8 +159,8 @@ Format 1 had one version string. Five identifiers now move independently:
 The policy for each is in [dataset.md](dataset.md#evolution). This build reads journal
 version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
 before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
-that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r3`
-since SeekParquet) and the dataset format are in the resume identity: a build of another recipe or format
+that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r4`
+since Parquet pages are compressed at zstd `SpeedFastest`) and the dataset format are in the resume identity: a build of another recipe or format
 refuses the journal. `created_by` names the real build, so parts are byte-identical within a build only. A part
 claimed but not recorded when a run stopped is reproduced on resume with its own footer's columns and
 `created_by`, so that one part does not depend on the build that resumes.
@@ -364,6 +364,10 @@ the version 9 journals of earlier builds, which an earlier build cannot do the o
 `encoders_at_start_bound_by` and `encoders_after_listing_bound_by`; encoders are now admitted against an
 allowance of their own, 1/16 of memory (at most 1 GiB) whatever `--sort-buffer` says, where earlier builds
 divided the sort buffer, and a text output's `compressor.jobs_reason` `row_budget` is `encoder_allowance`.
+Parquet pages are compressed at zstd `SpeedFastest` where earlier builds used `SpeedDefault`: parts are about 0.3
+to 1.1 % larger for less CPU a page, and read the same. The writer recipe is therefore `swath/parquet-r4`, and
+an interrupted run of an earlier build (`swath/parquet-r3`) cannot be resumed by this build: finish it with that
+build, or start it over with `--overwrite`.
 A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.

@@ -416,7 +416,7 @@ func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false),
+	def, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(pageLevel), zstd.WithEncoderCRC(false),
 		zstd.WithZeroFrames(true), zstd.WithAllLitEntropyCompression(true))
 	if err != nil {
 		t.Fatal(err)

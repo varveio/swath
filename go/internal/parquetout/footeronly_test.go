@@ -38,14 +38,16 @@ type partDigests struct{ Data, Meta, Offsets, Values, Keys string }
 
 // footerOnlyGolden are the digests of the parts footerOnlyScenarios write,
 // a frozen golden written by the 2026-11-05 layout (a1177c7f, parquet-go
-// v0.32.0, klauspost/compress v1.19.1) on linux/amd64 with AVX2.
+// v0.32.0, klauspost/compress v1.19.1) on linux/amd64 with AVX2, its pages
+// compressed again at the Recipe's zstd level (swath/parquet-r4): Data,
+// Meta and Offsets follow the pages; Values and Keys are the layout's.
 var footerOnlyGolden = map[string][]partDigests{
 	"unique": {
-		{Data: "2626b20b48e07c6363f58dae1c974e0d82619aa63834c42467be875eb40bcaea", Meta: "b2831a92f707b173044531061cf4092786ca4709bc79dc9e65c7695519906649", Offsets: "1f6bada2ee2378ea8b24bd445ecf75e188617c4ed5760ea7e764db80e72c4f3a", Values: "0bf0f8858dc591df5a10068543f218217565156794dea437af2363ad1b2975d3", Keys: "ed8e65dd97f16aa43ed9210936b012a947a5ee861776d6d00e75d9de8de9e35c"},
-		{Data: "5302c228ead3bfd86e7b82ae9a9c5b3ca0747ad904d3ed77383bf6c9b8524e8c", Meta: "36b39ced2612dbff3c54569b720c9f8d693901b1ff38f3aa7dc826200f48ffda", Offsets: "51cbf6606faf6fc3593dde3ad79371fc7b849ad9e913e28a309845ba0342756e", Values: "a497c6dd0e323ba87d947fdfc2548d6e453fef5c5106afb9d254106d866632ba", Keys: "7a33dbf04cc2655e548d1c50bf64b4bf17c7ea07fe6522b8965a0e504de70b47"},
+		{Data: "cf04179756b286dae6b6fb637daad103943731c3562aed0d9890e953921cd8b8", Meta: "947c40e4bcd0b7299d487e9714d84deaa1048c933d83d7b4c07b2343f5ae59e9", Offsets: "798b444ab42de13f01f4e196842f45de3ff77884e1c31a0e8827d7bcace536b8", Values: "0bf0f8858dc591df5a10068543f218217565156794dea437af2363ad1b2975d3", Keys: "ed8e65dd97f16aa43ed9210936b012a947a5ee861776d6d00e75d9de8de9e35c"},
+		{Data: "2aada266be78d9f1eb668c59401e3db733be4f6a48ff8eb261d7c9a6a206b172", Meta: "fc70af5507d0ad803db679715b314a5766083ebac93eeefb05470da8be6b68f1", Offsets: "37b84d3cbf7c110d2ae58c4f35016d6a3a02a3b51ffab4facbbd4bb8df361391", Values: "a497c6dd0e323ba87d947fdfc2548d6e453fef5c5106afb9d254106d866632ba", Keys: "7a33dbf04cc2655e548d1c50bf64b4bf17c7ea07fe6522b8965a0e504de70b47"},
 	},
-	"grouped": {{Data: "16fe9928745fd00ed3d8b752ea9f2b38a4f35d32c1a82d7c4156c21460658c41", Meta: "5ffa53f7f84ea101b28d4b48b08f5e05ff1df28a85cc9581d15f7fb553cb42ce", Offsets: "b71219a3b31030e798ef434be128fca06326076ed9cbbe7775ac81546d357b4b", Values: "090823997d879c764370a4bf56853645ef4465d5eb279a76a1ce5d005a26e63e", Keys: "a33f329a55148003782ad9791913f4898943f88bb8bc143f1ee2756c47773353"}},
-	"long":    {{Data: "fe7141fc6afc1b6346a876813a1d37d9505ce4c97bd12c5039ef95a52848af8a", Meta: "013d49896f6cd4129793134e13d19f4065b6675d3073ea494462c90821b90e03", Offsets: "4ee257c4e5d7e6eec8fdff7343869c5fc3c6bf0bb3fc6fac34a432929d6791ee", Values: "d882cc46a48207f5d6f0396b4aea0873a39c19867e56644bdeda53cbe0bdba68", Keys: "158a647bdd1ebdc4702f242f45572402e657b0079def7cb557c22c28e0b3fc3e"}},
+	"grouped": {{Data: "9629f3b0012c4c3caa9b29e6d892f359d43241d82f33f0af619233e2995503cf", Meta: "7c8209698e80450acd4472dfcf7e286fd87bb977d9eee326d2fd84f00a22b428", Offsets: "56313c0ec77786561a4e07d9fe984ae3aff07b1be965ea4e371b253e141cc7c0", Values: "090823997d879c764370a4bf56853645ef4465d5eb279a76a1ce5d005a26e63e", Keys: "a33f329a55148003782ad9791913f4898943f88bb8bc143f1ee2756c47773353"}},
+	"long":    {{Data: "75918583c245d092240a5771882b587ffc9dd16ab3027f5984d33e9ec7b842f9", Meta: "1a6add7ce5c480f32994081bf8be43a8642c9905b3409150d1c92cb9f663d952", Offsets: "86829989ef6a66466d8d7755cec158aac700a55e8588b0d9e1df697e5d761b54", Values: "d882cc46a48207f5d6f0396b4aea0873a39c19867e56644bdeda53cbe0bdba68", Keys: "158a647bdd1ebdc4702f242f45572402e657b0079def7cb557c22c28e0b3fc3e"}},
 }
 
 // footerOnlyGeneric are the grouped part's digests on parquet-go's generic
@@ -60,7 +62,7 @@ var footerOnlyGolden = map[string][]partDigests{
 // column of the grouped rows meets such a group, the other scenarios do
 // not. Only the data pages and what locates them differ: Data, Meta (the
 // chunk sizes and offsets) and Offsets.
-var footerOnlyGeneric = partDigests{Data: "90eebb8a485c65eac46604a89805e4fa95c8ef844257463dfc7f56a274138235", Meta: "24abfb0b9b822e39f9be53b2481d8d0dfa53e607981f36cc8435290799cf8ddb", Offsets: "a3bf42f2bdf7dada5977dc185d2e249757a0e72afb6077fc353d85f0527953c7", Values: "090823997d879c764370a4bf56853645ef4465d5eb279a76a1ce5d005a26e63e", Keys: "a33f329a55148003782ad9791913f4898943f88bb8bc143f1ee2756c47773353"}
+var footerOnlyGeneric = partDigests{Data: "a3efd2cbe7558aa86cb32dad5cedb7d0dcddbe50b6e539a271ea982714bcbbed", Meta: "81cd4f917dc53408cb5bd300677d62999d94e9d643aef56131586fd3f37b9024", Offsets: "d4e615b09d3828af88a912c502a748e59572b10a1b7a64b3d863b6b1242cffc1", Values: "090823997d879c764370a4bf56853645ef4465d5eb279a76a1ce5d005a26e63e", Keys: "a33f329a55148003782ad9791913f4898943f88bb8bc143f1ee2756c47773353"}
 
 // rleAVX2 reports whether parquet-go encodes dictionary indexes with its
 // AVX2 kernels here (its rle_amd64.go).

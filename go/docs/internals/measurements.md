@@ -2065,6 +2065,51 @@ first streaming method, since revised after review) was cancelled and superseded
 `969dfd9a` changed only how diffds's streaming method compares float columns, which the listing schema does not
 have.
 
+## Parquet pages at zstd SpeedFastest (2026-11-11)
+
+Parquet pages are compressed at klauspost `SpeedFastest` (`parquetout.pageLevel`, writer recipe
+`swath/parquet-r4`) where `swath/parquet-r3` used `SpeedDefault`; the other codec options are unchanged, and
+the spill codec was already at `SpeedFastest`.
+
+**The codec, on the build host** (a shared 4-vCPU VM, Xeon Platinum 8581C, not a benchmark machine).
+`BenchmarkPageCodec` (`SWATH_CODEC_BENCH_PART=PART go test ./internal/parquetout -run X -bench
+BenchmarkPageCodec -benchtime 3x`) decompresses every page of a part and compresses each again on one state at
+both levels, the codec's other options kept. The parts were written by the `swath/parquet-r3` build from
+aws-public-blockchain's keys (the study's replay fixture `current-eba31d9`, its first part): two prefixes,
+`v1.1/sonarx/` (1,060,892 keys of mixed shapes) and `v1.1/stellar/ledgers/pubnet/FE` (4,108,000 keys of the
+shape that holds most of the bucket), served by `swath-replay` from a 5,168,892-row subset with no injected
+latency and listed by `swath list` into a local sorted dataset (4 encoders). Medians of three runs:
+
+| Pages | Level | ns a page | Bytes a page | Ratio |
+|---|---|---|---|---|
+| sonarx, 9,353 pages, 68.6 MB raw | SpeedDefault | 19,798 | 3,150 | 2.330 |
+| | SpeedFastest | 16,286 (-17.7 %) | 3,186 (+1.1 %) | 2.304 |
+| stellar FE, 36,168 pages, 239.6 MB raw | SpeedDefault | 21,169 | 2,718 | 2.437 |
+| | SpeedFastest | 18,032 (-14.8 %) | 2,723 (+0.2 %) | 2.433 |
+
+The ETag column (hex, about half the compressed bytes) and the size column compress the same at both levels;
+the difference is in the key column (sonarx +5.2 %, stellar -0.9 %) and `last_modified` (+5.6 % and +4.9 %).
+The same listings end to end (three runs a build, alternating, the replay server on the same host; process CPU
+from `/usr/bin/time`, medians): sonarx 30,404,915 to 30,736,985 bytes of output (+1.09 %), CPU 4.42 to 4.29 s
+(-2.9 %); stellar FE 101,705,572 to 101,868,044 bytes (+0.16 %), CPU 15.16 to 14.89 s (-1.8 %). Those runs
+are listing-bound, so wall time and peak RSS show no difference beyond their noise. The outputs read back the
+same: the swath reader's row digests and DuckDB's `EXCEPT ALL` both ways match, and `seekparquet validate
+--level digest` completes on both builds' datasets.
+
+**A diagnostic replay A/B on Batch**, not a calibrated benchmark: the whole aws-public-blockchain fixture
+(143,008,674 objects) replayed to a sorted dataset written to GCS, on 4 and 8 vCPU with 4 GiB of memory and a
+30 GB disk, three blocks of the `SpeedFastest` build against `main` (`swath/parquet-r3`). Ratios
+`SpeedFastest`/`main`, with the interval the A/B reports:
+
+| vCPU | Wall | CPU a object | Tail |
+|---|---|---|---|
+| 8 | 0.97 [0.89, 1.04] | 0.965 | 0.92 |
+| 4 | 0.96 [0.91, 1.09] | 0.95 | 0.94 |
+
+The dataset grew 0.3 %, from 3,317 to 3,327 MB. So the level saves 3.5 to 5 % of the CPU an object costs and
+6 to 8 % of the tail, for 0.3 % more stored and uploaded bytes on this bucket (up to 1.1 % on the mixed-shape
+prefix above); wall time moves within the A/B's interval.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's

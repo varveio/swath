@@ -1252,7 +1252,11 @@ func tearAt(b []byte, k string) (cut, lo, hi int) {
 // workers and a 16 MiB spill cap (the durable spill's least), replaying
 // its certificates through the spill read handles; the dataset is the
 // uninterrupted run's, byte for byte. The same with --all-versions hot
-// groups (a group's versions consecutive, never split at a certificate).
+// groups (a group's versions consecutive, never split at a certificate),
+// killed instead at a ledger sync once eight certificates are sealed, its
+// frontier held: its first unlink can come after the drain has published
+// every certificate (the flusher's cycle lagging a fast drain), leaving
+// nothing to replay.
 func TestDurableResumeSmallerBudget(t *testing.T) {
 	datasettest.RequireJournal(t)
 	smaller := func(cfg Config) Config {
@@ -1297,7 +1301,23 @@ func TestDurableResumeSmallerBudget(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "ds")
 		cfg := hotVersionsConfig(api, out, false)
 		cfg.Limits.RowBudget = 1 << 20
-		crashDurable(t, cfg, "spill-unlink", 1)
+		// K stays below every certificate while the frontier is held, so
+		// the ones the ledger holds at the kill, eight or more, are all
+		// replayed.
+		g := &versionsGate{release: make(chan struct{}), hold: true}
+		api.gate.Store(g)
+		var killed atomic.Bool
+		restore := faults.Set(gated(func(p string) error {
+			if p == "spill-ledger-sync" && g.sealed.Load() >= 8 && killed.CompareAndSwap(false, true) {
+				return faults.ErrCrash
+			}
+			return nil
+		}))
+		_, err := Run(context.Background(), cfg)
+		restore()
+		if !errors.Is(err, faults.ErrCrash) {
+			t.Fatalf("not killed with eight certificates sealed (%d sealed): %v", g.sealed.Load(), err)
+		}
 		sum, err := Run(context.Background(), smaller(hotVersionsConfig(api, out, true)))
 		if err != nil {
 			t.Fatal(err)
