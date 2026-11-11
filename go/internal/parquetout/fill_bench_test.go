@@ -18,8 +18,9 @@ import (
 // aws-public-blockchain's: ledger keys, hex ETags, STANDARD, a full-object
 // CRC64NVME checksum and no owner (no --s3-fetch-owner), so two of the
 // nine columns null. Each row holds its own strings, as decoded rows do.
-// With distinct, every string column differs from the row before (the
-// worst case for a fill that reuses a repeated value).
+// With distinct, every string column alternates between two values of
+// different lengths, so no string repeats the row before's (a synthetic
+// case: no value is reused, and each comparison ends at the length).
 func s3Page(distinct bool) []s3.Row {
 	rows := make([]s3.Row, 1024)
 	for i := range rows {

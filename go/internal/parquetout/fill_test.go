@@ -5,6 +5,7 @@ package parquetout_test
 
 import (
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 
@@ -65,7 +66,8 @@ func referenceFill[P any](s *schema.Schema[P], rows []schema.Row[P], column int)
 
 // TestFillMatchesReference: every column of S3 pages fills to the values
 // the reference builds one by one (kind, bytes, levels, column), with
-// repeated strings, runs of them, nulls and distinct neighbours.
+// repeated strings, runs of them, nulls, present empty strings and
+// distinct neighbours.
 func TestFillMatchesReference(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
 	pick := func(vs ...string) string { return strings.Clone(vs[r.IntN(len(vs))]) }
@@ -79,16 +81,23 @@ func TestFillMatchesReference(t *testing.T) {
 			o.ETag = mixed[i-1].Data.ETag
 		}
 	}
+	// emptyOwner's owner_id is present whenever a display name is: an
+	// accessor's "", true among nulls and repeats.
+	emptyOwner := s3.Schema
+	emptyOwner.Columns = slices.Clone(s3.Schema.Columns)
+	emptyOwner.Columns[4].Str = func(o *s3.Object) (string, bool) { return o.OwnerID, o.OwnerDisplayName != "" }
 	for name, page := range map[string][]s3.Row{"repeats": s3Page(false), "distinct": s3Page(true), "mixed": mixed} {
-		for column := range 1 + len(s3.Schema.Columns) {
-			got := make([]pq.Value, len(page))
-			parquetout.FillPage(&s3.Schema, page, column, got)
-			want := referenceFill(&s3.Schema, page, column)
-			for i := range want {
-				g, w := got[i], want[i]
-				if g.Kind() != w.Kind() || !pq.Equal(g, w) || g.RepetitionLevel() != w.RepetitionLevel() ||
-					g.DefinitionLevel() != w.DefinitionLevel() || g.Column() != w.Column() {
-					t.Fatalf("%s, column %d, row %d: %v, want %v", name, column, i, g, w)
+		for _, s := range []*schema.Schema[s3.Object]{&s3.Schema, &emptyOwner} {
+			for column := range 1 + len(s.Columns) {
+				got := make([]pq.Value, len(page))
+				parquetout.FillPage(s, page, column, got)
+				want := referenceFill(s, page, column)
+				for i := range want {
+					g, w := got[i], want[i]
+					if g.Kind() != w.Kind() || !pq.Equal(g, w) || g.RepetitionLevel() != w.RepetitionLevel() ||
+						g.DefinitionLevel() != w.DefinitionLevel() || g.Column() != w.Column() {
+						t.Fatalf("%s, column %d, row %d: %v, want %v", name, column, i, g, w)
+					}
 				}
 			}
 		}

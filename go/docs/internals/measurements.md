@@ -2125,16 +2125,20 @@ are the same, kind, bytes, levels and column, so the parts are byte-identical. A
 earlier row's equal bytes. `BenchmarkFill` (`go test ./internal/parquetout -run X -bench BenchmarkFill`)
 fills every column of a 1,024-row S3 page shaped like aws-public-blockchain's: ledger keys, hex ETags,
 STANDARD, a CRC64NVME full-object checksum on every row (as in the fixture), no owner, and each row holding
-its own strings. `distinct=true` alternates every string column row to row, the worst case for the reuse.
+its own strings. `distinct=true` alternates every string column row to row between two values of different
+lengths: a synthetic case where no value is reused and each comparison ends at the length (long equal-length
+near-matches, which compare more bytes, were not benchmarked).
 Five runs each, 0 allocations a row before and after:
 
 | Page | Before (ns a row) | After (ns a row) |
 |---|---|---|
 | blockchain-shaped | 211.0 to 212.2 | 122.4 to 122.9 (-42 %) |
-| every string differing from the row before | 211.0 to 211.6 | 174.9 to 175.3 (-17 %, the nulls alone) |
+| synthetic: every string differing from the row before | 211.0 to 211.6 | 174.9 to 175.3 (-17 %, the nulls alone) |
 
 `TestFillMatchesReference` compares every value with the earlier fill's, one by one, on these pages and on
-a page of random repeats, nulls and empty strings. The run-level saving was not measured; at the profile's
+a page of random repeats, nulls and empty strings; `TestFillReuseOutlivesNoPage` writes two pages whose
+repeated strings own their bytes, poisoned once each page's flush returns, serially and column-parallel, and
+requires the file of the same rows in ordinary strings. The run-level saving was not measured; at the profile's
 share, a 42 % cheaper fill would be about 17 CPU-seconds of that run's 194-second tail.
 
 ## SeekParquet conformance
