@@ -392,6 +392,7 @@ type azureWalk struct {
 // seeded random set.
 func (d *driver) runAzure(keys [][]byte, rng *rand.Rand) {
 	d.comp = azureComparator{acceptSegments: d.o.acceptSegments}
+	effectBefore := markerBytesDiffer.Load()
 	cases, marks := azureMatrix(keys, rng, d.o.maxPrefixes)
 	d.runCases("case", cases)
 	for _, m := range marks {
@@ -426,8 +427,9 @@ func (d *driver) runAzure(keys [][]byte, rng *rand.Rand) {
 		random[i].Name = fmt.Sprintf("random %d", i)
 	}
 	d.runCases("random", random)
+	d.rep.TokenEffectOnly = int(markerBytesDiffer.Load() - effectBefore)
 	fmt.Printf("azure: %d answers matched by marker effect only (marker bytes differ); %d accepted as the segment improvement\n",
-		markerBytesDiffer.Load(), improvements.Load())
+		d.rep.TokenEffectOnly, improvements.Load())
 }
 
 func azureRandom(keys [][]byte, rng *rand.Rand, prefixes []string) request {

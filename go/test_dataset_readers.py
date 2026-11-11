@@ -72,12 +72,14 @@ class DuckDBComparison(unittest.TestCase):
 
     def test_actual_sql_on_both_schemas(self):
         for fixture in fixtures():
-            for mutation in ("same", "reorder", "duplicate", "null", "metadata"):
+            for mutation in ("same", "reorder", "unordered", "duplicate", "null", "metadata"):
                 with self.subTest(schema=fixture["schema_id"], mutation=mutation), tempfile.TemporaryDirectory() as td:
                     rows = fixture["rows"]
                     changed = copy.deepcopy(rows)
                     if mutation == "reorder":
                         changed[0], changed[1] = changed[1], changed[0]
+                    elif mutation == "unordered":
+                        changed[2], changed[3] = changed[3], changed[2]
                     elif mutation == "duplicate":
                         changed.insert(0, changed[0].copy())
                     elif mutation == "null":
@@ -87,11 +89,139 @@ class DuckDBComparison(unittest.TestCase):
                     a, b = Path(td) / "a", Path(td) / "b"
                     self.dataset(a, fixture, rows)
                     self.dataset(b, fixture, changed)
-                    result = compare(str(a), str(b))
+                    result = compare(str(a), str(b), method="sql")
                     self.assertEqual(result["identical"], mutation == "same", result)
-                    if mutation == "reorder":
+                    if mutation in ("reorder", "unordered"):
                         self.assertEqual(result["only_in_a"], 0)
                         self.assertGreater(result["sequence_differences"][0], 0)
+                    if mutation == "unordered":
+                        self.assertGreater(result["not_ascending"][1], 0)
+                    # The streaming method gives the SQL method's answer, every count included.
+                    streamed = compare(str(a), str(b), method="stream")
+                    self.assertEqual(streamed.pop("method"), "stream")
+                    result.pop("method")
+                    self.assertEqual(streamed, result)
+
+
+def s3_rows(keys, **columns):
+    """A SELECT of S3 objects with these keys (None for a null key), one row each in order;
+    columns overrides a column's SQL expression, None leaves the column out."""
+    cols = {"key": "k", "size": "CAST(100 AS BIGINT)", "last_modified": "TIMESTAMP '2026-01-01 00:00:00.123456'",
+            "etag": "'e'", "storage_class": "'STANDARD'", "owner_id": "NULL::VARCHAR", "owner_display_name": "NULL::VARCHAR",
+            "checksum_algorithm": "NULL::VARCHAR", "checksum_type": "NULL::VARCHAR"}
+    cols.update(columns)
+    listed = "[" + ",".join("NULL" if k is None else sql_string(k) for k in keys) + "]::VARCHAR[]"
+    return (f"SELECT {', '.join(f'{v} AS {c}' for c, v in cols.items() if v is not None)} "
+            f"FROM (SELECT unnest({listed}) AS k, generate_subscripts({listed}, 1) AS i) ORDER BY i")
+
+
+def write_dataset(directory, schema, part_queries):
+    import duckdb
+    (directory / "data").mkdir(parents=True)
+    con = duckdb.connect()
+    entries = []
+    for i, query in enumerate(part_queries):
+        path = f"data/part-{i:05d}.parquet"
+        con.execute(f"COPY ({query}) TO {sql_string(directory / path)} (FORMAT parquet)")
+        entries.append({"path": path})
+    con.close()
+    (directory / "manifest.json").write_text(json.dumps({"schema_id": schema, "parts": entries}))
+
+
+@unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")
+class StreamingMatchesSQL(unittest.TestCase):
+    """The streaming method's report is the SQL method's, every count included, on the shapes
+    where a row-by-row reader could part from DuckDB's view: columns and types that differ
+    across parts and sides, null keys, empty and several parts, canonical against current,
+    --ts-ms, and (with tiny buckets) the bucketed multiset pass."""
+
+    S3 = "swath/s3-objects/v1"
+    CASES = {
+        "a column some parts lack": ([s3_rows(["a"], is_delete_marker="false"), s3_rows(["b"])],
+                                     [s3_rows(["a"], is_delete_marker="false"), s3_rows(["b"], is_delete_marker="false")]),
+        "a column's type across parts": ([s3_rows(["a"], etag="CAST(1 AS BIGINT)"), s3_rows(["b"], etag="'1'")],
+                                         [s3_rows(["a", "b"], etag="'1'")]),
+        "a column's type across sides": ([s3_rows(["a", "b"], etag="CAST(1 AS BIGINT)")], [s3_rows(["a", "b"], etag="'1'")]),
+        "null keys, same": ([s3_rows(["b", None, "a"])], [s3_rows(["b", None, "a"])]),
+        "null keys, differing": ([s3_rows(["b", None, "a", None])], [s3_rows(["b", None, "c"])]),
+        "empty and several parts": ([s3_rows(["a", "b"]), s3_rows([]), s3_rows(["c"])], [s3_rows(["a"]), s3_rows(["b", "c"])]),
+        "overlapping parts": ([s3_rows(["a", "b"]), s3_rows(["c"])], [s3_rows(["a", "b"]), s3_rows(["b", "c"])]),
+        "a changed value": ([s3_rows(["a", "b", "c"])], [s3_rows(["a", "b", "c"], size="CASE WHEN k = 'b' THEN 7 ELSE 100 END")]),
+        "a duplicated row": ([s3_rows(["a", "b"])], [s3_rows(["a", "a", "b"])]),
+        "signed zeros": ([s3_rows(["a", "b"], etag="-CAST(0.0 AS DOUBLE)")], [s3_rows(["a", "b"], etag="CAST(0.0 AS DOUBLE)")]),
+        "NaN variants": ([s3_rows(["a", "b"], etag="CAST('NaN' AS DOUBLE)")], [s3_rows(["a", "b"], etag="-CAST('NaN' AS DOUBLE)")]),
+        "a differing float": ([s3_rows(["a", "b"], etag="CAST(1.5 AS DOUBLE)")],
+                              [s3_rows(["a", "b"], etag="CASE WHEN k = 'b' THEN CAST('NaN' AS DOUBLE) ELSE 1.5 END")]),
+        "microseconds": ([s3_rows(["a", "b"])], [s3_rows(["a", "b"], last_modified="TIMESTAMP '2026-01-01 00:00:00.123'")]),
+    }
+
+    def check(self, a, b, ts_ms=False):
+        from bench import diffds
+        sql = compare(str(a), str(b), ts_ms, method="sql")
+        sql.pop("method")
+        for bucket_rows in (diffds.BUCKET_ROWS, 2):
+            saved, diffds.BUCKET_ROWS = diffds.BUCKET_ROWS, bucket_rows
+            try:
+                streamed = compare(str(a), str(b), ts_ms, method="stream")
+            finally:
+                diffds.BUCKET_ROWS = saved
+            streamed.pop("method")
+            self.assertEqual(streamed, sql, f"bucket rows {bucket_rows}")
+        return sql
+
+    def test_cases(self):
+        for name, (pa, pb) in self.CASES.items():
+            for ts_ms in (False, True):
+                with self.subTest(case=name, ts_ms=ts_ms), tempfile.TemporaryDirectory() as td:
+                    a, b = Path(td) / "a", Path(td) / "b"
+                    write_dataset(a, self.S3, pa)
+                    write_dataset(b, self.S3, pb)
+                    result = self.check(a, b, ts_ms)
+                    if name == "a column some parts lack":
+                        self.assertFalse(result["identical"])  # union_by_name: null, not the canonical false
+                    if name in ("a column's type across parts", "a column's type across sides", "null keys, same",
+                                "empty and several parts", "signed zeros", "NaN variants"):
+                        self.assertTrue(result["identical"], result)
+                    if name == "a differing float":
+                        self.assertFalse(result["identical"], result)
+                    if name == "microseconds":
+                        self.assertEqual(result["identical"], ts_ms, result)
+
+    def test_canonical_against_current(self):
+        canonical = {"version_id": "NULL::VARCHAR", "is_latest": "NULL::BOOLEAN", "is_delete_marker": "false", "row_type": "'OBJECT'"}
+        with tempfile.TemporaryDirectory() as td:
+            a, b = Path(td) / "a", Path(td) / "b"
+            write_dataset(a, "swath/canonical", [s3_rows(["a", "b"], **canonical)])
+            write_dataset(b, self.S3, [s3_rows(["a", "b"])])
+            self.assertTrue(self.check(a, b)["identical"])
+            self.assertTrue(self.check(a, b, ts_ms=True)["identical"])
+
+    def test_one_key_group_streams_in_bounded_memory(self):
+        """Two million versions of one key, one differing: the multiset pass is DuckDB's,
+        bounded by DIFFDS_MEMORY, not a Python group of the key's rows."""
+        import resource
+        import subprocess
+        import sys
+        version = ("SELECT 'k' AS key, CAST(i AS BIGINT) AS size, TIMESTAMP '2026-01-01' AS last_modified, md5(i::VARCHAR) AS etag, "
+                   "'STANDARD' AS storage_class, NULL::VARCHAR AS owner_id, NULL::VARCHAR AS owner_display_name, "
+                   "NULL::VARCHAR AS checksum_algorithm, NULL::VARCHAR AS checksum_type, {vid} AS version_id, i = 0 AS is_latest, "
+                   "false AS is_delete_marker FROM range(2000000) t(i) ORDER BY i")
+        with tempfile.TemporaryDirectory() as td:
+            a, b = Path(td) / "a", Path(td) / "b"
+            write_dataset(a, "swath/s3-versions/v1", [version.format(vid="'v' || i")])
+            write_dataset(b, "swath/s3-versions/v1", [version.format(vid="CASE WHEN i = 1234567 THEN 'changed' ELSE 'v' || i END")])
+            env = dict(__import__("os").environ, DIFFDS_MEMORY="300MB")
+            proc = subprocess.run([sys.executable, str(Path(__file__).parent / "bench" / "diffds.py"), str(a), str(b), "--stream"],
+                                  cwd=td, env=env, capture_output=True, text=True)
+            peak_kib = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+            self.assertTrue(proc.stdout, proc.stderr)
+            result = json.loads(proc.stdout)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertEqual((result["only_in_a"], result["only_in_b"], result["sequence_differences"]), (1, 1, [1, 1]), result)
+            self.assertLess(peak_kib, 1_000_000, f"peak RSS {peak_kib} KiB")  # 0.4 GB; a Python group of the key would take 2 GB
+            sql = compare(str(a), str(b), method="sql")
+            sql.pop("method"), result.pop("method")
+            self.assertEqual(result, sql)
 
 
 @unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")

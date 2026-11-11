@@ -424,7 +424,14 @@ rescoped tokens, wrong buckets, paths and methods, raw and escaped non-ASCII), `
 and top-level prefixes, with and without the delimiter, at each page size) and a random walk. `gcsComparator`
 compares status, the compared headers plus `Allow`, and the body byte for byte (both servers are deterministic);
 a difference only in `nextPageToken` is named, and walks follow each server's own tokens, so tokens are judged by
-their effect. Measured with zero differences, no skipped token case and no token byte difference (the Java oracle at swath
+their effect. With `-go-fixture` the two servers serve different fixtures of the same rows (the Java server a
+Java-era fixture, the Go server its SeekParquet conversion), whose `gcs1.` tokens carry different scope bindings
+(the binding hashes the fixture identity): every token is then compared by its effect (flag, progress byte,
+boundary key) in place of its bytes, its presence and every other byte still compared, and the token cases
+(page 2, other scope, page size, the edits) resume each server from its own token. Three foreign-token cases
+send each server the other's page-2 token, which both must refuse as `invalid_page_token`; with one fixture
+identity on both sides they are skipped, not passed (`TestGCSTokenEffect`, `TestGCSDifferentFixtures`).
+With one fixture on both sides, measured with zero differences, no skipped token case and no token byte difference (the Java oracle at swath
 `main` 01dd55b, `--parquet-connections 2`, default `-walks 1,7,1000` with `-walk-limit 300` on the large fixtures,
 plus a separate full `-walks 1000 -random 0` run): the GCS evidence corpus (1,065 compared), synthetic 10k
 (2,079), synthetic 1M rolled into 6 parts and 110 row groups (2,079 plus 1,565 with the full 1,000-page walks),
@@ -447,7 +454,7 @@ the same corruptions of SDK runs) and requires each to be rejected.
 | GCS tokens and JSON | `gcs` `TestTokenShapes`, `TestTokenRejectsAnotherScopeOrFixture`, `TestRenderGolden`, `TestLatencyKeyGolden` |
 | GCS native metadata | `gcs` `TestNativeSchemaRendersTheBucketsMetadata` |
 | GCS serving | `server` `TestServesGCSObjectsList`, `TestGCSErrorsAreJSONEnvelopes`, `TestRouteClassification`, `TestGCSAdmissionRefusals`, `TestGCSFixtureAndStoreFailures`, `TestGCSInjectedDelayUsesTheSharedShapes`, `TestValidateProtocols`; `cmd/swath-replay` `TestProtocolSelection`, `TestServeGCSEndToEnd` |
-| GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk` |
+| GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk`, `TestGCSTokenEffect`, `TestGCSDifferentFixtures` |
 | GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults` (with `SWATH_REPLAY_FIXTURES`), `TestExpectationRules`, `TestComparatorMessages`, `TestPinsMatchWholeMessages`, `TestSDKMakesOneAttempt`, `TestProfileComparatorAcceptsAndRefuses`, `TestFullProjectionRequiresEmptyACLAndNoACLForbidsIt`, `TestWalksCompareInventoriesAcrossPageBoundaries`, `TestExchangeHeadersAreClassified`, `TestSDKRunReceiptNeedsEveryStep`, `TestRetryRunCapturesAreRefusedRatherThanWalked` |
 | GCS ports of the Java unit tests | `gcs` `TestTimestampsMatchAnIndependentFormatter`, `TestRendersProfileTypes`, `TestRawEscapesAndOmitsEmptyArrays`, `TestCompleteWireGolden`, `TestRefusesTooLongAndReservedNamesAndNegativeSize`, `TestClampedPageLimitReportsItsPath`, `TestDelimiterWalkReadsInBatches`, `TestIndexedDelimiterMatchesWalkAcrossRowGroups`; `server` `TestGCSShapeCountsAndRejectionMeter`, `TestOfficialClientUsesHierarchyOffsetsAndUnicode`, `TestOfficialClientDecodesAReplayFault` |
 
@@ -553,7 +560,9 @@ seeded random set. `azureComparator` requires the same status and classified hea
 `x-ms-request-id` and `Date` on each side, the BOM, and the same body bytes after masking the
 `ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary; `<Marker>` and
 `<NextMarker>` each matched with its own closing tag, so a broken element is compared as it is); it counts the
-answers that matched only by effect, which is zero when both servers report the same fixture identity. With
+answers that matched only by effect, which is zero when both servers report the same fixture identity
+(`TestAzureDriverAcrossFixtures` runs the section across two identities, as `-go-fixture` on a converted fixture
+does, and fails a marker that resumes elsewhere). With
 `-java-args "... --serving-mode duckdb"` and `-go-fixture` it compares the Java server serving an unsorted
 capture with the Go server serving the same rows sorted; `-accept-segment-improvement` then counts the Java
 server's `too_many_segments` refusals answered by the Go route as the known improvement.
@@ -592,6 +601,6 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
-| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip`, `TestProgressMarkerCaseKeepsProgress` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestAzureDriverAcrossFixtures`, `TestMarkerCasesRunOrSkip`, `TestProgressMarkerCaseKeepsProgress` |
 | native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
 | the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |

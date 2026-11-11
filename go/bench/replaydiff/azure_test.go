@@ -239,6 +239,80 @@ func TestAzureDriverAgreesWithItself(t *testing.T) {
 	}
 }
 
+// TestAzureDriverAcrossFixtures: with the two servers on different
+// fixtures of the same names (-go-fixture: the Java server on a Java-era
+// fixture, the Go server on its SeekParquet conversion), every marker's
+// scope digest differs, and the Azure route still passes: the comparator
+// reads markers for their effect and each server resumes from its own.
+// A marker that resumes elsewhere still fails.
+func TestAzureDriverAcrossFixtures(t *testing.T) {
+	var keys []string
+	for i := range 200 {
+		keys = append(keys, fmt.Sprintf("d%d/s%d/k%03d", i%3, i%7, i), fmt.Sprintf("u/é%d", i%9))
+	}
+	keys = dedupe(keys)
+	start := func(identity string) string {
+		srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 64,
+			ResponseBufferBudget: 1 << 30, MaxResponseBytes: 1 << 26, StopTimeout: time.Second, IdleTimeout: time.Minute,
+			WriteTimeout: time.Minute, SlowRequestLog: -1, Store: memstore.Keys(memstore.Options{Rollup: true}, keys...),
+			ServingMode: "MEMORY", FixtureIdentity: identity, Protocols: []string{"s3", "azure"}, AzureAccount: "replay"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Listen(); err != nil {
+			t.Fatal(err)
+		}
+		go srv.Serve()
+		t.Cleanup(func() { srv.Shutdown(time.Second) })
+		return fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+	}
+	client := &http.Client{}
+	ref := &target{name: "java", base: start("java-era"), client: client}
+	all, _, err := listAll(ref, "bkt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := options{bucket: "bkt", protocol: "azure", parallel: 4, maxPrefixes: 30, maxTop: 5, walkSizes: "1,7,5000", random: 100}
+	goBase := start("seekparquet")
+	run := func(base string) *report {
+		rep := &report{}
+		d := &driver{o: o, ref: ref, got: &target{name: "go", base: base, client: client}, rep: rep}
+		d.runAzure(all, rand.New(rand.NewPCG(3, 3)))
+		return rep
+	}
+	rep := run(goBase)
+	if rep.Failed != 0 || rep.Passed < 300 || rep.TokenEffectOnly == 0 {
+		for _, r := range rep.Results {
+			if !r.Pass {
+				t.Errorf("%s %q: %+v %s", r.Kind, r.Name, r.diff, r.Error)
+				break
+			}
+		}
+		t.Fatalf("%d passed, %d failed, %d by marker effect", rep.Passed, rep.Failed, rep.TokenEffectOnly)
+	}
+	// The Go side's markers resume one byte further: the walks fail.
+	shifted := editingProxy(t, goBase, func(b []byte) []byte {
+		return nextMarkRe.ReplaceAllFunc(b, func(m []byte) []byte {
+			v := nextMarkRe.FindSubmatch(m)[1]
+			raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(string(v), "az1."))
+			if err != nil {
+				return m
+			}
+			return []byte("<NextMarker>az1." + base64.RawURLEncoding.EncodeToString(append(raw, 0)) + "</NextMarker>")
+		})
+	})
+	rep = run(shifted)
+	walks := 0
+	for _, r := range rep.Results {
+		if r.Kind == "walk" && !r.Pass {
+			walks++
+		}
+	}
+	if walks == 0 {
+		t.Errorf("markers resuming elsewhere: %d failed, no walk", rep.Failed)
+	}
+}
+
 // editingProxy serves base's answers with each body passed through edit.
 func editingProxy(t *testing.T, base string, edit func(body []byte) []byte) string {
 	t.Helper()

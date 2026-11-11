@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -28,7 +29,10 @@ import (
 const gcsPath = "/storage/v1/b/{bucket}/o"
 
 // runGCS is run for the GCS route: the scripted matrix, token walks that
-// follow each server's own tokens, and a seeded random walk.
+// follow each server's own tokens, and a seeded random walk. With
+// -go-fixture the two servers serve different fixtures of the same rows,
+// whose page tokens are bound to different identities: the comparison
+// then judges each token by its effect (gcsComparator.tokenEffect).
 func runGCS(o options) error {
 	ctx := context.Background()
 	if o.goBin == "" || o.java == "" || o.fixture == "" {
@@ -56,15 +60,25 @@ func runGCS(o options) error {
 	defer goSrv.stop()
 	got := &target{name: "go", base: goSrv.endpoint, client: client}
 	rep := &report{Reference: ref.name, Fixture: o.fixture, GoFixture: o.goFixture, Bucket: o.bucket, Seed: o.seed, Started: time.Now(), Keys: len(keys)}
-	d := &driver{o: o, ref: ref, got: got, comp: gcsComparator{maskMetadata: o.maskMetadata}, rep: rep}
+	comp := gcsComparator{maskMetadata: o.maskMetadata}
+	if o.goFixture != "" {
+		comp.tokenEffect, comp.effectOnly = true, new(atomic.Int64)
+	}
+	d := &driver{o: o, ref: ref, got: got, comp: comp, rep: rep}
 	d.runGCSAll(keys, rand.New(rand.NewPCG(o.seed, 0x5eed)))
 	rep.Seconds = time.Since(rep.Started).Seconds()
 	return d.write()
 }
 
-// runGCSAll runs the matrix, the walks and the random requests.
+// runGCSAll runs the matrix, the walks and the random requests; comparing
+// different fixtures, also the foreign-token cases.
 func (d *driver) runGCSAll(keys [][]byte, rng *rand.Rand) {
-	d.runGCSCases("case", gcsMatrix(keys, rng, d.o.maxPrefixes))
+	cases := gcsMatrix(keys, rng, d.o.maxPrefixes)
+	c, _ := d.comp.(gcsComparator)
+	if c.tokenEffect {
+		cases = append(cases, gcsForeignTokenCases(cases)...)
+	}
+	d.runGCSCases("case", cases)
 	d.runGCSWalks(gcsWalks(keys, parseSizes(d.o.walkSizes), d.o.maxTop))
 	prefixes := directoryPrefixes(keys)
 	random := make([]request, d.o.random)
@@ -73,6 +87,9 @@ func (d *driver) runGCSAll(keys [][]byte, rng *rand.Rand) {
 		random[i].Name = fmt.Sprintf("random %d", i)
 	}
 	d.runGCSCases("random", random)
+	if c.effectOnly != nil {
+		d.rep.TokenEffectOnly = int(c.effectOnly.Load())
+	}
 }
 
 func parseSizes(s string) []int {
@@ -182,7 +199,22 @@ func gcsListAll(t *target, bucket string) ([][]byte, error) {
 // sorted into a fixture the Java server reads, whose metadata is the
 // synthetic profile. Names, sizes, times, order, prefixes, tokens,
 // statuses and errors are still compared byte for byte.
-type gcsComparator struct{ maskMetadata bool }
+//
+// With tokenEffect (set by -go-fixture: the servers serve different
+// fixtures of the same rows) each gcs1. token's value is replaced by its
+// effect before the byte comparison: its flag, progress byte and boundary
+// key, without the 16-byte scope binding, which hashes the fixture
+// identity and so differs by construction. Whether a token is present,
+// what it resumes and every other byte are still compared, and a walk has
+// no token leniency left: a page whose tokens resume different positions
+// fails. effectOnly counts the answers that agree only by effect. The
+// scope binding itself is exercised by the token cases, each server
+// resuming from its own token (runGCSCases), and a token of the other
+// fixture must be refused (gcsForeignTokenCases).
+type gcsComparator struct {
+	maskMetadata, tokenEffect bool
+	effectOnly                *atomic.Int64
+}
 
 // itemMetadata matches one item metadata field with its leading comma
 // (each follows "size", so a comma always precedes it).
@@ -199,20 +231,61 @@ func (c gcsComparator) masked(r *response) *response {
 
 func (c gcsComparator) compare(ref, got *response) diff {
 	ref, got = c.masked(ref), c.masked(got)
-	d := (bytesComparator{}).compare(ref, got)
+	nref, ngot := ref, got
+	if c.tokenEffect {
+		nref, ngot = withTokenEffects(ref), withTokenEffects(got)
+	}
+	d := (bytesComparator{}).compare(nref, ngot)
 	if a, b := values(ref.Header, "allow"), values(got.Header, "allow"); a != b {
 		d.HeaderDiffs = append(d.HeaderDiffs, fmt.Sprintf("allow: %q | %q", a, b))
 		d.OK = false
 	}
-	if d.Offset >= 0 {
-		if equalMaskedTokens(ref.Body, got.Body) {
-			d.Detail = "bytes equal with the page tokens' values masked: the tokens differ"
-		} else {
-			d.Detail = "documents differ"
-		}
+	switch {
+	case d.Offset >= 0 && equalMaskedTokens(ref.Body, got.Body) && c.tokenEffect:
+		d.Detail = "the page tokens differ in effect (flag, progress or boundary)"
+	case d.Offset >= 0 && equalMaskedTokens(ref.Body, got.Body):
+		d.Detail = "bytes equal with the page tokens' values masked: the tokens differ"
+	case d.Offset >= 0:
+		d.Detail = "documents differ"
+	case d.OK && c.effectOnly != nil && !bytes.Equal(ref.Body, got.Body):
+		c.effectOnly.Add(1)
 	}
 	return d
 }
+
+// withTokenEffects is r with each page token's value replaced by its
+// effect (gcsTokenEffect).
+func withTokenEffects(r *response) *response {
+	if r == nil {
+		return r
+	}
+	m := *r
+	m.Body = tokenValue.ReplaceAllFunc(r.Body, func(b []byte) []byte {
+		v := b[len(`"nextPageToken":"`) : len(b)-1]
+		return []byte(`"nextPageToken":"` + gcsTokenEffect(string(v)) + `"`)
+	})
+	return &m
+}
+
+// gcsTokenEffect is what a gcs1. token resumes: its flag, progress byte
+// and boundary key, without the scope binding. A value that does not
+// decode as a token the servers issue is returned as it is, so it is
+// compared byte for byte.
+func gcsTokenEffect(t string) string {
+	body, ok := strings.CutPrefix(t, "gcs1.")
+	if !ok {
+		return t
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil || len(raw) < 2+gcsBindingBytes {
+		return t
+	}
+	return fmt.Sprintf("gcs1(flag=%d progress=%d boundary=%x)", raw[0], raw[1], raw[2+gcsBindingBytes:])
+}
+
+// gcsBindingBytes is the scope binding's length in a gcs1. token, after
+// the flag and progress bytes (internal/replay/gcs token.go).
+const gcsBindingBytes = 16
 
 // tokenValue is the value span of a page's nextPageToken member as the
 // servers write it (a token is base64url and '.', never escaped).
@@ -239,10 +312,15 @@ func (d *driver) skip(name, reason string) {
 }
 
 // runGCSCases is runCases with GCS page tokens: a request naming
-// TokenFrom gets the reference's nextPageToken for that request, edited
-// by gcsTokenEdits when the case names one. A source page that issued no
-// token leaves the case skipped: without a token it would be an ordinary
-// listing passing for a token test.
+// TokenFrom gets the nextPageToken of that request's answer, edited by
+// gcsTokenEdits when the case names one. With one fixture both servers
+// get the reference's token (the Go server issues the same bytes); with
+// different fixtures (tokenEffect) each server gets its own, so the
+// mutation, scope and page-size cases test each server's decoder on a
+// token it issued. A source page that issued no token on the reference
+// leaves the case skipped: without a token it would be an ordinary
+// listing passing for a token test. One the Go server's answer to the
+// source lacks fails.
 func (d *driver) runGCSCases(kind string, cases []request) {
 	var first, second []request
 	for _, c := range cases {
@@ -259,20 +337,20 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 		for range d.o.parallel {
 			wg.Go(func() {
 				for c := range work {
+					ra, rb := c, c
 					if c.TokenFrom != "" {
-						tok, ok := d.refTokens.Load(c.TokenFrom)
-						if !ok {
-							d.skip(c.Name, "the source page "+strconv.Quote(c.TokenFrom)+" issued no token")
+						var skip string
+						var err error
+						if ra, rb, skip, err = d.gcsWithTokens(c); skip != "" {
+							d.skip(c.Name, skip)
+							continue
+						} else if err != nil {
+							d.record(result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c), Error: err.Error()})
 							continue
 						}
-						t := tok.(string)
-						if edit := gcsTokenEdits[editOf(c.Name)]; edit != nil {
-							t = edit(t)
-						}
-						c.Query += "&pageToken=" + gcsEscape(t)
 					}
-					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
-					a, b, df, err := d.gcsCompareOne(c)
+					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, rb)}
+					a, b, df, err := d.gcsCompareOne(ra, rb)
 					if err != nil {
 						res.Error = err.Error()
 					} else {
@@ -280,8 +358,16 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 							df.OK = true
 						}
 						res.Pass, res.diff = df.OK, &df
+						if strings.HasPrefix(c.Name, gcsForeignPrefix) && !(invalidPageToken(a) && invalidPageToken(b)) {
+							res.Pass = false
+							res.Error = fmt.Sprintf("a token of the other fixture was served: want 400 invalid_page_token from both, got %d %q and %d %q",
+								a.Status, values(a.Header, "x-swath-replay-error"), b.Status, values(b.Header, "x-swath-replay-error"))
+						}
 						if tok := gcsNextToken(a.Body); tok != "" {
 							d.refTokens.Store(c.Name, tok)
+						}
+						if tok := gcsNextToken(b.Body); tok != "" {
+							d.gotTokens.Store(c.Name, tok)
 						}
 					}
 					if res.Pass {
@@ -299,12 +385,74 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 	}
 }
 
-// gcsCompareOne sends c to both servers and compares the answers.
-func (d *driver) gcsCompareOne(c request) (ref, got *response, df diff, err error) {
-	if ref, err = d.ref.do(d.o.bucket, c); err != nil {
+// gcsForeignPrefix names the foreign-token cases.
+const gcsForeignPrefix = "foreign token: "
+
+// gcsForeignTokenCases are the token cases run when the servers serve
+// different fixtures: each page-2 case of the matrix sent with the other
+// server's token, which is bound to the other fixture's identity and must
+// be refused by both servers as invalid_page_token (runGCSCases). They
+// keep the token decoder's binding check under test once every other
+// case resumes from each server's own token.
+func gcsForeignTokenCases(matrix []request) []request {
+	var out []request
+	for _, c := range matrix {
+		switch c.Name {
+		case "token page 2", "delimiter token page 2", "offset token page 2":
+			c.Name = gcsForeignPrefix + c.Name
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// invalidPageToken reports the GCS route's refusal of a token of another
+// scope or fixture.
+func invalidPageToken(r *response) bool {
+	return r.Status == 400 && values(r.Header, "x-swath-replay-error") == "invalid_page_token"
+}
+
+// gcsWithTokens is c for each server with its page token appended: the
+// reference's own (its edit applied) to the reference, and the same or,
+// comparing different fixtures, the Go server's own to the Go server; a
+// foreign-token case swaps the two. skip says why the case cannot run;
+// err is a source the Go server answered without a token where the
+// reference's had one.
+func (d *driver) gcsWithTokens(c request) (ra, rb request, skip string, err error) {
+	tok, ok := d.refTokens.Load(c.TokenFrom)
+	if !ok {
+		return c, c, "the source page " + strconv.Quote(c.TokenFrom) + " issued no token", nil
+	}
+	refTok, gotTok := tok.(string), tok.(string)
+	if cmp, _ := d.comp.(gcsComparator); cmp.tokenEffect {
+		g, ok := d.gotTokens.Load(c.TokenFrom)
+		if !ok {
+			return c, c, "", fmt.Errorf("the go server's answer to the source page %q issued no token; the reference's did", c.TokenFrom)
+		}
+		gotTok = g.(string)
+	}
+	if strings.HasPrefix(c.Name, gcsForeignPrefix) {
+		if refTok == gotTok {
+			return c, c, "the two servers issued the same token bytes: their fixtures share an identity, so no token is foreign", nil
+		}
+		refTok, gotTok = gotTok, refTok
+	}
+	if edit := gcsTokenEdits[editOf(c.Name)]; edit != nil {
+		refTok, gotTok = edit(refTok), edit(gotTok)
+	}
+	ra, rb = c, c
+	ra.Query += "&pageToken=" + gcsEscape(refTok)
+	rb.Query += "&pageToken=" + gcsEscape(gotTok)
+	return ra, rb, "", nil
+}
+
+// gcsCompareOne sends ra to the reference and rb to the Go server and
+// compares the answers.
+func (d *driver) gcsCompareOne(ra, rb request) (ref, got *response, df diff, err error) {
+	if ref, err = d.ref.do(d.o.bucket, ra); err != nil {
 		return nil, nil, df, fmt.Errorf("%s: %w", d.ref.name, err)
 	}
-	if got, err = d.got.do(d.o.bucket, c); err != nil {
+	if got, err = d.got.do(d.o.bucket, rb); err != nil {
 		return ref, nil, df, fmt.Errorf("%s: %w", d.got.name, err)
 	}
 	d.count(2)
@@ -356,13 +504,16 @@ func (d *driver) gcsWalkOne(w walk) result {
 		if errA == nil && errB == nil {
 			df = d.comp.compare(a, b)
 			ma, mb := a, b
-			if c, ok := d.comp.(gcsComparator); ok {
+			c, _ := d.comp.(gcsComparator)
+			if c.maskMetadata {
 				ma, mb = c.masked(a), c.masked(b)
 			}
-			if !df.OK && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(ma.Body, mb.Body) {
+			if !df.OK && !c.tokenEffect && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(ma.Body, mb.Body) {
 				// Every byte but the token values agrees: the walk judges
 				// the tokens by where they lead, and the byte difference
-				// is reported as a wire difference of its own.
+				// is reported as a wire difference of its own. Comparing
+				// different fixtures the comparator has judged the tokens
+				// by effect already, so a difference left is a failure.
 				df.OK = true
 				d.mu.Lock()
 				d.rep.TokenBytes = append(d.rep.TokenBytes, fmt.Sprintf("walk %q page %d", w.Name, res.Pages))

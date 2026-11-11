@@ -552,10 +552,23 @@ python3 verify.py /tmp/go-ds                                         # the swath
 
 - `bench/diffds.py A B` compares two datasets with DuckDB. It checks:
   - the row sets on the 13 canonical columns, in both directions;
+  - the ordered row sequences, in manifest part and file-row order;
   - that both datasets are strictly ascending by key bytes;
   - the dataset's minimum and maximum key.
 
-  It also prints part counts and sizes side by side. Replay's S3 route renders `LastModified` in
+  It also prints part counts and sizes side by side. Two methods give the same answer (`test_dataset_readers`
+  `DuckDBComparison` and `StreamingMatchesSQL` require equal reports, every count included, on columns and
+  types that differ across parts and sides, null keys, empty and several parts, canonical against current,
+  `--ts-ms`, and a two-million-row group of one key): `--sql` runs each check as a query over both whole
+  datasets, and its `EXCEPT ALL` holds every row in memory (143 million rows exhausted 50 GiB); `--stream`
+  reads each side as the SQL view reads it, cast to the two sides' common types, in sequence order (checked
+  against the part index and `file_row_number`), and compares row by row in bounded memory (two
+  12-million-row datasets: 0.3 GB, 87 s on the 4-vCPU dev VM; 0.8 GB with a planted difference at
+  `DIFFDS_MEMORY=1500MB`). When the sequences differ it counts the
+  multiset differences with `EXCEPT ALL` bucket by bucket, both sides partitioned on disk by a hash of the
+  whole row under the working directory. Without either flag, inputs of more than 20 million rows together
+  stream; `DIFFDS_MEMORY` bounds each streaming connection (default `4GB`) and sizes the buckets.
+  Replay's S3 route renders `LastModified` in
   milliseconds; datasets listed through replay therefore agree at that precision, and `--ts-ms` compares a
   replayed listing with a direct one.
 - **Java's reader on Go datasets:** not a gate since Go builds stopped writing format 1 (2026-11-05). Replay's
