@@ -420,10 +420,10 @@ func encoderPrice(root string) int64 {
 }
 
 // boundAfterListing is what bound n, the encoders reported after listing:
-// the post-listing constraint planned when listing ended and the count
-// was raised to it, else the start's, which still holds the count.
+// the post-listing constraint planned when listing ended and raised the
+// count to it, else the start's, which still holds the count.
 func (l *Limits) boundAfterListing(n int, listingDone bool) string {
-	if listingDone && n == l.maxEncoders {
+	if listingDone && n == l.maxEncoders && l.maxEncoders > l.Encoders {
 		return l.afterBy
 	}
 	return l.startBy
