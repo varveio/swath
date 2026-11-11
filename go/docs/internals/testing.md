@@ -501,9 +501,10 @@ against `bench/s3fake`.
   mismatched end tags now and then. `TestGeneratedCoverage` asserts that in each operation every class reaches
   read fields of documents the old scanner accepts, at least 100 each: entities, character references, CDATA,
   UTF-8, valid percent escapes and `+` under `EncodingType` url, and that a malformed escape after a valid one is
-  refused as one in at least 100; on the 50,000 it counts 1,780 (list) and 2,146 (versions) accepted documents with
-  percent escapes in decoded fields, 530 and 958 refused for a malformed escape, and decoded `&`, `<`, `é` and `~`
-  (from `%7E`) in more than 600 page values each per operation.
+  refused as one in at least 100; on the 50,000 it counts 1,712 (list) and 2,036 (versions) accepted documents with
+  percent escapes in decoded fields (under the last EncodingType, the one the scanner applies), 570 and 951
+  refused for a malformed escape, and decoded `&`, `<`, `é` and `~` (from `%7E`) in more than 600 page values each
+  per operation.
 - **GCS client vs Google's JSON API client:** the client is Google's generated `storage/v1` client with
   swath's envelope checks. `TestClientPagesMatchGoogleClient` sends the same requests through the client and
   the plain generated client to a fake JSON server and compares every field the schema keeps (names,

@@ -173,7 +173,7 @@ var genClasses = []string{clEntity, clCharRef, clPercent, clPlus, clMalformed, c
 type docInfo struct {
 	versions bool // the root is ListVersionsResult; else ListBucketResult (or neither)
 	listing  bool // the root is one of the two
-	url      bool // an <EncodingType>url</EncodingType> among the root's children
+	url      bool // the root's last EncodingType child is <EncodingType>url</EncodingType>
 	classes  map[string]bool
 }
 
@@ -267,10 +267,13 @@ func (g *docGen) text(kind string) map[string]bool {
 				g.b.WriteString(g.pick("v1.0/btc", "date=2023-01-01", "a", " ", "-_.*"))
 			}
 		case "etag":
-			switch c := g.pick(clEntity, clEntity, clCharRef, "plain"); c {
-			case clEntity, clCharRef:
-				g.b.WriteString(g.pick("&quot;", "&#34;", "&#x22;"))
-				used[c] = true
+			switch g.pick(clEntity, clEntity, clCharRef, "plain") {
+			case clEntity:
+				g.b.WriteString("&quot;")
+				used[clEntity] = true
+			case clCharRef:
+				g.b.WriteString(g.pick("&#34;", "&#x22;"))
+				used[clCharRef] = true
 			default:
 				g.b.WriteString(g.pick("0123456789abcdef", "-12", "\""))
 			}
@@ -435,11 +438,13 @@ func genDoc(r *rand.Rand) ([]byte, docInfo) {
 				g.close(c)
 			}
 		case "EncodingType":
+			// The last EncodingType is the one the scanner applies.
 			if g.one(10) {
-				g.scalar(c, "string", false, false) // anything but url: keys are verbatim
+				g.scalar(c, "string", false, false) // never "url": keys are verbatim
+				g.info.url = false
 			} else {
 				g.b.WriteString("<" + g.ns + c + ">url</" + g.ns + c + ">")
-				g.info.url = g.info.url || in
+				g.info.url = in
 			}
 		case "IsTruncated":
 			g.scalar(c, "bool", in, false)
