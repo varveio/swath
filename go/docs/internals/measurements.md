@@ -2065,6 +2065,82 @@ first streaming method, since revised after review) was cancelled and superseded
 `969dfd9a` changed only how diffds's streaming method compares float columns, which the listing schema does not
 have.
 
+## Parquet pages at zstd SpeedFastest (2026-11-11)
+
+Parquet pages are compressed at klauspost `SpeedFastest` (`parquetout.pageLevel`, writer recipe
+`swath/parquet-r4`) where `swath/parquet-r3` used `SpeedDefault`; the other codec options are unchanged, and
+the spill codec was already at `SpeedFastest`.
+
+**The codec, on the build host** (a shared 4-vCPU VM, Xeon Platinum 8581C, not a benchmark machine).
+`BenchmarkPageCodec` (`SWATH_CODEC_BENCH_PART=PART go test ./internal/parquetout -run X -bench
+BenchmarkPageCodec -benchtime 3x`) decompresses every page of a part and compresses each again on one state at
+both levels, the codec's other options kept. The parts were written by the `swath/parquet-r3` build from
+aws-public-blockchain's keys (the study's replay fixture `current-eba31d9`, its first part): two prefixes,
+`v1.1/sonarx/` (1,060,892 keys of mixed shapes) and `v1.1/stellar/ledgers/pubnet/FE` (4,108,000 keys of the
+shape that holds most of the bucket), served by `swath-replay` from a 5,168,892-row subset with no injected
+latency and listed by `swath list` into a local sorted dataset (4 encoders). Medians of three runs:
+
+| Pages | Level | ns a page | Bytes a page | Ratio |
+|---|---|---|---|---|
+| sonarx, 9,353 pages, 68.6 MB raw | SpeedDefault | 19,798 | 3,150 | 2.330 |
+| | SpeedFastest | 16,286 (-17.7 %) | 3,186 (+1.1 %) | 2.304 |
+| stellar FE, 36,168 pages, 239.6 MB raw | SpeedDefault | 21,169 | 2,718 | 2.437 |
+| | SpeedFastest | 18,032 (-14.8 %) | 2,723 (+0.2 %) | 2.433 |
+
+The ETag column (hex, about half the compressed bytes) and the size column compress the same at both levels;
+the difference is in the key column (sonarx +5.2 %, stellar -0.9 %) and `last_modified` (+5.6 % and +4.9 %).
+The same listings end to end (three runs a build, alternating, the replay server on the same host; process CPU
+from `/usr/bin/time`, medians): sonarx 30,404,915 to 30,736,985 bytes of output (+1.09 %), CPU 4.42 to 4.29 s
+(-2.9 %); stellar FE 101,705,572 to 101,868,044 bytes (+0.16 %), CPU 15.16 to 14.89 s (-1.8 %). Those runs
+are listing-bound, so wall time and peak RSS show no difference beyond their noise. The outputs read back the
+same: the swath reader's row digests and DuckDB's `EXCEPT ALL` both ways match, and `seekparquet validate
+--level digest` completes on both builds' datasets.
+
+**A diagnostic replay A/B on Batch**, not a calibrated benchmark: the whole aws-public-blockchain fixture
+(143,008,674 objects) replayed to a sorted dataset written to GCS, on 4 and 8 vCPU with 4 GiB of memory and a
+30 GB disk, three blocks of the `SpeedFastest` build against `main` (`swath/parquet-r3`). Ratios
+`SpeedFastest`/`main`, with the interval the A/B reports:
+
+| vCPU | Wall | CPU a object | Tail |
+|---|---|---|---|
+| 8 | 0.97 [0.89, 1.04] | 0.965 | 0.92 |
+| 4 | 0.96 [0.91, 1.09] | 0.95 | 0.94 |
+
+The dataset grew 0.3 %, from 3,317 to 3,327 MB. So the level saves 3.5 to 5 % of the CPU an object costs and
+6 to 8 % of the tail, for 0.3 % more stored and uploaded bytes on this bucket (up to 1.1 % on the mixed-shape
+prefix above); wall time moves within the A/B's interval.
+
+## Parquet fill: repeated values and nulls built once (2026-11-11, microbench)
+
+A microbenchmark on the build host (a shared 4-vCPU VM, Xeon Platinum 8581C), not a run. The fill turns a
+page's rows into each column's parquet values (`parquetout.fill`, `fillKey`). In a profile of the tail of a
+sorted aws-public-blockchain run (143M objects to GCS, 8 vCPU, 256 workers, at `855001c8`) it took 40.8 of
+194 CPU-seconds. The fill allocates nothing; nearly all of its time was building each value: parquet-go's
+`Value.Level` is not inlined (cost 93 over the budget of 80), and each call copies the 24-byte value in and
+out, then into the page's slice. The accessors cost about 5 % of it.
+
+The fill now builds a column's null value once, and reuses a string value equal to the previous row's (a
+storage class, a checksum algorithm or type repeat down a page) instead of building it again. The values
+are the same, kind, bytes, levels and column, so the parts are byte-identical. A reused value points at the
+earlier row's equal bytes. `BenchmarkFill` (`go test ./internal/parquetout -run X -bench BenchmarkFill`)
+fills every column of a 1,024-row S3 page shaped like aws-public-blockchain's: ledger keys, hex ETags,
+STANDARD, a CRC64NVME full-object checksum on every row (as in the fixture), no owner, and each row holding
+its own strings. `distinct=true` alternates every string column row to row between two values of different
+lengths: a synthetic case where no value is reused and each comparison ends at the length (long equal-length
+near-matches, which compare more bytes, were not benchmarked).
+Five runs each, 0 allocations a row before and after:
+
+| Page | Before (ns a row) | After (ns a row) |
+|---|---|---|
+| blockchain-shaped | 211.0 to 212.2 | 122.4 to 122.9 (-42 %) |
+| synthetic: every string differing from the row before | 211.0 to 211.6 | 174.9 to 175.3 (-17 %, the nulls alone) |
+
+`TestFillMatchesReference` compares every value with the earlier fill's, one by one, on these pages and on
+a page of random repeats, nulls and empty strings; `TestFillReuseOutlivesNoPage` writes two pages whose
+repeated strings own their bytes, poisoned once each page's flush returns, serially and column-parallel, and
+requires the file of the same rows in ordinary strings. The run-level saving was not measured; at the profile's
+share, a 42 % cheaper fill would be about 17 CPU-seconds of that run's 194-second tail.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's

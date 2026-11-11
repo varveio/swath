@@ -296,8 +296,8 @@ func TestArrowColumnTypes(t *testing.T) {
 	reads := []read{
 		{"Azure's types", page(), 0},
 		{"Content-Length int64", page(column{"Content-Length", arrow.PrimitiveTypes.Int64, `[null, 5000000000, null]`}), 0},
-		{"unread columns of any type", page(column{"LeaseState", dict, `["available", "leased", null]`},
-			column{"LastAccessTime", str, `["x", "y", null]`}, column{"Unmapped", dict, `["x", "y", "x"]`}), 0},
+		{"unread columns of any type", page(column{"LeaseStatus", dict, `["unlocked", "locked", null]`},
+			column{"Cache-Control", arrow.PrimitiveTypes.Int64, `[1, 2, null]`}, column{"Unmapped", dict, `["x", "y", "x"]`}), 0},
 	}
 	for _, u := range []arrow.TimeUnit{arrow.Millisecond, arrow.Microsecond, arrow.Nanosecond} {
 		typ := &arrow.TimestampType{Unit: u}

@@ -5,6 +5,33 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port, Azure Blob: `--all-versions` lists every entry of each name: blob versions, snapshots and
+  soft-deleted blobs beside the current blob (`include=versions,snapshots,deleted`), under the new schema
+  `swath/azblob-versions/v1`: the `swath/azblob-objects/v1` columns, then `version_id`, `is_latest` (the row a
+  current listing has), `snapshot`, `is_deleted`, `deleted_time` and `remaining_retention_days`. A name's rows
+  are consecutive, in Azure's order (snapshots and versions oldest first, the current blob last), never split
+  across parts or ranges; a resume restarts after the last complete name. It needs no permission beyond listing
+  and uses the same call and format. It was refused before. Versions and snapshots are tested against
+  recorded and synthetic listings only; soft-deleted blobs also against a public container.
+
+- Go port, Azure Blob: rows carry the properties List Blobs returns for every blob that swath dropped:
+  `access_tier_inferred`, `access_tier_change_time`, `archive_status` and `rehydrate_priority` (a pending
+  rehydration from Archive), `last_access_time`, `content_encoding`, `server_encrypted`, `encryption_scope`,
+  `customer_provided_key_sha256`, `lease_state` and `tag_count`. They come in the same responses, so they cost
+  no request. `--azure-fetch-metadata`, `--azure-fetch-tags` and `--azure-fetch-immutability` fill `metadata`
+  and `tags` (JSON objects) and the immutability policy and legal hold columns, null otherwise; tags need the
+  SAS `t` permission or an Entra ID role that reads tags, and a listing refused for it stops naming the
+  permission. The columns are added to `swath/azblob-objects/v1` as optional columns, as the dataset evolution
+  policy allows: parts written before lack them, and readers read them as null there (`go/reader`'s
+  `AzblobObject` decodes them). A dataset of the same container therefore gains these columns.
+
+- Fixed: Go port, Azure Blob: admission refused most public open-data containers (60 of the 64 Planetary Computer
+  containers; NOAA's GOES, HRRR, GFS and NWM; NAIP) unless `--azure-assume-flat` was given (#457). Asked anonymously or
+  with a container SAS, Get Account Information does not answer, and those accounts' Data Lake host answers 409
+  `EndpointUnsupportedAccountFeatures`, which Azure documents as the answer for a flat account with blob soft delete
+  on (a hierarchical one keeps its Data Lake endpoint). That answer now establishes a flat namespace; the report's
+  `namespace` reads `filesystem endpoint blocked`.
+
 - Go port: `go/reader`'s `Dataset.Totals` scans in parallel shards over borrowed batches, as `Scan` does, with
   `runtime.GOMAXPROCS(0)` goroutines, instead of one serial pass of owning rows; it plans only the paths not
   inside another (the same rows) and takes each `Count` from the rows its scan reads instead of a count plan

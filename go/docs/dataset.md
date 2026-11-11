@@ -181,6 +181,7 @@ binding, accessor order and null handling.
 | `swath/gcs-objects/v1` | a Cloud Storage live object | UTF-8 | yes | 1,024 bytes |
 | `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
 | `swath/azblob-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
+| `swath/azblob-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
 | `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
 
 Every column after the key is nullable unless marked required. Types: `STRING` is `BYTE_ARRAY (STRING)`, UTF-8;
@@ -200,7 +201,7 @@ quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STR
 **`swath/gcs-objects/v1`**: `key` (the object name), `size` int64, `last_modified` timestamp (`updated`), `etag`
 STRING (the JSON API's opaque entity tag), `generation` and `metageneration` int64, `storage_class` STRING, `md5`
 and `crc32c` STRING (base64, as listed), `content_type` STRING, and last `time_created` timestamp
-(`timeCreated`). `time_created` is the one column a part may lack: parts written before the lister recorded it
+(`timeCreated`). `time_created` is the one column of this id a part may lack: parts written before the lister recorded it
 do not have it, and a reader reads it as null there. `last_modified` also moves when only the object's metadata
 changes, and `etag` is not a content hash. Compare content with `md5` or `crc32c`. GCS gives no `md5` for composite
 objects and neither hash for objects encrypted with customer-managed or customer-supplied keys.
@@ -213,7 +214,26 @@ live generation. There is no `is_latest`.
 as listed; null when absent, as for blobs uploaded in blocks without one), `content_type` STRING, `blob_type`
 STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `access_tier` STRING (null when absent), `creation_time`
 timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a
-content hash: compare content with `content_md5`, and never compare ETags across stores.
+content hash: compare content with `content_md5`, and never compare ETags across stores. Then the columns added
+to the schema id later, which a part written before lacks (read them as null there): `access_tier_inferred` bool
+(true when the tier is the account's default, not set on the blob), `access_tier_change_time` timestamp,
+`archive_status` STRING (`rehydrate-pending-to-hot`, `-cool`, `-cold`), `rehydrate_priority` STRING (`High`,
+`Standard`), `last_access_time` timestamp (only with the account's last access tracking on),
+`content_encoding` STRING, `server_encrypted` bool, `encryption_scope` STRING, `customer_provided_key_sha256`
+STRING, `lease_state` STRING (`available`, `leased`, `expired`, `breaking`, `broken`), `tag_count` int64, and
+the columns a run asks for, null unless it did: `metadata` and `tags` STRING (a JSON object of names to
+values, keys sorted; `{}` for none; `metadata` null for a blob encrypted with a customer-provided key, whose
+metadata a listing cannot read), `immutability_policy_until` timestamp, `immutability_policy_mode` STRING
+(`Unlocked`, `Locked`) and `legal_hold` bool (false for none). Each is as Azure lists it, null where it lists
+nothing. The Python comparison reader supplies typed nulls for these added columns when an entire
+current-object dataset lacks them, and unions parts by name when only some parts lack them.
+
+**`swath/azblob-versions/v1`**: the `swath/azblob-objects/v1` columns in the same order, then `version_id` STRING
+(as listed, a timestamp; null for a snapshot and on an account without versioning), `is_latest` bool (required:
+the name's current blob, live, the row a current listing has), `snapshot` STRING (the snapshot's time as listed;
+null unless the row is a snapshot), `is_deleted` bool (required: soft-deleted), `deleted_time` timestamp and
+`remaining_retention_days` int64 (until the soft-deleted entry is purged; null unless deleted). A soft-deleted
+entry keeps its size and metadata: it is stored and billed until purged. There are no delete markers.
 
 **`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them and
 records `no_dirs` in `coverage.filters`):
@@ -259,7 +279,8 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
 - **Azure order is byte order after adaptation.** List Blobs returns names in UTF-16 code-unit order, which
   puts names with characters at U+10000 and above before those at U+E000 to U+FFFF. swath's adapter reorders
   them, so an Azure dataset is in byte order like every other one, not in the service's listing order.
-- **Versions rows are consecutive per key.** In `swath/s3-versions/v1` and `swath/gcs-generations/v1` a key
+- **Versions rows are consecutive per key.** In `swath/s3-versions/v1`, `swath/gcs-generations/v1` and
+  `swath/azblob-versions/v1` a key
   repeats once per version, on consecutive rows, and a key's group never spans two parts. On S3 the order within
   a group is the service's: newest first, with versions and delete markers interleaved. No column rebuilds it,
   since two entries can share `last_modified`. On GCS rows order by key and then by numeric `generation`, strictly
@@ -268,8 +289,10 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   with `is_latest` true, and a key whose first row is a delete marker is deleted. On GCS the last row is the newest
   generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
   `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
-  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS), row by
-  row. The reader module describes version roles with `VersionSpec` on `SchemaSpec.Versions`: version ID,
+  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3), `time_deleted IS NULL` (GCS) or
+  `is_latest` (Azure Blob), row by row. On Azure Blob a group is in the service's order: a name's entries keyed
+  by their time within the name (snapshots and versions oldest first; the base blob or current version, the one
+  with `is_latest`, last). The reader module describes version roles with `VersionSpec` on `SchemaSpec.Versions`: version ID,
   latest or deleted-at, and optional delete marker ([version roles](../reader/README.md#version-roles)).
   swath's text output, version counts and per-prefix totals read the rows through it. Typed reader decoders and
   schema-specific SQL still bind columns by name.

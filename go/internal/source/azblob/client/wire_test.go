@@ -92,6 +92,10 @@ func wireEntries(t *testing.T, body []byte) client.ListOutput {
 					ContentType  string `xml:"Content-Type"`
 					BlobType     string `xml:"BlobType"`
 					AccessTier   string `xml:"AccessTier"`
+					Inferred     string `xml:"AccessTierInferred"`
+					LeaseState   string `xml:"LeaseState"`
+					Encrypted    string `xml:"ServerEncrypted"`
+					Encoding     string `xml:"Content-Encoding"`
 				} `xml:"Properties"`
 			} `xml:",any"`
 		} `xml:"Blobs"`
@@ -129,10 +133,27 @@ func wireEntries(t *testing.T, body []byte) client.ListOutput {
 			}
 			it.LastModified, it.CreationTime = micros(p.LastModified), micros(p.CreationTime)
 			it.ETag, it.ContentMD5, it.ContentType, it.BlobType, it.AccessTier = p.ETag, p.ContentMD5, p.ContentType, p.BlobType, p.AccessTier
+			it.AccessTierInferred, it.ServerEncrypted = wireTri(t, p.Inferred), wireTri(t, p.Encrypted)
+			it.LeaseState, it.ContentEncoding = p.LeaseState, p.Encoding
 		}
 		out.Items = append(out.Items, it)
 	}
 	return out
+}
+
+// wireTri reads an XML boolean property, client.Unset when absent.
+func wireTri(t *testing.T, s string) client.Tri {
+	t.Helper()
+	switch s {
+	case "":
+		return client.Unset
+	case "true":
+		return client.True
+	case "false":
+		return client.False
+	}
+	t.Fatalf("boolean property %q", s)
+	return client.Unset
 }
 
 // epoch is the Last-Modified of the fixture's first key (azblobtest.Serve).

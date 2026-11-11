@@ -32,8 +32,8 @@ type Common struct {
 	Policy    Policy
 	Admission objhttp.Admission
 	// AllVersions lists every version of every key (--all-versions): S3
-	// versions and delete markers, GCS generations, in the providers'
-	// versions schemas.
+	// versions and delete markers, GCS generations, Azure Blob versions,
+	// snapshots and soft-deleted blobs, in the providers' versions schemas.
 	AllVersions bool
 }
 
@@ -68,8 +68,8 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 	// Policy has no seed and no probes, its zero Admission no limiter.
 	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
-	source.Define(f, source.Flag{Name: source.AllVersionsFlag, Value: source.Switch(&c.AllVersions), Usage: "S3 and GCS: list every version, S3 delete markers too (not Azure Blob)",
-		Long: "S3: versions and delete markers (needs s3:ListBucketVersions). GCS: generations, live and noncurrent. Refused on Azure Blob. A key's rows are consecutive and never split across parts."})
+	source.Define(f, source.Flag{Name: source.AllVersionsFlag, Value: source.Switch(&c.AllVersions), Usage: "list every version of every key, not only the current objects",
+		Long: "S3: versions and delete markers (needs s3:ListBucketVersions). GCS: generations, live and noncurrent. Azure Blob: versions, snapshots and soft-deleted blobs. A key's rows are consecutive and never split across parts."})
 	source.Define(f, source.Flag{Name: "request-rate", Value: (*rateFlag)(&a.RequestRate), Metavar: "N", Group: source.GroupLimits,
 		Usage: "cap every HTTP attempt at N per second (0: no cap)",
 		Long:  "Set it to stay under a request quota shared with other clients. Refused when the spacing exceeds half --stall-timeout."})

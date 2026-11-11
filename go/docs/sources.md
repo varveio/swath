@@ -132,19 +132,48 @@ run's identity.
 ## Azure Blob Storage
 
 `az://ACCOUNT/CONTAINER[/PREFIX]`, or the same as
-`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`, lists a container's current blobs.
+`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`, lists a container's current blobs;
+`--all-versions` lists every entry: blob versions, snapshots and soft-deleted blobs beside the current blobs.
 
 **Flat namespace only.** Before listing, swath asks the account whether it has a hierarchical namespace
 (Data Lake Storage Gen2), and refuses one that does, with exit 2 and cause `unsupported`. When the account
-will not say (an anonymous caller is always refused that question, and swath then asks the account's Data
-Lake host, which answers public containers), the run is refused too, unless `--azure-assume-flat` asserts a
-flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
+will not say (an anonymous caller is always refused that question), swath asks the account's Data Lake host,
+which answers public containers; its refusal of a flat account that has blob soft delete or events on also
+establishes a flat namespace. Only when neither establishes the namespace is the run refused too, unless
+`--azure-assume-flat` asserts a flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
 reports a hierarchical namespace is refused whatever is asserted. A credential the service refuses during
-these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`). Versions, snapshots and deleted blobs are not
-listed, and `--all-versions` is refused.
+these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`).
 
 **Permissions.** Permission to list the container's blobs: a SAS with the list permission, or an Entra ID
-role that includes it.
+role that includes it. `--all-versions` needs no more: Azure lists versions, snapshots and soft-deleted blobs to
+anyone who may list, anonymous callers of a public container included.
+
+**Every entry** (`--all-versions`, schema `swath/azblob-versions/v1`). Each version, snapshot and soft-deleted
+blob is a row, with `version_id`, `snapshot`, `is_deleted`, `deleted_time` and `remaining_retention_days`;
+`is_latest` marks the row a current listing has. A name's rows are consecutive, in Azure's order: snapshots and
+versions oldest first, the current blob last. Soft-deleted blobs exist only while the account's retention keeps
+them (`remaining_retention_days`), so two listings days apart differ. A container without versions, snapshots or
+deleted blobs lists the same rows as without the switch, every one `is_latest`. Each entry is a row, so a
+container with a long history lists more pages, each a billed listing operation; the format does not change
+(Arrow where the account has it).
+
+**Properties.** Each row carries what List Blobs returns for every blob: besides size, times, ETag, MD5,
+content type, blob type and access tier, whether the tier is inferred and when it last changed, a pending
+rehydration from Archive (`archive_status`, `rehydrate_priority`), the last access time (only where the
+account tracks it), content encoding, server encryption, encryption scope and customer-provided key hash,
+lease state and tag count. These come in the same responses at no extra request; a column is null where
+Azure lists nothing. Three switches ask for more, at the cost of larger responses:
+
+| Switch | Fills | Needs |
+|---|---|---|
+| `--azure-fetch-metadata` | `metadata`: the user metadata as a JSON object, keys sorted (`{}` for none) | listing permission; up to 8 KiB a blob |
+| `--azure-fetch-tags` | `tags`: the blob index tags as a JSON object (`{}` for none) | the right to read tags: a SAS with the `t` permission, or an Entra ID role with the tags read data action (Storage Blob Data Owner); never anonymous |
+| `--azure-fetch-immutability` | `immutability_policy_until`, `immutability_policy_mode`, `legal_hold` | listing permission |
+
+Without a switch its columns are null. Azure refuses a whole listing that asks for tags without the right to
+read them (401 anonymously, 403 `AuthorizationPermissionMismatch` with a SAS); swath then stops with that
+error and names the permission, and never lists without the tags it was asked for. A blob encrypted with a
+customer-provided key lists no metadata: its `metadata` is null. The switches are part of the run's identity.
 
 **Credentials,** in this order: `--anonymous`; a SAS from `--azure-sas-token`, else from the source URL's query
 (`az://account/container?sv=...&sig=...`), else `AZURE_STORAGE_SAS_TOKEN`; an account key from

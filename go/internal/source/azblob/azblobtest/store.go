@@ -49,23 +49,76 @@ type Store struct {
 	// Fail, when it returns an error, fails request n with it.
 	Fail func(req int) error
 
-	keys []string // Azure's order
+	keys    []string      // the names, Azure's order
+	entries []client.Item // every entry, Azure's order (a name's entries in the order given)
 
 	mu      sync.Mutex
+	views   map[client.Include][]client.Item // view's, by include
 	markers map[string]storeMarker
 	log     []Record
 }
 
 type storeMarker struct {
 	prefix, delimiter, startFrom string
-	pos                          int // the index in keys the listing continues at
+	include                      client.Include
+	pos                          int // the index in the include's view the listing continues at
 }
 
-// NewStore is a store holding keys (duplicates dropped).
+// NewStore is a store holding keys (duplicates dropped), one current blob
+// each.
 func NewStore(keys []string) *Store {
 	k := slices.Clone(keys)
 	slices.SortFunc(k, CompareUTF16)
-	return &Store{keys: slices.Compact(k), markers: map[string]storeMarker{}}
+	k = slices.Compact(k)
+	entries := make([]client.Item, len(k))
+	for i, name := range k {
+		entries[i] = client.Item{Name: name, Size: int64(len(name)), BlobType: "BlockBlob"}
+	}
+	return &Store{keys: k, entries: entries, markers: map[string]storeMarker{}}
+}
+
+// NewEntryStore is a store of a versioned or soft-deleting container:
+// entries are blobs whose names may repeat (their metadata, tags and
+// immutability listed only with the include that asks for them), a name's entries listed in the
+// order given (Azure's within a name: snapshots and versions oldest first,
+// the base blob or current version last). An entry is listed only with the
+// include it needs (Listed); startFrom lists from a name's first entry, and
+// a marker continues inside a name.
+func NewEntryStore(entries []client.Item) *Store {
+	e := slices.Clone(entries)
+	slices.SortStableFunc(e, func(a, b client.Item) int { return CompareUTF16(a.Name, b.Name) })
+	var keys []string
+	for _, it := range e {
+		if len(keys) == 0 || keys[len(keys)-1] != it.Name {
+			keys = append(keys, it.Name)
+		}
+	}
+	return &Store{keys: keys, entries: e, markers: map[string]storeMarker{}}
+}
+
+// Listed reports whether a listing with inc lists entry it: a snapshot
+// needs include=snapshots, a version other than the current one
+// include=versions, a soft-deleted entry include=deleted.
+func Listed(it *client.Item, inc client.Include) bool {
+	return (it.Snapshot == "" || inc.Snapshots) && (!it.Deleted || inc.Deleted) &&
+		(it.VersionID == "" || it.IsCurrentVersion || inc.Versions)
+}
+
+// view is the entries a listing with inc lists, in Azure's order, built
+// once per include (s.mu is held).
+func (s *Store) view(inc client.Include) []client.Item {
+	if v, ok := s.views[inc]; ok {
+		return v
+	}
+	v := slices.DeleteFunc(slices.Clone(s.entries), func(it client.Item) bool { return !Listed(&it, inc) })
+	for i := range v {
+		v[i] = strip(v[i], inc)
+	}
+	if s.views == nil {
+		s.views = map[client.Include][]client.Item{}
+	}
+	s.views[inc] = v
+	return v
 }
 
 // FailAt fails the requests numbered in reqs with ErrInjected.
@@ -165,10 +218,11 @@ func (s *Store) list(ctx context.Context, n int, in *client.ListInput) (*client.
 			size = k
 		}
 	}
+	view := s.view(in.Include)
 	var pos int
 	if in.Marker != "" {
 		m, ok := s.markers[in.Marker]
-		if !ok || m.prefix != in.Prefix || m.delimiter != in.Delimiter || m.startFrom != in.StartFrom {
+		if !ok || m.prefix != in.Prefix || m.delimiter != in.Delimiter || m.startFrom != in.StartFrom || m.include != in.Include {
 			return nil, ErrMarker
 		}
 		pos = m.pos
@@ -177,48 +231,63 @@ func (s *Store) list(ctx context.Context, n int, in *client.ListInput) (*client.
 		if CompareUTF16(in.StartFrom, lower) > 0 {
 			lower = in.StartFrom
 		}
-		pos = sort.Search(len(s.keys), func(i int) bool { return CompareUTF16(s.keys[i], lower) >= 0 })
+		pos = sort.Search(len(view), func(i int) bool { return CompareUTF16(view[i].Name, lower) >= 0 })
 	}
 	out := &client.ListOutput{}
 	next := pos
-	if s.Empty == nil || !s.Empty(n) || !s.within(pos, in.Prefix) {
-		out.Items, next = s.page(in.Prefix, in.Delimiter, pos, size)
+	if s.Empty == nil || !s.Empty(n) || !within(view, pos, in.Prefix) {
+		out.Items, next = page(view, in.Prefix, in.Delimiter, pos, size)
 	}
-	if s.within(next, in.Prefix) {
+	if within(view, next, in.Prefix) {
 		out.NextMarker = fmt.Sprintf("m%d", len(s.markers)+1)
-		s.markers[out.NextMarker] = storeMarker{prefix: in.Prefix, delimiter: in.Delimiter, startFrom: in.StartFrom, pos: next}
+		s.markers[out.NextMarker] = storeMarker{prefix: in.Prefix, delimiter: in.Delimiter, startFrom: in.StartFrom, include: in.Include, pos: next}
 	}
 	return out, nil
 }
 
-// within reports whether keys[i] exists and is under prefix: the prefix
+// within reports whether view[i] exists and is under prefix: the prefix
 // window is contiguous in Azure's order and a listing starts inside it or
 // past it.
-func (s *Store) within(i int, prefix string) bool {
-	return i < len(s.keys) && strings.HasPrefix(s.keys[i], prefix)
+func within(view []client.Item, i int, prefix string) bool {
+	return i < len(view) && strings.HasPrefix(view[i].Name, prefix)
 }
 
-// page lists up to size items from keys[pos]: a key with the delimiter
+// page lists up to size items from view[pos]: a name with the delimiter
 // after the prefix is listed as its roll-up, once for its whole subtree,
 // which a listing starting inside it reaches first.
-func (s *Store) page(prefix, delimiter string, pos, size int) ([]client.Item, int) {
+func page(view []client.Item, prefix, delimiter string, pos, size int) ([]client.Item, int) {
 	var items []client.Item
 	i := pos
-	for len(items) < size && s.within(i, prefix) {
-		k := s.keys[i]
+	for len(items) < size && within(view, i, prefix) {
+		k := view[i].Name
 		if delimiter != "" {
 			if at := strings.Index(k[len(prefix):], delimiter); at >= 0 {
 				r := k[:len(prefix)+at+len(delimiter)]
 				items = append(items, client.Item{Name: r, Prefix: true})
-				for i++; i < len(s.keys) && strings.HasPrefix(s.keys[i], r); i++ {
+				for i++; i < len(view) && strings.HasPrefix(view[i].Name, r); i++ {
 				}
 				continue
 			}
 		}
-		items = append(items, client.Item{Name: k, Size: int64(len(k)), BlobType: "BlockBlob"})
+		items = append(items, view[i])
 		i++
 	}
 	return items, i
+}
+
+// strip is it as a listing with inc lists it: user metadata, tags, the
+// immutability policy and the legal hold only when asked for.
+func strip(it client.Item, inc client.Include) client.Item {
+	if !inc.Metadata {
+		it.Metadata = ""
+	}
+	if !inc.Tags {
+		it.Tags = ""
+	}
+	if !inc.Immutability {
+		it.ImmutabilityMode, it.ImmutabilityUntil, it.LegalHold = "", 0, client.Unset
+	}
+	return it
 }
 
 // AccountInfo answers that the account's namespace is flat.
