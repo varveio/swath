@@ -151,8 +151,9 @@ Handle completion and cleanup explicitly. When classifying errors with
   An S3 ETag cannot distinguish a replacement with the same ETag. Azure soft
   delete or versioning can retain deleted data and charges.
 
-Writer errors redact request URL credentials and upload session handles while
-preserving error chains for `errors.Is` and `errors.As`.
+Every error a `Writer` or an `Upload` returns is redacted as `RedactError` redacts: no request URL's query or
+user information is in its text, and upload session handles are removed, while `errors.Is` and `errors.As`
+still see the chain.
 
 ## API and provider details
 

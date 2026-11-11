@@ -3,7 +3,9 @@
 
 // Package objfile provides pinned byte-range reads, create-only uploads and
 // conditional deletes for objects in S3, Google Cloud Storage and Azure Blob
-// Storage. It does not list objects, plan reads or cache bytes.
+// Storage. It does not list objects, plan reads or cache bytes. Every read of
+// an Object returns bytes of the version it pinned, or fails with
+// ErrObjectChanged and returns none of another version's bytes.
 //
 // The store packages provide an Opener and Writer over the caller's SDK client;
 // objfile/remote constructs clients from store URIs. Reads check the
@@ -28,9 +30,9 @@ import (
 // the bytes it read; a full read ending exactly there succeeds. After Close,
 // reads fail with an error wrapping fs.ErrClosed.
 //
-// Reads validate the response's range offset, total size and length. A wrong
-// range fails with an error; a changed identity or size fails with
-// ErrObjectChanged. A short response body is requested again from where it
+// Reads validate the response's range offset, and its total size and length
+// when the response states them. A wrong range fails with an error; a
+// changed identity or size fails with ErrObjectChanged. A short response body is requested again from where it
 // stopped, at most twice, in addition to the SDK's request retries. The GCS
 // package documents the transport required for this validation with its SDK.
 type Object interface {

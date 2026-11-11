@@ -66,7 +66,9 @@ type DestinationOptions struct {
 	Emulator bool
 	// RequestTimeout bounds the wait for response headers after sending a
 	// request (0: DefaultRequestTimeout). It also bounds GCS and Azure
-	// token exchanges. It does not bound an upload's body transfer or all
+	// token exchanges, and the S3 credential chain's requests (STS, SSO,
+	// container and instance roles), which go through the destination's
+	// client and its response-header timeout. It does not bound an upload's body transfer or all
 	// its retries. Bound those with the operation's context; S3 multipart
 	// initiation and abort cleanup use S3Write.AbortTimeout independently.
 	RequestTimeout time.Duration
@@ -113,7 +115,9 @@ type Destination struct {
 // GCS requests the read-write scope; S3 signs every request; Azure uses SAS
 // or Entra ID. DestinationOptions controls their credentials and endpoints.
 // GCS and S3 SDK logging is disabled to keep credentials and upload handles
-// out of their logs.
+// out of their logs, the S3 credential chain's logger included. The Azure
+// SDK's log is process-wide and not changed here: the swath command turns it
+// off before any SDK use.
 func OpenDestination(ctx context.Context, location string, o DestinationOptions) (*Destination, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {
