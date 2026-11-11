@@ -339,6 +339,7 @@ type spillFile struct {
 	size    int64 // bytes written (owner only, then the drainer once complete)
 	r       *bufio.Reader
 	h       *handle // r's lease on the file's read handle
+	drained bool    // its read handle retired for good (handles.mu)
 	read    int64   // rows replayed (drainer only)
 	pos     int64   // bytes replayed: where a closed reader reopens (drainer only)
 	used    uint64

@@ -358,7 +358,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   idle handle for the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesLowFDLimit` under
   a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
   lease's release, when its file is drained (before the unlink, or before a durable file goes back to its
-  cache: `evictions.retired`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and
+  cache: `evictions.retired`; a lease whose open was under way then gets a descriptor for itself alone, closed at its
+  release: `TestHandlesRetiredDuringOpen`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and
   every handle when the run stops (success, failure, cancellation) or the output's identity check fails
   (`evictions.closed`): no descriptor of a replaced output is read again. Tests: concurrent reads, retirements
   and evictions on a two-handle cache (`TestHandlesConcurrentReadsAndEviction`, under `-race`), truncation,

@@ -136,8 +136,10 @@ func (c *handles) lease(f *spillFile, open func() (*os.File, error)) (*handle, e
 		return nil, err
 	}
 	h := &handle{fh: fh, refs: 1}
-	if c.closed {
-		h.gone = true // closed at its release
+	if c.closed || f.drained {
+		// Stopped, or f retired while this open was under way: the handle
+		// serves this lease alone and is closed at its release.
+		h.gone = true
 		return h, nil
 	}
 	if o := c.m[f]; o != nil { // another lease opened f meanwhile
@@ -175,6 +177,9 @@ func (c *handles) release(h *handle) {
 func (c *handles) retire(f *spillFile, why evictReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if why == evictRetired {
+		f.drained = true // no handle of f is kept from now on
+	}
 	if h := c.m[f]; h != nil {
 		c.drop(f, h, why)
 	}

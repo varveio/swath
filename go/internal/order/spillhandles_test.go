@@ -417,3 +417,28 @@ func TestHandlesConserveGroups(t *testing.T) {
 	}
 	replayed(t, st)
 }
+
+// TestHandlesRetiredDuringOpen: a file retired while a lease's open of it
+// is under way: the read is served, and its descriptor closed at the
+// release, never kept.
+func TestHandlesRetiredDuringOpen(t *testing.T) {
+	s, err := newSpiller(&testSchema, t.TempDir(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	f, at := handleFile(t, s, "r", 1, 5)
+	hookOpen = func(g *spillFile) error {
+		s.h.retire(g, evictRetired)
+		return nil
+	}
+	t.Cleanup(func() { hookOpen = nil })
+	rows, _, err := s.readAt(f, at[0].off, at[0].size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, "retired during the open", rows, handleRows("r", 0, 5))
+	if n := s.h.openFDs(); n != 0 {
+		t.Fatalf("%d descriptors kept for a retired file", n)
+	}
+}
