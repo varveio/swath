@@ -225,6 +225,7 @@ type provider[P any] struct {
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
 	oneRead          bool // the adapters read once per page (Options.PagePolicy)
+	trace            *rangeTrace
 }
 
 // Range is the engine's range.
@@ -281,10 +282,21 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 		if !eo.Sequential {
 			eo.PageFor, eo.PageMax = keyrange.GrowPage(client.MaxPageSize), client.MaxPageSize
 		}
+	case pageEstimate:
+		p.oneRead = true
+		if !eo.Sequential {
+			eo.PageFor, eo.PageMax = keyrange.EstimatePage(client.MaxPageSize), client.MaxPageSize
+		}
 	default:
-		return nil, fmt.Errorf("Azure Blob: --azure-page-policy %q: want %s, %s or %s", opt.PagePolicy, pageFixed, pageOneRead, pageGrow)
+		return nil, fmt.Errorf("Azure Blob: --azure-page-policy %q: want %s, %s, %s or %s", opt.PagePolicy, pageFixed, pageOneRead, pageGrow, pageEstimate)
 	}
-	if oracle != nil && !eo.Sequential {
+	if p.trace, err = openRangeTrace(); err != nil {
+		return nil, err
+	}
+	if oracle != nil && oracle.shadow != nil && !eo.Sequential {
+		eo.PageFor = oracle.logged(eo.PageFor)
+		eo.PageMax = max(eo.PageMax, eo.PageSize)
+	} else if oracle != nil && !eo.Sequential {
 		// One read per page: a read of the counted size into a chain that
 		// holds a read's surplus would end past the range by that surplus.
 		p.oneRead = true
@@ -369,9 +381,10 @@ func (p *provider[P]) tagsRefused(err error) error {
 
 // The experimental page policies (Options.PagePolicy).
 const (
-	pageFixed   = "fixed"
-	pageOneRead = "one-read"
-	pageGrow    = "grow"
+	pageFixed    = "fixed"
+	pageOneRead  = "one-read"
+	pageGrow     = "grow"
+	pageEstimate = "estimate"
 )
 
 // adapterKey carries an Expand's adapter on its context.
@@ -385,6 +398,9 @@ type adapterKey struct{}
 func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range, P]) error {
 	a := p.adapter()
 	defer a.Release()
+	if p.trace != nil {
+		return traceExpand(p.trace, context.WithValue(ctx, adapterKey{}, a), r, e, a, p.Engine.Expand)
+	}
 	return p.Engine.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
 

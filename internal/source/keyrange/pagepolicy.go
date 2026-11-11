@@ -40,3 +40,26 @@ func GrowPage(maxPage int) func(PageHint) int {
 		return min(next, int(want))
 	}
 }
+
+// EstimatePage is the experimental estimate-sized policy (#449,
+// diagnostic), an Options.PageFor asking at most maxPage: each request asks
+// for the engine's finite remaining-population estimate plus two rows (the
+// seek's own key and the first key past the range), at least the nominal
+// size; without a finite estimate (unknown, the frontier, a bound past the
+// page's view) it asks the nominal size. Unlike GrowPage it takes no
+// steps: a split's estimate sizes a child's first request, and the waste
+// at a range's end is the estimate's error.
+func EstimatePage(maxPage int) func(PageHint) int {
+	return func(h PageHint) int {
+		if math.IsNaN(h.Rem) || math.IsInf(h.Rem, 0) {
+			return h.Nominal
+		}
+		return min(max(int(h.Rem)+2, h.Nominal), maxPage)
+	}
+}
+
+// Bounds is r's interval for experiment tracing: (lo, hi], or (lo, ⊤)
+// when open, and how it was made (root, seed, lower, upper).
+func (r Range) Bounds() (lo, hi string, open bool, born string) {
+	return r.lo, r.hi, r.open, [...]string{"root", "seed", "lower", "upper"}[r.born]
+}

@@ -42,6 +42,15 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 // maxSeeds.
 func Tiles(workers int) int { return min(maxSeeds, 4*max(workers, 1)) }
 
+// tileLimit is the run's tile limit: Options.SeedTiles (diagnostic), else
+// Tiles.
+func (p *Engine[P]) tileLimit() int {
+	if p.opt.SeedTiles > 0 {
+		return p.opt.SeedTiles
+	}
+	return Tiles(p.opt.Workers)
+}
+
 // priorTilesPerWorker is how many tiles a counted prior aims at per
 // worker: two, so every worker starts with a tile and the end of the run
 // has some to balance, where four (Tiles) make tiles of few pages each,
@@ -173,7 +182,7 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 		fill = float64(q*p.opt.PageSize - 1)
 		p.c.Set(cSeedFromTilePages, int64(q))
 	}
-	tiles, unsafe := tilePrior(pr, Tiles(p.opt.Workers), fill, after, p.opt.Prefix, p.safe, p.safeStart)
+	tiles, unsafe := tilePrior(pr, p.tileLimit(), fill, after, p.opt.Prefix, p.safe, p.safeStart)
 	p.lock()
 	p.c.Set(cSeedFromParts, int64(pr.Parts))
 	p.c.Set(cSeedFromIndexed, int64(pr.IndexedParts))

@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/counters"
@@ -167,6 +168,7 @@ type Adapter struct {
 	// oneRead: a page that holds rows is returned rather than read again
 	// (OneReadPerPage).
 	oneRead bool
+	Tally   Tally
 }
 
 // OneReadPerPage makes every page that holds rows end at its first read's
@@ -191,6 +193,31 @@ func (a *Adapter) Release() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	clear(a.chains)
+}
+
+// Tally is this adapter's own share of the counters (an Expand's range;
+// experiment tracing, #449).
+type Tally struct {
+	Responses, Items, Overlap atomic.Int64
+}
+
+// Buffered is the rows the registered chains hold read and not emitted:
+// at Release, what the range abandons (a split's parent chain).
+func (a *Adapter) Buffered() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, c := range a.chains {
+		for i := range c.stack {
+			n += len(c.stack[i].buf)
+		}
+	}
+	return n
+}
+
+func (a *Adapter) overlap(n int64) {
+	a.add(COverlapRows, n)
+	a.Tally.Overlap.Add(n)
 }
 
 func (a *Adapter) add(i int, n int64) { a.set.Add(a.base+counters.ID(i), n) }
@@ -452,6 +479,8 @@ func (a *Adapter) read(ctx context.Context, c *chain, i, limit int) error {
 		return err
 	}
 	a.add(CResponses, 1)
+	a.Tally.Responses.Add(1)
+	a.Tally.Items.Add(int64(len(out.Items)))
 	if len(out.Items) == 0 && out.NextMarker != "" {
 		a.add(CEmptyPages, 1)
 	}
@@ -479,7 +508,7 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 		if !sp.contains(n, c.prefix) {
 			a.end(sp) // rule 3: past every member
 			if !a.transfer(c, i, items[k:], marker) {
-				a.add(COverlapRows, int64(len(items)-k))
+				a.overlap(int64(len(items) - k))
 			}
 			return
 		}
@@ -494,7 +523,7 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 			// grouped listing Through's own later entries follow it, so
 			// the span ends at the first item past them (rule 3).
 			a.end(sp)
-			a.add(COverlapRows, int64(len(items)-k-1))
+			a.overlap(int64(len(items) - k - 1))
 			return
 		}
 	}

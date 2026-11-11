@@ -197,6 +197,9 @@ type Options struct {
 	// on the page size may set it (Azure's markers do not).
 	PageFor func(PageHint) int
 	PageMax int // the most PageFor may ask (0: PageSize)
+	// SeedTiles is the most tiles a seed or a prior starts the run with
+	// (diagnostic; 0: Tiles(Workers)).
+	SeedTiles int
 	// PriorPageSize, when above PageSize, is the page size a counted prior
 	// (SeedFrom) sets instead: the provider's largest page, worth asking
 	// once the prior's tiles hold pages of keys each (Azure's 5,000).
