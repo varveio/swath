@@ -788,7 +788,9 @@ func (pr *proposal) children(c, m, hi string) (lower, upper float64) {
 		return lower, upper
 	}
 	if s := lower + upper; s > 0 && !math.IsInf(s, 1) {
-		return pr.rem * lower / s, pr.rem * upper / s
+		// Normalize first: a finite gauge weight times the retained count
+		// can overflow even when the weight's share is at most one.
+		return pr.rem * (lower / s), pr.rem * (upper / s)
 	}
 	return pr.rem / 2, pr.rem / 2
 }

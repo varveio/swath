@@ -169,13 +169,14 @@ prior's tiles hold whole pages. The diagnostic `--page-size` overrides it.
 (`running.held`, `seed.from.held_pages`) for the rank and the admission gates, instead of the page's gauge,
 which errs long by orders of magnitude on hierarchical keys and would admit splits of a tile's last page or two;
 a split shares the count between the children in the gauge's proportion (halves where the gauge cannot read a
-child). A range that lists past its count (`seed.from.outrun`) hands its remainder back to the gauge.
+child), normalizing the weights before scaling so large gauge estimates cannot turn a finite retained count
+infinite. A range that lists past its count (`seed.from.outrun`) hands its remainder back to the gauge.
 
-The prior sets the initial tiles and that first estimate only; the adaptive engine is the same for every source
+The prior sets the initial tiles and their retained counts; the adaptive engine is the same for every source
 (owner splits on demand, the gauge, the admission gates, the override, structure probes). How a stale prior is
 corrected: a grown segment lists past its count, and from then its gauge's remainder ranks it; an uncounted
 tile's first page replaces its estimate with the gauge's. Once workers go idle (hunger) it splits inside like any
-range, the gates reading the page, not the prior. A gauge that
+range, the gates using its retained count while it lasts and the page's gauge afterwards. A gauge that
 cannot read the bound (+∞) ranks it above every finite estimate; where the gauge errs, the admission override (4
 refusals in a row) and hunger cover the rest. An emptied segment costs one request for its tile; a new folder
 between cuts lies inside one tile and is split there. The report shows it: `seed.from.error.within_2x`, `.grown`,

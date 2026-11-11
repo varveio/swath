@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -133,5 +134,93 @@ func TestPriorCountHeld(t *testing.T) {
 	got, st, _, _ = seeded(t, keys, small, Options{PageSize: 100, PriorPageSize: 100}, 4)
 	if !slices.Equal(got, keys) || st.Get(cSeedFromOutrun) == 0 {
 		t.Fatalf("stale prior: %d keys, outrun %d", len(got), st.Get(cSeedFromOutrun))
+	}
+}
+
+// A gauge may read a finite number near the float limit from valid long
+// keys. Sharing a finite prior must conserve its count, even when the
+// unnormalized product would overflow, or the gauge cannot read a child.
+func TestPriorChildrenConserveCount(t *testing.T) {
+	const remaining = 1_000_000.0
+	for _, tc := range []struct {
+		name   string
+		prefix int
+	}{
+		{"ordinary", 0},
+		{"huge_finite", 640},
+		{"unread_bound", 700},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := strings.Repeat("0", tc.prefix)
+			page := []string{prefix + "0", prefix + "1"}
+			c, m, hi := page[1], prefix+"2", "2"
+			pr := proposal{gauge: newGauge(page), rem: remaining, held: true}
+			a, b := pr.gauge.keys(c, m), pr.gauge.keys(m, hi)
+			if tc.name == "huge_finite" && (math.IsInf(a+b, 0) || !math.IsInf(remaining*b, 1)) {
+				t.Fatalf("expected finite weights with an overflowing product, got %g, %g", a, b)
+			}
+			if tc.name == "unread_bound" && !math.IsInf(a+b, 1) {
+				t.Fatalf("expected an unread child, got %g, %g", a, b)
+			}
+			lower, upper := pr.children(c, m, hi)
+			if !(lower >= 0 && lower <= remaining && upper >= 0 && upper <= remaining) ||
+				math.Abs(lower+upper-remaining) > remaining*1e-12 {
+				t.Fatalf("finite prior %g became children %g, %g (weights %g, %g)", remaining, lower, upper, a, b)
+			}
+			if math.IsInf(a+b, 1) && (lower != remaining/2 || upper != remaining/2) {
+				t.Fatalf("unread child: %g, %g, want halves", lower, upper)
+			}
+		})
+	}
+}
+
+// Exercise the actual pivot, admission override and child inheritance:
+// an extreme but finite gauge must not install an infinite retained
+// count that no finite number of listed keys can exhaust.
+func TestPriorChildrenOutrunAfterAdmittedSplit(t *testing.T) {
+	prefix := strings.Repeat("0", 290)
+	page := make([]string, PageKeys)
+	for i := range page {
+		page[i] = prefix + fmt.Sprintf("%03d", i)
+	}
+	const remaining = 1_000_000.0
+	c := page[len(page)-1]
+	p, err := newTest(newSorted(nil, false, 1), Options{Workers: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Range{hi: "2", id: p.ids.Add(1), born: fromSeed}
+	st := &running{id: r.id, keys: int64(len(page)), prior: remaining + float64(len(page)), rem: remaining}
+	p.running[r.id] = st
+	pr := propose(r, page, page[0], c, r.hi, true, 3)
+	pr.gauge, pr.rem, pr.held = newGauge(page), remaining, true
+	a, b := pr.gauge.keys(c, pr.m), pr.gauge.keys(pr.m, r.hi)
+	if math.IsInf(a+b, 0) || !math.IsInf(remaining*b, 1) {
+		t.Fatalf("expected finite weights with an overflowing product, got %g, %g", a, b)
+	}
+	var pv pivot
+	var ok bool
+	for range admitRefusals + 1 {
+		pv, ok = p.decide(st, r, c, pr)
+		if ok {
+			break
+		}
+	}
+	if !ok || p.c.Load(cSplitAdmittedPersistent) != 1 {
+		t.Fatal("split was not admitted after persistent refusals")
+	}
+	lower, upper := p.commit(st, r, c, pv)
+	if math.Abs(lower.est+upper.est-remaining) > remaining*1e-12 {
+		t.Fatalf("children lost the retained count: %g, %g", lower.est, upper.est)
+	}
+	for _, r := range []Range{lower, upper} {
+		child := p.enter(r)
+		if !r.prior || !r.estOK || child.held() != r.est || !(r.est >= 0 && r.est <= remaining) {
+			t.Fatalf("child did not inherit a finite count: range %+v, held %g", r, child.held())
+		}
+		child.keys = 2_000_000
+		if got := child.held(); got != 0 {
+			t.Fatalf("child could not exhaust its prior: %g left", got)
+		}
 	}
 }
