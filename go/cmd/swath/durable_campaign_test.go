@@ -764,16 +764,6 @@ func frontierEnd(t *testing.T, dir string, rows int64) string {
 	return ""
 }
 
-func readManifest(t *testing.T, dir string) dataset.Manifest {
-	t.Helper()
-	var m dataset.Manifest
-	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
-	if err != nil || json.Unmarshal(b, &m) != nil {
-		t.Fatalf("manifest of %s: %v", dir, err)
-	}
-	return m
-}
-
 // sameRowsStreamed compares two datasets row by row, every column, in
 // manifest order, holding one batch of each at a time: parts closed by time
 // differ between runs, their rows may not.
