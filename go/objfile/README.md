@@ -51,6 +51,8 @@ func (s *remote.Store) Scope() string                                          /
 type Condition int
 const CreateOnly Condition                              // ifGenerationMatch=0 (S3: If-None-Match: *)
 var ErrExists error                                    // a CreateOnly write found an object
+var ErrUnresolved error                                // the write's outcome is unknown: read the name back
+func RedactError(err error) error                      // URLs in the text lose query and user information
 type Receipt struct{ Name string; Size int64; Identity string }
 type Upload interface {
 	io.Writer
@@ -66,6 +68,7 @@ type Writer interface {
 func RootWriter(w Writer, prefix string) Writer
 func gcs.NewWriter(client *storage.Client, bucket string, o gcs.WriteOptions) objfile.Writer
 func remote.Create(ctx context.Context, location string, o remote.CreateOptions) (*remote.Destination, error)
+func remote.ResolveEndpoint(endpoint string) (string, bool) // the flag, or STORAGE_EMULATOR_HOST (emulator)
 ```
 
 The store packages take the caller's own SDK client, with its credentials, endpoint, transport and retry
@@ -201,7 +204,13 @@ created version (the GCS generation). `Abort` ends an upload without an object. 
 `ifGenerationMatch=0`, checked by the service when the object is created, so of two writers of one name exactly
 one succeeds and the other gets `ErrExists`. After a lost response the SDK sends the request again, and a
 `PutIfAbsent` retry then finds the write's own object and returns `ErrExists`: a caller that must tell the two
-apart reads the object back and compares it with what it wrote.
+apart reads the object back and compares it with what it wrote. A completion that fails in transport, times
+out, is cancelled in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service
+may have applied it, or may still (a request accepted behind a failed connection), so a read that finds nothing
+proves nothing yet; only a refusal (another 4xx) leaves no object for certain. Every error a writer returns has
+passed through `RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's
+query, user information and fragment from the text: a GCS resumable session URI is a bearer capability for its
+upload, and the SDK's transport errors quote it. `Abort` may run while a `Write` is blocked; it cancels first.
 
 `gcs.NewWriter` uploads in resumable sessions of `WriteOptions.ChunkSize` (8 MiB by default; the SDK rounds to
 256 KiB): the SDK buffers one chunk an upload and blocks `Write` while it is in flight, so memory is a chunk per
@@ -214,7 +223,10 @@ leaves the process.
 `remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a
 read-write client it owns, with its own credentials (`CreateOptions.CredentialsFile`, or Application Default
 Credentials) and endpoint, shared with no read client. Only `gs://` is written; `s3://` and `az://` are
-refused. The SDK's logger is silenced, since its debug output writes request headers unredacted.
+refused. The SDK's logger is silenced, since its debug output writes request headers unredacted. The endpoint
+is resolved once (`ResolveEndpoint`: the option, else `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly,
+so a caller that records it is never redirected by the environment later. A response's headers are awaited two
+minutes at most (`RequestTimeout`), a chunk's transfer two minutes, and reads get at most five attempts.
 
 `gcs/gcsfake` is the in-process fake the GCS tests use: JSON metadata and deletes, XML ranged reads, and
 uploads both single-request and resumable, with `ifGenerationMatch` evaluated atomically at creation and a

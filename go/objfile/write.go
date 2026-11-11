@@ -42,12 +42,22 @@ type Receipt struct {
 	Identity string
 }
 
+// ErrUnresolved reports a write whose outcome is unknown: the request failed
+// in transport, timed out, or was answered with a server error, so the
+// store may have applied it, or may still apply it. A caller that must
+// know reads the name back, and takes absence as proof of nothing while
+// the request could still be in flight.
+var ErrUnresolved = errors.New("objfile: the write's outcome is unknown")
+
 // Upload is one object being written. Write takes its bytes in order; Close
-// completes it, and only a Close that returns nil leaves an object, whose
-// Receipt is then valid. Abort ends it without an object (after a failed
-// Close, or instead of one); Abort after a successful Close does nothing.
-// An Upload is used by one goroutine at a time; Abort may be called from
-// another to cancel it.
+// completes it. A Close that returns nil leaves an object, whose Receipt is
+// then valid. A Close that fails with ErrUnresolved may have left one, or
+// may yet leave one (a request the store accepted can outlive the failed
+// connection): only a read of the name settles it, and nothing the caller
+// does to the Upload can prevent it. A Close that fails otherwise, and an
+// Abort before Close, leave no object. Abort after a successful Close does
+// nothing. An Upload is used by one goroutine at a time; Abort may be
+// called from another to cancel it, while a Write is in progress.
 type Upload interface {
 	io.Writer
 	Close() error
@@ -65,11 +75,16 @@ type Writer interface {
 	// exists until Close succeeds.
 	NewWriter(ctx context.Context, name string, c Condition) (Upload, error)
 	// PutIfAbsent creates name holding data, CreateOnly, in one request
-	// where the store allows: ErrExists when an object is already there.
+	// where the store allows: ErrExists when an object is already there,
+	// ErrUnresolved when the outcome is unknown.
 	PutIfAbsent(ctx context.Context, name string, data []byte) (Receipt, error)
 	// DeleteIf deletes name only if its current version is identity: one
 	// that is gone fails with an error wrapping fs.ErrNotExist, one
 	// replaced since with ErrObjectChanged.
+	//
+	// Every error a Writer or an Upload returns has passed through
+	// RedactError: no request URL's query or user information is in its
+	// text.
 	DeleteIf(ctx context.Context, name, identity string) error
 }
 

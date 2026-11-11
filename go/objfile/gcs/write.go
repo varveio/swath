@@ -18,6 +18,7 @@ import (
 	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/internal/redact"
 )
 
 // DefaultChunkSize is the bytes a resumable upload sends per request, and
@@ -27,6 +28,10 @@ const DefaultChunkSize = 8 << 20
 // DefaultMaxAttempts bounds each request's attempts, the SDK's retries
 // included.
 const DefaultMaxAttempts = 5
+
+// DefaultChunkTransferTimeout bounds one chunk request of a resumable
+// upload: 8 MiB at under 70 KB/s.
+const DefaultChunkTransferTimeout = 2 * time.Minute
 
 // WriteOptions configure a Writer.
 type WriteOptions struct {
@@ -45,6 +50,10 @@ type WriteOptions struct {
 	// ChunkRetryDeadline bounds the time one chunk is retried (0: the
 	// SDK's, 32 seconds).
 	ChunkRetryDeadline time.Duration
+	// ChunkTransferTimeout bounds one chunk request, so a stalled request
+	// is retried (within ChunkRetryDeadline) instead of waited on (0:
+	// DefaultChunkTransferTimeout).
+	ChunkTransferTimeout time.Duration
 	// Retried, if set, is called with each failed attempt the SDK's policy
 	// would retry, and the operation it belongs to (a caller's account of
 	// retries and their classes). It must return quickly.
@@ -62,6 +71,9 @@ func NewWriter(client *storage.Client, bucket string, o WriteOptions) objfile.Wr
 	}
 	if o.MaxAttempts <= 0 {
 		o.MaxAttempts = DefaultMaxAttempts
+	}
+	if o.ChunkTransferTimeout <= 0 {
+		o.ChunkTransferTimeout = DefaultChunkTransferTimeout
 	}
 	return writer{bucket: client.Bucket(bucket), o: o}
 }
@@ -111,6 +123,7 @@ func (w writer) NewWriter(ctx context.Context, name string, c objfile.Condition)
 	sw := obj.NewWriter(ctx)
 	sw.ChunkSize = w.o.ChunkSize
 	sw.ChunkRetryDeadline = w.o.ChunkRetryDeadline
+	sw.ChunkTransferTimeout = w.o.ChunkTransferTimeout
 	sw.ContentType = "application/octet-stream" // no sniffing
 	u.w, u.cancel = sw, cancel
 	return u, nil
@@ -124,9 +137,13 @@ type upload struct {
 	name   string
 	w      *storage.Writer
 	cancel context.CancelFunc
-	n      int64 // bytes written
 
-	written, retries atomic.Int64 // read by the retry budget, on the SDK's goroutine
+	written, retries atomic.Int64 // bytes written; retried attempts (read on the SDK's goroutine)
+
+	// wmu serializes the SDK writer's Write and Close: Abort cancels the
+	// context first, which ends a Write blocked on the network, then takes
+	// wmu to join the SDK's goroutine.
+	wmu sync.Mutex
 
 	mu      sync.Mutex
 	state   int // 0 open, 1 closing or closed, 2 aborted
@@ -135,11 +152,24 @@ type upload struct {
 }
 
 func (u *upload) Write(p []byte) (int, error) {
+	u.wmu.Lock()
+	defer u.wmu.Unlock()
+	u.mu.Lock()
+	state := u.state
+	u.mu.Unlock()
+	if state != 0 {
+		return 0, redact.URLs(fmt.Errorf("objfile/gcs: write %s: upload closed or aborted", u.name))
+	}
 	n, err := u.w.Write(p)
-	u.n += int64(n)
-	u.written.Store(u.n)
+	u.written.Add(int64(n))
 	if err != nil {
-		err = writeError(u.name, err)
+		// A session start or a middle chunk creates no object: a failed
+		// Write is never unresolved. The session's precondition may fail
+		// here (ErrExists).
+		if status(err) == http.StatusPreconditionFailed {
+			err = fmt.Errorf("%w: %w", objfile.ErrExists, err)
+		}
+		err = redact.URLs(&fs.PathError{Op: "write", Path: u.name, Err: err})
 	}
 	return n, err
 }
@@ -148,18 +178,20 @@ func (u *upload) Close() error {
 	u.mu.Lock()
 	if u.state != 0 {
 		u.mu.Unlock()
-		return fmt.Errorf("objfile/gcs: write %s: upload already closed or aborted", u.name)
+		return redact.URLs(fmt.Errorf("objfile/gcs: write %s: upload already closed or aborted", u.name))
 	}
 	u.state = 1
 	u.mu.Unlock()
+	u.wmu.Lock()
 	err := u.w.Close()
+	u.wmu.Unlock()
 	if err == nil {
 		a := u.w.Attrs()
 		switch {
 		case a == nil:
-			err = errors.New("the service returned no object")
-		case a.Size != u.n:
-			err = fmt.Errorf("the service stored %d bytes of %d written", a.Size, u.n)
+			err = fmt.Errorf("%w: the service returned no object", objfile.ErrUnresolved)
+		case a.Size != u.written.Load():
+			err = fmt.Errorf("the service stored %d bytes of %d written", a.Size, u.written.Load())
 		default:
 			u.mu.Lock()
 			u.receipt, u.done = objfile.Receipt{Name: u.name, Size: a.Size, Identity: strconv.FormatInt(a.Generation, 10)}, true
@@ -168,15 +200,17 @@ func (u *upload) Close() error {
 	}
 	u.cancel()
 	if err != nil {
-		return writeError(u.name, err)
+		return completionError(u.name, err)
 	}
 	return nil
 }
 
-// Abort cancels the upload: its session request is cancelled and no
-// object is created. A session the service already holds expires (GCS
-// keeps an unfinished resumable session for a week); its URI never leaves
-// this process.
+// Abort cancels the upload before Close: the session's request is
+// cancelled and no object is created, since only Close sends the request
+// that creates it. A session the service already holds expires (GCS keeps
+// an unfinished resumable session for a week); its URI never leaves this
+// process. It may run while a Write is blocked on the network, which the
+// cancellation ends.
 func (u *upload) Abort() error {
 	u.mu.Lock()
 	state := u.state
@@ -185,8 +219,10 @@ func (u *upload) Abort() error {
 	}
 	u.mu.Unlock()
 	u.cancel()
-	if state == 0 && u.n > 0 {
+	if state == 0 && u.written.Load() > 0 {
+		u.wmu.Lock()
 		_ = u.w.Close() // waits for the SDK's goroutine; fails with the cancellation
+		u.wmu.Unlock()
 	}
 	return nil
 }
@@ -214,6 +250,10 @@ func (w writer) PutIfAbsent(ctx context.Context, name string, data []byte) (objf
 }
 
 func (w writer) DeleteIf(ctx context.Context, name, identity string) error {
+	return redact.URLs(w.deleteIf(ctx, name, identity))
+}
+
+func (w writer) deleteIf(ctx context.Context, name, identity string) error {
 	gen, err := strconv.ParseInt(identity, 10, 64)
 	if err != nil || gen <= 0 {
 		return &fs.PathError{Op: "delete", Path: name, Err: fmt.Errorf("%w: identity %q is not a generation", fs.ErrInvalid, identity)}
@@ -235,12 +275,22 @@ func (w writer) DeleteIf(ctx context.Context, name, identity string) error {
 	return &fs.PathError{Op: "delete", Path: name, Err: err}
 }
 
-// writeError marks a failed precondition as objfile.ErrExists.
-func writeError(name string, err error) error {
-	if status(err) == http.StatusPreconditionFailed {
+// completionError classifies a failed completion (the request that creates
+// the object): a failed precondition is objfile.ErrExists; a service answer
+// that refuses the request (4xx but 408 and 429) leaves no object; anything
+// else (a transport failure, a timeout, a cancellation in flight, a server
+// error, a throttle a proxy may have answered for a request still in
+// flight) is objfile.ErrUnresolved. The text is redacted.
+func completionError(name string, err error) error {
+	switch code := status(err); {
+	case errors.Is(err, objfile.ErrUnresolved):
+	case code == http.StatusPreconditionFailed:
 		err = fmt.Errorf("%w: %w", objfile.ErrExists, err)
+	case code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
+	default:
+		err = fmt.Errorf("%w: %w", objfile.ErrUnresolved, err)
 	}
-	return &fs.PathError{Op: "write", Path: name, Err: err}
+	return redact.URLs(&fs.PathError{Op: "write", Path: name, Err: err})
 }
 
 // status is the HTTP status of a service error, 0 for another error.

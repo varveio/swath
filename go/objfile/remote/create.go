@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/oauth2/google"
@@ -35,9 +37,18 @@ type CreateOptions struct {
 	// Endpoint is the JSON API base the client sends to
 	// (https://storage.googleapis.com/storage/v1/ by default), as the SDK
 	// takes it; "" is the default, or the emulator STORAGE_EMULATOR_HOST
-	// names (then without credentials). It may not carry user information,
-	// a query or a fragment.
+	// names (then without credentials: ResolveEndpoint). It may not carry
+	// user information, a query or a fragment.
 	Endpoint string
+	// Emulator says Endpoint is an emulator's host or URL, reached without
+	// credentials (what ResolveEndpoint returns for STORAGE_EMULATOR_HOST).
+	// A caller that freezes the route resolves it once and passes both, so
+	// the environment is not read again.
+	Emulator bool
+	// RequestTimeout bounds the wait for a response's headers once a
+	// request is sent, so a stalled request fails (and is retried) instead
+	// of hanging (0: DefaultRequestTimeout).
+	RequestTimeout time.Duration
 	// Write configures the uploads (chunk size, retries, their account).
 	Write gcs.WriteOptions
 }
@@ -67,18 +78,20 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 		return nil, fmt.Errorf("remote: writing to %s:// is not supported (gs:// only)", l.Scheme)
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
+	pool.ResponseHeaderTimeout = o.RequestTimeout
+	if pool.ResponseHeaderTimeout <= 0 {
+		pool.ResponseHeaderTimeout = DefaultRequestTimeout
+	}
 	d := &Destination{scope: l.String()}
-	endpoint, emulator := o.Endpoint, false
-	if endpoint == "" {
-		endpoint = os.Getenv("STORAGE_EMULATOR_HOST")
-		emulator = endpoint != ""
+	if o.Endpoint == "" && !o.Emulator {
+		o.Endpoint, o.Emulator = ResolveEndpoint("")
 	}
 	s := &Store{scope: d.scope}
-	if err := s.at(endpoint); err != nil {
+	if err := s.at(o.Endpoint); err != nil {
 		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
 	}
 	d.scope = s.scope
-	client, err := writeClient(ctx, pool, o, emulator)
+	client, err := writeClient(ctx, pool, o)
 	if err != nil {
 		return nil, err
 	}
@@ -93,11 +106,11 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 // ranged.Transport, as Open's do. The SDK's logger is silenced: its debug
 // output, switched on by the environment, writes request headers
 // unredacted, the bearer token included.
-func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions, emulator bool) (*storage.Client, error) {
+func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions) (*storage.Client, error) {
 	tr := ranged.Transport(pool)
 	opts := []option.ClientOption{option.WithLogger(slog.New(slog.DiscardHandler))}
 	switch {
-	case emulator:
+	case o.Emulator:
 	case o.CredentialsFile != "":
 		b, err := os.ReadFile(o.CredentialsFile)
 		if err != nil {
@@ -118,14 +131,46 @@ func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions, e
 		}
 	}
 	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: tr}))
-	if o.Endpoint != "" {
-		ep := o.Endpoint
-		if ep[len(ep)-1] != '/' {
+	if ep := o.Endpoint; ep != "" {
+		if o.Emulator {
+			// The emulator's JSON API base, as the SDK makes it from
+			// STORAGE_EMULATOR_HOST, given explicitly: the environment
+			// is not read again.
+			if !strings.Contains(ep, "://") {
+				ep = "http://" + ep
+			}
+			ep = strings.TrimSuffix(ep, "/") + "/storage/v1/"
+		} else if ep[len(ep)-1] != '/' {
 			ep += "/"
 		}
 		opts = append(opts, option.WithEndpoint(ep))
 	}
-	return storage.NewClient(ctx, opts...)
+	c, err := storage.NewClient(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// Reads (metadata, ranges) are bounded as uploads are: the SDK's
+	// default retries them until the context ends.
+	c.SetRetry(storage.WithMaxAttempts(gcs.DefaultMaxAttempts))
+	return c, nil
+}
+
+// DefaultRequestTimeout bounds the wait for a response's headers.
+const DefaultRequestTimeout = 2 * time.Minute
+
+// ResolveEndpoint is the destination endpoint the options' Endpoint
+// resolves to: endpoint itself when set, else the emulator
+// STORAGE_EMULATOR_HOST names (emulator true), else "" (Google's). A
+// caller that freezes a destination's route resolves it once, records it,
+// and passes the result to Create.
+func ResolveEndpoint(endpoint string) (string, bool) {
+	if endpoint != "" {
+		return endpoint, false
+	}
+	if host := os.Getenv("STORAGE_EMULATOR_HOST"); host != "" {
+		return host, true
+	}
+	return "", false
 }
 
 // Writer is the Destination's writer of names under the location's

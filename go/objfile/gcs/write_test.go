@@ -9,10 +9,15 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
@@ -324,5 +329,115 @@ func TestRootWriter(t *testing.T) {
 	}
 	if _, ok := f.Get("ds/x/m.json"); !ok {
 		t.Fatalf("objects: %v", f.Names())
+	}
+}
+
+// failing fails, as a connection lost in transport would, a resumable
+// session's middle chunks (chunks), its last request (last), or every
+// single-request creation (single).
+type failing struct {
+	base                 http.RoundTripper
+	chunks, last, single bool
+}
+
+func (f failing) RoundTrip(r *http.Request) (*http.Response, error) {
+	q := r.URL.Query()
+	final := !strings.HasSuffix(r.Header.Get("Content-Range"), "/*")
+	if q.Get("upload_id") != "" && (f.chunks && !final || f.last && final) || f.single && q.Get("uploadType") == "multipart" {
+		return nil, errors.New("connection lost")
+	}
+	return f.base.RoundTrip(r)
+}
+
+// TestSessionSecrecy: a session URI is a bearer capability for its upload;
+// no error a write returns quotes it, whether a middle chunk or the
+// completion fails in transport. A completion that fails so is unresolved
+// (the request may have reached the service); a failed chunk is not.
+func TestSessionSecrecy(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		size       int
+		fail       failing
+		unresolved bool
+	}{
+		{"chunk", 3 * chunk, failing{chunks: true}, false},
+		{"completion", 3*chunk + 7, failing{last: true}, true},
+		{"single", 100, failing{single: true}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := gcsfake.New(bucket)
+			srv := httptest.NewServer(f)
+			t.Cleanup(srv.Close)
+			c.fail.base = http.DefaultTransport
+			cl, err := storage.NewClient(context.Background(), option.WithEndpoint(srv.URL+"/storage/v1/"), option.WithoutAuthentication(),
+				option.WithHTTPClient(&http.Client{Transport: c.fail}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cl.Close() })
+			w := gcs.NewWriter(cl, bucket, gcs.WriteOptions{ChunkSize: chunk, MaxAttempts: 1, ChunkRetryDeadline: 200 * time.Millisecond})
+			_, err = upload(t, w, "obj", objfiletest.Data(c.size, 1))
+			if err == nil {
+				t.Fatal("a write whose requests fail succeeded")
+			}
+			if strings.Contains(err.Error(), "upload_id") || strings.Contains(err.Error(), "uploadType") {
+				t.Fatalf("the request URL's query is in the error: %v", err)
+			}
+			if errors.Is(err, objfile.ErrUnresolved) != c.unresolved {
+				t.Fatalf("unresolved = %v, want %v: %v", errors.Is(err, objfile.ErrUnresolved), c.unresolved, err)
+			}
+		})
+	}
+}
+
+// TestUnresolved: a completion answered with a server error, or never
+// answered, is unresolved; one the service refuses (403) is not.
+func TestUnresolved(t *testing.T) {
+	for code, want := range map[int]bool{http.StatusServiceUnavailable: true, http.StatusInternalServerError: true, http.StatusForbidden: false, http.StatusBadRequest: false} {
+		f, w, _, _ := writerOf(t)
+		f.SetFault(func(op, _ string, after bool) int {
+			if op == gcsfake.OpCreate && !after {
+				return code
+			}
+			return 0
+		})
+		_, err := w.PutIfAbsent(context.Background(), "m", []byte("x"))
+		if err == nil || errors.Is(err, objfile.ErrUnresolved) != want {
+			t.Errorf("%d: %v, unresolved want %v", code, err, want)
+		}
+	}
+}
+
+// TestConcurrentAbort: Abort from another goroutine ends a writer that
+// keeps writing, without a data race and without waiting on the network.
+func TestConcurrentAbort(t *testing.T) {
+	_, c := client(t, plain)
+	w := gcs.NewWriter(c, bucket, gcs.WriteOptions{ChunkSize: chunk})
+	for i := range 10 {
+		u, err := w.NewWriter(context.Background(), "race"+strconv.Itoa(i), objfile.CreateOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := u.Write([]byte("first")); err != nil {
+			t.Fatal(err)
+		}
+		started, done := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			close(started)
+			for {
+				if _, err := u.Write(make([]byte, 4096)); err != nil {
+					return
+				}
+			}
+		}()
+		<-started
+		if err := u.Abort(); err != nil {
+			t.Fatal(err)
+		}
+		<-done
+		if err := u.Close(); err == nil {
+			t.Fatal("Close after Abort succeeded")
+		}
 	}
 }
