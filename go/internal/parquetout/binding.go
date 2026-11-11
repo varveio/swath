@@ -108,13 +108,26 @@ func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row
 	if c.Required {
 		def = 0
 	}
+	null := pq.NullValue().Level(0, 0, col)
 	switch {
 	case c.Str != nil:
+		// A string equal to the previous row's reuses its value, so a run of
+		// repeats (a storage class, a checksum type) skips building one:
+		// Level is not inlined. The value then points at the earlier row's
+		// bytes, which are equal, so the column is written the same.
+		var last string
+		var lastValue pq.Value
+		have := false
 		for i := range rows {
-			if v, ok := c.Str(&rows[i].Data); ok {
-				dst[i] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
-			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+			v, ok := c.Str(&rows[i].Data)
+			switch {
+			case !ok:
+				dst[i] = null
+			case have && v == last:
+				dst[i] = lastValue
+			default:
+				last, lastValue, have = v, pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col), true
+				dst[i] = lastValue
 			}
 		}
 	case c.Type == schema.Int32 || c.Type == schema.Uint32:
@@ -122,7 +135,7 @@ func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row
 			if v, ok := c.Int(&rows[i].Data); ok {
 				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i] = null
 			}
 		}
 	case c.Bool != nil:
@@ -130,7 +143,7 @@ func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row
 			if v, ok := c.Bool(&rows[i].Data); ok {
 				dst[i] = pq.BooleanValue(v).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i] = null
 			}
 		}
 	default:
@@ -138,7 +151,7 @@ func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row
 			if v, ok := c.Int(&rows[i].Data); ok {
 				dst[i] = pq.Int64Value(v).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i] = null
 			}
 		}
 	}
