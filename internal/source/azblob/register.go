@@ -18,6 +18,7 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/tree"
 )
 
 func init() {
@@ -50,7 +51,7 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 		Long: "A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included."})
 	source.Define(f, source.Flag{Name: "azure-fetch-immutability", Value: source.Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
 	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
-		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
+		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report is never overridden and uses tree listing for current blobs. Frozen for resume and shown in the report."})
 	return o
 }
 
@@ -120,8 +121,18 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		}
 		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionSchema), Registered: p, p: p}, nil
 	}
-	p, err := New(ctx, opt)
+	p, own, hns, err := admitted(ctx, opt, &Schema, (*Provider).object, func(o *Object) int64 { return o.Size })
 	if err != nil {
+		return nil, err
+	}
+	if hns {
+		t, err := newTree(p, own)
+		if err != nil {
+			return nil, err
+		}
+		return &treeOpened{Bound: registry.Bind[tree.OrderedRange, Object](t, &Schema), t: t}, nil
+	}
+	if err := p.flat(own); err != nil {
 		return nil, err
 	}
 	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil

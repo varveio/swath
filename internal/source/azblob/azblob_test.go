@@ -431,9 +431,9 @@ func (h hostFake) RoundTrip(req *http.Request) (*http.Response, error) {
 // with soft delete or blob events) lists; an absent header, another code or
 // a refusal there is unknown, which refuses unless
 // --azure-assume-flat asserts a flat namespace (frozen in the identity, shown in
-// the report, warned about). A hierarchical namespace refuses whatever is
-// asserted, and an endpoint that is not ACCOUNT.blob.core.windows.net has
-// no Data Lake host to ask.
+// the report, warned about). A hierarchical namespace, from either call,
+// lists on the tree core whatever is asserted, and an endpoint that is not
+// ACCOUNT.blob.core.windows.net has no Data Lake host to ask.
 func TestAdmissionFallback(t *testing.T) {
 	blob := func(status int, hns string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -473,13 +473,13 @@ func TestAdmissionFallback(t *testing.T) {
 		{"401, dfs false", blob(401, ""), 200, "false", false, "filesystem properties", false, false, ""},
 		{"403, dfs false", blob(403, ""), 200, "false", false, "filesystem properties", false, false, ""},
 		{"silent, dfs false", blob(200, ""), 200, "false", false, "filesystem properties", false, false, ""},
-		{"401, dfs true", blob(401, ""), 200, "true", false, "", true, false, ""},
-		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "", true, false, ""},
+		{"401, dfs true", blob(401, ""), 200, "true", false, "filesystem properties", true, false, ""},
+		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "filesystem properties", true, false, ""},
 		{"401, dfs absent", blob(401, ""), 200, "", false, "", false, false, ""},
 		{"401, dfs absent, asserted", blob(401, ""), 200, "", true, "asserted", false, false, ""},
 		{"401, dfs 401, asserted", blob(401, ""), 401, "", true, "asserted", false, false, ""},
 		{"blob false", blob(200, "false"), 200, "true", false, "account information", false, true, ""},
-		{"blob true, asserted", blob(200, "true"), 200, "false", true, "", true, true, ""},
+		{"blob true, asserted", blob(200, "true"), 200, "false", true, "account information", true, true, ""},
 		{"blob 500, asserted", blob(500, ""), 200, "false", true, "asserted", false, true, ""},
 		{"401, dfs 409 soft delete or events", blob(401, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
 		{"403, dfs 409 soft delete or events", blob(403, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
@@ -499,12 +499,19 @@ func TestAdmissionFallback(t *testing.T) {
 			Warn: func(s string) { warned = append(warned, s) }})
 		switch {
 		case c.admitted == "":
-			if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" ||
-				strings.Contains(err.Error(), "hierarchical namespace") != c.hierarchical {
-				t.Fatalf("%s: %v, want a refusal (hierarchical %v)", c.name, err, c.hierarchical)
+			if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" {
+				t.Fatalf("%s: %v, want a refusal", c.name, err)
 			}
 		case err != nil:
 			t.Fatalf("%s: %v", c.name, err)
+		case c.hierarchical:
+			o, ok := src.(*treeOpened)
+			if !ok {
+				t.Fatalf("%s: opened as %T, want the tree mode", c.name, src)
+			}
+			if st := o.t.Stats(); st.Namespace != c.admitted || st.Listing != "tree" || len(warned) != 0 {
+				t.Fatalf("%s: namespace %q listing %q, warnings %q", c.name, st.Namespace, st.Listing, warned)
+			}
 		default:
 			o := src.(*opened[Object])
 			if n := o.p.Stats().Namespace; n != c.admitted {

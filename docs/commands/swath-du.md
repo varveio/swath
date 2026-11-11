@@ -186,8 +186,9 @@ Azure Blob:
                                 For when Get Account Information and the Data Lake host's Filesystem
                                 Get Properties are both refused or silent (a Data Lake host that
                                 refuses the account for soft delete or blob events already
-                                establishes a flat one); a hierarchical namespace they report still
-                                refuses. Frozen for resume and shown in the report.
+                                establishes a flat one); a hierarchical namespace they report is
+                                never overridden and uses tree listing for current blobs. Frozen for
+                                resume and shown in the report.
 
 Local:
       --metadata names|stat|statx

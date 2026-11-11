@@ -66,7 +66,10 @@ filter package's proof that every descendant is excluded. `Out.Rows` checks that
 `Descend`: reader-owned `Omit` and `Prune` take precedence. A match retains the directory row for the
 ordinary row filter, emits no child, and increments `Stats.Excluded`, separately from reader-owned
 `Stats.Pruned`. It applies equally to whole directories and segments. localfs reports these as
-`pruned_dirs` and `other_device_dirs`; its `pruning` plan classifies the exclude rules. Row rejection
+`pruned_dirs` and `other_device_dirs`. Azure HNS also installs the predicate in its registered
+`Run` and reports `pruned_dirs` (absent when zero); both sources report the rule classification in
+`pruning`. This avoids child listing requests on HNS; the service still lists the parent and returns
+the directory metadata. Row rejection
 alone never prevents descent, and no counts or bytes are estimated for unvisited descendants.
 
 Two ways to read a directory:
