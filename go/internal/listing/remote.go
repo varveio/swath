@@ -235,7 +235,8 @@ func (rs *remoteState) checkFresh(ctx context.Context) error {
 // commit's time bound, when the run saved a candidate manifest (it reached
 // its commit): the destination's
 // manifest is the candidate (the commit happened: the marker is written
-// now, not finalized), another one (a lost race), absent (the commit is
+// now, not finalized), another one (a lost race: this run's own uploads
+// are deleted, as the commit's loser deletes them), absent (the commit is
 // made again, with the same candidate), or unknown (unresolved).
 func (rs *remoteState) preflight(ctx context.Context, r *os.Root) error {
 	cand, err := dataset.ReadCandidate(r)
@@ -254,6 +255,12 @@ func (rs *remoteState) preflight(ctx context.Context, r *os.Root) error {
 		}
 		return nil // committed: the caller finalizes
 	case dataset.ManifestOther:
+		// Lost: this run's own uploads go, as the commit's loser cleans
+		// them; a failed delete is tried again by the next resume.
+		rs.outcome = "lost_race"
+		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), orDefault(rs.cfg.FinalizeTimeout, DefaultFinalizeTimeout))
+		rs.cleanupOrphans(cctx, r, dataset.ManifestParts(other))
+		ccancel()
 		return &dataset.LostRaceError{Winner: other}
 	}
 	return fmt.Errorf("%w: read back: %v", dataset.ErrCommitUnresolved, objfile.RedactError(err))

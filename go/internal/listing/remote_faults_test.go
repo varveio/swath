@@ -809,3 +809,45 @@ func TestRemoteFinalizeRetried(t *testing.T) {
 	}
 	d.sameAsLocal(t, "finalized on resume", ref, "refin", true)
 }
+
+// TestRemoteLostRaceResumed: a run killed after saving its candidate, whose
+// prefix another run then commits, deletes its own uploads when resumed
+// (and on a later resume when a delete failed), and reports the lost race.
+func TestRemoteLostRaceResumed(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	d := newDestination(t, nil)
+	ws := filepath.Join(t.TempDir(), "work")
+	crashRemote(t, url, ws, d.output("lostresume"), false, "candidate-saved", 1)
+	d.Put("lostresume/"+dataset.ManifestName, []byte(`{"other":1}`))
+	ours := func() int {
+		n := 0
+		for _, name := range d.Names() {
+			if strings.HasPrefix(name, "lostresume/data/") {
+				n++
+			}
+		}
+		return n
+	}
+	if ours() == 0 {
+		t.Fatal("no part uploaded before the kill")
+	}
+	d.SetFault(func(op, _ string, after bool) int {
+		if op == gcsfake.OpDelete && !after {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	rep, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
+	if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.OrphansLeft == 0 || ours() == 0 {
+		t.Fatalf("%v; %+v", err, rep.Output.Remote)
+	}
+	d.SetFault(nil)
+	rep, err = Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
+	if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.Commit != "lost_race" || rep.Output.Remote.OrphansDeleted == 0 || ours() != 0 {
+		t.Fatalf("%v; %+v; %d parts left", err, rep.Output.Remote, ours())
+	}
+	if o, _ := d.Get("lostresume/" + dataset.ManifestName); string(o.Data) != `{"other":1}` {
+		t.Fatal("the winner's manifest changed")
+	}
+}
