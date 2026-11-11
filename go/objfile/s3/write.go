@@ -108,28 +108,41 @@ type writer struct {
 // opts are a request's options: the attempt bound, retry accounting under
 // op's name, and for PutObject a 409 retried (S3's answer to a concurrent
 // conditional write; the request can be sent again whole).
-func (w *writer) opts(op string) func(*s3.Options) {
+func (w *writer) opts(op string) func(*s3.Options) { return w.creating(op, nil) }
+
+// creating is opts for a request that creates an object: uncertain, if
+// set, is set when an attempt is retried after a failure that may have
+// reached the service (anything but a 409), which a later refusal does
+// not undo (completionError).
+func (w *writer) creating(op string, uncertain *atomic.Bool) func(*s3.Options) {
 	return func(o *s3.Options) {
 		r := retry.AddWithMaxAttempts(o.Retryer, w.o.MaxAttempts)
 		if op == "PutObject" {
 			r = retry.AddWithErrorCodes(r, "ConditionalRequestConflict")
 		}
-		o.Retryer = counted{RetryerV2: r.(aws.RetryerV2), op: op, retried: w.o.Retried}
+		o.Retryer = counted{RetryerV2: r.(aws.RetryerV2), op: op, retried: w.o.Retried, uncertain: uncertain}
 	}
 }
 
-// counted tells retried of each retry: the retry middleware asks for a
-// retry token only once it has decided to retry.
+// counted tells retried of each retry, and marks uncertain: the retry
+// middleware asks for a retry token only once it has decided to retry.
 type counted struct {
 	aws.RetryerV2
-	op      string
-	retried func(string, error)
+	op        string
+	retried   func(string, error)
+	uncertain *atomic.Bool
 }
 
+// GetRetryToken is the wrapped retryer's, once a retry is decided.
 func (c counted) GetRetryToken(ctx context.Context, err error) (func(error) error, error) {
 	release, terr := c.RetryerV2.GetRetryToken(ctx, err)
-	if terr == nil && c.retried != nil {
-		c.retried(c.op, err)
+	if terr == nil {
+		if c.retried != nil {
+			c.retried(c.op, err)
+		}
+		if c.uncertain != nil && apiCode(err) != "ConditionalRequestConflict" {
+			c.uncertain.Store(true)
+		}
 	}
 	return release, terr
 }
@@ -166,6 +179,8 @@ type upload struct {
 	n       int64 // bytes written
 	state   int   // 0 open, 1 closed, 2 failed
 	receipt objfile.Receipt
+
+	uncertain atomic.Bool // the creating request was retried after an ambiguous failure
 
 	aborts   int   // abort attempts made (abortUpload)
 	abortErr error // the last abort's failure, while id is still due
@@ -258,7 +273,7 @@ func (u *upload) Close() error {
 	if err != nil {
 		u.state = 2
 		if completion {
-			err = completionError(err)
+			err = completionError(err, u.uncertain.Load())
 		}
 		return u.fail(err)
 	}
@@ -276,7 +291,7 @@ func (u *upload) complete() (completion bool, err error) {
 		data = *u.buf
 	}
 	if u.id == "" {
-		r, err := u.w.put(u.ctx, u.name, data)
+		r, err := u.w.put(u.ctx, u.name, data, &u.uncertain)
 		u.receipt = r
 		return true, err
 	}
@@ -287,7 +302,7 @@ func (u *upload) complete() (completion bool, err error) {
 	}
 	out, err := u.w.client.CompleteMultipartUpload(u.ctx, &s3.CompleteMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id,
 		MultipartUpload: &types.CompletedMultipartUpload{Parts: u.parts}, IfNoneMatch: aws.String("*"), MpuObjectSize: aws.Int64(u.n)},
-		u.w.opts("CompleteMultipartUpload"))
+		u.w.creating("CompleteMultipartUpload", &u.uncertain))
 	if err != nil {
 		return true, err
 	}
@@ -434,10 +449,11 @@ func (u *upload) pathError(err error) error {
 	return &fs.PathError{Op: "write", Path: u.name, Err: err}
 }
 
-// put creates name holding data by one PutObject, If-None-Match: *.
-func (w *writer) put(ctx context.Context, name string, data []byte) (objfile.Receipt, error) {
+// put creates name holding data by one PutObject, If-None-Match: *;
+// uncertain is marked as creating marks it.
+func (w *writer) put(ctx context.Context, name string, data []byte, uncertain *atomic.Bool) (objfile.Receipt, error) {
 	out, err := w.client.PutObject(ctx, &s3.PutObjectInput{Bucket: &w.bucket, Key: &name, Body: bytes.NewReader(data), ContentLength: aws.Int64(int64(len(data))),
-		IfNoneMatch: aws.String("*"), ContentType: aws.String("application/octet-stream"), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32}, w.opts("PutObject"))
+		IfNoneMatch: aws.String("*"), ContentType: aws.String("application/octet-stream"), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32}, w.creating("PutObject", uncertain))
 	if err != nil {
 		return objfile.Receipt{}, err
 	}
@@ -459,9 +475,10 @@ func receiptOf(name string, size int64, etag, version *string) (objfile.Receipt,
 
 // PutIfAbsent creates name holding data by one PutObject, If-None-Match: *.
 func (w *writer) PutIfAbsent(ctx context.Context, name string, data []byte) (objfile.Receipt, error) {
-	r, err := w.put(ctx, name, data)
+	var uncertain atomic.Bool
+	r, err := w.put(ctx, name, data, &uncertain)
 	if err != nil {
-		return objfile.Receipt{}, redact.URLs(&fs.PathError{Op: "write", Path: name, Err: classify(completionError(err))})
+		return objfile.Receipt{}, redact.URLs(&fs.PathError{Op: "write", Path: name, Err: classify(completionError(err, uncertain.Load()))})
 	}
 	return r, nil
 }
@@ -499,14 +516,20 @@ func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 // a server error (an error in a 200 answer included), 408 or 429, and
 // NoSuchUpload, which a completion retried after its first attempt
 // succeeded unseen meets. A refusal (another 4xx: 412 and 409 are
-// classify's) leaves none.
-func completionError(err error) error {
+// classify's) leaves none, unless an earlier attempt of the request failed
+// ambiguously (uncertain: the SDK retried it), which the refusal does not
+// undo; 412 stays classify's (a retry that finds the object, the
+// request's own or another's, is how a lost answer looks too).
+func completionError(err error, uncertain bool) error {
 	code := status(err)
 	switch {
 	case errors.Is(err, objfile.ErrUnresolved):
 		return err
 	case apiCode(err) == "NoSuchUpload":
-	case code == http.StatusPreconditionFailed || code == http.StatusConflict:
+	case code == http.StatusPreconditionFailed:
+		return err
+	case uncertain:
+	case code == http.StatusConflict:
 		return err
 	case code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
 		return err

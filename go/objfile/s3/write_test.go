@@ -756,3 +756,43 @@ func TestRootWriter(t *testing.T) {
 		t.Fatalf("a path CheckPath refuses: %v", err)
 	}
 }
+
+// TestUnresolvedSticks: a creating request refused (403) after an attempt
+// that failed ambiguously (503, retried by the SDK) is still unresolved:
+// the first attempt may yet create the object. So for PutIfAbsent and for
+// a multipart completion; a 409 retried before a refusal is not ambiguous.
+func TestUnresolvedSticks(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		first int
+		size  int
+		want  bool // unresolved
+	}{
+		{"put", http.StatusServiceUnavailable, 0, true},
+		{"completion", http.StatusServiceUnavailable, 3 * part, true},
+		{"put after 409", http.StatusConflict, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFixture(t, false, nil, s3.WriteOptions{})
+			var n atomic.Int64
+			x.f.SetFault(func(op, _ string, after bool) int {
+				if op == s3fake.OpCreate && !after {
+					if n.Add(1) == 1 {
+						return c.first
+					}
+					return http.StatusForbidden
+				}
+				return 0
+			})
+			var err error
+			if c.size == 0 {
+				_, err = x.w.PutIfAbsent(context.Background(), "m", []byte("x"))
+			} else {
+				_, err = upload(t, x.w, "m", objfiletest.Data(c.size, 1))
+			}
+			if err == nil || errors.Is(err, objfile.ErrUnresolved) != c.want {
+				t.Fatalf("a refusal after a %d: %v, unresolved %v wanted", c.first, err, c.want)
+			}
+		})
+	}
+}

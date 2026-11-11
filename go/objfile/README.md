@@ -210,7 +210,9 @@ retry then finds the write's own object and returns `ErrExists`: a caller that m
 object back and compares it with what it wrote. A completion that fails in transport, times out, is cancelled
 in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service may have applied it,
 or may still (a request accepted behind a failed connection), so a read that finds nothing proves nothing yet;
-only a refusal (another 4xx) leaves no object for certain. Every error a writer returns has passed through
+only a refusal (another 4xx) leaves no object for certain, and only when no earlier attempt of the same request
+failed ambiguously and was retried by the SDK (that attempt may still land, so the completion stays
+`ErrUnresolved`). Every error a writer returns has passed through
 `RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's query, user
 information and fragment from the text: a GCS resumable session URI is a bearer capability for its upload, and
 the SDK's transport errors quote it.
@@ -250,7 +252,8 @@ aborted), and the upload ends with `ErrConflict`, which a caller retries from th
 request (`PutObject`, or `CompleteMultipartUpload`) is `ErrUnresolved` when its outcome is unknown: a transport
 failure, a timeout, a cancellation, a server error (an error in a 200 answer included: the SDK retries it as a
 500), 408, 429, and `NoSuchUpload`, which a completion meets when its first attempt took effect and its answer
-was lost; another 4xx is a refusal, and leaves no object. `DeleteIf` sends an ETag identity as `If-Match`, and
+was lost; another 4xx is a refusal, and leaves no object, unless the SDK retried the request after an ambiguous
+failure first (a retried 409 is not one). `DeleteIf` sends an ETag identity as `If-Match`, and
 deletes a version id by its id (that version only). Every error passes through `RedactError`, and the upload id
 is then removed in any spelling, raw or URL-escaped. **S3 never expires an incomplete multipart upload:** one a
 crash leaves, or whose abort was not confirmed, holds its parts, billed, until it is aborted; a bucket written to
