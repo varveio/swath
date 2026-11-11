@@ -357,10 +357,11 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   descriptors open are at most the larger of 16 and the concurrent readers (the drainer's 8 readers, the
   read-ahead's 8 reads, the segment workers `listing.segmentWorkers` admits, more than 16 where the descriptor
   limit allows), the bound descriptor admission priced before; the cache adds none (`peak_readers` counts its
-  descriptors). An open refused for
-  want of descriptors (EMFILE, ENFILE) closes every idle handle and is retried once, and the cache keeps no
-  idle handle for the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesLowFDLimit` under
-  a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
+  descriptors). A spill open refused for
+  want of descriptors (EMFILE, ENFILE), a read miss's or a frame's write, closes every idle handle and is retried
+  once (a write's after the ownership check, before anything is written), and the cache keeps no idle handle for
+  the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesWriteRetryOnce`, and
+  `TestHandlesLowFDLimit` and `TestHandlesWriteAtFDLimit` under a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
   lease's release, when its file is drained (before the unlink, or before a durable file goes back to its
   cache: `evictions.retired`; a lease whose open was under way then gets a descriptor for itself alone, closed at its
   release: `TestHandlesRetiredDuringOpen`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and

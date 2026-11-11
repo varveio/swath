@@ -443,3 +443,40 @@ func TestHandlesRetiredDuringOpen(t *testing.T) {
 		t.Fatalf("%d descriptors kept for a retired file", n)
 	}
 }
+
+// TestHandlesWriteRetryOnce: a frame's write open refused for want of
+// descriptors is retried once after the idle read handles are closed; a
+// second refusal fails the frame (nothing written, nothing retried again).
+func TestHandlesWriteRetryOnce(t *testing.T) {
+	s, err := newSpiller(&testSchema, t.TempDir(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	g, at := handleFile(t, s, "idle", 1, 3)
+	if _, _, err := s.readAt(g, at[0].off, at[0].size); err != nil {
+		t.Fatal(err)
+	}
+	var tries atomic.Int64
+	refuse := int64(1)
+	hookOpenWrite = func(*spillFile) error {
+		if tries.Add(1) <= refuse {
+			return &os.PathError{Op: "open", Path: "x", Err: syscall.EMFILE}
+		}
+		return nil
+	}
+	t.Cleanup(func() { hookOpenWrite = nil })
+	f := s.file()
+	if err := s.write(f, handleRows("w", 0, 3), false); err != nil || tries.Load() != 2 {
+		t.Fatalf("one refusal: %v after %d opens", err, tries.Load())
+	}
+	if st := s.h.stats(); st.Evictions.LowFD != 1 || s.h.openFDs() != 0 {
+		t.Fatalf("%+v, %d open", st, s.h.openFDs())
+	}
+	tries.Store(0)
+	refuse = 2
+	size := f.size
+	if err := s.write(f, handleRows("w", 1, 3), false); !errors.Is(err, syscall.EMFILE) || tries.Load() != 2 || f.size != size {
+		t.Fatalf("two refusals: %v after %d opens, size %d -> %d", err, tries.Load(), size, f.size)
+	}
+}

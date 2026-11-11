@@ -29,10 +29,11 @@ import (
 // themselves bound (the drainer's maxReaders, the read-ahead's aheadReads,
 // the segment workers listing.segmentWorkers admits, which may exceed 16
 // when the descriptor limit allows). That is the bound descriptor
-// admission already priced before the cache; it adds none. An open that fails for want of
-// descriptors (EMFILE, ENFILE) closes every idle handle, is retried once,
-// and the cache stops keeping idle handles for the rest of the run (the
-// low-descriptor fallback: one open per read, as before).
+// admission already priced before the cache; it adds none. A spill open
+// that fails for want of descriptors (EMFILE, ENFILE), a read miss's or a
+// frame's write (spiller.writeFrames), closes every idle handle and is
+// retried once, and the cache stops keeping idle handles for the rest of
+// the run (the low-descriptor fallback: one open per read, as before).
 //
 // Lifetime. A handle is retired before its file is removed or handed back
 // to its durable cache (drained), when the file is truncated (an ENOSPC
@@ -132,11 +133,8 @@ func (c *handles) lease(f *spillFile, open func() (*os.File, error)) (*handle, e
 	c.opening++
 	c.mu.Unlock()
 	fh, err := open()
-	if err != nil && (errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE)) {
-		c.mu.Lock()
-		c.max = 0 // the fallback: no idle handle kept from now on
-		c.evict(evictLowFD, 0)
-		c.mu.Unlock()
+	if lowFD(err) {
+		c.lowFD()
 		fh, err = open()
 	}
 	c.mu.Lock()
@@ -166,6 +164,21 @@ func (c *handles) lease(f *spillFile, open func() (*os.File, error)) (*handle, e
 	c.m[f] = h
 	c.evict(evictCapacity, c.max)
 	return h, nil
+}
+
+// lowFD reports whether err is an open refused for want of descriptors.
+func lowFD(err error) bool {
+	return err != nil && (errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE))
+}
+
+// lowFD is the low-descriptor fallback, for any spill open refused for want
+// of descriptors (a read miss, a frame's write): every idle handle is
+// closed and none is kept from now on, so the open can be retried once.
+func (c *handles) lowFD() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.max = 0
+	c.evict(evictLowFD, 0)
 }
 
 // release ends a lease: a retired handle is closed at its last, an idle one

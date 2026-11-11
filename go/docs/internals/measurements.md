@@ -930,8 +930,8 @@ about 80 digits per call, not one per key). `BenchmarkExtrapolate`, one call ove
 
 | Case | Before | After | Change | B/op | allocs/op |
 |---|---:|---:|---:|---|---|
-| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19, unchanged |
-| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24, unchanged |
+| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19 → 18 |
+| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24 → 23 |
 
 The page and the cursor are scanned in place (no copy), every byte is marked in a 256-entry table eight bytes per
 step, and the alphabet's safety is checked once over the table instead of per byte (−33 % from the first two, a

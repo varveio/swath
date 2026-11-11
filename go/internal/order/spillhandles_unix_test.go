@@ -77,3 +77,72 @@ func TestHandlesLowFDLimit(t *testing.T) {
 		t.Fatalf("%+v, %d open", st, s.h.openFDs())
 	}
 }
+
+// TestHandlesWriteAtFDLimit (red team 4): under a descriptor limit the
+// process has used up, with ten idle read handles open, a frame's write
+// still succeeds: its open fails (EMFILE), the idle read handles are
+// closed and the open retried once; the frame reads back exact.
+func TestHandlesWriteAtFDLimit(t *testing.T) {
+	s, err := newSpiller(&testSchema, t.TempDir(), false, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	for i := range 10 {
+		f, at := handleFile(t, s, fmt.Sprintf("w%d", i), 1, 4)
+		if _, _, err := s.readAt(f, at[0].off, at[0].size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := s.file()
+	ents, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Skip(err)
+	}
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	low := lim
+	low.Cur = uint64(len(ents) + 16)
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &low); err != nil {
+		t.Skip(err)
+	}
+	var fill []*os.File
+	defer func() {
+		for _, f := range fill {
+			f.Close()
+		}
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+			t.Error(err)
+		}
+	}()
+	for {
+		g, err := os.Open(os.DevNull)
+		if errors.Is(err, syscall.EMFILE) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		fill = append(fill, g)
+		if len(fill) > 1<<12 {
+			t.Skip("the descriptor limit did not bind")
+		}
+	}
+	if err := s.write(f, handleRows("new", 0, 4), false); err != nil {
+		t.Fatalf("write at the descriptor limit with idle read handles: %v", err)
+	}
+	if st := s.h.stats(); st.Evictions.LowFD != 10 || s.h.openFDs() != 0 {
+		t.Fatalf("%+v, %d open", st, s.h.openFDs())
+	}
+	for _, g := range fill[:4] { // room for the read back
+		g.Close()
+	}
+	fill = fill[4:]
+	rows, _, err := s.readAt(f, f.lastOff, f.lastSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, "written at the limit", rows, handleRows("new", 0, 4))
+}

@@ -550,12 +550,29 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 		err = s.check()
 	}
 	if err == nil {
+		openW := func() (*os.File, error) {
+			s.opens.Add(1)
+			if hookOpenWrite != nil {
+				if err := hookOpenWrite(f); err != nil {
+					return nil, err
+				}
+			}
+			if f.d != nil {
+				return s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+			}
+			return os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		}
 		var fh *os.File
-		s.opens.Add(1)
-		if f.d != nil {
-			fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		} else {
-			fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		fh, err = openW()
+		if lowFD(err) {
+			// Refused for want of descriptors: the read handles' idle
+			// descriptors are closed (the low-descriptor fallback) and the
+			// open, nothing written yet, is retried once after the
+			// ownership check.
+			s.h.lowFD()
+			if err = s.check(); err == nil {
+				fh, err = openW()
+			}
 		}
 		if err == nil {
 			if err = s.check(); err == nil {
@@ -812,6 +829,10 @@ func (s *spiller[P]) lease(f *spillFile) (*handle, error) {
 		return os.Open(f.path)
 	})
 }
+
+// hookOpenWrite, if set, sees every write open of a spill file first, and
+// fails it with its error (tests).
+var hookOpenWrite func(f *spillFile) error
 
 // hookOpen, if set, sees every read open of a spill file first, and fails
 // it with its error (tests).
