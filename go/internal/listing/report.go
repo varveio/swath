@@ -26,8 +26,10 @@ import (
 // and requests.failure_warnings. 5: invocation.row_budget_bytes is
 // invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
 // (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens, and profiles (the development profiles, SWATH_CPUPROFILE and
-// SWATH_MEMPROFILE).
+// and opens, profiles (the development profiles, SWATH_CPUPROFILE and
+// SWATH_MEMPROFILE), resources.spill.read_handles (the spill read handles'
+// hits, misses and evictions) and frame_bytes and frame_rows (the row
+// frames by size).
 const ReportVersion = 5
 
 // Report is the one run report: run.json beside a committed dataset, and

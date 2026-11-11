@@ -348,7 +348,10 @@ tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](inter
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most
 1 GiB, where it was 128 MiB on every host), `resources.spill.frames` and `opens`, and `profiles` (the development
-profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE`). A version 4 reader ignores
+profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE`), and
+`resources.spill.read_handles` (the spill read handles' `hits`, `misses`, `raced`, `evictions` by reason and
+`peak_open`) and `frame_bytes` and `frame_rows` (the row frames written by size: `p50`, `p90`, `p99` as power-of-two
+bucket bounds, and the exact `max`); `opens` counts one open per read handle miss, not one per frame read. A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.
 

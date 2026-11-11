@@ -140,8 +140,11 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
-off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts; a resume's certificate validation not counted), `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`, and with durable spill
+off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
+`max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
+`peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
+the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,

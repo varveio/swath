@@ -23,7 +23,7 @@ import (
 // (Segmenter: the Parquet router, once part 0 has frozen its size ratio)
 // lets the drainer cut the rest itself, exactly where the sink would, and
 // hand the parts to several workers at once: each segment is one part,
-// read (spill frames on its own descriptor, readAt), order-checked and
+// read (spill frames on their files' read handles, readAt), order-checked and
 // written by one worker, so parts encode in parallel instead of one after
 // another. The sink publishes them in ordinal order and checks each
 // against the previous (adjacency) before publishing it; the seams between
@@ -527,7 +527,7 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 }
 
 // rowsTimed is a unit's rows, with the frame's decoding time: in memory,
-// or its frame read and decoded on its own descriptor; a frame holding
+// or its frame read and decoded on its file's read handle; a frame holding
 // other than the rows its marker recorded is refused.
 func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error) {
 	if u.f == nil {

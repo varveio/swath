@@ -1246,3 +1246,63 @@ func tearAt(b []byte, k string) (cut, lo, hi int) {
 	}
 	return -1, 0, 0
 }
+
+// TestDurableResumeSmallerBudget: killed at its first unlink, a run with
+// a 1 MiB sort buffer and 32 workers resumes with the 128 KiB minimum, 4
+// workers and a 16 MiB spill cap (the durable spill's least), replaying
+// its certificates through the spill read handles; the dataset is the
+// uninterrupted run's, byte for byte. The same with --all-versions hot
+// groups (a group's versions consecutive, never split at a certificate).
+func TestDurableResumeSmallerBudget(t *testing.T) {
+	datasettest.RequireJournal(t)
+	smaller := func(cfg Config) Config {
+		cfg.Limits.RowBudget, cfg.Limits.Workers, cfg.Limits.Spill.Max = minRowBudget, 4, 16<<20
+		return cfg
+	}
+	handles := func(t *testing.T, sum Report) {
+		t.Helper()
+		sp := sum.Resources.Spill
+		if sp == nil || sp.Durable == nil || sp.Durable.Resume == nil || sp.Durable.Resume.ReplayedRows == 0 {
+			t.Fatalf("nothing replayed: %+v", sp)
+		}
+		if h := sp.ReadHandles; h.PeakOpen > order.MaxSpillReaders {
+			t.Fatalf("read handles: %+v", h)
+		}
+		t.Logf("resume: %d rows replayed, read handles %+v, frames %+v", sp.Durable.Resume.ReplayedRows, sp.ReadHandles, sp.FrameRows)
+	}
+	t.Run("objects", func(t *testing.T) {
+		url, _, _ := slowFrontier(t, "d06/")
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		out := filepath.Join(t.TempDir(), "ds")
+		cfg := durableConfig(url, out, false)
+		cfg.Limits.RowBudget = 1 << 20
+		crashDurable(t, cfg, "spill-unlink", 1)
+		sum, err := Run(context.Background(), smaller(durableConfig(url, out, true)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameDataset(t, "resume", ref, out)
+		handles(t, sum)
+	})
+	t.Run("versions", func(t *testing.T) {
+		api := newHotVersions(t)
+		defer order.SetDurableEvents(api.event)()
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), hotVersionsConfig(api, ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		out := filepath.Join(t.TempDir(), "ds")
+		cfg := hotVersionsConfig(api, out, false)
+		cfg.Limits.RowBudget = 1 << 20
+		crashDurable(t, cfg, "spill-unlink", 1)
+		sum, err := Run(context.Background(), smaller(hotVersionsConfig(api, out, true)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameDataset(t, "resume", ref, out)
+		handles(t, sum)
+	})
+}
