@@ -216,8 +216,11 @@ func uploadBytes(r *RemoteOutput) int64 {
 	return gcs.DefaultChunkSize
 }
 
-// checkFresh refuses a fresh run whose destination holds a manifest.
+// checkFresh refuses a fresh run whose destination holds a manifest, within
+// the commit's time bound.
 func (rs *remoteState) checkFresh(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, orDefault(rs.cfg.CommitTimeout, DefaultCommitTimeout))
+	defer cancel()
 	state, _, _, err := dataset.ResolveManifest(ctx, rs.d, nil)
 	switch state {
 	case dataset.ManifestAbsent:
@@ -228,8 +231,9 @@ func (rs *remoteState) checkFresh(ctx context.Context) error {
 	return fmt.Errorf("%s: %w", rs.d.URI(), ErrDestinationExists)
 }
 
-// preflight is a resume's first look at the destination, when the run
-// saved a candidate manifest (it reached its commit): the destination's
+// preflight is a resume's first look at the destination, within the
+// commit's time bound, when the run saved a candidate manifest (it reached
+// its commit): the destination's
 // manifest is the candidate (the commit happened: the marker is written
 // now, not finalized), another one (a lost race), absent (the commit is
 // made again, with the same candidate), or unknown (unresolved).
@@ -238,6 +242,8 @@ func (rs *remoteState) preflight(ctx context.Context, r *os.Root) error {
 	if err != nil || cand == nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, orDefault(rs.cfg.CommitTimeout, DefaultCommitTimeout))
+	defer cancel()
 	state, other, id, err := dataset.ResolveManifest(ctx, rs.d, cand)
 	switch state {
 	case dataset.ManifestAbsent:
@@ -294,12 +300,14 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 // finalize is a commit's aftermath, idempotent: the objects this run
 // created that the manifest does not name (keep) are deleted by the
 // generations their uploads recorded; the run report is created beside
-// the manifest only if absent; then the marker records it finalized.
+// the manifest only if absent; then, if every such object is gone, the
+// marker records the run finalized. A cleanup that left one leaves the
+// marker unfinalized, for a resume to try again.
 func (rs *remoteState) finalize(ctx context.Context, cfg Config, r *os.Root, rec dataset.RemoteCommitRecord, keep map[string]bool, rep *Report) error {
 	if keep == nil {
 		return fmt.Errorf("finalize: the committed manifest does not parse")
 	}
-	rs.cleanupOrphans(ctx, r, keep)
+	cleaned := rs.cleanupOrphans(ctx, r, keep)
 	rep.Output.Remote = rs.report(cfg.Output.Dir)
 	if err := faults.At("run-report"); err != nil {
 		return err
@@ -310,6 +318,9 @@ func (rs *remoteState) finalize(ctx context.Context, cfg Config, r *os.Root, rec
 	}
 	if _, err := rs.d.Writer.PutIfAbsent(ctx, dataset.ReportName, b); err != nil && !errors.Is(err, objfile.ErrExists) {
 		return &dataset.ReportError{Err: err}
+	}
+	if !cleaned {
+		return fmt.Errorf("finalize: %d orphans could not be deleted (or the allocation log could not be read); a resume of the work directory tries again", rs.orphans.Failed)
 	}
 	if err := faults.At("finalized"); err != nil {
 		return err
@@ -513,19 +524,21 @@ func (jr *runJournal) remoteRouter(ctx context.Context, o *parquetout.Options) {
 	o.Create = rp.Create
 }
 
-// cleanupOrphans deletes the objects this run allocated that keep (a
-// committed manifest's parts) does not name.
-func (rs *remoteState) cleanupOrphans(ctx context.Context, r *os.Root, keep map[string]bool) {
+// cleanupOrphans deletes the objects this run created that keep (a
+// committed manifest's parts) does not name, and reports whether none was
+// left behind by a failure.
+func (rs *remoteState) cleanupOrphans(ctx context.Context, r *os.Root, keep map[string]bool) bool {
 	l, err := dataset.ReadAllocations(r)
 	if err != nil {
 		rs.orphans.Failed++
-		return
+		return false
 	}
 	st := dataset.DeleteOwned(ctx, rs.d, l, keep)
 	rs.orphans.Deleted += st.Deleted
 	rs.orphans.Gone += st.Gone
 	rs.orphans.Failed += st.Failed
 	rs.orphans.Unproven += st.Unproven
+	return st.Failed == 0
 }
 
 // report is the destination's account now.

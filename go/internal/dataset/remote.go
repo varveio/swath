@@ -293,6 +293,14 @@ type LostRaceError struct{ Winner []byte }
 func (e *LostRaceError) Error() string { return ErrLostRace.Error() }
 func (e *LostRaceError) Unwrap() error { return ErrLostRace }
 
+// ErrCandidateMismatch: the work directory holds a candidate manifest an
+// earlier attempt tried to create, naming other parts than this attempt
+// would commit (its journal lost the final record, and a part was written
+// again). That creation may still be pending, so the candidate is never
+// replaced: the run is refused, as unresolved, for the operator to settle
+// (by reading the destination's manifest once no request can be pending).
+var ErrCandidateMismatch = errors.New("the saved candidate manifest names other parts than this attempt would commit")
+
 // ErrCommitUnresolved: the manifest's creation was neither confirmed nor
 // refuted (the creation failed and the read-back failed too). Nothing is
 // removed; a resume reads it back again.
@@ -343,7 +351,8 @@ func ResolveManifest(ctx context.Context, r *Remote, candidate []byte) (Manifest
 // prior is a candidate an earlier attempt saved: when it names exactly
 // these parts, its bytes are created again (the same manifest, its
 // publication time included), so a creation still in flight from that
-// attempt and this one are the same commit.
+// attempt and this one are the same commit; when it names other parts the
+// commit is refused (ErrCandidateMismatch, unresolved), never replaced.
 //
 // A creation that is not answered with success is resolved by reading the
 // manifest back: the candidate's bytes are this run's commit; other bytes
@@ -359,7 +368,12 @@ func ResolveManifest(ctx context.Context, r *Remote, candidate []byte) (Manifest
 func PublishRemote(ctx context.Context, ws *os.Root, r *Remote, meta Meta, parts []Part, prior []byte, commit func(install func() error) error) (RemoteCommit, error) {
 	var rc RemoteCommit
 	b := prior
-	if b == nil || !sameParts(b, parts) {
+	switch {
+	case b != nil && !sameParts(b, parts):
+		// An earlier attempt's creation of other bytes may still land: this
+		// run cannot prove it will not, so it never replaces the candidate.
+		return rc, fmt.Errorf("%w: %w", ErrCommitUnresolved, ErrCandidateMismatch)
+	case b == nil:
 		var err error
 		if b, err = EncodeJSON(newManifest(meta, parts, func(_ int, p Part) string { return p.Path })); err != nil {
 			return rc, err
@@ -401,12 +415,16 @@ func PublishRemote(ctx context.Context, ws *os.Root, r *Remote, meta Meta, parts
 const createAttempts = 3
 
 // createManifest creates the manifest b, resolving every failure by a
-// read-back (PublishRemote).
+// read-back (PublishRemote). Uncertainty is kept across attempts: once any
+// creation failed ambiguously, a later refusal does not prove that the
+// earlier one will not land, so the outcome stays unresolved unless the
+// manifest is read back.
 func createManifest(ctx context.Context, r *Remote, b []byte) (outcome, identity string, err error) {
 	rec, perr := r.Writer.PutIfAbsent(ctx, ManifestName, b)
 	if perr == nil {
 		return CommitCreated, rec.Identity, nil
 	}
+	uncertain := ambiguous(perr)
 	for attempt := 1; ; attempt++ {
 		state, other, id, rerr := ResolveManifest(ctx, r, b)
 		switch state {
@@ -417,19 +435,20 @@ func createManifest(ctx context.Context, r *Remote, b []byte) (outcome, identity
 		case ManifestUnknown:
 			return "", "", fmt.Errorf("%w: create: %v; read back: %v", ErrCommitUnresolved, perr, objfile.RedactError(rerr))
 		}
-		// Absent.
-		if !ambiguous(perr) && !errors.Is(perr, objfile.ErrConflict) {
-			return "", "", fmt.Errorf("create manifest: %w", perr) // refused: not created, never to be
+		// Absent. A conflict with another conditional write created
+		// nothing and may be made again; a refusal settles the commit only
+		// if no creation of these bytes is still possibly in flight.
+		if !uncertain && !errors.Is(perr, objfile.ErrConflict) {
+			return "", "", fmt.Errorf("create manifest: %w", perr)
 		}
 		if attempt >= createAttempts || ctx.Err() != nil {
 			return "", "", fmt.Errorf("%w: the creation failed (%v) and no manifest is there yet; it may still appear", ErrCommitUnresolved, perr)
 		}
-		// The same bytes again (a conflict with another conditional write
-		// created nothing and may be made again): whichever creation
-		// lands, it is this one.
+		// The same bytes again: whichever creation lands, it is this one.
 		if rec, perr = r.Writer.PutIfAbsent(ctx, ManifestName, b); perr == nil {
 			return CommitCreated, rec.Identity, nil
 		}
+		uncertain = uncertain || ambiguous(perr)
 	}
 }
 
@@ -523,11 +542,14 @@ func VerifyObject(ctx context.Context, r *Remote, name, identity string, want Pa
 		return fmt.Errorf("%w: %s is version %s; the journal recorded %s", ErrRemoteAltered, name, obj.Identity(), identity)
 	}
 	h := sha256.New()
-	rd := obj.WithContext(ctx)
 	buf := make([]byte, 4<<20)
 	var off int64
 	for {
-		n, err := rd.ReadAt(buf, off)
+		// Each read has a deadline of its own, its body included: a stalled
+		// response fails the verification instead of holding the resume.
+		rctx, cancel := context.WithTimeout(ctx, VerifyReadTimeout)
+		n, err := obj.WithContext(rctx).ReadAt(buf, off)
+		cancel()
 		h.Write(buf[:n])
 		off += int64(n)
 		if progress != nil {
@@ -545,6 +567,10 @@ func VerifyObject(ctx context.Context, r *Remote, name, identity string, want Pa
 	}
 	return nil
 }
+
+// VerifyReadTimeout bounds one read of VerifyObject (4 MiB), its response
+// body included.
+const VerifyReadTimeout = 2 * time.Minute
 
 // ErrRemoteAltered: a retained remote part is not the object its record
 // names.

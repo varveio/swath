@@ -34,10 +34,13 @@ import (
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
+	"google.golang.org/api/googleapi"
 )
 
-// Regression tests for the reviews of the bucket output (2026-11-11): each
-// replays a reviewer's reproducing schedule.
+// Fault schedules of a dataset in a bucket: commits whose outcome is
+// unknown, secrets in errors, links in the work directory, a damaged
+// journal header, a drifted endpoint, bounded waits and multi-chunk
+// uploads.
 
 // localTree is a small local tree (no journal: its run publishes at the
 // end, the path that deleted its parts after an ambiguous commit).
@@ -543,4 +546,266 @@ func TestRemoteMultiChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.sameAsLocal(t, "killed in a chunk", ref, "killed", true)
+}
+
+// mixedWriter's first manifest creation fails ambiguously (its request
+// kept, as one still in flight), every later one is refused (403).
+type mixedWriter struct {
+	objfile.Writer
+	pending []byte
+	calls   int
+}
+
+func (w *mixedWriter) PutIfAbsent(ctx context.Context, n string, b []byte) (objfile.Receipt, error) {
+	if n != dataset.ManifestName {
+		return w.Writer.PutIfAbsent(ctx, n, b)
+	}
+	w.calls++
+	if w.calls == 1 {
+		w.pending = bytes.Clone(b)
+		return objfile.Receipt{}, objfile.ErrUnresolved
+	}
+	return objfile.Receipt{}, &googleapi.Error{Code: http.StatusForbidden}
+}
+
+// TestRemoteAmbiguityKept: once any creation of the manifest failed
+// ambiguously, a later refusal settles nothing: the commit is unresolved
+// and no part is deleted, whether the refusal comes from the commit's own
+// retry or from the SDK's retries of one request, so the first creation
+// landing later commits a dataset whose parts all exist.
+func TestRemoteAmbiguityKept(t *testing.T) {
+	t.Run("commit retry", func(t *testing.T) {
+		d := newDestination(t, nil)
+		out := d.output("mixed")
+		open := out.Open
+		var w *mixedWriter
+		out.Open = func(ctx context.Context, s *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+			r, closeFn, err := open(ctx, s)
+			if err == nil {
+				w = &mixedWriter{Writer: r.Writer}
+				r.Writer = w
+			}
+			return r, closeFn, err
+		}
+		rep, err := Run(context.Background(), treeConfig(localTree(t), filepath.Join(t.TempDir(), "work"), out))
+		if !errors.Is(err, dataset.ErrCommitUnresolved) || w.calls < 2 || rep.Output.Remote.OrphansDeleted != 0 {
+			t.Fatalf("%v; %d creations; %+v", err, w.calls, rep.Output.Remote)
+		}
+		if _, err := w.Writer.PutIfAbsent(context.Background(), dataset.ManifestName, w.pending); err != nil {
+			t.Fatal(err)
+		}
+		committedPartsExist(t, d, "mixed")
+	})
+	t.Run("sdk retries", func(t *testing.T) {
+		// The first request goes on downstream behind two proxy 503s (the
+		// SDK's two attempts); every later creation is refused.
+		var pending func()
+		var attempts int
+		d := newDestination(t, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+				if q.Method == http.MethodPost && q.URL.Query().Get("name") == "httpmixed/manifest.json" {
+					attempts++
+					if attempts == 1 {
+						b, _ := io.ReadAll(q.Body)
+						detached := q.Clone(context.Background())
+						detached.Body = io.NopCloser(bytes.NewReader(b))
+						pending = func() { h.ServeHTTP(httptest.NewRecorder(), detached) }
+					}
+					code := http.StatusServiceUnavailable
+					if attempts > 2 {
+						code = http.StatusForbidden
+					}
+					http.Error(w, "proxy failure", code)
+					return
+				}
+				h.ServeHTTP(w, q)
+			})
+		})
+		_, err := Run(context.Background(), treeConfig(localTree(t), filepath.Join(t.TempDir(), "work"), d.output("httpmixed")))
+		if !errors.Is(err, dataset.ErrCommitUnresolved) || pending == nil {
+			t.Fatalf("%v (%d attempts)", err, attempts)
+		}
+		if d.Count(gcsfake.OpDelete) != 0 {
+			t.Fatal("parts deleted after an ambiguous creation")
+		}
+		pending()
+		committedPartsExist(t, d, "httpmixed")
+	})
+}
+
+// TestRemoteCandidateKept: a resume that would commit other parts than an
+// unresolved candidate names (its journal lost the final record, and the
+// last part was written again under a new name) refuses, as unresolved,
+// and replaces neither the candidate nor any part: the earlier creation
+// landing later commits a dataset whose parts all exist.
+func TestRemoteCandidateKept(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	d := newDestination(t, nil)
+	ws := filepath.Join(t.TempDir(), "work")
+	out := d.output("cand")
+	open := out.Open
+	var w *delayedWriter
+	out.Open = func(ctx context.Context, s *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+		r, closeFn, err := open(ctx, s)
+		if err == nil {
+			w = &delayedWriter{Writer: r.Writer}
+			r.Writer = w
+		}
+		return r, closeFn, err
+	}
+	if _, err := Run(context.Background(), remoteConfig(url, ws, false, out)); !errors.Is(err, dataset.ErrCommitUnresolved) {
+		t.Fatal(err)
+	}
+	pending := bytes.Clone(w.pending)
+	b, err := os.ReadFile(journal.Path(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(journal.Path(ws), b[:len(b)-5], 0o644); err != nil { // the final record torn
+		t.Fatal(err)
+	}
+	_, err = Run(context.Background(), remoteConfig(url, ws, true, d.output("cand")))
+	if !errors.Is(err, dataset.ErrCandidateMismatch) || !errors.Is(err, dataset.ErrCommitUnresolved) {
+		t.Fatalf("resume with another candidate's parts: %v", err)
+	}
+	if _, ok := d.Get("cand/" + dataset.ManifestName); ok {
+		t.Fatal("a manifest was created")
+	}
+	r, err := os.OpenRoot(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if cand, _ := dataset.ReadCandidate(r); !bytes.Equal(cand, pending) {
+		t.Fatal("the unresolved candidate was replaced")
+	}
+	d.Put("cand/"+dataset.ManifestName, pending) // the earlier creation lands
+	committedPartsExist(t, d, "cand")
+}
+
+// stallingOpener holds every open of the manifest until its context ends.
+type stallingOpener struct {
+	objfile.Opener
+	entered chan struct{}
+	once    *sync.Once
+}
+
+func (o stallingOpener) Open(ctx context.Context, n string) (objfile.Object, error) {
+	if n == dataset.ManifestName {
+		o.once.Do(func() { close(o.entered) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return o.Opener.Open(ctx, n)
+}
+
+// TestRemoteResumeBounded: a resume's look at the destination's manifest
+// (its preflight) ends at the commit's time bound, whether the read never
+// answers or its body stalls after the headers, on the client a run
+// builds.
+func TestRemoteResumeBounded(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	t.Run("open", func(t *testing.T) {
+		d := newDestination(t, nil)
+		ws := filepath.Join(t.TempDir(), "work")
+		out := d.output("boundresume")
+		crashRemote(t, url, ws, out, false, "candidate-saved", 1)
+		open, entered := out.Open, make(chan struct{})
+		var once sync.Once
+		out.CommitTimeout = 100 * time.Millisecond
+		out.Open = func(ctx context.Context, s *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+			r, closeFn, err := open(ctx, s)
+			if err == nil {
+				r.Opener = stallingOpener{r.Opener, entered, &once}
+			}
+			return r, closeFn, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, err := Run(ctx, remoteConfig(url, ws, true, out))
+		select {
+		case <-entered:
+		default:
+			t.Fatal("the resume never read the manifest")
+		}
+		if !errors.Is(err, dataset.ErrCommitUnresolved) || ctx.Err() != nil {
+			t.Fatalf("%v (the outer deadline: %v)", err, ctx.Err())
+		}
+	})
+	t.Run("stalled body", func(t *testing.T) {
+		var stall atomic.Bool
+		d := newDestination(t, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+				if stall.Load() && q.Method == http.MethodGet && strings.Contains(q.URL.Path, "manifest.json") {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+					<-q.Context().Done()
+					return
+				}
+				h.ServeHTTP(w, q)
+			})
+		})
+		ws := filepath.Join(t.TempDir(), "work")
+		out := &RemoteOutput{Location: "gs://" + dstBucket + "/httpbound", ChunkSize: 256 << 10, CommitTimeout: 100 * time.Millisecond}
+		t.Setenv("STORAGE_EMULATOR_HOST", d.url)
+		crashRemote(t, url, ws, out, false, "candidate-saved", 1)
+		stall.Store(true)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, err := Run(ctx, remoteConfig(url, ws, true, out))
+		if !errors.Is(err, dataset.ErrCommitUnresolved) || ctx.Err() != nil {
+			t.Fatalf("%v (the outer deadline: %v)", err, ctx.Err())
+		}
+	})
+}
+
+// TestRemoteFinalizeRetried: a commit whose orphan cleanup fails (the
+// deletes refused) is not finalized: the next resume deletes them and
+// finalizes.
+func TestRemoteFinalizeRetried(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	d := newDestination(t, nil)
+	ws := filepath.Join(t.TempDir(), "work")
+	crashRemote(t, url, ws, d.output("refin"), false, "upload-completed", 1)
+	d.SetFault(func(op, _ string, after bool) int {
+		if op == gcsfake.OpDelete && !after {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	rep, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("refin")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := func() *dataset.RemoteCommitRecord {
+		r, err := os.OpenRoot(ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		m, err := dataset.ReadCommitMarker(r)
+		if err != nil || m == nil {
+			t.Fatalf("marker: %v", err)
+		}
+		return m
+	}
+	if rep.Output.Remote.OrphansLeft == 0 || marker().Finalized {
+		t.Fatalf("left %d, finalized %v", rep.Output.Remote.OrphansLeft, marker().Finalized)
+	}
+	d.SetFault(nil)
+	if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("refin"))); !errors.Is(err, ErrComplete) {
+		t.Fatalf("the finalizing resume: %v", err)
+	}
+	if !marker().Finalized {
+		t.Fatal("not finalized once the cleanup succeeded")
+	}
+	d.sameAsLocal(t, "finalized on resume", ref, "refin", true)
 }
