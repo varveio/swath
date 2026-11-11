@@ -110,7 +110,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
 // SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
-// SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
+// SpeedFastest with entropy coding, and parts cut at size/0.1 for part 0,
 // then at the frozen ratio. Bump the revision with any change to these.
 // It is the resume identity's writer field: a resume refuses a journal
 // written under another recipe.
@@ -119,7 +119,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // DraftRevision), the logical schema (schema IDs), the private journal
 // (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
-const Recipe = "swath/parquet-r3"
+const Recipe = "swath/parquet-r4"
 
 // createdApp, createdVersion and createdBuild make the footer's
 // created_by: the tool, its module version and its VCS revision, from the
