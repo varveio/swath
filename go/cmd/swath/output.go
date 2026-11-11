@@ -38,7 +38,7 @@ func textDest(path string) (format, compression string) {
 var unwritten = []string{".csv", ".json", ".ndjson", ".txt", ".bz2", ".xz", ".gz", ".zst"}
 
 // outputForms names what -o takes, for its refusals.
-const outputForms = "-o takes a dataset directory (any other name, or one ending in /), a GCS or S3 bucket prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
+const outputForms = "-o takes a dataset directory (any other name, or one ending in /), a GCS, S3 or Azure Blob prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
 
 // hasScheme reports whether path starts with a URL scheme (s3://).
 func hasScheme(path string) bool {
@@ -86,8 +86,8 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 		return nil, nil
 	case !remote && o.workDir != "":
 		return nil, errors.New("--work-dir is the work directory of a dataset in a bucket; a dataset directory is its own")
-	case !remote && (o.outputCreds != "" || o.outputEndpoint != "" || o.outputProfile != "" || o.outputRegion != ""):
-		return nil, errors.New("--output-gcs-credentials-file, --output-s3-profile, --output-s3-region and --output-endpoint-url apply to a dataset in a bucket")
+	case !remote && (o.outputCreds != "" || o.outputEndpoint != "" || o.outputProfile != "" || o.outputRegion != "" || o.outputSAS != ""):
+		return nil, errors.New("--output-gcs-credentials-file, --output-s3-profile, --output-s3-region, --output-azure-sas-token and --output-endpoint-url apply to a dataset in a bucket")
 	case remote:
 		return nil, resolveRemote(o)
 	case !toStdout:
@@ -146,7 +146,7 @@ func resolveRemote(o *options) error {
 	case o.format != "":
 		return fmt.Errorf("--format %s: -o %s is a dataset, not text rows", o.format, shown)
 	}
-	r := listing.RemoteOutput{Location: o.out, CredentialsFile: o.outputCreds, Profile: o.outputProfile, Region: o.outputRegion}
+	r := listing.RemoteOutput{Location: o.out, CredentialsFile: o.outputCreds, Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	if err := r.Check(); err != nil {
 		return fmt.Errorf("-o %s: %w", shown, err)
 	}

@@ -62,6 +62,7 @@ complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l work-dir -
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l output-gcs-credentials-file -r -F -d 'credentials for a GCS -o (default: Application Default Credentials)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l output-s3-region -x -d 'the region of an S3 -o'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l output-s3-profile -x -d 'the shared config profile an S3 -o takes credentials (and region) from'
+complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l output-azure-sas-token -x -d 'a shared access signature for an Azure -o; never recorded'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l output-endpoint-url -x -d 'the endpoint of a bucket -o (default: the provider\'s)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l include -x -d 'keep keys this glob matches (repeatable: any of them)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l exclude -x -d 'drop keys this glob matches (repeatable; beats any include)'

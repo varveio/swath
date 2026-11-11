@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,18 +31,22 @@ import (
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/go/objfile/azblob/azfake"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
 	"github.com/varveio/swath/go/objfile/s3/s3fake"
 )
 
-// TestRemoteOutputRefusals: what -o gs://... refuses at parse time.
+// TestRemoteOutputRefusals: what a bucket -o refuses at parse time.
 func TestRemoteOutputRefusals(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "w")
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"-o", "az://acct/c/p", "--work-dir", work}, "gs:// and s3:// only"},
+		{[]string{"-o", "az://acct/c/p"}, "--work-dir"},
+		{[]string{"-o", "az://acct/c/p", "--work-dir", work, "--output-s3-profile", "p"}, "for an S3 destination"},
+		{[]string{"-o", "gs://b/p", "--work-dir", work, "--output-azure-sas-token", "sig=x"}, "for an Azure destination"},
+		{[]string{"-o", filepath.Join(t.TempDir(), "ds"), "--output-azure-sas-token", "sig=x"}, "apply to a dataset in a bucket"},
 		{[]string{"-o", "s3://b/p"}, "--work-dir"},
 		{[]string{"-o", "s3://b/p", "--work-dir", work, "--output-gcs-credentials-file", "x.json"}, "for a GCS destination"},
 		{[]string{"-o", "gs://b/p", "--work-dir", work, "--output-s3-region", "eu-west-1"}, "for an S3 destination"},
@@ -69,6 +75,10 @@ func TestRemoteOutputRefusals(t *testing.T) {
 	o, _, err = parseList([]string{"s3://src", "-o", "s3://b/p", "--work-dir", work, "--output-s3-region", "eu-west-1", "--output-s3-profile", "w"}, io.Discard, command{})
 	if err != nil || o.remote == nil || o.remote.String() != "s3://b/p/" || o.outputRegion != "eu-west-1" || o.outputProfile != "w" {
 		t.Fatalf("an s3:// -o: %v, %+v", err, o.remote)
+	}
+	o, _, err = parseList([]string{"s3://src", "-o", "az://acct/c/p", "--work-dir", work, "--output-azure-sas-token", "sig=x"}, io.Discard, command{})
+	if err != nil || o.remote == nil || o.remote.String() != "az://acct/c/p/" || o.outputSAS != "sig=x" {
+		t.Fatalf("an az:// -o: %v, %+v", err, o.remote)
 	}
 }
 
@@ -340,4 +350,83 @@ func TestRemoteS3ListAndResume(t *testing.T) {
 	if len(f.Uploads()) != 0 {
 		t.Fatalf("uploads left open: %v", f.Uploads())
 	}
+}
+
+// TestRemoteAzureListAndResume: swath list -o az://... writes the dataset
+// to an emulator-style endpoint (the account its first path segment),
+// every request carrying the destination's SAS, is stopped by its
+// deadline, and swath resume WORK_DIR, refused without the SAS (never
+// recorded), completes it there given another (a rotated one). The
+// account is frozen in the journal's identity; no file of the work
+// directory holds a SAS.
+func TestRemoteAzureListAndResume(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	s3test.NoCredentials(t)
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(60000, 7)))
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond) // 60 pages over 2 workers: the run outlasts its deadline
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(src.Close)
+	f := azfake.New("acct", "dst")
+	var mu sync.Mutex
+	sigs := map[string]int{}
+	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sigs[r.URL.Query().Get("sig")]++
+		mu.Unlock()
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(dst.Close)
+	ctx := context.Background()
+	work := filepath.Join(t.TempDir(), "work")
+	args := []string{"s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--workers", "2", "--part-size", "4KiB",
+		"-o", "az://acct/dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL, "--output-azure-sas-token", "sv=1&sig=FIRSTSIG"}
+	if c := exitCode(t, run(ctx, append(args, "--max-duration", "1500ms"), io.Discard, false)); c != exitDeadline {
+		t.Fatalf("first attempt: exit %d", c)
+	}
+	st, err := journal.Read(work)
+	if err != nil || len(st.Records) == 0 || st.Header.Identity.Destination == nil || st.Header.Identity.Destination.Account != "acct" {
+		t.Fatalf("the work directory's journal: %v, %+v", err, st.Header.Identity.Destination)
+	}
+	if _, ok := f.Get("ds/" + dataset.ManifestName); ok {
+		t.Fatal("committed before the resume")
+	}
+	if err := resume(ctx, []string{work, "--max-duration", "0"}, io.Discard); err == nil || !strings.Contains(err.Error(), "--output-azure-sas-token") {
+		t.Fatalf("resume without the SAS: %v", err)
+	}
+	if err := resume(ctx, []string{work, "--output-azure-sas-token", "sv=1&sig=SECONDSIG", "--max-duration", "0"}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	o, ok := f.Get("ds/" + dataset.ManifestName)
+	if !ok || !dataset.Committed(work) {
+		t.Fatalf("not committed: %v", f.Names())
+	}
+	var m dataset.Manifest
+	if err := json.Unmarshal(o.Data, &m); err != nil || len(m.Parts) < 2 {
+		t.Fatalf("manifest: %v, %d parts", err, len(m.Parts))
+	}
+	var rows int64
+	for _, p := range m.Parts {
+		rows += p.Rows
+	}
+	if rows != 60000 {
+		t.Fatalf("%d rows committed", rows)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if sigs["FIRSTSIG"] == 0 || sigs["SECONDSIG"] == 0 || len(sigs) != 2 {
+		t.Fatalf("destination requests by signature: %v", sigs)
+	}
+	_ = filepath.WalkDir(work, func(path string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		b, _ := os.ReadFile(path)
+		if bytes.Contains(b, []byte("FIRSTSIG")) || bytes.Contains(b, []byte("SECONDSIG")) {
+			t.Errorf("%s holds a SAS", path)
+		}
+		return nil
+	})
 }
