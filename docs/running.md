@@ -213,11 +213,11 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 
 ## Stopping and resuming
 
-A dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
+A journaled dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
 supervisor does with each code is in [reference/exit-codes.md](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
-"Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
-again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
+"Resumable" means an object-store run whose journal is intact. Filesystem and Azure HNS tree runs keep no
+journal: start them again in a new or empty directory (`--overwrite` refuses interrupted output that is not a dataset).
 
 **Signals.** SIGINT and SIGTERM stop the run gracefully: published parts and the journal stay, and
 `error.json` and the report are written. Only the first signal counts; the forced exit follows 15 s later. SIGKILL, a panic or an
@@ -407,6 +407,8 @@ and for S3 the delete-marker state, in wire order.
 
 ## Known limits
 
+- **Azure HNS:** experimental tree listing requires a directory scope and does not support resume,
+  `--all-versions` or `--sequential`; see [Azure Blob Storage](sources.md#azure-blob-storage).
 - **Windows:** journaled object-store dataset runs, recovery and bucket commit cleanup through resume
   are refused for local and bucket output: directory sync is unavailable, so a power loss could lose
   acknowledged work. The output lock holds. Filesystem runs work without resume; an already committed,

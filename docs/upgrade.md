@@ -98,10 +98,12 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; 0.3
 `source.stats.counters` with their own names ([internals/counters.md](internals/counters.md)). The full schema
 is [reference/run-report.md](reference/run-report.md).
 
+Azure hierarchical listing on `main` is experimental: directory scopes only, with no resume or version
+listing. Flat namespaces also support `--all-versions` for blob versions, snapshots and soft-deleted
+blobs. See [Azure Blob Storage](sources.md#azure-blob-storage).
+
 ## What 0.3 had that is not here
 
-- **Azure hierarchical namespaces.** swath lists flat namespaces only; with `--all-versions` it also lists
-  blob versions, snapshots and soft-deleted blobs.
 - **S3 directory buckets and GCS soft-deleted objects.** These are outside the supported listing scope.
   swath does support `--all-versions` for S3 versions and delete markers, GCS live and noncurrent
   generations and Azure Blob versions, snapshots and soft-deleted blobs, under their own schemas. 0.3 does not implement these modes.

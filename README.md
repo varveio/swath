@@ -5,7 +5,7 @@
 **Parallel listing and inventory for large object stores and filesystems.**
 
 swath is an open-source command-line tool that lists files and objects in local and mounted
-filesystems, S3, GCS, and Azure Blob Storage (flat namespace). It can summarize sizes by
+filesystems, S3, GCS, and Azure Blob Storage. It can summarize sizes by
 directory or prefix (`du`) and write sorted Parquet inventories.
 
 > **Release candidates available.** Download v0.4.0-rc.2 from the
@@ -32,7 +32,7 @@ other runs separate.
 | Local and mounted filesystems | Text or dataset listing; direct `du` summaries | No scan resume. Mounted shares use the OS filesystem, not a native NFS or SMB client. |
 | Amazon S3 | Text or dataset listing; prefix totals; eligible dataset resume | General-purpose buckets, not directory buckets. `--all-versions` lists versions and delete markers. Check S3-compatible endpoints separately. |
 | Google Cloud Storage | Native `gs://` listing; prefix totals; eligible dataset resume | `--all-versions` lists live and noncurrent generations. Their metadata differs from S3 versions. |
-| Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces only. `--all-versions` lists versions, snapshots and soft-deleted blobs. Hierarchical namespaces are unsupported. |
+| Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces support `--all-versions` (versions, snapshots and soft-deleted blobs). Experimental hierarchical listing on `main` requires a directory scope and has no resume or version listing. |
 
 Eligible journaled object-store dataset scans can resume. Local scans and text output
 cannot. Windows currently refuses journaled object-store dataset runs and recovery through resume

@@ -147,14 +147,24 @@ run's identity.
 `https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`, lists a container's current blobs;
 `--all-versions` lists every entry: blob versions, snapshots and soft-deleted blobs beside the current blobs.
 
-**Flat namespace only.** Before listing, swath asks the account whether it has a hierarchical namespace
-(Data Lake Storage Gen2), and refuses one that does, with exit 2 and cause `unsupported`. When the account
-will not say (an anonymous caller is always refused that question), swath asks the account's Data Lake host,
-which answers public containers; its refusal of a flat account that has blob soft delete or events on also
-establishes a flat namespace. Only when neither establishes the namespace is the run refused too, unless
-`--azure-assume-flat` asserts a flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
-reports a hierarchical namespace is refused whatever is asserted. A credential the service refuses during
-these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`).
+**Namespace.** Before listing, swath asks the account whether it has a hierarchical namespace (Data Lake
+Storage Gen2). A flat account is listed by key ranges. An account with a hierarchical namespace lists one
+directory at a time, in directory-tree order (`/` sorts lowest), which no key range can seek through: swath
+lists it directory by directory (experimental, issue #263), splitting a large directory as it splits a flat
+container, and writes each directory as a row keyed with a trailing `/` (`RegionName=Guinea/`) with the
+properties the listing gives it, followed by its contents, in byte order like any listing. The source's
+prefix must then name a directory (end it with `/`), `--sequential` is refused, and such a run does not
+resume yet; the report's `listing` is `tree`, and the mode is recorded for resume. When the account will
+not say (an anonymous caller is always refused that question, and swath then asks the account's Data Lake
+host, which answers public containers, and whose refusal of a flat account that has blob soft delete or
+events on also establishes a flat namespace; a container SAS is refused by both), one listing request shows
+whether entries carry a hierarchical namespace's resource type; otherwise the run is refused, unless
+`--azure-assume-flat` asserts a flat namespace. The assertion is recorded for resume and shown in the
+report's `namespace`; an account that reports a hierarchical namespace is listed as one whatever is
+asserted. A credential the service refuses during these checks (an expired SAS, say) ends the run as an
+authentication failure (exit 1, cause `auth`).
+`--all-versions` lists a flat account's every entry; on a hierarchical namespace it is refused.
+[Recursive excludes](filters.md#what-narrows-the-listing) also avoid listing matching HNS subtrees.
 
 **Permissions.** Permission to list the container's blobs: a SAS with the list permission, or an Entra ID
 role that includes it. `--all-versions` needs no more: Azure lists versions, snapshots and soft-deleted blobs to

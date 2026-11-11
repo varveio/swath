@@ -9,6 +9,11 @@ A range is a directory. Its entries are sorted by key, where a directory's key i
 else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a directory's DIR row followed
 by its subtree, before the next sibling, is global order. A directory with more than 4096 entries is split into
 chunk ranges of 2048 sorted names that share one reference-counted directory fd, so several workers stat it.
+The walk is the [tree core](../tree-sources.md)'s: `tree.Walker` is the `source.Provider`, the provider is its
+`Reader` (its engines below read, sort and stat a directory; `emit` is the walk decision per row: a
+directory is walked, pruned by `--one-file-system` or omitted as the excluded output), chunks are the
+walker's segments, and `files`, `dirs`, `bytes`, `skipped_dirs` and `other_device_dirs` are the walker's
+counts. Listings and count reports were byte-identical before and after the move (1.2M entries).
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
@@ -77,8 +82,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - **Recursive exclusion pruning.** Before workers start, `opened.Run` derives an immutable directory
   predicate from `registry.Env.Filter`. The filter package's glob compiler recognizes terminal `/**`
   segments without a second glob language. `Walker.SetPruneDirectories` installs it in the tree
-  core, which retains the directory row for the
-  ordinary row filter but submits no child for a matching directory; this applies to ordered listings,
+  core, which retains the directory row for the ordinary row filter but submits no child for a matching
+  directory; this applies to ordered listings,
   counts, native chunks/slabs and the portable engine. Includes, metadata filters, directory-row-only
   exclusions and regexes do not themselves stop descent. Automatic output-directory `Skip` exclusions
   still drop both the row and traversal.

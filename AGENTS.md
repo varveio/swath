@@ -7,7 +7,7 @@ Read this before changing swath. General contribution rules are in
 
 swath is a command-line tool for parallel listing and inventory of large object stores
 and filesystems. The unreleased Go implementation on `main` supports local and mounted
-filesystems, S3, GCS and Azure Blob flat namespaces, with size summaries and sorted
+filesystems, S3, GCS and Azure Blob (flat namespaces and experimental hierarchical listings), with size summaries and sorted
 Parquet output. The latest published release is the S3-focused Java v0.3.2, which Go
 replaces at release. The Java implementation is no longer on `main`; it is preserved at
 the tag `java-final`.

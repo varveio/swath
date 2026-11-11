@@ -95,23 +95,31 @@ The engine works on keys; the store seeks by name. `Ordered`'s fetch translates 
 
 - **Reorder.** Within a directory a file's key is its name, a directory's key its name + `/`. A directory
   entry is held until an entry whose key passes its key arrives (`a`, then `a-b`: `a-b` is emitted, then
-  `a/`). Held entries form a stack whose top is the smallest key; a page never ends with one held (the
-  fetch reads the next name page instead, `tree.resolve_pages`), so the engine's cursor `c` (the page's
-  last key) has every directory it skipped past already emitted.
-- **Start.** Names after `n` (A's part below the directory, cut at its first `/`) are listed; rows with key
-  ≤ A are dropped (`tree.dropped_rows`: the low-byte siblings re-read after a directory key cursor).
-- **Candidates.** A directory `d` sorts before A by name and after it by key exactly when A starts with `d`
-  and the next byte is below `/` (or A is `d`): `part` for a pivot `part-0015`. Such a directory belongs to
-  the range but lies behind its seek. The fetch resolves A's candidates from the directory's knowledge
-  (the name intervals already read and the directories seen there) and asks `Lookup` only for a candidate
-  outside them (`tree.candidate_lookups`); a present one starts the chain held (`tree.candidate_dirs`).
-  After a page ending at cursor `c` every candidate of `c` was read, so a lower child never looks up; a
-  pivot's candidates are short prefixes the parent has usually read past.
+  `a/`; `tree.held_dirs`). Held entries form a stack whose top is the smallest key.
+- **Page ends.** A page whose name page ended with nothing held continues by the lister's token (the mode's
+  token carries the chain's start key with it). One that ended with directories held ends at its last
+  emitted key `c`, and its token restarts the name listing after `c`: each held directory is one of `c`'s
+  candidates (below) or a name after `c`'s, read again. A directory named like the start of thousands of
+  its siblings (`part` beside `part-00000…`) is held across all of them, so it must not force one huge
+  page: that is why a page may end with rows held. A page that emitted nothing yet reads on
+  (`tree.resolve_pages`).
+- **Start.** Names after `n` (the start key's part below the directory, cut at its first `/`) are listed;
+  rows with key ≤ the start key are dropped (`tree.dropped_rows`: the low-byte siblings read again after a
+  directory key).
+- **Candidates.** A directory `d` sorts before a start key A by name and after it by key exactly when A starts
+  with `d` and the next byte is below `/` (or A is `d`): `part` for a pivot `part-0015`. Such a directory
+  belongs to the range but lies behind its seek. The fetch resolves A's candidates from what was read of the
+  directory (the name intervals listed and the directories seen there) and asks `Lookup` only for a
+  candidate outside them (`tree.lookups`); a present one starts the chain held (`tree.candidate_dirs`). A
+  cursor's candidates were all read; a pivot's may not be: on `overturemapswestus2` with 20-entry pages each
+  of 31 splits cost one lookup (`part-00150` lies beyond the parent's last name). At the default page of
+  1,000 a split already costs at least two pages (the admission gates), so a lookup per split adds at most a
+  third; skipping lookups whose candidate the lower child is certain to read is open.
 - **Bounds.** `T` is not sent: the engine trims keys past it. A directory held past `T` belongs to the next
   range, whose candidates find it.
 
 Every directory costs at least one request; a directory larger than one page costs its pages plus the
-engine's splits. The first page is never read twice: the segment seeks after it.
+engine's splits and their lookups. The first page is never read twice: the segment seeks after it.
 
 ## Errors, engagement and cancellation
 
@@ -119,9 +127,10 @@ A reader returns an error only when the run must stop. localfs counts open, read
 directory with samples (unchanged); Azure's request failures are the client's (retries, requeue through the
 engine for segments, fatal for a first page after retries). The walker checks the context before every
 `Read`; readers check it in long loops (localfs as before; `Ordered` per name page). Engagement counters:
-the walker's (`tree.*` in the report), the ordered mode's (`tree.first_pages`, `tree.dirs_whole`,
+the walker's (`tree.Stats`: files, dirs, bytes, pruned, excluded, omitted, segments; localfs reports them in its own
+fields), the ordered mode's (`tree.first_pages`, `tree.dirs_whole`,
 `tree.dirs_split`, `tree.held_dirs`, `tree.resolve_pages`, `tree.dropped_rows`, `tree.candidate_dirs`,
-`tree.candidate_lookups`), and the engine's own for segments.
+`tree.lookups`), and the engine's own for segments.
 
 ## Composition with the order stage and counts
 
