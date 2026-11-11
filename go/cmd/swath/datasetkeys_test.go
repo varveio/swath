@@ -44,3 +44,14 @@ func datasetKeys(t *testing.T, dir string) []string {
 	}
 	return ks
 }
+
+// readManifest decodes the manifest of the dataset at dir.
+func readManifest(t *testing.T, dir string) dataset.Manifest {
+	t.Helper()
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("manifest of %s: %v", dir, err)
+	}
+	return m
+}

@@ -172,14 +172,15 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
 		r, err = cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Marker: str(in.Marker), Prefix: str(in.Prefix),
-			MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
+			MaxResults: size, StartFrom: str(in.StartFrom), Include: in.Include.sdk(), ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
 		if err == nil {
 			out, err = flat(r.Segment, r.NextMarker)
 		}
 	} else {
 		var r container.ListBlobsHierarchyResponse
 		r, err = cc.NewListBlobsHierarchyPager(in.Delimiter, &container.ListBlobsHierarchyOptions{Marker: str(in.Marker),
-			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
+			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), Include: in.Include.sdk(),
+			ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
 		if err == nil {
 			out, err = merge(r.Segment, r.NextMarker)
 		}
@@ -194,7 +195,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
 	}
-	if err := out.Validate(in.Marker); err != nil {
+	if err := out.Validate(in.Marker, in.Include.Grouped()); err != nil {
 		return nil, err
 	}
 	c.formats.count(arrowAnswer(s.Header), len(out.Items))
@@ -347,7 +348,7 @@ func item(b *container.BlobItem) (Item, error) {
 	if b == nil || b.Name == nil {
 		return Item{}, fmt.Errorf("%w: a <Blob> without a name", objhttp.ErrSyntax)
 	}
-	it := Item{Name: *b.Name}
+	it := Item{Name: *b.Name, Entry: entry(b), Props: props(b)}
 	if !utf8.ValidString(it.Name) {
 		return Item{}, fmt.Errorf("%w: name %q is not UTF-8", objhttp.ErrInvalidPage, it.Name)
 	}
@@ -473,6 +474,15 @@ var arrowColumns = map[string]func(arrow.DataType) bool{
 	"Name": arrowString, "ResourceType": arrowString, "Etag": arrowString, "Content-MD5": arrowString,
 	"Content-Type": arrowString, "BlobType": arrowString, "AccessTier": arrowString,
 	"Content-Length": arrowInt64, "Last-Modified": arrowTimestamp, "Creation-Time": arrowTimestamp,
+	// Entry (include.go)
+	"Snapshot": arrowString, "VersionId": arrowString, "IsCurrentVersion": arrowBool, "Deleted": arrowBool,
+	"DeletedTime": arrowTimestamp, "RemainingRetentionDays": arrowInt32,
+	// Props (include.go)
+	"AccessTierInferred": arrowBool, "AccessTierChangeTime": arrowTimestamp, "ArchiveStatus": arrowString,
+	"RehydratePriority": arrowString, "LastAccessTime": arrowTimestamp, "Content-Encoding": arrowString,
+	"ServerEncrypted": arrowBool, "EncryptionScope": arrowString, "CustomerProvidedKeySha256": arrowString,
+	"LeaseState": arrowString, "TagCount": arrowInt32, "Metadata": arrowMap, "Tags": arrowMap,
+	"ImmutabilityPolicyUntilDate": arrowTimestamp, "ImmutabilityPolicyMode": arrowString, "LegalHold": arrowBool,
 }
 
 // xmlEnvelope checks an XML listing: the root element is

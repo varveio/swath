@@ -37,7 +37,7 @@ decision to add it later).
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--storage-class CLASS[,CLASS]` | `--storage-class` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](../commands/swath-list.md) and [schema registry](../dataset.md#schema-registry) |
+| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers, GCS generations or Azure Blob versions, snapshots and soft-deleted blobs | extended | implemented in Go; [current CLI](../commands/swath-list.md) and [schema registry](../dataset.md#schema-registry) |
 
 ## Output formats and datasets
 

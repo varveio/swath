@@ -42,7 +42,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from dataset_schema import (COLUMNS, S3_CURRENT, GCS_CURRENT, VERSION_IDS,
+from dataset_schema import (COLUMNS, S3_CURRENT, GCS_CURRENT, AZBLOB_CURRENT, AZBLOB_ADDED, VERSION_IDS,
                             schema_id, sql_string)
 
 COLS = ["key", "size", "last_modified", "etag", "storage_class", "version_id", "is_latest",
@@ -96,6 +96,12 @@ def selection(have, ts_ms, sid, cols):
                 sel.append(f"{CURRENT_OBJECT[c]} AS {c}")
             elif sid == GCS_CURRENT and c == "time_created":
                 sel.append("NULL::TIMESTAMP AS time_created")
+            elif sid == AZBLOB_CURRENT and c in AZBLOB_ADDED:
+                typ = ("BOOLEAN" if c in {"access_tier_inferred", "server_encrypted", "legal_hold"}
+                       else "BIGINT" if c == "tag_count"
+                       else "TIMESTAMPTZ" if c in {"access_tier_change_time", "last_access_time", "immutability_policy_until"}
+                       else "VARCHAR")
+                sel.append(f"NULL::{typ} AS {c}")
             else:
                 raise ValueError(f"schema {sid} is missing column {c}")
         elif c == "last_modified" and sid not in VERSION_IDS:

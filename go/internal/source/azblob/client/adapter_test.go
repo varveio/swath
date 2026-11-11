@@ -377,7 +377,7 @@ func TestMergeOrder(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("merged %q, want %q", got, want)
 		}
-		if err := out.Validate(""); err != nil {
+		if err := out.Validate("", false); err != nil {
 			t.Fatal(err)
 		}
 	}

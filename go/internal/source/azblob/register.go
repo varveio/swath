@@ -44,6 +44,11 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	source.Define(f, source.Flag{Name: "azure-sas-token", Shown: source.ShownNever, Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
 		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
+	source.Define(f, source.Flag{Name: "azure-fetch-metadata", Value: source.Switch(&o.FetchMetadata), Usage: "fill the metadata column with each blob's user metadata",
+		Long: "A JSON object, keys sorted; {} for a blob without any, null for one encrypted with a customer-provided key. Up to 8 KiB a blob: it grows the responses, the memory a row holds and the dataset."})
+	source.Define(f, source.Flag{Name: "azure-fetch-tags", Value: source.Switch(&o.FetchTags), Usage: "fill the tags column with each blob's index tags",
+		Long: "A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included."})
+	source.Define(f, source.Flag{Name: "azure-fetch-immutability", Value: source.Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
 	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
 		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	return o
@@ -108,28 +113,35 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		}
 	}
 	opt.Account, opt.Container, opt.Prefix, opt.Workers, opt.Warn = account, container, prefix, req.Workers, req.Warn
+	if opt.AllVersions {
+		p, err := NewVersions(ctx, opt)
+		if err != nil {
+			return nil, err
+		}
+		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionSchema), Registered: p, p: p}, nil
+	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil
 }
 
-type opened struct {
-	registry.Bound[Object]
+type opened[P any] struct {
+	registry.Bound[P]
 	keyrange.Registered
-	p *Provider
+	p *provider[P]
 }
 
 // Locator records the root without its SAS.
-func (o *opened) Locator() source.Locator {
+func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "azblob", Root: o.p.target(), Container: o.p.opt.Container}
 }
 
 // endpoint is the account's blob service URL as the client requests it
 // (the route without the container): https://ACCOUNT.blob.core.windows.net,
 // or an endpoint with the account path segment.
-func (o *opened) endpoint() string {
+func (o *opened[P]) endpoint() string {
 	return strings.TrimSuffix(strings.TrimSuffix(o.p.route, o.p.opt.Container), "/")
 }
 
@@ -139,15 +151,26 @@ func (o *opened) endpoint() string {
 // may change, a SAS among them. flat_asserted is --azure-assume-flat, so a
 // resume cannot add or drop the assertion. A supplied client must name its
 // route (Routed), or the run declines resume.
-func (o *opened) Identity() source.Identity {
+func (o *opened[P]) Identity() source.Identity {
 	ep := o.endpoint()
-	return source.Identity{Provider: "azblob", Fields: []source.IdentityField{
+	id := source.Identity{Provider: "azblob", Fields: []source.IdentityField{
 		{Name: "source", Value: o.p.target()},
 		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
 		{Name: "account", Value: o.p.opt.Account},
 		{Name: "container", Value: o.p.opt.Container},
 		{Name: "flat_asserted", Value: strconv.FormatBool(o.p.opt.Flat)},
 	}}
+	// What a run asked for beyond the default columns, only when asked,
+	// so a default run's identity is as before they existed.
+	for _, f := range []struct {
+		name string
+		on   bool
+	}{{"fetch_metadata", o.p.opt.FetchMetadata}, {"fetch_tags", o.p.opt.FetchTags}, {"fetch_immutability", o.p.opt.FetchImmutability}} {
+		if f.on {
+			id.Fields = append(id.Fields, source.IdentityField{Name: f.name, Value: "true"})
+		}
+	}
+	return id
 }
 
 // Capabilities: the byte-order adapter serves byte-ordered pages from
@@ -155,11 +178,11 @@ func (o *opened) Identity() source.Identity {
 // lists one marker chain. A run with an object-count cap, or through a
 // supplied client that does not name its route, cannot resume (as for S3
 // and GCS).
-func (o *opened) Capabilities() source.Capabilities {
+func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
 }
 
-func (o *opened) Report() source.Report {
+func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("azblob", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
 }
@@ -168,11 +191,16 @@ func (o *opened) Report() source.Report {
 // optional interfaces a range-engine provider gives the pipeline); a
 // capability whose method went missing would silently be off.
 var (
-	_ registry.Source     = (*opened)(nil)
-	_ keyrange.Registered = (*opened)(nil)
-	_ source.Identified   = (*opened)(nil)
-	_ source.Capable      = (*opened)(nil)
-	_ source.Reporter     = (*opened)(nil)
+	_ registry.Source     = (*opened[Object])(nil)
+	_ keyrange.Registered = (*opened[Object])(nil)
+	_ source.Identified   = (*opened[Object])(nil)
+	_ source.Capable      = (*opened[Object])(nil)
+	_ source.Reporter     = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Version])(nil)
+	_ keyrange.Registered = (*opened[Version])(nil)
+	_ source.Identified   = (*opened[Version])(nil)
+	_ source.Capable      = (*opened[Version])(nil)
+	_ source.Reporter     = (*opened[Version])(nil)
 )
 
 // keyPrefix is the name prefix a root names (registry.Factory.KeyPrefix).

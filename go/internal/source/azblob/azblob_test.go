@@ -398,14 +398,15 @@ func TestAdmission(t *testing.T) {
 	if _, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c}); !errors.Is(err, source.ErrUnsupported) {
 		t.Fatalf("unknown namespace: %v", err)
 	}
-	c = &pages{}
-	_, err = New(context.Background(), Options{Account: "acct", Container: "c", Client: c, AllVersions: true})
-	if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "--all-versions") || objhttp.Label(err) != "unsupported" {
-		t.Fatalf("all versions: %v", err)
-	}
+	// --all-versions is admitted as any listing: a hierarchical namespace
+	// refuses it before any listing request.
+	c = &pages{hns: true}
 	src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: c, AllVersions: true}, Workers: 1})
-	if src != nil || !errors.Is(err, source.ErrUnsupported) || c.lists.Load() != 0 {
-		t.Fatalf("all versions through open: %v", err)
+	if src != nil || !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" || c.lists.Load() != 0 {
+		t.Fatalf("all versions on a hierarchical namespace: %v", err)
+	}
+	if _, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: &pages{}, AllVersions: true}); err == nil {
+		t.Fatal("New lists every entry")
 	}
 }
 
@@ -505,7 +506,7 @@ func TestAdmissionFallback(t *testing.T) {
 		case err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		default:
-			o := src.(*opened)
+			o := src.(*opened[Object])
 			if n := o.p.Stats().Namespace; n != c.admitted {
 				t.Fatalf("%s: admitted by %q, want %q", c.name, n, c.admitted)
 			}
@@ -752,7 +753,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := src.(*opened).p
+	p := src.(*opened[Object]).p
 	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Timeout.Seconds() != 7 || p.Options().PageSize != 7 || !p.opt.Flat {
 		t.Fatalf("flags not applied: %+v", p.opt)
 	}
@@ -914,7 +915,7 @@ func TestAdmissionBlockedEndpointSigned(t *testing.T) {
 		case c.admitted && err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		case c.admitted:
-			if n := src.(*opened).p.Stats().Namespace; n != "filesystem endpoint blocked" {
+			if n := src.(*opened[Object]).p.Stats().Namespace; n != "filesystem endpoint blocked" {
 				t.Fatalf("%s: admitted by %q", c.name, n)
 			}
 		case err == nil || objhttp.Classify(err) != objhttp.ClassAuth:

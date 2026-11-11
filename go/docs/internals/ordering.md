@@ -668,7 +668,12 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
   captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the
   trailer's offset and the magic). Files are named by their random ID; nothing depends on a path or inode.
-  Disposable spill files keep the version-1 frames above.
+  Disposable spill files keep the version-1 frames above. The durable row codec revision is 2:
+  the Azure optional-property extension changed its payload encoding. This global revision rejects
+  older spill caches for every provider as `rejected.codec`, so their intervals are relisted. The
+  schema ID, journal identity and Parquet writer recipe are unchanged by this cache revision;
+  journaled Parquet parts and their committed prefix remain reusable.
+  `azblob.TestDurableLegacySpillUpgrade` exercises fixed revision-1 Azure files and relists the suffix.
 - **The ledger** (`spill/durable/ledger`) is a file of its own, not journal frames: the part journal keeps
   its single committer and its strict corruption rule, and no cache failure touches it. Its first frame is
   the magic, its version, the run UUID and the identity digest; then `sealed {file_id, cs, ce, ce_open,
