@@ -913,6 +913,25 @@ envelope, and the Guard's one allocation and copy of the body, which is most of 
 allocates beyond the page. `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it
 replaced (kept in `xml_old_test.go`): the same pages, the same errors.
 
+### Pivot density step cost (2026-11-11)
+
+The same blockchain profile put `keyrange.extrapolateWhy`, the density step `propose` runs after every continuing
+page (138,485 split decisions considered in 149,783 pages), at 24 of 714 CPU-seconds, 3.4 %: 15 s in its own loop over
+every byte of the page, 4 s in `isSafe`, 1.6 s in `growslice` (`append(page, c)` copied the 1,000-key page whenever
+it had no spare capacity, and otherwise wrote the cursor into that capacity), about 3 s in `math/big` (three values of
+about 80 digits per call, not one per key). `BenchmarkExtrapolate`, one call over a 1,000-key blockchain-shaped page
+(stride 64), on the build host as above, old and new binaries alternated eight times at `-benchtime=3000x`:
+
+| Case | Before | After | Change | B/op | allocs/op |
+|---|---:|---:|---:|---|---|
+| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19, unchanged |
+| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24, unchanged |
+
+The page and the cursor are scanned in place (no copy), every byte is marked in a 256-entry table eight bytes per
+step, and the alphabet's safety is checked once over the table instead of per byte (−33 % from the first two, a
+further −51 % from the unrolled marking). `TestExtrapolateMatchesOld` holds the result, pivot and reason, to the one
+it replaced (kept in `extrapolate_test.go`).
+
 ### azblob v1.7.0 to v1.8.3 (2026-11-10)
 
 `BenchmarkList` (`internal/source/azblob/client`), main `05e36feb` (azblob v1.7.0, azcore v1.21.1) against the
