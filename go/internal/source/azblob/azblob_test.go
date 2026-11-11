@@ -484,6 +484,7 @@ func TestAdmissionFallback(t *testing.T) {
 		{"403, dfs 409 soft delete or events", blob(403, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
 		{"401, dfs 409 soft delete or events, asserted", blob(401, ""), 409, "", true, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
 		{"401, dfs 409 another code", blob(401, ""), 409, "", false, "", false, false, "ContainerBeingDeleted"},
+		{"401, dfs 403 with that code", blob(401, ""), 403, "", false, "", false, false, "EndpointUnsupportedAccountFeatures"},
 		{"401, dfs 403 permission mismatch", blob(401, ""), 403, "", false, "", false, false, "AuthorizationPermissionMismatch"},
 	} {
 		asked := 0
@@ -876,6 +877,48 @@ func TestParseURLDiagnostics(t *testing.T) {
 		_, _, _, _, err := ParseURL(c.root)
 		if err == nil || err.Error() != c.want {
 			t.Errorf("ParseURL: %v, want %q", err, c.want)
+		}
+	}
+}
+
+// TestAdmissionBlockedEndpointSigned: the Data Lake host answers 409
+// EndpointUnsupportedAccountFeatures before it checks credentials, so a
+// signed caller whose credential Get Account Information rejected (auth)
+// keeps that failure, while a container SAS that Get Account Information
+// merely refuses (403 AuthorizationPermissionMismatch, access denied) is
+// admitted by the 409.
+func TestAdmissionBlockedEndpointSigned(t *testing.T) {
+	answer := func(status int, code string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("x-ms-error-code", code)
+			w.WriteHeader(status)
+		}
+	}
+	for _, c := range []struct {
+		name, blobCode string
+		blobStatus     int
+		admitted       bool
+	}{
+		{"rejected credential", "AuthenticationFailed", 403, false},
+		{"no credential accepted", "NoAuthenticationInformation", 401, false},
+		{"container SAS", "AuthorizationPermissionMismatch", 403, true},
+	} {
+		hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": answer(c.blobStatus, c.blobCode),
+			"acct.dfs.core.windows.net": answer(409, "EndpointUnsupportedAccountFeatures")}}
+		cl, err := client.New(context.Background(), client.Config{Account: "acct", SAS: "sv=1&sig=S", HTTPClient: hc, Retry: objhttp.Retry{MaxAttempts: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: cl}, Workers: 1})
+		switch {
+		case c.admitted && err != nil:
+			t.Fatalf("%s: %v", c.name, err)
+		case c.admitted:
+			if n := src.(*opened).p.Stats().Namespace; n != "filesystem endpoint blocked" {
+				t.Fatalf("%s: admitted by %q", c.name, n)
+			}
+		case err == nil || objhttp.Classify(err) != objhttp.ClassAuth:
+			t.Fatalf("%s: %v (class %q), want the auth failure", c.name, err, objhttp.Classify(err))
 		}
 	}
 }

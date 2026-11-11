@@ -99,8 +99,12 @@ passes (`flatFeatures`): Azure documents that blob soft delete blocks the Data L
 without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
 ([soft delete overview](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)). Most
 public open-data accounts answer it: 60 of the 64 Planetary Computer containers, and NOAA's GOES, HRRR, GFS and NWM and
-NAIP (checked live on 2026-11-11). A 403 `AuthorizationPermissionMismatch` there proves nothing: a container SAS met
-it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
+NAIP (checked live on 2026-11-11). The host gives that 409 before it checks credentials, so a signed caller whose
+credential Get Account Information rejected (class auth) keeps that failure; a container SAS that Get Account
+Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by the 409. One report attributes the
+same message to an account reached through a private endpoint for `blob` without one for `dfs`; whether a
+hierarchical account can answer it that way is unverified. A 403 `AuthorizationPermissionMismatch` there proves
+nothing: a container SAS met it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
 there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
