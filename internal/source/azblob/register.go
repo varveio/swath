@@ -53,8 +53,8 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	if diag {
 		source.Define(f, source.Flag{Name: "azure-page-policy", Value: source.Text(&o.PagePolicy), Metavar: "fixed|one-read|grow|estimate",
-			Usage: "experimental page policy (default fixed)",
-			Long:  "fixed: pages of --page-size; one-read ends a page at its first read's last row instead of reading again for the rest; grow adds pages that double after full pages, up to 5,000, but to at most half the keys estimated left; estimate asks the finite remainder estimate plus two, 1,000 to 5,000. grow and estimate read once per page. The default is fixed."})
+			Usage: "experimental page policy (default one-read)",
+			Long:  "fixed: pages of --page-size, read again to fill a page, as before one read per page became the default; one-read (the default) ends a page at its first read's last row instead of reading again for the rest; grow adds pages that double after full pages, up to 5,000, but to at most half the keys estimated left; estimate asks the finite remainder estimate plus two, 1,000 to 5,000. grow and estimate read once per page. The default is one-read."})
 	}
 	return o
 }

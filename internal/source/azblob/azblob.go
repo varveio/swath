@@ -111,7 +111,8 @@ type Options struct {
 	// fails.
 	FetchMetadata, FetchTags, FetchImmutability bool
 	// PagePolicy is the experimental page policy (#449, diagnostic):
-	// "" or fixed, one-read (order.Adapter.OneReadPerPage) or grow
+	// fixed (two reads a page, as before #469), "" or one-read
+	// (order.Adapter.OneReadPerPage) or grow
 	// (one-read and keyrange.GrowPage up to client.MaxPageSize).
 	PagePolicy string
 	// Policy is the range engine's (the shared engine flags).
@@ -273,10 +274,11 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 	if err != nil {
 		return nil, err
 	}
+	p.oneRead = true // one read per page, the default since #469
 	switch opt.PagePolicy {
-	case "", pageFixed:
-	case pageOneRead:
-		p.oneRead = true
+	case "", pageOneRead:
+	case pageFixed:
+		p.oneRead = false
 	case pageGrow:
 		p.oneRead = true
 		if !eo.Sequential {

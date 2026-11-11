@@ -215,7 +215,7 @@ _swath_diag_list() {
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
         '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
-        '--azure-page-policy=[experimental page policy (default fixed)]:value:(fixed one-read grow estimate)' \
+        '--azure-page-policy=[experimental page policy (default one-read)]:value:(fixed one-read grow estimate)' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
         '--s3-region=[the bucket'\''s region]:NAME: ' \
@@ -298,7 +298,7 @@ _swath_diag_count() {
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
         '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
-        '--azure-page-policy=[experimental page policy (default fixed)]:value:(fixed one-read grow estimate)' \
+        '--azure-page-policy=[experimental page policy (default one-read)]:value:(fixed one-read grow estimate)' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
         '--s3-region=[the bucket'\''s region]:NAME: ' \

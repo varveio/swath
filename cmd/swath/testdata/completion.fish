@@ -137,7 +137,7 @@ complete -c swath -n '__swath_cmd "diag list" "diag count"' -l sequential -d 'li
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l max-keys -x -d 'with --sequential, stop after N objects (marked incomplete)'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l page-size -x -d 'ask for pages of N entries (default the provider\'s)'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l seed-tiles -x -d 'start with at most N tiles from the seed or --seed-from'
-complete -c swath -n '__swath_cmd "diag list" "diag count"' -l azure-page-policy -x -a 'fixed one-read grow estimate' -d 'experimental page policy (default fixed)'
+complete -c swath -n '__swath_cmd "diag list" "diag count"' -l azure-page-policy -x -a 'fixed one-read grow estimate' -d 'experimental page policy (default one-read)'
 complete -c swath -n '__swath_cmd "resume"' -l spill-compress -d 'undo a recorded --no-spill-compress'
 complete -c swath -n '__swath_cmd "resume"' -l no-spill-plain -d 'undo a recorded --spill-plain'
 complete -c swath -n '__swath_cmd "resume"' -l no-anonymous -d 'undo a recorded --anonymous'
