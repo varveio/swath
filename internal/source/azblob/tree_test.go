@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
@@ -18,6 +19,7 @@ import (
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/tree"
 )
 
@@ -171,6 +173,77 @@ func TestTreeCancelMidDirectory(t *testing.T) {
 	}
 	if n := len(store.Log()); n > 200 {
 		t.Fatalf("%d requests after cancelling at 30", n)
+	}
+}
+
+// Resolution may consume multiple stateful adapter tokens before it can
+// emit a directory row. Exhausted retries on a later read must preserve
+// those held rows and retry the current token, never the consumed input.
+func TestTreeResolutionRetry(t *testing.T) {
+	keys := []string{"0", "1", "2", "a/", "a-/", "a--/", "z"}
+	for _, fail := range []int{5, 6, 7} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			store := azblobtest.NewTreeStore(keys)
+			store.Fail = func(n int) error {
+				if n == fail {
+					return treeExhausted()
+				}
+				return nil
+			}
+			o := openTree(t, store, "", 1, 1)
+			rows, err := runTree(context.Background(), o, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(keysOf(rows), store.Keys()) {
+				t.Fatalf("got %q want %q", keysOf(rows), store.Keys())
+			}
+			if n := o.t.Stats().Counters.Value("tree.resolve_requeues"); n != 1 {
+				t.Fatalf("resolution requeues %d", n)
+			}
+		})
+	}
+}
+
+func treeExhausted() error {
+	err := &client.Error{Status: 503, Code: "ServerBusy"}
+	return &objhttp.ExhaustedError{Attempts: 1, Err: objhttp.Normalize(err)}
+}
+
+// A permanent inner failure returns with its classification; cancellation
+// during the resolution backoff stops promptly without another request.
+func TestTreeResolutionStops(t *testing.T) {
+	for _, cancelWait := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", cancelWait), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			store := azblobtest.NewTreeStore([]string{"0", "1", "2", "a/", "a-/", "a--/", "z"})
+			store.Fail = func(n int) error {
+				if n != 6 {
+					return nil
+				}
+				if cancelWait {
+					time.AfterFunc(10*time.Millisecond, cancel)
+					return treeExhausted()
+				}
+				return objhttp.Normalize(&client.Error{Status: 403, Code: "AuthenticationFailed"})
+			}
+			o := openTree(t, store, "", 1, 1)
+			_, err := runTree(ctx, o, 1)
+			if cancelWait {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancel: %v", err)
+				}
+				if n := o.t.Stats().Counters.Value("tree.resolve_requeues"); n != 1 {
+					t.Fatalf("resolution requeues %d", n)
+				}
+			} else if objhttp.Classify(err) != objhttp.ClassAuth {
+				t.Fatalf("permanent: %v class %q", err, objhttp.Classify(err))
+			}
+			if n := len(store.Log()); n != 7 {
+				t.Fatalf("%d requests; failure was request 7", n)
+			}
+		})
 	}
 }
 

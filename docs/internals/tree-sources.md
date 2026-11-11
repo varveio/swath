@@ -126,15 +126,22 @@ engine's splits and their lookups. The first page is never read twice: the segme
 A reader returns an error only when the run must stop. localfs counts open, read and stat errors per
 directory with samples (unchanged); Azure's request failures are the client's (retries, requeue through the
 engine for segments and, the same way, for a directory's first page: `tree.first_page_requeues`, since tree
-mode cannot resume). The walker checks the context before every
+mode cannot resume). When one logical page needs several name pages to resolve held directories, a later
+name page is requeued in place (`tree.resolve_requeues`), preserving the held rows and current continuation:
+earlier successful reads have consumed their adapter tokens and cannot be replayed. The same provider
+requeue predicate and tree backoff bounds apply; permanent failures return and cancellation interrupts the wait.
+The walker checks the context before every
 `Read`; readers check it in long loops (localfs as before; `Ordered` per name page). Engagement counters:
 the walker's (`tree.Stats`: files, dirs, bytes, pruned, excluded, omitted, segments; localfs reports them in its own
 fields), the ordered mode's (`tree.first_pages`, `tree.dirs_whole`,
 `tree.dirs_split`, `tree.held_dirs`, `tree.resolve_pages`, `tree.dropped_rows`, `tree.candidate_dirs`,
-`tree.lookups`, `tree.first_page_requeues`, `tree.record_resets`), and the engine's own for segments. A split
-directory's record of what was read only saves lookups: past 100,000 directories it is dropped
-(`tree.record_resets`) and later candidates are looked up, so a directory of millions of subdirectories
-does not hold them all for the run.
+`tree.lookups`, `tree.first_page_requeues`, `tree.resolve_requeues`, `tree.record_resets`,
+`tree.record_evictions`), and the engine's own for segments. Directory records only save lookups. Each
+record holds at most 4,096 combined name intervals, directory entries and negative lookup results; exceeding
+that limit drops all its evidence together (`tree.record_resets`). The shared cache holds at most 256
+directory records, evicting one at capacity (`tree.record_evictions`); an active reader can retain its own
+bounded record until it finishes. Candidates whose evidence was dropped use `Lookup`, preserving ordering
+without retaining the listing's entire page or directory history.
 
 ## Composition with the order stage and counts
 

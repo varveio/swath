@@ -74,6 +74,8 @@ const (
 	cLookups
 	cFirstRequeues
 	cRecordResets
+	cResolveRequeues
+	cRecordEvictions
 )
 
 // OrderedCounters are the ordered mode's engagement counters, registered
@@ -88,7 +90,9 @@ var OrderedCounters = []counters.Def{
 	{Key: "tree.candidate_dirs", Kind: counters.Count, Unit: "directories", Help: "directories behind a range's seek by name that belong to it by key (part before part-0015)"},
 	{Key: "tree.lookups", Kind: counters.Count, Unit: "requests", Help: "directory lookups for such candidates outside the names already read"},
 	{Key: "tree.first_page_requeues", Kind: counters.Count, Unit: "requests", Help: "directories' first pages asked again after the client's retries were exhausted"},
-	{Key: "tree.record_resets", Kind: counters.Count, Unit: "directories", Help: "split directories' records of what was read dropped at their cap (later candidates are looked up)"},
+	{Key: "tree.record_resets", Kind: counters.Count, Unit: "directories", Help: "directory records dropped at the combined span, directory and negative-lookup entry cap (later candidates are looked up)"},
+	{Key: "tree.resolve_requeues", Kind: counters.Count, Unit: "requests", Help: "inner name pages asked again after retry exhaustion while preserving held rows and the current continuation"},
+	{Key: "tree.record_evictions", Kind: counters.Count, Unit: "directories", Help: "directory records evicted at the cache's record cap (later candidates are looked up)"},
 }
 
 // OrderedRange is a range of the ordered mode: a directory (named by its
@@ -106,7 +110,7 @@ type Ordered[P any] struct {
 	base counters.ID
 	page int
 	// requeue is the provider's predicate (keyrange.Description.Requeue)
-	// for a first page asked again after its retries were exhausted.
+	// for a first page or inner resolution read whose retries were exhausted.
 	requeue func(error) bool
 
 	mu    sync.Mutex
@@ -323,6 +327,7 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 	}
 	in := &DirQuery{Dir: dir, After: name, Token: token, Max: q.Max}
 	prev := name
+	wait := requeueFirstWait
 	for first := true; ; first = false {
 		if !first {
 			if err := ctx.Err(); err != nil {
@@ -332,8 +337,24 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 		}
 		pg, err := o.l.List(ctx, in)
 		if err != nil {
-			return nil, err
+			// Earlier successful reads consumed their adapter tokens. Retrying
+			// the logical page would replay one of those stale tokens and lose
+			// its held rows. Only the failing inner read is safe to repeat.
+			if first || o.requeue == nil || !o.requeue(err) || ctx.Err() != nil {
+				return nil, err
+			}
+			o.add(cResolveRequeues, 1)
+			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil, context.Cause(ctx)
+			case <-t.C:
+			}
+			wait = min(2*wait, requeueMaxWait)
+			continue
 		}
+		wait = requeueFirstWait
 		for i := range pg.Entries {
 			e := &pg.Entries[i]
 			if e.Name == "" || strings.IndexByte(e.Name, '/') >= 0 || (prev != "" || i > 0) && e.Name <= prev {
@@ -382,7 +403,9 @@ func (o *Ordered[P]) lookup(ctx context.Context, k *known[P], dir, name string) 
 	if ok && (e.Name != name || !e.Dir) {
 		return Entry[P]{}, false, source.Violation(fmt.Errorf("%w: lookup of %q in %q answered %q", keyrange.ErrInvalidPage, name, dir, e.Name))
 	}
-	k.found(name, e, ok)
+	if k.found(name, e, ok) {
+		o.add(cRecordResets, 1)
+	}
 	return e, ok, nil
 }
 
@@ -392,6 +415,15 @@ func (o *Ordered[P]) know(dir string) *known[P] {
 	defer o.mu.Unlock()
 	k := o.known[dir]
 	if k == nil {
+		if len(o.known) >= maxKnownRecords {
+			// Any record may be evicted: it only saves lookups. Active
+			// readers retain their own bounded record until they finish.
+			for d := range o.known {
+				delete(o.known, d)
+				break
+			}
+			o.add(cRecordEvictions, 1)
+		}
 		k = &known[P]{dirs: map[string]Entry[P]{}}
 		o.known[dir] = k
 	}
@@ -399,19 +431,22 @@ func (o *Ordered[P]) know(dir string) *known[P] {
 }
 
 // forget drops a directory's record once nothing more of it will be read
-// (it fit its first page). A split directory's record is kept for the run:
-// its segments' candidates are resolved from it.
+// (it fit its first page). Split directories' records remain in the bounded
+// cache so their segments' candidates can be resolved without a lookup.
 func (o *Ordered[P]) forget(dir string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	delete(o.known, dir)
 }
 
-// maxKnownDirs caps the directories a split directory's record holds;
+// maxKnownEntries caps each record's combined spans, directories and negative
+// lookups; maxKnownRecords caps cached directory records. Retained entries
+// are bounded by their product, plus one bounded record per active reader.
 // requeueFirstWait and requeueMaxWait bound a requeued first page's
-// backoff.
+// or inner resolution page's backoff.
 var (
-	maxKnownDirs     = 100_000
+	maxKnownEntries  = 4096
+	maxKnownRecords  = 256
 	requeueFirstWait = 1 * time.Second
 	requeueMaxWait   = 30 * time.Second
 )
@@ -459,15 +494,7 @@ func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) (reset bool) {
 			k.dirs[e.Name] = e
 		}
 	}
-	if len(k.dirs) > maxKnownDirs {
-		// The record only saves lookups: dropped whole (spans with the
-		// directories they hold), later candidates are looked up instead,
-		// and a split directory of millions of subdirectories (users/<id>/)
-		// no longer holds them all for the run.
-		k.spans, k.dirs, k.none = nil, map[string]Entry[P]{}, nil
-		return true
-	}
-	return false
+	return k.trim()
 }
 
 // dirAt reports what is known of name: sure when it lies in a read
@@ -490,7 +517,7 @@ func (k *known[P]) dirAt(name string) (Entry[P], bool, bool) {
 }
 
 // found records a lookup's answer.
-func (k *known[P]) found(name string, e Entry[P], ok bool) {
+func (k *known[P]) found(name string, e Entry[P], ok bool) (reset bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if ok {
@@ -498,4 +525,16 @@ func (k *known[P]) found(name string, e Entry[P], ok bool) {
 	} else {
 		k.none = append(k.none, name)
 	}
+	return k.trim()
+}
+
+// trim drops all related evidence together: retaining a span after dropping
+// a directory it contains would turn a real directory into a false negative.
+// The caller holds k.mu.
+func (k *known[P]) trim() bool {
+	if len(k.spans)+len(k.dirs)+len(k.none) <= maxKnownEntries {
+		return false
+	}
+	k.spans, k.dirs, k.none = nil, map[string]Entry[P]{}, nil
+	return true
 }

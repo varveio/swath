@@ -395,9 +395,9 @@ func TestOrderedFirstPageRequeued(t *testing.T) {
 // TestOrderedRecordCapped: a split directory's record is dropped at its cap
 // (later candidates are looked up instead) and the output is unchanged.
 func TestOrderedRecordCapped(t *testing.T) {
-	old := maxKnownDirs
-	maxKnownDirs = 3
-	t.Cleanup(func() { maxKnownDirs = old })
+	old := maxKnownEntries
+	maxKnownEntries = 3
+	t.Cleanup(func() { maxKnownEntries = old })
 	keys := manyKeys(2000)
 	for i := range 300 {
 		keys = append(keys, fmt.Sprintf("big/d%05d/f", i))
@@ -412,5 +412,74 @@ func TestOrderedRecordCapped(t *testing.T) {
 	}
 	if counter(o, "tree.record_resets") == 0 {
 		t.Fatal("the record was never dropped")
+	}
+}
+
+// File-only pages, lookup misses and completed split directories all count
+// against the optional cache's limits. Eviction must preserve the oracle.
+func TestOrderedCacheBounded(t *testing.T) {
+	oldEntries, oldRecords := maxKnownEntries, maxKnownRecords
+	maxKnownEntries, maxKnownRecords = 8, 3
+	t.Cleanup(func() { maxKnownEntries, maxKnownRecords = oldEntries, oldRecords })
+	for _, manyDirs := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manyDirs=%v", manyDirs), func(t *testing.T) {
+			var keys []string
+			for i := range 400 {
+				prefix := ""
+				if manyDirs {
+					prefix = fmt.Sprintf("d%03d/", i/20)
+				}
+				keys = append(keys, fmt.Sprintf("%sf%05d", prefix, i))
+			}
+			h := newHNS(keys)
+			c, _, o, err := walkOrdered(t, h, 4, 1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(c.keys, h.oracle()) {
+				t.Fatal("cache eviction changed output")
+			}
+			if len(o.known) > maxKnownRecords {
+				t.Fatalf("retained %d directory records", len(o.known))
+			}
+			for dir, k := range o.known {
+				if n := len(k.spans) + len(k.dirs) + len(k.none); n > maxKnownEntries {
+					t.Fatalf("%q retained %d entries", dir, n)
+				}
+			}
+			if manyDirs && counter(o, "tree.record_evictions") == 0 {
+				t.Fatal("record cap did not engage")
+			}
+			if !manyDirs && counter(o, "tree.record_resets") == 0 {
+				t.Fatal("file-page span cap did not engage")
+			}
+		})
+	}
+	// A cache miss after eviction must still resolve a real directory by
+	// Lookup; a long sequence of absent candidates must also remain bounded.
+	h := newHNS([]string{"real/child"})
+	o, err := NewOrdered[obj](h, keyrange.Options{Workers: 1}, keyrange.Description[obj]{Target: "hns", Listing: keyrange.Listing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := o.know("")
+	for i := range 200 {
+		if _, _, err := o.lookup(context.Background(), k, "", fmt.Sprintf("missing%d", i)); err != nil {
+			t.Fatal(err)
+		}
+		if len(k.none) > maxKnownEntries {
+			t.Fatalf("retained %d negative lookups", len(k.none))
+		}
+	}
+	for i := range 10 {
+		o.know(fmt.Sprint(i))
+	}
+	if len(o.known) > maxKnownRecords {
+		t.Fatalf("retained %d directory records", len(o.known))
+	}
+	k = o.know("")
+	e, ok, err := o.lookup(context.Background(), k, "", "real")
+	if err != nil || !ok || !e.Dir || h.lookups.Load() != 201 {
+		t.Fatalf("fallback lookup: entry=%+v ok=%v err=%v requests=%d", e, ok, err, h.lookups.Load())
 	}
 }
