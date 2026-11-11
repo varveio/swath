@@ -375,7 +375,10 @@ func (p *provider[P]) admit(ctx context.Context) error {
 		if n, ok := p.client.(namespaced); ok {
 			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
 				hns, err, how = h, nil, "filesystem properties"
-			} else if flatFeatures(nerr) {
+			} else if flatFeatures(nerr) && (p.unsigned() || class(err) != objhttp.ClassAuth) {
+				// The Data Lake host answers this 409 before it checks
+				// credentials, so a signed caller's rejected credential
+				// (Get Account Information's auth failure) stays that failure.
 				hns, err, how = false, nil, "filesystem endpoint blocked"
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
 				err = fmt.Errorf("%w; filesystem properties: %w", err, nerr)
@@ -440,15 +443,21 @@ func fallback(err error) bool {
 // refused: the service refused the caller (class auth or access denied, by
 // Azure's status and code).
 func refused(err error) bool {
+	c := class(err)
+	return c == objhttp.ClassAuth || c == objhttp.ClassAccessDenied
+}
+
+// class is the service's classification of err (by Azure's status and
+// code); the zero class when err is not a service answer.
+func class(err error) objhttp.Class {
 	if errors.Is(err, source.ErrUnsupported) {
-		return false
+		return ""
 	}
 	f := objhttp.Normalize(err)
 	if f == nil {
-		return false
+		return ""
 	}
-	classified := (&client.Error{Status: f.Status, Code: f.Code}).Failure()
-	return classified.Class == objhttp.ClassAuth || classified.Class == objhttp.ClassAccessDenied
+	return (&client.Error{Status: f.Status, Code: f.Code}).Failure().Class
 }
 
 // connect builds the client unless Options.Client supplies one (own).
