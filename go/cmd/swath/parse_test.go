@@ -271,9 +271,9 @@ func TestOutputDestination(t *testing.T) {
 		{[]string{"-o", "x.gz"}, "", "does not write .gz"},
 		{[]string{"-o", "x.zst"}, "", "does not write .zst"},
 		{[]string{"-o", "x.xz"}, "", "does not write .xz"},
-		{[]string{"-o", "s3://bkt/out"}, "", "object-store destination"},
-		{[]string{"-o", "gs://bkt/out"}, "", "object-store destination"},
-		{[]string{"-o", "https://acct.blob.core.windows.net/c"}, "", "object-store destination"},
+		{[]string{"-o", "s3://bkt/out"}, "", "not supported yet"},
+		{[]string{"-o", "gs://bkt/out"}, "", "needs --work-dir"},
+		{[]string{"-o", "https://acct.blob.core.windows.net/c"}, "", "want s3://BUCKET"},
 	} {
 		args := append([]string{"s3://bkt"}, c.args...)
 		for i, a := range args {

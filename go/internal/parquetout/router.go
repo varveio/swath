@@ -70,6 +70,11 @@ type Options struct {
 	// one relative to the directory it locked, so a pathname replaced
 	// after Verify cannot receive the part.
 	Open func(path string) (*os.File, error)
+	// Create, if set, makes part ordinal's artifact instead of a local file
+	// (Open is then unused): a remote dataset's upload. The router gives
+	// it to the module's part writer, whose Seal syncs it (completing the
+	// upload) and whose Abort closes it (aborting one not completed).
+	Create func(ordinal int) (dataset.Artifact, error)
 	// MaxRows, if positive, also closes a part once it holds that many rows
 	// (Java's --part-rotation-max-rows). Such a cut depends only on the
 	// rows, so boundaries stay deterministic (it is part of the resume
@@ -530,8 +535,16 @@ func (r *Router[P]) encode(p *part[P]) {
 		s, createdBy = claimSchema(r.schema, r.opt.Cut.Columns), r.opt.Cut.CreatedBy
 	}
 	var w *writer[P]
+	var f dataset.Artifact
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.codec, columns, createdBy)
+		if r.opt.Create != nil {
+			f, err = r.opt.Create(p.ordinal)
+		} else {
+			f, err = openLocal(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal))
+		}
+	}
+	if err == nil {
+		w, err = create(f, s, r.codec, columns, createdBy) // closes f when it fails
 	}
 	if err != nil {
 		p.err = err

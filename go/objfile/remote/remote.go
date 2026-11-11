@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -142,12 +143,17 @@ func gcsClient(ctx context.Context, pool http.RoundTripper, emulator bool) (*sto
 	tr := ranged.Transport(pool)
 	if !emulator {
 		var err error
-		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadOnly), internaloption.EnableNewAuthLibrary()); err != nil {
+		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadOnly), internaloption.EnableNewAuthLibrary(), option.WithLogger(quietLog)); err != nil {
 			return nil, err
 		}
 	}
-	return storage.NewClient(ctx, append([]option.ClientOption{option.WithHTTPClient(&http.Client{Transport: tr})}, gcsEndpoint...)...)
+	return storage.NewClient(ctx, append([]option.ClientOption{option.WithHTTPClient(&http.Client{Transport: tr}), option.WithLogger(quietLog)}, gcsEndpoint...)...)
 }
+
+// quietLog is the GCS clients' logger: it emits nothing. The SDK's own,
+// switched on by GOOGLE_SDK_GO_LOGGING_LEVEL, writes request headers and
+// token exchanges unredacted.
+var quietLog = slog.New(slog.DiscardHandler)
 
 // gcsEndpoint is the GCS client's endpoint option; a test sets it.
 var gcsEndpoint []option.ClientOption

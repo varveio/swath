@@ -81,10 +81,13 @@ columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet 
 dataset, hands on its metadata, checks its schema, and streams and lists its current objects; the SeekParquet module
 and the standard library only; [../../reader/README.md](../../reader/README.md)) and `go/objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
-credentials through `objfile/remote`; [../../objfile/README.md](../../objfile/README.md)). The lister imports
+credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The lister imports
 `go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
-specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. Neither nested
-module imports the lister.
+specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. It imports
+`go/objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
+conditional creation and the read-back of retained parts go through `objfile/gcs` and `objfile/remote.Create`,
+which links `cloud.google.com/go/storage` into the swath binary
+([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister.
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`localfs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`

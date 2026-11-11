@@ -146,6 +146,131 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 `run.json`, and for the outcome files a supervisor acts on, `error.json` and the `--report` file; `Atomic`
 (never torn, not synced) for the file rewritten as the run goes, `.swath/progress.json`.
 
+## A dataset in a bucket
+
+A dataset written to GCS (`-o gs://BUCKET/PREFIX --work-dir DIR`) keeps the same journal, ordering and resume
+rules; what changes is where a part goes and what claims it. The work directory `DIR` is a dataset directory
+without `data/` or a manifest: its `.swath/` holds the lock, the journal, spill and the remote state
+(`.swath/remote/`). Its lock protects the local recovery only; two runs writing one prefix are kept apart by
+their part names (unique per run and attempt) and the manifest's precondition, never by a lock.
+
+**The work directory's state is confined.** The remote state (the allocation log, the claim receipts, the
+candidate manifest, the commit marker) is read, appended to, replaced and synced only through the locked work
+directory's `os.Root`, as recovery's other paths are, and each directory and file is checked by lstat
+(`dataset.CheckRemoteLayout`, and before every mutation) so a link or a file where a directory belongs is
+refused (`ErrUnsafeLayout`) before anything is written; the root refuses a path that leaves the directory. A
+link swapped in while the run goes fails the next write there (`TestRemoteWorkDirLinks`).
+
+**A part's life.** Its name, `data/RUN/ATTEMPT/part-NNNNN.parquet`, is appended to `.swath/remote/allocated`
+(`A NAME`) and fsynced before its upload begins, so recovery and cleanup know every name the run may have
+written without listing the bucket. The part writer writes into an artifact (`dataset.Artifact`), never into
+the SDK's writer: SeekParquet's `Seal` calls `Sync` then `Close`, and its `Abort` calls `Close`, so the remote
+artifact's `Sync` completes the upload (the GCS resumable session's last request) and its `Close` aborts the
+upload unless `Sync` completed it. Once the upload completes, the generation it created is appended to the same
+log (`C NAME GENERATION`) and fsynced: the only evidence cleanup accepts that an object is this run's. A torn
+last line (an append cut short) is cut, durably, when the log is opened again, before the next line follows.
+The module's running SHA-256 is the digest recorded; nothing is read back. The ordered committer then, for one
+part at a time:
+
+1. writes the claim receipt `.swath/remote/claims/part-NNNNN.json` (the object name, its generation, the
+   `PartInfo`, and the reproduction inputs: rows, columns, `created_by`), durable;
+2. appends and fsyncs the journal record, which names the object and its generation (`Record.Object`,
+   `Identity`; journal version 10);
+3. moves K: only now may the order stage's durable spill retire certificates K covers.
+
+Upload completion, durable claim, journal sync, then K: the remote analogue of seal, claim, record, rename.
+Receipts are kept until the commit. A completed upload with no receipt was never named by a record and is
+disposable; a receipt at the ordinal after the last record is the one claim whose record may have been
+acknowledged and lost since, exactly as a local `.claimed` part. A journal whose header reads as damaged while
+the work directory holds remote state (an allocated name, a receipt, a candidate: written only after a durable
+header) is corruption (`journal.ErrCorrupt`), never a fresh start that would discard acknowledged parts.
+
+**Commit.** After the router's publication gate (dense ordinals, strictly ascending disjoint keys, rows
+written equal to rows routed), the manifest naming each part by its object name is saved durably as
+`.swath/remote/manifest.candidate.json`, then created at `PREFIX/manifest.json` with `ifGenerationMatch=0`
+(`dataset.PublishRemote`), within the commit's time bound (10 minutes). That creation is the commit. A
+candidate an earlier attempt saved that names the same parts is created as it is, its publication time
+included. A creation that is not answered with success is resolved by reading the manifest back and comparing
+it with the candidate, byte for byte: the same bytes are this run's commit (`commit: confirmed`); other bytes a
+lost race (`dataset.ErrLostRace`; a resume that finds it, after a kill, deletes the run's own uploads as the
+loser does). Absence settles nothing after an ambiguous failure (`objfile.ErrUnresolved`:
+a transport failure, a timeout, a cancellation in flight, a server error; a request the service accepted can
+outlive its failed connection and still create the manifest later): the same bytes are created again, up to
+three creations in all, so whichever lands is this commit; if none is answered the commit is unresolved
+(`dataset.ErrCommitUnresolved`). Only a creation the service refused outright (another 4xx) and absent
+afterwards is no commit (the run fails; resumable when journaled). A read-back that fails, or a commit that
+runs out of time, is unresolved too. An unresolved commit removes nothing: the parts and the candidate stay,
+and a resume reads the manifest back and creates the same candidate again. The manifest is never overwritten
+or deleted (`TestRemoteDelayedCommit` replays a creation that lands after the run gave up).
+
+**Aftermath.** Once committed, `DIR/commit.json` records it, not yet finalized. Its name is reserved in the work
+directory (no `--report` or profile may be written there), and only a commit record parses as a marker. The committing run then, within
+its own time bound, deletes the objects it created that the manifest does not name, each only at the
+generation its upload recorded (`dataset.DeleteOwned`; an object at an allocated name with no recorded
+creation, such as one a failed `CreateOnly` found or an upload that never completed, is never touched and is
+counted `orphans_unproven`), creates `run.json` beside the manifest only if absent (only the winner writes it,
+and a failure never revokes the commit), and marks the marker finalized. A run killed in between, or whose
+aftermath failed, is finished by `swath resume DIR`, idempotently, before it reports the run complete. A loser
+deletes the objects it created that the winner's manifest does not name; an unjournaled run that fails before
+its commit deletes the objects it created, unless the commit is unresolved.
+
+**Resume.** `swath resume DIR` replays the recorded command with DIR as the work directory (the recorded `-o`
+stays). Before recovery, when the run saved a candidate manifest, the destination's manifest is read: the
+candidate means the commit happened (the marker is written and the aftermath finished, and the run is
+complete); another manifest, a lost race (refused); none, recovery goes on and the commit creates that
+candidate. Recovery (`listing.recoverRemote`) then syncs the journal, refuses a receipt beyond the ordinal
+after the last record (an acknowledged record was lost), and checks every recorded part: the object at its name
+must still be the recorded generation, and its bytes, read whole through that pinned generation as a stream,
+must have the recorded size and SHA-256 (`dataset.VerifyObject`); a replaced, deleted or altered object is
+refused (`dataset.ErrRemoteAltered`) before anything is listed. A receipt at the next ordinal is the suspect:
+the resume cuts that part at the receipt's rows, writes it with its columns and `created_by`, and records it
+only if its bytes are the receipt's (else `ErrAmbiguousTail`). Parts are never continued from an old upload
+session: an incomplete part is written again from the recovered rows, to a new attempt's name. Nothing remote
+is deleted during recovery; the crashed attempts' orphans go at the commit.
+
+On Windows a bucket run of an object store is refused as any journaled run is (`listing.ErrUnenforced`: the work
+directory's entries cannot be synced); an unjournaled one (a local tree) runs, without resume.
+
+**Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
+(the flag, or the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and passed to the
+client explicitly) and the layout version (`swath/remote-1`) are frozen in the resume identity
+(`journal.Identity.Destination`, compared and hashed; no credential): a resume under another endpoint or
+another emulator is refused (`TestRemoteEndpointFrozen`). Credentials are resolved again on every invocation
+(`--output-gcs-credentials-file` may change on resume), and are the destination's own: the client is
+read-write scoped, built apart from the source's, and the source's `--anonymous` never reaches it.
+`--output-endpoint-url` and `-o` are recorded as URLs, redacted when they carry user information or a query.
+
+**Secrets and bounds.** A resumable session's URI is a bearer capability for its upload, and the SDK's
+transport errors quote the request URL: every error the objfile writer returns passes through
+`objfile.RedactError`, which keeps the error chain and drops every URL's query and user information from its
+text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`). Requests are
+bounded: a response's headers within two minutes; a GCS resumable upload's chunk transfer within two minutes
+(then retried, within the chunk's retry deadline), an upload's retries within a cumulative allowance that grows
+with the chunks it has sent (four for its first request and four more a chunk, spent wherever its failures fall:
+not a per-chunk limit); reads within five attempts; the commit and the aftermath within their own time
+bounds. Token exchanges for the destination's credentials go through a client of their own, bounded the same
+way (headers and body), and are fetched with the context of the request that needs one; the SDK's debug logging
+(`GOOGLE_SDK_GO_LOGGING_LEVEL`) is off for the destination's credentials and clients, so no token or signed
+assertion is ever logged.
+
+**Limits.** The bucket is outside the run's control once a dataset is committed: a lifecycle rule, a retention
+change or a person that deletes or replaces a committed part makes the manifest name an object that is gone or
+different, and swath does not notice (a reader that checks the manifest's SHA-256 does). Configure lifecycle
+rules on the dataset's prefix only for runs you have abandoned. An incomplete-upload rule is safe.
+
+**Crash points.** `TestRemoteCrashMatrix` kills a run (spill off and on) at each of `allocated`,
+`upload-chunk`, `upload-completed`, `part-closed`, `claim-receipt`, `claimed`, `journal-append`,
+`journal-sync`, `recorded`, `candidate-saved`, `manifest-put`, `manifest-created`, `manifest`, `run-report`
+and `finalized`, besides the listing's points, and requires the resume to commit the uninterrupted run's parts
+byte for byte with no orphan left and the run report in place; `TestRemoteRecoveryKilled` kills the resume in
+its verification and after it; `TestRemoteMultiChunk` drops a connection in a middle chunk of a multi-chunk
+upload and kills a run inside a later chunk. A failed upload, a cancellation, a lost manifest answer, a delayed
+creation, a race of two work directories with different rows, retained objects replaced, deleted or altered,
+links in the work directory, a damaged header and a drifted endpoint have their own tests
+(`internal/listing/remote_test.go`, `remote_faults_test.go`), all against the in-process fake
+(`objfile/gcs/gcsfake`): a fake is not the service, and its preconditions and resumable sessions follow the
+documented protocol, not observed GCS behavior.
+
 ## Resume
 
 `swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../commands/swath-resume.md](../commands/swath-resume.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below):
@@ -307,7 +432,7 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 9 (version 3 made the identity provider-neutral, version 4 writes part
+the payload, and the payload (JSON); journal version 10 (version 3 made the identity provider-neutral, version 4 writes part
 bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
 refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
 hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
@@ -319,7 +444,8 @@ moves or removes any part or touches the journal; version 8 adds the run UUID to
 run starts and kept across every resume, and keeps the durable spill across a resume; version 9 records each
 part's SHA-256 where earlier versions recorded its MD5, so recovery, which compares a retained part with its
 record by that digest, refuses versions 7 and 8 before it touches anything, as an earlier build refuses
-version 9).
+version 9; version 10 names a bucket dataset's part objects in its records and its destination in the
+identity, and this build still reads version 9, a local dataset's journal without them).
 An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
 `--overwrite`. The first frame is the header (tool, format, identity, creation time, and the run UUID).

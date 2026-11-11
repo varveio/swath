@@ -29,7 +29,8 @@ import (
 // and opens, profiles (the development profiles, SWATH_CPUPROFILE and
 // SWATH_MEMPROFILE), resources.spill.read_handles (the spill read handles'
 // hits, misses and evictions) and frame_bytes and frame_rows (the row
-// frames by size).
+// frames by size), and output.remote (a dataset written to a bucket: its
+// destination, uploads, retries, commit and orphan cleanup).
 const ReportVersion = 5
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -250,6 +251,10 @@ const (
 	ClassDeadline    = "deadline"
 	ClassInterrupted = "interrupted"
 	ClassTerminated  = "terminated"
+	// ClassUnresolved: a dataset in a bucket whose manifest's creation
+	// could not be confirmed or refuted; everything is kept, and a resume
+	// creates the same manifest again.
+	ClassUnresolved = "unresolved"
 )
 
 // Outcome is how the run ended.
@@ -355,6 +360,9 @@ type Output struct {
 	// Totals is swath du's per-prefix totals: the depth, the prefixes and
 	// their cap, the column summed and the total (nil without them).
 	Totals *totals.Stats `json:"totals,omitempty"`
+	// Remote is a remote dataset's account: its destination, uploads,
+	// commit and orphan cleanup (nil for a local dataset).
+	Remote *Remote `json:"remote,omitempty"`
 }
 
 // TextOutput is a text run's destination and what reached it. A run that

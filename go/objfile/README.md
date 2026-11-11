@@ -46,6 +46,29 @@ func ParseLocation(raw string) (Location, error)
 func remote.Open(ctx context.Context, location string) (*remote.Store, error) // default credentials
 type remote.Store struct{ ... }                                                // objfile.Opener and io.Closer
 func (s *remote.Store) Scope() string                                          // the scope for Pin and Restore
+
+// The write side (GCS only): create-only uploads, conditional deletes.
+type Condition int
+const CreateOnly Condition                              // ifGenerationMatch=0 (S3: If-None-Match: *)
+var ErrExists error                                    // a CreateOnly write found an object
+var ErrUnresolved error                                // the write's outcome is unknown: read the name back
+func RedactError(err error) error                      // URLs in the text lose query and user information
+type Receipt struct{ Name string; Size int64; Identity string }
+type Upload interface {
+	io.Writer
+	Close() error // completes: the object exists only after a nil Close
+	Abort() error // no object; nothing after a successful Close
+	Receipt() (Receipt, bool)
+}
+type Writer interface {
+	NewWriter(ctx context.Context, name string, c Condition) (Upload, error)
+	PutIfAbsent(ctx context.Context, name string, data []byte) (Receipt, error)
+	DeleteIf(ctx context.Context, name, identity string) error // only that version
+}
+func RootWriter(w Writer, prefix string) Writer
+func gcs.NewWriter(client *storage.Client, bucket string, o gcs.WriteOptions) objfile.Writer
+func remote.Create(ctx context.Context, location string, o remote.CreateOptions) (*remote.Destination, error)
+func remote.ResolveEndpoint(endpoint string) (string, bool) // the flag, or STORAGE_EMULATOR_HOST (emulator)
 ```
 
 The store packages take the caller's own SDK client, with its credentials, endpoint, transport and retry
@@ -172,9 +195,50 @@ before a token expires, runs in the background with its own context and is not c
 The swath CLI parses the same schemes for a listing root, with other semantics: a listing prefix is a key
 prefix, not a directory, and an `az://` root may carry a SAS query. It keeps its own parser.
 
+## Writing
+
+The write side creates whole objects under a precondition and nothing else: no rename, no listing, no
+overwrite, and a delete only of the version named by its identity. `NewWriter` starts an upload whose bytes are
+sent as they are written; the object exists only once `Close` returns nil, and its `Receipt` then names the
+created version (the GCS generation). `Abort` ends an upload without an object. `CreateOnly` is GCS
+`ifGenerationMatch=0`, checked by the service when the object is created, so of two writers of one name exactly
+one succeeds and the other gets `ErrExists`. After a lost response the SDK sends the request again, and a
+`PutIfAbsent` retry then finds the write's own object and returns `ErrExists`: a caller that must tell the two
+apart reads the object back and compares it with what it wrote. A completion that fails in transport, times
+out, is cancelled in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service
+may have applied it, or may still (a request accepted behind a failed connection), so a read that finds nothing
+proves nothing yet; only a refusal (another 4xx) leaves no object for certain. Every error a writer returns has
+passed through `RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's
+query, user information and fragment from the text: a GCS resumable session URI is a bearer capability for its
+upload, and the SDK's transport errors quote it. `Abort` may run while a `Write` is blocked; it cancels first.
+
+`gcs.NewWriter` uploads in resumable sessions of `WriteOptions.ChunkSize` (8 MiB by default; the SDK rounds to
+256 KiB): the SDK buffers one chunk an upload and blocks `Write` while it is in flight, so memory is a chunk per
+open upload and a slow store holds the writer back. An object smaller than a chunk goes in one request. Retries
+are the SDK's, bounded per upload: the SDK's upload loops count no attempts, so an upload has a cumulative
+allowance of `MaxAttempts`-1 retries (4 by default) for its first request and as many more for each chunk it has
+sent, spent wherever its failures fall (not a strict per-chunk limit), and each chunk's retries also stop at
+`ChunkRetryDeadline`; metadata reads and deletes get `MaxAttempts` each. `Retried` is told each attempt its policy
+retries. `Abort` cancels the session's request; a session the service
+holds expires on its own (GCS keeps one for a week), and its URI, a bearer credential for the upload, never
+leaves the process.
+
+`remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a
+read-write client it owns, with its own credentials (`CreateOptions.CredentialsFile`, or Application Default
+Credentials) and endpoint, shared with no read client. Only `gs://` is written; `s3://` and `az://` are
+refused. The SDK's logger is silenced, since its debug output writes request headers unredacted. The endpoint
+is resolved once (`ResolveEndpoint`: the option, else `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly,
+so a caller that records it is never redirected by the environment later. For `gs://`, a response's headers are
+awaited two minutes at most (`RequestTimeout`), a resumable upload's chunk transfer two minutes
+(`gcs.DefaultChunkTransferTimeout`), and reads get at most five attempts.
+
+`gcs/gcsfake` is the in-process fake the GCS tests use: JSON metadata and deletes, XML ranged reads, and
+uploads both single-request and resumable, with `ifGenerationMatch` evaluated atomically at creation and a
+fault hook that fails a request before it acts, or loses its response after.
+
 ## What it is not
 
-There is no listing, no caching, no read planning and no writing. Reading a dataset from a store has three
+There is no listing, no caching and no read planning. Reading a dataset from a store has three
 layers, and objfile is the first:
 
 1. **Storage source** (objfile): ranged reads of one pinned version, cancellation, bounded concurrency.
@@ -188,7 +252,9 @@ layers, and objfile is the first:
 `go test -race ./...` in this directory. Each store runs one behaviour suite (`internal/objfiletest`) through
 both `Open` and `OpenSized` against an in-process fake: gofakes3 for S3 (wrapped to answer a mismatched
 `If-Match` on GET with 412, which gofakes3 checks only on writes) and small `httptest` servers for the GCS
-JSON and XML APIs and Azure Blob. `s3/dataset_test.go` writes a dataset with SeekParquet's `local.WriteDir`,
+JSON and XML APIs (`gcs/gcsfake`, which also takes uploads) and Azure Blob. `gcs/write_test.go` uploads
+through a single request and resumable sessions, races a creation against an upload, aborts and cancels, fails
+and loses responses at each upload step, and deletes by generation. `s3/dataset_test.go` writes a dataset with SeekParquet's `local.WriteDir`,
 uploads it to gofakes3 and compares a Range and a List read through objfile with the local read. `gcs/range_test.go`
 serves ignored, shifted and cut-then-shifted ranges, with and without the transport `remote.Open` installs.
 `remote` opens each provider's location against an in-process server through the environment (the S3 endpoint

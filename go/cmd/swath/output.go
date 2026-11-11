@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
@@ -37,7 +38,7 @@ func textDest(path string) (format, compression string) {
 var unwritten = []string{".csv", ".json", ".ndjson", ".txt", ".bz2", ".xz", ".gz", ".zst"}
 
 // outputForms names what -o takes, for its refusals.
-const outputForms = "-o takes a dataset directory (any other name, or one ending in /), NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
+const outputForms = "-o takes a dataset directory (any other name, or one ending in /), a GCS bucket prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
 
 // hasScheme reports whether path starts with a URL scheme (s3://).
 func hasScheme(path string) bool {
@@ -52,9 +53,12 @@ func hasScheme(path string) bool {
 //     a pipe (| zstd);
 //   - -o NAME.tsv or NAME.jsonl, optionally .gz or .zst: that format and
 //     compression, one file;
+//   - -o a bucket prefix: the Parquet dataset there, with --work-dir DIR
+//     its local work directory (resolveRemote); a store the listing does
+//     not write to is refused;
 //   - -o NAME/, or another name: the Parquet dataset directory; a name
-//     ending in a data-file extension swath does not write (unwritten),
-//     and a URL (an object-store destination), are refused.
+//     ending in a data-file extension swath does not write (unwritten) is
+//     refused.
 //
 // With -o FILE a --format that agrees with the file's name is accepted,
 // one that does not is refused, as is --format with a dataset directory.
@@ -76,11 +80,16 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 
 func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	toStdout := o.out == "" || o.out == "-"
+	remote := !toStdout && hasScheme(o.out)
 	switch {
 	case o.countOnly: // swath du and swath diag count write no rows (placement refuses -o; du's --format is resolveTotals')
 		return nil, nil
-	case !toStdout && hasScheme(o.out):
-		return nil, fmt.Errorf("-o %s: an object-store destination is not supported; %s", registry.Redact(o.out), outputForms)
+	case !remote && o.workDir != "":
+		return nil, errors.New("--work-dir is the work directory of a dataset in a bucket; a dataset directory is its own")
+	case !remote && (o.outputCreds != "" || o.outputEndpoint != ""):
+		return nil, errors.New("--output-gcs-credentials-file and --output-endpoint-url apply to a dataset in a bucket")
+	case remote:
+		return nil, resolveRemote(o)
 	case !toStdout:
 		format, comp := textDest(o.out)
 		dir := strings.HasSuffix(o.out, "/") || strings.HasSuffix(o.out, string(filepath.Separator))
@@ -116,6 +125,29 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 		return &textout.Config{Format: o.format}, nil
 	}
 	return nil, fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+}
+
+// resolveRemote resolves an -o that is a URL: a bucket prefix the listing
+// writes to (listing.ParseDestination, over objfile.ParseLocation: a literal
+// prefix, a dataset root, a scheme it writes), the work directory it needs,
+// and the refusals of phase one: no replacement, no text format.
+func resolveRemote(o *options) error {
+	shown := registry.Redact(o.out)
+	l, err := listing.ParseDestination(o.out)
+	switch {
+	case err != nil:
+		return fmt.Errorf("-o %s: %w; %s", shown, err, outputForms)
+	case o.workDir == "":
+		return fmt.Errorf("-o %s: a dataset in a bucket needs --work-dir DIR, the local directory for its lock, journal and spill", shown)
+	case hasScheme(o.workDir):
+		return fmt.Errorf("--work-dir %s: the work directory is local", registry.Redact(o.workDir))
+	case o.overwrite:
+		return fmt.Errorf("--overwrite: -o %s: replacing a dataset in a bucket is not supported; write to another prefix", shown)
+	case o.format != "":
+		return fmt.Errorf("--format %s: -o %s is a dataset, not text rows", o.format, shown)
+	}
+	o.remote = &l
+	return nil
 }
 
 // resolveTotals sets up swath du's per-prefix totals: a tally at --depth

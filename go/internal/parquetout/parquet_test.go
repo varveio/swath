@@ -60,7 +60,11 @@ func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part 
 	t.Helper()
 	c := newCodec(columns)
 	defer c.Close()
-	w, err := create(nil, path, &testSchema, c, func() int { return columns }, "")
+	f, err := openLocal(nil, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := create(f, &testSchema, c, func() int { return columns }, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +518,11 @@ func TestValueLimits(t *testing.T) {
 	write := func(link string) error {
 		c := newCodec(1)
 		defer c.Close()
-		w, err := create(nil, filepath.Join(t.TempDir(), "x.parquet"), &s, c, func() int { return 1 }, "")
+		f, err := openLocal(nil, filepath.Join(t.TempDir(), "x.parquet"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := create(f, &s, c, func() int { return 1 }, "")
 		if err != nil {
 			t.Fatal(err)
 		}

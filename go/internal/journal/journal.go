@@ -100,6 +100,13 @@ type Record struct {
 	Limit     int64            `json:"limit"`           // the router's frozen logical bytes per part (0 until the calibrating part closes)
 	RowsTotal int64            `json:"rows_total"`      // rows in parts 0..Ordinal
 	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
+
+	// Object and Identity name a remote dataset's part: its object name,
+	// relative to the dataset root, and the version created (the GCS
+	// generation). Empty for a local dataset, whose part i is
+	// data/part-%05d.parquet.
+	Object   string `json:"object,omitempty"`
+	Identity string `json:"identity,omitempty"`
 }
 
 // Unresumable is a run's terminal frame, after its last record: the run
@@ -446,7 +453,12 @@ func (j *Journal) Close() error {
 // its record by that digest, so an earlier journal is refused before
 // recovery touches anything (VersionError), as an earlier build refuses
 // version 9; its run is listed again with --overwrite.
-const Version = 9
+//
+// Version 10 names a remote dataset's parts in their records
+// (Record.Object, Identity) and its destination in the identity
+// (Identity.Destination). A version 9 journal is a local dataset's, read
+// as version 10 without those fields; an earlier build refuses version 10.
+const Version = 10
 
 // MinVersion is the oldest version this build reads.
 const MinVersion = 9

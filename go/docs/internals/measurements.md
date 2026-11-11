@@ -1411,6 +1411,30 @@ counted the tree; a95c1b12 priced the workers at plan time and took the tree out
 Follow-up (open, not run): on the 64 lists, segments on with the read-ahead off; and the fixed gate with a
 fixed worker count (pricing off) against `seg6`.
 
+## Uploads to a bucket, on the fake (2026-11-11)
+
+The upload path of a dataset written to GCS (`objfile/gcs`'s writer, 8 MiB resumable chunks), measured on a
+4-vCPU GCE VM (Xeon Platinum 8581C) against the in-process fake, so with no network: what it costs the client,
+not what a bucket sustains. `BenchmarkUpload` (`go test ./gcs -run X -bench BenchmarkUpload -benchtime 10x` in
+`go/objfile`) writes a 64 MiB object 4 KiB at a time, as the part writer does. Measured at the writer of
+`8c256076` (the benchmark itself added in `5415cf54`); the raw benchmark output was not kept, so rerun the
+command to reproduce:
+
+| Server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| the fake, keeping the bytes and checking the CRC32C | 388 MB/s | 523 MB (the fake's own appends) | 2,117 |
+| middle chunks read and dropped (the client's cost) | 1,557 MB/s | 8.9 MB (one 8 MiB chunk buffer) | 1,763 |
+
+So an upload of one 64 MiB part takes about 43 ms of wall time on this host with a server that drops the bytes (client and server together), one chunk buffer per open
+upload, against the seconds of CPU a part's encoding takes. `TestMeasureRemoteOverhead`
+(`SWATH_MEASURE_REMOTE=1`, `internal/listing`) runs one listing of 400,000 keys (gofakes3) with 4 encoders and
+256 KiB parts (28 parts, 7.8 MB) to a local directory and to the fake, three times each: wall time 0.97 to
+1.15 s either way, process CPU (the fakes' included) 3.1 to 3.4 s local and 3.2 to 3.7 s remote after the first
+run, and the remote runs' `upload_wait_ns` 0.48 to 0.60 s summed over the encoders (each part one request to
+the in-process fake), at `5415cf54` on a host shared with other builds; its raw log was not kept (provenance:
+the test's own `t.Log` lines, rerun with the variable set). These are single-host smoke numbers; a real
+bucket's latency and bandwidth are not measured here.
+
 ## Spill read handles on local trees, 2026-11-11
 
 **Local host, screening only.** A 4-vCPU, 8 GiB GCP VM, ext4 on a persistent disk, shared with other agents' builds

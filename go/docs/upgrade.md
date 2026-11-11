@@ -351,7 +351,14 @@ tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](inter
 profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE`), and
 `resources.spill.read_handles` (the spill read handles' `hits`, `misses`, `raced`, `evictions` by reason and
 `peak_open`) and `frame_bytes` and `frame_rows` (the row frames written by size: `p50`, `p90`, `p99` as power-of-two
-bucket bounds, and the exact `max`); `opens` counts one open per read handle miss, not one per frame read. A version 4 reader ignores
+bucket bounds, and the exact `max`); `opens` counts one open per read handle miss, not one per frame read; and
+`output.remote`, present only for a dataset written to a bucket (`-o gs://...`): `destination`, `work_dir`,
+`commit`, `manifest`, `manifest_identity`, `manifest_sha256`, `uploads`, `uploads_aborted`, `upload_bytes`,
+`upload_wait_ns`, `retries`, `retry_classes`, `objects_verified`, `orphans_deleted`, `orphans_gone`,
+`orphans_left` and `orphans_unproven`. `outcome.class` gains `unresolved` (exit 75, `cause`
+`commit_unresolved`), and `outcome.cause` `lost_race`, `remote_altered` and `candidate_mismatch`, all for a
+dataset in a bucket. The journal's version is 10 (it names a bucket dataset's part objects); this build reads
+the version 9 journals of earlier builds, which an earlier build cannot do the other way round. A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.
 
