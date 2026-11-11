@@ -284,8 +284,8 @@ func TestSpillReadFailures(t *testing.T) {
 	if err := os.WriteFile(f.path, []byte{0xff, 0xff, 0xff, 0x7f, 0, 0, 0, 0}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
-		t.Fatalf("oversized length: %v (reader open %v)", err, f.f != nil)
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.h != nil {
+		t.Fatalf("oversized length: %v (reader open %v)", err, f.h != nil)
 	}
 	s.close()
 
@@ -299,8 +299,8 @@ func TestSpillReadFailures(t *testing.T) {
 	if err := os.WriteFile(f.path, s.frame('Z', bomb), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
-		t.Fatalf("decoded past the limit: %v (reader open %v)", err, f.f != nil)
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.h != nil {
+		t.Fatalf("decoded past the limit: %v (reader open %v)", err, f.h != nil)
 	}
 	s.close()
 
@@ -319,7 +319,7 @@ func TestSpillReadFailures(t *testing.T) {
 	if err := os.WriteFile(f.path, s.frame('R', inflated), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f.close()
+	s.closeFile(f)
 	f.r, f.pos = nil, 0
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -343,11 +343,11 @@ func TestSpillReadFailures(t *testing.T) {
 		t.Fatalf("replay: %v %v", got, err)
 	}
 	// The sink fails here; the run ends without reading the trailer.
-	if f.f == nil {
+	if f.h == nil {
 		t.Fatal("the reader is not open mid-file")
 	}
 	s.close()
-	if f.f != nil {
+	if f.h != nil {
 		t.Fatal("close left a spill reader open")
 	}
 }
@@ -464,8 +464,8 @@ func TestRunningNodeStorageIsBounded(t *testing.T) {
 
 // TestSpillReadersAreCapped: a deep walk leaves one partly replayed spill
 // file per spilled ancestor. With 3 x maxReaders files each read part way,
-// at most maxReaders readers (descriptors and 64 KiB buffers) are open at
-// once; an evicted reader reopens at its position and every file replays
+// at most maxReaders readers (64 KiB buffers) and maxHandles descriptors
+// are open at once; an evicted reader reopens at its position and every file replays
 // exactly, trailer checks included. Before, every partly read file kept
 // its reader open.
 func TestSpillReadersAreCapped(t *testing.T) {
@@ -492,7 +492,7 @@ func TestSpillReadersAreCapped(t *testing.T) {
 	open := func() int {
 		n := 0
 		for _, f := range files {
-			if f.f != nil {
+			if f.h != nil {
 				n++
 			}
 		}
@@ -523,8 +523,10 @@ func TestSpillReadersAreCapped(t *testing.T) {
 			t.Fatalf("%d readers open, cap %d", n, maxReaders)
 		}
 	}
-	if p := g.readers.peak.Load(); p != maxReaders || g.readers.n.Load() != 0 {
-		t.Fatalf("readers: peak %d, open %d", p, g.readers.n.Load())
+	// The descriptors: the readers' handles, and idle ones the handle
+	// cache keeps, at most maxHandles; none once every file is drained.
+	if p := g.readers.peak.Load(); p != int64(maxHandles) || g.readers.n.Load() != 0 {
+		t.Fatalf("descriptors: peak %d, open %d", p, g.readers.n.Load())
 	}
 	if s.live.Load() != 0 || g.spill.n.Load() != 0 {
 		t.Fatalf("live spill bytes %d after every file was replayed", s.live.Load())
@@ -561,7 +563,7 @@ func TestDeltaFrameMalformed(t *testing.T) {
 		if _, err := s.next(f); err != nil {
 			t.Fatal(err)
 		}
-		f.close()
+		s.closeFile(f)
 		f.r, f.pos = nil, 0
 		return f
 	}
@@ -600,8 +602,8 @@ func TestDeltaFrameMalformed(t *testing.T) {
 		runtime.ReadMemStats(&before)
 		_, err := s.next(f)
 		runtime.ReadMemStats(&after)
-		if alloc := after.TotalAlloc - before.TotalAlloc; !errors.Is(err, c.want) || alloc > 1<<20 || f.f != nil {
-			t.Fatalf("%s: %v (want %v), %d bytes allocated, reader open %v", c.name, err, c.want, alloc, f.f != nil)
+		if alloc := after.TotalAlloc - before.TotalAlloc; !errors.Is(err, c.want) || alloc > 1<<20 || f.h != nil {
+			t.Fatalf("%s: %v (want %v), %d bytes allocated, reader open %v", c.name, err, c.want, alloc, f.h != nil)
 		}
 		if refused := s.decodeRefused.Load(); (refused == 1) != (c.want == schema.ErrDecodeCap) {
 			t.Fatalf("%s: %d decode-cap refusals counted", c.name, refused)
@@ -626,8 +628,8 @@ func TestDeltaFrameMalformed(t *testing.T) {
 	if err := os.WriteFile(f.path, s.frame(frameDeltaZstd, enc.EncodeAll(make([]byte, 4<<20), nil)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
-		t.Fatalf("a zstd delta frame decoded past the limit: %v (reader open %v)", err, f.f != nil)
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.h != nil {
+		t.Fatalf("a zstd delta frame decoded past the limit: %v (reader open %v)", err, f.h != nil)
 	}
 }
 

@@ -57,7 +57,7 @@ re-list it into a new directory.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 5: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 6: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -342,6 +342,11 @@ of the flags every object store has are gone, one shared flag serving S3, GCS an
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
 is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
+
+**Run report: version 6.** Version 6 adds fields only: `resources.spill.read_handles` (the spill read handles'
+`hits`, `misses`, `raced`, `evictions` by reason and `peak_open`) and `frame_bytes` and `frame_rows` (the row frames
+written by size: `p50`, `p90`, `p99` as power-of-two bucket bounds, and the exact `max`). `opens` now counts one open
+per handle miss, not one per frame read. A version 5 reader ignores the additions.
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most

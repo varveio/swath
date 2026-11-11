@@ -1,4 +1,4 @@
-report_version 5
+report_version 6
 args_hash string
 attempt.id string
 attempt.started time
@@ -191,6 +191,14 @@ resources.spill.durable.sealed_files int64
 resources.spill.durable.slots int
 resources.spill.durable_off string
 resources.spill.format string
+resources.spill.frame_bytes.max int64
+resources.spill.frame_bytes.p50 int64
+resources.spill.frame_bytes.p90 int64
+resources.spill.frame_bytes.p99 int64
+resources.spill.frame_rows.max int64
+resources.spill.frame_rows.p50 int64
+resources.spill.frame_rows.p90 int64
+resources.spill.frame_rows.p99 int64
 resources.spill.frames int64
 resources.spill.fs_type string
 resources.spill.logical_bytes int64
@@ -199,6 +207,15 @@ resources.spill.opens int64
 resources.spill.peak_bytes int64
 resources.spill.peak_readers int64
 resources.spill.ranges int64
+resources.spill.read_handles.evictions.capacity int64
+resources.spill.read_handles.evictions.closed int64
+resources.spill.read_handles.evictions.low_fd int64
+resources.spill.read_handles.evictions.retired int64
+resources.spill.read_handles.evictions.truncated int64
+resources.spill.read_handles.hits int64
+resources.spill.read_handles.misses int64
+resources.spill.read_handles.peak_open int64
+resources.spill.read_handles.raced int64
 resources.spill.refused int64
 resources.spill.reserve_bytes int64
 resources.spill.rows int64

@@ -205,7 +205,15 @@ type Spill struct {
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
 	ReserveBytes int64 `json:"reserve_bytes"`
-	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+	PeakReaders  int64 `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
+	// ReadHandles is the spill read handles' account: every read of a
+	// spill file (a frame at an offset, a trailer, the drainer's reader)
+	// leases its file's one descriptor, kept open between reads.
+	ReadHandles order.HandleStats `json:"read_handles"`
+	// FrameBytes and FrameRows are the row frames written by size: bytes
+	// (header included) and rows, as power-of-two bucket bounds.
+	FrameBytes order.SizeQuantiles `json:"frame_bytes"`
+	FrameRows  order.SizeQuantiles `json:"frame_rows"`
 	// Durable is the durable spill's account (nil when it was off: no
 	// journal, a provider without fences, a spill cap
 	// below 16 MiB); DurableOff says why it was off when it could have run.
@@ -388,7 +396,7 @@ func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
 // than the encoders admitted after listing (their working set is that
 // admission's, encoderPrice each), and the order stage keeps
 // them to one per spare processor. Each reads one spill frame at a time on
-// its own descriptor: the 16 spill descriptors reserved at admission
+// its file's read handle, at most one descriptor: the 16 spill descriptors reserved at admission
 // (order.MaxSpillReaders), plus what the limit leaves beside the workers'
 // connections, the encoders' part files and the reserve (fds 0: unknown,
 // no cap). Beside its writer a worker holds one decoded frame, one batch
@@ -1111,6 +1119,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {
 			res.Spill.Durable = c.Report()

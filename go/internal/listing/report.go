@@ -26,8 +26,10 @@ import (
 // and requests.failure_warnings. 5: invocation.row_budget_bytes is
 // invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
 // (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens.
-const ReportVersion = 5
+// and opens. 6 adds fields only: resources.spill.read_handles (the spill
+// read handles' hits, misses and evictions) and frame_bytes and frame_rows
+// (the row frames by size).
+const ReportVersion = 6
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

@@ -60,6 +60,7 @@ func (s *spiller[P]) nextDurable(f *spillFile, hdr [8]byte, size uint32) ([]sche
 		case frameTrailer:
 			t, ok := parseTrailer(body)
 			s.closeFile(f)
+			s.h.retire(f, evictRetired)
 			if !ok || t.rows != f.read {
 				return nil, fmt.Errorf("spill: durable file %s holds %d rows, its trailer says %d", f.d.name, f.read, t.rows)
 			}

@@ -340,11 +340,36 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   coding and trailing bytes are refused too (`TestDeltaFrameMalformed`), and the stream-wide order guard
   checks every replayed row as before.
 - **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 drainer
-  readers (a descriptor and a 64 KiB buffer each) are open; past that the least recently used one is closed
-  and reopened at its position when the drainer comes back to it (`TestSpillReadersAreCapped`). The
-  read-ahead opens one descriptor per frame it reads, at most 8 at once, and closes it after the read:
-  `order.MaxSpillReaders` (16) is both, for descriptor admission (`peak_readers` counts both). A read-ahead
-  read decodes into fresh buffers (it runs beside the drainer); only the drainer reuses its own.
+  readers (a 64 KiB buffer and a lease on the file's read handle each) are open; past that the least recently
+  used one is dropped and reopened at its position when the drainer comes back to it
+  (`TestSpillReadersAreCapped`). The read-ahead reads at most 8 frames at once. A read-ahead read decodes into
+  fresh buffers (it runs beside the drainer); only the drainer reuses its own.
+- **Read handles** (`order/spillhandles.go`). Every read of a spill file leases the file's one read
+  descriptor and reads it with `pread`, which is safe concurrently: a frame read at an offset (the read-ahead,
+  the segments), a trailer read and the drainer's sequential reader (a `pread` cursor under its buffer, so it
+  shares the descriptor and sees frames the frontier's owner appends after it). The handle stays open between
+  reads, so a file is opened once for its reads, not once per frame read and again for its trailer; when the
+  read-ahead has read every frame, the drainer checks the trailer at its offset on the same handle, with no
+  reader opened. Writes still open the file per frame (unchanged). Bounds: at most `order.MaxSpillReaders`
+  (16) descriptors are kept, leased or idle; an idle handle past that is closed, least recently used first
+  (`evictions.capacity`); leases themselves are bounded by the readers above and the segment workers, so
+  descriptor admission is unchanged (`peak_readers` counts the cache's descriptors). An open refused for
+  want of descriptors (EMFILE, ENFILE) closes every idle handle and is retried once, and the cache keeps no
+  idle handle for the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesLowFDLimit` under
+  a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
+  lease's release, when its file is drained (before the unlink, or before a durable file goes back to its
+  cache: `evictions.retired`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and
+  every handle when the run stops (success, failure, cancellation) or the output's identity check fails
+  (`evictions.closed`): no descriptor of a replaced output is read again. Tests: concurrent reads, retirements
+  and evictions on a two-handle cache (`TestHandlesConcurrentReadsAndEviction`, under `-race`), truncation,
+  stop and replacement (`TestHandlesTruncation`, `TestHandlesStop`), row and payload conservation at caps
+  0, 1, 3 and 16 and in group mode (`TestHandlesConserveRows`, `TestHandlesConserveGroups`), and a durable
+  kill and resume with a smaller sort buffer, fewer workers and a smaller spill cap, objects and versions
+  (`listing.TestDurableResumeSmallerBudget`). The report's `spill.read_handles` counts hits, misses (one
+  open each), races and evictions by reason; `spill.frame_bytes` and `spill.frame_rows` give the row frames'
+  size distribution. A range that spills one frame can at best share that frame's read with its trailer's:
+  the writes' per-frame opens and the per-file create and unlink remain (packing tiny ranges is the next
+  step).
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier. The exception is a journaled run's durable
@@ -398,7 +423,7 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   `aheadScan`). It enters finished nodes only, and restarts at the drainer's position whenever nothing is
   queued: the drainer may then have passed it, or a node it stopped at have been compacted since.
 - **Reading.** An idle worker (nothing queued to list) claims the next queued frame, reads it with one
-  `pread` on its own descriptor and decodes it through the same frame decoder as the drainer's own reads
+  `pread` on its file's read handle and decodes it through the same frame decoder as the drainer's own reads
   (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder,
   and at most one fewer than `GOMAXPROCS`, so the drainer keeps a processor. With one processor there is no
   read-ahead: an idle worker's read would only take turns with the drainer (on Batch, one core, the three
@@ -417,7 +442,8 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   (`TestReadAheadMemoryIsBounded`).
 - **Failure.** A frame that fails its CRC or its decoding fails the run when the drainer reaches it: the rows
   before it were handed on, none of its own or after (`TestReadAheadCorruptFrame`). A stop wakes both waits;
-  every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
+  every read releases its lease (a stopped run's handles are closed at their last release), and the run's
+  `WaitGroup` waits for reads in flight
   (`TestReadAheadCancelMidReplay`).
 
 The report's `resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
@@ -479,7 +505,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   does not arise there: every row is listed, and the parts publish as fast as they encode. With
   `--part-interval 0` the parts are identical either way; with it on, boundaries already depend on timing.
 - **Order.** A worker takes the next segment, opens its part in order (ordinals stay dense), reads its
-  frames on its own descriptor, checks every row against the one before (the first segment also against the
+  frames on their files' read handles, checks every row against the one before (the first segment also against the
   drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
   the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
   earlier one; the order stage checks each seam again. A seam that descends stops the run before the first
