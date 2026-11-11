@@ -85,6 +85,13 @@ type Config struct {
 	// terminal accounts (cmd/swath's forced exit). An error returned
 	// without running step means not committed. nil runs step.
 	Commit func(step func() error) error
+	// ListingDone, if set, is called once when the provider has finished
+	// listing: the event timings.listing_done_at records
+	// (order.Options.ListingDone), from an order-stage goroutine without
+	// its lock; the drain may still have rows to hand on. A failed or
+	// stopped listing and a dry run (nothing ordered) never call it. It
+	// should return promptly: the drain's segments are planned after it.
+	ListingDone func()
 }
 
 // finalize applies Finalize to r once: the first call on a terminal report
@@ -661,6 +668,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	defer jr.closeCache(false)
 	if err := a.startCache(&oopt, src, cancel); err != nil {
 		return a.sum.failed(err)
+	}
+	if done := cfg.ListingDone; done != nil {
+		prev := oopt.ListingDone
+		oopt.ListingDone = func() {
+			if prev != nil {
+				prev()
+			}
+			done()
+		}
 	}
 	env.Order = oopt
 	var dropped atomic.Int64

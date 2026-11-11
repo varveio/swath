@@ -341,11 +341,14 @@ of the flags every object store has are gone, one shared flag serving S3, GCS an
 `--gcs-endpoint` and `--azblob-endpoint` are `--endpoint-url`, `--gcs-request-timeout` and
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
 is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
-are delta coded and zstd compressed by default.
+are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles the listing and the drain's
+tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
+tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most
-1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`. A version 4 reader ignores
+1 GiB, where it was 128 MiB on every host), `resources.spill.frames` and `opens`, and `profiles` (the development
+profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE`). A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.
 
