@@ -237,8 +237,13 @@ func (u *upload) sendPart() error {
 		return fmt.Errorf("the object exceeds %d parts of %d bytes", maxParts, u.w.o.PartSize)
 	}
 	if u.id == "" {
-		out, err := u.w.client.CreateMultipartUpload(u.ctx, &s3.CreateMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name,
+		// Not cancelled with the upload (bounded as an abort is): a creation
+		// cancelled in flight could still create an upload whose id the
+		// answer would have carried, and which nothing could then abort.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), u.w.o.AbortTimeout)
+		out, err := u.w.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name,
 			ContentType: aws.String("application/octet-stream"), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32}, u.w.opts("CreateMultipartUpload"))
+		cancel()
 		if err != nil {
 			return err
 		}
@@ -246,6 +251,9 @@ func (u *upload) sendPart() error {
 			return errors.New("CreateMultipartUpload returned no upload id")
 		}
 		u.id, u.everID = *out.UploadId, *out.UploadId
+		if err := u.ctx.Err(); err != nil {
+			return err // cancelled meanwhile: the caller aborts the new upload
+		}
 	}
 	num := int32(len(u.parts) + 1)
 	out, err := u.w.client.UploadPart(u.ctx, &s3.UploadPartInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id, PartNumber: &num,

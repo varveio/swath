@@ -243,7 +243,9 @@ whatever the caller's object size: a part size of 5 MiB to 5 GiB, and at most 10
 object is 10,000 × `PartSize` (78 GiB at 8 MiB); the write past it fails before sending.
 
 A failed `Close`, and `Abort`, abort the multipart upload under a context of their own (`AbortTimeout`, 30 s),
-since the upload's may be the one cancelled, and confirm it: `ListParts` must answer `NoSuchUpload`, else the
+since the upload's may be the one cancelled, and confirm it. The upload's creation is not cancelled with it
+either (it is bounded the same way): a creation the service completed after its client gave up would leave an
+upload whose id nothing knows. The confirmation: `ListParts` must answer `NoSuchUpload`, else the
 abort is sent again (a part in flight when the abort ran can keep the upload, and S3 asks for repeated aborts
 then), three times at most. An abort that fails or stays unconfirmed is `s3.ErrAbortUnconfirmed`: `Abort` returns
 it, a failed `Close` joins it after its own failure, and a later `Abort` tries again, three attempts over the
