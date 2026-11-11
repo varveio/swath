@@ -15,6 +15,7 @@ require (
 	github.com/johannesboyne/gofakes3 v1.2.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/varveio/seekparquet/go v0.1.1-0.20261110165708-6acba1a03da2
+	golang.org/x/oauth2 v0.38.0
 	google.golang.org/api v0.311.0
 )
 
@@ -89,7 +90,6 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
