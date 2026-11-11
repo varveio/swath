@@ -42,8 +42,7 @@ func ChunkBytes(n int) int {
 // first request and as many more for each chunk sent (WriteOptions).
 const DefaultMaxAttempts = 5
 
-// DefaultChunkTransferTimeout bounds one chunk request of a resumable
-// upload: 8 MiB at under 70 KB/s.
+// DefaultChunkTransferTimeout bounds one chunk request of a resumable upload.
 const DefaultChunkTransferTimeout = 2 * time.Minute
 
 // WriteOptions configure a Writer.
@@ -79,6 +78,15 @@ type WriteOptions struct {
 // transport. Uploads are resumable in chunks of o.ChunkSize; CreateOnly is
 // ifGenerationMatch=0, which the service checks when the object is created.
 // Content is stored as given: no content-type sniffing, no transcoding.
+// Each upload buffers one chunk and blocks Write while a chunk is in flight.
+// Abort cancels requests without deleting the resumable session; unfinished
+// sessions expire after a week. Session URIs are bearer credentials and are
+// removed from request errors.
+//
+// DeleteIf deletes a specific generation, including an older one retained by
+// versioning. If it is missing, a separate metadata read reports
+// objfile.ErrObjectChanged when another generation is current, or
+// fs.ErrNotExist otherwise. The delete and metadata read are not atomic.
 func NewWriter(client *storage.Client, bucket string, o WriteOptions) objfile.Writer {
 	o.ChunkSize = ChunkBytes(o.ChunkSize)
 	if o.MaxAttempts <= 0 {
@@ -266,6 +274,7 @@ func (w writer) PutIfAbsent(ctx context.Context, name string, data []byte) (objf
 	return r, nil
 }
 
+// DeleteIf deletes the named generation with a generation-match precondition.
 func (w writer) DeleteIf(ctx context.Context, name, identity string) error {
 	return redact.URLs(w.deleteIf(ctx, name, identity))
 }
@@ -293,7 +302,8 @@ func (w writer) deleteIf(ctx context.Context, name, identity string) error {
 }
 
 // completionError classifies a failed completion (the request that creates
-// the object): a failed precondition is objfile.ErrExists; a service answer
+// the object): a failed precondition is objfile.ErrExists, including a retry
+// after a lost success response; a service answer
 // that refuses the request (4xx but 408 and 429) leaves no object, unless
 // an earlier attempt of the upload failed ambiguously (uncertain: the SDK
 // retried it), which the refusal does not undo; anything else (a transport

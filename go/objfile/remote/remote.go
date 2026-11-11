@@ -1,11 +1,14 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package remote opens a dataset root in S3, GCS or Azure Blob Storage by
-// its URI, with each provider's default credentials. A program that needs a
-// region, an endpoint, anonymous access or its own transport builds the SDK
-// client itself and uses objfile/s3, objfile/gcs or objfile/azblob with
-// objfile.Root instead.
+// Package remote opens object-store roots by URI and owns their SDK clients.
+// Open provides reads with default credentials; OpenDestination provides
+// reads and conditional writes with DestinationOptions. Both scope object
+// names to the location's prefix using objfile.Root.
+//
+// For anonymous access or a custom transport, construct the provider's SDK
+// client and use objfile/s3, objfile/gcs or objfile/azblob directly. See the
+// gcs package's range-validation requirements for caller-built clients.
 package remote
 
 import (
@@ -57,8 +60,9 @@ type Store struct {
 //   - az: azidentity's DefaultAzureCredential, on the account's
 //     blob.core.windows.net endpoint.
 //
-// Open makes no request; a missing bucket or a refused credential fails the
-// first Open of the Store. The Store outlives ctx: each request runs under
+// Open makes no object-store request; a missing bucket or insufficient
+// permissions fail the first operation on the Store. Credential setup may
+// fail during Open. The Store outlives ctx: each request runs under
 // the context of the Open or read that makes it, a token exchange the request
 // waits for included (a refresh the library starts early, before a token
 // expires, runs in the background with its own context), so a Store opened

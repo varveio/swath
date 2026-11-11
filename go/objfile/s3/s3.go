@@ -1,13 +1,19 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package s3 opens objects of an S3 bucket as objfile Objects with the AWS SDK
-// for Go v2. Open learns the object's size, ETag and, in a versioned bucket,
-// its version id with HeadObject; OpenSized takes them from the first read,
-// and ReadObject from its one GetObject of the whole object. Every later read
-// is a ranged GetObject with If-Match on that ETag and, when there is one,
-// that version id. A 412, a 404, or a response naming another
+// Package s3 reads and creates objects in an S3 bucket with the AWS SDK for Go v2.
+// New supplies an objfile.Opener; NewWriter supplies an objfile.Writer.
+// Open learns the object's size, ETag and, in a versioned bucket,
+// its version id with HeadObject; OpenSized takes them from its first ranged
+// GetObject, and ReadObject from its one GetObject of the whole object, with
+// no Range. Every request after that is a GetObject of one byte range, with
+// If-Match on that ETag and, when there is one, that version id: one for each
+// ReadAt, and one for each merged span of a ReadRanges batch, sent
+// concurrently. A 412, a 404, or a response naming another
 // ETag, version or size fails the read with objfile.ErrObjectChanged.
+// Without a non-null version id, separate creations with the same ETag and
+// size cannot be distinguished. The service must honor If-Match on reads
+// and conditional deletes, and If-None-Match on creation.
 package s3
 
 import (

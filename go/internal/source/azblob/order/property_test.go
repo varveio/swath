@@ -195,7 +195,7 @@ func TestProperty(t *testing.T) {
 	}
 	// The generator reaches every path: splits, overlap past a span's end,
 	// empty continuing pages, empty spans and failed reads.
-	for _, i := range []int{CSpans, CSplits, CSeeks, CProbes, COverlapRows, CEmptyPages, CResponses} {
+	for _, i := range []int{CSpans, CSplits, CSeeks, CProbes, COverlapRows, CEmptyPages, CResponses, CShortPages} {
 		if set.Load(counters.ID(i)) == 0 {
 			t.Errorf("no case engaged %s", CounterDefs[i].Key)
 		}

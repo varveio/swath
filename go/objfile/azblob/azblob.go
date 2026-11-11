@@ -1,17 +1,19 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package azblob opens blobs of an Azure Blob Storage container as objfile
-// Objects with the azblob SDK. Open learns the blob's size and ETag from its
-// properties; OpenSized takes the ETag from the first read, and ReadObject
-// from its one download of the whole blob. Every later read
-// is a ranged download with If-Match on that ETag. A 412, a 404, or a
+// Package azblob reads and creates blobs in an Azure Blob Storage container with
+// the azblob SDK. New supplies an objfile.Opener; NewWriter supplies an
+// objfile.Writer. Open learns the blob's size and ETag from its
+// properties; OpenSized takes the ETag from its first ranged download, and
+// ReadObject from its one download of the whole blob, with no range. Every
+// request after that is a download of one byte range with If-Match on that
+// ETag: one for each ReadAt, and one for each merged span of a ReadRanges
+// batch, sent concurrently. A 412, a 404, or a
 // response naming another ETag or size fails the read with
 // objfile.ErrObjectChanged.
 //
-// NewWriter writes block blobs: a small object by one Put Blob, a larger
-// one staged in blocks (Put Block) and created by Put Block List, both
-// create-only (If-None-Match: *).
+// Reads use the current blob's ETag; Azure snapshots and version-id reads are
+// not exposed. The service must honor If-Match and If-None-Match conditions.
 package azblob
 
 import (

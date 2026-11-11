@@ -1,23 +1,16 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package objfile opens an object in an object store as a file read by byte
-// range, with one stored version of the object pinned for the file's
-// lifetime: every read of an Object returns bytes of the object as it was when
-// the Object was opened, or fails with ErrObjectChanged. Nothing else is offered: no
-// listing, caching or writing beyond whole objects.
+// Package objfile provides pinned byte-range reads, create-only uploads and
+// conditional deletes for objects in S3, Google Cloud Storage and Azure Blob
+// Storage. It does not list objects, plan reads or cache bytes.
 //
-// The store packages (objfile/s3, objfile/gcs, objfile/azblob) each provide an
-// Opener over the caller's own SDK client. An Object satisfies the file
-// interfaces of the SeekParquet module (SourceFile, ContextBinder) and anything
-// else that reads an io.ReaderAt of a known size, such as parquet-go's
-// OpenFile.
-//
-// A reader that knows several ranges it needs reads them as one batch
-// (RangeReader, ReadRanges): their bytes are merged into as few requests as
-// BatchPolicy allows, sent concurrently, each one pinned. A small object
-// read whole, such as a manifest, is one request (ReadObject), and an object
-// of known size opens without one (OpenSized).
+// The store packages provide an Opener and Writer over the caller's SDK client;
+// objfile/remote constructs clients from store URIs. Reads check the
+// pinned version or ETag and size, failing with ErrObjectChanged on a mismatch.
+// An S3 ETag alone cannot distinguish separate creations with the same ETag.
+// An Object supplies io.ReaderAt and a known size, as used by SeekParquet and
+// parquet-go. Provider package comments describe their request and retry limits.
 package objfile
 
 import (
@@ -31,11 +24,15 @@ import (
 )
 
 // Object is an opened object. It is safe for concurrent use. ReadAt follows
-// io.ReaderAt: a read that reaches the end of the object returns io.EOF with
-// the bytes it read. After Close, reads fail with an error wrapping
-// fs.ErrClosed.
+// io.ReaderAt: a read shortened by the end of the object returns io.EOF with
+// the bytes it read; a full read ending exactly there succeeds. After Close,
+// reads fail with an error wrapping fs.ErrClosed.
 //
-// An Object the store packages open is also a RangeReader.
+// Reads validate the response's range offset, total size and length. A wrong
+// range fails with an error; a changed identity or size fails with
+// ErrObjectChanged. A short response body is requested again from where it
+// stopped, at most twice, in addition to the SDK's request retries. The GCS
+// package documents the transport required for this validation with its SDK.
 type Object interface {
 	io.ReaderAt
 	// Size returns the object's length in bytes, as it was when opened. An
@@ -45,9 +42,10 @@ type Object interface {
 	// Identity names the pinned version: the S3 version id, or the ETag
 	// when the object has none or has the version id "null" (which S3
 	// keeps across an overwrite), the GCS generation, or the Azure ETag.
-	// An Object from OpenSized
-	// pins on its first read and returns "" before it. A cache can key
-	// bytes by name and Identity.
+	// An Object from OpenSized pins on its first read and returns "" before
+	// it. An S3 ETag is not a unique creation identifier: a replacement can
+	// have the same ETag. A cache can key bytes by name and Identity within
+	// these provider identity limits.
 	Identity() string
 	Close() error
 	// WithContext returns a view of the file whose reads are bounded by
@@ -55,7 +53,7 @@ type Object interface {
 	WithContext(ctx context.Context) io.ReaderAt
 }
 
-// Opener opens objects by name, honouring ctx. A missing object fails with
+// Opener opens objects by name, honoring ctx. A missing object fails with
 // an error wrapping fs.ErrNotExist.
 type Opener interface {
 	// Open asks the store for the object's size and version (one metadata
@@ -108,8 +106,8 @@ func ReadObject(ctx context.Context, o Opener, name string, limit int64) ([]byte
 	return b, f.Identity(), nil
 }
 
-// ErrObjectChanged reports that an object was replaced or deleted after its Object
-// was opened. A read that fails with it returned no bytes of another version.
+// ErrObjectChanged reports a missing or mismatched pinned identity or size.
+// A read that fails with it returns no bytes from the mismatched response.
 var ErrObjectChanged = errors.New("objfile: object changed since it was opened")
 
 // CheckPath reports whether name is a path a Root may open: segments

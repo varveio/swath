@@ -1,19 +1,28 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package gcs opens objects of a Google Cloud Storage bucket as objfile Objects
-// with cloud.google.com/go/storage. Open learns the object's size and
-// generation from its attributes; OpenSized takes the generation from the
-// first read, and ReadObject from its one request for the whole object. Every later read is a range reader of that generation, of the
-// stored bytes (no decompressive transcoding). A read of a generation that no
-// longer exists, or one finding another size, fails with
-// objfile.ErrObjectChanged; one served from another offset fails.
+// Package gcs reads and creates objects in a Google Cloud Storage bucket with
+// cloud.google.com/go/storage. New supplies an objfile.Opener; NewWriter supplies
+// an objfile.Writer. Open learns the object's size and
+// generation from its attributes; OpenSized takes the generation from its
+// first range reader, and ReadObject from its one reader of the whole
+// object, with no Range. Every request after that is a range reader of one
+// byte range of that generation, of the stored bytes (no decompressive
+// transcoding): one for each ReadAt, and one for each merged span of a
+// ReadRanges batch, sent concurrently. A read of a generation that no longer
+// exists, or one finding another size, fails with objfile.ErrObjectChanged;
+// one served from another offset fails.
 //
 // The SDK's reader requests the rest of a range by itself when a body fails
 // part way, checks only that answer's status, and for one labelled
 // Content-Encoding: gzip skips as many bytes of it as it had read. The client
-// objfile/remote builds ends such a body instead, and objfile requests and
-// checks the rest; on a client the caller builds, such a read may return
+// objfile/remote builds validates every response to a request for one byte
+// range (a batch never asks for more than one range a request): its status,
+// Content-Range, length and lack of transport decompression, then ends a
+// failed body with EOF so objfile requests and checks the rest. The SDK's
+// request for the rest of a whole-object read, "bytes=N-", is validated
+// alike, as the range to the object's end. A caller-supplied client needs
+// the same transport behavior; otherwise a failed-body retry may return
 // wrong bytes without an error.
 package gcs
 

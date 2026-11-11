@@ -38,10 +38,9 @@ import (
 	"github.com/varveio/swath/go/objfile/s3"
 )
 
-// CreateOptions configure a Destination. Nothing in them is shared with
-// any client the caller reads with: a destination's credentials are its
-// own.
-type CreateOptions struct {
+// DestinationOptions configure the clients OpenDestination owns. They do
+// not change any other client's credentials, endpoint or connection pool.
+type DestinationOptions struct {
 	// CredentialsFile (gs://) is a Google credentials JSON file (a service
 	// account's key, or authorized-user credentials) read for the
 	// destination; "" uses Application Default Credentials. Either way the
@@ -65,9 +64,11 @@ type CreateOptions struct {
 	// A caller that freezes the route resolves it once and passes both, so
 	// the environment is not read again. gs:// only.
 	Emulator bool
-	// RequestTimeout bounds the wait for a response's headers once a
-	// request is sent, so a stalled request fails (and is retried) instead
-	// of hanging (0: DefaultRequestTimeout).
+	// RequestTimeout bounds the wait for response headers after sending a
+	// request (0: DefaultRequestTimeout). It also bounds GCS and Azure
+	// token exchanges. It does not bound an upload's body transfer or all
+	// its retries. Bound those with the operation's context; S3 multipart
+	// initiation and abort cleanup use S3Write.AbortTimeout independently.
 	RequestTimeout time.Duration
 	// Region (s3://) is the bucket's region, which requests are signed for;
 	// "" is AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
@@ -76,26 +77,24 @@ type CreateOptions struct {
 	// Profile (s3://) is the shared config profile the credentials (and,
 	// without Region, the region) come from; "" is the AWS SDK's default
 	// chain (environment, AWS_PROFILE or default, SSO, web identity,
-	// container and instance roles). Requests are always signed.
+	// container and instance roles). Requests are always signed. The SDK
+	// also honors AWS_CA_BUNDLE and the profile's ca_bundle for TLS trust.
 	Profile string
 	// SAS (az://) is a shared access signature (a query string, with or
 	// without a leading '?') appended to every request; "" uses Entra ID
 	// through azidentity's DefaultAzureCredential, which needs an https
 	// endpoint. No error or Scope holds it.
 	SAS string
-	// Write configures gs:// uploads (chunk size, retries, their account).
-	Write gcs.WriteOptions
-	// S3Write configures s3:// uploads (part size, retries, their account).
+	// GCSWrite configures gs:// upload buffering, retries and chunk timeouts.
+	GCSWrite gcs.WriteOptions
+	// S3Write configures s3:// upload buffering, retries and abort cleanup.
 	S3Write s3.WriteOptions
-	// AzureWrite configures az:// uploads (block size, retries, their
-	// account).
+	// AzureWrite configures az:// upload buffering and retries.
 	AzureWrite azblob.WriteOptions
 }
 
-// Destination is a dataset root opened for writing by Create: a Writer and
-// an Opener (for reading back what it wrote) of the names under the
-// location's prefix, through one client it owns. It is safe for concurrent
-// use.
+// Destination provides reads and conditional writes under a location's
+// prefix, through clients it owns. It is safe for concurrent use.
 type Destination struct {
 	o      objfile.Opener
 	w      objfile.Writer
@@ -104,13 +103,18 @@ type Destination struct {
 	close  func() error
 }
 
-// Create returns the Destination of location, a URI ParseLocation accepts:
-// gs://, s3:// or az://. It makes no request: a missing bucket or
-// container, or a refused credential, fails the first request. Credentials
-// are loaded now (a file that cannot be read fails Create; an AWS chain
-// and DefaultAzureCredential resolve theirs at the first request); the
-// Destination outlives ctx.
-func Create(ctx context.Context, location string, o CreateOptions) (*Destination, error) {
+// OpenDestination opens location for reads and conditional writes. The
+// location must be a URI objfile.ParseLocation accepts. It creates no
+// bucket, container or object and makes no object-store request; credential
+// and client setup can fail here, while permissions are checked on use.
+// The Destination owns its clients and outlives ctx: subsequent operations
+// use their own contexts. Close it after finishing its reads and uploads.
+//
+// GCS requests the read-write scope; S3 signs every request; Azure uses SAS
+// or Entra ID. DestinationOptions controls their credentials and endpoints.
+// GCS and S3 SDK logging is disabled to keep credentials and upload handles
+// out of their logs.
+func OpenDestination(ctx context.Context, location string, o DestinationOptions) (*Destination, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {
 		return nil, err
@@ -141,7 +145,7 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 		return nil, err
 	}
 	d.o = objfile.Root(gcs.New(client, l.Container), l.Prefix)
-	d.w = objfile.RootWriter(gcs.NewWriter(client, l.Container, o.Write), l.Prefix)
+	d.w = objfile.RootWriter(gcs.NewWriter(client, l.Container, o.GCSWrite), l.Prefix)
 	d.close = func() error { err := client.Close(); pool.CloseIdleConnections(); return err }
 	return d, nil
 }
@@ -151,7 +155,7 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 // ranged.Transport, as Open's do. The SDK's logger is silenced: its debug
 // output, switched on by the environment, writes request headers
 // unredacted, the bearer token included.
-func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions) (*storage.Client, error) {
+func writeClient(ctx context.Context, pool http.RoundTripper, o DestinationOptions) (*storage.Client, error) {
 	tr := ranged.Transport(pool)
 	quiet := slog.New(slog.DiscardHandler)
 	opts := []option.ClientOption{option.WithLogger(quiet)}
@@ -196,7 +200,7 @@ func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions) (
 // request timeout (headers and body), and are fetched with the context of
 // the request that needs one; their debug logging is off whatever the
 // environment says (it would print tokens and signed assertions).
-func writeCredentials(o CreateOptions, quiet *slog.Logger) (*auth.Credentials, error) {
+func writeCredentials(o DestinationOptions, quiet *slog.Logger) (*auth.Credentials, error) {
 	timeout := o.RequestTimeout
 	if timeout <= 0 {
 		timeout = DefaultRequestTimeout
@@ -227,15 +231,14 @@ func writeCredentials(o CreateOptions, quiet *slog.Logger) (*auth.Credentials, e
 	return creds, nil
 }
 
-// DefaultRequestTimeout bounds the wait for a response's headers, and a
-// token exchange.
+// DefaultRequestTimeout is the default for DestinationOptions.RequestTimeout.
 const DefaultRequestTimeout = 2 * time.Minute
 
-// ResolveEndpoint is the destination endpoint the options' Endpoint
-// resolves to: endpoint itself when set, else the emulator
-// STORAGE_EMULATOR_HOST names (emulator true), else "" (Google's). A
-// caller that freezes a destination's route resolves it once, records it,
-// and passes the result to Create.
+// ResolveEndpoint resolves a GCS destination endpoint: endpoint when set,
+// else STORAGE_EMULATOR_HOST (with emulator true), else "" for Google's
+// default. It does not resolve S3 or Azure endpoints. A caller recording a
+// destination's route passes both results to OpenDestination as Endpoint
+// and Emulator.
 func ResolveEndpoint(endpoint string) (string, bool) {
 	if endpoint != "" {
 		return endpoint, false
@@ -246,10 +249,10 @@ func ResolveEndpoint(endpoint string) (string, bool) {
 	return "", false
 }
 
-// createS3 is Create of an s3:// location: a client of its own over its
+// createS3 is OpenDestination of an s3:// location: a client of its own over its
 // own connection pool, from the AWS SDK's configuration with o's profile
 // and region, signing every request.
-func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destination, error) {
+func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*Destination, error) {
 	d := &Destination{scope: l.String()}
 	s := &Store{scope: d.scope}
 	if err := s.at(o.Endpoint); err != nil {
@@ -317,9 +320,9 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 	return d, nil
 }
 
-// createAzure is Create of an az:// location: a client of its own over its
+// createAzure is OpenDestination of an az:// location: a client of its own over its
 // own connection pool, authorized by o's SAS or by DefaultAzureCredential.
-func createAzure(l objfile.Location, o CreateOptions) (*Destination, error) {
+func createAzure(l objfile.Location, o DestinationOptions) (*Destination, error) {
 	d := &Destination{scope: l.String()}
 	s := &Store{scope: d.scope}
 	if err := s.at(o.Endpoint); err != nil {
@@ -431,7 +434,8 @@ func (d *Destination) ReadObject(ctx context.Context, name string, limit int64) 
 // and " at " the endpoint when one is set. It holds no credentials.
 func (d *Destination) Scope() string { return d.scope }
 
-// Close releases the client and its idle connections.
+// Close releases the client and its idle connections. Finish the
+// Destination's reads and uploads before calling Close.
 func (d *Destination) Close() error { return d.close() }
 
 var _ interface {

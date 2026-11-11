@@ -10,11 +10,7 @@ import (
 	"strings"
 )
 
-// The write side: an object is created whole, under a precondition, and is
-// visible only once its upload completes. Nothing here renames, lists,
-// overwrites or deletes an object the caller does not name by its identity.
-
-// Condition is the precondition of a write.
+// Condition is the service-enforced precondition of a write.
 type Condition int
 
 // CreateOnly creates the object only if no object has the name: GCS
@@ -29,13 +25,13 @@ var ErrExists = errors.New("objfile: an object already exists at the name")
 
 // ErrConflict reports a CreateOnly write the store refused because another
 // conditional write of the name was in progress (S3's 409
-// ConditionalRequestConflict). No object was created by it; the write may
-// be made again, from its first byte (an upload's sent bytes are gone).
+// ConditionalRequestConflict). Unless the error also matches ErrUnresolved,
+// this write created no object and can be retried from its first byte.
 var ErrConflict = errors.New("objfile: a concurrent conditional write of the name conflicted")
 
-// Receipt identifies an object a write created: its name as the caller
-// gave it, its size and its Identity (the GCS generation, as Object's
-// Identity names it).
+// Receipt records a confirmed creation: the caller's name, the stored size and
+// the provider identity described by Object.Identity. An ETag identity does not
+// distinguish separate creations that share that ETag.
 type Receipt struct {
 	Name     string
 	Size     int64
@@ -46,45 +42,55 @@ type Receipt struct {
 // in transport, timed out, or was answered with a server error, so the
 // store may have applied it, or may still apply it. A caller that must
 // know reads the name back, and takes absence as proof of nothing while
-// the request could still be in flight.
+// the request could still be in flight. This uncertainty applies even when
+// another sentinel also matches: an ambiguous attempt followed by a conflict
+// can match both ErrUnresolved and ErrConflict.
 var ErrUnresolved = errors.New("objfile: the write's outcome is unknown")
 
-// Upload is one object being written. Write takes its bytes in order; Close
-// completes it. A Close that returns nil leaves an object, whose Receipt is
-// then valid. A Close that fails with ErrUnresolved may have left one, or
-// may yet leave one (a request the store accepted can outlive the failed
-// connection): only a read of the name settles it, and nothing the caller
-// does to the Upload can prevent it. A Close that fails otherwise, and an
-// Abort before Close, leave no object. Abort after a successful Close does
-// nothing. An Upload is used by one goroutine at a time; Abort may be
-// called from another to cancel it, while a Write is in progress.
+// Upload writes one object's bytes in order. Close sends the final creation
+// request; a nil result confirms that the service created the object and makes
+// Receipt valid. A failed Close can also leave an object: ErrExists may follow
+// a lost success response, and ErrUnresolved means creation may have happened
+// or may still happen. Read back to check whether the intended content is
+// present; a failed Close does not establish ownership. Absence is inconclusive
+// while a request could still be in flight.
+//
+// Abort before Close prevents creation. After Close has sent its request,
+// Abort cannot undo a creation or settle an unresolved outcome; after a
+// successful Close it does nothing. Provider-specific temporary resources may
+// need cleanup even when no object was created. Use an Upload from one
+// goroutine at a time, except that Abort may cancel an in-progress Write from
+// another goroutine.
 type Upload interface {
 	io.Writer
 	Close() error
 	Abort() error
-	// Receipt is the created object's, after a successful Close (ok false
-	// before).
+	// Receipt returns the confirmed creation after a successful Close;
+	// ok is false otherwise.
 	Receipt() (r Receipt, ok bool)
 }
 
-// Writer creates objects by name, honouring ctx, and deletes the ones it is
-// given the identity of.
+// Writer creates objects by name, honoring ctx, and conditionally deletes them.
+// Store packages redact request URLs in errors, preserving errors.Is and
+// errors.As. Callers can use RedactError for errors they add themselves.
 type Writer interface {
 	// NewWriter starts an upload of name under condition c. Bytes are sent
-	// as they are written, in chunks the store's package bounds; no object
-	// exists until Close succeeds.
+	// as they are written, in chunks the store's package bounds; Close sends
+	// the final request that creates the object. See Upload for failed Close
+	// and Abort outcomes.
 	NewWriter(ctx context.Context, name string, c Condition) (Upload, error)
-	// PutIfAbsent creates name holding data, CreateOnly, in one request
-	// where the store allows: ErrExists when an object is already there,
-	// ErrUnresolved when the outcome is unknown.
+	// PutIfAbsent creates name holding data under CreateOnly, using one request
+	// where the store allows. Its errors have the same outcome semantics as
+	// Upload.Close, including ErrExists after a lost success response.
 	PutIfAbsent(ctx context.Context, name string, data []byte) (Receipt, error)
-	// DeleteIf deletes name only if its current version is identity: one
-	// that is gone fails with an error wrapping fs.ErrNotExist, one
-	// replaced since with ErrObjectChanged.
-	//
-	// Every error a Writer or an Upload returns has passed through
-	// RedactError: no request URL's query or user information is in its
-	// text.
+	// DeleteIf asks the service to delete the version or generation named by
+	// identity, or the current object under an ETag match. A named version
+	// can be deleted while a newer version remains current. An ETag match can
+	// delete a replacement with the same ETag; S3 ETags are not unique creation
+	// identifiers. The service must honor the supplied delete condition.
+	// A reported identity mismatch wraps ErrObjectChanged. An absent target
+	// may succeed or return an error wrapping fs.ErrNotExist, depending on the
+	// provider; success does not prove the target existed.
 	DeleteIf(ctx context.Context, name, identity string) error
 }
 

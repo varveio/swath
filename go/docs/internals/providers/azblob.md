@@ -93,11 +93,22 @@ account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
 with the configured account, no port and no path; with any other `--endpoint-url` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
-passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
-Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
+passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
+`EndpointUnsupportedAccountFeatures` there ("This endpoint does not support BlobStorageEvents or SoftDelete") also
+passes (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
+without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
+([soft delete overview](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)). Most
+public open-data accounts answer it: 60 of the 64 Planetary Computer containers, and NOAA's GOES, HRRR, GFS and NWM and
+NAIP (checked live on 2026-11-11). The host gives that 409 before it checks credentials, so a signed caller whose
+credential Get Account Information rejected (class auth) keeps that failure; a container SAS that Get Account
+Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by the 409. One report attributes the
+same message to an account reached through a private endpoint for `blob` without one for `dfs`; whether a
+hierarchical account can answer it that way is unverified. A 403 `AuthorizationPermissionMismatch` there proves
+nothing: a container SAS met it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
+there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
-`filesystem properties` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`filesystem properties`, `filesystem endpoint blocked` or `asserted`, with a warning), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
@@ -142,6 +153,15 @@ has not reached), and a span that ends before its response does discards the res
 (`order_overlap_rows`: a read asks for a full page). An adapter invariant broken (only an out-of-order page can
 do it) is the client's invalid page, a protocol violation.
 
+*One read per page.* A page that holds an item ends where its span needs another read, short of `Max` if need
+be (`order_short_pages`, and the items they lacked, `order_short_rows`); reads that bring it no member (empty
+continuing pages, empty spans) do not count. A seek after a listed name, the lower child of every split, returns
+that name first and rule 1 drops it, so its read holds one member fewer than the page. Filling the page with a
+second read would leave the rest of that read buffered in the chain, and the engine abandons a chain at every
+split: its children would read those rows again. With one read per page a chain whose names lie below U+E000
+holds nothing between pages (`TestPropertySplitsAndResume`), and every item the service returns is listed once,
+a dropped split cursor or past a range's end (`TestAzureSplitsReadNothingTwice`).
+
 **On the range engine.** `Description.Listing` is `keyrange.Listing`: the adapter's pages are byte-ordered,
 start after `After` (exclusive; `StartInclusive` is false) and end at `Through`, which is never sent. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
 control character, not ending in `.` (Azure's name rules). `Requeue` is `objhttp.Requeue`; `InvalidPage` is `objhttp.ErrInvalidPage`
@@ -164,7 +184,7 @@ past the request timeout, cut to it) and `list_format.arrow_pages`, `.arrow_item
 valid listing pages each format carried and their blobs and prefixes; an XML page is the service declining Arrow), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
 `order_seeks`, `order_probes` (span reads that found no member), `order_overlap_rows`, `order_empty_pages` (empty
 continuing pages followed inside a span's read), `order_stack_max`, `order_buffer_rows_max`, `order_responses`,
-`order_chains_evicted` and `order_chains_max`. **Connections**: the [shared pool](../clients.md#pool-construction), with provider-owned rotation of the
+`order_chains_evicted`, `order_chains_max`, `order_short_pages` and `order_short_rows` (one read per page). **Connections**: the [shared pool](../clients.md#pool-construction), with provider-owned rotation of the
 service and HTTP-client slices (`TestServicePool`, `TestServicePoolRoundRobin`). The client's anonymous note goes to the run's warnings.
 
 **Overload signals** (`client.Error.Failure`):

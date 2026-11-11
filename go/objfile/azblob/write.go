@@ -86,6 +86,18 @@ type WriteOptions struct {
 // when it creates it. Content is stored as given, typed
 // application/octet-stream, each request's body with a CRC64 the service
 // verifies.
+// Each upload buffers one block and blocks Write while staging it. Abort
+// cancels requests but sends no block deletion: uncommitted blocks expire
+// a week after the last was staged, or are discarded when
+// a blob is committed at the name. They require no lifecycle rule. Block ids
+// are unique to an upload and are removed from request errors.
+// Requests use the upload's context, without a separate block-transfer timeout.
+//
+// DeleteIf sends If-Match against the current blob's ETag. A service 404 wraps
+// fs.ErrNotExist and a 412 wraps objfile.ErrObjectChanged. Soft-deleted blobs
+// remain until the account's retention period expires; with versioning, deletion
+// retains a previous version until explicitly deleted or removed by a lifecycle
+// rule. Conditional deletion does not bypass these retention policies.
 func NewWriter(client *azsdk.Client, containerName string, o WriteOptions) (objfile.Writer, error) {
 	if o.BlockSize == 0 {
 		o.BlockSize = DefaultBlockSize
@@ -147,8 +159,8 @@ func (w *writer) call(ctx context.Context, op string, uncertain *atomic.Bool) co
 	})
 }
 
-// NewWriter starts name's upload, CreateOnly; nothing is sent until its
-// first block is full, or Close.
+// NewWriter starts name's upload, CreateOnly; requests begin when more bytes
+// follow the first full block, or at Close.
 func (w *writer) NewWriter(ctx context.Context, name string, c objfile.Condition) (objfile.Upload, error) {
 	if c != objfile.CreateOnly {
 		return nil, fmt.Errorf("objfile/azblob: write %s: unsupported condition %d", name, c)
@@ -267,8 +279,8 @@ func (u *upload) stage() error {
 }
 
 // Close creates the object; the failure is objfile.ErrUnresolved when the
-// creating request's outcome is unknown. Blocks staged by a failed upload
-// stay uncommitted (Abort).
+// creating request's outcome is unknown. Blocks left uncommitted are
+// reclaimed by the service (Abort).
 func (u *upload) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -349,9 +361,9 @@ func (u *upload) redact(err error) error {
 	return err
 }
 
-// Abort cancels the upload: a request in flight is cancelled, and no blob
-// is created, since only Close sends the request that creates it. No call
-// is needed for the blocks already staged: they are uncommitted, never
+// Abort cancels the upload. Before Close, no blob is created; after Close
+// sends its creating request, Abort cannot undo creation or settle an
+// unresolved outcome. No call is needed for blocks still uncommitted: they are never
 // part of a blob or visible as one, and the service discards them when a
 // blob is created at the name, or a week after the last was staged. Abort
 // may be called from another goroutine than Write's: it waits only for
@@ -413,10 +425,7 @@ func (w *writer) PutIfAbsent(ctx context.Context, name string, data []byte) (obj
 	return r, nil
 }
 
-// DeleteIf deletes the blob if its ETag is identity (If-Match). With blob
-// soft delete on, the deleted blob is kept until the account's retention
-// period expires; with blob versioning on, it becomes a previous version,
-// kept until it is deleted explicitly or by a lifecycle rule.
+// DeleteIf deletes the current blob under If-Match on identity.
 func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 	if identity == "" {
 		return &fs.PathError{Op: "delete", Path: name, Err: fmt.Errorf("%w: no identity", fs.ErrInvalid)}
