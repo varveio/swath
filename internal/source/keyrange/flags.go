@@ -92,7 +92,8 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
 			Usage: "with --sequential, stop after N objects (marked incomplete)"})
-		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d, capped at the provider's maximum; default the provider's)", MaxPageFlag),
+		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: "ask for pages of N entries (default the provider's)",
+			Long: fmt.Sprintf("1 to %d, capped at the provider's maximum.", MaxPageFlag),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
 				if err != nil || n < 1 || n > MaxPageFlag {
@@ -101,7 +102,8 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 				p.PageSize = n
 				return nil
 			})})
-		source.Define(f, source.Flag{Name: "seed-tiles", Metavar: "N", Usage: "start with at most N tiles from the seed or --seed-from (default 4 per worker, at most 1,000)",
+		source.Define(f, source.Flag{Name: "seed-tiles", Metavar: "N", Usage: "start with at most N tiles from the seed or --seed-from",
+			Long: "Default 4 per worker, at most 1,000.",
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
 				if err != nil || n < 1 || n > 100000 {

@@ -204,7 +204,8 @@ _swath_diag_list() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
-        '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
+        '--page-size=[ask for pages of N entries (default the provider'\''s)]:N: ' \
+        '--seed-tiles=[start with at most N tiles from the seed or --seed-from]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -214,6 +215,7 @@ _swath_diag_list() {
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
         '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
+        '--azure-page-policy=[experimental page policy (default fixed)]:value:(fixed one-read grow estimate)' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
         '--s3-region=[the bucket'\''s region]:NAME: ' \
@@ -285,7 +287,8 @@ _swath_diag_count() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
-        '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
+        '--page-size=[ask for pages of N entries (default the provider'\''s)]:N: ' \
+        '--seed-tiles=[start with at most N tiles from the seed or --seed-from]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -295,6 +298,7 @@ _swath_diag_count() {
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
         '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
+        '--azure-page-policy=[experimental page policy (default fixed)]:value:(fixed one-read grow estimate)' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
         '--s3-region=[the bucket'\''s region]:NAME: ' \
