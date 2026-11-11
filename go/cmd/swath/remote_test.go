@@ -435,12 +435,16 @@ func TestRemoteAzureListAndResume(t *testing.T) {
 // TestRemoteAzureSASEchoed: an Azure destination refuses every write with
 // an answer that quotes the request's query back, its escapes in lower
 // case; the SAS's signature, with characters a URL reserves, reaches
-// neither the run's error, error.json nor the report.
+// neither the run's error, error.json nor the report. The source is a
+// local tree, which keeps no journal, so it runs on Windows too.
 func TestRemoteAzureSASEchoed(t *testing.T) {
 	captureStderr(t)
-	s3test.NoCredentials(t)
-	src := httptest.NewServer(s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))))
-	t.Cleanup(src.Close)
+	root := t.TempDir()
+	for i := range 300 {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%04d", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	const secret = "ZQXSECRET"
 	f := azfake.New("acct", "dst")
 	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +459,7 @@ func TestRemoteAzureSASEchoed(t *testing.T) {
 	t.Cleanup(dst.Close)
 	work := filepath.Join(t.TempDir(), "work")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err := run(context.Background(), []string{"s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--part-size", "4KiB",
+	err := run(context.Background(), []string{root, "--part-size", "4KiB",
 		"-o", "az://acct/dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL, "--report", report,
 		"--output-azure-sas-token", "sv=1&sp=rwd&sig=" + url.QueryEscape("AB+"+secret+"/CD=")}, io.Discard, false)
 	if err == nil {
