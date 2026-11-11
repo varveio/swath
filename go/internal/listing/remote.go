@@ -208,13 +208,9 @@ func (rs *remoteState) close() {
 	}
 }
 
-// uploadBytes is the memory admitted per encoder for its upload: one chunk.
-func uploadBytes(r *RemoteOutput) int64 {
-	if r.ChunkSize > 0 {
-		return int64(r.ChunkSize)
-	}
-	return gcs.DefaultChunkSize
-}
+// uploadBytes is the memory admitted per encoder for its upload: one chunk,
+// as the SDK rounds it.
+func uploadBytes(r *RemoteOutput) int64 { return int64(gcs.ChunkBytes(r.ChunkSize)) }
 
 // checkFresh refuses a fresh run whose destination holds a manifest, within
 // the commit's time bound.

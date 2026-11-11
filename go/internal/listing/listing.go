@@ -143,7 +143,7 @@ type OutputConfig struct {
 // Limits are the execution limits; none changes the dataset's content.
 type Limits struct {
 	Workers  int // listing goroutines; default DefaultWorkers
-	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the row budget and descriptors (admitEncoders)
+	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the encoder allowance and descriptors (admitEncoders)
 	// RowBudget bounds the bytes of rows and scheduler metadata held
 	// between listing and encoding (reorder storage and the encoders'
 	// queues); 0 is the default, 1/16 of the least detected memory limit
@@ -167,12 +167,30 @@ type Limits struct {
 	// (encodersGiven).
 	maxEncoders   int
 	encodersGiven bool
-	// encoderBytes is the working set admitted per Parquet encoder, the
-	// source's schema's (encoderPrice).
-	encoderBytes int64
+	// encoderBytes is the working set admitted per Parquet encoder: the
+	// source's schema's writer (writerBytes, encoderPrice) and, for a
+	// dataset in a bucket, its upload's buffer (uploadBytes).
+	encoderBytes, writerBytes, uploadBytes int64
+	// encoderAllowance is the memory encoders are admitted against: the
+	// default row budget's policy (rowBudgetFor), whatever --sort-buffer
+	// says, so row storage and writers are sized apart.
+	encoderAllowance int64
+	// startBy and afterBy name what bound the encoders at start and after
+	// listing (Bound*).
+	startBy, afterBy string
 	// rowBudgetWhy is how RowBudget was chosen (rowBudgetFor).
 	rowBudgetWhy RowBudget
 }
+
+// What bound the encoders a run admitted (Drain.EncodersAtStartBoundBy,
+// EncodersAfterListingBoundBy).
+const (
+	BoundMemory      = "memory"      // the encoder allowance, at each encoder's price
+	BoundCPU         = "cpu"         // GOMAXPROCS
+	BoundDescriptors = "descriptors" // the descriptor limit
+	BoundMinimum     = "minimum"     // one encoder, whatever the limits say
+	BoundExplicit    = "explicit"    // --encoders
+)
 
 // SpillLimits bound spill.
 type SpillLimits struct {
@@ -338,18 +356,29 @@ func (c *Config) resolve() error {
 	if l.Workers == 0 {
 		l.Workers = defaultWorkers(c.Source.URI)
 	}
-	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, readMemoryLimits())
+	mem := readMemoryLimits()
+	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, mem)
+	l.encoderAllowance, _ = rowBudgetFor(0, mem)
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
-	l.encoderBytes = encoderPrice(c.Source.URI)
+	l.writerBytes = encoderPrice(c.Source.URI)
 	if o.Remote != nil {
 		// Each encoder's part is an upload holding one chunk: admitted with
 		// its writer, before listing and after it alike.
-		l.encoderBytes += uploadBytes(o.Remote)
+		l.uploadBytes = uploadBytes(o.Remote)
 	}
+	l.encoderBytes = l.writerBytes + l.uploadBytes
+	l.startBy, l.afterBy = BoundExplicit, BoundExplicit
 	if l.Encoders == 0 {
-		l.Encoders = min(runtime.GOMAXPROCS(0), admit(*c))
-		if c.Output.Text == nil { // Parquet writers only: a text output's jobs are not raised
-			l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.encoderBytes, l.Workers, fdLimit())))
+		procs, fds := runtime.GOMAXPROCS(0), fdLimit()
+		if c.Output.Text != nil {
+			l.Encoders, l.startBy = bound(int64(admitTextJobs(l.encoderAllowance)), BoundMemory, procs)
+			l.maxEncoders, l.afterBy = l.Encoders, l.startBy // a text output's jobs are not raised
+		} else {
+			l.Encoders, l.startBy = admission(l.encoderAllowance, l.encoderBytes, l.Workers, fds, procs)
+			l.maxEncoders, l.afterBy = admission(l.encoderAllowance+int64(l.Workers)*listingPageBytes, l.encoderBytes, l.Workers, fds, procs)
+			if l.maxEncoders < l.Encoders {
+				l.maxEncoders, l.afterBy = l.Encoders, l.startBy
+			}
 		}
 	}
 	if l.PartSize == 0 {
@@ -392,29 +421,51 @@ func encoderPrice(root string) int64 {
 
 // admitEncoders is how many Parquet encoders the run's resources carry,
 // never fewer than one. Encoder memory is admitted apart from the row
-// budget but sized by it: per encoder bytes (encoderPrice: one writer and
-// one codec state) each within an allowance equal to the row budget, so a host given a
-// larger budget for rows also runs more writers to drain them; and one
-// descriptor each beside the spill readers, the workers' connections and
-// spill writes, and a reserve (fds 0 when the limit is unknown).
-func admitEncoders(rowBudget, per int64, workers int, fds int64) int {
-	n := rowBudget / per
+// budget, against an allowance of its own (Limits.encoderAllowance: the
+// default row budget's share of the memory found, whatever --sort-buffer
+// says): per encoder bytes each (one writer and one codec state,
+// encoderPrice, and for a dataset in a bucket one upload buffer,
+// uploadBytes); and one descriptor each beside the spill readers, the
+// workers' connections and spill writes, and a reserve (fds 0 when the
+// limit is unknown).
+func admitEncoders(allowance, per int64, workers int, fds int64) int {
+	n, _ := admission(allowance, per, workers, fds, math.MaxInt)
+	return n
+}
+
+// admission is admitEncoders capped at procs (GOMAXPROCS), and what bound
+// it (Bound*).
+func admission(allowance, per int64, workers int, fds int64, procs int) (int, string) {
+	n, by := allowance/per, BoundMemory
 	if fds > 0 {
-		n = min(n, fds-int64(order.MaxSpillReaders)-2*int64(workers)-fdReserve)
+		if d := fds - int64(order.MaxSpillReaders) - 2*int64(workers) - fdReserve; d < n {
+			n, by = d, BoundDescriptors
+		}
 	}
-	return int(max(1, n))
+	return bound(n, by, procs)
+}
+
+// bound caps n, which by bound, at procs, and raises it to one.
+func bound(n int64, by string, procs int) (int, string) {
+	if int64(procs) < n {
+		n, by = int64(procs), BoundCPU
+	}
+	if n < 1 {
+		n, by = 1, BoundMinimum
+	}
+	return int(n), by
 }
 
 // admitAfterListing is how many encoders the run carries once the
 // provider has finished listing (order.Options.ListingDone): no page is
-// in flight any more, so the memory the workers' pages held beside the
-// row budget (listingPageBytes each) goes to writers instead, on top of
-// the allowance equal to the row budget; descriptors as admitEncoders
-// (the workers' idle connections stay open). Each encoder costs per
-// (encoderPrice). 128 MiB and 64 workers carry 6 of the object stores'
-// schemas, 256 workers 12.
-func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
-	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, per, workers, fds)
+// in flight any more, so the memory the workers' pages held
+// (listingPageBytes each) goes to writers instead, on top of the encoder
+// allowance; descriptors as admitEncoders (the workers' idle connections
+// stay open). Each encoder costs per. An allowance of 128 MiB and 64
+// workers carry 6 of the object stores' schemas written locally, 256
+// workers 12.
+func admitAfterListing(allowance, per int64, workers int, fds int64) int {
+	return admitEncoders(allowance+int64(workers)*listingPageBytes, per, workers, fds)
 }
 
 // segmentWorkers caps the workers writing the tail as parallel parts
@@ -442,21 +493,21 @@ func segmentWorkers(encoders, workers int, fds int64) int {
 const listingPageBytes = 1 << 20
 
 // admitTextJobs is how many zstd jobs a text output's compressor runs at
-// once, never fewer than one: each within textout.JobBytes of an allowance
-// equal to the row budget, as Parquet encoders are admitted (admitEncoders),
-// but with the compressor's own working set and no descriptor (the jobs
-// write one file).
-func admitTextJobs(rowBudget int64) int {
-	return int(max(1, rowBudget/textout.JobBytes))
+// once, never fewer than one: each within textout.JobBytes of the encoder
+// allowance, as Parquet encoders are admitted (admitEncoders), but with
+// the compressor's own working set and no descriptor (the jobs write one
+// file).
+func admitTextJobs(allowance int64) int {
+	return int(max(1, allowance/textout.JobBytes))
 }
 
 // admit is the encoders (Parquet writers, or a text output's compression
 // jobs) c's resources carry.
 func admit(c Config) int {
 	if c.Output.Text != nil {
-		return admitTextJobs(c.Limits.RowBudget)
+		return admitTextJobs(c.Limits.encoderAllowance)
 	}
-	return admitEncoders(c.Limits.RowBudget, c.Limits.encoderBytes, c.Limits.Workers, fdLimit())
+	return admitEncoders(c.Limits.encoderAllowance, c.Limits.encoderBytes, c.Limits.Workers, fdLimit())
 }
 
 // textJobs is the compression jobs of a text output and why that many
@@ -474,8 +525,8 @@ func textJobs(c Config, asked int) *TextCompressor {
 	switch {
 	case asked > 0:
 		t.JobsReason = JobsAsked
-	case admitTextJobs(c.Limits.RowBudget) < runtime.GOMAXPROCS(0):
-		t.JobsReason = JobsRowBudget
+	case admitTextJobs(c.Limits.encoderAllowance) < runtime.GOMAXPROCS(0):
+		t.JobsReason = JobsAllowance
 	}
 	return t
 }
@@ -506,11 +557,11 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	switch n := admit(cfg); {
 	case asked <= n || cfg.Warn == nil:
 	case cfg.Output.Text != nil:
-		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; --sort-buffer %d MiB carries %d",
-			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
+		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; the encoder allowance (%d MiB, from the memory found) carries %d",
+			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.encoderAllowance>>20, n))
 	default:
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; --sort-buffer %d MiB and the descriptor limit carry %d",
-			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; the encoder allowance (%d MiB, from the memory found) and the descriptor limit carry %d",
+			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.encoderAllowance>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
 		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression, Compressor: textJobs(cfg, asked)}
@@ -1235,6 +1286,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
+		d.EncoderAllowanceBytes, d.EncoderWriterBytes, d.EncoderUploadBytes = l.encoderAllowance, l.writerBytes, l.uploadBytes
+		d.EncodersAtStartBoundBy, d.EncodersAfterListingBoundBy = l.startBy, l.afterBy
 		switch {
 		case l.encodersGiven:
 			d.EncoderAdmission = AdmissionExplicit

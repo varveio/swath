@@ -401,10 +401,10 @@ type TextCompressor struct {
 // Why a text output's compressor runs the jobs it does
 // (TextCompressor.JobsReason).
 const (
-	JobsAsked     = "encoders"   // --encoders (Limits.Encoders) set it
-	JobsCores     = "cores"      // GOMAXPROCS: the budget carries more
-	JobsRowBudget = "row_budget" // the row budget's allowance carries fewer than GOMAXPROCS (admitTextJobs)
-	JobsGzip      = "gzip"       // gzip: one stream
+	JobsAsked     = "encoders"          // --encoders (Limits.Encoders) set it
+	JobsCores     = "cores"             // GOMAXPROCS: the encoder allowance carries more
+	JobsAllowance = "encoder_allowance" // the encoder allowance carries fewer than GOMAXPROCS (admitTextJobs)
+	JobsGzip      = "gzip"              // gzip: one stream
 )
 
 // Resources the run used. Wait times sum over goroutines.
@@ -483,6 +483,17 @@ type Drain struct {
 	EncodersAtStart      int    `json:"encoders_at_start,omitempty"`
 	EncodersAfterListing int    `json:"encoders_after_listing,omitempty"`
 	EncoderAdmission     string `json:"encoder_admission,omitempty"`
+	// What the encoders were admitted against: the encoder allowance (the
+	// default row budget's share of the memory found, whatever
+	// --sort-buffer says), each encoder's price (its writer, and for a
+	// dataset in a bucket its upload buffer), and what bound the count at
+	// start and after listing (Bound*: memory, cpu, descriptors, minimum,
+	// explicit).
+	EncoderAllowanceBytes       int64  `json:"encoder_allowance_bytes,omitempty"`
+	EncoderWriterBytes          int64  `json:"encoder_writer_bytes,omitempty"`
+	EncoderUploadBytes          int64  `json:"encoder_upload_bytes,omitempty"`
+	EncodersAtStartBoundBy      string `json:"encoders_at_start_bound_by,omitempty"`
+	EncodersAfterListingBoundBy string `json:"encoders_after_listing_bound_by,omitempty"`
 }
 
 // Why the encoders after listing are what they are (Drain.EncoderAdmission).

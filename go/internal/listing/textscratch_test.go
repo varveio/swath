@@ -63,6 +63,7 @@ func entries(t *testing.T, dir string) []string {
 // file alone.
 func TestTextSpillBesideOutput(t *testing.T) {
 	s3test.NoCredentials(t)
+	withMemory(t, memoryLimits{physical: 2 << 20}) // an encoder allowance of the minimum, 128 KiB
 	tmp, dir := t.TempDir(), t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	out := filepath.Join(dir, "keys.tsv.zst")
@@ -83,12 +84,12 @@ func TestTextSpillBesideOutput(t *testing.T) {
 	if got := entries(t, tmp); len(got) != 0 {
 		t.Fatalf("TMPDIR holds %v", got)
 	}
-	c, why := sum.Output.Text.Compressor, JobsRowBudget
+	c, why := sum.Output.Text.Compressor, JobsAllowance
 	if runtime.GOMAXPROCS(0) == 1 {
 		why = JobsCores // both bind; the cores are named first
 	}
 	if c == nil || c.Jobs != 1 || c.JobsReason != why || c.BytesOut != sum.Output.Text.Bytes || c.BytesIn <= c.BytesOut {
-		t.Fatalf("compressor %+v (bytes %d): a 128 KiB budget admits one job", c, sum.Output.Text.Bytes)
+		t.Fatalf("compressor %+v (bytes %d): a 128 KiB allowance admits one job", c, sum.Output.Text.Bytes)
 	}
 	if sum.Output.Text.SinkWaitNs <= 0 {
 		t.Fatalf("no sink wait: %+v", sum.Output.Text)

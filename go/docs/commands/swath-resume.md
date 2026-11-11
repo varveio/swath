@@ -117,19 +117,21 @@ Performance:
                                 it throttles at the default.
       --encoders N            Parquet encoders, or a .zst file's compression jobs (default: CPUs)
                                 Lower it to leave cores to other work; the default follows
-                                GOMAXPROCS, the sort buffer and the descriptor limit. An explicit
-                                count is kept, with a warning when they cannot carry it.
+                                GOMAXPROCS, the descriptor limit and an encoder allowance of 1/16 of
+                                memory (as the default sort buffer, whatever --sort-buffer says; at
+                                most 1GiB). An explicit count is kept, with a warning when they
+                                cannot carry it.
       --sort-buffer SIZE      bytes buffered for sorted output; not a total-memory limit
                                 Rows listed ahead of the output, the output queues and the
                                 scheduler's metadata. Past it rows spill to disk; with no spill
                                 space listing waits. Request pages, directory reads, writers,
-                                compression and the Go runtime are extra, the tail after listing
-                                holds about one more, and a larger value admits more encoders.
-                                Default: 1/16 of the least of detected physical memory, the cgroup's
-                                limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected;
-                                invocation.sort_buffer says which). Raise it when spill is heavy and
-                                memory is free; to use less memory lower it with --workers and
-                                --encoders.
+                                compression and the Go runtime are extra, and the tail after listing
+                                holds about one more; encoders are admitted against an allowance of
+                                their own, so this sizes rows only. Default: 1/16 of the least of
+                                detected physical memory, the cgroup's limit and GOMEMLIMIT, at most
+                                1GiB (128MiB when none is detected; invocation.sort_buffer says
+                                which). Raise it when spill is heavy and memory is free; to use less
+                                memory lower it with --workers and --encoders.
       --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
                                 Set it when the output filesystem is shared or small. Past it, or at
                                 the reserve, listing waits instead of spilling.

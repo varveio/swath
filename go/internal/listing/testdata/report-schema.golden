@@ -129,8 +129,13 @@ requests.timeouts int64
 resources.budget_wait_ns int64
 resources.drain.ahead_wait_ns int64
 resources.drain.encoder_admission string
+resources.drain.encoder_allowance_bytes int64
+resources.drain.encoder_upload_bytes int64
+resources.drain.encoder_writer_bytes int64
 resources.drain.encoders_after_listing int
+resources.drain.encoders_after_listing_bound_by string
 resources.drain.encoders_at_start int
+resources.drain.encoders_at_start_bound_by string
 resources.drain.order_check_ns int64
 resources.drain.read_ahead.capped_waits int64
 resources.drain.read_ahead.decode_ns int64
