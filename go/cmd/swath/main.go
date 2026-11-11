@@ -15,8 +15,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
-	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -509,6 +507,7 @@ type options struct {
 	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
+	memProfileRate         int      // SWATH_MEMPROFILERATE, with memProfile
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
@@ -796,6 +795,11 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
+	if o.memProfile != "" {
+		if o.memProfileRate, err = memProfileRate(os.Getenv("SWATH_MEMPROFILERATE")); err != nil {
+			return o, "", usageError{err}
+		}
+	}
 	if (text != nil && text.Path == "" || o.totals != nil) && o.report == "-" {
 		return o, "", usageError{errReportStdout}
 	}
@@ -862,9 +866,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		cfg.Output.Dir = o.workDir
 		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds}
 	}
-	stopProfile, err := profile(o.cpuProfile, o.memProfile)
+	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(m) })
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
+	}
+	if prof != nil {
+		cfg.ListingDone = prof.listingDone
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -904,9 +911,18 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		if r.Requests != nil {
 			r.Requests.FailureWarnings, r.Requests.LogDropped = fw.warnings.Load(), dropped.Load()
 		}
+		r.Profiles = prof.account()
 		term.account(r, err)
 	}
 	cfg.Commit = term.commit // the commit and its account, one step against a forced exit
+	if prof != nil {
+		// The profiles' phase switch, which may block on a slow file,
+		// finishes before the commit's gate is taken, never inside it.
+		cfg.Commit = func(step func() error) error {
+			prof.wait()
+			return term.commit(step)
+		}
+	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
@@ -930,7 +946,10 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	tt.disp.stop()
-	stopProfile()
+	if prof != nil {
+		prof.stop()
+		sum.Profiles = prof.account() // the files' final status, for --report
+	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
@@ -1164,37 +1183,6 @@ func escapeControl(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// profile starts the CPU profile and arranges the allocation profile, the
-// files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths
-// resolved them), for development.
-func profile(cpu, mem string) (stop func(), err error) {
-	stops := []func(){}
-	if path := cpu; path != "" {
-		f, err := createNoFollow(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			return nil, err
-		}
-		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
-	}
-	if path := mem; path != "" {
-		runtime.MemProfileRate = 64 << 10
-		stops = append(stops, func() {
-			if f, err := createNoFollow(path); err == nil {
-				_ = pprof.Lookup("allocs").WriteTo(f, 0)
-				f.Close()
-			}
-		})
-	}
-	return func() {
-		for _, s := range stops {
-			s()
-		}
-	}, nil
 }
 
 // createNoFollow creates or truncates the profile file path, refusing a

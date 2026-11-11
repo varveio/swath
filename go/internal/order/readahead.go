@@ -20,7 +20,7 @@ import (
 // before it reaches them. The drainer plans them (planAhead: a cursor
 // walks the finished nodes ahead of it, in drain order, and queues each
 // spill marker it meets); idle workers claim the queued frames, read them
-// on their own descriptors (spiller.readAt) and decode them; the drainer
+// on their files' read handles (spiller.readAt) and decode them; the drainer
 // takes them from the head of the queue, in the order it planned them,
 // and only checks their order and hands them on. The tree order is the
 // queue order: the head of the queue must be the marker the drainer is
@@ -34,9 +34,9 @@ import (
 // lead is (leadLimit). Past its share a worker waits (waitAhead).
 
 const (
-	// aheadReads caps the frames being read at once: each holds a
-	// descriptor for the read (MaxSpillReaders counts them for descriptor
-	// admission) and a zstd decoder; eight decoders outrun one drainer
+	// aheadReads caps the frames being read at once: each leases its
+	// file's read handle, at most a descriptor (MaxSpillReaders counts them
+	// for descriptor admission) and a zstd decoder; eight decoders outrun one drainer
 	// (measurements: go/docs/internals/measurements.md).
 	aheadReads = 8
 	// aheadFrames caps the frames planned and not yet taken: enough to

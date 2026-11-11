@@ -15,45 +15,77 @@ import (
 
 // checkSidePaths refuses, before the source is opened, a file the command
 // writes beside its output (--report, the SWATH_CPUPROFILE and
-// SWATH_MEMPROFILE profiles) where it would replace managed output: the
+// SWATH_MEMPROFILE profiles and their phase files) where it would replace managed output: the
 // text output file; inside the dataset directory anything but an ordinary
 // name directly in it (not data/, the manifest, run.json, error.json, the
 // .swath workspace with its lock and journal, nor an earlier layout's
 // entry); and anything inside another directory this tool manages (a
-// dataset or an interrupted run, whose lock this run does not hold).
+// dataset or an interrupted run, whose lock this run does not hold); and
+// any of them that is another of them (one write would replace another).
 //
 // Each path is resolved once (sideDest) and o then names the resolved
 // destination: every writer (the report's, the profiles') writes there,
 // the pathname that was checked, not a second resolution of the original.
 func checkSidePaths(o *options) error {
 	o.cpuProfile, o.memProfile = os.Getenv("SWATH_CPUPROFILE"), os.Getenv("SWATH_MEMPROFILE")
+	var files []sideFile
 	for _, side := range []struct {
-		what string
-		path *string
+		what   string
+		path   *string
+		phases []string // the phase files written beside it (profile.go)
 	}{
-		{"--report", &o.report},
-		{"SWATH_CPUPROFILE", &o.cpuProfile},
-		{"SWATH_MEMPROFILE", &o.memProfile},
+		{"--report", &o.report, nil},
+		{"SWATH_CPUPROFILE", &o.cpuProfile, []string{phaseListing, phaseTail}},
+		{"SWATH_MEMPROFILE", &o.memProfile, []string{phaseListing, phaseExit}},
 	} {
 		if *side.path == "" || side.what == "--report" && *side.path == "-" { // - is stdout
 			continue
 		}
-		dest, err := checkSidePath(*o, *side.path)
-		if err == nil {
-			err = writable(dest)
-		}
-		if fi, lerr := os.Lstat(dest); err == nil && side.what != "--report" && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
-			// A profile is opened, which would follow the link to wherever
-			// it points by then (createNoFollow refuses it there too); the
-			// report is renamed over its name, which replaces a link.
-			err = fmt.Errorf("is a symbolic link: a profile is not written through one")
-		}
+		dest, err := checkSideFile(*o, *side.path, side.what != "--report")
 		if err != nil {
 			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
 		}
+		files = append(files, sideFile{side.what, *side.path, dest})
+		for _, ph := range side.phases {
+			if _, err = checkSideFile(*o, dest+ph, true); err != nil {
+				return fmt.Errorf("%s %s: %s: %w", side.what, *side.path, dest+ph, err)
+			}
+			files = append(files, sideFile{side.what, *side.path + ph, dest + ph})
+		}
 		*side.path = dest
 	}
+	// No two side files are one file: a later write would replace an
+	// earlier one (SWATH_CPUPROFILE=P and SWATH_MEMPROFILE=P.tail).
+	for i, a := range files {
+		for _, b := range files[i+1:] {
+			if samePlace(a.dest, b.dest) {
+				return fmt.Errorf("%s %s: is also %s's %s", b.what, b.given, a.what, a.given)
+			}
+		}
+	}
 	return nil
+}
+
+// sideFile is one file a run writes beside its output: the variable or
+// flag that names it, the name as given (a phase file's: FILE's with its
+// suffix) and its resolved destination.
+type sideFile struct{ what, given, dest string }
+
+// checkSideFile checks one side file's path (checkSidePath, writable) and
+// returns its destination; a profile's (profile) may not be a symbolic
+// link.
+func checkSideFile(o options, path string, profile bool) (string, error) {
+	dest, err := checkSidePath(o, path)
+	if err == nil {
+		err = writable(dest)
+	}
+	if fi, lerr := os.Lstat(dest); err == nil && profile && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		// A profile is opened, which would follow the link to wherever
+		// it points by then (createNoFollow refuses it there too); the
+		// report is renamed over its name, which replaces a link.
+		err = fmt.Errorf("is a symbolic link: a profile is not written through one")
+	}
+	return dest, err
 }
 
 // writable refuses a side file's destination that cannot be written: a

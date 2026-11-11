@@ -153,8 +153,11 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
-off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts; a resume's certificate validation not counted), `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`, and with durable spill
+off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
+`max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
+`peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
+the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
@@ -183,4 +186,14 @@ sample is dropped and the interval doubles), and the last at the end. Each of `s
 `inflight`, `limit` (the limiter's, 0 without one), `spill_bytes` (live), `free_disk_bytes` (absent without an
 output) and `rss_bytes` (the resident set now; Linux only, absent elsewhere). Absent for a run that stopped
 before listing.
+
+**Profiles** (`profiles`, development only). Present when `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE` is set
+([diagnostics.md](../internals/diagnostics.md#phase-profiles)): `phase_boundary_at`, the logical boundary between
+the phases (the event `timings.listing_done_at` records, microseconds later; absent when listing never finished),
+`cpu_cut_delay_ns` (from the boundary to the listing phase's CPU profile's stop: the listing file holds that much
+of the tail), `cpu_gap_ns` (from that stop to the tail's CPU profile's start, which neither covers),
+`mem_profile_rate` (bytes allocated per memory profile sample, 0: none), and `files`, each with `kind`
+(`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`), `path`, `status` (`planned`: written later in the run;
+`written`; `failed`, with `error`). `run.json`, written at the commit, has the tail's and the exit's files
+`planned`; `--report`, written as the process ends, has every file's final status.
 <!-- report:end -->

@@ -930,8 +930,8 @@ about 80 digits per call, not one per key). `BenchmarkExtrapolate`, one call ove
 
 | Case | Before | After | Change | B/op | allocs/op |
 |---|---:|---:|---:|---|---|
-| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19, unchanged |
-| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24, unchanged |
+| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19 → 18 |
+| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24 → 23 |
 
 The page and the cursor are scanned in place (no copy), every byte is marked in a 256-entry table eight bytes per
 step, and the alphabet's safety is checked once over the table instead of per byte (−33 % from the first two, a
@@ -1431,6 +1431,63 @@ upload, against the seconds of CPU a part's encoding takes. `TestMeasureRemoteOv
 run, and the remote runs' `upload_wait_ns` 0.48 to 0.60 s summed over the encoders (each part one request to
 the in-process fake). These are single-host smoke numbers; a real bucket's latency and bandwidth are not
 measured here.
+
+## Spill read handles on local trees, 2026-11-11
+
+**Local host, screening only.** A 4-vCPU, 8 GiB GCP VM, ext4 on a persistent disk, shared with other agents' builds
+and tests: the 1-minute load was 11 to 50 during every arm and the host swapped (5 GiB of swap in use), so trees
+listed warm went cold between runs. Wall times swing tenfold between repetitions of one arm in either binary and
+are not evidence; the counters (frames, ranges, opens per frame and per range, handle hits) are. Trees from
+`bench/localtree_gen.py`, runs by `bench/localtree.sh` (arms shuffled within each repetition, `--encoders 4`,
+default 16 workers, output and spill on ext4), tables by `bench/localtree_table.py`. Base is 0c856fc3, new is
+the read-handle cache (`order/spillhandles.go`) at the same base.
+
+**Baseline: the macOS pathology's shape reproduces on Linux, at a smaller sort buffer.** At 128 MiB and 1 GiB no
+tree of 1.2M files spilled with 16 workers (`smalldirs`, `bigdirs`); a probe at 128 MiB with 64 workers (the owner's
+Mac runs 64) spilled 19,406 rows in 5,656 frames (3.4 rows a frame, 3.0 opens a frame) with a 2.7 s tail. At 32 MiB:
+
+| tree (1.2M files, ext4) | wall | spilled rows | frames | ranges | rows/frame | opens | opens/frame | tail |
+|---|---|---|---|---|---|---|---|---|
+| `smalldirs` (200k directories of 3-9 files) | 255 s | 1,163,642 | 332,315 | 166,143 | 3.50 | 996,868 | 3.00 | 135 s |
+| `skewed` (70k directories, long names) | 70 s | 1,112,656 | 112,870 | 64,824 | 9.86 | 367,016 | 3.25 | 3.9 s |
+| owner's Mac, 128 MiB (for comparison) | 31 s | 1,019,908 | 194,277 | 116,859 | 5.25 | 622,180 | 3.20 | 13 s |
+
+Opens are two per frame plus two per range in the base (996,916 predicted, 996,868 counted on `smalldirs`): each
+frame is written on its own open and the trailer on another, each frame read at an offset on its own, and each
+trailer on a reader opened for it. On
+`smalldirs` the read-ahead's reads took 383 s summed over its 3 readers (2.3 ms a frame), so the tail is I/O
+bound on this host, not decode bound (0.6 s of decoding on the Mac). How much a run spills depends on
+how fast the walk outruns the drainer: on a cold or contended tree the same `smalldirs` arm spilled nothing.
+
+**After: read opens per range from 3 to about 1.5.** Medians of 5 interleaved repetitions (`smalldirs` 300k files,
+50k directories; `bigdirs` 1.2M files in 24 directories):
+
+| tree, buffer | bin | rows/frame | opens/frame | opens/range | hits | misses | user CPU | tail |
+|---|---|---|---|---|---|---|---|---|
+| `smalldirs` tmpfs, 8 MiB | base | 3.50 | 2.97 | 5.94 | – | – | 5.5 s | 2.9 s |
+| | new | 3.50 | 2.27 | 4.53 | 56,014 | 57,186 | 3.4 s | 3.0 s |
+| `smalldirs` tmpfs, 32 MiB | base | 3.48 | 2.99 | 6.04 | – | – | 1.6 s | 0.8 s |
+| | new | 3.51 | 2.22 | 4.45 | 18,684 | 17,442 | 1.8 s | 1.8 s |
+| `smalldirs` ext4, 8 MiB | base | 3.50 | 2.98 | 5.97 | – | – | 4.7 s | 0.8 s |
+| | new | 3.50 | 2.20 | 4.39 | 68,201 | 58,694 | 3.5 s | 0.7 s |
+| `smalldirs` ext4, 32 MiB | base | 3.49 | 3.00 | 6.00 | – | – | 2.0 s | 0.5 s |
+| | new | 3.50 | 2.03 | 4.05 | 21,403 | 19,257 | 2.1 s | 0.6 s |
+| `bigdirs` ext4, 8 MiB | base | 1,020 | 3.02 | 5.90 | – | – | 3.2 s | 0.5 s |
+| | new | 1,020 | 2.04 | 3.98 | 1,028 | 556 | 3.4 s | 0.3 s |
+| `bigdirs` ext4, 32 MiB | base | 1,020 | 3.02 | 5.90 | – | – | 3.1 s | 0.5 s |
+| | new | 1,019 | 2.39 | 4.66 | 356 | 490 | 3.0 s | 0.2 s |
+
+`skewed` (1.2M files, ext4, 32 MiB) has single runs only (its repetitions did not finish on the loaded host):
+base 5.66 and 5.95 opens a range (367,016 and 400,892 opens), new 4.17 (272,791 opens over 65,416 ranges;
+98,098 hits, 93,354 misses). At 128 MiB and 1 GiB nothing spilled in either binary (the cache is idle; walls within the noise). The writes'
+opens are unchanged (one per frame and one per trailer), so the floor with one read open per file is one per
+frame plus two per range: about 4.0 per range on both trees (two frames a range). `bigdirs` reaches it; on
+`smalldirs` the cache reaches 4.0 to 4.5, with 1.4 to 1.6 misses per range, because the read-ahead touches up to 64 planned frames (about 30 files) ahead of the drainer while at
+most 16 descriptors stay open, so a file's handle is often evicted (`evictions.capacity`) before the drainer
+reads its trailer. Evicting the most recently used instead (a probe, not kept) gave the same 4.3 to 4.4. User CPU
+fell by a quarter to a third at 8 MiB on `smalldirs` (fewer opens, and no 64 KiB reader buffer per trailer); no
+wall or tail change is measurable on this host. On the Mac, where the open and close were the expensive part
+(162 s of system CPU), the same counters predict about a third fewer opens; Batch and the Mac decide the wall.
 
 ## Smoke runs only
 

@@ -851,3 +851,32 @@ func TestRemoteLostRaceResumed(t *testing.T) {
 		t.Fatal("the winner's manifest changed")
 	}
 }
+
+// TestRemoteWithProfilesAndSpill: a bucket run with spill on calls the
+// listing-done hook (the phase profiles' boundary) once, accounts the
+// spill read handles of whatever it spilled, and commits the local run's
+// dataset.
+func TestRemoteWithProfilesAndSpill(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	d := newDestination(t, nil)
+	cfg := remoteConfig(url, filepath.Join(t.TempDir(), "work"), false, d.output("prof"))
+	cfg.Limits.Spill.Off = false
+	var done atomic.Int64
+	cfg.ListingDone = func() { done.Add(1) }
+	sum, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Load() != 1 {
+		t.Fatalf("the listing-done hook ran %d times", done.Load())
+	}
+	if sp := sum.Resources.Spill; sp == nil || sp.Rows > 0 && sp.ReadHandles.Hits+sp.ReadHandles.Misses == 0 {
+		t.Fatalf("no spill read-handle account: %+v", sp)
+	}
+	d.sameAsLocal(t, "profiles and spill", ref, "prof", true)
+}

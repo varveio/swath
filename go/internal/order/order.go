@@ -113,6 +113,11 @@ type Stats struct {
 	SpillFiles   int64 // ranges that spilled
 	SpillOpens   int64 // spill files opened (spiller.opens)
 	SpillPeak    int64 // peak live spill bytes
+	// SpillHandles is the spill read handles' account (spillhandles.go).
+	SpillHandles HandleStats
+	// SpillFrameBytes and SpillFrameRows are the rows frames written, by
+	// bytes and by rows.
+	SpillFrameBytes, SpillFrameRows SizeQuantiles
 	// SpillLogical is the spilled rows' logical bytes (schema.LogicalBytes):
 	// against SpillBytes, what the frame coding saved. SpillFormat names
 	// the frames ("delta", "plain", each optionally "+zstd").
@@ -614,6 +619,8 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles, st.SpillOpens = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load(), o.sp.opens.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
+		st.SpillHandles = o.sp.h.stats()
+		st.SpillFrameBytes, st.SpillFrameRows = o.sp.frameBytes.quantiles(), o.sp.frameRows.quantiles()
 		st.Drainer.ReplayDecode += time.Duration(o.sp.decodeNs.Load())
 		st.SpillLogical, st.SpillFormat, st.SpillDecodeRefused = o.sp.logical.Load(), o.sp.format(), o.sp.decodeRefused.Load()
 	}
@@ -724,6 +731,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		if o.sp != nil {
 			o.sp.cache.Stop()
+			o.sp.h.stop() // the cache keeps no handle past a stop
 		}
 		o.stopped.Store(true)
 		wake()
@@ -1480,17 +1488,38 @@ func (o *run[R, P]) drainNext(f *drainFrame[R, P], releaseEvery int64) (*node[R,
 }
 
 // closeNode finishes a drained node: a spilled node's trailer is read
-// (the count checked, the file deleted) and its items dropped.
+// (the count checked, the file deleted) and its items dropped. With no
+// reader open and only the trailer left (the read-ahead read every frame)
+// the trailer is read at its offset on the file's handle, as the segments
+// read it, with no reader (and its buffer) opened for it.
 func (o *run[R, P]) closeNode(n *node[R, P]) error {
 	if n.spill != nil {
 		f := n.spill
 		n.spill = nil
 		o.mu.Unlock()
-		rows, err := o.sp.next(f)
-		o.mu.Lock()
-		if err == nil && rows != nil {
-			err = errors.New("spill: frames after the last marker")
+		var err error
+		if f.r == nil && f.trailerAt > 0 && f.pos == f.trailerAt {
+			var rows int64
+			if rows, err = o.sp.trailerRows(f); err == nil && rows != f.read {
+				name := f.path
+				if f.d != nil {
+					name = f.d.name
+				}
+				err = fmt.Errorf("spill: %s holds %d rows, trailer says %d", name, f.read, rows)
+			}
+			if err == nil {
+				err = o.sp.drained(f)
+			} else {
+				o.sp.closeFile(f)
+			}
+		} else {
+			var rows []schema.Row[P]
+			rows, err = o.sp.next(f)
+			if err == nil && rows != nil {
+				err = errors.New("spill: frames after the last marker")
+			}
 		}
+		o.mu.Lock()
 		if err != nil {
 			return err
 		}
