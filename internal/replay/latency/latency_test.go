@@ -90,6 +90,14 @@ func TestPerEntryTerm(t *testing.T) {
 	if d := mustParse(t, "worker_page=16ms+0.05ms/entry", 0, 10).DelayEntries(WorkerPage, 0, 1000, 0); d != 6600*time.Microsecond {
 		t.Errorf("scaled: %v", d)
 	}
+	// A number's own sign stays with it: only a + that starts a /cp or
+	// /entry term separates terms.
+	for spec, want := range map[string]time.Duration{"worker_page=1e+3ms": time.Second, "worker_page=+3ms": 3 * time.Millisecond,
+		"worker_page=1e+1ms+1e+0ms/entry": 20 * time.Millisecond} {
+		if d := mustParse(t, spec, 0, 1).DelayEntries(WorkerPage, 0, 10, 0); d != want {
+			t.Errorf("%s over 10 entries: %v, want %v", spec, d, want)
+		}
+	}
 	for _, spec := range []string{"worker_page=1ms+1ms/entry+1ms/entry", "worker_page=1ms+1ms/entry+1ms/cp", "worker_page=1ms+fast/entry", "worker_page=1ms+"} {
 		if _, err := Parse(spec, 0, 1); err == nil {
 			t.Errorf("Parse(%q) accepted", spec)

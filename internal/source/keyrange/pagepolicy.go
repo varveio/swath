@@ -37,7 +37,10 @@ func GrowPage(maxPage int) func(PageHint) int {
 		if want <= float64(h.Nominal) {
 			return h.Nominal
 		}
-		return min(next, int(want))
+		if want >= float64(next) {
+			return next // before converting: a large estimate overflows int
+		}
+		return int(want)
 	}
 }
 

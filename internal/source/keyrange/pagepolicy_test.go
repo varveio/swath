@@ -36,6 +36,7 @@ func TestGrowPage(t *testing.T) {
 		{"frontier: keys listed, one page", PageHint{Asked: 1000, Full: 1, Rem: inf, Keys: 1000}, 1000},
 		{"frontier: keys listed, three pages", PageHint{Asked: 1000, Full: 3, Rem: inf, Keys: 3000}, 1500},
 		{"frontier: keys listed, long", PageHint{Asked: 2000, Full: 6, Rem: inf, Keys: 30000}, 4000},
+		{"an estimate past int's range", PageHint{Asked: 1000, Full: 1, Rem: math.Ldexp(1, 100), Keys: 1000}, 2000},
 	} {
 		c.h.Nominal = 1000
 		if got := grow(c.h); got != c.want {

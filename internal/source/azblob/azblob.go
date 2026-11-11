@@ -103,6 +103,11 @@ type Options struct {
 	// AllVersions lists every entry of each name (NewVersions): its
 	// versions, snapshots and soft-deleted blobs beside its current blob.
 	AllVersions bool
+	// PagePolicy is the experimental page policy (#449, diagnostic):
+	// fixed (two reads a page, as before #469), "" or one-read
+	// (order.Adapter.OneReadPerPage) or grow
+	// (one-read and keyrange.GrowPage up to client.MaxPageSize).
+	PagePolicy string
 	// FetchMetadata, FetchTags and FetchImmutability add the user
 	// metadata, the blob index tags, and the immutability policy and legal
 	// hold to each row (include=metadata, tags, immutabilitypolicy and
@@ -110,11 +115,6 @@ type Options struct {
 	// to read them, which a listing does not: without it every request
 	// fails.
 	FetchMetadata, FetchTags, FetchImmutability bool
-	// PagePolicy is the experimental page policy (#449, diagnostic):
-	// fixed (two reads a page, as before #469), "" or one-read
-	// (order.Adapter.OneReadPerPage) or grow
-	// (one-read and keyrange.GrowPage up to client.MaxPageSize).
-	PagePolicy string
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -222,11 +222,11 @@ type provider[P any] struct {
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace        string // how admission found the namespace flat (Stats.Namespace)
+	oneRead          bool   // the adapters read once per page (Options.PagePolicy)
+	trace            *rangeTrace
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
-	oneRead          bool // the adapters read once per page (Options.PagePolicy)
-	trace            *rangeTrace
 }
 
 // Range is the engine's range.
@@ -292,9 +292,6 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 	default:
 		return nil, fmt.Errorf("Azure Blob: --azure-page-policy %q: want %s, %s, %s or %s", opt.PagePolicy, pageFixed, pageOneRead, pageGrow, pageEstimate)
 	}
-	if p.trace, err = openRangeTrace(); err != nil {
-		return nil, err
-	}
 	if oracle != nil && oracle.shadow != nil && !eo.Sequential {
 		eo.PageFor = oracle.logged(eo.PageFor)
 		eo.PageMax = max(eo.PageMax, eo.PageSize)
@@ -306,6 +303,11 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 	}
 	e, err := keyrange.New(eo, p.description(), p.fetch)
 	if err != nil {
+		return nil, err
+	}
+	// After the options are accepted: a refused run leaves an earlier
+	// trace in place.
+	if p.trace, err = openRangeTrace(); err != nil {
 		return nil, err
 	}
 	p.Engine = e

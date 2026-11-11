@@ -53,6 +53,9 @@ type Options struct {
 }
 
 // ParseURL splits gs://bucket[/prefix].
+// maxResults: GCS returns at most 1,000 objects a request; --page-size goes to 5,000 for Azure.
+const maxResults = 1000
+
 func ParseURL(u string) (bucket, prefix string, err error) {
 	rest, ok := strings.CutPrefix(u, "gs://")
 	if !ok || rest == "" {
@@ -251,7 +254,7 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 // for complete generation groups and an exclusive upper name bound.
 func (p *provider[P]) input(q *keyrange.Query, versions bool) *client.ListInput {
 	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
-		StartOffset: q.After, PageToken: q.Token, MaxResults: q.Max, Versions: versions}
+		StartOffset: q.After, PageToken: q.Token, MaxResults: min(q.Max, maxResults), Versions: versions}
 	if versions && q.After != "" {
 		if start, ok := ExclusiveStart(q.After); ok {
 			in.StartOffset = start

@@ -79,7 +79,8 @@ func loadPageOracle(prefix string) (*pageOracle, error) {
 		return nil, nil
 	}
 	path, mode := spec, "grow"
-	if i := strings.LastIndexByte(spec, ':'); i >= 0 {
+	// A drive letter's colon (C:\keys.tsv) is the path's, not a mode's.
+	if i := strings.LastIndexByte(spec, ':'); i >= 0 && !(i == 1 && len(spec) > 2 && (spec[2] == '\\' || spec[2] == '/')) {
 		path, mode = spec[:i], spec[i+1:]
 	}
 	if mode != "grow" && mode != "trim" && mode != "shadow" {

@@ -263,7 +263,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
 | `groups.overfetch_rows` | count | rows | groups | rows above a range end read to close its last key group (excludes resume suppression and split relisting) |
 | `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
-| `page.grown` | count | requests | page_policy | range requests that asked for more than the nominal page size (--page-growth or an oracle) |
+| `page.grown` | count | requests | page_policy | range requests that asked for more than the nominal page size (--azure-page-policy grow or estimate, or an oracle) |
 | `page.trimmed` | count | requests | page_policy | range requests that asked for less than the nominal page size (an oracle) |
 | `page.asked_keys` | count | keys | page_policy | page sizes the range requests asked for, summed |
 | `page.growth_reset` | count | requests | page_policy | range requests back at the nominal size after a grown one: a short page, or too few keys estimated left |

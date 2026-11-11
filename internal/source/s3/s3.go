@@ -73,6 +73,9 @@ type Options struct {
 }
 
 // ParseURL splits s3://bucket/prefix.
+// maxKeys: S3 returns at most 1,000 keys a request (ListObjectsV2, ListObjectVersions); --page-size goes to 5,000 for Azure.
+const maxKeys = 1000
+
 func ParseURL(u string) (bucket, prefix string, err error) {
 	rest, ok := strings.CutPrefix(u, "s3://")
 	if !ok || rest == "" {
@@ -265,7 +268,7 @@ func (p *provider[P]) Stats() Stats {
 // the first request only.
 func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
 	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
-		ContinuationToken: q.Token, MaxKeys: q.Max, FetchOwner: p.opt.FetchOwner && !q.Probe}
+		ContinuationToken: q.Token, MaxKeys: min(q.Max, maxKeys), FetchOwner: p.opt.FetchOwner && !q.Probe}
 	if q.Token == "" {
 		in.StartAfter = q.After
 	}

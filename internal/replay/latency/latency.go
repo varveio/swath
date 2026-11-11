@@ -240,8 +240,26 @@ func parseShape(s string) (Shape, error) {
 	return 0, fmt.Errorf("unknown latency shape '%s' (worker_page|pivot_probe|structure_probe)", s)
 }
 
+// splitTerms splits a delay at each + between terms, leaving a number's own
+// sign with it: a leading one (+3ms) and an exponent's (1e+3ms).
+func splitTerms(v string) []string {
+	var terms []string
+	start := 0
+	for i := 1; i < len(v); i++ {
+		if v[i] != '+' || i == start {
+			continue
+		}
+		if c := v[i-1]; (c == 'e' || c == 'E') && i >= 2 && (v[i-2] >= '0' && v[i-2] <= '9' || v[i-2] == '.') {
+			continue
+		}
+		terms = append(terms, v[start:i])
+		start = i + 1
+	}
+	return append(terms, v[start:])
+}
+
 func parseDelay(s Shape, v string) (Delay, error) {
-	terms := strings.Split(v, "+")
+	terms := splitTerms(v)
 	b, err := parseDuration(strings.TrimSpace(terms[0]))
 	if err != nil {
 		return Delay{}, err

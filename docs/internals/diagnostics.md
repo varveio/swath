@@ -59,8 +59,8 @@ Diagnostics:
                               at its first read's last row instead of reading again for the rest;
                               grow adds pages that double after full pages, up to 5,000, but to at
                               most half the keys estimated left; estimate asks the finite remainder
-                              estimate plus two, 1,000 to 5,000. grow and estimate read once per
-                              page. The default is one-read.
+                              estimate plus two, from --page-size to 5,000. grow and estimate read
+                              once per page. The default is one-read.
 ```
 <!-- diag-list:end -->
 
@@ -92,8 +92,8 @@ Diagnostics:
                         per page became the default; one-read (the default) ends a page at its first
                         read's last row instead of reading again for the rest; grow adds pages that
                         double after full pages, up to 5,000, but to at most half the keys estimated
-                        left; estimate asks the finite remainder estimate plus two, 1,000 to 5,000.
-                        grow and estimate read once per page. The default is one-read.
+                        left; estimate asks the finite remainder estimate plus two, from --page-size
+                        to 5,000. grow and estimate read once per page. The default is one-read.
 ```
 <!-- diag-count:end -->
 

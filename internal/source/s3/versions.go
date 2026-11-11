@@ -192,7 +192,7 @@ func parseVersionsToken(tok string) (key, versionID string, err error) {
 // previous page's token carries (version-id-marker only when that page
 // returned one).
 func versionsInput(bucket string, q *keyrange.Query) (*client.VersionsInput, error) {
-	in := &client.VersionsInput{Bucket: bucket, Prefix: q.Prefix, Delimiter: q.Delimiter, MaxKeys: q.Max}
+	in := &client.VersionsInput{Bucket: bucket, Prefix: q.Prefix, Delimiter: q.Delimiter, MaxKeys: min(q.Max, maxKeys)}
 	if q.Token == "" {
 		in.KeyMarker = q.After
 		return in, nil

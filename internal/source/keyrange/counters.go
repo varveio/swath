@@ -307,7 +307,7 @@ var Counters = table([numCounters]counters.Def{
 	cGroupsOverfetchRows:          d("groups.overfetch_rows", counters.Count, "rows", "rows above a range end read to close its last key group (excludes resume suppression and split relisting)", "groups"),
 	cGroupsMaxRows:                d("groups.max_rows", counters.Max, "rows", "the largest observed key group in emitted or held rows (all emission paths, before filters)", "groups"),
 	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
-	cPageGrown:                    d("page.grown", counters.Count, "requests", "range requests that asked for more than the nominal page size (--page-growth or an oracle)", "page_policy"),
+	cPageGrown:                    d("page.grown", counters.Count, "requests", "range requests that asked for more than the nominal page size (--azure-page-policy grow or estimate, or an oracle)", "page_policy"),
 	cPageTrimmed:                  d("page.trimmed", counters.Count, "requests", "range requests that asked for less than the nominal page size (an oracle)", "page_policy"),
 	cPageAskedKeys:                d("page.asked_keys", counters.Count, "keys", "page sizes the range requests asked for, summed", "page_policy"),
 	cPageGrowthReset:              d("page.growth_reset", counters.Count, "requests", "range requests back at the nominal size after a grown one: a short page, or too few keys estimated left", "page_policy"),
