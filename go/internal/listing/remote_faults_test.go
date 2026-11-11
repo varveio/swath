@@ -813,43 +813,46 @@ func TestRemoteFinalizeRetried(t *testing.T) {
 // TestRemoteLostRaceResumed: a run killed after saving its candidate, whose
 // prefix another run then commits, deletes its own uploads when resumed
 // (and on a later resume when a delete failed), and reports the lost race.
+// Per provider.
 func TestRemoteLostRaceResumed(t *testing.T) {
-	datasettest.RequireJournal(t)
-	url := crashBucket(t)
-	d := newDestination(t, gcsProvider, nil)
-	ws := filepath.Join(t.TempDir(), "work")
-	crashRemote(t, url, ws, d.output("lostresume"), false, "candidate-saved", 1)
-	d.Put("lostresume/"+dataset.ManifestName, []byte(`{"other":1}`))
-	ours := func() int {
-		n := 0
-		for _, name := range d.Names() {
-			if strings.HasPrefix(name, "lostresume/data/") {
-				n++
+	eachProvider(t, func(t *testing.T, p provider) {
+		datasettest.RequireJournal(t)
+		url := crashBucket(t)
+		d := newDestination(t, p, nil)
+		ws := filepath.Join(t.TempDir(), "work")
+		crashRemote(t, url, ws, d.output("lostresume"), false, "candidate-saved", 1)
+		d.Put("lostresume/"+dataset.ManifestName, []byte(`{"other":1}`))
+		ours := func() int {
+			n := 0
+			for _, name := range d.Names() {
+				if strings.HasPrefix(name, "lostresume/data/") {
+					n++
+				}
 			}
+			return n
 		}
-		return n
-	}
-	if ours() == 0 {
-		t.Fatal("no part uploaded before the kill")
-	}
-	d.SetFault(func(op, _ string, after bool) int {
-		if op == gcsfake.OpDelete && !after {
-			return http.StatusForbidden
+		if ours() == 0 {
+			t.Fatal("no part uploaded before the kill")
 		}
-		return 0
+		d.SetFault(func(op, _ string, after bool) int {
+			if op == opDelete && !after {
+				return http.StatusForbidden
+			}
+			return 0
+		})
+		rep, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
+		if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.OrphansLeft == 0 || ours() == 0 {
+			t.Fatalf("%v; %+v", err, rep.Output.Remote)
+		}
+		d.SetFault(nil)
+		rep, err = Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
+		if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.Commit != "lost_race" || rep.Output.Remote.OrphansDeleted == 0 || ours() != 0 {
+			t.Fatalf("%v; %+v; %d parts left", err, rep.Output.Remote, ours())
+		}
+		if o, _ := d.Object("lostresume/" + dataset.ManifestName); string(o) != `{"other":1}` {
+			t.Fatal("the winner's manifest changed")
+		}
 	})
-	rep, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
-	if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.OrphansLeft == 0 || ours() == 0 {
-		t.Fatalf("%v; %+v", err, rep.Output.Remote)
-	}
-	d.SetFault(nil)
-	rep, err = Run(context.Background(), remoteConfig(url, ws, true, d.output("lostresume")))
-	if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.Commit != "lost_race" || rep.Output.Remote.OrphansDeleted == 0 || ours() != 0 {
-		t.Fatalf("%v; %+v; %d parts left", err, rep.Output.Remote, ours())
-	}
-	if o, _ := d.Object("lostresume/" + dataset.ManifestName); string(o) != `{"other":1}` {
-		t.Fatal("the winner's manifest changed")
-	}
 }
 
 // TestRemoteWithProfilesAndSpill: a bucket run with spill on calls the
@@ -857,26 +860,28 @@ func TestRemoteLostRaceResumed(t *testing.T) {
 // spill read handles of whatever it spilled, and commits the local run's
 // dataset.
 func TestRemoteWithProfilesAndSpill(t *testing.T) {
-	datasettest.RequireJournal(t)
-	url := crashBucket(t)
-	ref := filepath.Join(t.TempDir(), "ref")
-	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
-		t.Fatal(err)
-	}
-	d := newDestination(t, gcsProvider, nil)
-	cfg := remoteConfig(url, filepath.Join(t.TempDir(), "work"), false, d.output("prof"))
-	cfg.Limits.Spill.Off = false
-	var done atomic.Int64
-	cfg.ListingDone = func() { done.Add(1) }
-	sum, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if done.Load() != 1 {
-		t.Fatalf("the listing-done hook ran %d times", done.Load())
-	}
-	if sp := sum.Resources.Spill; sp == nil || sp.Rows > 0 && sp.ReadHandles.Hits+sp.ReadHandles.Misses == 0 {
-		t.Fatalf("no spill read-handle account: %+v", sp)
-	}
-	d.sameAsLocal(t, "profiles and spill", ref, "prof", true)
+	eachProvider(t, func(t *testing.T, p provider) {
+		datasettest.RequireJournal(t)
+		url := crashBucket(t)
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		d := newDestination(t, p, nil)
+		cfg := remoteConfig(url, filepath.Join(t.TempDir(), "work"), false, d.output("prof"))
+		cfg.Limits.Spill.Off = false
+		var done atomic.Int64
+		cfg.ListingDone = func() { done.Add(1) }
+		sum, err := Run(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done.Load() != 1 {
+			t.Fatalf("the listing-done hook ran %d times", done.Load())
+		}
+		if sp := sum.Resources.Spill; sp == nil || sp.Rows > 0 && sp.ReadHandles.Hits+sp.ReadHandles.Misses == 0 {
+			t.Fatalf("no spill read-handle account: %+v", sp)
+		}
+		d.sameAsLocal(t, "profiles and spill", ref, "prof", true)
+	})
 }

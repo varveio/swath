@@ -39,6 +39,7 @@ const dstBucket = "dst"
 const (
 	opCreate = "create" // the request that creates an object
 	opRead   = "read"   // a ranged read
+	opDelete = "delete" // a delete
 )
 
 // bucketFake is a provider's fake bucket as the tests use it.
