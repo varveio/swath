@@ -915,7 +915,7 @@ func TestAdmissionBlockedEndpointSigned(t *testing.T) {
 		case c.admitted && err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		case c.admitted:
-			if n := src.(*opened).p.Stats().Namespace; n != "filesystem endpoint blocked" {
+			if n := src.(*opened[Object]).p.Stats().Namespace; n != "filesystem endpoint blocked" {
 				t.Fatalf("%s: admitted by %q", c.name, n)
 			}
 		case err == nil || objhttp.Classify(err) != objhttp.ClassAuth:
