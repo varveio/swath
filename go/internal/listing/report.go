@@ -26,7 +26,11 @@ import (
 // and requests.failure_warnings. 5: invocation.row_budget_bytes is
 // invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
 // (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens.
+// and opens, profiles (the development profiles, SWATH_CPUPROFILE and
+// SWATH_MEMPROFILE), resources.spill.read_handles (the spill read handles'
+// hits, misses and evictions) and frame_bytes and frame_rows (the row
+// frames by size), and output.remote (a dataset written to a bucket: its
+// destination, uploads, retries, commit and orphan cleanup).
 const ReportVersion = 5
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -62,6 +66,9 @@ type Report struct {
 	// History is the run's progress, sampled (at most HistoryCap samples;
 	// nil for a run that stopped before listing).
 	History *History `json:"history,omitempty"`
+	// Profiles is the development profiles this run writes
+	// (SWATH_CPUPROFILE, SWATH_MEMPROFILE; nil when neither is set).
+	Profiles *Profiles `json:"profiles,omitempty"`
 
 	report    *source.Report
 	sampler   *sampler        // the history's, stopped by finish
@@ -73,6 +80,50 @@ type Report struct {
 // Live is the source's request account when the report was finished
 // (zero for a source that makes no requests).
 func (r *Report) Live() source.Requests { return r.live }
+
+// Profiles is the development profiles a run writes (SWATH_CPUPROFILE,
+// SWATH_MEMPROFILE), split at the end of listing so the listing and the
+// drain's tail after it are profiled apart. Diagnostics only: the caller
+// (cmd/swath) fills it.
+type Profiles struct {
+	// PhaseBoundaryAt is the logical boundary between the phases: the
+	// event timings.listing_done_at records (the provider finished), taken
+	// microseconds after it. Absent when listing never finished (a failed
+	// or stopped run, a dry run): the listing-phase files then hold the
+	// whole run and no tail file is written.
+	PhaseBoundaryAt time.Time `json:"phase_boundary_at,omitzero"`
+	// CPUCutDelayNs is from the boundary to the listing phase's CPU
+	// profile's stop (the phase switch runs on a goroutine of its own): the
+	// listing file holds this much of the tail too. CPUGapNs is from that
+	// stop to the tail's CPU profile's start, which neither covers: Go runs
+	// one CPU profile at a time, and the listing phase's is written out
+	// before the tail's starts. Both absent until the switch has run, the
+	// gap also when the tail's profile could not start.
+	CPUCutDelayNs *int64 `json:"cpu_cut_delay_ns,omitempty"`
+	CPUGapNs      *int64 `json:"cpu_gap_ns,omitempty"`
+	// MemProfileRate is runtime.MemProfileRate during the run (bytes
+	// allocated per sample, 0: none sampled; absent without a memory
+	// profile).
+	MemProfileRate *int `json:"mem_profile_rate,omitempty"`
+	// Files are the profile files, in the order cpu_listing, cpu_tail,
+	// mem_listing, mem_exit.
+	Files []ProfileFile `json:"files"`
+}
+
+// ProfileFile is one profile file: its Kind (cpu_listing: the CPU profile
+// from the run's start to the phase switch, or to the end without one;
+// cpu_tail: from the switch to the end; mem_listing, mem_exit: the
+// allocation profile, cumulative from the start, as of the latest garbage
+// collection before the switch and before the end), its Path, and its
+// Status: planned (to be written later in the run: run.json, written at
+// the commit, names the tail's and the exit's files so), written, or
+// failed, with the Error.
+type ProfileFile struct {
+	Kind   string `json:"kind"`
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
 
 // Requests is an invocation's HTTP account. HTTPAttempts is the one
 // request count: every HTTP attempt sent (pages, probes, client retries,
@@ -200,6 +251,10 @@ const (
 	ClassDeadline    = "deadline"
 	ClassInterrupted = "interrupted"
 	ClassTerminated  = "terminated"
+	// ClassUnresolved: a dataset in a bucket whose manifest's creation
+	// could not be confirmed or refuted; everything is kept, and a resume
+	// creates the same manifest again.
+	ClassUnresolved = "unresolved"
 )
 
 // Outcome is how the run ended.
@@ -305,6 +360,9 @@ type Output struct {
 	// Totals is swath du's per-prefix totals: the depth, the prefixes and
 	// their cap, the column summed and the total (nil without them).
 	Totals *totals.Stats `json:"totals,omitempty"`
+	// Remote is a remote dataset's account: its destination, uploads,
+	// commit and orphan cleanup (nil for a local dataset).
+	Remote *Remote `json:"remote,omitempty"`
 }
 
 // TextOutput is a text run's destination and what reached it. A run that
@@ -343,10 +401,10 @@ type TextCompressor struct {
 // Why a text output's compressor runs the jobs it does
 // (TextCompressor.JobsReason).
 const (
-	JobsAsked     = "encoders"   // --encoders (Limits.Encoders) set it
-	JobsCores     = "cores"      // GOMAXPROCS: the budget carries more
-	JobsRowBudget = "row_budget" // the row budget's allowance carries fewer than GOMAXPROCS (admitTextJobs)
-	JobsGzip      = "gzip"       // gzip: one stream
+	JobsAsked     = "encoders"          // --encoders (Limits.Encoders) set it
+	JobsCores     = "cores"             // GOMAXPROCS: the encoder allowance carries more
+	JobsAllowance = "encoder_allowance" // the encoder allowance carries fewer than GOMAXPROCS (admitTextJobs)
+	JobsGzip      = "gzip"              // gzip: one stream
 )
 
 // Resources the run used. Wait times sum over goroutines.
@@ -425,6 +483,17 @@ type Drain struct {
 	EncodersAtStart      int    `json:"encoders_at_start,omitempty"`
 	EncodersAfterListing int    `json:"encoders_after_listing,omitempty"`
 	EncoderAdmission     string `json:"encoder_admission,omitempty"`
+	// What the encoders were admitted against: the encoder allowance (the
+	// default row budget's share of the memory found, whatever
+	// --sort-buffer says), each encoder's price (its writer, and for a
+	// dataset in a bucket its upload buffer), and what bound the count at
+	// start and after listing (Bound*: memory, cpu, descriptors, minimum,
+	// explicit).
+	EncoderAllowanceBytes       int64  `json:"encoder_allowance_bytes,omitempty"`
+	EncoderWriterBytes          int64  `json:"encoder_writer_bytes,omitempty"`
+	EncoderUploadBytes          int64  `json:"encoder_upload_bytes,omitempty"`
+	EncodersAtStartBoundBy      string `json:"encoders_at_start_bound_by,omitempty"`
+	EncodersAfterListingBoundBy string `json:"encoders_after_listing_bound_by,omitempty"`
 }
 
 // Why the encoders after listing are what they are (Drain.EncoderAdmission).

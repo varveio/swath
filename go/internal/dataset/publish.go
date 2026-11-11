@@ -56,8 +56,34 @@ type PartInfo struct {
 
 // Part is a written part at run time: its file and its PartInfo.
 type Part struct {
-	Path string // temporary path while unpublished, the final path once published
+	// Path is a local part's temporary path while unpublished, its final
+	// path once published; a remote part's object name, relative to the
+	// dataset root (RemotePartName).
+	Path string
+	// Identity is a remote part's object version (the GCS generation),
+	// "" for a local part.
+	Identity string
+	// Columns and CreatedBy are the part's footer columns (the key first)
+	// and created_by, as written: what a resume needs to reproduce it
+	// (a remote part's claim receipt holds them).
+	Columns   []string
+	CreatedBy string
 	PartInfo
+}
+
+// Artifact is where one part's bytes go: the SeekParquet part writer's
+// file (Write, a Sync that makes the bytes durable, Close) and the part's
+// name. A local artifact is a file under the workspace; a remote one an
+// upload, which Sync completes and Close aborts unless Sync succeeded.
+type Artifact interface {
+	Write(p []byte) (int, error)
+	Sync() error
+	Close() error
+	// Name is the part's Path (Part.Path).
+	Name() string
+	// Identity is the written object's version once Sync succeeded ("" for
+	// a local file).
+	Identity() string
 }
 
 // SegmentPlan is a sink's cut rule for the rows still to come, as the
@@ -81,9 +107,10 @@ type InvariantError struct{ Reason string }
 
 func (e *InvariantError) Error() string { return "dataset invariant violated: " + e.Reason }
 
-// Check is the publication gate: dense ordinals (part i at TempPath i, or
-// at its final name once published early), strictly ascending disjoint key
-// ranges, and rows written == rows routed.
+// Check is the publication gate: dense ordinals (part i at TempPath i, at
+// its final name once published early, or a remote part's object named for
+// ordinal i), strictly ascending disjoint key ranges, and rows written ==
+// rows routed.
 func Check(parts []Part, rows int64) error {
 	var n int64
 	for i, p := range parts {
@@ -263,22 +290,14 @@ func WriteReport(out string, v any) error {
 // the same step, or refuses it (an error without calling install).
 func Publish(out string, meta Meta, parts []Part, commit func(install func() error) error) error {
 	data := filepath.Join(out, DataDir)
-	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
-		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
-	if m.Coverage.Exclusions == nil {
-		m.Coverage.Exclusions = []string{}
-	}
-	if m.Coverage.Filters == nil {
-		m.Coverage.Filters = []string{}
-	}
 	for i, p := range parts {
 		if final := filepath.Join(data, PartName(i)); p.Path != final {
 			if err := os.Rename(p.Path, final); err != nil {
 				return fmt.Errorf("publish part %d: %w", i, err)
 			}
 		}
-		m.Parts = append(m.Parts, ManifestPart{Path: DataDir + "/" + PartName(i), PartInfo: p.PartInfo})
 	}
+	m := newManifest(meta, parts, func(i int, _ Part) string { return DataDir + "/" + PartName(i) })
 	if err := syncDir(data); err != nil {
 		return fmt.Errorf("sync data directory: %w", err)
 	}
@@ -296,10 +315,15 @@ func Publish(out string, meta Meta, parts []Part, commit func(install func() err
 	return faults.At("manifest")
 }
 
-// Committed reports whether out holds a committed dataset (its manifest).
+// Committed reports whether out holds a committed dataset (its
+// manifest), or is the work directory of a remote dataset committed (a
+// commit marker, RemoteCommitName, that parses as one).
 func Committed(out string) bool {
-	fi, err := os.Stat(filepath.Join(out, ManifestName))
-	return err == nil && fi.Mode().IsRegular()
+	if fi, err := os.Stat(filepath.Join(out, ManifestName)); err == nil && fi.Mode().IsRegular() {
+		return true
+	}
+	_, err := markerAt(out)
+	return err == nil
 }
 
 func writeJSON(dir, name string, v any) error {

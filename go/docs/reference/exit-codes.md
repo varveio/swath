@@ -6,10 +6,10 @@ directory, `error.json` carry the same code with its class and cause.
 | Code | Class | Meaning | Resumable |
 |---|---|---|---|
 | 0 | `completed` | the dataset is committed, the text rows or totals are written, or the reader closed stdout early (`\| head`); also `swath resume` on a dataset that is already complete | – |
-| 1 | `fatal`, `incomplete` | a failure a resume will not fix: access denied, no such bucket, credentials that do not load, another swath process owning the output, an invalid page from the service (`cause` `protocol`), more than 100,000 parts (`part_limit`), an output layout swath did not make (`unsafe_layout`), more prefixes than `--max-prefixes` (`prefix_limit`); `incomplete`: a dataset committed with partial coverage | no |
-| 2 | `usage`, `refused` | `usage`: the command line does not parse, or names an unknown scheme. `refused`: something the caller must fix before anything runs: a non-empty `-o` directory without `--overwrite`, `--overwrite` on a directory that is not a swath dataset, a new run over an interrupted one, an output that is or contains the listed tree, `--overwrite` of an output inside it, a resume whose identity changed or that has nothing to resume, an S3 directory bucket | `refused` leaves the output as it was: an interrupted run there can still be resumed |
+| 1 | `fatal`, `incomplete` | a failure a resume will not fix: access denied, no such bucket, credentials that do not load, another swath process owning the output, an invalid page from the service (`cause` `protocol`), more than 100,000 parts (`part_limit`), an output layout swath did not make (`unsafe_layout`), more prefixes than `--max-prefixes` (`prefix_limit`); for a dataset in a bucket, another run's manifest created first (`lost_race`), a retained part changed in the bucket (`remote_altered`), a saved manifest an earlier attempt may still create naming other parts (`candidate_mismatch`); `incomplete`: a dataset committed with partial coverage | no |
+| 2 | `usage`, `refused` | `usage`: the command line does not parse, or names an unknown scheme. `refused`: something the caller must fix before anything runs: a non-empty `-o` directory without `--overwrite`, `--overwrite` on a directory that is not a swath dataset, a new run over an interrupted one, an output that is or contains the listed tree, `--overwrite` of an output inside it, a resume whose identity changed or that has nothing to resume, an S3 directory bucket, a bucket or container `-o` whose prefix already holds a dataset or overlaps the listed source | `refused` leaves the output as it was: an interrupted run there can still be resumed |
 | 74 | `disk_full` | a part, a journal record or the manifest could not be written: the filesystem is full (`cause` `no_space`) | yes, once there is space |
-| 75 | `stuck` | no progress for `--stall-timeout` (10 minutes by default; a warning at half) | yes |
+| 75 | `stuck`, `unresolved` | `stuck`: no progress for `--stall-timeout` (10 minutes by default; a warning at half). `unresolved` (`cause` `commit_unresolved`): a dataset in a bucket whose manifest's creation could neither be confirmed nor refuted; every part is kept | yes |
 | 124 | `deadline` | `--max-duration` reached before the output was finished | yes |
 | 130 | `interrupted` | SIGINT | yes |
 | 143 | `terminated` | SIGTERM | yes |
@@ -27,7 +27,10 @@ The `cause` of exit 75 says what rose while nothing progressed:
 | `stuck_no_rows` | none of these: requests failing or hanging, or a stopped pipeline |
 
 The other causes are the provider's failure class (`auth`, `access_denied`, `throttle`, `timeout`, `parse`,
-`unsupported`), `protocol`, `no_space` and the limits named above.
+`unsupported`), `protocol`, `no_space`, the limits named above, and a dataset in a bucket's `commit_unresolved`,
+`lost_race`, `remote_altered` and `candidate_mismatch`. A destination that keeps failing an upload past its
+retries ends the run `fatal`; its journal is intact, and `swath resume DIR` continues it once the destination
+answers.
 
 ## What a supervisor does with each code
 
@@ -35,7 +38,7 @@ The other causes are the provider's failure class (`auth`, `access_denied`, `thr
 |---|---|
 | 0 | done |
 | 130, 143 | `swath resume DIR --report NEW-FILE` |
-| 75 | resume once; a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space) |
+| 75 | resume once; a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
 | 74 | free space, or move the directory to a larger disk, then `swath resume DIR` |
 | 124 | resume only within a separate budget of attempts or total time: a source that keeps a run busy without finishing reaches 124 on every attempt; past the budget, a person |
 | 1, 2 | a person: a resume will not fix it |

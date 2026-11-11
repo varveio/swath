@@ -316,6 +316,25 @@ func TestSegmentsFailureClosesNoPart(t *testing.T) {
 	}
 }
 
+// heldUntilOthersDone holds f's slow range after its first page until
+// every other range is done, trailers written ("one-range-open"), not
+// merely emitted (f.left): listing then finishes right after the slow
+// range, before the drainer can reach the bad sibling. Released on
+// emission, the siblings past the bad one could still be writing their
+// trailers while the drainer replayed up to it; slow file writes (macOS,
+// Windows) or a faster drain let the order guard fire before listing was
+// done, so the segments never engaged (listing_active).
+func heldUntilOthersDone(t *testing.T, f *frontier) {
+	f.hold = make(chan struct{})
+	var once sync.Once
+	restore := SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			once.Do(func() { close(f.hold) })
+		}
+	})
+	t.Cleanup(restore)
+}
+
 // badFrontier lists sibling bad with sibling bad-1's keys: each range is
 // ascending, the stream repeats a range (a broken provider).
 type badFrontier struct {
@@ -341,8 +360,7 @@ func TestSegmentsSeamError(t *testing.T) {
 		withProcs(t, procs)
 		for _, limit := range []int64{2000, 60_000, 1 << 30} {
 			f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
-			f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-			f.left.Store(int64(f.siblings))
+			heldUntilOthersDone(t, f)
 			s := &partSink{limit: limit, encoders: 4}
 			st, err := Run[fr, tp](context.Background(), badFrontier{f, 30}, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
 			var inv *dataset.InvariantError
@@ -367,8 +385,7 @@ func TestSegmentsDescentAtASeam(t *testing.T) {
 	anyShare(t)
 	withProcs(t, 5)
 	f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	heldUntilOthersDone(t, f)
 	s := &partSink{limit: 1 << 40, maxRows: 200, encoders: 4}
 	st, err := Run[fr, tp](context.Background(), badFrontier{f, 30}, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
 	if st.Segments.Reason != SegmentEngaged || st.Segments.Segments < 2 {

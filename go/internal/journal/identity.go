@@ -31,6 +31,29 @@ type Identity struct {
 	// Filters are the row filters' descriptions (package filter), in
 	// order; none for an unfiltered run.
 	Filters []string `json:"filters,omitempty"`
+	// Destination is a remote dataset's root (nil for a local dataset):
+	// where its parts and manifest go is as fixed as how they are cut.
+	Destination *Destination `json:"destination,omitempty"`
+}
+
+// Destination is a remote dataset's frozen root: the provider ("gs", "s3"
+// or "az"), the Azure storage account ("" for another provider), the
+// bucket (or container), the literal prefix ("" or ending in "/"), the
+// effective endpoint ("" for the provider's default; an emulator's host
+// when the environment named one), the region (S3's, as resolved; "" for
+// another) and the layout version (dataset.RemoteLayout). It holds no
+// credential: credentials are resolved again on a resume.
+type Destination struct {
+	Provider string `json:"provider"`
+	Account  string `json:"account,omitempty"`
+	Bucket   string `json:"bucket"`
+	Prefix   string `json:"prefix"`
+	Endpoint string `json:"endpoint,omitempty"`
+	// Emulator says Endpoint is an emulator's host, reached without
+	// credentials (STORAGE_EMULATOR_HOST, resolved when the run started).
+	Emulator bool   `json:"emulator,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Layout   string `json:"layout"`
 }
 
 // Redacted returns a diagnostic copy, including for journals written before
@@ -132,6 +155,35 @@ func Check(stored, requested Identity) error {
 	case !slices.Equal(stored.Filters, requested.Filters):
 		return &MismatchError{"filters", fmt.Sprintf("%q", stored.Filters), fmt.Sprintf("%q", requested.Filters)}
 	}
+	return checkDestination(stored.Destination, requested.Destination)
+}
+
+// checkDestination compares the frozen destinations (nil: a local
+// dataset).
+func checkDestination(stored, requested *Destination) error {
+	show := func(d *Destination) string {
+		if d == nil {
+			return "a local dataset"
+		}
+		if d.Account != "" {
+			return d.Provider + "://" + d.Account + "/" + d.Bucket + "/" + d.Prefix
+		}
+		return d.Provider + "://" + d.Bucket + "/" + d.Prefix
+	}
+	switch {
+	case stored == nil && requested == nil:
+		return nil
+	case stored == nil || requested == nil:
+		return &MismatchError{"destination", show(stored), show(requested)}
+	case stored.Provider != requested.Provider || stored.Account != requested.Account || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
+		return &MismatchError{"destination", show(stored), show(requested)}
+	case stored.Endpoint != requested.Endpoint || stored.Emulator != requested.Emulator:
+		return &MismatchError{"endpoint", redactEndpoint(stored.Endpoint), redactEndpoint(requested.Endpoint)}
+	case stored.Region != requested.Region:
+		return &MismatchError{"destination region", stored.Region, requested.Region}
+	case stored.Layout != requested.Layout:
+		return &MismatchError{"destination layout", stored.Layout, requested.Layout}
+	}
 	return nil
 }
 
@@ -164,6 +216,22 @@ func (id Identity) Hash() string {
 	}
 	for _, f := range id.Filters {
 		put("filter=", f)
+	}
+	if d := id.Destination; d != nil {
+		put("destination.provider=", d.Provider)
+		if d.Account != "" {
+			put("destination.account=", d.Account) // Azure's only: the others' hashes are as before
+		}
+		put("destination.bucket=", d.Bucket)
+		put("destination.prefix=", d.Prefix)
+		put("destination.endpoint=", d.Endpoint)
+		if d.Emulator {
+			put("destination.emulator=", "true")
+		}
+		if d.Region != "" {
+			put("destination.region=", d.Region) // GCS has none: its hashes are as before
+		}
+		put("destination.layout=", d.Layout)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

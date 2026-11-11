@@ -159,8 +159,8 @@ Format 1 had one version string. Five identifiers now move independently:
 The policy for each is in [dataset.md](dataset.md#evolution). This build reads journal
 version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
 before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
-that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r3`
-since SeekParquet) and the dataset format are in the resume identity: a build of another recipe or format
+that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r4`
+since Parquet pages are compressed at zstd `SpeedFastest`) and the dataset format are in the resume identity: a build of another recipe or format
 refuses the journal. `created_by` names the real build, so parts are byte-identical within a build only. A part
 claimed but not recorded when a run stopped is reproduced on resume with its own footer's columns and
 `created_by`, so that one part does not depend on the build that resumes.
@@ -341,11 +341,34 @@ of the flags every object store has are gone, one shared flag serving S3, GCS an
 `--gcs-endpoint` and `--azblob-endpoint` are `--endpoint-url`, `--gcs-request-timeout` and
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
 is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
-are delta coded and zstd compressed by default.
+are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles the listing and the drain's
+tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
+tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most
-1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`. A version 4 reader ignores
+1 GiB, where it was 128 MiB on every host), `resources.spill.frames` and `opens`, and `profiles` (the development
+profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE`), and
+`resources.spill.read_handles` (the spill read handles' `hits`, `misses`, `raced`, `evictions` by reason and
+`peak_open`) and `frame_bytes` and `frame_rows` (the row frames written by size: `p50`, `p90`, `p99` as power-of-two
+bucket bounds, and the exact `max`); `opens` counts one open per read handle miss, not one per frame read; and
+`output.remote`, present only for a dataset written to a bucket (`-o gs://...`, `-o s3://...` or `-o az://...`): `destination`, `work_dir`,
+`commit`, `manifest`, `manifest_identity`, `manifest_sha256`, `uploads`, `uploads_aborted`,
+`aborts_unconfirmed`, `upload_bytes`,
+`upload_wait_ns`, `retries`, `retry_classes`, `objects_verified`, `orphans_deleted`, `orphans_gone`,
+`orphans_left` and `orphans_unproven`. `outcome.class` gains `unresolved` (exit 75, `cause`
+`commit_unresolved`), and `outcome.cause` `lost_race`, `remote_altered` and `candidate_mismatch`, all for a
+dataset in a bucket. The journal's version is 10 (it names a bucket dataset's part objects); this build reads
+the version 9 journals of earlier builds, which an earlier build cannot do the other way round. Version 5 also reports what the Parquet encoders were admitted against, beside their counts in
+`resources.drain`: `encoder_allowance_bytes`, `encoder_writer_bytes`, `encoder_upload_bytes`,
+`encoders_at_start_bound_by` and `encoders_after_listing_bound_by`; encoders are now admitted against an
+allowance of their own, 1/16 of memory (at most 1 GiB) whatever `--sort-buffer` says, where earlier builds
+divided the sort buffer, and a text output's `compressor.jobs_reason` `row_budget` is `encoder_allowance`.
+Parquet pages are compressed at zstd `SpeedFastest` where earlier builds used `SpeedDefault`: parts are about 0.3
+to 1.1 % larger for less CPU a page, and read the same. The writer recipe is therefore `swath/parquet-r4`, and
+an interrupted run of an earlier build (`swath/parquet-r3`) cannot be resumed by this build: finish it with that
+build, or start it over with `--overwrite`.
+A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.
 

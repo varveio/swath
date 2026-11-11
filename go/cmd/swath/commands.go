@@ -75,7 +75,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// A text run keeps no journal: there is nothing to continue.
 		return stop(usageError{errText})
 	}
-	if dataset.Committed(dir) {
+	if dataset.Committed(dir) && !dataset.Unfinalized(dir) {
+		// A bucket dataset's work directory committed but not finalized goes
+		// on: the run finishes the commit's aftermath, then reports complete.
 		return stop(listing.ErrComplete)
 	}
 	st, err := journal.Read(dir)
@@ -117,12 +119,18 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	// The recorded flags without --overwrite (the output is resumed, not
 	// replaced), then the overrides, then the directory as given (it may
-	// have moved), then SOURCE.
+	// have moved: the dataset directory, or a bucket dataset's work
+	// directory, whose -o stays as recorded), then SOURCE.
 	var cmd []string
 	var secrets []string // secret flags the run had, whose values were not recorded
+	remote := false      // a bucket -o: DIR is its work directory, the bucket stays as recorded
 	for _, a := range flags {
 		name, v, eq := strings.Cut(strings.TrimPrefix(a, "--"), "=")
 		if name == "overwrite" && (!eq || v == "true") {
+			continue
+		}
+		if name == "work-dir" {
+			remote = true
 			continue
 		}
 		if eq && v == redacted && slices.Contains(secretFlags, name) {
@@ -147,7 +155,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, dir, name, hint)})
 		}
 	}
-	cmd = append(append(append(cmd, overrides...), "--output="+dir), operand...)
+	at := "--output=" + dir
+	if remote {
+		at = "--work-dir=" + dir
+	}
+	cmd = append(append(append(cmd, overrides...), at), operand...)
 	// Parsed with the diagnostic flag set, a superset of swath list's: the
 	// runtime overrides include diagnostic ones (--spill-reserve,
 	// --no-spill-compress), and a recorded swath list command holds none

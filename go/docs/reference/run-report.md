@@ -97,7 +97,23 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `encoder_allowance`, `encoders`, `gzip`). `remote` is a
+dataset written to a bucket's (`-o gs://...`, `-o s3://...` or `-o az://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
+`destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
+`confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
+`resumed`: a resume found the commit made and finished its aftermath; `lost_race`: another run's manifest is
+there; `unresolved`: neither could be established, and everything is kept; empty when the run did not reach its
+commit), `manifest`, `manifest_identity` (its GCS generation, S3 version id or ETag, or Azure ETag) and `manifest_sha256` once committed,
+`uploads` (completed), `uploads_aborted`, `aborts_unconfirmed` (aborted uploads whose abort the store did not
+confirm: an S3 multipart upload whose abort failed or that stayed listed, its parts kept until the bucket's
+lifecycle rule removes them; absent when none, and always for GCS and Azure, whose aborts send nothing to
+confirm), `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
+upload writes and completions: a write waits for the chunk, part or block before it), `retries` and `retry_classes` (attempts
+the SDK retried, by `http_STATUS`, `timeout`, `connection`, `other`), `objects_verified` (retained parts a resume
+read whole and checked), and the orphans (objects this run created, by the generation its upload recorded, that no committed
+manifest names): `orphans_deleted`, `orphans_gone` (absent, or replaced since: not this run's),
+`orphans_left` (a delete failed) and `orphans_unproven` (names allocated with no recorded creation, never
+touched). `totals` is a
 `swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
 `objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
@@ -140,8 +156,11 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
-off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts; a resume's certificate validation not counted), `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`, and with durable spill
+off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
+`max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
+`peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
+the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
@@ -158,7 +177,10 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
 `per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`); and `encoders_at_start`, `encoders_after_listing`,
-`encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+`encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
+`--sort-buffer` says), `encoder_writer_bytes` and `encoder_upload_bytes` (one encoder's prices), and
+`encoders_at_start_bound_by` and `encoders_after_listing_bound_by` (`memory`, `cpu`, `descriptors`, `minimum`,
+`explicit`; after listing, the start's when the count was not raised). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).
@@ -170,4 +192,14 @@ sample is dropped and the interval doubles), and the last at the end. Each of `s
 `inflight`, `limit` (the limiter's, 0 without one), `spill_bytes` (live), `free_disk_bytes` (absent without an
 output) and `rss_bytes` (the resident set now; Linux only, absent elsewhere). Absent for a run that stopped
 before listing.
+
+**Profiles** (`profiles`, development only). Present when `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE` is set
+([diagnostics.md](../internals/diagnostics.md#phase-profiles)): `phase_boundary_at`, the logical boundary between
+the phases (the event `timings.listing_done_at` records, microseconds later; absent when listing never finished),
+`cpu_cut_delay_ns` (from the boundary to the listing phase's CPU profile's stop: the listing file holds that much
+of the tail), `cpu_gap_ns` (from that stop to the tail's CPU profile's start, which neither covers),
+`mem_profile_rate` (bytes allocated per memory profile sample, 0: none), and `files`, each with `kind`
+(`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`), `path`, `status` (`planned`: written later in the run;
+`written`; `failed`, with `error`). `run.json`, written at the commit, has the tail's and the exit's files
+`planned`; `--report`, written as the process ends, has every file's final status.
 <!-- report:end -->

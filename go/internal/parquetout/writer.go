@@ -59,9 +59,11 @@ const unboundedKeyBytes = 4096
 // requires, passed TestWriterAdmissionCoversHeap and wrote the same pages
 // (TestFooterOnlyChange); it was not remeasured.
 //   - a codec state that has compressed a page larger than one zstd block
-//     (128 KiB) keeps a history of one 8 MiB window and a block (zstd's
-//     lower encoder memory: twice the window without it), plus its match
-//     tables: about 10.6 MiB measured, 12 priced (bigStateBytes); one that
+//     keeps a history of one window and a block (zstd's lower encoder
+//     memory: twice the window without it), plus its match tables. Measured
+//     at SpeedDefault (8 MiB window, 128 KiB blocks): about 10.6 MiB, 12
+//     priced (bigStateBytes). SpeedFastest, the page level since r4, uses a
+//     4 MiB window and 64 KiB blocks, so the price stays conservative; one that
 //     only saw smaller pages, about 2 MiB (smallStateBytes). A key page is
 //     1,024 keys, so keys over 128 bytes make every state a big one.
 //   - a writer holds its row group's encoded pages (groupBytes, overshot:
@@ -110,7 +112,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
 // SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
-// SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
+// SpeedFastest with entropy coding, and parts cut at size/0.1 for part 0,
 // then at the frozen ratio. Bump the revision with any change to these.
 // It is the resume identity's writer field: a resume refuses a journal
 // written under another recipe.
@@ -119,7 +121,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // DraftRevision), the logical schema (schema IDs), the private journal
 // (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
-const Recipe = "swath/parquet-r3"
+const Recipe = "swath/parquet-r4"
 
 // createdApp, createdVersion and createdBuild make the footer's
 // created_by: the tool, its module version and its VCS revision, from the
@@ -143,7 +145,9 @@ func footerBuild(b buildinfo.Build) (app, version, rev string) {
 // (strictly ascending, or with schema.Info.Groups nondecreasing).
 type writer[P any] struct {
 	schema *schema.Schema[P]
-	path   string
+	file   dataset.Artifact
+	cols   []string // the footer's columns, the key first
+	by     string   // the footer's created_by
 	part   *write.PartWriter
 	fill   func(column int, values []pq.Value) // fillPage, bound once
 	capped []int                               // the columns with a Spec.MaxBytes, enforced as the key's cap is
@@ -151,18 +155,17 @@ type writer[P any] struct {
 	closed bool
 }
 
-// partFile is a part's file as the module writes it: its writes and its
-// sync go through faults.
+// partFile is a local part's file as the module writes it: its writes and
+// its sync go through faults.
 type partFile struct{ *os.File }
 
 func (f partFile) Write(b []byte) (int, error) { return faults.Write(f.File, b) }
 func (f partFile) Sync() error                 { return faults.Sync(f.File) }
+func (f partFile) Identity() string            { return "" }
 
-// create opens path for a part, compressing with c (the router's, shared
-// by its writers; the writer does not close it). createdBy, if not empty,
-// is the footer's created_by verbatim instead of this build's (a
-// reproduced claimed part's own, Cut.CreatedBy).
-func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], c *codec, columns func() int, createdBy string) (*writer[P], error) {
+// openLocal creates a local part's file at path with open (nil: by
+// pathname).
+func openLocal(open func(string) (*os.File, error), path string) (dataset.Artifact, error) {
 	if open == nil {
 		open = func(path string) (*os.File, error) {
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -172,12 +175,22 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	if err != nil {
 		return nil, fmt.Errorf("create part: %w", err)
 	}
+	return partFile{f}, nil
+}
+
+// create starts a part written to f, compressing with c (the router's,
+// shared by its writers; the writer does not close it). createdBy, if not
+// empty, is the footer's created_by verbatim instead of this build's (a
+// reproduced claimed part's own, Cut.CreatedBy). The module's part writer
+// gets the artifact, never an SDK writer: its Seal syncs then closes, and
+// its Abort closes, which the artifact maps onto completing or aborting.
+func create[P any](f dataset.Artifact, s *schema.Schema[P], c *codec, columns func() int, createdBy string) (*writer[P], error) {
 	if createdBy == "" {
 		var cfg pq.WriterConfig
 		pq.CreatedBy(createdApp, createdVersion, createdBuild).ConfigureWriter(&cfg)
 		createdBy = cfg.CreatedBy
 	}
-	part, err := write.NewPart(partFile{f}, nodeOf(s), write.PartOptions{
+	part, err := write.NewPart(f, nodeOf(s), write.PartOptions{
 		Key:      seekparquet.Key{Column: dataset.KeyColumn, Unique: !s.Info.Groups},
 		SchemaID: s.ID, Codec: c, CreatedBy: createdBy, ColumnWorkers: columns,
 		PageRows: pageRows, RowGroupBytes: groupBytes, RowGroupRows: groupRows,
@@ -186,7 +199,11 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		_ = f.Close()
 		return nil, fmt.Errorf("create part: %w", err)
 	}
-	w := &writer[P]{schema: s, path: path, part: part, page: make([]schema.Row[P], 0, pageRows)}
+	w := &writer[P]{schema: s, file: f, by: createdBy, part: part, page: make([]schema.Row[P], 0, pageRows)}
+	w.cols = append(w.cols, dataset.KeyColumn)
+	for i := range s.Columns {
+		w.cols = append(w.cols, s.Columns[i].Name)
+	}
 	w.fill = func(column int, values []pq.Value) { fillPage(s, w.page, column, values) }
 	for i := range s.Columns {
 		if s.Columns[i].MaxBytes > 0 && s.Columns[i].Str != nil {
@@ -267,10 +284,11 @@ func (w *writer[P]) close() (dataset.Part, error) {
 		_ = w.part.Abort()
 	}
 	if err != nil {
-		return dataset.Part{}, fmt.Errorf("close %s: %w", w.path, err)
+		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
 	}
-	return dataset.Part{Path: w.path, PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
-		MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}, nil
+	return dataset.Part{Path: w.file.Name(), Identity: w.file.Identity(), Columns: w.cols, CreatedBy: w.by,
+		PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
+			MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}, nil
 }
 
 // abort releases the writer without producing a part.

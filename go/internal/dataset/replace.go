@@ -110,14 +110,24 @@ func (p *Pending) Abort() {
 
 // ReplaceJSON is Replace with v as indented JSON (HTML characters kept).
 func ReplaceJSON(path string, v any, d Durability) error {
+	b, err := EncodeJSON(v)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", filepath.Base(path), err)
+	}
+	return Replace(path, b, d)
+}
+
+// EncodeJSON is v as ReplaceJSON writes it: indented, HTML characters kept,
+// a final newline.
+func EncodeJSON(v any) ([]byte, error) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		return fmt.Errorf("encode %s: %w", filepath.Base(path), err)
+		return nil, err
 	}
-	return Replace(path, b.Bytes(), d)
+	return b.Bytes(), nil
 }
 
 // TempOf reports whether base (a file name) is a temporary file of

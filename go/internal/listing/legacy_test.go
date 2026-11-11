@@ -39,8 +39,11 @@ func legacyLayout(t *testing.T, out string) []int {
 	}
 	size := binary.LittleEndian.Uint32(b[:4])
 	cur := fmt.Sprintf(`"version":%d`, journal.Version)
-	hdr := []byte(strings.Replace(string(b[8:8+size]), cur, `"version":6`, 1))
-	if len(hdr) != int(size) || !bytes.Contains(hdr, []byte(`"version":6`)) {
+	// The same length, so the frame's length stands: JSON's whitespace pads
+	// a one-digit version.
+	six := `"version":` + strings.Repeat(" ", len(cur)-len(`"version":6`)) + `6`
+	hdr := []byte(strings.Replace(string(b[8:8+size]), cur, six, 1))
+	if len(hdr) != int(size) || !bytes.Contains(hdr, []byte(six)) {
 		t.Fatalf("the header does not hold %s", cur)
 	}
 	sum := crc32.Update(crc32.Checksum(b[:4], crc32.MakeTable(crc32.Castagnoli)), crc32.MakeTable(crc32.Castagnoli), hdr)

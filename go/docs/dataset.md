@@ -71,6 +71,39 @@ lists), `run.json` (the run report: operational, written after the commit and ne
 `.swath/` (the run's private workspace, which readers ignore). The full tree and the publication order are in
 [internals/parquet-output.md](internals/parquet-output.md#publication-gate-and-order).
 
+## A dataset in a bucket
+
+`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`, or
+`-o az://ACCOUNT/CONTAINER/PREFIX`) writes the same dataset straight to Google Cloud Storage (or S3, or Azure
+Blob Storage); nothing of it is written to local disk. Readers see the same profile, with two differences in layout:
+
+- **Part names are unique to a run and an attempt:** `PREFIX/data/RUN/ATTEMPT/part-NNNNN.parquet`, where RUN is
+  the run's UUID (kept across its resumes) and ATTEMPT the invocation's id. Ordinals stay dense and in key
+  order (`part-NNNNN`), but parts of one dataset may sit under several attempt directories when the run was
+  resumed. The manifest's `parts[].path` names each one; a reader takes them from the manifest and never from a
+  listing of `data/`, which may also hold parts no manifest names (below).
+- **The manifest is created, never replaced:** `PREFIX/manifest.json` is written only if absent (GCS
+  `ifGenerationMatch=0`, S3 and Azure `If-None-Match: *`), so of two runs writing one prefix exactly one commits. `PREFIX/run.json` is written by
+  the run that committed, after the commit, only if absent. A prefix that already holds a manifest is refused
+  before the run starts: a dataset in a bucket is not replaced (choose a new prefix per run).
+
+Parts are uploaded as they close and are individually visible before the commit; an upload aborted before
+its completion leaves no object, and one whose completion failed ambiguously may. Until the manifest exists the
+prefix holds no dataset, whatever `data/` holds. The committing run deletes every part object it created that
+its manifest does not name, only at the version its upload recorded (the GCS generation; the S3 version id,
+or its ETag as `If-Match`; the Azure ETag as `If-Match`) (retries, attempts cut short); a run
+that loses the race deletes its own. An object at one of the run's names that it never recorded creating is
+left. A commit whose outcome is unknown (the creation failed ambiguously and no manifest is there yet) deletes
+nothing: the manifest may still appear, and every part it names must then exist. Objects a killed run left
+behind are cleaned by its resume; an abandoned run's are not cleaned by anything, and are named in its work
+directory (`.swath/remote/allocated`).
+
+`DIR`, the work directory, is local and holds what a resume needs: the lock, the journal, spill, a claim
+receipt per part (`.swath/remote/claims/`), the names allocated before their uploads began, the candidate
+manifest and, once committed, `commit.json` (finalized once the orphans are cleaned and `run.json` is in place). `swath resume DIR` continues the run against the recorded
+destination. [internals/durability.md](internals/durability.md#a-dataset-in-a-bucket) has the protocol;
+[production.md](production.md#writing-to-a-bucket) the operating guide.
+
 ## The swath extension
 
 SeekParquet allows only its own members at the top level, in `key` and in each part. A producer's metadata
