@@ -23,7 +23,7 @@ type Policy struct {
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
-	SeedTiles  int       // the most tiles a seed or prior starts with (0: Tiles(workers)); diagnostic
+	SeedTiles  int       // cap initial tiles before resume reuse (0: legacy defaults); diagnostic
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -103,7 +103,7 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 				return nil
 			})})
 		source.Define(f, source.Flag{Name: "seed-tiles", Metavar: "N", Usage: "start with at most N tiles from the seed or --seed-from",
-			Long: "Default 4 per worker, at most 1,000.",
+			Long: "Includes the frontier and closing sentinel; reused resume certificates may subdivide tiles. By default the seed keeps up to 4 cuts per worker (at most 1,000); --seed-from uses that many tiles.",
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
 				if err != nil || n < 1 || n > 100000 {

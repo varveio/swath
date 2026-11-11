@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,22 +56,148 @@ func TestEstimatePage(t *testing.T) {
 	}
 }
 
-// TestSeedTiles: --seed-tiles caps the seed's cuts below 4 per worker,
-// and the listing is still every key once in order.
+// TestEstimatePageLargeFiniteRemainder uses the gauge of valid, sparse
+// fixed-width keys: a finite estimate can exceed the integer range.
+func TestEstimatePageLargeFiniteRemainder(t *testing.T) {
+	page := make([]string, 1000)
+	for i := range page {
+		page[i] = fmt.Sprintf("%030d", i)
+	}
+	rem := newGauge(page).keys(page[len(page)-1], "1")
+	if math.IsInf(rem, 0) || math.IsNaN(rem) || rem <= float64(math.MaxInt64) {
+		t.Fatalf("expected a finite estimate beyond the integer range, got %g", rem)
+	}
+	if got := EstimatePage(5000)(PageHint{Rem: rem, Nominal: 1000}); got != 5000 {
+		t.Fatalf("estimate %g: page size %d, want 5000", rem, got)
+	}
+}
+
+// The explicit budget counts every initial child, including the closing
+// sentinel and frontier. Zero retains the legacy seed/prior tiling.
 func TestSeedTiles(t *testing.T) {
-	keys := slices.Sorted(slices.Values(dateLayout(10)))
-	for _, tiles := range []int{0, 3, 17} {
-		got, st, leaves := runBudget(t, newSorted(keys, false, 1), Options{Seed: true, SeedTiles: tiles, PageSize: 50}, 64, 1<<20)
-		if !slices.Equal(got, keys) {
-			t.Fatalf("tiles %d: %d keys, want %d", tiles, len(got), len(keys))
+	for _, c := range []struct {
+		name      string
+		keys      []string
+		seedTiles int
+	}{
+		{"sentinel", []string{"a/1", "b/1", "c/1"}, 5},
+		{"object-last", []string{"a/1", "b/1", "c/1", "z"}, 4},
+	} {
+		for _, prior := range []bool{false, true} {
+			for _, budget := range []int{0, 1, 2, 3, 17} {
+				opt := Options{Seed: true, SeedTiles: budget, Workers: 2}
+				if prior {
+					opt.Prior = priorOf(c.keys, 1)
+				}
+				p, err := New(opt, Description[Object]{Target: "test", Listing: Listing}, fetchFrom(newSorted(c.keys, false, 1)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := &tileRec{}
+				if err := p.Expand(context.Background(), p.Root(), rec); err != nil {
+					t.Fatal(err)
+				}
+				legacy := c.seedTiles
+				if prior {
+					legacy = len(c.keys) + 1
+				}
+				want := min(budget, legacy)
+				if budget == 0 {
+					want = legacy
+				}
+				what := fmt.Sprintf("%s prior=%v budget=%d", c.name, prior, budget)
+				if len(rec.tiles) != want {
+					t.Fatalf("%s: %d tiles, want %d", what, len(rec.tiles), want)
+				}
+				spans := make([]span, len(rec.tiles))
+				for i, r := range rec.tiles {
+					spans[i] = span{lo: r.lo, hi: r.hi, open: r.open}
+				}
+				checkTiling(t, what, spans)
+				if !prior {
+					st := p.Stats()
+					if got := st.Get(cSeedCuts) + st.Get(cSeedSentinel) + 1; got != int64(len(rec.tiles)) {
+						t.Fatalf("seed counters describe %d tiles, emitted %d", got, len(rec.tiles))
+					}
+				}
+			}
 		}
-		checkTiling(t, fmt.Sprintf("tiles %d", tiles), leaves)
-		limit := int64(tiles)
-		if tiles == 0 {
-			limit = int64(Tiles(64))
+	}
+}
+
+// Capping either seed must preserve exact coverage, also after unsafe
+// resume keys and when unsafe cuts are shortened or discarded.
+func TestSeedTilesCoverage(t *testing.T) {
+	var keys []string
+	for i := range 12 {
+		for j := range 25 {
+			keys = append(keys, fmt.Sprintf("d%02d/k%03d", i, j))
 		}
-		if cuts := st.Get(cSeedCuts); cuts == 0 || cuts > limit || tiles > 0 && st.Get(cSeedSubsampled) != 1 {
-			t.Errorf("tiles %d: %d cuts, subsampled %d", tiles, cuts, st.Get(cSeedSubsampled))
+	}
+	keys = append(keys, "bad\n/child")
+	slices.Sort(keys)
+	accept := func(k string) bool { return Safe(k) && !strings.Contains(k, "05") }
+	for _, prior := range []bool{false, true} {
+		for _, budget := range []int{1, 2, 3, 17} {
+			for _, after := range []string{"", "d05/k007"} {
+				opt := Options{Seed: true, SeedTiles: budget, PageSize: 7}
+				if prior {
+					opt.Prior = priorOf(keys, 13)
+				}
+				if after != "" {
+					opt.Resume = &Resume{After: after}
+				}
+				// Count the actual root children before any later adaptive splits.
+				rootOpt := opt
+				rootOpt.Workers = 8
+				p, err := New(rootOpt, Description[Object]{Target: "test", Listing: Listing, AcceptBound: accept}, fetchFrom(newSorted(keys, false, 1)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := &tileRec{}
+				if err := p.Expand(context.Background(), p.Root(), rec); err != nil {
+					t.Fatal(err)
+				}
+				if len(rec.tiles) < 1 || len(rec.tiles) > budget {
+					t.Fatalf("prior=%v budget=%d after=%q: %d tiles", prior, budget, after, len(rec.tiles))
+				}
+				got, _, leaves := runPolicy(t, newSorted(keys, true, 1), opt, 8, 1<<20, accept)
+				from := 0
+				if after != "" {
+					from = slices.Index(keys, after) + 1
+				}
+				if !slices.Equal(got, keys[from:]) {
+					t.Fatalf("prior=%v budget=%d after=%q: got %d keys, want %d", prior, budget, after, len(got), len(keys)-from)
+				}
+				if after == "" {
+					checkTiling(t, fmt.Sprintf("prior=%v budget=%d", prior, budget), leaves)
+				}
+			}
+		}
+	}
+}
+
+func TestSeedTilesGroups(t *testing.T) {
+	keys := groupKeys(100)
+	for _, prior := range []bool{false, true} {
+		for _, budget := range []int{1, 2, 3} {
+			for _, inclusive := range []bool{false, true} {
+				v := newVersioned(keys, groupKeyspace(len(keys), 7, 30), 1)
+				v.short, v.empties, v.inclusive = true, true, inclusive
+				opt := Options{Seed: true, SeedTiles: budget, Workers: 8, PageSize: 7}
+				if prior {
+					opt.Prior = priorOf(keys, 10)
+				}
+				p := newGroupEngine(t, v, opt)
+				rec := &tileRec{}
+				if err := p.Expand(context.Background(), p.Root(), rec); err != nil {
+					t.Fatal(err)
+				}
+				if len(rec.tiles) < 1 || len(rec.tiles) > budget {
+					t.Fatalf("prior=%v budget=%d inclusive=%v: %d tiles", prior, budget, inclusive, len(rec.tiles))
+				}
+				runGroups(t, v, opt)
+			}
 		}
 	}
 }

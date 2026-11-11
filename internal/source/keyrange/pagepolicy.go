@@ -54,7 +54,12 @@ func EstimatePage(maxPage int) func(PageHint) int {
 		if math.IsNaN(h.Rem) || math.IsInf(h.Rem, 0) {
 			return h.Nominal
 		}
-		return min(max(int(h.Rem)+2, h.Nominal), maxPage)
+		// Bound the estimate before converting or adding: the gauge can
+		// produce finite estimates beyond the integer range.
+		if h.Rem >= float64(maxPage-2) {
+			return maxPage
+		}
+		return min(max(int(max(h.Rem, 0))+2, h.Nominal), maxPage)
 	}
 }
 

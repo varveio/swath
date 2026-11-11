@@ -110,6 +110,11 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   `(…, prefixCeil(pk)], (prefixCeil(pk), ⊤]`, so the folder holding the end of the top level is bounded and
   not the open frontier (a page ending with an object declines it, `seed.sentinel_declined.*`). With the
   descent, a bucket whose mass sits under its last top-level folder is tiled inside that folder too.
+- *Explicit tile budget.* The diagnostic `--seed-tiles N` limits the initial seed or prior tiling to at
+  most N ranges, including the closing sentinel and open frontier. At N=1 one range covers the scope;
+  later adaptive splits remain enabled. This budget applies before reused resume certificates subdivide
+  the tiles into replay ranges and live gaps. The unset/default seed retains its cut budget and sentinel
+  behavior above; a prior retains its default tile budget.
 - *A resumed scope.* After `Restart(K)` the seed tiles `(K, ⊤]` instead: every folder above `K` inside the scope
   is listed at the top, after `K`'s longest accepted prefix (each lists the siblings after `K`'s branch at its
   level, so a resume inside one day folder still tiles the rest of the month and year), and only cuts strictly

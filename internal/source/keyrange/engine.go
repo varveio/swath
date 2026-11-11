@@ -198,7 +198,7 @@ type Options struct {
 	PageFor func(PageHint) int
 	PageMax int // the most PageFor may ask (0: PageSize)
 	// SeedTiles is the most tiles a seed or a prior starts the run with
-	// (diagnostic; 0: Tiles(Workers)).
+	// before resume reuse subdivides them (diagnostic; 0: legacy defaults).
 	SeedTiles int
 	// PriorPageSize, when above PageSize, is the page size a counted prior
 	// (SeedFrom) sets instead: the provider's largest page, worth asking

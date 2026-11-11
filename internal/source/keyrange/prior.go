@@ -37,13 +37,13 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 	return nil
 }
 
-// Tiles is the most tiles a seed or a prior starts a run with: 4 per
-// worker, so every worker starts with work and a few to spare, at most
-// maxSeeds.
+// Tiles is the default prior tile budget and seed folder-cut budget:
+// 4 per worker, at most maxSeeds. The seed also adds its frontier and,
+// when available, a closing sentinel.
 func Tiles(workers int) int { return min(maxSeeds, 4*max(workers, 1)) }
 
-// tileLimit is the run's tile limit: Options.SeedTiles (diagnostic), else
-// Tiles.
+// tileLimit is the explicit total tile budget, or the legacy default
+// (a folder-cut budget for the seed, a tile budget for a prior).
 func (p *Engine[P]) tileLimit() int {
 	if p.opt.SeedTiles > 0 {
 		return p.opt.SeedTiles
@@ -115,7 +115,10 @@ func tilePrior(pr *source.Prior, k int, fill float64, after, scope string, safe 
 		cands = append(cands, cand{key, pending + w})
 		pending, last = 0, key
 	}
-	bounded := max(k-1, 1)
+	if k <= 1 {
+		return nil, unsafe // the open frontier alone covers the scope
+	}
+	bounded := k - 1
 	if fill > 0 {
 		acc := 0.0
 		for i, c := range cands {

@@ -49,7 +49,9 @@ Diagnostics:
       --page-size N         ask for pages of N entries (default the provider's)
                               1 to 5000, capped at the provider's maximum.
       --seed-tiles N        start with at most N tiles from the seed or --seed-from
-                              Default 4 per worker, at most 1,000.
+                              Includes the frontier and closing sentinel; reused resume certificates
+                              may subdivide tiles. By default the seed keeps up to 4 cuts per worker
+                              (at most 1,000); --seed-from uses that many tiles.
       --azure-page-policy fixed|one-read|grow|estimate
                             experimental page policy (default fixed)
                               fixed: pages of --page-size; one-read ends a page at its first read's
@@ -80,7 +82,9 @@ Diagnostics:
       --page-size N   ask for pages of N entries (default the provider's)
                         1 to 5000, capped at the provider's maximum.
       --seed-tiles N  start with at most N tiles from the seed or --seed-from
-                        Default 4 per worker, at most 1,000.
+                        Includes the frontier and closing sentinel; reused resume certificates may
+                        subdivide tiles. By default the seed keeps up to 4 cuts per worker (at most
+                        1,000); --seed-from uses that many tiles.
       --azure-page-policy fixed|one-read|grow|estimate
                       experimental page policy (default fixed)
                         fixed: pages of --page-size; one-read ends a page at its first read's last
