@@ -39,9 +39,11 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 
 ### Memory
 
-swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output and, through
-encoder admission, how many writers run; `GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on
-RSS; an OS or container limit can stop the process when memory cannot be reclaimed. A run holds:
+swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output only; how many
+writers run is admitted against an allowance of their own, 1/16 of the memory found (at most 1 GiB) whatever
+`--sort-buffer` says ([encoder admission](internals/ordering.md#the-budget)), and `--encoders N` sets fewer.
+`GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on RSS; an OS or container limit can stop the
+process when memory cannot be reclaimed. A run holds:
 
 - **Rows in flight, bounded by `--sort-buffer`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are

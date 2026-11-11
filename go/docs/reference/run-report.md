@@ -180,7 +180,7 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 `encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
 `--sort-buffer` says), `encoder_writer_bytes` and `encoder_upload_bytes` (one encoder's prices), and
 `encoders_at_start_bound_by` and `encoders_after_listing_bound_by` (`memory`, `cpu`, `descriptors`, `minimum`,
-`explicit`). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+`explicit`; after listing, the start's when the count was not raised). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).

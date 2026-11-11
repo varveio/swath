@@ -419,6 +419,16 @@ func encoderPrice(root string) int64 {
 	return parquetout.DefaultEncoderBytes
 }
 
+// boundAfterListing is what bound n, the encoders reported after listing:
+// the post-listing constraint planned when listing ended and the count
+// was raised to it, else the start's, which still holds the count.
+func (l *Limits) boundAfterListing(n int, listingDone bool) string {
+	if listingDone && n == l.maxEncoders {
+		return l.afterBy
+	}
+	return l.startBy
+}
+
 // admitEncoders is how many Parquet encoders the run's resources carry,
 // never fewer than one. Encoder memory is admitted apart from the row
 // budget, against an allowance of its own (Limits.encoderAllowance: the
@@ -1287,7 +1297,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
 		d.EncoderAllowanceBytes, d.EncoderWriterBytes, d.EncoderUploadBytes = l.encoderAllowance, l.writerBytes, l.uploadBytes
-		d.EncodersAtStartBoundBy, d.EncodersAfterListingBoundBy = l.startBy, l.afterBy
+		d.EncodersAtStartBoundBy = l.startBy
+		d.EncodersAfterListingBoundBy = l.boundAfterListing(d.EncodersAfterListing, !ost.ListingDone.IsZero())
 		switch {
 		case l.encodersGiven:
 			d.EncoderAdmission = AdmissionExplicit

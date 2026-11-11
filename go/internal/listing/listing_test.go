@@ -403,6 +403,23 @@ func TestEncoderAllowance(t *testing.T) {
 	if l.Encoders != 3 || l.maxEncoders != 3 || l.startBy != BoundExplicit || l.afterBy != BoundExplicit {
 		t.Errorf("explicit: %+v", l)
 	}
+	// The constraint reported after listing is the planned one only once
+	// listing raised the count to it: 2 GiB, local, 5 processors start 4
+	// encoders (memory) and plan 5 (cpu); a run stopped before listing
+	// ended still has 4, bound by memory.
+	withMemory(t, memoryLimits{physical: 2 * gib})
+	prev := runtime.GOMAXPROCS(5)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+	l = resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 128 << 10, Workers: 64}})
+	if l.Encoders != 4 || l.startBy != BoundMemory || l.maxEncoders != 5 || l.afterBy != BoundCPU {
+		t.Fatalf("2 GiB on 5 processors: %d (%s), after listing %d (%s)", l.Encoders, l.startBy, l.maxEncoders, l.afterBy)
+	}
+	if by := l.boundAfterListing(4, false); by != BoundMemory {
+		t.Errorf("listing not done, 4 encoders: bound by %s, want memory", by)
+	}
+	if by := l.boundAfterListing(5, true); by != BoundCPU {
+		t.Errorf("listing done, 5 encoders: bound by %s, want cpu", by)
+	}
 	// Unknown memory: the allowance is the fallback, 128 MiB.
 	withMemory(t, memoryLimits{})
 	if l := resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 1 << 30}}); l.encoderAllowance != DefaultRowBudget {
