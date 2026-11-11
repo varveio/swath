@@ -412,10 +412,10 @@ func (w *writer) PutIfAbsent(ctx context.Context, name string, data []byte) (obj
 	return r, nil
 }
 
-// DeleteIf deletes the blob if its ETag is identity (If-Match). In an
-// account with blob versioning or soft delete, the deleted blob is kept as
-// a previous version, or a soft-deleted blob, as the account's settings
-// say.
+// DeleteIf deletes the blob if its ETag is identity (If-Match). With blob
+// soft delete on, the deleted blob is kept until the account's retention
+// period expires; with blob versioning on, it becomes a previous version,
+// kept until it is deleted explicitly or by a lifecycle rule.
 func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 	if identity == "" {
 		return &fs.PathError{Op: "delete", Path: name, Err: fmt.Errorf("%w: no identity", fs.ErrInvalid)}

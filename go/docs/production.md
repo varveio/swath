@@ -173,8 +173,11 @@ run's metadata.
 - **Azure staged blocks need no rule:** a part larger than 8 MiB is staged in blocks and created by its block
   list. Blocks an aborted, failed or killed upload staged are uncommitted: never a blob, never visible, and the
   service discards them a week after the last was staged (or when a blob is created at the name), so no
-  lifecycle rule is needed for them. In an account with blob versioning or soft delete, the orphans swath
-  deletes are kept as previous versions or soft-deleted blobs for the account's retention, and billed meanwhile.
+  lifecycle rule is needed for them. The orphans swath deletes are not always gone: with blob soft delete on,
+  each is kept as a soft-deleted blob until the account's retention period expires; with blob versioning on,
+  each becomes a previous version, which Azure keeps until it is deleted explicitly or by a lifecycle rule, so
+  its bytes can stay billed indefinitely. In a versioned account, add a lifecycle rule that deletes previous
+  versions under the dataset prefixes (`daysAfterCreationGreaterThan` on `version`).
 - **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
   A failed or cancelled upload is aborted and the abort confirmed, but one a killed process leaves is not (its
   id dies with it), nor one whose abort the bucket refused or did not confirm (the report's

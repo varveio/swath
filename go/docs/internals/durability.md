@@ -221,8 +221,9 @@ or deleted (`TestRemoteDelayedCommit` replays a creation that lands after the ru
 directory (no `--report` or profile may be written there), and only a commit record parses as a marker. The committing run then, within
 its own time bound, deletes the objects it created that the manifest does not name, each only at the
 version its upload recorded (`dataset.DeleteOwned`: GCS by generation; S3 by version id, or with `If-Match` on
-its ETag; Azure with `If-Match` on its ETag, which in an account with versioning or soft delete keeps the blob
-as a previous version or a soft-deleted blob for the account's retention; an object at an allocated name with no recorded
+its ETag; Azure with `If-Match` on its ETag, which with soft delete keeps the blob until the retention period
+expires, and with versioning keeps it as a previous version until it is deleted explicitly or by a lifecycle
+rule; an object at an allocated name with no recorded
 creation, such as one a failed `CreateOnly` found or an upload that never completed, is never touched and is
 counted `orphans_unproven`), creates `run.json` beside the manifest only if absent (only the winner writes it,
 and a failure never revokes the commit), and marks the marker finalized. A run killed in between, or whose
@@ -296,7 +297,9 @@ change or a person that deletes or replaces a committed part makes the manifest 
 different, and swath does not notice (a reader that checks the manifest's SHA-256 does). Configure lifecycle
 rules on the dataset's prefix only for runs you have abandoned. An incomplete-upload rule is safe, and S3 needs
 one (`AbortIncompleteMultipartUpload`): S3 never expires an incomplete multipart upload a killed run left, or
-one whose abort was not confirmed. Azure's uncommitted blocks expire on their own.
+one whose abort was not confirmed. Azure's uncommitted blocks expire on their own; in an Azure account with
+blob versioning, the orphans swath deletes remain as previous versions, billed, until a lifecycle rule or a
+person deletes them ([production.md](../production.md#writing-to-a-bucket)).
 
 **Crash points.** `TestRemoteCrashMatrix` kills a run (spill off and on) at each of `allocated`,
 `upload-chunk`, `upload-completed`, `part-closed`, `claim-receipt`, `claimed`, `journal-append`,

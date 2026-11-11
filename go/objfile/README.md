@@ -281,8 +281,9 @@ client's for that call): `MaxAttempts`, azcore's exponential backoff from `Retry
 and what azcore retries by default; a `Retry-After` over `MaxRetryDelay` is not retried. `Retried` is told of a
 retry once the attempt it made has ended, so a retry azcore declines, or one cancelled in its backoff, is not
 counted.
-`DeleteIf` sends the ETag as `If-Match`; in an account with versioning or soft delete the deleted blob is kept
-as the account says. Every error passes through `RedactError`, and the upload's block ids (their shared
+`DeleteIf` sends the ETag as `If-Match`; with soft delete the deleted blob is kept until the retention period
+expires, and with versioning it becomes a previous version, kept (and billed) until it is deleted explicitly or
+by a lifecycle rule. Every error passes through `RedactError`, and the upload's block ids (their shared
 prefix, raw or URL-escaped) are removed wherever else its text holds them.
 
 `remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a client
