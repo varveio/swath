@@ -274,8 +274,9 @@ names one, and the SDKs' transport errors quote the request URL: every error the
 text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`); the S3
 writer also removes the upload id wherever else its text holds it, raw or URL-escaped
 (`TestRemoteS3UploadIDSecrecy`), and the Azure writer its block ids (`TestRemoteAzureSecrecy`); an Azure
-destination's SAS rides in every request's query, and its signature is also scrubbed from error bodies before
-the SDK quotes them. Requests are bounded: a response's headers within two minutes; a GCS resumable
+destination's SAS rides in every request's query, and every parameter it names is also scrubbed from error
+bodies before the SDK quotes them, found by name however the body spells it (decoded, escaped in either case,
+escaped again), as the source's scrubber does (`TestCreateAzureRefusals`, `TestRemoteAzureSASEchoed`). Requests are bounded: a response's headers within two minutes; a GCS resumable
 upload's chunk transfer within two minutes (then retried, within the chunk's retry deadline), an upload's
 retries within a cumulative allowance that grows with the chunks it has sent (four for its first request and
 four more a chunk, spent wherever its failures fall: not a per-chunk limit); an S3 or Azure write request within

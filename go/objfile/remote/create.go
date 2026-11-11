@@ -4,7 +4,6 @@
 package remote
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,6 +34,7 @@ import (
 	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/go/objfile/internal/redact"
 	"github.com/varveio/swath/go/objfile/s3"
 )
 
@@ -339,8 +339,8 @@ func createAzure(l objfile.Location, o CreateOptions) (*Destination, error) {
 		return nil, errors.New("remote: the destination's shared access signature is not a query string") // the parse error would quote it
 	}
 	var tr http.RoundTripper = pool
-	if sig := q.Get("sig"); sig != "" {
-		tr = scrubbed{next: pool, secrets: []string{sig, url.QueryEscape(sig)}}
+	if q.Has("sig") {
+		tr = scrubbed{next: pool, scrub: redact.SAS(sas)}
 	}
 	opts := &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: tr}}}
 	var client *azsdk.Client
@@ -380,12 +380,12 @@ func azureService(account, endpoint string) string {
 	return strings.TrimSuffix(endpoint, "/") + "/" + account + "/"
 }
 
-// scrubbed removes secrets from the body of every error response, which
-// an SDK error quotes: a service that echoes a request's query back would
-// otherwise put a SAS's signature in an error's text.
+// scrubbed scrubs the body of every error response, which an SDK error
+// quotes: a service that echoes a request's query back would otherwise put
+// a SAS's signature in an error's text, however it spelled it.
 type scrubbed struct {
-	next    http.RoundTripper
-	secrets []string
+	next  http.RoundTripper
+	scrub func(string) string
 }
 
 // maxErrorBody bounds the error body scrubbed and kept.
@@ -398,10 +398,8 @@ func (s scrubbed) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	_ = resp.Body.Close()
-	for _, secret := range s.secrets {
-		b = bytes.ReplaceAll(b, []byte(secret), []byte("[redacted]"))
-	}
-	resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
+	clean := s.scrub(string(b))
+	resp.Body, resp.ContentLength = io.NopCloser(strings.NewReader(clean)), int64(len(clean))
 	resp.Header.Del("Content-Length")
 	return resp, err
 }

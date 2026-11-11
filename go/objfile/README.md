@@ -293,7 +293,9 @@ applied. For `az://`: `CreateOptions.SAS`, appended to every request, or Entra I
 `DefaultAzureCredential` of its own (which needs an `https://` endpoint); the blob service is
 `ACCOUNT.blob.core.windows.net`, or an `Endpoint` that takes the account as its first path segment, as an
 emulator's does, and no endpoint is taken from the environment. The SAS is in no error or `Scope`: URLs lose
-their query, and the signature is scrubbed from the body of every error answer before the SDK quotes it.
+their query, and the body of every error answer is scrubbed before the SDK quotes it: the SAS's signature and
+every parameter it names, found by name however the body spells it (decoded, escaped in either case, escaped
+again), as swath's Azure source scrubs its own.
 Account keys and connection strings are not taken. The SDKs' loggers are silenced, since the GCS SDK's debug output writes request
 headers unredacted. The GCS endpoint is resolved once (`ResolveEndpoint`: the option, else
 `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly, so a caller that records it is never redirected by the

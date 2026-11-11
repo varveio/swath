@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,20 +436,34 @@ func TestCreateAzureRefusals(t *testing.T) {
 	if _, err := Create(context.Background(), "az://acct/ctr", CreateOptions{SAS: "sig=x", AzureWrite: azblob.WriteOptions{BlockSize: azblob.MaxBlockSize + 1}}); err == nil {
 		t.Error("a block size over the limit: accepted")
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("x-ms-error-code", "AuthenticationFailed")
-		w.WriteHeader(http.StatusForbidden)
-		fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s</Message></Error>", r.URL.RawQuery)
-	}))
-	t.Cleanup(srv.Close)
-	d, err := Create(context.Background(), "az://acct/ctr", CreateOptions{Endpoint: srv.URL, SAS: "sv=1&sig=" + secret})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	_, err = d.Writer().PutIfAbsent(context.Background(), "m", []byte("x"))
-	if err == nil || !strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), secret) {
-		t.Fatalf("a refused write whose answer quotes the request: %v", err)
+	// The service's answer quotes the request's query back: as sent, with its
+	// escapes in lower case, escaped once more, and with a second signature.
+	sig := url.QueryEscape("AB+" + secret + "/CD=")
+	for name, c := range map[string]struct {
+		sas  string
+		echo func(string) string
+	}{
+		"as sent":   {"sv=1&sig=" + sig, func(q string) string { return q }},
+		"lower":     {"sv=1&sig=" + sig, func(q string) string { return strings.NewReplacer("%2B", "%2b", "%2F", "%2f", "%3D", "%3d").Replace(q) }},
+		"escaped":   {"sv=1&sig=" + sig, url.QueryEscape},
+		"two sigs":  {"sv=1&sig=other&sig=" + sig, func(q string) string { return q }},
+		"sig first": {"sig=" + sig + "&sv=1", func(q string) string { return strings.ToLower(q) }},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("x-ms-error-code", "AuthenticationFailed")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s</Message></Error>", c.echo(r.URL.RawQuery))
+		}))
+		d, err := Create(context.Background(), "az://acct/ctr", CreateOptions{Endpoint: srv.URL, SAS: c.sas})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = d.Writer().PutIfAbsent(context.Background(), "m", []byte("x"))
+		if err == nil || !strings.Contains(err.Error(), "403") || strings.Contains(strings.ToLower(fmt.Sprintf("%+v", err)), strings.ToLower(secret)) {
+			t.Errorf("%s: a refused write whose answer quotes the request: %v", name, err)
+		}
+		d.Close()
+		srv.Close()
 	}
 }
 

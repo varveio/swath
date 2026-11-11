@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -429,4 +430,48 @@ func TestRemoteAzureListAndResume(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestRemoteAzureSASEchoed: an Azure destination refuses every write with
+// an answer that quotes the request's query back, its escapes in lower
+// case; the SAS's signature, with characters a URL reserves, reaches
+// neither the run's error, error.json nor the report.
+func TestRemoteAzureSASEchoed(t *testing.T) {
+	captureStderr(t)
+	s3test.NoCredentials(t)
+	src := httptest.NewServer(s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))))
+	t.Cleanup(src.Close)
+	const secret = "ZQXSECRET"
+	f := azfake.New("acct", "dst")
+	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			f.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("x-ms-error-code", "AuthorizationPermissionMismatch")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "<Error><Code>AuthorizationPermissionMismatch</Code><Message>%s</Message></Error>", strings.ToLower(r.URL.RawQuery))
+	}))
+	t.Cleanup(dst.Close)
+	work := filepath.Join(t.TempDir(), "work")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(context.Background(), []string{"s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--part-size", "4KiB",
+		"-o", "az://acct/dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL, "--report", report,
+		"--output-azure-sas-token", "sv=1&sp=rwd&sig=" + url.QueryEscape("AB+"+secret+"/CD=")}, io.Discard, false)
+	if err == nil {
+		t.Fatal("a run whose writes are refused succeeded")
+	}
+	errFile, _ := os.ReadFile(filepath.Join(work, dataset.ErrorName))
+	rep, _ := os.ReadFile(report)
+	if len(errFile) == 0 || len(rep) == 0 {
+		t.Fatalf("no error.json (%d bytes) or report (%d bytes)", len(errFile), len(rep))
+	}
+	for _, text := range []string{err.Error(), string(errFile), string(rep)} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(secret)) {
+			t.Fatalf("the signature escaped: %s", text)
+		}
+	}
+	if !strings.Contains(string(errFile), "403") {
+		t.Fatalf("the refusal is not in error.json: %s", errFile)
+	}
 }
