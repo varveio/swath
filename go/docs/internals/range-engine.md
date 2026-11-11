@@ -149,14 +149,14 @@ directory; the sequential listing and sources off the range engine (the filesyst
 Tiling (`tilePrior`): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
 K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its
 longest accepted prefix when that still sorts after the previous cut and inside the scope, else merged into the
-next (`seed.from.unsafe`). A counted prior's tiles are whole pages: the prior's expected keys over 2 tiles per
-worker, rounded up to q whole pages (`seed.from.tile_pages`), and a tile ends at the last cut that keeps it at
-most q pages less one key (a seek after a listed name can give the first page one key fewer), or at its first cut
-when that alone holds more. A tile then ends where its last page does: it costs q requests and discards at most a
-cut's keys past its end, where tiles of equal mass end mid-page, and a smaller tile costs a request for a part of
-a page. More tiles than `min(1000, 4 × workers) − 1` this way (cuts coarser than the pages) falls back to the
-equal-mass rule, which also tiles an uncounted prior: with more cuts than that, a cut is kept where the running
-mass first reaches the next multiple of total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]`
+next (`seed.from.unsafe`). A counted prior targets whole-page tiles: the prior's expected keys over 2 tiles per
+worker, rounded up to a target of q whole pages (`seed.from.tile_pages`), and a tile ends at the last cut that
+keeps it at most q pages less one key (a seek after a listed name can give the first page one key fewer), or at
+its first cut when that alone holds more. The q-page target aims to reduce partly used requests and rows read past a tile's end;
+it is not a request limit, since a coarse cut can exceed it. More tiles than `min(1000, 4 × workers) − 1` this
+way (cuts coarser than the pages) falls back to the equal-mass rule, which also tiles an uncounted prior:
+with more cuts than that, a cut is kept where the running mass first reaches the next multiple of
+total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]`
 and the open frontier `(ck, ⊤]` for keys the prior did not know (`seed.from.tiles` counts all). Each bounded tile
 carries its expected keys as its estimate (`Range.est`).
 

@@ -48,9 +48,9 @@ func Tiles(workers int) int { return min(maxSeeds, 4*max(workers, 1)) }
 // and each tile's last page is partly past its end.
 const priorTilesPerWorker = 2
 
-// tilePages is how many pages a counted prior's tile holds at most: the
+// tilePages is the target pages per counted-prior tile: the
 // prior's expected keys over priorTilesPerWorker tiles per worker, in
-// whole pages, at least one.
+// whole pages, at least one. A coarse first cut can exceed the target.
 func tilePages(expected float64, workers, page int) int {
 	return max(1, int(math.Ceil(expected/float64(priorTilesPerWorker*max(workers, 1)*page))))
 }

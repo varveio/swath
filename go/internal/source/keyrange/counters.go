@@ -210,7 +210,7 @@ var Counters = table([numCounters]counters.Def{
 	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
 	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
 	cSeedFromPageSize:             d("seed.from.page_size", counters.Max, "keys", "the page size a counted prior set (the provider's largest; 0: not engaged)", "seed_from"),
-	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the pages a counted prior's tile holds at most: its tiles end where the next cut would take them past this many pages (0: not engaged)", "seed_from"),
+	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the target pages per counted-prior tile; a coarse first cut can exceed the target (0: not engaged)", "seed_from"),
 	cSeedFromHeld:                 d("seed.from.held_pages", counters.Count, "pages", "range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge", "seed_from"),
 	cSeedFromOutrun:               d("seed.from.outrun", counters.Count, "ranges", "ranges that listed their prior's count and went on: the page's gauge estimates their remainder from there", "seed_from"),
 	cSplitConsidered:              d("split.considered", counters.Count, "decisions", "split decisions taken with demand and rank", "split"),
