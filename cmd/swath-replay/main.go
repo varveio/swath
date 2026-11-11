@@ -183,7 +183,7 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.StringVar(&f.idleTimeout, "idle-timeout", "30s", "connection idle timeout")
 	fs.StringVar(&f.writeTimeout, "write-timeout", "30s", "response write timeout, from the first byte written")
 	fs.IntVar(&f.metricsPort, "metrics-port", -1, "serve /metrics, /healthz and /runtime-attestation on this port; negative disables, 0 picks one")
-	fs.StringVar(&f.injectLatency, "inject-latency", "", "per-shape target latency: prod-commoncrawl, or e.g. worker_page=223ms,pivot_probe=121ms,structure_probe=223ms+55ms/cp")
+	fs.StringVar(&f.injectLatency, "inject-latency", "", "per-shape target latency: prod-commoncrawl, or e.g. worker_page=223ms,pivot_probe=121ms,structure_probe=223ms+55ms/cp, worker_page=16ms+0.05ms/entry (a term per entry returned, any shape)")
 	fs.Float64Var(&f.latencyJitter, "latency-jitter", 0, "deterministic jitter fraction in [0,1), keyed by the request")
 	fs.Float64Var(&f.latencyScale, "latency-scale", 1, "divide every injected delay by this factor")
 	slowDefault := int64(-1)

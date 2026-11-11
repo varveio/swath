@@ -66,10 +66,13 @@ func Classify(delimiter bool, maxResults int64) Shape {
 }
 
 // Delay is one shape's delay: a base, plus, for structure probes, a term
-// per common prefix returned (which a network proxy cannot infer).
+// per common prefix returned (which a network proxy cannot infer), plus,
+// for any shape, a term per entry returned (objects and prefixes: a
+// service whose page time grows with the page, as Azure's List Blobs).
 type Delay struct {
 	Base            time.Duration
 	PerCommonPrefix time.Duration
+	PerEntry        time.Duration
 }
 
 // ProdCommonCrawl is the built-in reference profile. Its structure-probe
@@ -105,8 +108,15 @@ func New(delays map[Shape]Delay, jitter float64) (*Profile, error) {
 
 // Delay is the target time of a request of shape s that returned
 // commonPrefixes prefixes; key identifies the request for the jitter, so
-// the same request always gets the same delay.
+// the same request always gets the same delay. A per-entry term counts
+// no entry here (DelayEntries).
 func (p *Profile) Delay(s Shape, commonPrefixes int64, key int64) time.Duration {
+	return p.DelayEntries(s, commonPrefixes, 0, key)
+}
+
+// DelayEntries is Delay for a response of entries entries (objects and
+// prefixes together), which a per-entry term multiplies.
+func (p *Profile) DelayEntries(s Shape, commonPrefixes, entries, key int64) time.Duration {
 	if p == nil {
 		return 0
 	}
@@ -114,6 +124,9 @@ func (p *Profile) Delay(s Shape, commonPrefixes int64, key int64) time.Duration 
 	base := d.Base
 	if d.PerCommonPrefix != 0 && commonPrefixes > 0 {
 		base = addSaturating(base, mulSaturating(d.PerCommonPrefix, commonPrefixes))
+	}
+	if d.PerEntry != 0 && entries > 0 {
+		base = addSaturating(base, mulSaturating(d.PerEntry, entries))
 	}
 	if base == 0 || p.jitter == 0 {
 		return base
@@ -159,7 +172,7 @@ func mix64(z int64) int64 {
 // list of shape=delay where shape is worker_page (page), pivot_probe
 // (pivot) or structure_probe (structure), and delay is 6865ms, 6.9s or a
 // bare millisecond count, with an optional +55ms/cp term for
-// structure_probe only. scale divides every delay (1 leaves the profile
+// structure_probe only and an optional +0.05ms/entry term for any shape. scale divides every delay (1 leaves the profile
 // exactly as written). A blank spec returns nil (no injection), and then
 // a scale other than 1 is an error: there is nothing to compress.
 func Parse(spec string, jitter, scale float64) (*Profile, error) {
@@ -203,7 +216,7 @@ func Parse(spec string, jitter, scale float64) (*Profile, error) {
 	}
 	if scale != 1 {
 		for s, d := range delays {
-			delays[s] = Delay{Base: divide(d.Base, scale), PerCommonPrefix: divide(d.PerCommonPrefix, scale)}
+			delays[s] = Delay{Base: divide(d.Base, scale), PerCommonPrefix: divide(d.PerCommonPrefix, scale), PerEntry: divide(d.PerEntry, scale)}
 		}
 	}
 	return New(delays, jitter)
@@ -228,24 +241,39 @@ func parseShape(s string) (Shape, error) {
 }
 
 func parseDelay(s Shape, v string) (Delay, error) {
-	base, perCP, hasCP := strings.Cut(v, "+")
-	if !hasCP {
-		d, err := parseDuration(v)
-		return Delay{Base: d}, err
-	}
-	perCP = strings.TrimSpace(perCP)
-	if !strings.HasSuffix(strings.ToLower(perCP), "/cp") {
-		return Delay{}, fmt.Errorf("per-entry latency term must end in /cp (e.g. 55ms/cp), got: %s", perCP)
-	}
-	if s != StructureProbe {
-		return Delay{}, errors.New("a /cp term only applies to structure_probe (only a delimiter'd response has a fanout)")
-	}
-	b, err := parseDuration(strings.TrimSpace(base))
+	terms := strings.Split(v, "+")
+	b, err := parseDuration(strings.TrimSpace(terms[0]))
 	if err != nil {
 		return Delay{}, err
 	}
-	c, err := parseDuration(strings.TrimSpace(perCP[:len(perCP)-3]))
-	return Delay{Base: b, PerCommonPrefix: c}, err
+	d := Delay{Base: b}
+	cp, entry := false, false
+	for _, term := range terms[1:] {
+		term = strings.TrimSpace(term)
+		lower := strings.ToLower(term)
+		unit := "/entry"
+		switch {
+		case strings.HasSuffix(lower, "/cp") && !cp:
+			if s != StructureProbe {
+				return Delay{}, errors.New("a /cp term only applies to structure_probe (only a delimiter'd response has a fanout)")
+			}
+			unit, cp = "/cp", true
+		case strings.HasSuffix(lower, "/entry") && !entry:
+			entry = true
+		default:
+			return Delay{}, fmt.Errorf("a latency term after the base must end in /cp or /entry, each at most once (e.g. 55ms/cp, 0.05ms/entry), got: %s", term)
+		}
+		c, err := parseDuration(strings.TrimSpace(term[:len(term)-len(unit)]))
+		if err != nil {
+			return Delay{}, err
+		}
+		if unit == "/cp" {
+			d.PerCommonPrefix = c
+		} else {
+			d.PerEntry = c
+		}
+	}
+	return d, nil
 }
 
 // parseDuration reads one delay: a number then ms or s (the number in the

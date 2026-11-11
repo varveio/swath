@@ -345,7 +345,7 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	cost := time.Since(started)
 	s.reg.Get(metrics.RequestStageLatency, ProtocolGCS, "page").Record(cost)
 	shape := latency.Classify(len(req.Delimiter) > 0, int64(req.PageSize))
-	delay := s.cfg.Latency.Delay(shape, int64(len(page.Prefixes)), req.LatencyKey())
+	delay := s.cfg.Latency.DelayEntries(shape, int64(len(page.Prefixes)), int64(len(page.Items)+len(page.Prefixes)), req.LatencyKey())
 
 	renderStart := time.Now()
 	out.SetFirstChunkHint(max(4096, gcs.EstimateSize(len(page.Items)+len(page.Prefixes))))
