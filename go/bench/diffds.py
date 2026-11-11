@@ -245,16 +245,27 @@ def cast(columns, types):
     return ", ".join(f"CAST({c} AS {t}) AS {c}" for c, t in zip(columns, types))
 
 
-# Types whose Python values compare exactly as DuckDB compares them. A column of another type
-# (timestamps, of any precision and zone; anything else) is streamed as the VARCHAR rendering
-# of its common-type value, which is one string per value.
+# Types whose Python values compare exactly as DuckDB compares them. A float column is
+# streamed with its SQL-equal values made one value (every NaN one NaN rendering, -0.0 as
+# 0.0) and rendered as text, which is then one string per SQL value; a column of another type
+# (timestamps, of any precision and zone; anything else) as the VARCHAR rendering of its
+# common-type value, which is one string per value.
 PYTHON_EXACT = {"VARCHAR", "BLOB", "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
                 "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"}
+FLOATS = {"FLOAT", "REAL", "DOUBLE"}
 
 
 def stream_cast(columns, types):
-    return ", ".join(f"CAST({c} AS {t}) AS {c}" if t in PYTHON_EXACT else f"CAST(CAST({c} AS {t}) AS VARCHAR) AS {c}"
-                     for c, t in zip(columns, types))
+    out = []
+    for c, t in zip(columns, types):
+        v = f"CAST({c} AS {t})"
+        if t in PYTHON_EXACT:
+            out.append(f"{v} AS {c}")
+        elif t in FLOATS:
+            out.append(f"CASE WHEN isnan({v}) THEN 'nan' WHEN {v} = 0 THEN '0' ELSE CAST({v} AS VARCHAR) END AS {c}")
+        else:
+            out.append(f"CAST({v} AS VARCHAR) AS {c}")
+    return ", ".join(out)
 
 
 def stream(paths, ts_ms, sid, columns, types):

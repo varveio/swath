@@ -148,6 +148,10 @@ class StreamingMatchesSQL(unittest.TestCase):
         "overlapping parts": ([s3_rows(["a", "b"]), s3_rows(["c"])], [s3_rows(["a", "b"]), s3_rows(["b", "c"])]),
         "a changed value": ([s3_rows(["a", "b", "c"])], [s3_rows(["a", "b", "c"], size="CASE WHEN k = 'b' THEN 7 ELSE 100 END")]),
         "a duplicated row": ([s3_rows(["a", "b"])], [s3_rows(["a", "a", "b"])]),
+        "signed zeros": ([s3_rows(["a", "b"], etag="-CAST(0.0 AS DOUBLE)")], [s3_rows(["a", "b"], etag="CAST(0.0 AS DOUBLE)")]),
+        "NaN variants": ([s3_rows(["a", "b"], etag="CAST('NaN' AS DOUBLE)")], [s3_rows(["a", "b"], etag="-CAST('NaN' AS DOUBLE)")]),
+        "a differing float": ([s3_rows(["a", "b"], etag="CAST(1.5 AS DOUBLE)")],
+                              [s3_rows(["a", "b"], etag="CASE WHEN k = 'b' THEN CAST('NaN' AS DOUBLE) ELSE 1.5 END")]),
         "microseconds": ([s3_rows(["a", "b"])], [s3_rows(["a", "b"], last_modified="TIMESTAMP '2026-01-01 00:00:00.123'")]),
     }
 
@@ -176,8 +180,10 @@ class StreamingMatchesSQL(unittest.TestCase):
                     if name == "a column some parts lack":
                         self.assertFalse(result["identical"])  # union_by_name: null, not the canonical false
                     if name in ("a column's type across parts", "a column's type across sides", "null keys, same",
-                                "empty and several parts"):
+                                "empty and several parts", "signed zeros", "NaN variants"):
                         self.assertTrue(result["identical"], result)
+                    if name == "a differing float":
+                        self.assertFalse(result["identical"], result)
                     if name == "microseconds":
                         self.assertEqual(result["identical"], ts_ms, result)
 
