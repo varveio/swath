@@ -53,7 +53,8 @@ process when memory cannot be reclaimed. A run holds:
   about two sort buffers in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`).
 - **Pages in flight, outside it:** accepted success bodies are limited to 16 MiB for S3/GCS and
   64 MiB for Azure. These byte limits do not bound the backing buffer capacity or decoded rows and
-  strings. Worker requests, seed listings and probes can overlap. Include those allocations, the
+  strings. Azure Blob asks for 5,000 entries a page with a counted `--seed-from` prior, against 1,000
+  otherwise: about five times the memory per page in flight, beside the same sort buffer. Worker requests, seed listings and probes can overlap. Include those allocations, the
   encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
   See [body handling](internals/clients.md#what-swath-keeps) and
   [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
@@ -121,7 +122,7 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
 Object stores charge per listing request. An S3 or GCS request returns up to 1,000 keys, an Azure Blob one up
 to 5,000. A run sends about one request per page of keys, plus the seed's delimiter listings, the probes that
 pick split points, and retries; a run seeded from a previous dataset (`--seed-from`) comes close to one per
-page. The run report counts every HTTP
+page, and on Azure Blob asks for pages of 5,000. The run report counts every HTTP
 attempt in `requests.http_attempts`, and on AWS S3 and GCS's own endpoints estimates their cost in
 `cost.cost_usd` at the provider's reference list rate (0.005 USD per 1,000 requests); a custom endpoint and
 Azure Blob have no estimate. The progress line shows the same estimate as the run goes. Pricing varies by

@@ -149,16 +149,33 @@ directory; the sequential listing and sources off the range engine (the filesyst
 Tiling (`tilePrior`): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
 K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its
 longest accepted prefix when that still sorts after the previous cut and inside the scope, else merged into the
-next (`seed.from.unsafe`); with more cuts than `min(1000, 4 × workers) − 1`, a cut is kept where the running mass
-first reaches the next multiple of total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]` and
-the open frontier `(ck, ⊤]` for keys the prior did not know (`seed.from.tiles` counts all). Each bounded tile
-carries its expected keys as its estimate (`Range.est`), the rank's remainder until its first page.
+next (`seed.from.unsafe`). A counted prior's tiles are whole pages: the prior's expected keys over 2 tiles per
+worker, rounded up to q whole pages (`seed.from.tile_pages`), and a tile ends at the last cut that keeps it at
+most q pages less one key (a seek after a listed name can give the first page one key fewer), or at its first cut
+when that alone holds more. A tile then ends where its last page does: it costs q requests and discards at most a
+cut's keys past its end, where tiles of equal mass end mid-page, and a smaller tile costs a request for a part of
+a page. More tiles than `min(1000, 4 × workers) − 1` this way (cuts coarser than the pages) falls back to the
+equal-mass rule, which also tiles an uncounted prior: with more cuts than that, a cut is kept where the running
+mass first reaches the next multiple of total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]`
+and the open frontier `(ck, ⊤]` for keys the prior did not know (`seed.from.tiles` counts all). Each bounded tile
+carries its expected keys as its estimate (`Range.est`).
+
+*Page size.* With a counted prior the run asks for the provider's largest page (`Options.PriorPageSize`,
+`seed.from.page_size`): Azure's 5,000 (S3 and GCS return at most 1,000, the default). A cold run keeps 1,000:
+its ranges end as split children much smaller than a page, each discarding most of its last page, where a
+prior's tiles hold whole pages. The diagnostic `--page-size` overrides it.
+
+*The prior's count.* A counted tile's count, less the keys its ranges listed, stays its remainder estimate
+(`running.held`, `seed.from.held_pages`) for the rank and the admission gates, instead of the page's gauge,
+which errs long by orders of magnitude on hierarchical keys and would admit splits of a tile's last page or two;
+a split shares the count between the children in the gauge's proportion (halves where the gauge cannot read a
+child). A range that lists past its count (`seed.from.outrun`) hands its remainder back to the gauge.
 
 The prior sets the initial tiles and that first estimate only; the adaptive engine is the same for every source
 (owner splits on demand, the gauge, the admission gates, the override, structure probes). How a stale prior is
-corrected: a tile's first page replaces the prior's estimate with its gauge's remainder, so a grown segment is
-under-ranked only until its first page; from then the rank, by estimated remainder, sees it as large, and once
-workers go idle (hunger) it splits inside like any range, the gates reading the page, not the prior. A gauge that
+corrected: a grown segment lists past its count, and from then its gauge's remainder ranks it; an uncounted
+tile's first page replaces its estimate with the gauge's. Once workers go idle (hunger) it splits inside like any
+range, the gates reading the page, not the prior. A gauge that
 cannot read the bound (+∞) ranks it above every finite estimate; where the gauge errs, the admission override (4
 refusals in a row) and hunger cover the rest. An emptied segment costs one request for its tile; a new folder
 between cuts lies inside one tile and is split there. The report shows it: `seed.from.error.within_2x`, `.grown`,

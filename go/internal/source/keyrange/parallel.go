@@ -102,6 +102,10 @@ type Range struct {
 	// remainder until its own first page gives one (running.rem).
 	est   float64
 	estOK bool
+	// prior: est is a counted prior's (a tile's expected keys, or its
+	// share of its parent's), which the range's pages do not replace by
+	// their gauge until it is listed (running.held).
+	prior bool
 	// tile: 1 + the index of the prior tile (expandPrior) the range lies
 	// in, inherited by its children; 0 for none. Its keys add to the
 	// tile's, which the report compares with the prior (priorErrors).
@@ -146,6 +150,16 @@ type running struct {
 	lat          float64        // page latency, ns: an EWMA of its pages (weight slowLatencyWeight), from its parent's (0: unknown)
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
 	groupOpen    bool           // group mode: its last emitted key's group may continue, or it emitted none yet (no split, unranked)
+	prior        float64        // a counted prior's expected keys in the range (Range.prior; 0: none)
+}
+
+// held is the prior's count of keys still to list in st, its expected
+// keys less those listed, or 0 where it has none or they are listed. A
+// prior's count is exact for a fresh prior, where a page's gauge errs
+// long by orders of magnitude on hierarchical keys (admission.go), so it
+// stays the range's remainder while it lasts; mu held.
+func (st *running) held() float64 {
+	return max(st.prior-float64(st.keys), 0)
 }
 
 // slowKeys is st's keys left for the slow-range rule: its remainder, or,
@@ -417,6 +431,9 @@ func (p *Engine[P]) enter(r Range) *running {
 		p.queued--
 	}
 	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow}
+	if r.prior && r.estOK {
+		st.prior = r.est
+	}
 	p.running[r.id] = st
 	if r.slow {
 		p.slowQueued--
@@ -645,8 +662,21 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		}
 		st.ended = done
 		st.groupOpen = p.d.Groups && grp.unsplittable()
-		if !math.IsNaN(rem) {
-			st.rem = rem
+		// held: the prior's remainder, which the admission gates read in
+		// place of the gauge's (NaN: none).
+		held := math.NaN()
+		switch h := st.held(); {
+		case h > 0 && !done:
+			held, st.rem = h, h
+			p.c.Inc(cSeedFromHeld)
+		case st.prior > 0 && !done:
+			st.prior = 0
+			p.c.Inc(cSeedFromOutrun)
+			fallthrough
+		default:
+			if !math.IsNaN(rem) {
+				st.rem = rem
+			}
 		}
 		if p.opt.SlowSplit {
 			if st.lat == 0 {
@@ -682,6 +712,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 			pr = propose(r, page, head, c, ceil, bounded, want)
 			pr.gauge, pr.rem = g, rem
+			if !math.IsNaN(held) {
+				pr.rem, pr.held = held, true
+			}
 		}
 		if pv, ok := p.decide(st, r, c, pr); ok {
 			if p.d.Groups && grp.unsplittable() {
@@ -741,7 +774,23 @@ type proposal struct {
 	shrink   bool      // the density step lay nearer than the reflection and was not taken
 	anchor   string    // the anchor the reflection measured from ("": ⊥)
 	gauge    *gauge    // the page's gauge (nil: no estimate), for the admission gates and the children's estimates
-	rem      float64   // the gauge's remainder (c, hi] of a bounded range
+	rem      float64   // the gauge's remainder (c, hi] of a bounded range, or the prior's (held)
+	held     bool      // rem is the prior's count (running.held): the children share it
+}
+
+// children is the keys a split of (c, hi] at m leaves each child by the
+// page's gauge, or, where the remainder is a prior's count (held), that
+// count shared in the gauge's proportion (halves where the gauge cannot
+// read a child).
+func (pr *proposal) children(c, m, hi string) (lower, upper float64) {
+	lower, upper = pr.gauge.keys(c, m), pr.gauge.keys(m, hi)
+	if !pr.held {
+		return lower, upper
+	}
+	if s := lower + upper; s > 0 && !math.IsInf(s, 1) {
+		return pr.rem * lower / s, pr.rem * upper / s
+	}
+	return pr.rem / 2, pr.rem / 2
 }
 
 // propose places the pivot of a split of r at cursor c below ceil
@@ -940,13 +989,14 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			// Pages as this range's pages come: a provider may return fewer
 			// keys than asked for.
 			page := float64(len(g.page))
+			lower, upper := pr.children(c, m, r.hi)
 			refuse := counters.ID(0) // the refusing gate; 0 (cObjects) for none
 			switch {
 			case pr.rem < admitRemainderPages*page:
 				refuse = cSplitSkippedRemainder
-			case g.keys(c, m) < admitChildPages*page:
+			case lower < admitChildPages*page:
 				refuse = cSplitSkippedLowerTiny
-			case g.keys(m, r.hi) < admitChildPages*page:
+			case upper < admitChildPages*page:
 				refuse = cSplitSkippedUpperTiny
 			}
 			switch {
@@ -960,8 +1010,9 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		}
 	}
 	st.refused = 0
-	if g := pr.gauge; g != nil {
-		pv.lower, pv.upper, pv.estOK = g.keys(c, m), g.keys(m, r.hi), true
+	if pr.gauge != nil {
+		pv.lower, pv.upper = pr.children(c, m, r.hi)
+		pv.estOK, pv.prior = true, pr.held
 	}
 	p.account(time.Now())
 	p.queued += 2 // the children, reserved until commit hands them out
@@ -982,6 +1033,7 @@ type pivot struct {
 	// gauge), their remainders until their own first pages.
 	lower, upper float64
 	estOK        bool
+	prior        bool // lower and upper share a prior's count (Range.prior)
 	slow         bool // a slow-range split, taken without an idle worker
 }
 
@@ -1025,8 +1077,8 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
 		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
 	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
-	lower.est, lower.estOK = pv.lower, pv.estOK
-	upper.est, upper.estOK = pv.upper, pv.estOK && !r.open
+	lower.est, lower.estOK, lower.prior = pv.lower, pv.estOK, pv.prior
+	upper.est, upper.estOK, upper.prior = pv.upper, pv.estOK && !r.open, pv.prior && !r.open
 	// A resumed range split before its cursor passed the resume key hands
 	// the key on: keys up to it are already published.
 	if r.after > c {

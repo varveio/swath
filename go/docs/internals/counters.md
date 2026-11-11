@@ -162,9 +162,13 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.from.tiles` | count | ranges | seed_from | ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers)) |
 | `seed.from.expected_keys` | count | keys | seed_from | keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth |
 | `seed.from.error.within_2x` | count | ranges | seed_from | prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included) |
-| `seed.from.error.grown` | count | ranges | seed_from | prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out) |
+| `seed.from.error.grown` | count | ranges | seed_from | prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (past its count the gauge estimates its remainder, and splits share it out) |
 | `seed.from.error.shrunk` | count | ranges | seed_from | prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied |
 | `seed.from.error.max_grown` | max | x | seed_from | the largest ratio of a prior tile's listed keys to the prior's expectation, rounded |
+| `seed.from.page_size` | max | keys | seed_from | the page size a counted prior set (the provider's largest; 0: not engaged) |
+| `seed.from.tile_pages` | max | pages | seed_from | the pages a counted prior's tile holds at most: its tiles end where the next cut would take them past this many pages (0: not engaged) |
+| `seed.from.held_pages` | count | pages | seed_from | range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge |
+| `seed.from.outrun` | count | ranges | seed_from | ranges that listed their prior's count and went on: the page's gauge estimates their remainder from there |
 | `seed.sentinel_declined.truncated` | count | decisions | seed | sentinel declined: the top level had more pages than the seed followed |
 | `seed.sentinel_declined.object_last` | count | decisions | seed | sentinel declined: the top level's last page ended with an object |
 | `seed.sentinel_declined.no_ceiling` | count | decisions | seed | sentinel declined: no prefix ceiling above the last cut (and a resume key) |

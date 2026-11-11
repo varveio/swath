@@ -30,6 +30,10 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 		return err
 	}
 	p.opt.Prior = pr
+	if pr.Counted && p.opt.PriorPageSize > p.opt.PageSize {
+		p.opt.PageSize = p.opt.PriorPageSize
+		p.c.Set(cSeedFromPageSize, int64(p.opt.PageSize))
+	}
 	return nil
 }
 
@@ -37,6 +41,19 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 // worker, so every worker starts with work and a few to spare, at most
 // maxSeeds.
 func Tiles(workers int) int { return min(maxSeeds, 4*max(workers, 1)) }
+
+// priorTilesPerWorker is how many tiles a counted prior aims at per
+// worker: two, so every worker starts with a tile and the end of the run
+// has some to balance, where four (Tiles) make tiles of few pages each,
+// and each tile's last page is partly past its end.
+const priorTilesPerWorker = 2
+
+// tilePages is how many pages a counted prior's tile holds at most: the
+// prior's expected keys over priorTilesPerWorker tiles per worker, in
+// whole pages, at least one.
+func tilePages(expected float64, workers, page int) int {
+	return max(1, int(math.Ceil(expected/float64(priorTilesPerWorker*max(workers, 1)*page))))
+}
 
 // priorTile is one bounded tile a prior makes: (previous, hi] and the keys
 // the prior expects in it (est; counted false: none).
@@ -53,11 +70,16 @@ type priorTile struct {
 //     accepted prefix when that still sorts after the previous cut and
 //     inside the scope, else it is dropped and its keys join the next cut's
 //     interval (unsafe counts both);
-//   - with more cuts than tiles, a cut is kept where the running mass
-//     (rows, or one per cut without counts) first reaches the next multiple
-//     of total/(k-1); the last cut is always kept, so the frontier starts
-//     after the prior's last key.
-func tilePrior(pr *source.Prior, k int, after, scope string, safe func(string) bool, safeStart func(string) string) (tiles []priorTile, unsafe int) {
+//   - with fill > 0 (counted), a tile ends at the last cut that keeps its
+//     mass at most fill, or at its first cut when that alone exceeds it,
+//     so a tile of whole pages ends where its last page does; if that
+//     makes more than k-1 tiles, the tiles are cut as below instead;
+//   - else, with more cuts than tiles, a cut is kept where the running
+//     mass (rows, or one per cut without counts) first reaches the next
+//     multiple of total/(k-1);
+//   - the last cut is always kept, so the frontier starts after the
+//     prior's last key.
+func tilePrior(pr *source.Prior, k int, fill float64, after, scope string, safe func(string) bool, safeStart func(string) string) (tiles []priorTile, unsafe int) {
 	type cand struct {
 		key  string
 		mass float64
@@ -85,6 +107,23 @@ func tilePrior(pr *source.Prior, k int, after, scope string, safe func(string) b
 		pending, last = 0, key
 	}
 	bounded := max(k-1, 1)
+	if fill > 0 {
+		acc := 0.0
+		for i, c := range cands {
+			if acc > 0 && acc+c.mass > fill {
+				tiles = append(tiles, priorTile{hi: cands[i-1].key, est: acc})
+				acc = 0
+			}
+			acc += c.mass
+		}
+		if n := len(cands); n > 0 {
+			tiles = append(tiles, priorTile{hi: cands[n-1].key, est: acc})
+		}
+		if len(tiles) <= bounded {
+			return tiles, unsafe
+		}
+		tiles = nil
+	}
 	var total float64
 	for _, c := range cands {
 		total += c.mass
@@ -119,7 +158,22 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	if p.opt.Resume != nil {
 		after = p.opt.Resume.After
 	}
-	tiles, unsafe := tilePrior(pr, Tiles(p.opt.Workers), after, p.opt.Prefix, p.safe, p.safeStart)
+	// A counted prior's tiles are whole pages each (tilePages), less the
+	// one key a seek after a listed name can take from the first page
+	// (Azure's startFrom returns the tile's lo, which is dropped).
+	fill := 0.0
+	if pr.Counted {
+		expected := 0.0
+		for _, c := range pr.Cuts {
+			if c.Key > after {
+				expected += float64(c.Rows)
+			}
+		}
+		q := tilePages(expected, p.opt.Workers, p.opt.PageSize)
+		fill = float64(q*p.opt.PageSize - 1)
+		p.c.Set(cSeedFromTilePages, int64(q))
+	}
+	tiles, unsafe := tilePrior(pr, Tiles(p.opt.Workers), fill, after, p.opt.Prefix, p.safe, p.safeStart)
 	p.lock()
 	p.c.Set(cSeedFromParts, int64(pr.Parts))
 	p.c.Set(cSeedFromIndexed, int64(pr.IndexedParts))
@@ -132,7 +186,7 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	for _, t := range tiles {
 		r := Range{lo: lo, hi: t.hi, id: p.ids.Add(1), born: fromSeed}
 		if pr.Counted {
-			r.est, r.estOK = t.est, true
+			r.est, r.estOK, r.prior = t.est, true, true
 			expected += t.est
 			p.tiles = append(p.tiles, tileAccount{est: t.est})
 			r.tile = int32(len(p.tiles))

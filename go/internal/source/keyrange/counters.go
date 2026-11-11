@@ -54,6 +54,10 @@ const (
 	cSeedFromErrGrown
 	cSeedFromErrShrunk
 	cSeedFromErrMaxGrown
+	cSeedFromPageSize
+	cSeedFromTilePages
+	cSeedFromHeld
+	cSeedFromOutrun
 	cSentinelDeclinedTruncated
 	cSentinelDeclinedObjectLast
 	cSentinelDeclinedNoCeiling
@@ -202,9 +206,13 @@ var Counters = table([numCounters]counters.Def{
 	cSeedFromTiles:                d("seed.from.tiles", counters.Count, "ranges", "ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers))", "seed_from"),
 	cSeedFromExpected:             d("seed.from.expected_keys", counters.Count, "keys", "keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth", "seed_from"),
 	cSeedFromErrWithin:            d("seed.from.error.within_2x", counters.Count, "ranges", "prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included)", "seed_from"),
-	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out)", "seed_from"),
+	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (past its count the gauge estimates its remainder, and splits share it out)", "seed_from"),
 	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
 	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
+	cSeedFromPageSize:             d("seed.from.page_size", counters.Max, "keys", "the page size a counted prior set (the provider's largest; 0: not engaged)", "seed_from"),
+	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the pages a counted prior's tile holds at most: its tiles end where the next cut would take them past this many pages (0: not engaged)", "seed_from"),
+	cSeedFromHeld:                 d("seed.from.held_pages", counters.Count, "pages", "range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge", "seed_from"),
+	cSeedFromOutrun:               d("seed.from.outrun", counters.Count, "ranges", "ranges that listed their prior's count and went on: the page's gauge estimates their remainder from there", "seed_from"),
 	cSplitConsidered:              d("split.considered", counters.Count, "decisions", "split decisions taken with demand and rank", "split"),
 	cSplitPivotReflect:            d("split.pivot.reflect", counters.Count, "splits", "accepted splits whose pivot is the cursor reflected from its chain's anchor (forwardReflect at the scalar where they diverge)", "split"),
 	cSplitPivotMidpoint:           d("split.pivot.midpoint", counters.Count, "splits", "accepted splits whose pivot is a safe scalar midpoint between the cursor and hi", "split"),
