@@ -151,6 +151,10 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week).
+- **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
+  whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which
+  creates the very same manifest again. A run without a journal (a local tree) cannot resume: check the prefix
+  for a manifest before deleting anything under it.
 - **Report:** `output.remote` in the report ([run report](reference/run-report.md)): the commit's outcome, the
   uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads) and the orphans deleted.
   Uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
