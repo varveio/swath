@@ -47,10 +47,11 @@ func remote.Open(ctx context.Context, location string) (*remote.Store, error) //
 type remote.Store struct{ ... }                                                // objfile.Opener and io.Closer
 func (s *remote.Store) Scope() string                                          // the scope for Pin and Restore
 
-// The write side (GCS only): create-only uploads, conditional deletes.
+// The write side (GCS and S3): create-only uploads, conditional deletes.
 type Condition int
-const CreateOnly Condition                              // ifGenerationMatch=0 (S3: If-None-Match: *)
-var ErrExists error                                    // a CreateOnly write found an object
+const CreateOnly Condition                              // GCS ifGenerationMatch=0, S3 If-None-Match: *
+var ErrExists error                                    // a CreateOnly write found an object (412)
+var ErrConflict error                                  // a concurrent conditional write conflicted (S3 409)
 var ErrUnresolved error                                // the write's outcome is unknown: read the name back
 func RedactError(err error) error                      // URLs in the text lose query and user information
 type Receipt struct{ Name string; Size int64; Identity string }
@@ -67,6 +68,7 @@ type Writer interface {
 }
 func RootWriter(w Writer, prefix string) Writer
 func gcs.NewWriter(client *storage.Client, bucket string, o gcs.WriteOptions) objfile.Writer
+func s3.NewWriter(client *s3.Client, bucket string, o s3.WriteOptions) (objfile.Writer, error)
 func remote.Create(ctx context.Context, location string, o remote.CreateOptions) (*remote.Destination, error)
 func remote.ResolveEndpoint(endpoint string) (string, bool) // the flag, or STORAGE_EMULATOR_HOST (emulator)
 ```
@@ -200,17 +202,24 @@ prefix, not a directory, and an `az://` root may carry a SAS query. It keeps its
 The write side creates whole objects under a precondition and nothing else: no rename, no listing, no
 overwrite, and a delete only of the version named by its identity. `NewWriter` starts an upload whose bytes are
 sent as they are written; the object exists only once `Close` returns nil, and its `Receipt` then names the
-created version (the GCS generation). `Abort` ends an upload without an object. `CreateOnly` is GCS
-`ifGenerationMatch=0`, checked by the service when the object is created, so of two writers of one name exactly
-one succeeds and the other gets `ErrExists`. After a lost response the SDK sends the request again, and a
-`PutIfAbsent` retry then finds the write's own object and returns `ErrExists`: a caller that must tell the two
-apart reads the object back and compares it with what it wrote. A completion that fails in transport, times
-out, is cancelled in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service
-may have applied it, or may still (a request accepted behind a failed connection), so a read that finds nothing
-proves nothing yet; only a refusal (another 4xx) leaves no object for certain. Every error a writer returns has
-passed through `RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's
-query, user information and fragment from the text: a GCS resumable session URI is a bearer capability for its
-upload, and the SDK's transport errors quote it. `Abort` may run while a `Write` is blocked; it cancels first.
+created version, as a read's `Identity` names it (the GCS generation; the S3 version id, or the ETag without
+one). `Abort` ends an upload without an object. `CreateOnly` is checked by the service when the object is
+created (GCS `ifGenerationMatch=0`, S3 `If-None-Match: *`), so of two writers of one name exactly one succeeds
+and the other gets `ErrExists`. After a lost response the SDK sends the request again, and a `PutIfAbsent`
+retry then finds the write's own object and returns `ErrExists`: a caller that must tell the two apart reads the
+object back and compares it with what it wrote. A completion that fails in transport, times out, is cancelled
+in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service may have applied it,
+or may still (a request accepted behind a failed connection), so a read that finds nothing proves nothing yet;
+only a refusal (another 4xx) leaves no object for certain. Every error a writer returns has passed through
+`RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's query, user
+information and fragment from the text: a GCS resumable session URI is a bearer capability for its upload, and
+the SDK's transport errors quote it.
+
+Every provider's writer has one shape: an upload buffers one chunk (GCS) or part (S3) and sends it before
+`Write` takes more, so memory is one buffer per open upload and a slow store holds the writer back; retries are
+the SDK's, bounded per request, and `Retried` is told each one; `Abort` may be called from another goroutine
+while `Write` waits on the store (it cancels first); and an upload's session handle (a GCS session URI, an S3
+upload id) never appears in an error.
 
 `gcs.NewWriter` uploads in resumable sessions of `WriteOptions.ChunkSize` (8 MiB by default; the SDK rounds to
 256 KiB): the SDK buffers one chunk an upload and blocks `Write` while it is in flight, so memory is a chunk per
@@ -223,18 +232,44 @@ retries. `Abort` cancels the session's request; a session the service
 holds expires on its own (GCS keeps one for a week), and its URI, a bearer credential for the upload, never
 leaves the process.
 
-`remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a
-read-write client it owns, with its own credentials (`CreateOptions.CredentialsFile`, or Application Default
-Credentials) and endpoint, shared with no read client. Only `gs://` is written; `s3://` and `az://` are
-refused. The SDK's logger is silenced, since its debug output writes request headers unredacted. The endpoint
-is resolved once (`ResolveEndpoint`: the option, else `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly,
-so a caller that records it is never redirected by the environment later. For `gs://`, a response's headers are
-awaited two minutes at most (`RequestTimeout`), a resumable upload's chunk transfer two minutes
-(`gcs.DefaultChunkTransferTimeout`), and reads get at most five attempts.
+`s3.NewWriter` sends an object of at most `WriteOptions.PartSize` (8 MiB by default) as one `PutObject`, and a
+larger one as a multipart upload of `PartSize` parts and a last: `CreateMultipartUpload` once the first part is
+full, `UploadPart` for each, `CompleteMultipartUpload` with `If-None-Match: *` and the object's size
+(`x-amz-mp-object-size`). Parts carry a CRC32 checksum the service verifies. S3's limits are the writer's own,
+whatever the caller's object size: a part size of 5 MiB to 5 GiB, and at most 10,000 parts, so the largest
+object is 10,000 × `PartSize` (78 GiB at 8 MiB); the write past it fails before sending. A failed `Close`, and
+`Abort`, abort the multipart upload under a context of their own (`AbortTimeout`, 30 s), since the upload's may
+be the one cancelled. S3 answers a conditional write that races another with 409
+`ConditionalRequestConflict`: a `PutObject` is sent again (within `MaxAttempts`, 5 by default); a completion is
+not (its parts are gone once aborted), and the upload ends with `ErrConflict`, which a caller retries from the
+first byte. A 200 answer carrying an error is the SDK's to detect (it retries it as a 500). `DeleteIf` sends
+an ETag identity as `If-Match`, and deletes a version id by its id (that version only). **S3 never expires an
+incomplete multipart upload:** one a crash leaves holds its parts, billed, until it is aborted; a bucket written
+to needs a lifecycle rule that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`, a day or
+more after initiation).
 
-`gcs/gcsfake` is the in-process fake the GCS tests use: JSON metadata and deletes, XML ranged reads, and
-uploads both single-request and resumable, with `ifGenerationMatch` evaluated atomically at creation and a
-fault hook that fails a request before it acts, or loses its response after.
+`remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a client
+and connection pool it owns, with its own credentials and endpoint, shared with no read client. For `gs://`:
+`CreateOptions.CredentialsFile`, or Application Default Credentials, with the read-write scope. For `s3://`:
+the AWS SDK's configuration with `CreateOptions.Profile` and `Region` (else `AWS_REGION`, `AWS_DEFAULT_REGION`,
+the profile's, then `us-east-1`; `Destination.Region` is the one resolved), every request signed; an
+`Endpoint` is addressed path-style, and none set by the environment (`AWS_ENDPOINT_URL`, FIPS, dual-stack) is
+applied. `az://` is refused. The SDKs' loggers are silenced, since the GCS SDK's debug output writes request
+headers unredacted. The GCS endpoint is resolved once (`ResolveEndpoint`: the option, else
+`STORAGE_EMULATOR_HOST`) and given to the SDK explicitly, so a caller that records it is never redirected by the
+environment later. A response's headers are awaited two minutes at most (`RequestTimeout`, both providers).
+For `gs://`, a resumable upload's chunk transfer is also bounded, two minutes (`gcs.DefaultChunkTransferTimeout`),
+and reads get at most five attempts; for `s3://`, each write request's attempts are bounded (`MaxAttempts`) and
+every request runs under its operation's context, with no per-part transfer timeout.
+
+`gcs/gcsfake` and `s3/s3fake` are the in-process fakes the write tests use. `gcsfake`: JSON metadata and
+deletes, XML ranged reads, and uploads both single-request and resumable, with `ifGenerationMatch` evaluated
+atomically at creation. `s3fake`: HeadObject, ranged GetObject with `If-Match` and version ids, PutObject, the
+multipart calls and DeleteObject, path-style, an optionally versioned bucket, `If-None-Match: *` evaluated
+atomically with the creation on both PutObject and CompleteMultipartUpload, the part rules (order, ETags, the
+minimum part size, 10,000 parts) and aws-chunked bodies; it does not model signatures, checksum verification,
+lifecycle rules, a 409 except as an injected fault, or eventual consistency. Each has a fault hook that fails a
+request before it acts, or loses its response after.
 
 ## What it is not
 

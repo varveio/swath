@@ -18,12 +18,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/go/objfile/s3/s3fake"
 )
 
 // TestCreate: a destination writes and reads back under its prefix, on
@@ -59,11 +62,11 @@ func TestCreate(t *testing.T) {
 	}
 }
 
-// TestCreateRefusals: only gs:// is written; an endpoint carrying
-// credentials and an unreadable credentials file are refused.
+// TestCreateRefusals: only gs:// and s3:// are written; an endpoint
+// carrying credentials and an unreadable credentials file are refused.
 func TestCreateRefusals(t *testing.T) {
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
-	for _, loc := range []string{"s3://b/p", "az://acct/c/p"} {
+	for _, loc := range []string{"az://acct/c/p"} {
 		if _, err := Create(context.Background(), loc, CreateOptions{}); err == nil || !strings.Contains(err.Error(), "not supported") {
 			t.Errorf("Create(%s) = %v", loc, err)
 		}
@@ -197,5 +200,110 @@ func TestCreateTokenBounded(t *testing.T) {
 				t.Fatalf("the open waited %v on the token endpoint", took)
 			}
 		})
+	}
+}
+
+// s3Destination serves an s3fake bucket "bkt", recording each request's
+// Authorization; it returns the fake, its URL and the record.
+func s3Destination(t *testing.T) (*s3fake.Server, string, *sync.Map) {
+	t.Helper()
+	f := s3fake.New("bkt")
+	var auth sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth.Store(r.Header.Get("Authorization"), true)
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return f, srv.URL, &auth
+}
+
+// awsEnv clears the AWS environment a test does not set, and points the
+// shared files at an empty directory.
+func awsEnv(t *testing.T) {
+	dir := t.TempDir()
+	for _, v := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
+		"AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", "AWS_USE_FIPS_ENDPOINT", "AWS_USE_DUALSTACK_ENDPOINT", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"} {
+		t.Setenv(v, "")
+	}
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+}
+
+// TestCreateS3: an s3:// destination writes and reads back under its
+// prefix on the endpoint named (path-style), signing every request with
+// the profile's credentials; the region is the profile's when not given;
+// an endpoint the environment sets is not applied.
+func TestCreateS3(t *testing.T) {
+	awsEnv(t)
+	f, url, auth := s3Destination(t)
+	_, other, otherAuth := s3Destination(t)
+	t.Setenv("AWS_ENDPOINT_URL_S3", other) // the source's, say: never the destination's
+	t.Setenv("AWS_ENDPOINT_URL", other)
+	cfg := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(cfg, []byte("[profile dst]\nregion = eu-west-3\naws_access_key_id = AKIDDST\naws_secret_access_key = "+secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	d, err := Create(context.Background(), "s3://bkt/ds", CreateOptions{Endpoint: url, Profile: "dst"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if d.Scope() != "s3://bkt/ds/ at "+url || d.Region() != "eu-west-3" {
+		t.Fatalf("scope %q, region %q", d.Scope(), d.Region())
+	}
+	r, err := d.Writer().PutIfAbsent(context.Background(), "manifest.json", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.Get("ds/manifest.json"); !ok || r.Name != "manifest.json" {
+		t.Fatalf("objects %v, receipt %+v", f.Names(), r)
+	}
+	obj, err := d.Open(context.Background(), "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Close()
+	b, err := io.ReadAll(io.NewSectionReader(obj, 0, obj.Size()))
+	if err != nil || string(b) != `{}` || obj.Identity() != r.Identity {
+		t.Fatalf("read back %q (%v), identity %s, receipt %s", b, err, obj.Identity(), r.Identity)
+	}
+	n := 0
+	auth.Range(func(k, _ any) bool {
+		n++
+		if a := k.(string); !strings.HasPrefix(a, "AWS4-HMAC-SHA256 Credential=AKIDDST/") || !strings.Contains(a, "/eu-west-3/s3/") {
+			t.Errorf("a request signed %q", a)
+		}
+		return true
+	})
+	otherAuth.Range(func(k, _ any) bool { t.Errorf("the environment's endpoint was sent a request"); return false })
+	if n == 0 {
+		t.Fatal("no request recorded")
+	}
+
+	// The region given wins; without one or a profile's, us-east-1.
+	if d, err := Create(context.Background(), "s3://bkt/ds", CreateOptions{Endpoint: url, Profile: "dst", Region: "ap-south-1"}); err != nil || d.Region() != "ap-south-1" {
+		t.Fatalf("given region: %v", err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	if d, err := Create(context.Background(), "s3://bkt/ds", CreateOptions{Endpoint: url}); err != nil || d.Region() != "us-east-1" {
+		t.Fatalf("default region: %v", err)
+	}
+}
+
+// TestCreateS3Refusals: an endpoint carrying credentials, a part size S3
+// refuses, and a missing profile are refused before any request.
+func TestCreateS3Refusals(t *testing.T) {
+	awsEnv(t)
+	if _, err := Create(context.Background(), "s3://b", CreateOptions{Endpoint: "https://user:" + secret + "@host/"}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("endpoint with user information: %v", err)
+	}
+	if _, err := Create(context.Background(), "s3://b", CreateOptions{S3Write: s3.WriteOptions{PartSize: 1 << 20}}); err == nil {
+		t.Error("a 1 MiB part size: accepted")
+	}
+	if _, err := Create(context.Background(), "s3://b", CreateOptions{Profile: "missing"}); err == nil {
+		t.Error("a missing profile: accepted")
 	}
 }
