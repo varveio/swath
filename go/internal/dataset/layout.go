@@ -132,7 +132,7 @@ func ClaimPath(out string, i int) string { return TempPath(out, i) + ClaimSuffix
 // manifest; _SUCCESS for earlier layouts): overwrite removes them first.
 var commitEntries = []string{ManifestName, legacySuccess}
 
-var ownEntries = []string{DataDir, ManifestName, ReportName, ErrorName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
+var ownEntries = []string{DataDir, ManifestName, ReportName, ErrorName, RemoteCommitName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
 
 const (
 	legacyLocalSummary = "_swath_local_summary.json"

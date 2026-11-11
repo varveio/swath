@@ -380,3 +380,28 @@ func TestDeleteOwned(t *testing.T) {
 		t.Fatalf("left %v", names)
 	}
 }
+
+// TestCommitMarkerStrict: only a commit record is a commit marker: other
+// JSON at its name (a report written there) commits nothing and is refused
+// when read.
+func TestCommitMarkerStrict(t *testing.T) {
+	ws := workspace(t)
+	if err := ws.WriteFile(RemoteCommitName, []byte(`{"report_version":6,"outcome":{"status":"failed"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if Committed(ws.Name()) || Unfinalized(ws.Name()) {
+		t.Fatal("a report at the marker's name is taken for a commit")
+	}
+	if _, err := ReadCommitMarker(ws); !errors.Is(err, ErrBadMarker) {
+		t.Fatalf("read: %v", err)
+	}
+	if err := WriteCommitMarker(ws, RemoteCommitRecord{Destination: "gs://b/p/", ManifestSHA256: strings.Repeat("a", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	if !Committed(ws.Name()) || !Unfinalized(ws.Name()) {
+		t.Fatal("a commit record is not a commit")
+	}
+	if !Reserved(RemoteCommitName) {
+		t.Fatal("the marker's name is not reserved")
+	}
+}

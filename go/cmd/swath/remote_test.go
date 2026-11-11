@@ -48,6 +48,7 @@ func TestRemoteOutputRefusals(t *testing.T) {
 		{[]string{"-o", filepath.Join(t.TempDir(), "ds"), "--work-dir", work}, "--work-dir"},
 		{[]string{"-o", filepath.Join(t.TempDir(), "ds"), "--output-gcs-credentials-file", "x.json"}, "apply to a dataset in a bucket"},
 		{[]string{"--output-endpoint-url", "http://x/"}, "apply to a dataset in a bucket"},
+		{[]string{"-o", "gs://b/p", "--work-dir", work, "--report", filepath.Join(work, dataset.RemoteCommitName)}, "commit.json"},
 	} {
 		_, _, err := parseList(append([]string{"s3://src"}, c.args...), io.Discard, command{})
 		var u usageError

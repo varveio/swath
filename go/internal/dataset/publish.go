@@ -316,15 +316,14 @@ func Publish(out string, meta Meta, parts []Part, commit func(install func() err
 }
 
 // Committed reports whether out holds a committed dataset (its
-// manifest), or is the work directory of a remote dataset committed (its
-// commit marker, RemoteCommitName).
+// manifest), or is the work directory of a remote dataset committed (a
+// commit marker, RemoteCommitName, that parses as one).
 func Committed(out string) bool {
-	for _, n := range []string{ManifestName, RemoteCommitName} {
-		if fi, err := os.Stat(filepath.Join(out, n)); err == nil && fi.Mode().IsRegular() {
-			return true
-		}
+	if fi, err := os.Stat(filepath.Join(out, ManifestName)); err == nil && fi.Mode().IsRegular() {
+		return true
 	}
-	return false
+	_, err := markerAt(out)
+	return err == nil
 }
 
 func writeJSON(dir, name string, v any) error {

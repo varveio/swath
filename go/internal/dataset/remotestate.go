@@ -399,23 +399,43 @@ func ReadCommitMarker(r *os.Root) (*RemoteCommitRecord, error) {
 	if err != nil || b == nil {
 		return nil, err
 	}
+	return parseMarker(b)
+}
+
+// ErrBadMarker: the work directory's commit marker is not one: its JSON
+// is not a commit record (another file written at its name).
+var ErrBadMarker = errors.New("the commit marker is not a commit record")
+
+// parseMarker reads a commit record strictly: these members only, a
+// destination, and a manifest SHA-256 of 64 lowercase hex digits.
+func parseMarker(b []byte) (*RemoteCommitRecord, error) {
 	var rec RemoteCommitRecord
-	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, fmt.Errorf("%s: %w", RemoteCommitName, err)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&rec); err != nil {
+		return nil, fmt.Errorf("%s: %w: %v", RemoteCommitName, ErrBadMarker, err)
+	}
+	if _, err := hex.DecodeString(rec.ManifestSHA256); err != nil || len(rec.ManifestSHA256) != 64 || strings.ToLower(rec.ManifestSHA256) != rec.ManifestSHA256 || rec.Destination == "" {
+		return nil, fmt.Errorf("%s: %w", RemoteCommitName, ErrBadMarker)
 	}
 	return &rec, nil
+}
+
+// markerAt reads dir's commit marker by pathname (a read-only look).
+func markerAt(dir string) (*RemoteCommitRecord, error) {
+	b, err := os.ReadFile(filepath.Join(dir, RemoteCommitName))
+	if err != nil {
+		return nil, err
+	}
+	return parseMarker(b)
 }
 
 // Unfinalized reports whether dir is the work directory of a remote run
 // committed and not finalized (a read-only look, for the command's
 // early refusal of a complete run).
 func Unfinalized(dir string) bool {
-	b, err := os.ReadFile(filepath.Join(dir, RemoteCommitName))
-	if err != nil {
-		return false
-	}
-	var rec RemoteCommitRecord
-	return json.Unmarshal(b, &rec) == nil && !rec.Finalized
+	rec, err := markerAt(dir)
+	return err == nil && !rec.Finalized
 }
 
 // CommittedCandidate returns the manifest the work directory dir committed:
