@@ -168,12 +168,14 @@ run's metadata.
   prefix race at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
 - **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
-  only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe.
+  only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe, and on S3
+  required (above).
 - **Debug logging:** the destination's credentials and clients are built with a logger that discards
   everything, as the GCS source's client is, so `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` never logs a token, a signed
   assertion or a session URL. The storage SDK (v1.70.0) does not hand that logger to the JSON API client it
   builds inside, so with the variable set that client may still log request lines: the method, the object name
-  and a URL without credentials.
+  and a URL without credentials. An S3 destination's AWS SDK logs nothing: its logger discards everything and
+  its request logging is off, whatever the AWS configuration says.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week); S3's

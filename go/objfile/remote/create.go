@@ -280,6 +280,8 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 		if o.Endpoint != "" {
 			so.BaseEndpoint, so.UsePathStyle = aws.String(o.Endpoint), true
 		}
+		// Nothing is logged: no request, response or credential.
+		so.Logger, so.ClientLogMode = logging.Nop{}, 0
 		so.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
 		so.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
 	})

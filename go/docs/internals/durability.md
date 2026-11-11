@@ -269,12 +269,16 @@ attempts; the commit and the aftermath within their own time
 bounds. Token exchanges for the destination's credentials go through a client of their own, bounded the same
 way (headers and body), and are fetched with the context of the request that needs one; the SDK's debug logging
 (`GOOGLE_SDK_GO_LOGGING_LEVEL`) is off for the destination's credentials and clients, so no token or signed
-assertion is ever logged.
+assertion is ever logged. An S3 destination's credential chain (STS, SSO, container and instance roles) sends
+through the destination's own client and its bounds, with the context of the request that needs credentials,
+and the AWS SDK's logger is silenced for it, with no request or response logging.
 
 **Limits.** The bucket is outside the run's control once a dataset is committed: a lifecycle rule, a retention
 change or a person that deletes or replaces a committed part makes the manifest name an object that is gone or
 different, and swath does not notice (a reader that checks the manifest's SHA-256 does). Configure lifecycle
-rules on the dataset's prefix only for runs you have abandoned. An incomplete-upload rule is safe.
+rules on the dataset's prefix only for runs you have abandoned. An incomplete-upload rule is safe, and S3 needs
+one (`AbortIncompleteMultipartUpload`): S3 never expires an incomplete multipart upload a killed run left, or
+one whose abort was not confirmed.
 
 **Crash points.** `TestRemoteCrashMatrix` kills a run (spill off and on) at each of `allocated`,
 `upload-chunk`, `upload-completed`, `part-closed`, `claim-receipt`, `claimed`, `journal-append`,
