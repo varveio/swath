@@ -130,6 +130,31 @@ spill (`spill/durable/`) is kept after a stop for the resume and removed when th
 `$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the run
 warns at start.
 
+## Writing to a bucket
+
+`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` puts the dataset in GCS and keeps nothing large on the
+runner: the parts go up as they close, and `DIR` holds only spill and the run's metadata.
+
+- **Credentials:** the destination's are its own: `--output-gcs-credentials-file FILE` (a service account
+  key or authorized-user JSON) or Application Default Credentials, with the read-write scope. It needs
+  `storage.objects.create`, `get` and `delete` on the prefix (delete removes this run's own orphans, by
+  generation). The source's `--anonymous` or credentials never apply to it. A rotated key file is given to
+  `swath resume DIR` again; the endpoint (`--output-endpoint-url`) is fixed for the run.
+- **One prefix and one work directory per run:** a prefix that holds a `manifest.json` is refused; datasets in
+  a bucket are not replaced. Write each run to a dated prefix and let readers find the newest by its manifest.
+  A work directory belongs to its run (`--overwrite` is refused with a bucket): a new run takes a new or empty
+  one.
+- **Supervision:** as for a local dataset, `swath resume DIR` until exit 0. Give every attempt the same work
+  directory; if the runner's disk is lost the resume is lost with it, and a new run starts over at a new
+  prefix. Two runners sharing one work directory are refused by its lock; two work directories writing one
+  prefix race at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
+- **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
+  `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
+  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week).
+- **Report:** `output.remote` in the report ([run report](reference/run-report.md)): the commit's outcome, the
+  uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads) and the orphans deleted.
+  Uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
+
 ## Disk sizing
 
 - **The dataset:** about 30 bytes per row at the default part size (the live 1.09-billion-object listing of
@@ -143,6 +168,13 @@ warns at start.
 - **Peak spill** ≈ 0.7 × rows × spill bytes per row. The default spill budget is half of (free space at the
   start − the 1 GiB reserve), so the free space needed is about the dataset plus twice the peak spill plus
   1 GiB.
+- **A dataset in a bucket:** the work directory needs no room for the dataset. Size it as the spill budget
+  plus metadata plus the 1 GiB reserve: set `--spill-budget` explicitly (the default, half the free space,
+  follows whatever disk there is), and allow for the metadata, which grows with the parts (a claim receipt of
+  under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
+  the 100,000-part limit). Memory grows instead by one upload chunk (8 MiB) per encoder, admitted with its
+  writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
+  run's `resources.spill.peak_bytes` before shrinking the disk.
 - **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;
   so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
   disk the run still completes, but frames are refused and listing slows to the output's pace (the first bad
