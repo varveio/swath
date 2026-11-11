@@ -228,6 +228,9 @@ only if its bytes are the receipt's (else `ErrAmbiguousTail`). Parts are never c
 session: an incomplete part is written again from the recovered rows, to a new attempt's name. Nothing remote
 is deleted during recovery; the crashed attempts' orphans go at the commit.
 
+On Windows a bucket run of an object store is refused as any journaled run is (`listing.ErrUnenforced`: the work
+directory's entries cannot be synced); an unjournaled one (a local tree) runs, without resume.
+
 **Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
 (the flag, or the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and passed to the
 client explicitly) and the layout version (`swath/remote-1`) are frozen in the resume identity

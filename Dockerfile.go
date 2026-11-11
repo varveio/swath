@@ -47,8 +47,10 @@ WORKDIR /src/go
 
 # Modules first, so a source change reuses the downloaded module layer.
 COPY go/go.mod go/go.sum ./
-# The reader module, which go.mod replaces with ./reader, is part of the module graph.
+# The reader and objfile modules, which go.mod replaces with ./reader and
+# ./objfile, are part of the module graph.
 COPY go/reader/go.mod go/reader/go.sum ./reader/
+COPY go/objfile/go.mod go/objfile/go.sum ./objfile/
 ARG GOPROXY=https://proxy.golang.org,direct
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 

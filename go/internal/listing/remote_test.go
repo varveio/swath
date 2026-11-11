@@ -200,9 +200,12 @@ func TestRemoteDataset(t *testing.T) {
 	if _, err := os.Stat(ws2); err == nil {
 		t.Fatal("the refused run created its work directory")
 	}
-	// Resuming the committed work directory: complete.
-	if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("ds"))); !errors.Is(err, ErrComplete) {
-		t.Fatalf("resume of a committed run: %v", err)
+	// Resuming the committed work directory: complete (where a journaled
+	// run, and so resume, is offered).
+	if !datasettest.NoJournal() {
+		if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("ds"))); !errors.Is(err, ErrComplete) {
+			t.Fatalf("resume of a committed run: %v", err)
+		}
 	}
 }
 
@@ -475,7 +478,7 @@ func TestRemoteEmpty(t *testing.T) {
 	scriptNext = &scripted{chunk: 1}
 	scriptMu.Unlock()
 	ws := filepath.Join(t.TempDir(), "work")
-	_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: ws, Remote: d.output("empty")},
+	_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: ws, Remote: d.output("empty"), NoJournal: datasettest.NoJournal()},
 		Limits: Limits{PartSize: 2 << 10, Workers: 2, RowBudget: 128 << 10, PartInterval: -1}})
 	if err != nil {
 		t.Fatal(err)

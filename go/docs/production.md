@@ -148,6 +148,9 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
   directory; if the runner's disk is lost the resume is lost with it, and a new run starts over at a new
   prefix. Two runners sharing one work directory are refused by its lock; two work directories writing one
   prefix race at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
+- **Windows:** a bucket run of an object store keeps a journal, which Windows refuses (directories cannot be
+  synced there: [running.md](running.md#known-limits)), so it is refused there, as a journaled local dataset is;
+  a local tree, which keeps no journal, can be written to a bucket on Windows, without resume.
 - **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
   only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe.
