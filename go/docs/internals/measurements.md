@@ -1498,7 +1498,10 @@ The same measurements for a dataset written to S3 (`objfile/s3`'s writer: 8 MiB 
 part larger than one, CRC32 checksums), on the same kind of 4-vCPU VM, shared with other jobs during the run
 (load average 10 to 18): `BenchmarkUpload` (`go test ./s3 -run X -bench BenchmarkUpload -benchtime 10x` in
 `go/objfile`) writes a 64 MiB object 4 KiB at a time to `s3/s3fake`, and the GCS benchmark ran in the same
-invocation for comparison:
+invocation for comparison. Measured at the S3 writer as first written on `go/s3-output` (the commit
+"objfile/s3: create-only writes as multipart uploads, with a fake"), before the later changes to its failure
+paths (aborts, redaction, unresolved completions), which add no request to a successful upload; the raw
+benchmark output was not kept, so rerun the command to reproduce:
 
 | Writer, server | Throughput | Bytes allocated per object | Allocations per object |
 |---|---|---|---|
@@ -1510,7 +1513,7 @@ invocation for comparison:
 So the S3 client spends about 78 ms per 64 MiB object (8 `UploadPart` requests, the creation and the
 completion), against GCS's 50 ms on the same run: it sends each part from `Write` (nothing overlaps the
 buffering of the next part) and computes each part's CRC32 before sending it. Both are small beside a part's
-encoding. `TestMeasureRemoteOverhead` now runs per provider: for S3, with the listing's 256 KiB parts (one
+encoding. `TestMeasureRemoteOverhead` now runs per provider (the same tree and day; its log was not kept either): for S3, with the listing's 256 KiB parts (one
 `PutObject` each), wall time 1.12 to 1.42 s remote and 1.13 to 1.37 s local, process CPU 3.2 to 3.9 s remote and
 3.2 s local (after each provider's first run, whose CPU figure includes the setup), and `upload_wait_ns` 0.26 to
 0.32 s summed over the 4 encoders (GCS in the same run: 0.46 to 1.04 s). These are fake, single-host smoke

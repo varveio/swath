@@ -145,8 +145,12 @@ run's metadata.
   credential process) or the AWS SDK's default chain (environment, `AWS_PROFILE`, web identity, container and
   instance roles); requests are always signed, whatever the source's `--anonymous` or `--s3-profile`. Note that
   the default chain reads the same environment as the source's: give the destination a profile when the two
-  must differ. It needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` (orphans, by ETag or version id) and
-  `s3:AbortMultipartUpload` on `PREFIX/*`. The region is `--output-s3-region`, else `AWS_REGION`,
+  must differ. It needs, on the bucket (`arn:aws:s3:::BUCKET`), `s3:ListBucket`: without it S3 answers a
+  missing `manifest.json` with 403, not 404, and the fresh-prefix check fails. On the dataset's objects
+  (`arn:aws:s3:::BUCKET/PREFIX/*`) it needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` (orphans),
+  `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` (an abort's confirmation); in a versioned bucket
+  also `s3:GetObjectVersion` (reads pinned to a version id) and `s3:DeleteObjectVersion` (orphans, by version
+  id). The region is `--output-s3-region`, else `AWS_REGION`,
   `AWS_DEFAULT_REGION` or the profile's, else `us-east-1`; the one resolved, and `--output-endpoint-url`
   (an S3-compatible store, addressed path-style), are fixed for the run. The environment's endpoint variables
   (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, FIPS, dual-stack) are never applied to the destination; a CA

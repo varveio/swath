@@ -219,7 +219,8 @@ the SDK's transport errors quote it.
 
 Every provider's writer has one shape: an upload buffers one chunk (GCS) or part (S3) and sends it before
 `Write` takes more, so memory is one buffer per open upload and a slow store holds the writer back; retries are
-the SDK's, bounded per request, and `Retried` is told each one; `Abort` may be called from another goroutine
+the SDK's, bounded (GCS: a cumulative allowance per upload, below; S3: `MaxAttempts` per request), and `Retried`
+is told each one; `Abort` may be called from another goroutine
 while `Write` waits on the store (it cancels first); and an upload's session handle (a GCS session URI, an S3
 upload id) never appears in an error.
 
