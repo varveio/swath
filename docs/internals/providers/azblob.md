@@ -140,8 +140,9 @@ calls do not reach engine requeue.
 
 Spike (issue #263; design in [tree-sources.md](../tree-sources.md)). On an HNS account List Blobs lists in
 directory-tree order (`/` lowest: all of `Guinea/…` before `Guinea-Bissau`), so no byte-order seek covers the
-container; a flat run forced on one fails its order check (`--azure-assume-flat` on `bingmlbuildings`,
-2026-11-11). Within one directory, names hold no `/` and the service's order is UTF-16 by name, and
+container. A flat run forced on one may fail its order check (it did with `--azure-assume-flat` on
+`bingmlbuildings`, 2026-11-11) but need not: a seek can skip keys while every page still ascends (see
+Admission), so the check is no guard against a wrong assertion. Within one directory, names hold no `/` and the service's order is UTF-16 by name, and
 `startFrom` seeks by name (live, `overturemapswestus2`). `Tree` (`tree.go`) is the tree core's ordered mode
 (`tree.Ordered`) over that:
 
