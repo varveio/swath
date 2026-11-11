@@ -109,23 +109,31 @@ func TestProfilerPhases(t *testing.T) {
 	spin(50 * time.Millisecond)
 	p.listingDone()
 	p.listingDone() // once: a second call changes nothing
+	p.wait()
 	a := p.account()
 	boundary := a.PhaseBoundaryAt
-	if boundary.IsZero() || a.CPUGapNs == nil || *a.CPUGapNs < 0 {
+	if boundary.IsZero() || a.CPUGapNs == nil || *a.CPUGapNs < 0 || a.CPUCutDelayNs == nil || *a.CPUCutDelayNs < 0 {
 		t.Fatalf("account after the boundary: %+v", a)
+	}
+	if got := statuses(a); !slices.Equal(got, []string{"cpu written", "cpu.listing written", "cpu.tail planned", "mem.listing written", "mem.exit planned", "mem planned"}) {
+		t.Fatalf("after the switch: %q", got)
 	}
 	spin(50 * time.Millisecond)
 	p.stop()
 	p.stop() // idempotent
 	p.listingDone()
 
+	// The listing profile stops cpu_cut_delay_ns after the boundary; the
+	// tail's starts cpu_gap_ns after that (pprof's start times are the
+	// profiles' own, a little before StartCPUProfile returns).
 	ls, ld := profileSpan(t, cpu+phaseListing)
 	ts, _ := profileSpan(t, cpu+phaseTail)
-	if ls.After(boundary) || ls.Add(ld).After(ts) || ts.Before(boundary) {
-		t.Fatalf("phases: listing %v+%v, boundary %v, tail from %v", ls, ld, boundary, ts)
+	cut := boundary.Add(time.Duration(*a.CPUCutDelayNs))
+	if ls.After(boundary) || ls.Add(ld).After(ts) || ts.Before(cut) {
+		t.Fatalf("phases: listing %v+%v, boundary %v, cut %v, tail from %v", ls, ld, boundary, cut, ts)
 	}
-	if got := ts.Sub(boundary); got > time.Duration(*a.CPUGapNs)+time.Second {
-		t.Fatalf("the tail started %v after the boundary, gap %dns", got, *a.CPUGapNs)
+	if got := ts.Sub(cut); got > time.Duration(*a.CPUGapNs)+time.Second {
+		t.Fatalf("the tail started %v after the cut, gap %dns", got, *a.CPUGapNs)
 	}
 	whole, _ := os.ReadFile(cpu)
 	listing, _ := os.ReadFile(cpu + phaseListing)
@@ -139,13 +147,59 @@ func TestProfilerPhases(t *testing.T) {
 	if m, _ := os.ReadFile(mem); !bytes.Equal(m, exit) {
 		t.Fatal("the memory FILE is not FILE.exit")
 	}
+	a = p.account()
 	got := []string{}
 	for _, f := range a.Files {
-		got = append(got, f.Kind+" "+filepath.Base(f.Path))
+		got = append(got, f.Kind+" "+filepath.Base(f.Path)+" "+f.Status)
 	}
-	want := []string{"cpu_listing cpu", "cpu_listing cpu.listing", "cpu_tail cpu.tail", "mem_listing mem.listing", "mem_exit mem.exit", "mem_exit mem"}
-	if !slices.Equal(got, want) || a.MemProfileRate != 4096 {
-		t.Fatalf("files %q rate %d, want %q 4096", got, a.MemProfileRate, want)
+	want := []string{"cpu_listing cpu written", "cpu_listing cpu.listing written", "cpu_tail cpu.tail written", "mem_listing mem.listing written", "mem_exit mem.exit written", "mem_exit mem written"}
+	if !slices.Equal(got, want) || a.MemProfileRate == nil || *a.MemProfileRate != 4096 {
+		t.Fatalf("files %q rate %v, want %q 4096", got, a.MemProfileRate, want)
+	}
+}
+
+// statuses lists a's files as "name status".
+func statuses(a *listing.Profiles) []string {
+	got := []string{}
+	for _, f := range a.Files {
+		got = append(got, filepath.Base(f.Path)+" "+f.Status)
+	}
+	return got
+}
+
+// TestProfilerFailedWrites: a phase file that cannot be written is
+// reported failed, with its error, and warned of; the others are written.
+// SWATH_MEMPROFILERATE=0 is reported as 0.
+func TestProfilerFailedWrites(t *testing.T) {
+	dir := t.TempDir()
+	cpu, mem := filepath.Join(dir, "cpu"), filepath.Join(dir, "mem")
+	for _, d := range []string{cpu + phaseTail, mem + phaseListing} {
+		if err := os.Mkdir(d, 0o755); err != nil { // a directory: its open fails
+			t.Fatal(err)
+		}
+	}
+	before := runtime.MemProfileRate
+	defer func() { runtime.MemProfileRate = before }()
+	var warned []string
+	p, err := startProfiles(cpu, mem, 0, func(m string) { warned = append(warned, m) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.listingDone()
+	p.stop()
+	a := p.account()
+	got := statuses(a)
+	want := []string{"cpu written", "cpu.listing written", "cpu.tail failed", "mem.listing failed", "mem.exit written", "mem written"}
+	if !slices.Equal(got, want) || len(warned) != 2 || a.MemProfileRate == nil || *a.MemProfileRate != 0 || a.CPUGapNs != nil || a.CPUCutDelayNs == nil {
+		t.Fatalf("files %q, warned %q, rate %v, gap %v", got, warned, a.MemProfileRate, a.CPUGapNs)
+	}
+	for _, f := range a.Files {
+		if (f.Status == statusFailed) != (f.Error != "") {
+			t.Fatalf("%s: status %s, error %q", f.Path, f.Status, f.Error)
+		}
+	}
+	if b, err := json.Marshal(a); err != nil || !strings.Contains(string(b), `"mem_profile_rate":0`) {
+		t.Fatalf("rate 0 not reported: %s %v", b, err)
 	}
 }
 
@@ -165,7 +219,7 @@ func TestProfilerNoBoundary(t *testing.T) {
 	a := p.account()
 	p.stop()
 	p.listingDone() // after stop: nothing starts
-	if !a.PhaseBoundaryAt.IsZero() || a.CPUGapNs != nil || len(a.Files) != 4 {
+	if !a.PhaseBoundaryAt.IsZero() || a.CPUGapNs != nil || a.CPUCutDelayNs != nil || len(a.Files) != 4 {
 		t.Fatalf("account: %+v", a)
 	}
 	profileSpan(t, cpu)
@@ -251,12 +305,12 @@ func TestPhaseProfilesRun(t *testing.T) {
 	if d := p.PhaseBoundaryAt.Sub(r.Timings.ListingDoneAt); d < 0 || d > time.Second {
 		t.Fatalf("boundary %v, listing_done_at %v", p.PhaseBoundaryAt, r.Timings.ListingDoneAt)
 	}
-	if p.MemProfileRate != 512 || p.CPUGapNs == nil {
+	if p.MemProfileRate == nil || *p.MemProfileRate != 512 || p.CPUGapNs == nil || p.CPUCutDelayNs == nil {
 		t.Fatalf("profiles %+v", p)
 	}
 	for _, f := range p.Files {
-		if _, err := os.Stat(f.Path); err != nil {
-			t.Errorf("%s %s: %v", f.Kind, f.Path, err)
+		if _, err := os.Stat(f.Path); err != nil || f.Status != statusWritten {
+			t.Errorf("%s %s %s: %v", f.Kind, f.Path, f.Status, err)
 		}
 	}
 	if len(p.Files) != 6 {
@@ -267,10 +321,14 @@ func TestPhaseProfilesRun(t *testing.T) {
 	if ls.After(r.Timings.ListingDoneAt) || ts.Before(r.Timings.ListingDoneAt) {
 		t.Fatalf("listing profile from %v, tail from %v, listing_done_at %v", ls, ts, r.Timings.ListingDoneAt)
 	}
-	// run.json, written at the commit, names the same files.
+	// run.json, written at the commit after the switch, names the same
+	// files, those written at the end as planned.
 	runJSON, _ := readReport(filepath.Join(out, "run.json"))
-	if runJSON.Profiles == nil || len(runJSON.Profiles.Files) != len(p.Files) || !runJSON.Profiles.PhaseBoundaryAt.Equal(p.PhaseBoundaryAt) {
+	if runJSON.Profiles == nil || !runJSON.Profiles.PhaseBoundaryAt.Equal(p.PhaseBoundaryAt) {
 		t.Fatalf("run.json profiles %+v", runJSON.Profiles)
+	}
+	if got := statuses(runJSON.Profiles); !slices.Equal(got, []string{"cpu.pprof written", "cpu.pprof.listing written", "cpu.pprof.tail planned", "mem.pprof.listing written", "mem.pprof.exit planned", "mem.pprof planned"}) {
+		t.Fatalf("run.json files %q", got)
 	}
 }
 
@@ -311,6 +369,40 @@ func TestPhaseProfileRefusals(t *testing.T) {
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
 		t.Fatal("the link's target changed")
 	}
+
+	// No two side files may be one: a phase file and the other profile, or
+	// the report.
+	for _, tc := range []struct{ cpu, mem, report, later, earlier string }{
+		{"p", "p.tail", "", "SWATH_MEMPROFILE p.tail", "SWATH_CPUPROFILE's p.tail"},
+		{"p", "q", "p.listing", "SWATH_CPUPROFILE p.listing", "--report's p.listing"},
+		{"p", "p", "", "SWATH_MEMPROFILE p", "SWATH_CPUPROFILE's p"},
+		{"", "m", "m.exit", "SWATH_MEMPROFILE m.exit", "--report's m.exit"},
+	} {
+		dir := t.TempDir()
+		at := func(name string) string {
+			if name == "" {
+				return ""
+			}
+			return filepath.Join(dir, name)
+		}
+		t.Setenv("SWATH_CPUPROFILE", at(tc.cpu))
+		t.Setenv("SWATH_MEMPROFILE", at(tc.mem))
+		args := []string{src, "-o", filepath.Join(dir, "OUT"), "--no-progress", "--no-stats"}
+		if tc.report != "" {
+			args = append(args, "--report", at(tc.report))
+		}
+		err = run(context.Background(), args, &buf, false)
+		sep := string(filepath.Separator)
+		later := strings.Replace(tc.later, " ", " "+dir+sep, 1)
+		earlier := strings.Replace(tc.earlier, " ", " "+dir+sep, 1)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), later+": is also "+earlier) {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+			t.Fatalf("%+v: %d files written", tc, len(ents))
+		}
+	}
+	t.Setenv("SWATH_CPUPROFILE", "")
 
 	t.Setenv("SWATH_MEMPROFILE", filepath.Join(base, "mem2"))
 	for _, v := range []string{"-1", "x", "1.5"} {

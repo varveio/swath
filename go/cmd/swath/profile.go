@@ -4,11 +4,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -25,12 +27,20 @@ const (
 	phaseExit    = ".exit"
 )
 
-// The run report's kinds of profile file (listing.ProfileFile).
+// The run report's kinds of profile file (listing.ProfileFile), in the
+// order it lists them.
 const (
 	kindCPUListing = "cpu_listing"
 	kindCPUTail    = "cpu_tail"
 	kindMemListing = "mem_listing"
 	kindMemExit    = "mem_exit"
+)
+
+// A profile file's status in the run report (listing.ProfileFile).
+const (
+	statusPlanned = "planned" // to be written later in the run
+	statusWritten = "written"
+	statusFailed  = "failed"
 )
 
 // defaultMemProfileRate is runtime.MemProfileRate while SWATH_MEMPROFILE is
@@ -54,30 +64,63 @@ func memProfileRate(v string) (int, error) {
 // profiler writes the development profiles SWATH_CPUPROFILE and
 // SWATH_MEMPROFILE name, split at the end of listing (listingDone, the
 // event timings.listing_done_at records). The CPU profile runs from the
-// start to that boundary into FILE and FILE.listing (the same bytes: FILE
-// is the listing phase, no longer the whole run, since Go runs one CPU
-// profile at a time and keeps no whole-run profile beside the phases'), and
-// from the boundary to the end into FILE.tail; go tool pprof FILE.listing
-// FILE.tail merges them. The allocation profile, cumulative, is written at
-// the boundary into FILE.listing and at the end into FILE.exit and FILE
-// (the whole run, as before the split); go tool pprof -base FILE.listing
-// FILE.exit is the tail's. Without a boundary (listing never finished, a
-// dry run) the listing-phase CPU files hold the whole run and no tail or
-// memory listing file is written. A nil profiler (neither variable set)
-// does nothing.
+// start into FILE and FILE.listing (the same bytes: FILE is the listing
+// phase, no longer the whole run, since Go runs one CPU profile at a time
+// and keeps no whole-run profile beside the phases') until the phase switch
+// stops it, a little after the boundary (cutDelay), and from the switch to
+// the end into FILE.tail; go tool pprof FILE.listing FILE.tail merges them.
+// The allocation profile, cumulative, is written at the switch into
+// FILE.listing and at the end into FILE.exit and FILE (the whole run, as
+// before the split); go tool pprof -base FILE.listing FILE.exit is the
+// tail's. Without a boundary (listing never finished, a dry run) the
+// listing-phase CPU files hold the whole run and no tail or memory listing
+// file is written. A nil profiler (neither variable set) does nothing.
+//
+// Two locks: io serializes the profiles' writes (the switch, stop), which
+// may block on a slow file; mu guards the state account reads, and is
+// never held across a write, so the run report's account never waits for
+// one.
 type profiler struct {
 	cpu, mem string // the resolved paths (checkSidePaths); "" off
 	rate     int    // runtime.MemProfileRate with mem
 	warn     func(string)
 
+	io     sync.Mutex
+	cpuOut []*profFile // the running CPU profile's files (under io); nil: none running
+
 	mu       sync.Mutex
-	cpuOut   []*os.File    // the running CPU profile's files; nil: none running
-	boundary time.Time     // when listing finished (zero: not yet, or never)
-	switched chan struct{} // closed once the phase switch listingDone started has run
-	tail     bool          // the tail's CPU profile started
-	gap      time.Duration // from the boundary to its start
-	memDone  bool          // the allocation profile's listing file attempted
-	stopped  bool          // stop ran: no phase starts after it
+	files    map[string][]*profFile // by kind
+	boundary time.Time              // when listing finished (zero: not yet, or never)
+	switched chan struct{}          // closed once the switch listingDone started has run
+	cut      bool                   // the switch stopped the listing CPU profile
+	cutDelay time.Duration          // from the boundary to that stop
+	gap      time.Duration          // from that stop to the tail's start
+	tail     bool                   // the tail's CPU profile started
+	stopped  bool                   // stop began: no phase starts after it
+}
+
+// profFile is one profile file: where it goes, what it holds and how its
+// write went (under the profiler's mu). w is its writer while it is being
+// written (under io), recording the first write error.
+type profFile struct {
+	kind, path, status, err string
+	w                       *errWriter
+}
+
+// errWriter writes to f and keeps the first write error: runtime/pprof's
+// CPU profile writer reports none.
+type errWriter struct {
+	f   *os.File
+	err error
+}
+
+func (w *errWriter) Write(b []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.f.Write(b)
+	w.err = err
+	return n, err
 }
 
 // startProfiles starts the profiles cpu and mem name ("" off; resolved by
@@ -87,89 +130,131 @@ func startProfiles(cpu, mem string, rate int, warn func(string)) (*profiler, err
 	if cpu == "" && mem == "" {
 		return nil, nil
 	}
-	p := &profiler{cpu: cpu, mem: mem, rate: rate, warn: warn}
+	p := &profiler{cpu: cpu, mem: mem, rate: rate, warn: warn, files: map[string][]*profFile{}}
 	if mem != "" {
 		runtime.MemProfileRate = rate
+		p.plan(kindMemExit, mem+phaseExit, mem)
 	}
 	if cpu != "" {
-		if err := p.startCPU(cpu, cpu+phaseListing); err != nil {
+		if err := p.startCPU(p.plan(kindCPUListing, cpu, cpu+phaseListing)); err != nil {
 			return nil, err
 		}
 	}
 	return p, nil
 }
 
-// startCPU starts the CPU profile into the files paths name.
-func (p *profiler) startCPU(paths ...string) error {
-	var files []*os.File
-	ws := make([]io.Writer, 0, len(paths))
-	closeAll := func() {
-		for _, f := range files {
-			f.Close()
+// plan adds the files paths name, of kind, as planned.
+func (p *profiler) plan(kind string, paths ...string) []*profFile {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.planLocked(kind, paths...)
+}
+
+// planLocked is plan under mu.
+func (p *profiler) planLocked(kind string, paths ...string) []*profFile {
+	fs := make([]*profFile, len(paths))
+	for i, path := range paths {
+		fs[i] = &profFile{kind: kind, path: path, status: statusPlanned}
+		p.files[kind] = append(p.files[kind], fs[i])
+	}
+	return fs
+}
+
+// settle records how the writes of fs went (err: all of them failed).
+// A failure is warned of after mu is released: stderr may block.
+func (p *profiler) settle(fs []*profFile, err error) {
+	var failed []string
+	p.mu.Lock()
+	for _, f := range fs {
+		e := err
+		if e == nil && f.w != nil {
+			e = f.w.err
+		}
+		if e != nil {
+			f.status, f.err = statusFailed, e.Error()
+			failed = append(failed, fmt.Sprintf("profile %s: %v", f.path, e))
+		} else {
+			f.status = statusWritten
+		}
+		f.w = nil
+	}
+	p.mu.Unlock()
+	for _, m := range failed {
+		if p.warn != nil {
+			p.warn(m)
 		}
 	}
-	for _, path := range paths {
-		f, err := createNoFollow(path)
+}
+
+// open creates fs's files; it closes those it opened and returns the first
+// error if one fails.
+func open(fs []*profFile) (io.Writer, error) {
+	ws := make([]io.Writer, 0, len(fs))
+	for i, f := range fs {
+		file, err := createNoFollow(f.path)
 		if err != nil {
-			closeAll()
-			return err
+			closeFiles(fs[:i])
+			return nil, err
 		}
-		files = append(files, f)
-		ws = append(ws, f)
+		f.w = &errWriter{f: file}
+		ws = append(ws, f.w)
 	}
-	if err := pprof.StartCPUProfile(io.MultiWriter(ws...)); err != nil {
-		closeAll()
+	return io.MultiWriter(ws...), nil
+}
+
+// closeFiles closes fs's open files, recording a close error as a write
+// error.
+func closeFiles(fs []*profFile) {
+	for _, f := range fs {
+		if f.w != nil {
+			if err := f.w.f.Close(); f.w.err == nil {
+				f.w.err = err
+			}
+		}
+	}
+}
+
+// startCPU starts the CPU profile into fs (under io, or before the
+// profiler is shared). On failure fs are settled as failed.
+func (p *profiler) startCPU(fs []*profFile) error {
+	w, err := open(fs)
+	if err == nil {
+		if err = pprof.StartCPUProfile(w); err != nil {
+			closeFiles(fs)
+		}
+	}
+	if err != nil {
+		p.settle(fs, err)
 		return err
 	}
-	p.cpuOut = files
+	p.cpuOut = fs
 	return nil
 }
 
-// stopCPU stops the running CPU profile, if any, and closes its files.
+// stopCPU stops the running CPU profile, if any, and settles its files
+// (under io).
 func (p *profiler) stopCPU() {
 	if p.cpuOut == nil {
 		return
 	}
 	pprof.StopCPUProfile() // returns once the profile is written
-	for _, f := range p.cpuOut {
-		if err := f.Close(); err != nil {
-			p.warnf("profile %s: %v", f.Name(), err)
-		}
-	}
+	closeFiles(p.cpuOut)
+	p.settle(p.cpuOut, nil)
 	p.cpuOut = nil
 }
 
-// writeMem writes the allocation profile into the files paths name.
-func (p *profiler) writeMem(paths ...string) {
-	var files []*os.File
-	ws := make([]io.Writer, 0, len(paths))
-	for _, path := range paths {
-		f, err := createNoFollow(path)
-		if err != nil {
-			p.warnf("profile %s: %v", path, err)
-			continue
-		}
-		files = append(files, f)
-		ws = append(ws, f)
-	}
-	if len(files) == 0 {
-		return
-	}
-	err := pprof.Lookup("allocs").WriteTo(io.MultiWriter(ws...), 0)
-	for _, f := range files {
-		if cerr := f.Close(); err == nil {
-			err = cerr
+// writeMem writes the allocation profile into fs and settles them (under
+// io).
+func (p *profiler) writeMem(fs []*profFile) {
+	w, err := open(fs)
+	if err == nil {
+		err = pprof.Lookup("allocs").WriteTo(w, 0)
+		closeFiles(fs)
+		if slices.ContainsFunc(fs, func(f *profFile) bool { return f.w.err != nil }) {
+			err = nil // a file's own write error, recorded on that file only
 		}
 	}
-	if err != nil {
-		p.warnf("profile %s: %v", p.mem, err)
-	}
-}
-
-func (p *profiler) warnf(format string, a ...any) {
-	if p.warn != nil {
-		p.warn(fmt.Sprintf(format, a...))
-	}
+	p.settle(fs, err)
 }
 
 // listingDone is listing.Config.ListingDone: it marks the boundary now and
@@ -184,30 +269,57 @@ func (p *profiler) listingDone() {
 		return
 	}
 	p.boundary, p.switched = at, make(chan struct{})
-	go func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		defer close(p.switched)
-		if p.stopped {
-			return
-		}
-		if p.cpu != "" {
-			p.stopCPU()
-			if err := p.startCPU(p.cpu + phaseTail); err != nil {
-				p.warnf("profile %s: %v", p.cpu+phaseTail, err)
-			} else {
-				p.tail, p.gap = true, time.Since(at)
-			}
-		}
-		if p.mem != "" {
-			p.writeMem(p.mem + phaseListing)
-			p.memDone = true
-		}
-	}()
+	// The switch's files are planned now, so an account from here on
+	// names them.
+	var tail, mem []*profFile
+	if p.cpu != "" {
+		tail = p.planLocked(kindCPUTail, p.cpu+phaseTail)
+	}
+	if p.mem != "" {
+		mem = p.planLocked(kindMemListing, p.mem+phaseListing)
+	}
+	go p.switchPhase(at, tail, mem, p.switched)
 }
 
-// wait waits for the phase switch listingDone started, if any.
+// errSwitchLate settles the switch's files when the run ended first.
+var errSwitchLate = errors.New("not written: the run ended before the phase switch")
+
+// switchPhase stops the listing phase's profiles and starts the tail's:
+// the CPU profile into tail, the allocation profile into mem.
+func (p *profiler) switchPhase(at time.Time, tail, mem []*profFile, done chan struct{}) {
+	defer close(done)
+	p.io.Lock()
+	defer p.io.Unlock()
+	p.mu.Lock()
+	stopped := p.stopped
+	p.mu.Unlock()
+	if stopped {
+		p.settle(append(tail, mem...), errSwitchLate)
+		return
+	}
+	if tail != nil {
+		cut := time.Now()
+		p.stopCPU()
+		err := p.startCPU(tail)
+		started := time.Now()
+		p.mu.Lock()
+		p.cut, p.cutDelay = true, cut.Sub(at)
+		if err == nil {
+			p.tail, p.gap = true, started.Sub(cut)
+		}
+		p.mu.Unlock()
+	}
+	if mem != nil {
+		p.writeMem(mem)
+	}
+}
+
+// wait waits for the phase switch listingDone started, if any. A nil
+// profiler does not wait.
 func (p *profiler) wait() {
+	if p == nil {
+		return
+	}
 	p.mu.Lock()
 	ch := p.switched
 	p.mu.Unlock()
@@ -224,50 +336,51 @@ func (p *profiler) stop() {
 	}
 	p.wait()
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.stopped {
+		p.mu.Unlock()
 		return
 	}
 	p.stopped = true
+	exit := slices.Clone(p.files[kindMemExit])
+	p.mu.Unlock()
+	p.io.Lock()
 	p.stopCPU()
-	if p.mem != "" {
-		p.writeMem(p.mem+phaseExit, p.mem)
+	if exit != nil {
+		p.writeMem(exit)
 	}
+	p.io.Unlock()
+	p.wait() // a switch that began as stop did settles its files unwritten
 }
 
-// account is the run report's account of the profiles (nil for a nil
-// profiler): the files by phase and the boundary. It waits for a phase
-// switch under way, so the gap it reports is the switch's.
+// account is the run report's account of the profiles now (nil for a nil
+// profiler): each file with its status, the boundary, and the switch's
+// times once it has run. It never waits for a profile's write.
 func (p *profiler) account() *listing.Profiles {
 	if p == nil {
 		return nil
 	}
-	p.wait()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	a := &listing.Profiles{Files: []listing.ProfileFile{}}
 	if !p.boundary.IsZero() {
 		a.PhaseBoundaryAt = p.boundary.UTC()
 	}
-	add := func(kind string, paths ...string) {
-		for _, path := range paths {
-			a.Files = append(a.Files, listing.ProfileFile{Kind: kind, Path: path})
-		}
-	}
-	if p.cpu != "" {
-		add(kindCPUListing, p.cpu, p.cpu+phaseListing)
+	if p.cut {
+		cut := int64(p.cutDelay)
+		a.CPUCutDelayNs = &cut
 		if p.tail {
-			add(kindCPUTail, p.cpu+phaseTail)
 			gap := int64(p.gap)
 			a.CPUGapNs = &gap
 		}
 	}
 	if p.mem != "" {
-		a.MemProfileRate = p.rate
-		if p.memDone {
-			add(kindMemListing, p.mem+phaseListing)
+		rate := p.rate
+		a.MemProfileRate = &rate
+	}
+	for _, kind := range []string{kindCPUListing, kindCPUTail, kindMemListing, kindMemExit} {
+		for _, f := range p.files[kind] {
+			a.Files = append(a.Files, listing.ProfileFile{Kind: f.kind, Path: f.path, Status: f.status, Error: f.err})
 		}
-		add(kindMemExit, p.mem+phaseExit, p.mem)
 	}
 	return a
 }

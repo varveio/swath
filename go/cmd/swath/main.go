@@ -899,6 +899,14 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		term.account(r, err)
 	}
 	cfg.Commit = term.commit // the commit and its account, one step against a forced exit
+	if prof != nil {
+		// The profiles' phase switch, which may block on a slow file,
+		// finishes before the commit's gate is taken, never inside it.
+		cfg.Commit = func(step func() error) error {
+			prof.wait()
+			return term.commit(step)
+		}
+	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
@@ -922,7 +930,10 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	tt.disp.stop()
-	prof.stop()
+	if prof != nil {
+		prof.stop()
+		sum.Profiles = prof.account() // the files' final status, for --report
+	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)

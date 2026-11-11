@@ -136,15 +136,20 @@ encoders write the remaining parts. The profiles are split at that boundary, so 
 
 Go runs one CPU profile at a time, so there is no whole-run CPU profile beside the phases': `FILE` is the
 listing phase (it was the whole run before the split), and `go tool pprof FILE.listing FILE.tail` merges the two.
-Between them lies a gap, from the boundary until the tail's profile starts, while the listing phase's profile
-is written out (the report's `profiles.cpu_gap_ns`). The phase switch runs on a goroutine of its own, so the
-order stage does not wait for it. The allocation profile is cumulative: `go tool pprof -base FILE.listing
+The phase switch runs on a goroutine of its own, so the order stage does not wait for it; the listing phase's
+CPU profile therefore stops a little after the logical boundary (the report's `profiles.cpu_cut_delay_ns`, CPU
+the listing file holds from the tail), and the tail's starts once the listing phase's has been written out (the
+gap between them, `profiles.cpu_gap_ns`, is in neither file). The commit waits for the switch before it takes
+its terminal gate, never inside it. The allocation profile is cumulative: `go tool pprof -base FILE.listing
 FILE.exit` is the tail's allocations, and each file is as of the latest garbage collection before it was written
 (the process forces none). A run that never reaches the boundary (a failed or stopped listing, `swath diag count`
 and `swath du`, which order nothing) writes the CPU listing files for the whole run and neither `FILE.tail` nor
-the allocation `FILE.listing`.
+the allocation `FILE.listing`. No two of the profiles' files and `--report` may be one file (exit 2): with
+`SWATH_CPUPROFILE=P`, `SWATH_MEMPROFILE=P.tail` is refused.
 
-The run report's `profiles` names the files by kind (`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`), the
-boundary (`phase_boundary_at`), the gap and the sample rate ([run report](../reference/run-report.md#run-report));
-the tail's and the exit's files are written as the process ends, after `run.json`. Unset, nothing changes: no
+The run report's `profiles` names each file with its kind (`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`)
+and status (`planned`, `written`, `failed` with its `error`; a failure is also a warning on stderr), the boundary
+(`phase_boundary_at`), the cut's delay, the gap and the sample rate ([run report](../reference/run-report.md#run-report)).
+`run.json` is written at the commit, before the tail's and the exit's files, which it lists as `planned`;
+`--report`, written as the process ends, has every file's final status. Unset, nothing changes: no
 profile runs and the report has no `profiles`.

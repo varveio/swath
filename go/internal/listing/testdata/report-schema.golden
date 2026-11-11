@@ -94,9 +94,12 @@ output.totals.objects int64
 output.totals.prefixes int64
 output.totals.unsized int64
 output.versions int64
+profiles.cpu_cut_delay_ns int64
 profiles.cpu_gap_ns int64
+profiles.files[].error string
 profiles.files[].kind string
 profiles.files[].path string
+profiles.files[].status string
 profiles.mem_profile_rate int
 profiles.phase_boundary_at time
 report_version int

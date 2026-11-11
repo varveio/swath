@@ -20,13 +20,15 @@ import (
 // name directly in it (not data/, the manifest, run.json, error.json, the
 // .swath workspace with its lock and journal, nor an earlier layout's
 // entry); and anything inside another directory this tool manages (a
-// dataset or an interrupted run, whose lock this run does not hold).
+// dataset or an interrupted run, whose lock this run does not hold); and
+// any of them that is another of them (one write would replace another).
 //
 // Each path is resolved once (sideDest) and o then names the resolved
 // destination: every writer (the report's, the profiles') writes there,
 // the pathname that was checked, not a second resolution of the original.
 func checkSidePaths(o *options) error {
 	o.cpuProfile, o.memProfile = os.Getenv("SWATH_CPUPROFILE"), os.Getenv("SWATH_MEMPROFILE")
+	var files []sideFile
 	for _, side := range []struct {
 		what   string
 		path   *string
@@ -40,20 +42,34 @@ func checkSidePaths(o *options) error {
 			continue
 		}
 		dest, err := checkSideFile(*o, *side.path, side.what != "--report")
-		for _, ph := range side.phases {
-			if err == nil {
-				if _, err = checkSideFile(*o, dest+ph, true); err != nil {
-					err = fmt.Errorf("%s: %w", dest+ph, err)
-				}
-			}
-		}
 		if err != nil {
 			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
 		}
+		files = append(files, sideFile{side.what, *side.path, dest})
+		for _, ph := range side.phases {
+			if _, err = checkSideFile(*o, dest+ph, true); err != nil {
+				return fmt.Errorf("%s %s: %s: %w", side.what, *side.path, dest+ph, err)
+			}
+			files = append(files, sideFile{side.what, *side.path + ph, dest + ph})
+		}
 		*side.path = dest
+	}
+	// No two side files are one file: a later write would replace an
+	// earlier one (SWATH_CPUPROFILE=P and SWATH_MEMPROFILE=P.tail).
+	for i, a := range files {
+		for _, b := range files[i+1:] {
+			if samePlace(a.dest, b.dest) {
+				return fmt.Errorf("%s %s: is also %s's %s", b.what, b.given, a.what, a.given)
+			}
+		}
 	}
 	return nil
 }
+
+// sideFile is one file a run writes beside its output: the variable or
+// flag that names it, the name as given (a phase file's: FILE's with its
+// suffix) and its resolved destination.
+type sideFile struct{ what, given, dest string }
 
 // checkSideFile checks one side file's path (checkSidePath, writable) and
 // returns its destination; a profile's (profile) may not be a symbolic
