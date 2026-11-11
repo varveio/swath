@@ -332,11 +332,10 @@ func (a *Adapter) evict() bool {
 // include is inc as q sends it. A probe (keyrange.Query.Probe: the seed's
 // and structure's pages, whose rows are never emitted) leaves out what
 // only rows carry: metadata, tags, immutability. A delimiter query, which
-// only probes send, leaves out snapshots: List Blobs documents
-// delimiter with include=snapshots as 400 InvalidQueryParameter (the
-// service answered 200 on 2026-11-11, service version 2026-06-06), and a
-// snapshot never holds a name alone (its base blob is listed, or listed
-// deleted), so no roll-up is lost.
+// only probes send, leaves out snapshots: a roll-up never needs them (a
+// snapshot never holds a name alone: its base blob is listed, or listed
+// deleted), and List Blobs refused delimiter with include=snapshots
+// before service version 2021-06-08.
 func include(inc client.Include, q *keyrange.Query) client.Include {
 	if q.Probe {
 		inc.Metadata, inc.Tags, inc.Immutability = false, false, false

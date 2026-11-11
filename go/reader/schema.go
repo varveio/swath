@@ -214,7 +214,7 @@ var schemas = map[SchemaID]SchemaSpec{
 	// versioning), is_latest (the name's current blob: what a current
 	// listing lists), its snapshot time (null unless a snapshot), whether
 	// it is soft-deleted, when, and the days its retention has left.
-	AzblobVersionsV1: {ID: AzblobVersionsV1, Key: textKey, MaxKeyBytes: maxBlobNameBytes, Columns: concat(azblobColumns,
+	AzblobVersionsV1: {ID: AzblobVersionsV1, Key: textKey, MaxKeyBytes: maxBlobNameBytes, Columns: concat(present(azblobColumns),
 		ColumnSpec{Name: "version_id", Type: TypeString},
 		ColumnSpec{Name: "is_latest", Type: TypeBool, Required: true},
 		ColumnSpec{Name: "snapshot", Type: TypeString},
@@ -244,4 +244,14 @@ var schemas = map[SchemaID]SchemaSpec{
 
 func concat(cols []ColumnSpec, more ...ColumnSpec) []ColumnSpec {
 	return append(slices.Clone(cols), more...)
+}
+
+// present is cols with every column required in every part: a schema id
+// created after its columns were (none of its parts predates them).
+func present(cols []ColumnSpec) []ColumnSpec {
+	cols = slices.Clone(cols)
+	for i := range cols {
+		cols[i].MayBeAbsent = false
+	}
+	return cols
 }

@@ -6,6 +6,7 @@ package client
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
@@ -181,11 +182,15 @@ func object(m map[string]*string) string {
 	if len(m) == 0 {
 		return ""
 	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return "" // a map of strings always marshals
+	// Not json.Marshal: it escapes &, < and > (\u0026...), which a query
+	// comparing the stored text (URLs are common in metadata) would miss.
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(m) != nil {
+		return "" // a map of strings always encodes
 	}
-	return string(b)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // The Arrow types the SDK's resolvers read for the entry and property

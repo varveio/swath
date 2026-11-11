@@ -83,6 +83,24 @@ func (refusing) List(context.Context, *client.ListInput) (*client.ListOutput, er
 		Message: "This request is not authorized to perform this operation using this permission."}
 }
 
+// rejecting is a flat account whose listings fail on a rejected
+// credential, not on a missing permission.
+type rejecting struct{ *azblobtest.Store }
+
+func (rejecting) List(context.Context, *client.ListInput) (*client.ListOutput, error) {
+	return nil, &client.Error{Status: 403, Code: "AuthenticationFailed", Message: "Server failed to authenticate the request."}
+}
+
+// TestFetchTagsHintOnlyForPermission: a rejected credential with
+// --azure-fetch-tags is reported as it is, without the tags hint, which
+// would point at the wrong cause.
+func TestFetchTagsHintOnlyForPermission(t *testing.T) {
+	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: rejecting{azblobtest.NewStore([]string{"a"})}, FetchTags: true}, 1)
+	if err == nil || strings.Contains(err.Error(), "t permission") {
+		t.Fatalf("%v", err)
+	}
+}
+
 // TestFetchTagsRefused: a listing refused while it asks for tags names the
 // permission tags need, its class kept (access denied); without the flag
 // the same refusal is reported as it is.

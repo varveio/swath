@@ -195,9 +195,9 @@ the journal only between complete names; a resume restarts after the last comple
 adapter's exclusive start drops. The adapter serves grouped pages unchanged but for two rules: it may emit the
 last name again, and a range bounded at a name no longer ends its span at that name's first entry (its later
 entries follow it; the span ends at the first item past them, rule 3). Probes send no `metadata`, `tags` or
-immutability include, and delimiter queries (probes only) no `snapshots`: List Blobs documents
-`delimiter` with `include=snapshots` as 400 `InvalidQueryParameter`, although the service answered 200 on
-2026-11-11, and a snapshot never holds a name alone. `latest` sets `is_latest` on the base blob that is neither a
+immutability include, and delimiter queries (probes only) no `snapshots`: a snapshot never holds a name alone, so
+no roll-up needs them (List Blobs also refused `delimiter` with `include=snapshots` before service version
+2021-06-08). `latest` sets `is_latest` on the base blob that is neither a
 snapshot nor soft-deleted and is the current version, or lists no version id (a blob written before versioning
 was enabled, or an account without versioning). `TestVersionsListing` and `TestVersionsRestart` list names with
 up to five entries at page sizes that put seams inside names, with splits, and resume after names;

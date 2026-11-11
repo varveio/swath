@@ -70,7 +70,7 @@ def check_object_schema(con, path, sid, check):
     print(f"\nColumn-by-column against {sid}: {path}")
     for name, (physical, repetition, annotation) in contract.items():
         matches = [row for row in got if row[0] == name]
-        if not matches and (sid == GCS_CURRENT and name == "time_created" or azure and name in AZBLOB_ADDED):
+        if not matches and (sid == GCS_CURRENT and name == "time_created" or sid == AZBLOB_CURRENT and name in AZBLOB_ADDED):
             continue
         row = matches[0] if matches else (name, None, None, None, None)
         logical = str(row[3] or "")

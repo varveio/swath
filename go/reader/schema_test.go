@@ -59,11 +59,11 @@ func TestSchema(t *testing.T) {
 	added := []string{"access_tier_inferred", "access_tier_change_time", "archive_status", "rehydrate_priority",
 		"last_access_time", "content_encoding", "server_encrypted", "encryption_scope", "customer_provided_key_sha256",
 		"lease_state", "tag_count", "metadata", "tags", "immutability_policy_until", "immutability_policy_mode", "legal_hold"}
+	// Only the objects id predates them; the versions id was created with
+	// them, so every one of its parts has every column.
 	want := []string{"swath/gcs-objects/v1 time_created", "swath/gcs-generations/v1 time_created"}
-	for _, id := range []string{"swath/azblob-objects/v1 ", "swath/azblob-versions/v1 "} {
-		for _, name := range added {
-			want = append(want, id+name)
-		}
+	for _, name := range added {
+		want = append(want, "swath/azblob-objects/v1 "+name)
 	}
 	// The versions schema: the current columns, then the entry's.
 	av, _ := Schema(AzblobVersionsV1)

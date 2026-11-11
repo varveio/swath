@@ -275,7 +275,7 @@ class VerifierSchema(unittest.TestCase):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)
                     allowed = (dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
-                               or (schema.startswith("azblob") and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
+                               or (schema == "azblob" and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
                     self.assertEqual(status == 0, allowed, output)
                     if not allowed:
                         column = dataset.name.split("_", 1)[1].removeprefix("type_")

@@ -324,10 +324,14 @@ func (p *provider[P]) fill(o *Object) {
 	}
 }
 
-// tagsRefused names what a refused listing that asked for tags most
-// likely lacks; any other error is returned as it is.
+// tagsRefused names what a listing that asked for tags lacks when Azure
+// refuses it the way it refuses include=tags (403
+// AuthorizationPermissionMismatch, or an anonymous caller's 401
+// NoAuthenticationInformation); any other error, a rejected credential
+// among them, is returned as it is.
 func (p *provider[P]) tagsRefused(err error) error {
-	if p.opt.FetchTags && refused(err) {
+	f := objhttp.Normalize(err)
+	if p.opt.FetchTags && f != nil && (f.Code == "AuthorizationPermissionMismatch" || p.unsigned() && f.Code == "NoAuthenticationInformation") {
 		return fmt.Errorf("%w (--azure-fetch-tags needs the right to read blob index tags: a SAS with the t permission, "+
 			"or an Entra ID role with the tags read data action such as Storage Blob Data Owner; an anonymous caller has none)", err)
 	}
