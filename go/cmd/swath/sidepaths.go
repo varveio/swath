@@ -15,7 +15,7 @@ import (
 
 // checkSidePaths refuses, before the source is opened, a file the command
 // writes beside its output (--report, the SWATH_CPUPROFILE and
-// SWATH_MEMPROFILE profiles) where it would replace managed output: the
+// SWATH_MEMPROFILE profiles and their phase files) where it would replace managed output: the
 // text output file; inside the dataset directory anything but an ordinary
 // name directly in it (not data/, the manifest, run.json, error.json, the
 // .swath workspace with its lock and journal, nor an earlier layout's
@@ -28,25 +28,24 @@ import (
 func checkSidePaths(o *options) error {
 	o.cpuProfile, o.memProfile = os.Getenv("SWATH_CPUPROFILE"), os.Getenv("SWATH_MEMPROFILE")
 	for _, side := range []struct {
-		what string
-		path *string
+		what   string
+		path   *string
+		phases []string // the phase files written beside it (profile.go)
 	}{
-		{"--report", &o.report},
-		{"SWATH_CPUPROFILE", &o.cpuProfile},
-		{"SWATH_MEMPROFILE", &o.memProfile},
+		{"--report", &o.report, nil},
+		{"SWATH_CPUPROFILE", &o.cpuProfile, []string{phaseListing, phaseTail}},
+		{"SWATH_MEMPROFILE", &o.memProfile, []string{phaseListing, phaseExit}},
 	} {
 		if *side.path == "" || side.what == "--report" && *side.path == "-" { // - is stdout
 			continue
 		}
-		dest, err := checkSidePath(*o, *side.path)
-		if err == nil {
-			err = writable(dest)
-		}
-		if fi, lerr := os.Lstat(dest); err == nil && side.what != "--report" && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
-			// A profile is opened, which would follow the link to wherever
-			// it points by then (createNoFollow refuses it there too); the
-			// report is renamed over its name, which replaces a link.
-			err = fmt.Errorf("is a symbolic link: a profile is not written through one")
+		dest, err := checkSideFile(*o, *side.path, side.what != "--report")
+		for _, ph := range side.phases {
+			if err == nil {
+				if _, err = checkSideFile(*o, dest+ph, true); err != nil {
+					err = fmt.Errorf("%s: %w", dest+ph, err)
+				}
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
@@ -54,6 +53,23 @@ func checkSidePaths(o *options) error {
 		*side.path = dest
 	}
 	return nil
+}
+
+// checkSideFile checks one side file's path (checkSidePath, writable) and
+// returns its destination; a profile's (profile) may not be a symbolic
+// link.
+func checkSideFile(o options, path string, profile bool) (string, error) {
+	dest, err := checkSidePath(o, path)
+	if err == nil {
+		err = writable(dest)
+	}
+	if fi, lerr := os.Lstat(dest); err == nil && profile && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		// A profile is opened, which would follow the link to wherever
+		// it points by then (createNoFollow refuses it there too); the
+		// report is renamed over its name, which replaces a link.
+		err = fmt.Errorf("is a symbolic link: a profile is not written through one")
+	}
+	return dest, err
 }
 
 // writable refuses a side file's destination that cannot be written: a

@@ -170,4 +170,12 @@ sample is dropped and the interval doubles), and the last at the end. Each of `s
 `inflight`, `limit` (the limiter's, 0 without one), `spill_bytes` (live), `free_disk_bytes` (absent without an
 output) and `rss_bytes` (the resident set now; Linux only, absent elsewhere). Absent for a run that stopped
 before listing.
+
+**Profiles** (`profiles`, development only). Present when `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE` is set
+([diagnostics.md](../internals/diagnostics.md#phase-profiles)): `phase_boundary_at`, when the profiles changed
+phase (the event `timings.listing_done_at` records, microseconds later; absent when listing never finished),
+`cpu_gap_ns` (from the boundary to the tail's CPU profile's start, which neither CPU profile covers),
+`mem_profile_rate` (bytes allocated per memory profile sample), and `files`, each with `kind` (`cpu_listing`,
+`cpu_tail`, `mem_listing`, `mem_exit`) and `path`. The tail's and the exit's files are named before they are
+written, as the process ends.
 <!-- report:end -->

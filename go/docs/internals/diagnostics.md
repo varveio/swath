@@ -116,6 +116,35 @@ Diagnostics:
 
 | Variable | Effect |
 |---|---|
-| `SWATH_CPUPROFILE=FILE`, `SWATH_MEMPROFILE=FILE` | write a pprof CPU or heap profile; the file is checked as `--report FILE` is ([run-lifecycle.md](run-lifecycle.md#side-paths)) and may not be a symbolic link |
+| `SWATH_CPUPROFILE=FILE`, `SWATH_MEMPROFILE=FILE` | write pprof CPU and allocation profiles, split at the end of listing ([Phase profiles](#phase-profiles)); each file is checked as `--report FILE` is ([run-lifecycle.md](run-lifecycle.md#side-paths)) and may not be a symbolic link |
+| `SWATH_MEMPROFILERATE=N` | with `SWATH_MEMPROFILE`: `runtime.MemProfileRate`, bytes allocated per sample (default 65536; 1 records every allocation, 0 none) |
 | `SWATH_LOCALFS_ENGINE=portable` | select the portable filesystem engine in place of `getdents` on Linux ([providers/local.md](providers/local.md)) |
 | `SWATH_SPLIT_TRACE` | trace range-engine splits on stderr, one line per split: range id, bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation and the anchor its upper child carries |
+
+## Phase profiles
+
+A sorted run has two phases with different work: listing, until the provider has finished (the report's
+`timings.listing_done_at`), and the drain's tail after it, in which the order stage replays spill and the
+encoders write the remaining parts. The profiles are split at that boundary, so each phase is read on its own:
+
+| File | Holds |
+|---|---|
+| `FILE.listing` and `FILE` (`SWATH_CPUPROFILE`) | CPU from the run's start to the boundary |
+| `FILE.tail` (`SWATH_CPUPROFILE`) | CPU from the boundary to the end of the run |
+| `FILE.listing` (`SWATH_MEMPROFILE`) | allocations from the process's start to the boundary |
+| `FILE.exit` and `FILE` (`SWATH_MEMPROFILE`) | allocations from the process's start to the end of the run |
+
+Go runs one CPU profile at a time, so there is no whole-run CPU profile beside the phases': `FILE` is the
+listing phase (it was the whole run before the split), and `go tool pprof FILE.listing FILE.tail` merges the two.
+Between them lies a gap, from the boundary until the tail's profile starts, while the listing phase's profile
+is written out (the report's `profiles.cpu_gap_ns`). The phase switch runs on a goroutine of its own, so the
+order stage does not wait for it. The allocation profile is cumulative: `go tool pprof -base FILE.listing
+FILE.exit` is the tail's allocations, and each file is as of the latest garbage collection before it was written
+(the process forces none). A run that never reaches the boundary (a failed or stopped listing, `swath diag count`
+and `swath du`, which order nothing) writes the CPU listing files for the whole run and neither `FILE.tail` nor
+the allocation `FILE.listing`.
+
+The run report's `profiles` names the files by kind (`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`), the
+boundary (`phase_boundary_at`), the gap and the sample rate ([run report](../reference/run-report.md#run-report));
+the tail's and the exit's files are written as the process ends, after `run.json`. Unset, nothing changes: no
+profile runs and the report has no `profiles`.

@@ -26,7 +26,8 @@ import (
 // and requests.failure_warnings. 5: invocation.row_budget_bytes is
 // invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
 // (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens.
+// and opens, and profiles (the development profiles, SWATH_CPUPROFILE and
+// SWATH_MEMPROFILE).
 const ReportVersion = 5
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -62,6 +63,9 @@ type Report struct {
 	// History is the run's progress, sampled (at most HistoryCap samples;
 	// nil for a run that stopped before listing).
 	History *History `json:"history,omitempty"`
+	// Profiles is the development profiles this run writes
+	// (SWATH_CPUPROFILE, SWATH_MEMPROFILE; nil when neither is set).
+	Profiles *Profiles `json:"profiles,omitempty"`
 
 	report    *source.Report
 	sampler   *sampler        // the history's, stopped by finish
@@ -73,6 +77,42 @@ type Report struct {
 // Live is the source's request account when the report was finished
 // (zero for a source that makes no requests).
 func (r *Report) Live() source.Requests { return r.live }
+
+// Profiles is the development profiles a run writes (SWATH_CPUPROFILE,
+// SWATH_MEMPROFILE), split at the end of listing so the listing and the
+// drain's tail after it are profiled apart. Diagnostics only: the caller
+// (cmd/swath) fills it.
+type Profiles struct {
+	// PhaseBoundaryAt is when the profiles changed phase: the event
+	// timings.listing_done_at records (the provider finished), taken
+	// microseconds after it. Absent when listing never finished (a failed
+	// or stopped run, a dry run): the listing-phase files then hold the
+	// whole run and no tail file is written.
+	PhaseBoundaryAt time.Time `json:"phase_boundary_at,omitzero"`
+	// CPUGapNs is the time from the boundary to the tail's CPU profile's
+	// start, which neither CPU profile covers: Go runs one CPU profile at
+	// a time, and the listing phase's is written out before the tail's
+	// starts. Absent without a CPU profile or a boundary.
+	CPUGapNs *int64 `json:"cpu_gap_ns,omitempty"`
+	// MemProfileRate is runtime.MemProfileRate during the run (bytes
+	// allocated per sample; absent without a memory profile).
+	MemProfileRate int `json:"mem_profile_rate,omitempty"`
+	// Files are the profile files the run writes, by phase: cpu_listing,
+	// cpu_tail, mem_listing, mem_exit. Those written at the run's end
+	// (the tail's, the exit's) are named here before they are written; a
+	// failure to write one is a warning on stderr.
+	Files []ProfileFile `json:"files"`
+}
+
+// ProfileFile is one profile file: its Kind (cpu_listing: the CPU profile
+// from the run's start to the boundary, or to the end without one;
+// cpu_tail: from the boundary to the end; mem_listing, mem_exit: the
+// allocation profile, cumulative from the start, as of the latest garbage
+// collection before the boundary and before the end) and its Path.
+type ProfileFile struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
 
 // Requests is an invocation's HTTP account. HTTPAttempts is the one
 // request count: every HTTP attempt sent (pages, probes, client retries,

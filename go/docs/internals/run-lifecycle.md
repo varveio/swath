@@ -133,7 +133,7 @@ included, and the output is found by file identity (on a case-insensitive filesy
 Another dataset or run is recognized by a heuristic: a `.swath/lock` or `.swath/journal`, or a
 `manifest.json` with this tool's `format` and a `coverage` object; an earlier layout's marks (`_SUCCESS`
 beside `data/`, a `schemaId` manifest) and other tools' manifests are not. The `SWATH_CPUPROFILE` and
-`SWATH_MEMPROFILE` files are checked the same way and may not be symbolic links (a profile is opened, never
+`SWATH_MEMPROFILE` files, and their phase files beside them (`FILE.listing`, `FILE.tail`, `FILE.exit`), are checked the same way and may not be symbolic links (a profile is opened, never
 through a link; the report replaces its name by a rename, which replaces a link there rather than writing its
 target).
 
