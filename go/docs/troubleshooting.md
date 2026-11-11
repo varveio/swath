@@ -126,7 +126,8 @@ never recorded.
 | exit 2, `the destination already holds a dataset` | the prefix has a `manifest.json`; datasets in a bucket are not replaced | write to another prefix |
 | exit 2, `the destination overlaps the listed source` | the listing would list the dataset's own objects, or the dataset would sit inside the listed prefix | write to another bucket or a prefix outside the source's |
 | exit 75, class `unresolved` | the manifest's creation failed in a way that does not say whether it happened, and no manifest is there yet; every part is kept | `swath resume DIR` creates the same manifest again; without a journal (a local tree), check the prefix for a manifest before deleting anything under it |
-| exit 1, `cause` `lost_race` | another run created the prefix's manifest first; this run deleted its own parts | write to another prefix |
+| exit 1, `cause` `lost_race` | another run created the prefix's manifest first; this run deleted its own parts (`output.remote.orphans_left` counts any it could not; resuming the work directory tries again) | write to another prefix |
+| exit 2, `--report` names the work directory's `commit.json` | the commit marker's name is reserved | write the report elsewhere |
 | exit 1, `cause` `remote_altered` | a part the journal records was replaced, deleted or changed in the bucket | start over at a new prefix |
 | exit 1, `cause` `candidate_mismatch` | the work directory's saved manifest names other parts than the resume recovered (its journal lost the final record) and may still be created | read the prefix's manifest once no request can still be pending: if there is none, start over at a new prefix |
 | exit 1, `cause` `unsafe_layout` | something in the work directory's `.swath/remote/` is a link or not what swath made | inspect the work directory; start over with a new one |

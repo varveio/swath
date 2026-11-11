@@ -192,7 +192,8 @@ written equal to rows routed), the manifest naming each part by its object name 
 candidate an earlier attempt saved that names the same parts is created as it is, its publication time
 included. A creation that is not answered with success is resolved by reading the manifest back and comparing
 it with the candidate, byte for byte: the same bytes are this run's commit (`commit: confirmed`); other bytes a
-lost race (`dataset.ErrLostRace`). Absence settles nothing after an ambiguous failure (`objfile.ErrUnresolved`:
+lost race (`dataset.ErrLostRace`; a resume that finds it, after a kill, deletes the run's own uploads as the
+loser does). Absence settles nothing after an ambiguous failure (`objfile.ErrUnresolved`:
 a transport failure, a timeout, a cancellation in flight, a server error; a request the service accepted can
 outlive its failed connection and still create the manifest later): the same bytes are created again, up to
 three creations in all, so whichever lands is this commit; if none is answered the commit is unresolved
@@ -202,7 +203,8 @@ runs out of time, is unresolved too. An unresolved commit removes nothing: the p
 and a resume reads the manifest back and creates the same candidate again. The manifest is never overwritten
 or deleted (`TestRemoteDelayedCommit` replays a creation that lands after the run gave up).
 
-**Aftermath.** Once committed, `DIR/commit.json` records it, not yet finalized. The committing run then, within
+**Aftermath.** Once committed, `DIR/commit.json` records it, not yet finalized. Its name is reserved in the work
+directory (no `--report` or profile may be written there), and only a commit record parses as a marker. The committing run then, within
 its own time bound, deletes the objects it created that the manifest does not name, each only at the
 generation its upload recorded (`dataset.DeleteOwned`; an object at an allocated name with no recorded
 creation, such as one a failed `CreateOnly` found or an upload that never completed, is never touched and is
@@ -241,7 +243,15 @@ transport errors quote the request URL: every error the objfile writer returns p
 text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`). Requests are
 bounded: a response's headers within two minutes, a chunk's transfer within two minutes (then retried, within
 the chunk's retry deadline), reads within five attempts, the commit and the aftermath within their own time
-bounds.
+bounds. Token exchanges for the destination's credentials go through a client of their own, bounded the same
+way (headers and body), and are fetched with the context of the request that needs one; the SDK's debug logging
+(`GOOGLE_SDK_GO_LOGGING_LEVEL`) is off for the destination's credentials and clients, so no token or signed
+assertion is ever logged.
+
+**Limits.** The bucket is outside the run's control once a dataset is committed: a lifecycle rule, a retention
+change or a person that deletes or replaces a committed part makes the manifest name an object that is gone or
+different, and swath does not notice (a reader that checks the manifest's SHA-256 does). Configure lifecycle
+rules on the dataset's prefix only for runs you have abandoned. An incomplete-upload rule is safe.
 
 **Crash points.** `TestRemoteCrashMatrix` kills a run (spill off and on) at each of `allocated`,
 `upload-chunk`, `upload-completed`, `part-closed`, `claim-receipt`, `claimed`, `journal-append`,

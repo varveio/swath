@@ -148,6 +148,11 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
   directory; if the runner's disk is lost the resume is lost with it, and a new run starts over at a new
   prefix. Two runners sharing one work directory are refused by its lock; two work directories writing one
   prefix race at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
+- **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
+  dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
+  only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe.
+- **Debug logging:** `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` does not log the destination's tokens or session URLs;
+  the storage SDK may still log request names and URLs.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week).
