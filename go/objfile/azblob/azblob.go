@@ -7,6 +7,10 @@
 // is a ranged download with If-Match on that ETag. A 412, a 404, or a
 // response naming another ETag or size fails the read with
 // objfile.ErrObjectChanged.
+//
+// NewWriter writes block blobs: a small object by one Put Blob, a larger
+// one staged in blocks (Put Block) and created by Put Block List, both
+// create-only (If-None-Match: *).
 package azblob
 
 import (

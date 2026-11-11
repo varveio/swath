@@ -534,12 +534,13 @@ type options struct {
 	allocated, linksOnce          bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
-	// A bucket -o (gs:// or s3://): its work directory, its credentials,
-	// region and endpoint (--work-dir, --output-gcs-credentials-file,
-	// --output-s3-profile, --output-s3-region, --output-endpoint-url), and
-	// the location, resolved (nil for any other output).
-	workDir, outputCreds, outputEndpoint, outputProfile, outputRegion string
-	remote                                                            *objfile.Location
+	// A bucket -o (gs://, s3:// or az://): its work directory, its
+	// credentials, region and endpoint (--work-dir,
+	// --output-gcs-credentials-file, --output-s3-profile,
+	// --output-azure-sas-token, --output-s3-region, --output-endpoint-url),
+	// and the location, resolved (nil for any other output).
+	workDir, outputCreds, outputEndpoint, outputProfile, outputSAS, outputRegion string
+	remote                                                                       *objfile.Location
 }
 
 // swath du's --sort orders.
@@ -569,7 +570,7 @@ func (t *totalsOut) write(w io.Writer) error {
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
 var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
-	"output-gcs-credentials-file", "output-s3-profile"}, termFlags...)
+	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -599,13 +600,15 @@ func providerOperational() []string {
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
 // resume must be given it again.
-// They and secretEnv are the registered providers' (registry.Factory.Secrets).
+// They and secretEnv are the output's (registry.OutputSecretFlags) and the
+// registered providers' (registry.Factory.Secrets).
 var secretFlags, secretEnv = providerSecrets()
 
-// providerSecrets collects the registered providers' secret flags and the
-// environment variable that may stand in for each on resume.
+// providerSecrets collects the output's secret flags, then the registered
+// providers' and the environment variable that may stand in for each on
+// resume.
 func providerSecrets() ([]string, map[string]string) {
-	var flags []string
+	flags := slices.Clone(registry.OutputSecretFlags)
 	env := map[string]string{}
 	for _, f := range registry.Factories() {
 		for _, s := range f.Secrets {
@@ -866,7 +869,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		// dataset directory is (lock, journal, spill, receipts).
 		cfg.Output.Dir = o.workDir
 		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
-			Profile: o.outputProfile, Region: o.outputRegion}
+			Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	}
 	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(m) })
 	if err != nil {

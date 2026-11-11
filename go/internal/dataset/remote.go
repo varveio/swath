@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	seekparquet "github.com/varveio/seekparquet/go"
 	"google.golang.org/api/googleapi"
 
@@ -95,7 +96,7 @@ type UploadStats struct {
 	// AbortsUnconfirmed are aborts the store did not confirm (an S3
 	// multipart upload whose abort failed or that is still listed: its
 	// parts stay until an abort succeeds or the bucket's lifecycle rule
-	// removes them).
+	// removes them). GCS and Azure aborts send nothing to confirm.
 	AbortsUnconfirmed atomic.Int64
 	Bytes             atomic.Int64 // bytes handed to uploads
 	// WaitNs is the time encoders spent in upload writes and completions:
@@ -107,8 +108,8 @@ type UploadStats struct {
 	classes map[string]int64
 }
 
-// Retried counts one retried attempt of err (the Retried of objfile/gcs's
-// and objfile/s3's WriteOptions).
+// Retried counts one retried attempt of err (the Retried of the
+// objfile/gcs, objfile/s3 and objfile/azblob WriteOptions).
 func (s *UploadStats) Retried(_ string, err error) {
 	s.Retries.Add(1)
 	s.mu.Lock()
@@ -134,15 +135,18 @@ func (s *UploadStats) Classes() map[string]int64 {
 }
 
 // FailureClass names a store failure for a report: http_STATUS for a
-// service answer (GCS's, or an AWS SDK response error), timeout,
-// connection, or other.
+// service answer (GCS's, an AWS SDK response error, or an azcore one),
+// timeout, connection, or other.
 func FailureClass(err error) string {
 	var ge *googleapi.Error
+	var ae *azcore.ResponseError
 	var re interface{ HTTPStatusCode() int }
 	var ne net.Error
 	switch {
 	case errors.As(err, &ge):
 		return "http_" + strconv.Itoa(ge.Code)
+	case errors.As(err, &ae):
+		return "http_" + strconv.Itoa(ae.StatusCode)
 	case errors.As(err, &re) && re.HTTPStatusCode() > 0:
 		return "http_" + strconv.Itoa(re.HTTPStatusCode())
 	case errors.Is(err, context.DeadlineExceeded):

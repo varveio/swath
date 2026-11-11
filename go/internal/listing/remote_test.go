@@ -567,10 +567,10 @@ func TestRemoteRefusals(t *testing.T) {
 	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	for name, c := range map[string]func(*Config){
-		"replace":  func(c *Config) { c.Output.Replace = true },
-		"no dir":   func(c *Config) { c.Output.Dir = "" },
-		"az dest":  func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "az://acct/c/p"} },
-		"bad dest": func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "gs://B/p"} },
+		"replace":   func(c *Config) { c.Output.Replace = true },
+		"no dir":    func(c *Config) { c.Output.Dir = "" },
+		"sas on gs": func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "gs://b/p", SAS: "sig=x"} },
+		"bad dest":  func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "gs://B/p"} },
 	} {
 		cfg := remoteConfig(url, ws, false, d.output("x"))
 		c(&cfg)

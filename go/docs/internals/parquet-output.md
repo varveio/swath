@@ -61,7 +61,7 @@ state. The measurement dates and margins are in the writer-admission row above.
 
 Resource admission limits the default encoder count; an explicit `--encoders N` bypasses its
 memory and descriptor limits, with a warning on a shortfall. The allowance is its own, 1/16 of the memory
-found (at most 1 GiB), not `--sort-buffer`; a dataset written to a bucket adds its upload buffer (a GCS chunk or an S3 part) to each
+found (at most 1 GiB), not `--sort-buffer`; a dataset written to a bucket adds its upload buffer (a GCS chunk, an S3 part or an Azure block) to each
 encoder's price ([encoder admission](ordering.md#the-budget)). At a 128 MiB allowance,
 S3 current objects admit 4 encoders and GCS current objects 3, subject to cores and descriptors.
 After listing, the allowance adds 1 MiB per worker: at 64 workers the calculated counts are

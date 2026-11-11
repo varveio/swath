@@ -121,9 +121,11 @@ never recorded.
 
 | Message or exit | Meaning | What to do |
 |---|---|---|
-| exit 2, `-o gs://...` (or `s3://...`)`: a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
-| exit 2, `writing a dataset to az:// is not supported yet` | only `gs://` and `s3://` destinations are written | write to a GCS or S3 bucket, or to a local dataset directory |
-| exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination` | a destination option of the other provider | drop it, or give the one for the destination's provider |
+| exit 2, `-o gs://...` (or `s3://...`, `az://...`)`: a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
+| exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination`, `a shared access signature ... is for an Azure destination` | a destination option of another provider | drop it, or give the one for the destination's provider |
+| exit 2, `the run in DIR was started with --output-azure-sas-token, which is never recorded` | the Azure destination's SAS is not in the journal | give `--output-azure-sas-token` to `swath resume DIR` again (a rotated one is fine) |
+| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([production.md](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
+| `authorized requests are not permitted for non-TLS protected (https) endpoints` | Entra ID (no `--output-azure-sas-token`) on an `http://` endpoint, such as an emulator's | give the emulator a SAS |
 | `destination: remote: destination configuration: ...` | the S3 destination's AWS configuration does not load: a missing `--output-s3-profile`, an unreadable CA bundle | fix the profile or the shared config files |
 | exit 2, `the destination already holds a dataset` | the prefix has a `manifest.json`; datasets in a bucket are not replaced | write to another prefix |
 | exit 2, `the destination overlaps the listed source` | the listing would list the dataset's own objects, or the dataset would sit inside the listed prefix | write to another bucket or a prefix outside the source's |
@@ -136,9 +138,10 @@ never recorded.
 | a warning that the commit's aftermath is not finished | the dataset is committed, but deleting this run's leftover parts or writing `run.json` failed | `swath resume DIR` finishes it and exits 0 |
 | `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([production.md](production.md#writing-to-a-bucket)) |
 
-Errors never quote a resumable upload's session URL (its query is a credential for the upload) or an S3
-multipart upload's id: a URL in an error shows its scheme, host and path only, and an upload id is shown as
-`[upload-id]`.
+Errors never quote a resumable upload's session URL (its query is a credential for the upload), an S3
+multipart upload's id, an Azure destination's SAS or its block ids: a URL in an error shows its scheme, host and
+path only, an upload id is shown as `[upload-id]`, a block id as `[block-id]`, and a SAS signature an Azure
+error body quotes back as `[redacted]`.
 
 ## The run stops as stuck (exit 75)
 

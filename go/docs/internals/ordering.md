@@ -164,8 +164,8 @@ by about 15 MiB at the smallest `--sort-buffer`; RSS at 512 workers with 1 KiB k
 a floor of one: as many encoders as fit in an encoder allowance of their own, apart from the row budget, each
 priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
 `registry.Factory.EncoderBytes`) plus, for a dataset in a bucket, the one buffer its upload holds (`listing.uploadBytes`): 8 MiB by default
-for both providers; a GCS chunk asked is rounded up to 256 KiB as the SDK sends it, an S3 part is exactly the
-size asked (5 MiB to 5 GiB, refused otherwise). The allowance is the default row budget's share of the
+for every provider; a GCS chunk asked is rounded up to 256 KiB as the SDK sends it, an S3 part (5 MiB to
+5 GiB) and an Azure block (1 byte to 256 MiB) are exactly the size asked, any other size refused. The allowance is the default row budget's share of the
 memory found (1/16, at least 128 KiB, at most 1 GiB; 128 MiB when no limit is found), whatever `--sort-buffer`
 says: the sort buffer sizes row storage only, and a small one does not starve the writers. [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
 own the calculation, per-schema prices and measured margins. Descriptors bound the default count too:
@@ -177,14 +177,14 @@ Once the provider has finished listing (every range expanded, none in flight: `o
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
 1,000-key S3 response and its arena) is added to the encoder allowance, still at most `GOMAXPROCS` and the
-descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chunk or S3 part), before `GOMAXPROCS` caps it:
+descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chunk, S3 part or Azure block), before `GOMAXPROCS` caps it:
 
 | Memory | Allowance | Output | At start | After listing, 64 / 256 workers |
 |---|---|---|---|---|
 | 2 GiB | 128 MiB | local | 4 | 6 / 12 |
-| 2 GiB | 128 MiB | GCS or S3 | 3 | 4 / 9 |
+| 2 GiB | 128 MiB | GCS, S3 or Azure | 3 | 4 / 9 |
 | 8 GiB | 512 MiB | local | 16 | 18 / 24 |
-| 8 GiB | 512 MiB | GCS or S3 | 12 | 14 / 19 |
+| 8 GiB | 512 MiB | GCS, S3 or Azure | 12 | 14 / 19 |
 
 An 8-vCPU host with 8 GiB therefore starts eight writers, local or in a bucket, whatever `--sort-buffer` is. The router holds the extra slots from the
 start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column

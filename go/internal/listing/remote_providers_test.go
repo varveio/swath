@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
@@ -20,6 +23,8 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/azblob"
+	"github.com/varveio/swath/go/objfile/azblob/azfake"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
 	"github.com/varveio/swath/go/objfile/s3"
@@ -35,7 +40,7 @@ import (
 
 const dstBucket = "dst"
 
-// Fault steps both fakes name alike.
+// Fault steps every fake names alike.
 const (
 	opCreate = "create" // the request that creates an object
 	opRead   = "read"   // a ranged read
@@ -57,7 +62,8 @@ type bucketFake interface {
 	Count(op string) int64
 	// OpenUploads is the uploads started and neither completed nor
 	// aborted (GCS: resumable sessions, which expire; S3: multipart
-	// uploads, which do not).
+	// uploads, which do not; Azure: names holding uncommitted blocks,
+	// which the service discards after a week).
 	OpenUploads() int
 	// SetFault decides a request's fate before (after false) the fake
 	// acts on it, or after (its answer lost): a status other than 0 is
@@ -67,21 +73,24 @@ type bucketFake interface {
 
 // provider is a destination provider under test.
 type provider struct {
-	name   string
-	scheme string
-	fake   func() bucketFake
+	name string
+	// root is the URI of the destination bucket or container, without a
+	// prefix.
+	root string
+	fake func() bucketFake
 	// output is a RemoteOutput writing SCHEME://dst/prefix through the
 	// fake served at url.
 	output func(url, prefix string) *RemoteOutput
 	// uploading tells a request that carries an upload's bytes.
 	uploading func(r *http.Request) bool
 	// aborts: an upload that ends without its object ends its session at
-	// the store (S3's AbortMultipartUpload); GCS's SDK only cancels.
+	// the store (S3's AbortMultipartUpload); GCS's SDK only cancels, and
+	// Azure's staged blocks need no call.
 	aborts bool
 }
 
 // providers are the destinations every remote test runs against.
-var providers = []provider{gcsProvider, s3Provider}
+var providers = []provider{gcsProvider, s3Provider, azureProvider}
 
 // eachProvider runs f once per provider, as a subtest named for it.
 func eachProvider(t *testing.T, f func(t *testing.T, p provider)) {
@@ -121,11 +130,11 @@ func (d *destination) gcs() *gcsfake.Server {
 }
 
 // uri is the destination's URI of prefix.
-func (d *destination) uri(prefix string) string { return d.p.scheme + "://" + dstBucket + "/" + prefix }
+func (d *destination) uri(prefix string) string { return d.p.root + "/" + prefix }
 
 // gcsProvider writes through objfile/gcs to gcsfake, in chunks of 256 KiB
 // (the SDK's smallest).
-var gcsProvider = provider{name: "gcs", scheme: "gs",
+var gcsProvider = provider{name: "gcs", root: "gs://" + dstBucket,
 	fake: func() bucketFake { return gcsFake{gcsfake.New(dstBucket)} },
 	output: func(url, prefix string) *RemoteOutput {
 		loc := "gs://" + dstBucket + "/" + prefix
@@ -167,7 +176,7 @@ const s3Part = 4 << 10
 // s3Provider writes through objfile/s3 to s3fake, path-style, in parts of
 // the output's ChunkSize (s3Part unless a test sets another); the SDK's
 // retries do not wait.
-var s3Provider = provider{name: "s3", scheme: "s3",
+var s3Provider = provider{name: "s3", root: "s3://" + dstBucket,
 	fake: func() bucketFake {
 		f := s3fake.New(dstBucket)
 		f.MinPartSize = s3Part
@@ -213,3 +222,55 @@ func (f s3Fake) Put(name string, data []byte) { f.Server.Put(name, data) }
 func (f s3Fake) OpenUploads() int { return len(f.Uploads()) }
 
 func (f s3Fake) SetFault(fn func(op, name string, after bool) int) { f.Server.SetFault(fn) }
+
+// dstAccount is the Azure harness's storage account; azBlock its block
+// size: a part of the listing's (about 6 KiB) is two blocks staged and a
+// block list.
+const (
+	dstAccount = "acct"
+	azBlock    = 4 << 10
+)
+
+// azureProvider writes through objfile/azblob to azfake, addressed as an
+// emulator is (/ACCOUNT/CONTAINER/NAME), in blocks of the output's
+// ChunkSize; the client's retries do not wait.
+var azureProvider = provider{name: "azure", root: "az://" + dstAccount + "/" + dstBucket,
+	fake: func() bucketFake { return azFake{azfake.New(dstAccount, dstBucket)} },
+	output: func(url, prefix string) *RemoteOutput {
+		loc := "az://" + dstAccount + "/" + dstBucket + "/" + prefix
+		r := &RemoteOutput{Location: loc, ChunkSize: azBlock}
+		r.Open = func(ctx context.Context, stats *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+			c, err := azsdk.NewClientWithNoCredential(url+"/"+dstAccount+"/", &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{
+				Retry: policy.RetryOptions{MaxRetries: 1, RetryDelay: time.Millisecond, MaxRetryDelay: time.Millisecond}}})
+			if err != nil {
+				return nil, nil, err
+			}
+			l, err := objfile.ParseLocation(loc)
+			if err != nil {
+				return nil, nil, err
+			}
+			w, err := azblob.NewWriter(c, dstBucket, azblob.WriteOptions{BlockSize: int64(r.ChunkSize), MaxAttempts: 2,
+				RetryDelay: time.Millisecond, MaxRetryDelay: time.Millisecond, Retried: stats.Retried})
+			if err != nil {
+				return nil, nil, err
+			}
+			return &dataset.Remote{Location: l, Opener: objfile.Root(azblob.New(c, dstBucket), l.Prefix), Writer: objfile.RootWriter(w, l.Prefix)},
+				func() error { return nil }, nil
+		}
+		return r
+	},
+	uploading: func(r *http.Request) bool { return r.Method == http.MethodPut },
+}
+
+type azFake struct{ *azfake.Server }
+
+func (f azFake) Object(name string) ([]byte, bool) {
+	b, ok := f.Get(name)
+	return b.Data, ok
+}
+
+func (f azFake) Put(name string, data []byte) { f.Server.Put(name, data) }
+
+func (f azFake) OpenUploads() int { return len(f.Staging()) }
+
+func (f azFake) SetFault(fn func(op, name string, after bool) int) { f.Server.SetFault(fn) }

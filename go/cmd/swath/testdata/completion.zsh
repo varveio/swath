@@ -15,6 +15,7 @@ _swath_list() {
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
         '--output-s3-region=[the region of an S3 -o]:NAME: ' \
         '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
@@ -147,6 +148,7 @@ _swath_diag_list() {
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
         '--output-s3-region=[the region of an S3 -o]:NAME: ' \
         '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
@@ -229,6 +231,7 @@ _swath_diag_count() {
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
         '--output-s3-region=[the region of an S3 -o]:NAME: ' \
         '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
@@ -300,6 +303,7 @@ _swath_resume() {
     _arguments \
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
         '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \

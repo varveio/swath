@@ -326,8 +326,8 @@ func TestEncoderAllowance(t *testing.T) {
 		t.Fatalf("prices: writer %d, upload %d", writer, upload)
 	}
 	// Each provider's upload is priced at the buffer its writer holds:
-	// GCS rounds a chunk up to the SDK's 256 KiB; S3 sends a part of
-	// exactly the size given.
+	// GCS rounds a chunk up to the SDK's 256 KiB; S3 sends a part, and
+	// Azure stages a block, of exactly the size given.
 	for _, c := range []struct {
 		out  RemoteOutput
 		want int64
@@ -336,6 +336,8 @@ func TestEncoderAllowance(t *testing.T) {
 		{RemoteOutput{Location: "gs://d/p", ChunkSize: 300 << 10}, 512 << 10},
 		{RemoteOutput{Location: "s3://d/p"}, 8 * mib},
 		{RemoteOutput{Location: "s3://d/p", ChunkSize: 5<<20 + 300<<10}, 5<<20 + 300<<10},
+		{RemoteOutput{Location: "az://a/c/p"}, 8 * mib},
+		{RemoteOutput{Location: "az://a/c/p", ChunkSize: 300 << 10}, 300 << 10},
 	} {
 		if got := uploadBytes(&c.out); got != c.want {
 			t.Errorf("%s, chunk %d: upload priced %d, want %d", c.out.Location, c.out.ChunkSize, got, c.want)
