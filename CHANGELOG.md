@@ -5,6 +5,20 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/reader`'s `Dataset.Totals` scans in parallel shards over borrowed batches, as `Scan` does, with
+  `runtime.GOMAXPROCS(0)` goroutines, instead of one serial pass of owning rows; it plans only the paths not
+  inside another (the same rows) and takes each `Count` from the rows its scan reads instead of a count plan
+  per path. Totals, checks and API are unchanged; with several rows that fail, which one's error is returned is
+  now unspecified, as with `Scan`. `Aggregates` sums in one shard, as before, but no longer plans a prefix
+  inside another, so it can decode fewer key pages.
+
+- Fixed: `go/reader`'s sharded reads (`Scan`, `ScanBatches` since they shard, and `Totals`) did not check the
+  key order across shards: each shard's scan checks only its own keys, so a key below the one before it, or
+  repeating a unique key, where a row group begins (and past the pages a `CheckSchema` decodes) was read as a
+  success, with wrong totals. Each shard's first key is now checked against the last of the shard before it,
+  failing with SeekParquet's `key_order` refusal naming the key, as one pass refuses it; `Scan` and
+  `ScanBatches` return it after the shards' objects were handed on.
+
 - Go port, Azure Blob: listings ask for the Arrow format and read XML wherever the service answers XML
   (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay) (#440). On the 468,557-blob
   `Crime/` prefix of a public container, on a 4-vCPU VM, a listing took 3.4 s and 3.9 CPU-seconds against

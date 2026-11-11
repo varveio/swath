@@ -199,7 +199,7 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 	for k, i := range selected {
 		chosen[k] = spans[i]
 	}
-	found, err := d.sumSpans(ctx, chosen, []string{"size"}, st)
+	found, err := d.sumSpans(ctx, chosen, []string{"size"}, st, 1)
 	if err != nil {
 		return nil, err
 	}

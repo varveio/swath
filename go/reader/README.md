@@ -255,7 +255,12 @@ Azure versions schema.
   shards' batches concurrently and in no set order, so `fn` must be safe for concurrent use. A batch's slice is
   reused once `fn` returns: `fn` must not keep it (an `Object` copied out of it owns its memory). The first
   error cancels the other shards and is returned: `fn`'s and the module's unchanged, a row's `KindRow`, the
-  context's (checked before each batch). Batches already handed on stay handed on; a failed scan is no result.
+  context's (checked before each batch). Each shard's scan checks its own keys' order; when every shard has
+  succeeded, each shard's first key must be above the last key of the shard before it (`shardOrder`), or the
+  scan fails with SeekParquet's `key_order` refusal naming that key (at no part or row group), after every
+  batch was handed on: a key out of order where a row group begins, which no single shard sees, is refused
+  as one pass refuses it. `ScanBatches` and `Totals` share this check. Batches already handed on stay handed
+  on; a failed scan is no result.
   `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too, with Page's exception:
   a plan (`PlanRanges`) or split (`Split`) that fails returns no statistics, so its own reads are missing, while
   every completed plan, split and shard scan is counted. The context is checked before planning, before each
@@ -308,13 +313,18 @@ Azure versions schema.
 - **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
   a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
   other path only the object whose key equals it. Paths may repeat, nest and overlap; each total is independent.
-  The rows of all paths are planned at once (`seekparquet.Dataset.PlanRanges`, projecting `size` and
-  `last_modified`), which checks every part holding them, and scanned once, so a row several paths select is
-  decoded once. `Count` is the plan's count of the path's range, exact once its parts are checked; `Bytes` the
+  The rows of all paths are planned at once (`seekparquet.Dataset.PlanRanges` of the paths not inside another,
+  projecting `size` and `last_modified`), which checks every part holding them, and scanned once as `Scan` scans,
+  in shards read by `runtime.GOMAXPROCS(0)` goroutines over borrowed batches, so a row several paths select is
+  read once; the shards' totals are added up when all have succeeded, their keys in order across shards (as
+  `Scan` checks them). `Count` is the number of the path's rows the scan read: the plan's count of its range on
+  a dataset its reads find in key order, and a `key_order` refusal on one they do not; `Bytes` the
   sum of the sizes (nil when a selected filesystem entry has none); `NewestModified` the latest time, nil when the path selects nothing or any selected object
   has no time; `Exact` the object whose key is the path (never for `""`), with its ETag and storage class read by
-  a plan of those objects alone. Each object is checked as `Stream` checks it (`KindRow`), and sizes whose sum
-  overflows an int64 fail with `KindRow` naming `size` and no row. Totals is exact or fails: the module's
+  a plan of those objects alone. Each object is checked as `Stream` checks it (`KindRow`; a failing row is
+  decoded again as `Stream` decodes it, for the same error), and sizes whose sum overflows an int64 fail with
+  `KindRow` naming `size` and no row. The first error of any shard stops the others: with several failing rows,
+  which one is reported is unspecified, as with `Scan`. Totals is exact or fails: the module's
   refusals and the Source's errors unchanged, the context's error, no totals. **Local totals**
   (`swath/local-entries/v1`): an object is an entry of any kind; `Count` includes a directory's own row `d/` for
   the path `d/`, once, and `""` counts the entries below the root, which has no row; `Bytes` is the entries'
@@ -474,7 +484,17 @@ naming the one it ports, over datasets of several parts cut inside prefixes, rea
 records every open and read: `TestTotalsMatchStream` is the oracle, totals of root, nested, overlapping, exact,
 repeated and absent paths equal to those computed from a full `Stream`; the selection of `a`, `a/`, `a/b` and
 `ab/x`; missing times; overflow; Source failures and cancellation returned unchanged; nested paths reading
-exactly root's size and time pages; the aggregates oracle on fresh and checked datasets; counts reading no value
+exactly root's size and time pages; `TestTotalsMatchSerial`, sharded totals at 0 to 16 workers equal to
+`serialTotals` (Totals before it read in shards, kept as the oracle) over S3, GCS and Azure datasets, filesystem
+entries with and without a stat, an empty dataset and keys nested seven deep over many row groups and parts, for
+root, nested, repeated, exact, absent and no paths; `TestTotalsShardErrors`, one bad row (a negative size, a
+time past 9999, a null size) giving the oracle's error at every worker count, several giving one of theirs (the
+oracle's, the first in key order, at one worker), and a part lacking `last_modified` failing with `KindSchema`;
+`TestTotalsCancelledDuringScan`, a context cancelled at a read inside the scan at every worker count;
+`scan_test.go`'s `TestShardBoundaryOrder` (a key below the last of the row group before it, or repeating it,
+written by parquet-go past what `CheckSchema` decodes: `Scan`, `ScanBatches` and `Totals` refuse it at 1, 2, 4
+and 8 workers with `Stream`'s and the serial Totals' code and key), `TestShardBoundaryRepeatedKeys` (a group of
+equal keys across row groups under non-unique keys is read, not refused) and `TestShardOrder`; the aggregates oracle on fresh and checked datasets; counts reading no value
 page and opening no part between a prefix's ends, and nil across an unchecked part with a false manifest row
 count; sums publishing nothing on failure; budgets read within, a budget of exactly the prefixes' projected bytes
 summing them all (shared pages and dictionaries charged once), and a one-byte budget reading nothing beyond the

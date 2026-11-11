@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -645,6 +646,383 @@ func TestAzblobTotals(t *testing.T) {
 	for i, p := range []string{"", "a/", "c/"} {
 		if count, size := prefixTotals(objects, []byte(p)); *aggs[i].Count != count || *aggs[i].Bytes != size {
 			t.Fatalf("%q: %s, want %d and %d", p, describeAggregate(aggs[i]), count, size)
+		}
+	}
+}
+
+// serialTotals is Totals as it was at 6c507e01, before it read in shards,
+// verbatim but for its name and its serial sum (serialSumSpans): the
+// oracle of totals, its errors included, and the benchmarks' baseline.
+func serialTotals(ctx context.Context, d *Dataset, paths []string) ([]PathTotals, error) {
+	if err := d.usable(ctx); err != nil {
+		return nil, err
+	}
+	columns := objectColumns(d.spec.ID)
+	if columns == nil {
+		return nil, notCurrent(d.spec.ID)
+	}
+	unique, of := distinct(paths)
+	spans := make([]keySpan, len(unique))
+	exact := make(map[string]int)
+	for i, path := range unique {
+		switch {
+		case path == "":
+			spans[i] = prefixSpan(nil)
+		case strings.HasSuffix(path, "/"):
+			spans[i] = prefixSpan([]byte(path))
+			exact[path] = i
+		default:
+			spans[i] = keySpanOf([]byte(path))
+			exact[path] = i
+		}
+	}
+	sums, err := serialSumSpans(ctx, d, spans, []string{"size", "last_modified"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	totals := make([]PathTotals, len(unique))
+	for i, s := range sums.sums {
+		n, err := d.count(ctx, spans[i], nil)
+		if err != nil {
+			return nil, err
+		}
+		if n == nil {
+			return nil, fmt.Errorf("swath reader: the count of %q relies on a part no read has checked", unique[i])
+		}
+		if s.overflow {
+			return nil, semantic(KindRow, "size", nil, "the sizes %q selects overflow an int64 total", unique[i])
+		}
+		totals[i] = PathTotals{Count: *n, Bytes: s.total(), NewestModified: s.newestTime()}
+	}
+	for path, o := range sums.exact {
+		if i, ok := exact[path]; ok {
+			totals[i].Exact = &o
+		}
+	}
+	if err := d.fillExact(ctx, totals, columns[2:]); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]PathTotals, len(paths))
+	for i, u := range of {
+		out[i] = totals[u]
+		if e := out[i].Exact; e != nil {
+			c := *e
+			c.Key = bytes.Clone(e.Key)
+			out[i].Exact = &c
+		}
+	}
+	return out, nil
+}
+
+// serialSumSpans and serialObjectSum are sumSpans and objectSum as they
+// were at 6c507e01, verbatim but for their names.
+
+// serialSpanSums is what serialSumSpans found: each span's sum, and the objects whose
+// key equals a span's lower bound, by key.
+type serialSpanSums struct {
+	sums  []serialObjectSum
+	exact map[string]Object
+}
+
+// serialSumSpans plans the rows of spans projecting columns ("size", and
+// "last_modified" when it is to be summed too) and scans them once, adding
+// each object to every span holding its key. It records each object whose
+// key is a span's lower bound, with what columns gives of it.
+func serialSumSpans(ctx context.Context, d *Dataset, spans []keySpan, columns []string, st *ReadStats) (serialSpanSums, error) {
+	out := serialSpanSums{sums: make([]serialObjectSum, len(spans)), exact: make(map[string]Object)}
+	if len(spans) == 0 {
+		return out, nil
+	}
+	plan, err := d.sp.PlanRanges(ctx, ranges(spans), columns)
+	if err != nil {
+		return serialSpanSums{}, err
+	}
+	addStats(st, plan.Stats())
+	order := make([]int, len(spans))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(a, b int) int { return bytes.Compare(spans[a].lo, spans[b].lo) })
+	lower := make(map[string]bool, len(spans))
+	for _, s := range spans {
+		lower[string(s.lo)] = true
+	}
+	timed := slices.Contains(columns, "last_modified")
+	var active []int
+	next := 0
+	var scanned ReadStats
+	defer func() { addStats(st, scanned) }()
+	err = plan.Scan(ctx, &scanned, func(r seekparquet.Row) error {
+		dec := decoder{spec: d.spec, row: &r}
+		o := Object{Position: dec.position(), Size: dec.int64("size")}
+		if timed {
+			o.LastModified = dec.time("last_modified")
+		}
+		if dec.err != nil {
+			return dec.err
+		}
+		if err := checkObject(&o, d.spec.ID == LocalV1); err != nil {
+			return err
+		}
+		for ; next < len(order) && bytes.Compare(spans[order[next]].lo, r.Key) <= 0; next++ {
+			active = append(active, order[next])
+		}
+		active = slices.DeleteFunc(active, func(i int) bool {
+			return spans[i].hi != nil && bytes.Compare(r.Key, spans[i].hi) >= 0
+		})
+		for _, i := range active {
+			out.sums[i].add(&o)
+		}
+		if lower[string(r.Key)] {
+			out.exact[string(r.Key)] = o
+		}
+		return nil
+	})
+	if err != nil {
+		return serialSpanSums{}, err
+	}
+	return out, nil
+}
+
+// serialObjectSum is the sizes and newest modification time of some objects.
+type serialObjectSum struct {
+	bytes    int64
+	overflow bool // the sizes overflow an int64
+	unsized  bool // a filesystem entry has no size
+	newest   time.Time
+	dated    bool // newest is set
+	undated  bool // an object has no modification time
+}
+
+func (s *serialObjectSum) add(o *Object) {
+	if o.Size == nil {
+		s.unsized = true
+	} else {
+		s.addSize(*o.Size)
+	}
+	switch {
+	case o.LastModified == nil:
+		s.undated = true
+	case !s.dated || o.LastModified.After(s.newest):
+		s.newest, s.dated = *o.LastModified, true
+	}
+}
+
+func (s *serialObjectSum) addSize(size int64) {
+	if s.overflow || size > math.MaxInt64-s.bytes {
+		s.overflow = true
+		return
+	}
+	s.bytes += size
+}
+
+// total is the sum of the sizes, nil when an object had none or they
+// overflow an int64.
+func (s *serialObjectSum) total() *int64 {
+	if s.unsized || s.overflow {
+		return nil
+	}
+	return ptrTo(s.bytes)
+}
+
+// newestTime is the newest modification time, nil when there was no
+// object or one had no time.
+func (s *serialObjectSum) newestTime() *time.Time {
+	if !s.dated || s.undated {
+		return nil
+	}
+	t := s.newest
+	return &t
+}
+
+// totalsWorkers are the worker counts the sharded totals are checked at.
+var totalsWorkers = []int{0, 1, 2, 3, 4, 7, 16}
+
+// checkTotalsSerial requires totals over paths at every worker count to
+// equal serialTotals: the same totals, or the same error.
+func checkTotalsSerial(t *testing.T, d *Dataset, paths []string) {
+	t.Helper()
+	want, wantErr := serialTotals(context.Background(), d, paths)
+	for _, workers := range totalsWorkers {
+		got, err := d.totals(context.Background(), paths, workers)
+		if !reflect.DeepEqual(err, wantErr) {
+			t.Fatalf("workers=%d: error %v, want %v", workers, err, wantErr)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("workers=%d: %d totals, want %d", workers, len(got), len(want))
+		}
+		for i := range want {
+			if !reflect.DeepEqual(got[i], want[i]) {
+				t.Fatalf("workers=%d: path %d %q: %s, want %s", workers, i, paths[i], describeTotals(got[i]), describeTotals(want[i]))
+			}
+		}
+	}
+}
+
+// deepKeys returns sorted distinct keys nested up to seven levels, with
+// folder keys ("x/") among them.
+func deepKeys(r *rand.Rand, n int) []string {
+	names := []string{"p", "q", "q.", "r", "r0"}
+	var keys []string
+	for range n {
+		var k string
+		for range 1 + r.IntN(7) {
+			k += names[r.IntN(len(names))] + "/"
+		}
+		if r.IntN(6) != 0 {
+			k += fmt.Sprintf("%02d", r.IntN(50))
+		}
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
+// TestTotalsMatchSerial: sharded totals at every worker count equal the
+// serial oracle over S3, Cloud Storage and Azure datasets, filesystem
+// entries with and without a stat, an empty dataset and nested keys cut
+// into many row groups and parts, for root, nested, overlapping, exact,
+// repeated and absent paths and no path at all.
+func TestTotalsMatchSerial(t *testing.T) {
+	r := rand.New(rand.NewPCG(5, 6))
+	nested := randomKeys(r, 420)
+	nestedRows := keyRows(nested, nested[7], nested[200])
+	deep := deepKeys(r, 2500)
+	deepRows := keyRows(deep, deep[3], deep[1500])
+	var deepPaths []string
+	for i, p := range pathsOf(deep) {
+		if i < 20 || i%7 == 0 {
+			deepPaths = append(deepPaths, p)
+		}
+	}
+	batchPaths := []string{"", "k00000", "k00599", "k00600", "k01199", "k00042", "k00042/", "k/", "zzz/", "k00042", ""}
+	cases := []struct {
+		name  string
+		dir   func(*testing.T) string
+		paths []string
+	}{
+		{"nested", func(t *testing.T) string {
+			return writeParts(t, s3Spec(), 7, 40, cut(nestedRows, 0, 97, 210, 211, 330, len(nestedRows))...)
+		}, pathsOf(nested)},
+		{"deep", func(t *testing.T) string {
+			return writeParts(t, s3Spec(), 16, 64, cut(deepRows, 0, 900, 901, 1700, len(deepRows))...)
+		}, deepPaths},
+		{"s3", func(t *testing.T) string { return batchFixture(t, S3ObjectsV1) }, batchPaths},
+		{"gcs", func(t *testing.T) string { return batchFixture(t, GCSObjectsV1) }, batchPaths},
+		{"azblob", func(t *testing.T) string { return batchFixture(t, AzblobObjectsV1) }, batchPaths},
+		{"local", func(t *testing.T) string { return localDir(t, false) }, localPaths},
+		{"local-names", func(t *testing.T) string { return localDir(t, true) }, localPaths},
+		{"empty", func(t *testing.T) string { return writeDataset[s3Row](t, s3Spec(), nil) }, []string{"", "a/", "a"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := openDir(t, c.dir(t))
+			checkTotalsSerial(t, d, c.paths)
+			checkTotalsSerial(t, d, slices.Concat(c.paths[len(c.paths)/2:], c.paths))
+			checkTotalsSerial(t, d, nil)
+			checkTotalsSerial(t, d, []string{"zzzz/", "zzzz", "\xff\xff/"})
+		})
+	}
+}
+
+// localPaths are paths of localTree: root, directories, files, a missing
+// path and a directory named without its slash.
+var localPaths = []string{"", "d/", "d/e/", "z/", "z/y/f", "d/link", "a.txt", "missing/", "d", "d/\xff", "z/y/"}
+
+// TestTotalsShardErrors: a row Totals refuses fails every worker count.
+// One bad row gives the serial oracle's error at every count; with several
+// in different shards, one worker gives the oracle's (the first in key
+// order) and more give one of theirs. A part lacking last_modified fails
+// with KindSchema as the oracle does.
+func TestTotalsShardErrors(t *testing.T) {
+	keys := make([]string, 2000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("a/%02d/%04d", i/100, i)
+	}
+	bad := map[int]func(*s3Row){
+		150:  func(r *s3Row) { r.Size = ptr(int64(-1)) },
+		900:  func(r *s3Row) { r.LastModified = ptr(endObjectMicros) },
+		1700: func(r *s3Row) { r.Size = nil },
+	}
+	columns := map[string]string{keys[150]: "size", keys[900]: "last_modified", keys[1700]: "size"}
+	paths := []string{"", "a/01/", "a/09/", "a/17/0001", "a/19/"}
+	for at, breaks := range bad {
+		rows := keyRows(keys)
+		breaks(&rows[at])
+		d := openDir(t, writeParts(t, s3Spec(), 10, 50, cut(rows, 0, 1000, len(rows))...))
+		checkTotalsSerial(t, d, paths)
+		if _, err := d.Totals(context.Background(), paths); err == nil {
+			t.Fatalf("row %d: no error", at)
+		}
+	}
+	rows := keyRows(keys)
+	for at, breaks := range bad {
+		breaks(&rows[at])
+	}
+	d := openDir(t, writeParts(t, s3Spec(), 10, 50, cut(rows, 0, 1000, len(rows))...))
+	_, want := serialTotals(context.Background(), d, paths)
+	for _, workers := range totalsWorkers {
+		got, err := d.totals(context.Background(), paths, workers)
+		var se *SemanticError
+		if !errors.As(err, &se) || se.Kind != KindRow || se.Row == nil || columns[string(se.Row.Key)] != se.Column || got != nil {
+			t.Fatalf("workers=%d: %+v, %v; want the error of a bad row", workers, got, err)
+		}
+		if workers <= 1 && !reflect.DeepEqual(err, want) {
+			t.Fatalf("workers=%d: %v, want the first bad row's %v", workers, err, want)
+		}
+	}
+
+	type untimed struct {
+		Key          string  `parquet:"key"`
+		Size         *int64  `parquet:"size,optional"`
+		ETag         *string `parquet:"etag,optional"`
+		StorageClass *string `parquet:"storage_class,optional"`
+	}
+	dir := writeParts(t, s3Spec(), 10, 50, keyRows(keys)[:1000])
+	lacking := make([]untimed, 1000)
+	for i := range lacking {
+		lacking[i] = untimed{Key: keys[1000+i], Size: ptr(int64(i))}
+	}
+	appendPart(t, dir, writeGeometry(t, s3Spec(), lacking, 10, 50))
+	d = openDir(t, dir)
+	checkTotalsSerial(t, d, []string{"a/01/", "a/0"})
+	_, want = serialTotals(context.Background(), d, paths)
+	if se := semanticAt(t, want, KindSchema, "last_modified"); string(se.Row.Key) != keys[1000] {
+		t.Fatalf("oracle: %v", se)
+	}
+	for _, workers := range totalsWorkers {
+		got, err := d.totals(context.Background(), paths, workers)
+		if se := semanticAt(t, err, KindSchema, "last_modified"); se.Row == nil || got != nil {
+			t.Fatalf("workers=%d: %+v, %v", workers, got, err)
+		}
+	}
+}
+
+// TestTotalsCancelledDuringScan cancels the context at a read inside the
+// scan, at every worker count: Totals fails with the context's error and
+// returns nothing.
+func TestTotalsCancelledDuringScan(t *testing.T) {
+	keys := make([]string, 3000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("a/%02d/%04d", i/100, i)
+	}
+	dir := writeParts(t, s3Spec(), 10, 50, cut(keyRows(keys), 0, 1000, 2000, len(keys))...)
+	for _, workers := range totalsWorkers {
+		d, src := openSource(t, dir)
+		if err := d.CheckSchema(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		src.mu.Lock()
+		src.cancelAt, src.cancel = len(src.reads)+5, cancel
+		src.mu.Unlock()
+		got, err := d.totals(ctx, []string{"", "a/07/", "a/20/0001"}, workers)
+		cancel()
+		if !errors.Is(err, context.Canceled) || got != nil {
+			t.Fatalf("workers=%d: %+v, %v; want the context's error", workers, got, err)
 		}
 	}
 }

@@ -7,9 +7,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -237,6 +242,110 @@ func BenchmarkReaderStream(b *testing.B) {
 			benchLoop(b, rows, &counted, func() { stream(d) })
 		})
 	}
+}
+
+// BenchmarkReaderTotals: Totals of about 600 nested paths, root included
+// (benchTotalsPaths), over the whole dataset, end to end: the serial
+// oracle (serialTotals, Totals before it read in shards) and the sharded
+// totals at 1, 4 and 8 workers, with GOMAXPROCS unchanged. Besides ns/row
+// it reports B/row and allocs/row over every operation.
+func BenchmarkReaderTotals(b *testing.B) {
+	dir, rows := benchDataset(b)
+	ctx := context.Background()
+	var paths []string
+	d := benchWarm(b, dir, func(d *Dataset) { paths = benchTotalsPaths(b, d) })
+	want, err := serialTotals(ctx, d, paths)
+	if err != nil || want[0].Count != rows {
+		b.Fatalf("serial totals of %d rows: %v", rows, err)
+	}
+	for _, workers := range []int{0, 1, 4, 8} {
+		name := fmt.Sprintf("workers=%d", workers)
+		if workers == 0 {
+			name = "serial"
+		}
+		b.Run(name, func(b *testing.B) {
+			total := func() ([]PathTotals, error) {
+				if workers == 0 {
+					return serialTotals(ctx, d, paths)
+				}
+				return d.totals(ctx, paths, workers)
+			}
+			if got, err := total(); err != nil || !reflect.DeepEqual(got, want) {
+				b.Fatalf("totals differ from the serial oracle: %v", err)
+			}
+			b.ReportAllocs()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			n := int64(0)
+			for b.Loop() {
+				if _, err := total(); err != nil {
+					b.Fatal(err)
+				}
+				n++
+			}
+			runtime.ReadMemStats(&after)
+			b.ReportMetric(float64(len(paths)), "paths/op")
+			b.ReportMetric(float64(rows), "rows/op")
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(rows*n), "ns/row")
+			b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/float64(rows*n), "B/row")
+			b.ReportMetric(float64(after.Mallocs-before.Mallocs)/float64(rows*n), "allocs/row")
+		})
+	}
+}
+
+// benchTotalsPaths returns about 600 paths of the generated dataset, as a
+// registry of prefixes nested up to eight levels holds them: root, every
+// prefix above the days (tops, years, months), days and shard directories
+// evenly spaced, and a few exact keys.
+func benchTotalsPaths(b *testing.B, d *Dataset) []string {
+	dirs := map[string]bool{}
+	var keys []string
+	var last []byte
+	n := 0
+	err := d.ScanBatches(context.Background(), BatchScanRequest{Workers: 1}, func(batch *ObjectBatch) error {
+		for i := range batch.Len() {
+			key := batch.Key(i)
+			if n++; n%500_000 == 0 {
+				keys = append(keys, string(key))
+			}
+			dir := key[:bytes.LastIndexByte(key, '/')+1]
+			if bytes.Equal(dir, last) {
+				continue
+			}
+			last = append(last[:0], dir...)
+			for j, c := range dir {
+				if c == '/' {
+					dirs[string(dir[:j+1])] = true
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	var upper, days, shards []string
+	for _, p := range slices.Sorted(maps.Keys(dirs)) {
+		switch {
+		case strings.Contains(p, "/shard="):
+			shards = append(shards, p)
+		case strings.Contains(p, "/20") && strings.Count(p[strings.Index(p, "/20"):], "/") == 4: // /yyyy/mm/dd/
+			days = append(days, p)
+		default:
+			upper = append(upper, p)
+		}
+	}
+	paths := append([]string{""}, upper...)
+	paths = append(paths, keys...)
+	spread := func(from []string, n int) {
+		for i := range min(n, len(from)) {
+			paths = append(paths, from[i*len(from)/min(n, len(from))])
+		}
+	}
+	room := 600 - len(paths)
+	spread(days, room/2)
+	spread(shards, room-room/2)
+	return paths
 }
 
 // scanAllocBudget is Scan's allocation budget per object (Workers 1,
