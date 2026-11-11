@@ -59,9 +59,11 @@ const unboundedKeyBytes = 4096
 // requires, passed TestWriterAdmissionCoversHeap and wrote the same pages
 // (TestFooterOnlyChange); it was not remeasured.
 //   - a codec state that has compressed a page larger than one zstd block
-//     (128 KiB) keeps a history of one 8 MiB window and a block (zstd's
-//     lower encoder memory: twice the window without it), plus its match
-//     tables: about 10.6 MiB measured, 12 priced (bigStateBytes); one that
+//     keeps a history of one window and a block (zstd's lower encoder
+//     memory: twice the window without it), plus its match tables. Measured
+//     at SpeedDefault (8 MiB window, 128 KiB blocks): about 10.6 MiB, 12
+//     priced (bigStateBytes). SpeedFastest, the page level since r4, uses a
+//     4 MiB window and 64 KiB blocks, so the price stays conservative; one that
 //     only saw smaller pages, about 2 MiB (smallStateBytes). A key page is
 //     1,024 keys, so keys over 128 bytes make every state a big one.
 //   - a writer holds its row group's encoded pages (groupBytes, overshot:
