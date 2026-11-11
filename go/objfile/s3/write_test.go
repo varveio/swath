@@ -636,6 +636,41 @@ func TestAbort(t *testing.T) {
 			t.Fatalf("object made, or upload open (%v), %d aborts", x.f.Uploads(), x.f.Count(s3fake.OpAbort))
 		}
 	})
+	// Aborted while the multipart upload is being created: the creation
+	// is not cancelled with the upload, so its id is known and the new
+	// upload is aborted; a creation the service completed after its client
+	// gave up would otherwise leave an upload nothing can abort.
+	t.Run("creating", func(t *testing.T) {
+		entered, release, served := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		x := newFixture(t, false, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, ok := r.URL.Query()["uploads"]; ok && r.Method == http.MethodPost {
+					close(entered)
+					<-release
+					defer close(served) // the service creates the upload, whoever still listens
+				}
+				h.ServeHTTP(w, r)
+			})
+		}, s3.WriteOptions{})
+		u, _ := x.w.NewWriter(context.Background(), "obj", objfile.CreateOnly)
+		wrote := make(chan error, 1)
+		go func() { _, err := u.Write(objfiletest.Data(3*part, 1)); wrote <- err }()
+		<-entered
+		aborted := make(chan error, 1)
+		go func() { aborted <- u.Abort() }()
+		time.Sleep(20 * time.Millisecond) // Abort has cancelled the upload and waits for Write
+		close(release)
+		if err := <-wrote; err == nil {
+			t.Fatal("a Write cancelled while creating succeeded")
+		}
+		if err := <-aborted; err != nil {
+			t.Fatal(err)
+		}
+		<-served
+		if len(x.f.Uploads()) != 0 {
+			t.Fatalf("uploads left open: %v", x.f.Uploads())
+		}
+	})
 	// Abort from another goroutine while Write sends parts (go test -race).
 	t.Run("concurrent", func(t *testing.T) {
 		for range 20 {
