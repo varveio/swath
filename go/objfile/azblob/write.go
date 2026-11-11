@@ -72,9 +72,10 @@ type WriteOptions struct {
 	RetryDelay, MaxRetryDelay time.Duration
 	// Retried, if set, is called with each failed attempt that was retried,
 	// and the operation it belongs to, once the attempt the retry made has
-	// ended: a retry azcore declines (a Retry-After over MaxRetryDelay), or
-	// one cancelled before its attempt ends, is not counted. It must return
-	// quickly.
+	// ended normally: a retry azcore declines (a Retry-After over
+	// MaxRetryDelay) is not counted, nor is one whose attempt is cancelled
+	// after it was sent or ends in an error azcore does not retry, so a run
+	// cancelled mid-retry can under-report by one. It must return quickly.
 	Retried func(op string, err error)
 }
 

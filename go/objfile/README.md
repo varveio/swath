@@ -279,8 +279,9 @@ another 409 (a lease, an immutability policy) is a refusal. The creating request
 retried). Retries take the writer's options per request (azcore's per-call retry options, which replace the
 client's for that call): `MaxAttempts`, azcore's exponential backoff from `RetryDelay` up to `MaxRetryDelay`,
 and what azcore retries by default; a `Retry-After` over `MaxRetryDelay` is not retried. `Retried` is told of a
-retry once the attempt it made has ended, so a retry azcore declines, or one cancelled in its backoff, is not
-counted.
+retry once the attempt it made has ended normally: the retries counted are those whose attempt ended normally,
+so a retry azcore declines, or one cancelled in its backoff, is not counted, and a run cancelled mid-retry can
+under-report by one.
 `DeleteIf` sends the ETag as `If-Match`; with soft delete the deleted blob is kept until the retention period
 expires, and with versioning it becomes a previous version, kept (and billed) until it is deleted explicitly or
 by a lifecycle rule. Every error passes through `RedactError`, and the upload's block ids (their shared
