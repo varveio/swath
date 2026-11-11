@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/azblob"
+	"github.com/varveio/swath/go/objfile/azblob/azfake"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
 	"github.com/varveio/swath/go/objfile/s3"
@@ -62,15 +64,10 @@ func TestCreate(t *testing.T) {
 	}
 }
 
-// TestCreateRefusals: only gs:// and s3:// are written; an endpoint
-// carrying credentials and an unreadable credentials file are refused.
+// TestCreateRefusals: an endpoint carrying credentials and an unreadable
+// credentials file are refused.
 func TestCreateRefusals(t *testing.T) {
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
-	for _, loc := range []string{"az://acct/c/p"} {
-		if _, err := Create(context.Background(), loc, CreateOptions{}); err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Errorf("Create(%s) = %v", loc, err)
-		}
-	}
 	if _, err := Create(context.Background(), "gs://b", CreateOptions{Endpoint: "https://user:" + secret + "@host/storage/v1/"}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("endpoint with user information: %v", err)
 	}
@@ -357,5 +354,114 @@ func TestCreateS3CABundle(t *testing.T) {
 	}
 	if _, ok := f.Get("ds/profile.json"); !ok {
 		t.Fatalf("objects %v", f.Names())
+	}
+}
+
+// azureDestination serves an azfake container "ctr" of account "acct",
+// recording each request's query; it returns the fake, its URL and the
+// record.
+func azureDestination(t *testing.T) (*azfake.Server, string, *sync.Map) {
+	t.Helper()
+	f := azfake.New("acct", "ctr")
+	var queries sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries.Store(r.URL.Query().Get("sig"), true)
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return f, srv.URL, &queries
+}
+
+// TestCreateAzure: an az:// destination writes, in blocks and in one
+// request, and reads back under its prefix on the endpoint named, the
+// account its first path segment, every request carrying the SAS; the
+// scope names the endpoint and holds no SAS.
+func TestCreateAzure(t *testing.T) {
+	f, url, sigs := azureDestination(t)
+	sas := "?sv=2026-06-06&sp=rcwd&sig=" + secret
+	d, err := Create(context.Background(), "az://acct/ctr/ds", CreateOptions{Endpoint: url + "/", SAS: sas, AzureWrite: azblob.WriteOptions{BlockSize: 64 << 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if d.Scope() != "az://acct/ctr/ds/ at "+url+"/" || strings.Contains(d.Scope(), secret) || d.Region() != "" {
+		t.Fatalf("scope %q, region %q", d.Scope(), d.Region())
+	}
+	r, err := d.Writer().PutIfAbsent(context.Background(), "manifest.json", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := d.Writer().NewWriter(context.Background(), "data/p", objfile.CreateOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Write(make([]byte, 3<<16+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.Get("ds/manifest.json"); !ok || r.Name != "manifest.json" || f.Count(azfake.OpChunk) != 4 {
+		t.Fatalf("blobs %v, receipt %+v, %d blocks", f.Names(), r, f.Count(azfake.OpChunk))
+	}
+	obj, err := d.Open(context.Background(), "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Close()
+	b, err := io.ReadAll(io.NewSectionReader(obj, 0, obj.Size()))
+	if err != nil || string(b) != `{}` || obj.Identity() != r.Identity {
+		t.Fatalf("read back %q (%v), identity %s, receipt %s", b, err, obj.Identity(), r.Identity)
+	}
+	sigs.Range(func(k, _ any) bool {
+		if k.(string) != secret {
+			t.Errorf("a request carried the signature %q", k)
+		}
+		return true
+	})
+}
+
+// TestCreateAzureRefusals: an endpoint carrying credentials, a SAS that is
+// not a query string and a block size the service refuses are refused
+// before any request, quoting no credential; a write the service refuses
+// shows no signature, even when the service's answer quotes it.
+func TestCreateAzureRefusals(t *testing.T) {
+	if _, err := Create(context.Background(), "az://acct/ctr", CreateOptions{Endpoint: "https://user:" + secret + "@host/", SAS: "sig=x"}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("endpoint with user information: %v", err)
+	}
+	if _, err := Create(context.Background(), "az://acct/ctr", CreateOptions{SAS: "sig=%zz" + secret}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("a SAS that is not a query string: %v", err)
+	}
+	if _, err := Create(context.Background(), "az://acct/ctr", CreateOptions{SAS: "sig=x", AzureWrite: azblob.WriteOptions{BlockSize: azblob.MaxBlockSize + 1}}); err == nil {
+		t.Error("a block size over the limit: accepted")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ms-error-code", "AuthenticationFailed")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s</Message></Error>", r.URL.RawQuery)
+	}))
+	t.Cleanup(srv.Close)
+	d, err := Create(context.Background(), "az://acct/ctr", CreateOptions{Endpoint: srv.URL, SAS: "sv=1&sig=" + secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	_, err = d.Writer().PutIfAbsent(context.Background(), "m", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("a refused write whose answer quotes the request: %v", err)
+	}
+}
+
+// TestAzureService: the account's own host by default; on an endpoint, the
+// account is the first path segment after the endpoint's path.
+func TestAzureService(t *testing.T) {
+	for _, c := range [][3]string{
+		{"acct", "", "https://acct.blob.core.windows.net/"},
+		{"devstoreaccount1", "http://127.0.0.1:10000", "http://127.0.0.1:10000/devstoreaccount1/"},
+		{"acct", "https://gw.example.com/blob/", "https://gw.example.com/blob/acct/"},
+	} {
+		if got := azureService(c[0], c[1]); got != c[2] {
+			t.Errorf("azureService(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
+		}
 	}
 }
