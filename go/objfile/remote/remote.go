@@ -4,7 +4,9 @@
 // Package remote opens object-store roots by URI and owns their SDK clients.
 // Open provides reads with default credentials; OpenDestination provides
 // reads and conditional writes with DestinationOptions. Both scope object
-// names to the location's prefix using objfile.Root.
+// names to the location's prefix using objfile.Root, and are
+// objfile.ObjectReaders; neither bounds the requests in flight (wrap one in
+// objfile.Limit for that).
 //
 // For anonymous access or a custom transport, construct the provider's SDK
 // client and use objfile/s3, objfile/gcs or objfile/azblob directly. See the

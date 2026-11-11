@@ -25,8 +25,9 @@ var ErrInvalidSnapshot = errors.New("objfile: invalid pin snapshot")
 const snapshotVersion = 1
 
 // Pinned is an Opener's objects pinned across opens: the first Open of a name
-// records the object's size and Identity, and every later Open of that name
-// must find the same, or fails with ErrObjectChanged. A recorded pin is never
+// (or first read of an OpenSized Object, or ReadObject) records the object's
+// size and Identity, and every later one of that name must find the same, or
+// fails with ErrObjectChanged. A recorded pin is never
 // replaced. Pinned re-proves the current object; it never reads an older
 // version by its recorded identity. It is safe for concurrent use.
 type Pinned struct {

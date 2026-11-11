@@ -3,9 +3,12 @@
 
 // Package objfile provides pinned byte-range reads, create-only uploads and
 // conditional deletes for objects in S3, Google Cloud Storage and Azure Blob
-// Storage. It does not list objects, plan reads or cache bytes. Every read of
-// an Object returns bytes of the version it pinned, or fails with
-// ErrObjectChanged and returns none of another version's bytes.
+// Storage. It does not list objects or cache bytes, and does not decide which
+// bytes a reader needs; given a batch of ranges (ReadRanges), it plans the
+// requests that fetch them, merged, split and run concurrently under a
+// BatchPolicy. Every read of an Object returns bytes of the version it
+// pinned, or fails with ErrObjectChanged and returns none of another
+// version's bytes.
 //
 // The store packages provide an Opener and Writer over the caller's SDK client;
 // objfile/remote constructs clients from store URIs. Reads check the
@@ -30,11 +33,18 @@ import (
 // the bytes it read; a full read ending exactly there succeeds. After Close,
 // reads fail with an error wrapping fs.ErrClosed.
 //
-// Reads validate the response's range offset, and its total size and length
-// when the response states them. A wrong range fails with an error; a
-// changed identity or size fails with ErrObjectChanged. A short response body is requested again from where it
-// stopped, at most twice, in addition to the SDK's request retries. The GCS
-// package documents the transport required for this validation with its SDK.
+// Every request a read makes asks for one byte range: a ReadAt is one
+// request, and a batch of ReadRanges one for each span it merges. Reads
+// validate each response's range offset, and its total size and length when
+// the response states them; an Object from OpenSized is not pinned until a
+// response, or a metadata request after one that states none, has shown its
+// total size. A wrong range fails with an error; a changed identity or size
+// fails with ErrObjectChanged. A short response body is requested again from
+// where it stopped, at most twice for each request, in addition to the SDK's
+// request retries. The GCS package documents the transport required for this
+// validation with its SDK.
+//
+// An Object the store packages open is also a RangeReader.
 type Object interface {
 	io.ReaderAt
 	// Size returns the object's length in bytes, as it was when opened. An
@@ -59,7 +69,7 @@ type Object interface {
 // an error wrapping fs.ErrNotExist.
 type Opener interface {
 	// Open asks the store for the object's size and version (one metadata
-	// request) and pins that version.
+	// request) and pins that version; the Object's reads come after.
 	Open(ctx context.Context, name string) (Object, error)
 	// OpenSized opens an object whose size the caller already knows, such
 	// as a part a manifest lists, without a request: the Object pins the
@@ -143,8 +153,9 @@ func CheckPath(name string) error {
 }
 
 // Root scopes o to the objects under prefix, a dataset root: Open checks name
-// with CheckPath and opens prefix + "/" + name, as does OpenSized. An empty prefix is the whole
-// namespace of o; a trailing "/" on prefix is not doubled.
+// with CheckPath and opens prefix + "/" + name, as do OpenSized and
+// ReadObject. An empty prefix is the whole namespace of o; a trailing "/" on
+// prefix is not doubled. The Objects are o's own, batches included.
 func Root(o Opener, prefix string) Opener {
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
@@ -233,11 +244,11 @@ func (l limited) OpenSized(ctx context.Context, name string, size int64) (Object
 }
 
 // KnownSizes opens the names sizes lists with the size it gives: Open of
-// such a name is OpenSized, which makes no request. Other names, and
-// OpenSized, ReadObject, open as o does. It is for a reader that knows its
+// such a name is OpenSized, which makes no request. Other names, OpenSized
+// and ReadObject go to o unchanged. It is for a reader that knows its
 // files' sizes, from a manifest it has read, but opens them through an
 // interface that does not carry one (SeekParquet's Source.Open). sizes is
-// copied.
+// copied. OpenSized checks each size at the Object's first read.
 func KnownSizes(o Opener, sizes map[string]int64) Opener {
 	return knownSizes{o: o, sizes: maps.Clone(sizes)}
 }

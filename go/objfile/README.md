@@ -12,8 +12,10 @@ core package uses only the standard library. Provider packages use their officia
 SDKs; all three SDKs appear in the module graph, but a program links only the
 providers it imports. Importing `objfile/remote` links all three.
 
-objfile handles individual objects. It does not list, cache, plan reads, rename,
-or overwrite them; dataset publication and recovery belong to the application.
+objfile handles individual objects. It does not list, cache, rename, or overwrite
+them, or decide which bytes a reader needs; dataset publication and recovery belong
+to the application. Given a batch of ranges a reader needs, it plans the requests
+that fetch them: merging, splitting and running them concurrently.
 
 ## Read a remote file
 
@@ -23,7 +25,7 @@ or overwrite them; dataset publication and recovery belong to the application.
 it are literal relative paths, without empty, `.` or `..` segments. Location URIs
 cannot carry credentials, queries, or fragments.
 
-This example reads a Parquet footer without downloading the whole object:
+This example reads a Parquet footer with ranged reads, not the whole object:
 
 ```go
 import (
@@ -60,8 +62,8 @@ are finished. A missing object wraps `fs.ErrNotExist`; reads after an object's
 `Close` wrap `fs.ErrClosed`.
 
 Each object pins the identity learned by `Open`: an S3 version id and ETag, a GCS
-generation, or an Azure ETag. Reads check the returned identity, size, offset, and
-length. A changed or deleted pinned object yields `ErrObjectChanged`; an invalid
+generation, or an Azure ETag. Reads check the returned identity and offset, and the
+size and length a response states. A changed or deleted pinned object yields `ErrObjectChanged`; an invalid
 range response yields an error. S3 objects without a unique version id (including
 `"null"`) use the ETag as `Identity`: a replacement with the same ETag and size
 cannot be distinguished. Pinning does not provide a dataset-wide snapshot.
@@ -69,18 +71,59 @@ cannot be distinguished. Pinning does not provide a dataset-wide snapshot.
 **Custom GCS clients need care:** after a response body fails partway, the SDK can
 retry a range without checking its offset and return wrong bytes without an
 error. The clients built by `remote.Open` and `remote.OpenDestination` install a
-validating transport. See the [GCS package contract](gcs/gcs.go) before supplying
-your own client.
+validating transport, which checks each response against the one byte range its
+request names; every objfile request, a batched one included, names one range.
+See the [GCS package contract](gcs/gcs.go) before supplying your own client.
+
+## Read several ranges, or a small object whole
+
+A reader that knows several ranges it needs reads them as one batch. The ranges
+may be in any order and may touch or overlap; their buffers must not share memory:
+
+```go
+ranges := []objfile.Range{
+    {Off: indexOff, Buf: make([]byte, indexLen)},
+    {Off: pageOff, Buf: make([]byte, pageLen)},
+}
+if err := objfile.ReadRanges(ctx, object, ranges); err != nil {
+    var batch *objfile.BatchError // which ranges failed; the others are filled
+    ...
+}
+```
+
+The batch's bytes are merged into as few requests as `BatchPolicy` allows (touching
+and overlapping ranges, and gaps of up to 64 KiB while at most a quarter of a
+request is discarded), runs longer than 4 MiB are split, and the requests run
+concurrently, 16 and 64 MiB a batch at most, each pinned and resumed after a cut
+body as a `ReadAt` is. A ranged GET costs about one round trip whether it returns
+4 KiB or 4 MiB, so the policy saves round trips at a bounded over-read; `Batch`
+sets another. Cancelling the context cancels the requests in flight, and
+`ReadRanges` returns once they have stopped. A failed request fails only the
+ranges it covers (`BatchError`); a range outside the object fails the batch
+before any request.
+
+`ReadObject` reads a small object, such as a manifest, whole in one request with
+no metadata request first, refusing one larger than its limit (`ErrTooLarge`,
+without reading the body), and returns the identity it was served.
 
 For more control:
 
 - Build an SDK client and pass it to `s3.New`, `gcs.New`, or `azblob.New`; wrap the
-  opener with `Root` for path confinement and `Limit` for bounded requests.
-- Use `OpenSized` when a manifest already gives the size. It skips the metadata
-  request and pins on the first read; `Identity()` is empty until then.
+  opener with `Root` for path confinement and `Limit` for bounded requests. `Limit`
+  holds a slot per request: each `Open`, `ReadObject` and `ReadAt`, and each request
+  of a batch, so a batch never has more requests in flight than the limit.
+- Use `OpenSized` when a manifest already gives the size. It makes no request; the
+  first read pins the version, once its response states a total size equal to the
+  one given (a response that states none is followed by one metadata request), and
+  returns no byte before. Another size is `ErrObjectChanged`. `Size()` is only the
+  size given until then, and `Identity()` is empty.
+- `KnownSizes` turns `Open` of names whose sizes a reader already holds into
+  `OpenSized`, for a reader whose open carries no size (SeekParquet's
+  `Source.Open`).
 - Use `Pin` across opens and `Snapshot`/`Restore` across restarts. Compose it
   outermost: `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
-  `Pinned` has no `OpenSized`: it must check identity at open. A restored snapshot
+  `Pinned.OpenSized` checks the identity at the first read instead of at open, and
+  `Pinned.ReadObject` with the read; both re-prove the current object. A restored snapshot
   permits only recorded names and rechecks the current objects, rather than
   reopening historical versions. It records only objects actually opened; the
   application must establish that every required object is covered. Use the
@@ -151,15 +194,16 @@ Handle completion and cleanup explicitly. When classifying errors with
   An S3 ETag cannot distinguish a replacement with the same ETag. Azure soft
   delete or versioning can retain deleted data and charges.
 
-Every error a `Writer` or an `Upload` returns is redacted as `RedactError` redacts: no request URL's query or
-user information is in its text, and upload session handles are removed, while `errors.Is` and `errors.As`
-still see the chain.
+Every error a `Writer` or an `Upload` returns is redacted as `RedactError` redacts:
+no request URL's query or user information is in its text, and upload session
+handles are removed, while `errors.Is` and `errors.As` still see the chain.
 
 ## API and provider details
 
 The source comments own the API contract and provider settings:
 
-- [Objects, openers, roots, limits](objfile.go), [pins and snapshots](pin.go),
+- [Objects, openers, roots, limits](objfile.go), [batched reads](batch.go),
+  [pins and snapshots](pin.go),
   [uploads, receipts, errors, and conditional deletion](write.go).
 - [Remote stores](remote/remote.go) and [destinations](remote/create.go): credentials,
   endpoints, client ownership, timeouts, and `DestinationOptions` (including

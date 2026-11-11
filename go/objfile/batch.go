@@ -142,11 +142,12 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 				i, len(r.Buf), r.Off, size, fs.ErrInvalid)
 		}
 	}
-	b := plan(ranges, p.normal())
+	p = p.normal()
+	b := plan(ranges, p)
 	if len(b.spans) == 0 {
 		return nil
 	}
-	b.run(ctx, f, p.normal(), f.Identity() == "")
+	b.run(ctx, f, p, f.Identity() == "")
 	errs := b.rangeErrors(len(ranges))
 	if errs == nil {
 		return nil
