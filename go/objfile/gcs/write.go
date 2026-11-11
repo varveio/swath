@@ -25,6 +25,18 @@ import (
 // buffers in memory (one chunk an upload, held for a retry).
 const DefaultChunkSize = 8 << 20
 
+// ChunkBytes is the chunk a resumable upload of chunk size n sends and
+// buffers: n rounded up to a multiple of 256 KiB, as the SDK rounds it
+// (googleapi.MinUploadChunkSize); DefaultChunkSize for 0 or less. It is
+// the upload's memory a caller admits.
+func ChunkBytes(n int) int {
+	if n <= 0 {
+		return DefaultChunkSize
+	}
+	const unit = googleapi.MinUploadChunkSize
+	return (n + unit - 1) / unit * unit
+}
+
 // DefaultMaxAttempts sets the retry allowance: MaxAttempts each for a
 // metadata read or a delete; for an upload, MaxAttempts-1 retries for its
 // first request and as many more for each chunk sent (WriteOptions).
@@ -68,9 +80,7 @@ type WriteOptions struct {
 // ifGenerationMatch=0, which the service checks when the object is created.
 // Content is stored as given: no content-type sniffing, no transcoding.
 func NewWriter(client *storage.Client, bucket string, o WriteOptions) objfile.Writer {
-	if o.ChunkSize <= 0 {
-		o.ChunkSize = DefaultChunkSize
-	}
+	o.ChunkSize = ChunkBytes(o.ChunkSize)
 	if o.MaxAttempts <= 0 {
 		o.MaxAttempts = DefaultMaxAttempts
 	}
