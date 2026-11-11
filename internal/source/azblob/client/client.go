@@ -109,9 +109,13 @@ type ListInput struct {
 // hierarchical namespace's directory (ListInput.Tree; ResourceType
 // directory).
 type Item struct {
-	Name         string
-	Prefix       bool
-	Dir          bool
+	Name   string
+	Prefix bool
+	Dir    bool
+	// Hierarchical: the listing named the entry's resource type, file or
+	// directory, which only a hierarchical namespace does (a flat account
+	// names none in XML, and blob or blobprefix in Arrow).
+	Hierarchical bool
 	Size         int64
 	LastModified int64 // Unix microseconds; 0 when absent
 	CreationTime int64 // Unix microseconds; 0 when absent

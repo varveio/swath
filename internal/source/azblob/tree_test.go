@@ -16,6 +16,7 @@ import (
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/tree"
 )
@@ -210,4 +211,38 @@ func TestTreeNotNewFlat(t *testing.T) {
 		t.Fatalf("New on HNS: %v", err)
 	}
 	var _ keyrange.Range // the flat provider's range type is unchanged
+}
+
+// refusedInfo answers Get Account Information as a container SAS gets it
+// (403 AuthorizationFailure), listing through its store.
+type refusedInfo struct{ API }
+
+func (refusedInfo) AccountInfo(context.Context, string) (bool, error) {
+	return false, &client.Error{Status: 403, Code: "AuthorizationFailure"}
+}
+
+// TestTreeListedNamespace: when neither account call answers (a container
+// SAS), one listing that names its entries' resource type shows a
+// hierarchical namespace (namespace "listing"); a flat account's listing
+// names none, so its namespace stays unknown and the refusal stands.
+func TestTreeListedNamespace(t *testing.T) {
+	store := azblobtest.NewTreeStore(hnsCorpus(10))
+	src, err := open(context.Background(), registry.Request{Root: "az://acct/c/deep/1/", Options: &Options{Client: refusedInfo{store}}, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := src.(*treeOpened)
+	if !ok {
+		t.Fatalf("opened as %T", src)
+	}
+	if st := o.t.Stats(); st.Namespace != "listing" {
+		t.Fatalf("namespace %q", st.Namespace)
+	}
+	if rows, err := runTree(context.Background(), o, 2); err != nil || len(rows) == 0 {
+		t.Fatalf("%d rows, %v", len(rows), err)
+	}
+	_, err = open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: refusedInfo{azblobtest.NewStore([]string{"a/b", "c"})}}, Workers: 1})
+	if err == nil || strings.Contains(err.Error(), "hierarchical") {
+		t.Fatalf("flat account with a refused account call: %v", err)
+	}
 }

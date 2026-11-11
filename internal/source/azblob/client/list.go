@@ -378,7 +378,8 @@ func itemProps(name string, p *container.BlobProperties) Item {
 	if p == nil {
 		return it
 	}
-	it.Dir = deref(p.ResourceType) == "directory"
+	rt := deref(p.ResourceType)
+	it.Dir, it.Hierarchical = rt == "directory", rt == "directory" || rt == "file"
 	if p.ContentLength != nil {
 		it.Size = *p.ContentLength
 	}

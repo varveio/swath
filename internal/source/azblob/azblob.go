@@ -392,7 +392,12 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // answers the same, and whose 409 EndpointUnsupportedAccountFeatures is
 // flat (flatFeatures); (3) anything else is unknown, which refuses unless
 // Options.Flat asserts a flat namespace (a reported hierarchical one is
-// never overridden). Credentials that could not be had, or that the
+// never overridden). When both calls were refused (a container SAS, or an
+// anonymous caller where the Data Lake host also refuses) and no flat
+// namespace is asserted, one directory listing of the scope (listedHNS,
+// maxresults 1) may show a hierarchical namespace: its entries name their
+// resource type, which a flat account's never do. An asserted run sends no
+// such request, so a flat account's requests are unchanged. Credentials that could not be had, or that the
 // service refused (a signed caller's 401 or 403), are that failure (class
 // auth or access denied), as on any later request: the Data Lake host would
 // need the same.
@@ -416,6 +421,11 @@ func (p *provider[P]) admit(ctx context.Context) (hns bool, err error) {
 			}
 		}
 	}
+	if err != nil && ctx.Err() == nil && !p.opt.Flat && refused(err) {
+		if h, lerr := p.listedHNS(ctx); lerr == nil && h {
+			hns, err, how = true, nil, "listing"
+		}
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return false, context.Cause(ctx)
@@ -434,6 +444,18 @@ func (p *provider[P]) admit(ctx context.Context) (hns bool, err error) {
 		return false, source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish its namespace (%w); a flat namespace can be asserted with --azure-assume-flat", p.opt.Account, err))
 	}
 	return false, nil
+}
+
+// listedHNS lists the scope's first entry as a hierarchical namespace's
+// directory listing would (one request, maxresults 1) and reports whether
+// the service named its resource type (client.Item.Hierarchical).
+func (p *provider[P]) listedHNS(ctx context.Context) (bool, error) {
+	dir := p.opt.Prefix[:strings.LastIndexByte(p.opt.Prefix, '/')+1]
+	out, err := p.client.List(ctx, &client.ListInput{Container: p.opt.Container, Prefix: dir, Delimiter: "/", MaxResults: 1, Tree: true})
+	if err != nil {
+		return false, err
+	}
+	return len(out.Items) > 0 && out.Items[0].Hierarchical, nil
 }
 
 // unsigned says requests go anonymous, which Get Account Information

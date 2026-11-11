@@ -361,10 +361,11 @@ func TestSynthesizedPivotListed(t *testing.T) {
 	}
 }
 
-// TestAdmission: only a positively flat account is listed. A
-// hierarchical namespace (the replay's), a refused account-information
-// call (403, 401) and --all-versions refuse the run before any listing
-// request, as unsupported.
+// TestAdmission: only a positively flat account is listed by the flat
+// provider. A hierarchical namespace (the replay's), a refused
+// account-information call (403, 401) and --all-versions refuse the run as
+// unsupported; the refused calls after one listing probe (maxresults 1)
+// that could have shown a hierarchical namespace, no other listing.
 func TestAdmission(t *testing.T) {
 	hns := azblobtest.Serve(t, []string{"a", "b"}, azblobtest.HNS())
 	_, err := New(context.Background(), Options{Account: hns.Account, Container: hns.Container, Endpoint: base(hns), Anonymous: true, Workers: 1})
@@ -374,7 +375,7 @@ func TestAdmission(t *testing.T) {
 	var lists atomic.Int64
 	for status, code := range map[int]string{403: "AuthorizationFailure", 401: "NoAuthenticationInformation"} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("comp") == "list" {
+			if q := r.URL.Query(); q.Get("comp") == "list" && (q.Get("maxresults") != "1" || q.Get("delimiter") != "/") {
 				lists.Add(1)
 			}
 			w.Header().Set("x-ms-error-code", code)

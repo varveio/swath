@@ -55,7 +55,7 @@ func NewTreeStore(paths []string) *TreeStore {
 			return
 		}
 		seen[dir+name] = isDir
-		it := client.Item{Name: dir + name, Dir: isDir, ETag: "0x" + fmt.Sprintf("%x", dir+name), LastModified: 1_790_000_000_000_000, BlobType: "BlockBlob"}
+		it := client.Item{Name: dir + name, Dir: isDir, Hierarchical: true, ETag: "0x" + fmt.Sprintf("%x", dir+name), LastModified: 1_790_000_000_000_000, BlobType: "BlockBlob"}
 		if !isDir {
 			it.Size = int64(len(dir + name))
 		}
