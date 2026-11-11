@@ -11,7 +11,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from dataset_schema import AZBLOB_ADDED, COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
+from dataset_schema import AZBLOB_CURRENT, AZBLOB_VERSIONS, AZBLOB_ADDED, COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
 from bench.diffds import compare
 
 FIXTURES = Path(__file__).parent / "testdata" / "readers"
@@ -130,6 +130,66 @@ def write_dataset(directory, schema, part_queries):
         entries.append({"path": path})
     con.close()
     (directory / "manifest.json").write_text(json.dumps({"schema_id": schema, "parts": entries}))
+
+
+@unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")
+class AzureCompatibility(unittest.TestCase):
+    def rows(self, keys, extended=False, **overrides):
+        cols = {"key": "k", "size": "100::BIGINT",
+                "last_modified": "TIMESTAMPTZ '2026-01-01 00:00:00+00'", "etag": "'e'",
+                "content_md5": "NULL::VARCHAR", "content_type": "'text/plain'", "blob_type": "'BlockBlob'",
+                "access_tier": "'Hot'", "creation_time": "NULL::TIMESTAMPTZ"}
+        if extended:
+            cols.update({c: "NULL::VARCHAR" for c in AZBLOB_ADDED})
+            cols.update({c: "NULL::BOOLEAN" for c in ("access_tier_inferred", "server_encrypted", "legal_hold")})
+            cols.update({c: "NULL::TIMESTAMPTZ" for c in ("access_tier_change_time", "last_access_time",
+                                                       "immutability_policy_until")})
+            cols["tag_count"] = "NULL::BIGINT"
+        cols.update(overrides)
+        listed = "[" + ",".join(sql_string(k) for k in keys) + "]::VARCHAR[]"
+        return (f"SELECT {', '.join(f'{v} AS {c}' for c, v in cols.items() if v is not None)} "
+                f"FROM (SELECT unnest({listed}) AS k, generate_subscripts({listed}, 1) AS i) ORDER BY i")
+
+    def test_historical_and_mixed_parts(self):
+        old = self.rows(["a", "b"])
+        new = self.rows(["a", "b"], extended=True)
+        cases = {
+            "old/old": ([old], [old], True),
+            "old/new-null": ([old], [new], True),
+            "new-null/old": ([new], [old], True),
+            "mixed parts": ([self.rows(["a"]), self.rows(["b"], extended=True)], [new], True),
+            "added bool differs": ([old], [self.rows(["a", "b"], extended=True, legal_hold="false")], "legal_hold"),
+            "added int differs": ([old], [self.rows(["a", "b"], extended=True, tag_count="7::BIGINT")], "tag_count"),
+            "added time differs": ([old], [self.rows(["a", "b"], extended=True,
+                                  last_access_time="TIMESTAMPTZ '2026-01-01 00:00:00+00'")], "last_access_time"),
+            "added string differs": ([old], [self.rows(["a", "b"], extended=True, metadata="'{}'")], "metadata"),
+        }
+        for name, (pa, pb, expected) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                a, b = Path(td) / "a", Path(td) / "b"
+                write_dataset(a, AZBLOB_CURRENT, pa)
+                write_dataset(b, AZBLOB_CURRENT, pb)
+                results = []
+                for method in ("sql", "stream"):
+                    result = compare(str(a), str(b), method=method)
+                    self.assertEqual(result["identical"], expected is True, result)
+                    if expected is not True:
+                        self.assertEqual(result["differing_columns_at_same_position"], {expected: 2})
+                    result.pop("method")
+                    results.append(result)
+                self.assertEqual(*results)
+
+    def test_versions_columns_stay_required(self):
+        extra = {"version_id": "'v'", "is_latest": "true", "snapshot": "NULL::VARCHAR", "is_deleted": "false",
+                 "deleted_time": "NULL::TIMESTAMPTZ", "remaining_retention_days": "NULL::BIGINT"}
+        for column in COLUMNS[AZBLOB_VERSIONS]:
+            with self.subTest(column=column), tempfile.TemporaryDirectory() as td:
+                a = Path(td) / "a"
+                query = self.rows(["a"], extended=True, **dict(extra, **{column: None}))
+                write_dataset(a, AZBLOB_VERSIONS, [query])
+                for method in ("sql", "stream"):
+                    with self.assertRaisesRegex(ValueError, f"missing column {column}$"):
+                        compare(str(a), str(a), method=method)
 
 
 @unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")

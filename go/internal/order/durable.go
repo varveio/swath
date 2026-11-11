@@ -83,7 +83,10 @@ const (
 	// zstd frame bodies as spill.go writes them. A durable file whose
 	// header names another codec ID or version is not replayable by this
 	// build: recovery rejects it (rejected.codec) and lists its interval.
-	rowCodecVersion = 1
+	// Version 2 invalidates older payloads, including Azure objects before
+	// their optional property columns were added. The revision is global:
+	// older caches of every provider relist; journaled parts stay reusable.
+	rowCodecVersion = 2
 )
 
 // DurableDir is the durable spill directory, relative to the output.
