@@ -229,6 +229,11 @@ func TestPageForCoversEveryKeyOnce(t *testing.T) {
 	}
 	for name, keys := range keyspaces() {
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
+		// Whether a request was clamped to 5,000, grown and trimmed is the
+		// random draws' and, with several workers, the schedule's: asked of
+		// the keyspace's runs together, not of each run.
+		var clamped, busy bool
+		var grown, trimmed int64
 		for s := range seeds {
 			for _, w := range []int{1, 8, 64} {
 				rng := rand.New(rand.NewSource(int64(s*1000 + w)))
@@ -258,10 +263,16 @@ func TestPageForCoversEveryKeyOnce(t *testing.T) {
 				if firsts.Load() > requests.Load() || requests.Load() > 0 && (firsts.Load() == 0 || st.Get(cPageAskedKeys) == 0) {
 					t.Fatalf("%s: %d first requests of %d, asked %d keys", what, firsts.Load(), requests.Load(), st.Get(cPageAskedKeys))
 				}
-				if _, ok := api.sizes.Load(5000); requests.Load() > 50 && (!ok || st.Get(cPageGrown) == 0 || st.Get(cPageTrimmed) == 0) {
-					t.Errorf("%s: clamped to 5000 %v, grown %d, trimmed %d", what, ok, st.Get(cPageGrown), st.Get(cPageTrimmed))
+				if requests.Load() > 50 {
+					_, ok := api.sizes.Load(5000)
+					clamped, busy = clamped || ok, true
+					grown += st.Get(cPageGrown)
+					trimmed += st.Get(cPageTrimmed)
 				}
 			}
+		}
+		if busy && (!clamped || grown == 0 || trimmed == 0) {
+			t.Errorf("%s: clamped to 5000 %v, grown %d, trimmed %d", name, clamped, grown, trimmed)
 		}
 	}
 }
