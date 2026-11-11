@@ -10,8 +10,9 @@ import (
 	"syscall"
 )
 
-// Spill read handles. Every read of a spill file goes through one
-// descriptor per file, kept open between reads: a frame read at an offset
+// Spill read handles. Every read of a run's spill file (not a recovered
+// certificate's replay, durable_replay.go, which opens its own reader)
+// goes through one descriptor per file, kept open between reads: a frame read at an offset
 // (the read-ahead's, the segments'), a trailer read, and the drainer's
 // sequential reader all lease the file's handle and read it with ReadAt
 // (pread), which is safe concurrently, so one descriptor serves them all.
@@ -19,25 +20,32 @@ import (
 // small directories a range spills one or two frames, so a file was opened
 // once per frame read and again for its trailer.
 //
-// Bounds. The cache holds at most maxHandles descriptors, leased or idle:
-// past it, an idle handle is closed at its release (the least recently
-// used first). Leases are bounded by the readers themselves (the drainer's
-// maxReaders, the read-ahead's aheadReads, the segment workers), so the
-// descriptors open never exceed what descriptor admission reserves
-// (MaxSpillReaders) by more than before. An open that fails for want of
+// Bounds. maxHandles is a retention target, not a ceiling: an idle handle
+// is kept only while the descriptors open (and being opened) stay within
+// it, the least recently used closed first, and a miss first makes room
+// that way. A leased handle is never closed, so when every handle is
+// leased a miss opens past the target: the descriptors open are at most
+// the larger of maxHandles and the concurrent readers, which the readers
+// themselves bound (the drainer's maxReaders, the read-ahead's aheadReads,
+// the segment workers listing.segmentWorkers admits, which may exceed 16
+// when the descriptor limit allows). That is the bound descriptor
+// admission already priced before the cache; it adds none. An open that fails for want of
 // descriptors (EMFILE, ENFILE) closes every idle handle, is retried once,
 // and the cache stops keeping idle handles for the rest of the run (the
 // low-descriptor fallback: one open per read, as before).
 //
-// Lifetime. A handle never outlives its file's use: it is retired before
-// the file is removed or handed back to its durable cache (drained), when
-// the file is truncated (an ENOSPC rollback), and every handle is retired
-// when the run stops (cancellation, failure, success) or the output's
-// identity check fails (a replaced output: no descriptor of the old one is
-// read again). A retired handle leaves the cache at once; one still leased
-// is closed at its last release, and no new lease reaches it.
+// Lifetime. A handle is retired before its file is removed or handed back
+// to its durable cache (drained), when the file is truncated (an ENOSPC
+// rollback), and every cached handle when the run stops (cancellation,
+// failure, success) or the output's identity check fails. A retired handle
+// leaves the cache at once: an idle one is closed then, a leased one stays
+// usable by its holders and is closed at its last release, and no new
+// lease reaches it. A lease after a stop opens the file uncached, for
+// itself alone. Retirement does not revoke reads: cancellation and the
+// output's ownership checks are what stop a stopped or replaced run from
+// publishing.
 
-// maxHandles is the descriptors the handle cache holds open, leased or
+// maxHandles is the descriptors the handle cache keeps open while any is
 // idle (a variable for tests): the spill descriptors admission reserves.
 var maxHandles = MaxSpillReaders
 
@@ -52,7 +60,8 @@ type HandleStats struct {
 	Raced  int64 `json:"raced"`
 	// Evictions are the handles taken out of the cache, by reason.
 	Evictions HandleEvictions `json:"evictions"`
-	// PeakOpen is the most descriptors the cache held at once.
+	// PeakOpen is the most descriptors the cache held open at once, leased
+	// or idle (opens under way not counted).
 	PeakOpen int64 `json:"peak_open"`
 }
 
@@ -81,14 +90,15 @@ const (
 
 // handles is the spill read handles (mu).
 type handles struct {
-	mu     sync.Mutex
-	m      map[*spillFile]*handle
-	open   int // descriptors open or being opened: leased, idle, or retired and still leased
-	max    int // idle handles are kept while open <= max
-	tick   uint64
-	closed bool          // the run stopped: no handle is kept any more
-	g      func(d int64) // the open readers gauge (nil in tests)
-	st     HandleStats
+	mu      sync.Mutex
+	m       map[*spillFile]*handle
+	open    int // descriptors open: leased, idle, or retired and still leased
+	opening int // misses whose open is under way (their room made already)
+	max     int // idle handles are kept while open+opening <= max
+	tick    uint64
+	closed  bool          // the run stopped: no handle is kept any more
+	g       func(d int64) // the open readers gauge (nil in tests)
+	st      HandleStats
 }
 
 // handle is one file's read descriptor and its leases.
@@ -115,26 +125,27 @@ func (c *handles) lease(f *spillFile, open func() (*os.File, error)) (*handle, e
 		return h, nil
 	}
 	c.st.Misses++
-	// The descriptor is counted before it is opened, room made for it
-	// first: concurrent misses cannot together pass the cap with idle
-	// handles open.
+	// Room is made before the open, which counts as under way until it
+	// returns: concurrent misses cannot together pass the target with
+	// idle handles open.
 	c.evict(evictCapacity, c.max-1)
-	c.opened(1)
+	c.opening++
 	c.mu.Unlock()
 	fh, err := open()
 	if err != nil && (errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE)) {
 		c.mu.Lock()
 		c.max = 0 // the fallback: no idle handle kept from now on
-		c.evict(evictLowFD, 1)
+		c.evict(evictLowFD, 0)
 		c.mu.Unlock()
 		fh, err = open()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.opening--
 	if err != nil {
-		c.opened(-1)
 		return nil, err
 	}
+	c.opened(1)
 	h := &handle{fh: fh, refs: 1}
 	if c.closed || f.drained {
 		// Stopped, or f retired while this open was under way: the handle
@@ -185,8 +196,9 @@ func (c *handles) retire(f *spillFile, why evictReason) {
 	}
 }
 
-// stop retires every handle and keeps none from now on (the run stopped,
-// or its output was replaced).
+// stop retires every cached handle and keeps none from now on (the run
+// stopped, or its output was replaced): an idle one is closed now, a leased
+// one at its last release; a later lease opens uncached.
 func (c *handles) stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -199,7 +211,7 @@ func (c *handles) stop() {
 // evict closes the least recently used idle handles while more than limit
 // descriptors are open or being opened (mu held).
 func (c *handles) evict(why evictReason, limit int) {
-	for c.open > limit {
+	for c.open+c.opening > limit {
 		var lf *spillFile
 		var lh *handle
 		for f, h := range c.m {

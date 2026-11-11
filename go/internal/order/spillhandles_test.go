@@ -236,7 +236,8 @@ func TestHandlesLowFD(t *testing.T) {
 	}
 	sameRows(t, "after the refusal", rows, handleRows("g5", 1, 5))
 	st := s.h.stats()
-	if st.Evictions.LowFD != 5 || s.h.openFDs() != 0 {
+	// The peak counts descriptors open, not the refused open's attempt.
+	if st.Evictions.LowFD != 5 || s.h.openFDs() != 0 || st.PeakOpen != 5 {
 		t.Fatalf("after EMFILE: %+v, %d open", st, s.h.openFDs())
 	}
 	for i := range 6 {

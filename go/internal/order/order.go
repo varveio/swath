@@ -731,7 +731,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		if o.sp != nil {
 			o.sp.cache.Stop()
-			o.sp.h.stop() // no read handle outlives a cancelled run
+			o.sp.h.stop() // the cache keeps no handle past a stop
 		}
 		o.stopped.Store(true)
 		wake()

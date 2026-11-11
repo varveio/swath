@@ -344,16 +344,20 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   used one is dropped and reopened at its position when the drainer comes back to it
   (`TestSpillReadersAreCapped`). The read-ahead reads at most 8 frames at once. A read-ahead read decodes into
   fresh buffers (it runs beside the drainer); only the drainer reuses its own.
-- **Read handles** (`order/spillhandles.go`). Every read of a spill file leases the file's one read
+- **Read handles** (`order/spillhandles.go`). Every read of the run's spill files leases the file's one read
   descriptor and reads it with `pread`, which is safe concurrently: a frame read at an offset (the read-ahead,
   the segments), a trailer read and the drainer's sequential reader (a `pread` cursor under its buffer, so it
   shares the descriptor and sees frames the frontier's owner appends after it). The handle stays open between
   reads, so a file is opened once for its reads, not once per frame read and again for its trailer; when the
   read-ahead has read every frame, the drainer checks the trailer at its offset on the same handle, with no
-  reader opened. Writes still open the file per frame (unchanged). Bounds: at most `order.MaxSpillReaders`
-  (16) descriptors are kept, leased or idle; an idle handle past that is closed, least recently used first
-  (`evictions.capacity`); leases themselves are bounded by the readers above and the segment workers, so
-  descriptor admission is unchanged (`peak_readers` counts the cache's descriptors). An open refused for
+  reader opened. Writes still open the file per frame (unchanged). Bounds: `order.MaxSpillReaders` (16)
+  is a retention target, not a ceiling: idle handles are kept only while the descriptors open and being opened
+  stay within it, the least recently used closed first (`evictions.capacity`), and a miss makes room that way
+  before it opens. A leased handle is never closed, so with every handle leased a miss opens past 16: the
+  descriptors open are at most the larger of 16 and the concurrent readers (the drainer's 8 readers, the
+  read-ahead's 8 reads, the segment workers `listing.segmentWorkers` admits, more than 16 where the descriptor
+  limit allows), the bound descriptor admission priced before; the cache adds none (`peak_readers` counts its
+  descriptors). An open refused for
   want of descriptors (EMFILE, ENFILE) closes every idle handle and is retried once, and the cache keeps no
   idle handle for the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesLowFDLimit` under
   a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
@@ -361,13 +365,18 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   cache: `evictions.retired`; a lease whose open was under way then gets a descriptor for itself alone, closed at its
   release: `TestHandlesRetiredDuringOpen`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and
   every handle when the run stops (success, failure, cancellation) or the output's identity check fails
-  (`evictions.closed`): no descriptor of a replaced output is read again. Tests: concurrent reads, retirements
+  (`evictions.closed`). Retirement takes a handle out of the cache; it does not revoke reads: an idle one is
+  closed at once, a leased one stays usable by its holders and closes at its last release, and a lease after a
+  stop opens the file uncached, for itself alone. Cancellation and the output's ownership checks are what stop
+  a stopped or replaced run from publishing. Tests: concurrent reads, retirements
   and evictions on a two-handle cache (`TestHandlesConcurrentReadsAndEviction`, under `-race`), truncation,
   stop and replacement (`TestHandlesTruncation`, `TestHandlesStop`), row and payload conservation at caps
   0, 1, 3 and 16 and in group mode (`TestHandlesConserveRows`, `TestHandlesConserveGroups`), and a durable
   kill and resume with a smaller sort buffer, fewer workers and a smaller spill cap, objects and versions
   (`listing.TestDurableResumeSmallerBudget`). The report's `spill.read_handles` counts hits, misses (one
-  open each), races and evictions by reason; `spill.frame_bytes` and `spill.frame_rows` give the row frames'
+  open each, two when the first is refused for want of descriptors), races, evictions by reason and
+  `peak_open` (descriptors open at once, opens under way not counted); a recovered certificate's replay
+  (`durable_replay.go`) opens its own reader, outside these counters (in `spill.opens` and `peak_readers`); `spill.frame_bytes` and `spill.frame_rows` give the row frames'
   size distribution. A range that spills one frame can at best share that frame's read with its trailer's:
   the writes' per-frame opens and the per-file create and unlink remain (packing tiny ranges is the next
   step).

@@ -228,8 +228,8 @@ func (s *spiller[P]) closeReaders() {
 
 // check is the output's identity check (Options.SpillVerify) before a
 // spill file is created, appended to or removed: nil without one. A failed
-// check retires every read handle: none of a replaced output's descriptors
-// is read again.
+// check retires every cached read handle (handles.stop); the failure
+// itself is what stops the run.
 func (s *spiller[P]) check() error {
 	if s.verify == nil {
 		return nil
