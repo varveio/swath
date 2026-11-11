@@ -43,6 +43,38 @@ func TestGrowPage(t *testing.T) {
 	}
 }
 
+func TestEstimatePage(t *testing.T) {
+	est := EstimatePage(5000)
+	for _, c := range []struct {
+		rem  float64
+		want int
+	}{{math.NaN(), 1000}, {math.Inf(1), 1000}, {0, 1000}, {2500, 2502}, {4998, 5000}, {1e9, 5000}} {
+		if got := est(PageHint{Rem: c.rem, Nominal: 1000}); got != c.want {
+			t.Errorf("rem %v: %d, want %d", c.rem, got, c.want)
+		}
+	}
+}
+
+// TestSeedTiles: --seed-tiles caps the seed's cuts below 4 per worker,
+// and the listing is still every key once in order.
+func TestSeedTiles(t *testing.T) {
+	keys := slices.Sorted(slices.Values(dateLayout(10)))
+	for _, tiles := range []int{0, 3, 17} {
+		got, st, leaves := runBudget(t, newSorted(keys, false, 1), Options{Seed: true, SeedTiles: tiles, PageSize: 50}, 64, 1<<20)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("tiles %d: %d keys, want %d", tiles, len(got), len(keys))
+		}
+		checkTiling(t, fmt.Sprintf("tiles %d", tiles), leaves)
+		limit := int64(tiles)
+		if tiles == 0 {
+			limit = int64(Tiles(64))
+		}
+		if cuts := st.Get(cSeedCuts); cuts == 0 || cuts > limit || tiles > 0 && st.Get(cSeedSubsampled) != 1 {
+			t.Errorf("tiles %d: %d cuts, subsampled %d", tiles, cuts, st.Get(cSeedSubsampled))
+		}
+	}
+}
+
 // maxCheck is a fake API that refuses a page size outside 1..limit.
 type maxCheck struct {
 	*sorted
