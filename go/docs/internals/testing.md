@@ -492,10 +492,18 @@ against `bench/s3fake`.
   taken for a shorter page; the shared contract (`TestRetryContract`) that such a body is retried and counted. The
   scanner reads the whole body before parsing, so network chunk boundaries never fall inside a token.
   `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it replaced on 2026-11-11 (kept
-  as `xml_old_test.go`): on every fixture, every prefix of the short ones, 50,000 generated documents (entities,
-  references, CDATA, comments, `\r\n`, namespaces, attributes, child elements, good and bad URL escapes, missing and
-  mismatched end tags) and their truncations and byte edits, both as a ListBucketResult and as a
-  ListVersionsResult, the same page or the same error text.
+  as `xml_old_test.go`): on every fixture (the saved fuzz inputs decoded to the documents they hold,
+  `TestCorpusSeedDecoded`), every prefix of the short ones, 50,000 generated documents and their truncations and
+  byte edits, both as a ListBucketResult and as a ListVersionsResult, the same page or the same error text. The
+  generator writes by element role: an entry's fields are its direct children and the adversarial text goes into
+  the scalars the scanner reads (Key, ETag, Prefix, the markers, owner fields, numbers, times, booleans), with
+  child elements inside a scalar, empty elements, attributes, namespaces, unknown elements and missing or
+  mismatched end tags now and then. `TestGeneratedCoverage` asserts that in each operation every class reaches
+  read fields of documents the old scanner accepts, at least 100 each: entities, character references, CDATA,
+  UTF-8, valid percent escapes and `+` under `EncodingType` url, and that a malformed escape after a valid one is
+  refused as one in at least 100; on the 50,000 it counts 1,780 (list) and 2,146 (versions) accepted documents with
+  percent escapes in decoded fields, 530 and 958 refused for a malformed escape, and decoded `&`, `<`, `é` and `~`
+  (from `%7E`) in more than 600 page values each per operation.
 - **GCS client vs Google's JSON API client:** the client is Google's generated `storage/v1` client with
   swath's envelope checks. `TestClientPagesMatchGoogleClient` sends the same requests through the client and
   the plain generated client to a fake JSON server and compares every field the schema keeps (names,
