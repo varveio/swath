@@ -193,6 +193,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.slow.run_latency_ns` | gauge | ns | slow_split | --slow-split: the run's mean range page latency |
 | `split.skipped.outranked` | count | decisions | split | larger ranges took the demand |
 | `split.skipped.remainder` | count | decisions | split | bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page) |
+| `split.skipped.min_pages` | count | decisions | split | a bounded range that had listed fewer than --split-min-pages pages was not split (diagnostic) |
 | `split.skipped.lower_tiny` | count | decisions | split | bounded range whose pivot would leave the lower child (cursor, pivot] under 1 page by its last page's density: not split, the owner's next request covers it (decided again after the next page) |
 | `split.skipped.upper_tiny` | count | decisions | split | bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page) |
 | `split.estimate_none` | count | decisions | split | bounded split decisions past the guard without a density estimate (a page of fewer than 2 keys or no span): the admission gates did not apply |

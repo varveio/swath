@@ -132,6 +132,7 @@ func (r Range) estimate() float64 {
 // running is the split bookkeeping of a range in Expand (under p.mu).
 type running struct {
 	keys         int64
+	pages        int // pages listed (SplitMinPages)
 	open         bool
 	continuing   bool // last page full and not at the bound
 	unsplittable bool // proven: no pivot exists above a safe cursor
@@ -640,6 +641,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Add(cReuseBoundaryOverfetch, int64(overfetch))
 		}
 		st.keys += int64(n)
+		st.pages++
 		if st.unsplittable {
 			p.c.Add(cUnsplittableKeys, int64(n))
 		}
@@ -933,6 +935,12 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	// the gap past ".../0/19..." below hi ".../0/2"), whose upper child the
 	// gauge rightly reads as empty while the lower holds a million keys;
 	// refused for the range's life, they went to one worker (4 to 13 wide).
+	if !r.open && st.pages < p.opt.SplitMinPages {
+		// Not a refusal of this range's split for good: it lists on, and
+		// decides again after its next page (no admitRefusals override).
+		p.c.Inc(cSplitSkippedMinPages)
+		return
+	}
 	if !r.open {
 		if g := pr.gauge; g == nil {
 			p.c.Inc(cSplitEstimateNone)

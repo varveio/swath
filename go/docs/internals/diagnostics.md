@@ -46,7 +46,11 @@ Diagnostics:
       --slow-split          split a range whose pages are slow without waiting for an idle worker
       --sequential          list with one continuation-token chain (no ranges; the reference)
       --max-keys N          with --sequential, stop after N objects (marked incomplete)
-      --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
+      --page-size N         ask for pages of N entries (default the provider's)
+                              1 to 5000: S3 and GCS ask for at most 1,000, Azure Blob for 5,000.
+      --split-min-pages N   split a bounded range only after it listed N pages
+                              A prototype against split children smaller than a page (0, the
+                              default: off).
 ```
 <!-- diag-list:end -->
 
@@ -56,17 +60,21 @@ Diagnostics:
 ```text
 Diagnostics:
       --adaptive-limit-slow-start
-                     start the limit at 4 in flight, doubling each second to --workers
-      --no-seed      start from one range, without the delimiter-listing seed
+                           start the limit at 4 in flight, doubling each second to --workers
+      --no-seed            start from one range, without the delimiter-listing seed
       --structure[=auto|on|off]
-                     probes whose folder boundaries splits pivot on (default auto)
-                       The bare flag is on, so a mode needs '='. auto probes on the open frontier
-                       while its cursor is in a folder, and in bounded ranges whose chain stays
-                       inside one folder; on probes every range in a folder.
-      --slow-split   split a range whose pages are slow without waiting for an idle worker
-      --sequential   list with one continuation-token chain (no ranges; the reference)
-      --max-keys N   with --sequential, stop after N objects (marked incomplete)
-      --page-size N  ask for pages of N entries (1 to 1000; default the provider's)
+                           probes whose folder boundaries splits pivot on (default auto)
+                             The bare flag is on, so a mode needs '='. auto probes on the open
+                             frontier while its cursor is in a folder, and in bounded ranges whose
+                             chain stays inside one folder; on probes every range in a folder.
+      --slow-split         split a range whose pages are slow without waiting for an idle worker
+      --sequential         list with one continuation-token chain (no ranges; the reference)
+      --max-keys N         with --sequential, stop after N objects (marked incomplete)
+      --page-size N        ask for pages of N entries (default the provider's)
+                             1 to 5000: S3 and GCS ask for at most 1,000, Azure Blob for 5,000.
+      --split-min-pages N  split a bounded range only after it listed N pages
+                             A prototype against split children smaller than a page (0, the default:
+                             off).
 ```
 <!-- diag-count:end -->
 
@@ -101,8 +109,8 @@ Diagnostics:
   ([measurements](measurements.md) has the seed's effect on split depth).
 - **`--sequential`** is the one-chain oracle, and the only mode where `--max-keys` stops early (the dataset is
   then marked incomplete; such a run keeps no journal and cannot be resumed).
-- **`--structure`**, **`--slow-split`** and **`--page-size`** change how ranges are probed and split, and the
-  page size asked for ([range-engine.md](range-engine.md)).
+- **`--structure`**, **`--slow-split`**, **`--split-min-pages`** and **`--page-size`** change how ranges are
+  probed and split, and the page size asked for ([range-engine.md](range-engine.md)).
 - **`--adaptive-limit-slow-start`** starts the request limit at 4 in flight and doubles it each second up to
   `--workers` ([clients.md](clients.md#request-admission)).
 - **Spill.** `--no-spill` turns spill off (listing waits on the sort buffer instead); `--spill-reserve` sets the

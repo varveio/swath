@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -287,5 +288,36 @@ func TestRankProgress(t *testing.T) {
 	}
 	if split != 1 || p.c.Load(cSplitSkippedOutranked) != 2 {
 		t.Fatalf("splits=%d outranked=%d", split, p.c.Load(cSplitSkippedOutranked))
+	}
+}
+
+// TestSplitMinPages: with SplitMinPages a bounded range splits only once
+// it has listed that many pages itself (split.skipped.min_pages), the
+// frontier as before; past the scope's size no bounded range splits at
+// all. The listing is exact and tiles the scope either way.
+func TestSplitMinPages(t *testing.T) {
+	var keys []string
+	for i := range 20000 {
+		keys = append(keys, fmt.Sprintf("d%02d/m%02d/f%05d", i%7, i%12, i))
+	}
+	keys = slices.Compact(slices.Sorted(slices.Values(keys)))
+	var mu sync.Mutex
+	coin := func() bool { mu.Lock(); defer mu.Unlock(); return true }
+	for _, c := range []struct{ min, wantBounded int }{{0, 1}, {2, 1}, {1 << 20, 0}} {
+		got, st, leaves := run(t, newSorted(keys, false, 1), Options{PageSize: 100, SplitCoin: coin, SplitMinPages: c.min}, 8)
+		what := fmt.Sprintf("min %d", c.min)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("%s: %d keys, want %d", what, len(got), len(keys))
+		}
+		checkTiling(t, what, leaves)
+		bounded, skipped := st.Get(cSplitAcceptedBounded), st.Get(cSplitSkippedMinPages)
+		switch {
+		case c.wantBounded == 0 && bounded != 0, c.wantBounded > 0 && bounded == 0:
+			t.Fatalf("%s: %d bounded splits", what, bounded)
+		case (c.min > 0) != (skipped > 0):
+			t.Fatalf("%s: split.skipped.min_pages %d", what, skipped)
+		case st.Get(cSplitAcceptedFrontier) == 0:
+			t.Fatalf("%s: no frontier split", what)
+		}
 	}
 }

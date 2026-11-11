@@ -236,6 +236,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
 	eo := opt.Policy.Options()
+	eo.PageSize = min(eo.PageSize, keyrange.PageKeys) // S3 returns at most 1,000
 	eo.Prefix, eo.Workers = opt.Prefix, opt.Workers
 	eo.ClientOff = opt.Admission.Off(own)
 	return eo

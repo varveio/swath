@@ -23,6 +23,9 @@ type Policy struct {
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
+	// SplitMinPages: a bounded range splits only once it has listed this
+	// many pages itself (0: off); diagnostic, #449 prototype E.
+	SplitMinPages int
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -40,7 +43,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, SplitMinPages: p.SplitMinPages}
 }
 
 // Group is the engine's flag group, which every provider on the engine
@@ -91,15 +94,19 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
 			Usage: "with --sequential, stop after N objects (marked incomplete)"})
-		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d; default the provider's)", PageKeys),
+		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: "ask for pages of N entries (default the provider's)",
+			Long: fmt.Sprintf("1 to %d: S3 and GCS ask for at most 1,000, Azure Blob for 5,000.", MaxPageFlag),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
-				if err != nil || n < 1 || n > PageKeys {
-					return fmt.Errorf("want 1 to %d", PageKeys)
+				if err != nil || n < 1 || n > MaxPageFlag {
+					return fmt.Errorf("want 1 to %d", MaxPageFlag)
 				}
 				p.PageSize = n
 				return nil
 			})})
+		source.Define(f, source.Flag{Name: "split-min-pages", Metavar: "N", Value: source.Count(&p.SplitMinPages, 0),
+			Usage: "split a bounded range only after it listed N pages",
+			Long:  "A prototype against split children smaller than a page (0, the default: off)."})
 	}
 	return c
 }

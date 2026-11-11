@@ -36,7 +36,7 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
 
 The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
 `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size: the engine fallback
-is 1,000 (S3/GCS); Azure's default is also 1,000 (the service allows 5,000; at 5,000 most of a small span's page was discarded, [measurements](measurements.md#azure-page-size-2026-11-10)). Data and seed requests ask for it,
+is 1,000 (S3/GCS, which ask for no more whatever the diagnostic `--page-size`, up to 5,000, says); Azure's default is also 1,000 (the service allows 5,000; at 5,000 most of a small span's page was discarded, [measurements](measurements.md#azure-page-size-2026-11-10)). Data and seed requests ask for it,
 and structure probes for no more. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
 A continuing structure probe (a provider may cut pages short) is a partial
@@ -219,6 +219,10 @@ children, 1.82 requests per 1,000 keys). One estimate serves both the rank and t
   `…/0/19…` below `hi` `…/0/2`, its upper child is truly empty, and its lower child holds a million keys;
   refused for the range's life, those went to one worker and the run fell to 4–13 wide (66 s against 7 s on a
   6M-key slice). A page of fewer than two keys gives no estimate (`split.estimate_none`).
+- *Pages listed* (diagnostic prototype, `--split-min-pages N`, off by default): a bounded range splits only
+  once it has listed N pages itself (`split.skipped.min_pages`; not a refusal the override counts). Where the
+  gauge errs long it admits splits of a range's last page or two, whose children hold less than a page each and
+  each discard most of their last page; a range's own pages are evidence that it holds more.
 - *The rank* is by estimated remainder: the open frontier first, then the larger remainder `(c, hi]` by the
   range's last page, ranges whose page could not read their bound (+∞, a bound in another folder) above every
   finite estimate, and age within a class and on ties: a strict total order (`TestRank`). A child starts with its share of the parent's estimate, `(c, m]` or

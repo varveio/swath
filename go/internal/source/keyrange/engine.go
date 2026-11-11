@@ -193,6 +193,13 @@ type Options struct {
 	// own the client's configuration.
 	ClientOff []string
 
+	// SplitMinPages: a bounded range is split only once it has listed this
+	// many pages itself (0: off; diagnostic). The page's gauge errs long
+	// on hierarchical keys, so its admission gates pass splits whose
+	// children hold less than a page; a range's own pages are evidence
+	// that it holds more.
+	SplitMinPages int
+
 	// Test hooks: SplitCoin replaces the demand gate; Trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
 	SplitCoin func() bool
@@ -206,6 +213,10 @@ type Resume struct {
 
 // PageKeys is the default nominal page size (Options.PageSize).
 const PageKeys = 1000
+
+// MaxPageFlag is the largest diagnostic --page-size: Azure Blob's page. S3
+// and GCS return at most PageKeys and ask for no more.
+const MaxPageFlag = 5000
 
 // Stats is what a listing did: the time-weighted mean of ranges in Expand
 // and the counter snapshot.

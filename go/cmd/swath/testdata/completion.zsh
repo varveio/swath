@@ -186,7 +186,8 @@ _swath_diag_list() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
-        '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
+        '--page-size=[ask for pages of N entries (default the provider'\''s)]:N: ' \
+        '--split-min-pages=[split a bounded range only after it listed N pages]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -258,7 +259,8 @@ _swath_diag_count() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
-        '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
+        '--page-size=[ask for pages of N entries (default the provider'\''s)]:N: ' \
+        '--split-min-pages=[split a bounded range only after it listed N pages]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \

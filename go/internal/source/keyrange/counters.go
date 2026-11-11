@@ -88,6 +88,7 @@ const (
 	cSlowRunLatency
 	cSplitSkippedOutranked
 	cSplitSkippedRemainder
+	cSplitSkippedMinPages
 	cSplitSkippedLowerTiny
 	cSplitSkippedUpperTiny
 	cSplitEstimateNone
@@ -235,6 +236,7 @@ var Counters = table([numCounters]counters.Def{
 	cSlowRunLatency:               d("split.slow.run_latency_ns", counters.Gauge, "ns", "--slow-split: the run's mean range page latency", "slow_split"),
 	cSplitSkippedOutranked:        d("split.skipped.outranked", counters.Count, "decisions", "larger ranges took the demand", "split"),
 	cSplitSkippedRemainder:        d("split.skipped.remainder", counters.Count, "decisions", "bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page)", "split"),
+	cSplitSkippedMinPages:         d("split.skipped.min_pages", counters.Count, "decisions", "a bounded range that had listed fewer than --split-min-pages pages was not split (diagnostic)", "split"),
 	cSplitSkippedLowerTiny:        d("split.skipped.lower_tiny", counters.Count, "decisions", "bounded range whose pivot would leave the lower child (cursor, pivot] under 1 page by its last page's density: not split, the owner's next request covers it (decided again after the next page)", "split"),
 	cSplitSkippedUpperTiny:        d("split.skipped.upper_tiny", counters.Count, "decisions", "bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page)", "split"),
 	cSplitAdmittedPersistent:      d("split.admission.overridden", counters.Count, "decisions", "bounded split decisions the admission gates would refuse, taken because the range's previous 4 decisions (with demand) were refused: the policy kept proposing a pivot the gates refuse", "split"),
