@@ -15,8 +15,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
-	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +37,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/go/objfile"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -172,8 +171,11 @@ func newAttempt() *listing.Attempt {
 // cfgOut is the output directory a run with o would own ("" for swath
 // count).
 func cfgOut(o options) string {
-	if o.countOnly || o.text != nil {
+	switch {
+	case o.countOnly || o.text != nil:
 		return ""
+	case o.remote != nil:
+		return o.workDir
 	}
 	return o.out
 }
@@ -505,6 +507,7 @@ type options struct {
 	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
+	memProfileRate         int      // SWATH_MEMPROFILERATE, with memProfile
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
@@ -531,6 +534,13 @@ type options struct {
 	allocated, linksOnce          bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
+	// A bucket -o (gs://, s3:// or az://): its work directory, its
+	// credentials, region and endpoint (--work-dir,
+	// --output-gcs-credentials-file, --output-s3-profile,
+	// --output-azure-sas-token, --output-s3-region, --output-endpoint-url),
+	// and the location, resolved (nil for any other output).
+	workDir, outputCreds, outputEndpoint, outputProfile, outputSAS, outputRegion string
+	remote                                                                       *objfile.Location
 }
 
 // swath du's --sort orders.
@@ -559,7 +569,8 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
+	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -589,13 +600,15 @@ func providerOperational() []string {
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
 // resume must be given it again.
-// They and secretEnv are the registered providers' (registry.Factory.Secrets).
+// They and secretEnv are the output's (registry.OutputSecretFlags) and the
+// registered providers' (registry.Factory.Secrets).
 var secretFlags, secretEnv = providerSecrets()
 
-// providerSecrets collects the registered providers' secret flags and the
-// environment variable that may stand in for each on resume.
+// providerSecrets collects the output's secret flags, then the registered
+// providers' and the environment variable that may stand in for each on
+// resume.
 func providerSecrets() ([]string, map[string]string) {
-	var flags []string
+	flags := slices.Clone(registry.OutputSecretFlags)
 	env := map[string]string{}
 	for _, f := range registry.Factories() {
 		for _, s := range f.Secrets {
@@ -786,6 +799,11 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
+	if o.memProfile != "" {
+		if o.memProfileRate, err = memProfileRate(os.Getenv("SWATH_MEMPROFILERATE")); err != nil {
+			return o, "", usageError{err}
+		}
+	}
 	if (text != nil && text.Path == "" || o.totals != nil) && o.report == "-" {
 		return o, "", usageError{errReportStdout}
 	}
@@ -846,9 +864,19 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
 	}
-	stopProfile, err := profile(o.cpuProfile, o.memProfile)
+	if o.remote != nil {
+		// The dataset goes to the bucket; the work directory is owned as a
+		// dataset directory is (lock, journal, spill, receipts).
+		cfg.Output.Dir = o.workDir
+		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
+			Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
+	}
+	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(m) })
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
+	}
+	if prof != nil {
+		cfg.ListingDone = prof.listingDone
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -888,9 +916,18 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		if r.Requests != nil {
 			r.Requests.FailureWarnings, r.Requests.LogDropped = fw.warnings.Load(), dropped.Load()
 		}
+		r.Profiles = prof.account()
 		term.account(r, err)
 	}
 	cfg.Commit = term.commit // the commit and its account, one step against a forced exit
+	if prof != nil {
+		// The profiles' phase switch, which may block on a slow file,
+		// finishes before the commit's gate is taken, never inside it.
+		cfg.Commit = func(step func() error) error {
+			prof.wait()
+			return term.commit(step)
+		}
+	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
@@ -914,7 +951,10 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	tt.disp.stop()
-	stopProfile()
+	if prof != nil {
+		prof.stop()
+		sum.Profiles = prof.account() // the files' final status, for --report
+	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
@@ -1148,37 +1188,6 @@ func escapeControl(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// profile starts the CPU profile and arranges the allocation profile, the
-// files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths
-// resolved them), for development.
-func profile(cpu, mem string) (stop func(), err error) {
-	stops := []func(){}
-	if path := cpu; path != "" {
-		f, err := createNoFollow(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			return nil, err
-		}
-		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
-	}
-	if path := mem; path != "" {
-		runtime.MemProfileRate = 64 << 10
-		stops = append(stops, func() {
-			if f, err := createNoFollow(path); err == nil {
-				_ = pprof.Lookup("allocs").WriteTo(f, 0)
-				f.Close()
-			}
-		})
-	}
-	return func() {
-		for _, s := range stops {
-			s()
-		}
-	}, nil
 }
 
 // createNoFollow creates or truncates the profile file path, refusing a

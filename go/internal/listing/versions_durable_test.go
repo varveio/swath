@@ -67,6 +67,9 @@ type versionsGate struct {
 	// then ends inside the frontier's range, the sealed files ahead of it.
 	last     bool
 	lastSeen atomic.Bool
+	// hold, if set, never releases the frontier: the run is killed while
+	// it holds, every certificate sealed above K.
+	hold bool
 }
 
 // event is the order stage's event hook (order.SetDurableEvents) for the
@@ -82,6 +85,9 @@ func (p *hotVersions) event(e string) {
 	case "one-range-open":
 		g.lastSeen.Store(true)
 	default:
+		return
+	}
+	if g.hold {
 		return
 	}
 	if g.last && g.lastSeen.Load() && g.sealed.Load() > 0 || !g.last && g.sealed.Load() >= 8 {

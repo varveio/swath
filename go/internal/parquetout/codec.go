@@ -13,7 +13,7 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 )
 
-// codec is pure-Go ZSTD (klauspost, SpeedDefault) with all-literal entropy
+// codec is pure-Go ZSTD (klauspost, pageLevel) with all-literal entropy
 // compression enabled. A router's writers share one. Its states are single-state zstd encoders, made as calls
 // need them up to limit and reused last-in first-out, so a state is only
 // made, and only grows (to the largest page it compressed, about 11 MiB
@@ -39,12 +39,16 @@ func newCodec(limit int) *codec {
 	return c
 }
 
+// pageLevel is the zstd level of Parquet pages (Recipe): the fastest,
+// which spends least CPU per page in the output's tail.
+const pageLevel = zstd.SpeedFastest
+
 // newState is one zstd state with the writer's options (EncodeAll's
 // output does not depend on the state: it resets it every call).
 func newState() (*zstd.Encoder, error) {
 	return zstd.NewWriter(nil,
 		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithEncoderLevel(pageLevel),
 		zstd.WithEncoderCRC(false),
 		zstd.WithZeroFrames(true),
 		zstd.WithAllLitEntropyCompression(true),

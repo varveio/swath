@@ -161,9 +161,13 @@ headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (sy
 by about 15 MiB at the smallest `--sort-buffer`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
-a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it,
-each priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
-`registry.Factory.EncoderBytes`). [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
+a floor of one: as many encoders as fit in an encoder allowance of their own, apart from the row budget, each
+priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
+`registry.Factory.EncoderBytes`) plus, for a dataset in a bucket, the one buffer its upload holds (`listing.uploadBytes`): 8 MiB by default
+for every provider; a GCS chunk asked is rounded up to 256 KiB as the SDK sends it, an S3 part (5 MiB to
+5 GiB) and an Azure block (1 byte to 256 MiB) are exactly the size asked, any other size refused. The allowance is the default row budget's share of the
+memory found (1/16, at least 128 KiB, at most 1 GiB; 128 MiB when no limit is found), whatever `--sort-buffer`
+says: the sort buffer sizes row storage only, and a small one does not starve the writers. [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
 own the calculation, per-schema prices and measured margins. Descriptors bound the default count too:
 as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker
 and a reserve of 32 (`listing.admitEncoders`). An explicit `--encoders N` bypasses default memory
@@ -172,13 +176,25 @@ and descriptor admission and is honored with a warning on a resource shortfall.
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
-1,000-key S3 response and its arena) is added to the writer allowance, still at most `GOMAXPROCS` and the
-descriptors. 128 MiB at 64 workers carries 6 for S3, at 256 workers 12. The router holds the extra slots from the
+1,000-key S3 response and its arena) is added to the encoder allowance, still at most `GOMAXPROCS` and the
+descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chunk, S3 part or Azure block), before `GOMAXPROCS` caps it:
+
+| Memory | Allowance | Output | At start | After listing, 64 / 256 workers |
+|---|---|---|---|---|
+| 2 GiB | 128 MiB | local | 4 | 6 / 12 |
+| 2 GiB | 128 MiB | GCS, S3 or Azure | 3 | 4 / 9 |
+| 8 GiB | 512 MiB | local | 16 | 18 / 24 |
+| 8 GiB | 512 MiB | GCS, S3 or Azure | 12 | 14 / 19 |
+
+An 8-vCPU host with 8 GiB therefore starts eight writers, local or in a bucket, whatever `--sort-buffer` is. The router holds the extra slots from the
 start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
 goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
 An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
 `encoders_after_listing` and `encoder_admission`: `listing_done`, `explicit`, `at_cap` (the start already
-admitted the most the host carries) or `not_reached` (listing never finished).
+admitted the most the host carries) or `not_reached` (listing never finished); beside them the allowance
+(`encoder_allowance_bytes`), an encoder's prices (`encoder_writer_bytes`, `encoder_upload_bytes`) and what bound
+each count (`encoders_at_start_bound_by`, `encoders_after_listing_bound_by`: `memory`, `cpu`, `descriptors`,
+`minimum` or `explicit`).
 
 ## The waits
 
@@ -340,11 +356,47 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   coding and trailing bytes are refused too (`TestDeltaFrameMalformed`), and the stream-wide order guard
   checks every replayed row as before.
 - **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 drainer
-  readers (a descriptor and a 64 KiB buffer each) are open; past that the least recently used one is closed
-  and reopened at its position when the drainer comes back to it (`TestSpillReadersAreCapped`). The
-  read-ahead opens one descriptor per frame it reads, at most 8 at once, and closes it after the read:
-  `order.MaxSpillReaders` (16) is both, for descriptor admission (`peak_readers` counts both). A read-ahead
-  read decodes into fresh buffers (it runs beside the drainer); only the drainer reuses its own.
+  readers (a 64 KiB buffer and a lease on the file's read handle each) are open; past that the least recently
+  used one is dropped and reopened at its position when the drainer comes back to it
+  (`TestSpillReadersAreCapped`). The read-ahead reads at most 8 frames at once. A read-ahead read decodes into
+  fresh buffers (it runs beside the drainer); only the drainer reuses its own.
+- **Read handles** (`order/spillhandles.go`). Every read of the run's spill files leases the file's one read
+  descriptor and reads it with `pread`, which is safe concurrently: a frame read at an offset (the read-ahead,
+  the segments), a trailer read and the drainer's sequential reader (a `pread` cursor under its buffer, so it
+  shares the descriptor and sees frames the frontier's owner appends after it). The handle stays open between
+  reads, so a file is opened once for its reads, not once per frame read and again for its trailer; when the
+  read-ahead has read every frame, the drainer checks the trailer at its offset on the same handle, with no
+  reader opened. Writes still open the file per frame (unchanged). Bounds: `order.MaxSpillReaders` (16)
+  is a retention target, not a ceiling: idle handles are kept only while the descriptors open and being opened
+  stay within it, the least recently used closed first (`evictions.capacity`), and a miss makes room that way
+  before it opens. A leased handle is never closed, so with every handle leased a miss opens past 16: the
+  descriptors open are at most the larger of 16 and the concurrent readers (the drainer's 8 readers, the
+  read-ahead's 8 reads, the segment workers `listing.segmentWorkers` admits, more than 16 where the descriptor
+  limit allows), the bound descriptor admission priced before; the cache adds none (`peak_readers` counts its
+  descriptors). A spill open refused for
+  want of descriptors (EMFILE, ENFILE), a read miss's or a frame's write, closes every idle handle and is retried
+  once (a write's after the ownership check, before anything is written), and the cache keeps no idle handle for
+  the rest of the run (`evictions.low_fd`; `TestHandlesLowFD`, `TestHandlesWriteRetryOnce`, and
+  `TestHandlesLowFDLimit` and `TestHandlesWriteAtFDLimit` under a real descriptor limit). Lifetime: a handle is retired, out of the cache at once and closed at its last
+  lease's release, when its file is drained (before the unlink, or before a durable file goes back to its
+  cache: `evictions.retired`; a lease whose open was under way then gets a descriptor for itself alone, closed at its
+  release: `TestHandlesRetiredDuringOpen`), when the file is truncated (an ENOSPC rollback: `evictions.truncated`), and
+  every handle when the run stops (success, failure, cancellation) or the output's identity check fails
+  (`evictions.closed`). Retirement takes a handle out of the cache; it does not revoke reads: an idle one is
+  closed at once, a leased one stays usable by its holders and closes at its last release, and a lease after a
+  stop opens the file uncached, for itself alone. Cancellation and the output's ownership checks are what stop
+  a stopped or replaced run from publishing. Tests: concurrent reads, retirements
+  and evictions on a two-handle cache (`TestHandlesConcurrentReadsAndEviction`, under `-race`), truncation,
+  stop and replacement (`TestHandlesTruncation`, `TestHandlesStop`), row and payload conservation at caps
+  0, 1, 3 and 16 and in group mode (`TestHandlesConserveRows`, `TestHandlesConserveGroups`), and a durable
+  kill and resume with a smaller sort buffer, fewer workers and a smaller spill cap, objects and versions
+  (`listing.TestDurableResumeSmallerBudget`). The report's `spill.read_handles` counts hits, misses (one
+  open each, two when the first is refused for want of descriptors), races, evictions by reason and
+  `peak_open` (descriptors open at once, opens under way not counted); a recovered certificate's replay
+  (`durable_replay.go`) opens its own reader, outside these counters (in `spill.opens` and `peak_readers`); `spill.frame_bytes` and `spill.frame_rows` give the row frames'
+  size distribution. A range that spills one frame can at best share that frame's read with its trailer's:
+  the writes' per-frame opens and the per-file create and unlink remain (packing tiny ranges is the next
+  step).
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier. The exception is a journaled run's durable
@@ -398,7 +450,7 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   `aheadScan`). It enters finished nodes only, and restarts at the drainer's position whenever nothing is
   queued: the drainer may then have passed it, or a node it stopped at have been compacted since.
 - **Reading.** An idle worker (nothing queued to list) claims the next queued frame, reads it with one
-  `pread` on its own descriptor and decodes it through the same frame decoder as the drainer's own reads
+  `pread` on its file's read handle and decodes it through the same frame decoder as the drainer's own reads
   (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder,
   and at most one fewer than `GOMAXPROCS`, so the drainer keeps a processor. With one processor there is no
   read-ahead: an idle worker's read would only take turns with the drainer (on Batch, one core, the three
@@ -417,7 +469,8 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   (`TestReadAheadMemoryIsBounded`).
 - **Failure.** A frame that fails its CRC or its decoding fails the run when the drainer reaches it: the rows
   before it were handed on, none of its own or after (`TestReadAheadCorruptFrame`). A stop wakes both waits;
-  every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
+  every read releases its lease (a stopped run's handles are closed at their last release), and the run's
+  `WaitGroup` waits for reads in flight
   (`TestReadAheadCancelMidReplay`).
 
 The report's `resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
@@ -479,7 +532,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   does not arise there: every row is listed, and the parts publish as fast as they encode. With
   `--part-interval 0` the parts are identical either way; with it on, boundaries already depend on timing.
 - **Order.** A worker takes the next segment, opens its part in order (ordinals stay dense), reads its
-  frames on its own descriptor, checks every row against the one before (the first segment also against the
+  frames on their files' read handles, checks every row against the one before (the first segment also against the
   drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
   the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
   earlier one; the order stage checks each seam again. A seam that descends stops the run before the first

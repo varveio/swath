@@ -96,6 +96,24 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Value: source.Func(names(&o.columns))})
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
+	def(source.Flag{Name: "work-dir", Value: source.Text(&o.workDir), Metavar: "DIR", Group: source.GroupOutput, Commands: writing,
+		Usage: "with a bucket -o: the local work directory (lock, journal, spill)",
+		Long:  "Required when -o is a bucket prefix (GCS, S3 or Azure Blob), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve."})
+	def(source.Flag{Name: "output-gcs-credentials-file", Value: source.Text(&o.outputCreds), Metavar: "FILE", Group: source.GroupOutput, Commands: writing,
+		Usage: "credentials for a GCS -o (default: Application Default Credentials)",
+		Long:  "A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume."})
+	def(source.Flag{Name: "output-s3-region", Familiar: []string{"output-region"}, Value: source.Text(&o.outputRegion), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+		Usage: "the region of an S3 -o",
+		Long:  "Default: AWS_REGION, AWS_DEFAULT_REGION, the --output-s3-profile's, else us-east-1. The region resolved is fixed for the run."})
+	def(source.Flag{Name: "output-s3-profile", Familiar: []string{"output-profile"}, Value: source.Text(&o.outputProfile), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+		Usage: "the shared config profile an S3 -o takes credentials (and region) from",
+		Long:  "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS). The destination's own: the source's credentials and --anonymous never apply to it, and its requests are always signed. It may change on resume."})
+	def(source.Flag{Name: "output-azure-sas-token", Shown: source.ShownNever, Value: source.Text(&o.outputSAS), Metavar: "TOKEN", Group: source.GroupOutput, Commands: writing,
+		Usage: "a shared access signature for an Azure -o; never recorded",
+		Long:  "Default: Entra ID (DefaultAzureCredential). The destination's own: the source's SAS, key and --anonymous never apply to it. Give it again to swath resume; it may change there."})
+	def(source.Flag{Name: "output-endpoint-url", Shown: source.ShownURL, Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
+		Usage: "the endpoint of a bucket -o (default: the provider's)",
+		Long:  "GCS's JSON API base, an S3-compatible endpoint URL, or an Azure blob service base. GCS: as the SDK takes it (https://storage.googleapis.com/storage/v1/). S3: addressed path-style; AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_S3 are never applied to the destination. Azure: the account is its first path segment, as for an emulator (http://127.0.0.1:10000 serves ENDPOINT/ACCOUNT/CONTAINER). Fixed for the run."})
 
 	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",
@@ -129,10 +147,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
 	def(source.Flag{Name: "encoders", Value: source.Count(&o.encoders, 1), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
 		Usage: "Parquet encoders, or a .zst file's compression jobs (default: CPUs)",
-		Long:  "Lower it to leave cores to other work; the default follows GOMAXPROCS, the sort buffer and the descriptor limit. An explicit count is kept, with a warning when they cannot carry it."})
+		Long:  "Lower it to leave cores to other work; the default follows GOMAXPROCS, the descriptor limit and an encoder allowance of 1/16 of memory (as the default sort buffer, whatever --sort-buffer says; at most 1GiB). An explicit count is kept, with a warning when they cannot carry it."})
 	def(source.Flag{Name: "sort-buffer", Value: &o.rowBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
 		Usage: "bytes buffered for sorted output; not a total-memory limit",
-		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, the tail after listing holds about one more, and a larger value admits more encoders. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
+		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
 	def(source.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
 		Usage: "cap on spill (default: half the output filesystem's free space)",
 		Long:  "Set it when the output filesystem is shared or small. Past it, or at the reserve, listing waits instead of spilling."})

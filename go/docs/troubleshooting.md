@@ -88,7 +88,7 @@ manifest ([getting-started.md](getting-started.md#6-query-it-with-duckdb)).
 ## `-o` names a format swath does not write
 
 ```text
-swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
+swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS bucket prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
 ```
 
 Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#reading-text-rows-in-duckdb)).
@@ -116,6 +116,32 @@ On Windows a journaled run and `swath resume` are refused ([running.md](running.
 
 A run started with `--azure-sas-token` or `--s3-bearer-token-command` must be given it again: secrets are
 never recorded.
+
+## A dataset in a bucket fails
+
+| Message or exit | Meaning | What to do |
+|---|---|---|
+| exit 2, `-o gs://...` (or `s3://...`, `az://...`)`: a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
+| exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination`, `a shared access signature ... is for an Azure destination` | a destination option of another provider | drop it, or give the one for the destination's provider |
+| exit 2, `the run in DIR was started with --output-azure-sas-token, which is never recorded` | the Azure destination's SAS is not in the journal | give `--output-azure-sas-token` to `swath resume DIR` again (a rotated one is fine) |
+| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([production.md](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
+| `authorized requests are not permitted for non-TLS protected (https) endpoints` | Entra ID (no `--output-azure-sas-token`) on an `http://` endpoint, such as an emulator's | give the emulator a SAS |
+| `destination: remote: destination configuration: ...` | the S3 destination's AWS configuration does not load: a missing `--output-s3-profile`, an unreadable CA bundle | fix the profile or the shared config files |
+| exit 2, `the destination already holds a dataset` | the prefix has a `manifest.json`; datasets in a bucket are not replaced | write to another prefix |
+| exit 2, `the destination overlaps the listed source` | the listing would list the dataset's own objects, or the dataset would sit inside the listed prefix | write to another bucket or a prefix outside the source's |
+| exit 75, class `unresolved` | the manifest's creation failed in a way that does not say whether it happened, and no manifest is there yet; every part is kept | `swath resume DIR` creates the same manifest again; without a journal (a local tree), check the prefix for a manifest before deleting anything under it |
+| exit 1, `cause` `lost_race` | another run created the prefix's manifest first; this run deleted its own parts (`output.remote.orphans_left` counts any it could not; resuming the work directory tries again) | write to another prefix |
+| exit 2, `--report` names the work directory's `commit.json` | the commit marker's name is reserved | write the report elsewhere |
+| exit 1, `cause` `remote_altered` | a part the journal records was replaced, deleted or changed in the bucket | start over at a new prefix |
+| exit 1, `cause` `candidate_mismatch` | the work directory's saved manifest names other parts than the resume recovered (its journal lost the final record) and may still be created | read the prefix's manifest once no request can still be pending: if there is none, start over at a new prefix |
+| exit 1, `cause` `unsafe_layout` | something in the work directory's `.swath/remote/` is a link or not what swath made | inspect the work directory; start over with a new one |
+| a warning that the commit's aftermath is not finished | the dataset is committed, but deleting this run's leftover parts or writing `run.json` failed | `swath resume DIR` finishes it and exits 0 |
+| `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([production.md](production.md#writing-to-a-bucket)) |
+
+Errors never quote a resumable upload's session URL (its query is a credential for the upload), an S3
+multipart upload's id, an Azure destination's SAS or its block ids: a URL in an error shows its scheme, host and
+path only, an upload id is shown as `[upload-id]`, a block id as `[block-id]`, and a SAS signature an Azure
+error body quotes back as `[redacted]`.
 
 ## The run stops as stuck (exit 75)
 

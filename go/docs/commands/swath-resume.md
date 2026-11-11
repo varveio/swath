@@ -32,6 +32,18 @@ logs.parquet is already complete: nothing to resume
 
 [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
+A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
+`swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
+prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
+version: the GCS generation, the S3 version id or ETag, the Azure ETag; its size and SHA-256), and a resume of a run that reached
+its commit first reads the bucket's manifest back: the run's own means the run is complete, and the resume first
+finishes what the commit left (this run's leftover parts deleted, `run.json` beside the manifest). A commit that
+ended unresolved (exit 75) is resumed the same way: the resume creates the very manifest the run saved. The
+destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`), and an
+Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azure: account and container),
+prefix, endpoint and S3 region are fixed. A lost work directory loses the
+resume: the parts already uploaded are not reused, and a new run writes to a new prefix.
+
 Rows listed but not yet in a published part are listed again, except those a validated spill file still
 holds ([running.md](../running.md#stopping-and-resuming)).
 
@@ -58,6 +70,24 @@ resumes, and a text file `rows.tsv` is refused as text output.
 
 <!-- flags:begin -->
 ```text
+Output:
+      --output-gcs-credentials-file FILE
+                              credentials for a GCS -o (default: Application Default Credentials)
+                                A service account key or authorized-user JSON, with the read-write
+                                scope. The destination's own: the source's credentials and
+                                --anonymous never apply to it. It may change on resume.
+      --output-s3-profile NAME
+                              the shared config profile an S3 -o takes credentials (and region) from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS). The destination's own: the source's
+                                credentials and --anonymous never apply to it, and its requests are
+                                always signed. It may change on resume.
+      --output-azure-sas-token TOKEN
+                              a shared access signature for an Azure -o; never recorded
+                                Default: Entra ID (DefaultAzureCredential). The destination's own:
+                                the source's SAS, key and --anonymous never apply to it. Give it
+                                again to swath resume; it may change there.
+
 Object stores:
       --anonymous             send no credentials (a public bucket or container)
                                 Ignores any configured. Without it a source with no usable
@@ -100,19 +130,21 @@ Performance:
                                 it throttles at the default.
       --encoders N            Parquet encoders, or a .zst file's compression jobs (default: CPUs)
                                 Lower it to leave cores to other work; the default follows
-                                GOMAXPROCS, the sort buffer and the descriptor limit. An explicit
-                                count is kept, with a warning when they cannot carry it.
+                                GOMAXPROCS, the descriptor limit and an encoder allowance of 1/16 of
+                                memory (as the default sort buffer, whatever --sort-buffer says; at
+                                most 1GiB). An explicit count is kept, with a warning when they
+                                cannot carry it.
       --sort-buffer SIZE      bytes buffered for sorted output; not a total-memory limit
                                 Rows listed ahead of the output, the output queues and the
                                 scheduler's metadata. Past it rows spill to disk; with no spill
                                 space listing waits. Request pages, directory reads, writers,
-                                compression and the Go runtime are extra, the tail after listing
-                                holds about one more, and a larger value admits more encoders.
-                                Default: 1/16 of the least of detected physical memory, the cgroup's
-                                limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected;
-                                invocation.sort_buffer says which). Raise it when spill is heavy and
-                                memory is free; to use less memory lower it with --workers and
-                                --encoders.
+                                compression and the Go runtime are extra, and the tail after listing
+                                holds about one more; encoders are admitted against an allowance of
+                                their own, so this sizes rows only. Default: 1/16 of the least of
+                                detected physical memory, the cgroup's limit and GOMEMLIMIT, at most
+                                1GiB (128MiB when none is detected; invocation.sort_buffer says
+                                which). Raise it when spill is heavy and memory is free; to use less
+                                memory lower it with --workers and --encoders.
       --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
                                 Set it when the output filesystem is shared or small. Past it, or at
                                 the reserve, listing waits instead of spilling.

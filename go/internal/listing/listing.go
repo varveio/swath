@@ -85,6 +85,16 @@ type Config struct {
 	// terminal accounts (cmd/swath's forced exit). An error returned
 	// without running step means not committed. nil runs step.
 	Commit func(step func() error) error
+	// ListingDone, if set, is called once when the provider has finished
+	// listing: the event timings.listing_done_at records
+	// (order.Options.ListingDone), from an order-stage goroutine without
+	// its lock; the drain may still have rows to hand on. A failed or
+	// stopped listing and a dry run (nothing ordered) never call it. It
+	// should return promptly: the drain's segments are planned after it.
+	ListingDone func()
+
+	// remote is the remote dataset's run, once its destination is opened.
+	remote *remoteState
 }
 
 // finalize applies Finalize to r once: the first call on a terminal report
@@ -125,12 +135,15 @@ type OutputConfig struct {
 	// Text, if set, writes the rows as text (stdout or one file) instead of
 	// a dataset; Dir must be empty. Such a run keeps no journal.
 	Text *textout.Config
+	// Remote, if set, writes the dataset to an object store; Dir is then
+	// its work directory (the lock, journal, spill and claim receipts).
+	Remote *RemoteOutput
 }
 
 // Limits are the execution limits; none changes the dataset's content.
 type Limits struct {
 	Workers  int // listing goroutines; default DefaultWorkers
-	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the row budget and descriptors (admitEncoders)
+	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the encoder allowance and descriptors (admitEncoders)
 	// RowBudget bounds the bytes of rows and scheduler metadata held
 	// between listing and encoding (reorder storage and the encoders'
 	// queues); 0 is the default, 1/16 of the least detected memory limit
@@ -154,12 +167,30 @@ type Limits struct {
 	// (encodersGiven).
 	maxEncoders   int
 	encodersGiven bool
-	// encoderBytes is the working set admitted per Parquet encoder, the
-	// source's schema's (encoderPrice).
-	encoderBytes int64
+	// encoderBytes is the working set admitted per Parquet encoder: the
+	// source's schema's writer (writerBytes, encoderPrice) and, for a
+	// dataset in a bucket, its upload's buffer (uploadBytes).
+	encoderBytes, writerBytes, uploadBytes int64
+	// encoderAllowance is the memory encoders are admitted against: the
+	// default row budget's policy (rowBudgetFor), whatever --sort-buffer
+	// says, so row storage and writers are sized apart.
+	encoderAllowance int64
+	// startBy and afterBy name what bound the encoders at start and after
+	// listing (Bound*).
+	startBy, afterBy string
 	// rowBudgetWhy is how RowBudget was chosen (rowBudgetFor).
 	rowBudgetWhy RowBudget
 }
+
+// What bound the encoders a run admitted (Drain.EncodersAtStartBoundBy,
+// EncodersAfterListingBoundBy).
+const (
+	BoundMemory      = "memory"      // the encoder allowance, at each encoder's price
+	BoundCPU         = "cpu"         // GOMAXPROCS
+	BoundDescriptors = "descriptors" // the descriptor limit
+	BoundMinimum     = "minimum"     // one encoder, whatever the limits say
+	BoundExplicit    = "explicit"    // --encoders
+)
 
 // SpillLimits bound spill.
 type SpillLimits struct {
@@ -205,7 +236,15 @@ type Spill struct {
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
 	ReserveBytes int64 `json:"reserve_bytes"`
-	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+	PeakReaders  int64 `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
+	// ReadHandles is the spill read handles' account: every read of a
+	// spill file (a frame at an offset, a trailer, the drainer's reader)
+	// leases its file's one descriptor, kept open between reads.
+	ReadHandles order.HandleStats `json:"read_handles"`
+	// FrameBytes and FrameRows are the row frames written by size: bytes
+	// (header included) and rows, as power-of-two bucket bounds.
+	FrameBytes order.SizeQuantiles `json:"frame_bytes"`
+	FrameRows  order.SizeQuantiles `json:"frame_rows"`
 	// Durable is the durable spill's account (nil when it was off: no
 	// journal, a provider without fences, a spill cap
 	// below 16 MiB); DurableOff says why it was off when it could have run.
@@ -305,25 +344,49 @@ func (c *Config) resolve() error {
 		return bad("replace needs an output directory")
 	case o.Text != nil && (o.Dir != "" || o.Resume):
 		return bad("text output excludes a dataset directory and resume")
+	case o.Remote != nil && o.Dir == "":
+		return bad("a remote dataset needs a work directory")
+	case o.Remote != nil && o.Replace:
+		return bad("replacing a remote dataset is not supported")
+	case o.Remote != nil && o.Text != nil:
+		return bad("text output excludes a remote dataset")
 	case (c.Totals != nil || c.Deliver != nil) && !dryRun(*c):
 		return bad("per-prefix totals need a count (no dataset, no text)")
 	}
 	if l.Workers == 0 {
 		l.Workers = defaultWorkers(c.Source.URI)
 	}
-	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, readMemoryLimits())
+	mem := readMemoryLimits()
+	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, mem)
+	l.encoderAllowance, _ = rowBudgetFor(0, mem)
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
-	l.encoderBytes = encoderPrice(c.Source.URI)
+	l.writerBytes = encoderPrice(c.Source.URI)
+	if o.Remote != nil {
+		// Each encoder's part is an upload holding one buffer (a chunk or a
+		// part): admitted with its writer, before listing and after it alike.
+		l.uploadBytes = uploadBytes(o.Remote)
+	}
+	l.encoderBytes = l.writerBytes + l.uploadBytes
+	l.startBy, l.afterBy = BoundExplicit, BoundExplicit
 	if l.Encoders == 0 {
-		l.Encoders = min(runtime.GOMAXPROCS(0), admit(*c))
-		if c.Output.Text == nil { // Parquet writers only: a text output's jobs are not raised
-			l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.encoderBytes, l.Workers, fdLimit())))
+		procs, fds := runtime.GOMAXPROCS(0), fdLimit()
+		if c.Output.Text != nil {
+			l.Encoders, l.startBy = bound(int64(admitTextJobs(l.encoderAllowance)), BoundMemory, procs)
+			l.maxEncoders, l.afterBy = l.Encoders, l.startBy // a text output's jobs are not raised
+		} else {
+			l.Encoders, l.startBy = admission(l.encoderAllowance, l.encoderBytes, l.Workers, fds, procs)
+			l.maxEncoders, l.afterBy = admission(l.encoderAllowance+int64(l.Workers)*listingPageBytes, l.encoderBytes, l.Workers, fds, procs)
+			if l.maxEncoders < l.Encoders {
+				l.maxEncoders, l.afterBy = l.Encoders, l.startBy
+			}
 		}
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
 	}
 	switch {
+	case l.Spill.Reserve == 0 && o.Remote != nil:
+		l.Spill.Reserve = minSpillReserve // parts are uploaded, never written beside spill
 	case l.Spill.Reserve == 0:
 		l.Spill.Reserve = spillReserve(l.Encoders, l.PartSize)
 	case l.Spill.Reserve < 0:
@@ -356,31 +419,63 @@ func encoderPrice(root string) int64 {
 	return parquetout.DefaultEncoderBytes
 }
 
+// boundAfterListing is what bound n, the encoders reported after listing:
+// the post-listing constraint planned when listing ended and raised the
+// count to it, else the start's, which still holds the count.
+func (l *Limits) boundAfterListing(n int, listingDone bool) string {
+	if listingDone && n == l.maxEncoders && l.maxEncoders > l.Encoders {
+		return l.afterBy
+	}
+	return l.startBy
+}
+
 // admitEncoders is how many Parquet encoders the run's resources carry,
 // never fewer than one. Encoder memory is admitted apart from the row
-// budget but sized by it: per encoder bytes (encoderPrice: one writer and
-// one codec state) each within an allowance equal to the row budget, so a host given a
-// larger budget for rows also runs more writers to drain them; and one
-// descriptor each beside the spill readers, the workers' connections and
-// spill writes, and a reserve (fds 0 when the limit is unknown).
-func admitEncoders(rowBudget, per int64, workers int, fds int64) int {
-	n := rowBudget / per
+// budget, against an allowance of its own (Limits.encoderAllowance: the
+// default row budget's share of the memory found, whatever --sort-buffer
+// says): per encoder bytes each (one writer and one codec state,
+// encoderPrice, and for a dataset in a bucket one upload buffer,
+// uploadBytes); and one descriptor each beside the spill readers, the
+// workers' connections and spill writes, and a reserve (fds 0 when the
+// limit is unknown).
+func admitEncoders(allowance, per int64, workers int, fds int64) int {
+	n, _ := admission(allowance, per, workers, fds, math.MaxInt)
+	return n
+}
+
+// admission is admitEncoders capped at procs (GOMAXPROCS), and what bound
+// it (Bound*).
+func admission(allowance, per int64, workers int, fds int64, procs int) (int, string) {
+	n, by := allowance/per, BoundMemory
 	if fds > 0 {
-		n = min(n, fds-int64(order.MaxSpillReaders)-2*int64(workers)-fdReserve)
+		if d := fds - int64(order.MaxSpillReaders) - 2*int64(workers) - fdReserve; d < n {
+			n, by = d, BoundDescriptors
+		}
 	}
-	return int(max(1, n))
+	return bound(n, by, procs)
+}
+
+// bound caps n, which by bound, at procs, and raises it to one.
+func bound(n int64, by string, procs int) (int, string) {
+	if int64(procs) < n {
+		n, by = int64(procs), BoundCPU
+	}
+	if n < 1 {
+		n, by = 1, BoundMinimum
+	}
+	return int(n), by
 }
 
 // admitAfterListing is how many encoders the run carries once the
 // provider has finished listing (order.Options.ListingDone): no page is
-// in flight any more, so the memory the workers' pages held beside the
-// row budget (listingPageBytes each) goes to writers instead, on top of
-// the allowance equal to the row budget; descriptors as admitEncoders
-// (the workers' idle connections stay open). Each encoder costs per
-// (encoderPrice). 128 MiB and 64 workers carry 6 of the object stores'
-// schemas, 256 workers 12.
-func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
-	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, per, workers, fds)
+// in flight any more, so the memory the workers' pages held
+// (listingPageBytes each) goes to writers instead, on top of the encoder
+// allowance; descriptors as admitEncoders (the workers' idle connections
+// stay open). Each encoder costs per. An allowance of 128 MiB and 64
+// workers carry 6 of the object stores' schemas written locally, 256
+// workers 12.
+func admitAfterListing(allowance, per int64, workers int, fds int64) int {
+	return admitEncoders(allowance+int64(workers)*listingPageBytes, per, workers, fds)
 }
 
 // segmentWorkers caps the workers writing the tail as parallel parts
@@ -388,7 +483,7 @@ func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
 // than the encoders admitted after listing (their working set is that
 // admission's, encoderPrice each), and the order stage keeps
 // them to one per spare processor. Each reads one spill frame at a time on
-// its own descriptor: the 16 spill descriptors reserved at admission
+// its file's read handle, at most one descriptor: the 16 spill descriptors reserved at admission
 // (order.MaxSpillReaders), plus what the limit leaves beside the workers'
 // connections, the encoders' part files and the reserve (fds 0: unknown,
 // no cap). Beside its writer a worker holds one decoded frame, one batch
@@ -408,21 +503,21 @@ func segmentWorkers(encoders, workers int, fds int64) int {
 const listingPageBytes = 1 << 20
 
 // admitTextJobs is how many zstd jobs a text output's compressor runs at
-// once, never fewer than one: each within textout.JobBytes of an allowance
-// equal to the row budget, as Parquet encoders are admitted (admitEncoders),
-// but with the compressor's own working set and no descriptor (the jobs
-// write one file).
-func admitTextJobs(rowBudget int64) int {
-	return int(max(1, rowBudget/textout.JobBytes))
+// once, never fewer than one: each within textout.JobBytes of the encoder
+// allowance, as Parquet encoders are admitted (admitEncoders), but with
+// the compressor's own working set and no descriptor (the jobs write one
+// file).
+func admitTextJobs(allowance int64) int {
+	return int(max(1, allowance/textout.JobBytes))
 }
 
 // admit is the encoders (Parquet writers, or a text output's compression
 // jobs) c's resources carry.
 func admit(c Config) int {
 	if c.Output.Text != nil {
-		return admitTextJobs(c.Limits.RowBudget)
+		return admitTextJobs(c.Limits.encoderAllowance)
 	}
-	return admitEncoders(c.Limits.RowBudget, c.Limits.encoderBytes, c.Limits.Workers, fdLimit())
+	return admitEncoders(c.Limits.encoderAllowance, c.Limits.encoderBytes, c.Limits.Workers, fdLimit())
 }
 
 // textJobs is the compression jobs of a text output and why that many
@@ -440,8 +535,8 @@ func textJobs(c Config, asked int) *TextCompressor {
 	switch {
 	case asked > 0:
 		t.JobsReason = JobsAsked
-	case admitTextJobs(c.Limits.RowBudget) < runtime.GOMAXPROCS(0):
-		t.JobsReason = JobsRowBudget
+	case admitTextJobs(c.Limits.encoderAllowance) < runtime.GOMAXPROCS(0):
+		t.JobsReason = JobsAllowance
 	}
 	return t
 }
@@ -472,11 +567,11 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	switch n := admit(cfg); {
 	case asked <= n || cfg.Warn == nil:
 	case cfg.Output.Text != nil:
-		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; --sort-buffer %d MiB carries %d",
-			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
+		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; the encoder allowance (%d MiB, from the memory found) carries %d",
+			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.encoderAllowance>>20, n))
 	default:
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; --sort-buffer %d MiB and the descriptor limit carry %d",
-			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; the encoder allowance (%d MiB, from the memory found) and the descriptor limit carry %d",
+			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.encoderAllowance>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
 		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression, Compressor: textJobs(cfg, asked)}
@@ -540,6 +635,27 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		}
 	}
 	id := identity(src, s, cfg)
+	if r := cfg.Output.Remote; r != nil {
+		// The destination is fixed before anything is owned: its distance
+		// from the source, its client, then its identity as opened (the
+		// route and region resolved).
+		l, err := remoteLocation(r)
+		if err == nil {
+			err = checkOverlap(src.Locator(), l)
+		}
+		if err == nil {
+			cfg.remote, err = openRemote(ctx, r)
+		}
+		if err != nil {
+			rep, err := sum.failed(fmt.Errorf("destination: %w", err))
+			cfg.finalize(&rep, err)
+			rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
+			return rep, err
+		}
+		defer cfg.remote.close()
+		id.Destination = destinationIdentity(cfg.remote.d)
+		sum.Output.Remote = cfg.remote.report(cfg.Output.Dir)
+	}
 	sum.ArgsHash, sum.src = id.Hash(), src
 	jr, err := openJournal(ctx, cfg, src, id)
 	if err != nil {
@@ -548,6 +664,12 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		// failed recovery) is settled before the lock is released, except
 		// a dataset completed or a run gone by the time the lock was held:
 		// another process's outcome stands.
+		if cfg.remote != nil {
+			sum.Output.Remote = cfg.remote.report(cfg.Output.Dir)
+			if errors.Is(err, dataset.ErrLostRace) {
+				sum.Output.Remote.Commit = "lost_race"
+			}
+		}
 		rep, err := sum.failed(err)
 		cfg.finalize(&rep, err)
 		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
@@ -637,7 +759,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	env := registry.Env{Empty: jr.complete()}
 	watchSource(cfg.Progress, &sum, src, &env)
 	if cfg.Output.Dir != "" {
-		ropt, err := routerOptions(cfg, jr, shared, cancel)
+		ropt, err := routerOptions(ctx, cfg, jr, shared, cancel)
 		if err != nil {
 			return sum.failed(err)
 		}
@@ -646,7 +768,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// A dry run counts: nothing consumes its rows in order, so it holds
 	// no reorder storage and never spills (order.Count).
 	env.Count = dryRun(cfg)
-	a := &attempt{cfg: cfg, jr: jr, sum: sum}
+	a := &attempt{ctx: ctx, cfg: cfg, jr: jr, sum: sum}
 	oopt, scratch, err := orderOptions(cfg, jr, sum.Invocation.RowBudgetBytes, shared)
 	if err != nil {
 		return a.sum.failed(err)
@@ -661,6 +783,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	defer jr.closeCache(false)
 	if err := a.startCache(&oopt, src, cancel); err != nil {
 		return a.sum.failed(err)
+	}
+	if done := cfg.ListingDone; done != nil {
+		prev := oopt.ListingDone
+		oopt.ListingDone = func() {
+			if prev != nil {
+				prev()
+			}
+			done()
+		}
 	}
 	env.Order = oopt
 	var dropped atomic.Int64
@@ -862,12 +993,17 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 // routerOptions configures the Parquet router: parts journaled as they
 // close, their queues charged to the shared row budget, and an encoder
 // failure cancelling the run with its cause.
-func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) (*parquetout.Options, error) {
+func routerOptions(ctx context.Context, cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) (*parquetout.Options, error) {
 	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, MaxEncoders: cfg.Limits.maxEncoders, Account: shared.Add,
 		Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
 	jr.routerOptions(&ropt)
 	if err := jr.verifyOption(&ropt); err != nil {
 		return nil, err
+	}
+	if jr != nil && jr.remote != nil {
+		// Uploads run under the pipeline's context: a failure anywhere
+		// cancels it, and every upload in flight is aborted.
+		jr.remoteRouter(ctx, &ropt)
 	}
 	if pr := cfg.Progress; pr != nil {
 		ropt.Encoded = &pr.encoded
@@ -993,6 +1129,7 @@ func dryRun(cfg Config) bool { return cfg.Output.Dir == "" && cfg.Output.Text ==
 // attempt is one pipeline run's report and the state its failure and
 // commit paths share.
 type attempt struct {
+	ctx    context.Context // the pipeline's
 	cfg    Config
 	jr     *runJournal
 	router parquetout.Encoder
@@ -1111,6 +1248,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {
 			res.Spill.Durable = c.Report()
@@ -1158,6 +1296,9 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
+		d.EncoderAllowanceBytes, d.EncoderWriterBytes, d.EncoderUploadBytes = l.encoderAllowance, l.writerBytes, l.uploadBytes
+		d.EncodersAtStartBoundBy = l.startBy
+		d.EncodersAfterListingBoundBy = l.boundAfterListing(d.EncodersAfterListing, !ost.ListingDone.IsZero())
 		switch {
 		case l.encodersGiven:
 			d.EncoderAdmission = AdmissionExplicit
@@ -1218,8 +1359,12 @@ func (a *attempt) fail(err error) (Report, error) {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(a.cfg.Output.Dir)
 		}
+		a.failRemote(err)
 	}
 	a.durable()
+	if jr != nil {
+		a.sum.Output.Remote = jr.remote.report(a.cfg.Output.Dir)
+	}
 	return a.sum.failed(err)
 }
 
@@ -1277,12 +1422,22 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if cfg.Commit != nil {
 		commit = func(install func() error) error { return cfg.Commit(func() error { return step(install) }) }
 	}
-	if err := dataset.Publish(cfg.Output.Dir, meta, parts, commit); err != nil {
+	var err2 error
+	if jr != nil && jr.remote != nil {
+		err2 = a.commitRemote(meta, parts, commit, &committed)
+		sum.Output.Remote = jr.remote.report(cfg.Output.Dir)
+	} else {
+		err2 = dataset.Publish(cfg.Output.Dir, meta, parts, commit)
+	}
+	if err := err2; err != nil {
 		if committed { // only an injected crash follows the commit
 			return *sum, err
 		}
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
+			if !errors.Is(err, dataset.ErrLostRace) && !errors.Is(err, dataset.ErrCommitUnresolved) {
+				a.failRemote(err) // not committed, never to be: its parts go
+			}
 		}
 		a.durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
@@ -1294,6 +1449,10 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
 			cfg.Warn("run report not written: " + err.Error())
+		}
+	} else if jr != nil && jr.remote != nil {
+		if err := a.finalizeRemote(parts, sum); err != nil {
+			return *sum, err
 		}
 	} else if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())

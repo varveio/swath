@@ -435,6 +435,12 @@ func rootCredentials(root string) bool {
 // this is the second pass of a caller that hands one on.
 func RedactArgv(argv []string) []string {
 	secrets, urls := map[string]bool{}, map[string]bool{}
+	for _, u := range OutputURLFlags {
+		urls[u] = true
+	}
+	for _, s := range OutputSecretFlags {
+		secrets[s] = true
+	}
 	for _, f := range Factories() {
 		for _, s := range f.Secrets {
 			secrets[s.Flag] = true
@@ -472,6 +478,17 @@ func RedactArgv(argv []string) []string {
 	}
 	return out
 }
+
+// OutputURLFlags are the output's flags whose value is a URL that may
+// carry a credential (a destination's endpoint, a dataset URI): RedactArgv
+// hides each as it hides a provider's (source.FlagGroup.URLs), whichever
+// caller records the command line.
+var OutputURLFlags = []string{"output", "output-endpoint-url"}
+
+// OutputSecretFlags are the output's flags whose value is a secret (an
+// Azure destination's SAS): RedactArgv hides each as it hides a provider's
+// (Factory.Secrets), and a resume must be given it again.
+var OutputSecretFlags = []string{"output-azure-sas-token"}
 
 // RedactURL omits URL values that may carry credentials, including malformed
 // ones whose parse errors would quote the input.

@@ -873,6 +873,71 @@ commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 b
 S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
 and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
+### S3 scanner cost (2026-11-11)
+
+A CPU profile of a full listing of `aws-public-blockchain` (143,008,674 objects, sorted Parquet, 256 workers on 8
+vCPUs against the Go replay server; swath-notes `2026-11-11-swath-go-campaign/result-r2-profile.md`, a private run
+summary) put the scanner at 252 of 714 CPU-seconds, 35 %, about 1.76 µs per object. Microbenchmarks on the build host
+(4-vCPU GCP VM, Intel Xeon Platinum 8581C, Go 1.27.4; shared with other work, so the ratios are the result), the
+commit before the change and the change alternated as two test binaries, eight runs each at `-benchtime=1500x`,
+medians compared with benchstat (± is benchstat's confidence interval; every change p=0.000). `BenchmarkDecodeBody`
+is the scanner alone, `BenchmarkDecode` one full `ListObjectsV2` or `ListObjectVersions` call through the SDK stack
+and the Guard over an in-memory 1,000-entry page. Pages: `list` and `versions` are the older synthetic pages
+(URL-encoded keys, owners, checksums); `blockchain` and `full` are in the replay server's bytes, keys shaped like
+`aws-public-blockchain`'s (every key holds an escaped `=`), `full` with checksums, owners, multipart ETags and escaped
+spaces and UTF-8:
+
+| Benchmark | Page | Before ns/object | After ns/object | Change | B/object | allocs/object |
+|---|---|---:|---:|---:|---:|---:|
+| `DecodeBody` | list | 1,161 ± 2 % | 726 ± 2 % | −37 % | 271, unchanged | 0.003 (3 per page), unchanged |
+| `DecodeBody` | versions | 1,181 ± 2 % | 764 ± 2 % | −35 % | 329, unchanged | 0.003, unchanged |
+| `DecodeBody` | blockchain | 750 ± 2 % | 389 ± 2 % | **−48 %** | 279, unchanged | 0.003, unchanged |
+| `DecodeBody` | full | 1,158 ± 2 % | 660 ± 1 % | −43 % | 279, unchanged | 0.003, unchanged |
+| `Decode` | list | 1,333 ± 1 % | 897 ± 1 % | −33 % | 911, unchanged | 0.45 (451 per page), unchanged |
+| `Decode` | versions | 1,366 ± 1 % | 950 ± 1 % | −30 % | 983, unchanged | 0.45, unchanged |
+| `Decode` | blockchain | 890 ± 1 % | 537 ± 2 % | −40 % | 716, unchanged | 0.45, unchanged |
+| `Decode` | full | 1,329 ± 2 % | 835 ± 2 % | −37 % | 922, unchanged | 0.45, unchanged |
+
+What changed, in the order applied, each measured against the step before on the body-only benchmark (blockchain
+page; the other pages moved the same way or less): the URL decoding of a key moves the runs between escapes as
+blocks instead of byte by byte (−14 %); the `]]>` search on the scalar fast path runs only when the text holds a `]`
+(−3 %); a `<` that is not followed by `!` or `?` goes straight to the tag reader instead of four prefix tests for
+comments, CDATA, processing instructions and directives, measured together with the same `]` test in the general
+text decoder (−18 %); the five predefined entities are a switch, not a map (−4 %); a tag name ends at
+a byte-table lookup (−8 %); text with references that ends at its own end tag (every ETag's two `&quot;`) is decoded
+on the fast path instead of the general loop (−11 %); a `<` already at the cursor skips the search for it (−3 %). Two
+ideas did not win and are not in: one table-driven pass over a scalar's text in place of the byte searches (+4 %),
+and a byte loop in place of `IndexByte` for the namespace colon (+2 %). The full-client cost above the scanner is
+about 145 ns per object (145 µs per page) before and after: the SDK's middleware, its decoding of the minimal
+envelope, and the Guard's one allocation and copy of the body, which is most of the 437 B/object the full call
+allocates beyond the page. `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it
+replaced (kept in `xml_old_test.go`): the same pages, the same errors.
+
+Of that client cost, about 11 µs per request was `debug.ReadBuildInfo` parsing the build info for the User-Agent
+token: the SDK runs API options on every call. The token is now read once per client. `BenchmarkDecode`, ten
+alternated runs: blockchain 536.5 → 519.0 ns/object (−3.2 %), list 903.6 → 878.6 (−2.8 %), versions 957.8 → 930.6
+(−2.8 %), full 843.2 → 822.6 (−2.4 %), all p ≤ 0.001; 451 → 364 allocations per page. The GCS client still reads
+it per listing request (`gcs/client/list.go`); not measured.
+
+### Pivot density step cost (2026-11-11)
+
+The same blockchain profile put `keyrange.extrapolateWhy`, the density step `propose` runs after every continuing
+page (138,485 split decisions considered in 149,783 pages), at 24 of 714 CPU-seconds, 3.4 %: 15 s in its own loop over
+every byte of the page, 4 s in `isSafe`, 1.6 s in `growslice` (`append(page, c)` copied the 1,000-key page whenever
+it had no spare capacity, and otherwise wrote the cursor into that capacity), about 3 s in `math/big` (three values of
+about 80 digits per call, not one per key). `BenchmarkExtrapolate`, one call over a 1,000-key blockchain-shaped page
+(stride 64), on the build host as above, old and new binaries alternated eight times at `-benchtime=3000x`:
+
+| Case | Before | After | Change | B/op | allocs/op |
+|---|---:|---:|---:|---|---|
+| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19 → 18 |
+| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24 → 23 |
+
+The page and the cursor are scanned in place (no copy), every byte is marked in a 256-entry table eight bytes per
+step, and the alphabet's safety is checked once over the table instead of per byte (−33 % from the first two, a
+further −51 % from the unrolled marking). `TestExtrapolateMatchesOld` holds the result, pivot and reason, to the one
+it replaced (kept in `extrapolate_test.go`).
+
 ### azblob v1.7.0 to v1.8.3 (2026-11-10)
 
 `BenchmarkList` (`internal/source/azblob/client`), main `05e36feb` (azblob v1.7.0, azcore v1.21.1) against the
@@ -1345,6 +1410,144 @@ counted the tree; a95c1b12 priced the workers at plan time and took the tree out
 
 Follow-up (open, not run): on the 64 lists, segments on with the read-ahead off; and the fixed gate with a
 fixed worker count (pricing off) against `seg6`.
+
+## Uploads to a bucket, on the fake (2026-11-11)
+
+The upload path of a dataset written to GCS (`objfile/gcs`'s writer, 8 MiB resumable chunks), measured on a
+4-vCPU GCE VM (Xeon Platinum 8581C) against the in-process fake, so with no network: what it costs the client,
+not what a bucket sustains. `BenchmarkUpload` (`go test ./gcs -run X -bench BenchmarkUpload -benchtime 10x` in
+`go/objfile`) writes a 64 MiB object 4 KiB at a time, as the part writer does. Measured at the writer of
+`8c256076` (the benchmark itself added in `5415cf54`); the raw benchmark output was not kept, so rerun the
+command to reproduce:
+
+| Server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| the fake, keeping the bytes and checking the CRC32C | 388 MB/s | 523 MB (the fake's own appends) | 2,117 |
+| middle chunks read and dropped (the client's cost) | 1,557 MB/s | 8.9 MB (one 8 MiB chunk buffer) | 1,763 |
+
+So an upload of one 64 MiB part takes about 43 ms of wall time on this host with a server that drops the bytes (client and server together), one chunk buffer per open
+upload, against the seconds of CPU a part's encoding takes. `TestMeasureRemoteOverhead`
+(`SWATH_MEASURE_REMOTE=1`, `internal/listing`) runs one listing of 400,000 keys (gofakes3) with 4 encoders and
+256 KiB parts (28 parts, 7.8 MB) to a local directory and to the fake, three times each: wall time 0.97 to
+1.15 s either way, process CPU (the fakes' included) 3.1 to 3.4 s local and 3.2 to 3.7 s remote after the first
+run, and the remote runs' `upload_wait_ns` 0.48 to 0.60 s summed over the encoders (each part one request to
+the in-process fake), at `5415cf54` on a host shared with other builds; its raw log was not kept (provenance:
+the test's own `t.Log` lines, rerun with the variable set). These are single-host smoke numbers; a real
+bucket's latency and bandwidth are not measured here.
+
+## Spill read handles on local trees, 2026-11-11
+
+**Local host, screening only.** A 4-vCPU, 8 GiB GCP VM, ext4 on a persistent disk, shared with other agents' builds
+and tests: the 1-minute load was 11 to 50 during every arm and the host swapped (5 GiB of swap in use), so trees
+listed warm went cold between runs. Wall times swing tenfold between repetitions of one arm in either binary and
+are not evidence; the counters (frames, ranges, opens per frame and per range, handle hits) are. Trees from
+`bench/localtree_gen.py`, runs by `bench/localtree.sh` (arms shuffled within each repetition, `--encoders 4`,
+default 16 workers, output and spill on ext4), tables by `bench/localtree_table.py`. Base is 0c856fc3, new is
+the read-handle cache (`order/spillhandles.go`) at the same base.
+
+**Baseline: the macOS pathology's shape reproduces on Linux, at a smaller sort buffer.** At 128 MiB and 1 GiB no
+tree of 1.2M files spilled with 16 workers (`smalldirs`, `bigdirs`); a probe at 128 MiB with 64 workers (the owner's
+Mac runs 64) spilled 19,406 rows in 5,656 frames (3.4 rows a frame, 3.0 opens a frame) with a 2.7 s tail. At 32 MiB:
+
+| tree (1.2M files, ext4) | wall | spilled rows | frames | ranges | rows/frame | opens | opens/frame | tail |
+|---|---|---|---|---|---|---|---|---|
+| `smalldirs` (200k directories of 3-9 files) | 255 s | 1,163,642 | 332,315 | 166,143 | 3.50 | 996,868 | 3.00 | 135 s |
+| `skewed` (70k directories, long names) | 70 s | 1,112,656 | 112,870 | 64,824 | 9.86 | 367,016 | 3.25 | 3.9 s |
+| owner's Mac, 128 MiB (for comparison) | 31 s | 1,019,908 | 194,277 | 116,859 | 5.25 | 622,180 | 3.20 | 13 s |
+
+Opens are two per frame plus two per range in the base (996,916 predicted, 996,868 counted on `smalldirs`): each
+frame is written on its own open and the trailer on another, each frame read at an offset on its own, and each
+trailer on a reader opened for it. On
+`smalldirs` the read-ahead's reads took 383 s summed over its 3 readers (2.3 ms a frame), so the tail is I/O
+bound on this host, not decode bound (0.6 s of decoding on the Mac). How much a run spills depends on
+how fast the walk outruns the drainer: on a cold or contended tree the same `smalldirs` arm spilled nothing.
+
+**After: read opens per range from 3 to about 1.5.** Medians of 5 interleaved repetitions (`smalldirs` 300k files,
+50k directories; `bigdirs` 1.2M files in 24 directories):
+
+| tree, buffer | bin | rows/frame | opens/frame | opens/range | hits | misses | user CPU | tail |
+|---|---|---|---|---|---|---|---|---|
+| `smalldirs` tmpfs, 8 MiB | base | 3.50 | 2.97 | 5.94 | – | – | 5.5 s | 2.9 s |
+| | new | 3.50 | 2.27 | 4.53 | 56,014 | 57,186 | 3.4 s | 3.0 s |
+| `smalldirs` tmpfs, 32 MiB | base | 3.48 | 2.99 | 6.04 | – | – | 1.6 s | 0.8 s |
+| | new | 3.51 | 2.22 | 4.45 | 18,684 | 17,442 | 1.8 s | 1.8 s |
+| `smalldirs` ext4, 8 MiB | base | 3.50 | 2.98 | 5.97 | – | – | 4.7 s | 0.8 s |
+| | new | 3.50 | 2.20 | 4.39 | 68,201 | 58,694 | 3.5 s | 0.7 s |
+| `smalldirs` ext4, 32 MiB | base | 3.49 | 3.00 | 6.00 | – | – | 2.0 s | 0.5 s |
+| | new | 3.50 | 2.03 | 4.05 | 21,403 | 19,257 | 2.1 s | 0.6 s |
+| `bigdirs` ext4, 8 MiB | base | 1,020 | 3.02 | 5.90 | – | – | 3.2 s | 0.5 s |
+| | new | 1,020 | 2.04 | 3.98 | 1,028 | 556 | 3.4 s | 0.3 s |
+| `bigdirs` ext4, 32 MiB | base | 1,020 | 3.02 | 5.90 | – | – | 3.1 s | 0.5 s |
+| | new | 1,019 | 2.39 | 4.66 | 356 | 490 | 3.0 s | 0.2 s |
+
+`skewed` (1.2M files, ext4, 32 MiB) has single runs only (its repetitions did not finish on the loaded host):
+base 5.66 and 5.95 opens a range (367,016 and 400,892 opens), new 4.17 (272,791 opens over 65,416 ranges;
+98,098 hits, 93,354 misses). At 128 MiB and 1 GiB nothing spilled in either binary (the cache is idle; walls within the noise). The writes'
+opens are unchanged (one per frame and one per trailer), so the floor with one read open per file is one per
+frame plus two per range: about 4.0 per range on both trees (two frames a range). `bigdirs` reaches it; on
+`smalldirs` the cache reaches 4.0 to 4.5, with 1.4 to 1.6 misses per range, because the read-ahead touches up to 64 planned frames (about 30 files) ahead of the drainer while at
+most 16 descriptors stay open, so a file's handle is often evicted (`evictions.capacity`) before the drainer
+reads its trailer. Evicting the most recently used instead (a probe, not kept) gave the same 4.3 to 4.4. User CPU
+fell by a quarter to a third at 8 MiB on `smalldirs` (fewer opens, and no 64 KiB reader buffer per trailer); no
+wall or tail change is measurable on this host. On the Mac, where the open and close were the expensive part
+(162 s of system CPU), the same counters predict about a third fewer opens; Batch and the Mac decide the wall.
+
+## S3 uploads, on the fake (2026-11-11)
+
+The same measurements for a dataset written to S3 (`objfile/s3`'s writer: 8 MiB parts, a multipart upload per
+part larger than one, CRC32 checksums), on the same kind of 4-vCPU VM, shared with other jobs during the run
+(load average 10 to 18): `BenchmarkUpload` (`go test ./s3 -run X -bench BenchmarkUpload -benchtime 10x` in
+`go/objfile`) writes a 64 MiB object 4 KiB at a time to `s3/s3fake`, and the GCS benchmark ran in the same
+invocation for comparison. Measured at the S3 writer as first written on `go/s3-output` (the commit
+"objfile/s3: create-only writes as multipart uploads, with a fake"), before the later changes to its failure
+paths (aborts, redaction, unresolved completions), which add no request to a successful upload; the raw
+benchmark output was not kept, so rerun the command to reproduce:
+
+| Writer, server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| S3, the fake keeping the bytes (and each part's MD5, its ETag) | 144 MB/s | 431 MB (the fake's own copies) | 5,439 |
+| S3, parts read and dropped (the client's cost) | 857 MB/s | 3.2 MB (the part buffer is pooled across uploads) | 5,473 |
+| GCS, the fake keeping the bytes | 310 MB/s | 514 MB | 2,112 |
+| GCS, middle chunks read and dropped | 1,332 MB/s | 8.8 MB | 1,758 |
+
+So the S3 client spends about 78 ms per 64 MiB object (8 `UploadPart` requests, the creation and the
+completion), against GCS's 50 ms on the same run: it sends each part from `Write` (nothing overlaps the
+buffering of the next part) and computes each part's CRC32 before sending it. Both are small beside a part's
+encoding. `TestMeasureRemoteOverhead` now runs per provider (the same tree and day; its log was not kept either): for S3, with the listing's 256 KiB parts (one
+`PutObject` each), wall time 1.12 to 1.42 s remote and 1.13 to 1.37 s local, process CPU 3.2 to 3.9 s remote and
+3.2 s local (after each provider's first run, whose CPU figure includes the setup), and `upload_wait_ns` 0.26 to
+0.32 s summed over the 4 encoders (GCS in the same run: 0.46 to 1.04 s). These are fake, single-host smoke
+numbers; a real bucket's latency, bandwidth and request rates are not measured here.
+
+## Azure uploads, on the fake (2026-11-11)
+
+The same measurements for a dataset written to Azure Blob Storage (`objfile/azblob`'s writer: 8 MiB blocks,
+staged and committed by a block list for a part larger than one, each body's CRC64 computed over the buffer),
+on the same kind of 4-vCPU VM, shared with other jobs (load average 3 to 4): `BenchmarkUpload`
+(`go test ./azblob ./s3 ./gcs -run X -bench BenchmarkUpload -benchtime 10x` in `go/objfile`) writes a 64 MiB
+object 4 KiB at a time to `azblob/azfake`, with the S3 and GCS benchmarks in the same invocation. Measured on
+`go/azblob-output` once the CLI took `-o az://` (the commit "cmd/swath: -o az://ACCOUNT/CONTAINER/PREFIX, with
+--output-azure-sas-token"); the raw output is not kept in the repository, so rerun the command to reproduce:
+
+| Writer, server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| Azure, the fake keeping the bytes (and checking each CRC64) | 336 MB/s | 446 MB (the fake's own copies) | 2,007 |
+| Azure, blocks read and dropped (the client's cost) | 1,070 MB/s | 1.3 MB (the block buffer is pooled across uploads) | 1,687 |
+| S3, the fake keeping the bytes | 184 MB/s | 442 MB | 5,464 |
+| S3, parts read and dropped | 950 MB/s | 3.3 MB | 5,984 |
+| GCS, the fake keeping the bytes | 391 MB/s | 529 MB | 2,235 |
+| GCS, middle chunks read and dropped | 1,555 MB/s | 8.9 MB | 1,880 |
+
+So the Azure client spends about 63 ms per 64 MiB object (8 `Put Block` requests and the `Put Block List`),
+between GCS's 43 ms and S3's 71 ms on the same run: like S3's, it sends each block from `Write`, and computes
+each block's CRC64 before sending it. The SDK's own CRC64 option copies the body before hashing it (137 MB
+allocated per object in a first version of the writer); the writer hashes the buffer itself and passes the sum.
+`TestMeasureRemoteOverhead` (`SWATH_MEASURE_REMOTE=1`, 400,000 keys, 4 encoders, 256 KiB parts: 28 parts,
+each one `Put Blob`), three runs a provider in one invocation: for Azure, wall time 0.89 to 1.03 s remote and
+0.85 to 1.04 s local, process CPU 3.1 to 3.7 s remote and 3.1 s local (after the first run, whose CPU figure
+includes the setup), and `upload_wait_ns` 0.24 to 0.35 s summed over the encoders (S3 in the same run: 0.21 to
+0.29 s; GCS: 0.28 to 0.78 s). These are fake, single-host smoke numbers; a real account's latency, bandwidth,
+request rates and throttling are not measured here.
 
 ## Smoke runs only
 
@@ -1861,6 +2064,82 @@ blockchain listings had 143,008,674 rows, but `diffds.py`'s SQL `EXCEPT ALL` ran
 first streaming method, since revised after review) was cancelled and superseded by this run. After this run
 `969dfd9a` changed only how diffds's streaming method compares float columns, which the listing schema does not
 have.
+
+## Parquet pages at zstd SpeedFastest (2026-11-11)
+
+Parquet pages are compressed at klauspost `SpeedFastest` (`parquetout.pageLevel`, writer recipe
+`swath/parquet-r4`) where `swath/parquet-r3` used `SpeedDefault`; the other codec options are unchanged, and
+the spill codec was already at `SpeedFastest`.
+
+**The codec, on the build host** (a shared 4-vCPU VM, Xeon Platinum 8581C, not a benchmark machine).
+`BenchmarkPageCodec` (`SWATH_CODEC_BENCH_PART=PART go test ./internal/parquetout -run X -bench
+BenchmarkPageCodec -benchtime 3x`) decompresses every page of a part and compresses each again on one state at
+both levels, the codec's other options kept. The parts were written by the `swath/parquet-r3` build from
+aws-public-blockchain's keys (the study's replay fixture `current-eba31d9`, its first part): two prefixes,
+`v1.1/sonarx/` (1,060,892 keys of mixed shapes) and `v1.1/stellar/ledgers/pubnet/FE` (4,108,000 keys of the
+shape that holds most of the bucket), served by `swath-replay` from a 5,168,892-row subset with no injected
+latency and listed by `swath list` into a local sorted dataset (4 encoders). Medians of three runs:
+
+| Pages | Level | ns a page | Bytes a page | Ratio |
+|---|---|---|---|---|
+| sonarx, 9,353 pages, 68.6 MB raw | SpeedDefault | 19,798 | 3,150 | 2.330 |
+| | SpeedFastest | 16,286 (-17.7 %) | 3,186 (+1.1 %) | 2.304 |
+| stellar FE, 36,168 pages, 239.6 MB raw | SpeedDefault | 21,169 | 2,718 | 2.437 |
+| | SpeedFastest | 18,032 (-14.8 %) | 2,723 (+0.2 %) | 2.433 |
+
+The ETag column (hex, about half the compressed bytes) and the size column compress the same at both levels;
+the difference is in the key column (sonarx +5.2 %, stellar -0.9 %) and `last_modified` (+5.6 % and +4.9 %).
+The same listings end to end (three runs a build, alternating, the replay server on the same host; process CPU
+from `/usr/bin/time`, medians): sonarx 30,404,915 to 30,736,985 bytes of output (+1.09 %), CPU 4.42 to 4.29 s
+(-2.9 %); stellar FE 101,705,572 to 101,868,044 bytes (+0.16 %), CPU 15.16 to 14.89 s (-1.8 %). Those runs
+are listing-bound, so wall time and peak RSS show no difference beyond their noise. The outputs read back the
+same: the swath reader's row digests and DuckDB's `EXCEPT ALL` both ways match, and `seekparquet validate
+--level digest` completes on both builds' datasets.
+
+**A diagnostic replay A/B on Batch**, not a calibrated benchmark: the whole aws-public-blockchain fixture
+(143,008,674 objects) replayed to a sorted dataset written to GCS, on 4 and 8 vCPU with 4 GiB of memory and a
+30 GB disk, three blocks of the `SpeedFastest` build against `main` (`swath/parquet-r3`). Ratios
+`SpeedFastest`/`main`, with the interval the A/B reports:
+
+| vCPU | Wall | CPU a object | Tail |
+|---|---|---|---|
+| 8 | 0.97 [0.89, 1.04] | 0.965 | 0.92 |
+| 4 | 0.96 [0.91, 1.09] | 0.95 | 0.94 |
+
+The dataset grew 0.3 %, from 3,317 to 3,327 MB. So the level saves 3.5 to 5 % of the CPU an object costs and
+6 to 8 % of the tail, for 0.3 % more stored and uploaded bytes on this bucket (up to 1.1 % on the mixed-shape
+prefix above); wall time moves within the A/B's interval.
+
+## Parquet fill: repeated values and nulls built once (2026-11-11, microbench)
+
+A microbenchmark on the build host (a shared 4-vCPU VM, Xeon Platinum 8581C), not a run. The fill turns a
+page's rows into each column's parquet values (`parquetout.fill`, `fillKey`). In a profile of the tail of a
+sorted aws-public-blockchain run (143M objects to GCS, 8 vCPU, 256 workers, at `855001c8`) it took 40.8 of
+194 CPU-seconds. The fill allocates nothing; nearly all of its time was building each value: parquet-go's
+`Value.Level` is not inlined (cost 93 over the budget of 80), and each call copies the 24-byte value in and
+out, then into the page's slice. The accessors cost about 5 % of it.
+
+The fill now builds a column's null value once, and reuses a string value equal to the previous row's (a
+storage class, a checksum algorithm or type repeat down a page) instead of building it again. The values
+are the same, kind, bytes, levels and column, so the parts are byte-identical. A reused value points at the
+earlier row's equal bytes. `BenchmarkFill` (`go test ./internal/parquetout -run X -bench BenchmarkFill`)
+fills every column of a 1,024-row S3 page shaped like aws-public-blockchain's: ledger keys, hex ETags,
+STANDARD, a CRC64NVME full-object checksum on every row (as in the fixture), no owner, and each row holding
+its own strings. `distinct=true` alternates every string column row to row between two values of different
+lengths: a synthetic case where no value is reused and each comparison ends at the length (long equal-length
+near-matches, which compare more bytes, were not benchmarked).
+Five runs each, 0 allocations a row before and after:
+
+| Page | Before (ns a row) | After (ns a row) |
+|---|---|---|
+| blockchain-shaped | 211.0 to 212.2 | 122.4 to 122.9 (-42 %) |
+| synthetic: every string differing from the row before | 211.0 to 211.6 | 174.9 to 175.3 (-17 %, the nulls alone) |
+
+`TestFillMatchesReference` compares every value with the earlier fill's, one by one, on these pages and on
+a page of random repeats, nulls and empty strings; `TestFillReuseOutlivesNoPage` writes two pages whose
+repeated strings own their bytes, poisoned once each page's flush returns, serially and column-parallel, and
+requires the file of the same rows in ordinary strings. The run-level saving was not measured; at the profile's
+share, a 42 % cheaper fill would be about 17 CPU-seconds of that run's 194-second tail.
 
 ## SeekParquet conformance
 

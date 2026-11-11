@@ -406,3 +406,41 @@ func TestMismatchDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// TestDestinationIdentity: a remote destination's provider, account,
+// bucket, prefix, endpoint, region and layout are each frozen (compared
+// and hashed); an Azure destination is shown with its account.
+func TestDestinationIdentity(t *testing.T) {
+	base := Destination{Provider: "s3", Bucket: "b", Prefix: "p/", Endpoint: "http://h", Region: "eu-west-3", Layout: "swath/remote-1"}
+	id := Identity{Destination: &base}
+	if err := Check(id, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		field  string
+		change func(*Destination)
+	}{
+		{"destination", func(d *Destination) { d.Provider = "gs" }},
+		{"destination", func(d *Destination) { d.Provider, d.Account = "az", "acct" }},
+		{"endpoint", func(d *Destination) { d.Endpoint = "" }},
+		{"destination region", func(d *Destination) { d.Region = "us-east-1" }},
+		{"destination layout", func(d *Destination) { d.Layout = "x" }},
+	} {
+		d := base
+		c.change(&d)
+		other := Identity{Destination: &d}
+		var m *MismatchError
+		if err := Check(id, other); !errors.As(err, &m) || m.Field != c.field {
+			t.Errorf("%+v: %v, want a %s mismatch", d, err, c.field)
+		}
+		if other.Hash() == id.Hash() {
+			t.Errorf("%+v: same hash", d)
+		}
+	}
+	az := Destination{Provider: "az", Account: "a1", Bucket: "c", Prefix: "p/", Layout: "swath/remote-1"}
+	other := az
+	other.Account = "a2"
+	if err := Check(Identity{Destination: &az}, Identity{Destination: &other}); err == nil || !strings.Contains(err.Error(), "az://a1/c/p/") {
+		t.Errorf("another account: %v", err)
+	}
+}

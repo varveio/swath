@@ -34,7 +34,7 @@ const (
 	exitFatal       = 1   // a cause that a resume will not fix
 	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
 	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
-	exitStuck       = 75  // no progress for the stall timeout; resumable when the journal is intact
+	exitStuck       = 75  // no progress for the stall timeout, or a bucket commit unresolved; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
 	exitInterrupted = 130 // SIGINT
 	exitTerminated  = 143 // SIGTERM, a graceful stop; resumable
@@ -141,6 +141,18 @@ func classify(err, cause error, dir string) outcome {
 		// The part size and row cap are frozen in the identity, so a
 		// resume would reach the limit again; it outranks a stop cause.
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "part_limit"
+	case errors.Is(err, dataset.ErrCandidateMismatch):
+		// An earlier attempt's manifest may still appear: a person settles
+		// it, never a resume.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "candidate_mismatch"
+	case errors.Is(err, dataset.ErrCommitUnresolved):
+		// Nothing was removed: a resume creates the same manifest again.
+		// It outranks a stop cause, which may be what cut the commit short.
+		o.Class, o.ExitCode, o.Cause = listing.ClassUnresolved, exitStuck, "commit_unresolved"
+	case errors.Is(err, dataset.ErrLostRace):
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "lost_race"
+	case errors.Is(err, dataset.ErrRemoteAltered):
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "remote_altered"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
 	case errors.Is(cause, errStuck):
@@ -209,7 +221,8 @@ func stopSource(cause error) string {
 // (an S3 directory bucket).
 func refusal(err error) bool {
 	var mm *journal.MismatchError
-	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, listing.ErrPrior, source.ErrUnsupported} {
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, listing.ErrPrior, source.ErrUnsupported,
+		listing.ErrDestinationExists, listing.ErrOverlap} {
 		if errors.Is(err, r) {
 			return true
 		}
@@ -217,11 +230,15 @@ func refusal(err error) bool {
 	return errors.As(err, &mm)
 }
 
-// committedCoverage is the coverage in dir's manifest (ok false without a
-// readable one).
+// committedCoverage is the coverage in dir's manifest, or for the work
+// directory of a dataset in a bucket its committed candidate's (ok false
+// without a readable one).
 func committedCoverage(dir string) (dataset.Coverage, bool) {
 	var m dataset.Manifest
 	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if errors.Is(err, os.ErrNotExist) {
+		b, err = dataset.CommittedCandidate(dir) // a bucket dataset's work directory
+	}
 	if err != nil || json.Unmarshal(b, &m) != nil {
 		return dataset.Coverage{}, false
 	}

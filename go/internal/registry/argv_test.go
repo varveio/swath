@@ -50,3 +50,19 @@ func TestRedactEndpointArgv(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactOutputSecretArgv: an output's secret flag (OutputSecretFlags)
+// is hidden whatever its value, in either spelling.
+func TestRedactOutputSecretArgv(t *testing.T) {
+	for _, flag := range OutputSecretFlags {
+		for _, argv := range [][]string{
+			{"list", "--" + flag, "sv=1&sig=SECRET", "--anonymous"},
+			{"list", "--" + flag + "=sv=1&sig=SECRET", "--anonymous"},
+		} {
+			want := []string{"list", "--" + flag + "=[redacted]", "--anonymous"}
+			if got := RedactArgv(argv); !slices.Equal(got, want) {
+				t.Errorf("%q: got %q, want %q", argv, got, want)
+			}
+		}
+	}
+}

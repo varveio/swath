@@ -11,6 +11,12 @@ _swath_list() {
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
+        '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
+        '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -138,6 +144,12 @@ _swath_diag_list() {
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
+        '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
+        '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -215,6 +227,12 @@ _swath_diag_count() {
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
+        '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
+        '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -283,6 +301,9 @@ _swath_diag_count() {
 
 _swath_resume() {
     _arguments \
+        '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
