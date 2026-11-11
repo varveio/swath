@@ -13,13 +13,16 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/varveio/swath/internal/source/tree"
 )
 
 // TestSortRunsEqualsSerial: a directory's entries sorted in any number of
 // concurrent runs, merged, come out in the key order a serial sort of the
 // full keys gives: names that are prefixes of each other, names around '/'
 // (a directory's suffix) in byte order, bytes that are not UTF-8, and run
-// counts that leave an odd run out of a merge round.
+// counts that leave an odd run out of a merge round. The keys and their
+// order are the tree core's (tree.Key, byte order as tree.SortRows).
 func TestSortRunsEqualsSerial(t *testing.T) {
 	rng := rand.New(rand.NewPCG(20261108, 1))
 	alphabet := []byte("a-./0z\xff\x01")
@@ -47,11 +50,7 @@ func TestSortRunsEqualsSerial(t *testing.T) {
 						}
 						sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
 						sc.names = append(sc.names, name...)
-						k := prefix + name
-						if typ == unix.DT_DIR {
-							k += "/"
-						}
-						want = append(want, k)
+						want = append(want, tree.Key(prefix, name, typ == unix.DT_DIR))
 					}
 					slices.Sort(want)
 					buildKeys(prefix, sc)

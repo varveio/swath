@@ -56,10 +56,18 @@ func (o *Out[D, S, P]) Seg(s S) error
 context and calls `Read`. `Out.Rows` splices: it hands rows to the order stage's emitter up to each row whose
 walk is `Descend`, then emits that directory as a child range (prefix = the row's key, cloned: keys may be
 views of a reader's arena), and continues. `Out.Seg` emits a segment of the same directory at its position.
-The walker counts what it emitted (`files`, `dirs`, `bytes`, `pruned`, `omitted`, `segments`) and applies
+The walker counts what it emitted (`files`, `dirs`, `bytes`, `pruned`, `excluded`, `omitted`, `segments`) and applies
 `Options.NoDirs` (directories walked, their rows dropped). The reader owns everything about reading:
 handles, metadata calls, its error classes (counted per directory, never fatal unless the run must stop),
 sorting, chunking. The core imports no provider; a reader imports the core.
+
+Recursive excludes are installed before workers start with `Walker.SetPruneDirectories`, using the
+filter package's proof that every descendant is excluded. `Out.Rows` checks that predicate only for
+`Descend`: reader-owned `Omit` and `Prune` take precedence. A match retains the directory row for the
+ordinary row filter, emits no child, and increments `Stats.Excluded`, separately from reader-owned
+`Stats.Pruned`. It applies equally to whole directories and segments. localfs reports these as
+`pruned_dirs` and `other_device_dirs`; its `pruning` plan classifies the exclude rules. Row rejection
+alone never prevents descent, and no counts or bytes are estimated for unvisited descendants.
 
 Two ways to read a directory:
 
@@ -121,6 +129,11 @@ needs no change (its rows are ordered anyway). Segments do not declare coverage 
 not engage for tree sources (as for localfs today).
 
 ## Resume (designed, not built)
+
+Neither tree source implements resume or declares durable coverage fences. Pruning suppresses child
+submission; it does not advance a range-engine cursor or certify a subtree for recovery. A future
+restart must apply the same frozen filters while replaying the path to K: a pruned directory creates
+no child to resume, whether its own row is retained or filtered out.
 
 The journal stays key-only: the last published key K. A tree source restarts by walking down to K:
 

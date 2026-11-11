@@ -76,7 +76,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `Report` adds `no_dirs` to the filters likewise.
 - **Recursive exclusion pruning.** Before workers start, `opened.Run` derives an immutable directory
   predicate from `registry.Env.Filter`. The filter package's glob compiler recognizes terminal `/**`
-  segments without a second glob language. The shared `emit` path retains the directory row for the
+  segments without a second glob language. `Walker.SetPruneDirectories` installs it in the tree
+  core, which retains the directory row for the
   ordinary row filter but submits no child for a matching directory; this applies to ordered listings,
   counts, native chunks/slabs and the portable engine. Includes, metadata filters, directory-row-only
   exclusions and regexes do not themselves stop descent. Automatic output-directory `Skip` exclusions
@@ -84,7 +85,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   The report's `pruning` classifies configured rules: `reason` is `no_excludes`, `row_filters_only`, or
   `recursive_excludes`; `recursive_globs`, `row_only_globs` and `regex_rules` count the rules in each
   class, as given (repeated rules count separately). `pruned_dirs` counts child traversals prevented,
-  once per directory even when rules overlap;
+  once per directory even when rules overlap (`tree.Stats.Excluded`);
+  reader decisions take precedence: `Omit` for output directories, then `Prune` for another device
+  (`tree.Stats.Pruned` maps only to `other_device_dirs`);
   `dirs_read`, `skipped_dirs` and `other_device_dirs` keep their existing meanings. No excluded
   descendant counts or bytes are estimated. Original filter descriptions stay in `coverage.filters`;
   pruning adds neither skipped-entry errors nor output-directory exclusions.
