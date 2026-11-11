@@ -2110,6 +2110,33 @@ The dataset grew 0.3 %, from 3,317 to 3,327 MB. So the level saves 3.5 to 5 % of
 6 to 8 % of the tail, for 0.3 % more stored and uploaded bytes on this bucket (up to 1.1 % on the mixed-shape
 prefix above); wall time moves within the A/B's interval.
 
+## Parquet fill: repeated values and nulls built once (2026-11-11, microbench)
+
+A microbenchmark on the build host (a shared 4-vCPU VM, Xeon Platinum 8581C), not a run. The fill turns a
+page's rows into each column's parquet values (`parquetout.fill`, `fillKey`). In a profile of the tail of a
+sorted aws-public-blockchain run (143M objects to GCS, 8 vCPU, 256 workers, at `855001c8`) it took 40.8 of
+194 CPU-seconds. The fill allocates nothing; nearly all of its time was building each value: parquet-go's
+`Value.Level` is not inlined (cost 93 over the budget of 80), and each call copies the 24-byte value in and
+out, then into the page's slice. The accessors cost about 5 % of it.
+
+The fill now builds a column's null value once, and reuses a string value equal to the previous row's (a
+storage class, a checksum algorithm or type repeat down a page) instead of building it again. The values
+are the same, kind, bytes, levels and column, so the parts are byte-identical. A reused value points at the
+earlier row's equal bytes. `BenchmarkFill` (`go test ./internal/parquetout -run X -bench BenchmarkFill`)
+fills every column of a 1,024-row S3 page shaped like aws-public-blockchain's: ledger keys, hex ETags,
+STANDARD, a CRC64NVME full-object checksum on every row (as in the fixture), no owner, and each row holding
+its own strings. `distinct=true` alternates every string column row to row, the worst case for the reuse.
+Five runs each, 0 allocations a row before and after:
+
+| Page | Before (ns a row) | After (ns a row) |
+|---|---|---|
+| blockchain-shaped | 211.0 to 212.2 | 122.4 to 122.9 (-42 %) |
+| every string differing from the row before | 211.0 to 211.6 | 174.9 to 175.3 (-17 %, the nulls alone) |
+
+`TestFillMatchesReference` compares every value with the earlier fill's, one by one, on these pages and on
+a page of random repeats, nulls and empty strings. The run-level saving was not measured; at the profile's
+share, a 42 % cheaper fill would be about 17 CPU-seconds of that run's 194-second tail.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's
