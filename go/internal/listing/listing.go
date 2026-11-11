@@ -362,8 +362,8 @@ func (c *Config) resolve() error {
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
 	l.writerBytes = encoderPrice(c.Source.URI)
 	if o.Remote != nil {
-		// Each encoder's part is an upload holding one chunk: admitted with
-		// its writer, before listing and after it alike.
+		// Each encoder's part is an upload holding one buffer (a chunk or a
+		// part): admitted with its writer, before listing and after it alike.
 		l.uploadBytes = uploadBytes(o.Remote)
 	}
 	l.encoderBytes = l.writerBytes + l.uploadBytes
@@ -628,7 +628,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if r := cfg.Output.Remote; r != nil {
 		// The destination is fixed before anything is owned: its distance
 		// from the source, its client, then its identity as opened (the
-		// route resolved).
+		// route and region resolved).
 		l, err := remoteLocation(r)
 		if err == nil {
 			err = checkOverlap(src.Locator(), l)

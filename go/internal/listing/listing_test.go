@@ -318,10 +318,28 @@ func withMemory(t *testing.T, m memoryLimits) {
 //
 // before the processors cap them (8 on an 8-vCPU host).
 func TestEncoderAllowance(t *testing.T) {
+	// The table's bucket rows hold for each provider: their default
+	// upload buffers are the same 8 MiB (below).
 	writer := encoderPrice("s3://b")
 	upload := int64(gcs.DefaultChunkSize)
 	if writer != 31*mib+mib/2 || upload != 8*mib {
 		t.Fatalf("prices: writer %d, upload %d", writer, upload)
+	}
+	// Each provider's upload is priced at the buffer its writer holds:
+	// GCS rounds a chunk up to the SDK's 256 KiB; S3 sends a part of
+	// exactly the size given.
+	for _, c := range []struct {
+		out  RemoteOutput
+		want int64
+	}{
+		{RemoteOutput{Location: "gs://d/p"}, 8 * mib},
+		{RemoteOutput{Location: "gs://d/p", ChunkSize: 300 << 10}, 512 << 10},
+		{RemoteOutput{Location: "s3://d/p"}, 8 * mib},
+		{RemoteOutput{Location: "s3://d/p", ChunkSize: 5<<20 + 300<<10}, 5<<20 + 300<<10},
+	} {
+		if got := uploadBytes(&c.out); got != c.want {
+			t.Errorf("%s, chunk %d: upload priced %d, want %d", c.out.Location, c.out.ChunkSize, got, c.want)
+		}
 	}
 	for _, c := range []struct {
 		memory                   int64

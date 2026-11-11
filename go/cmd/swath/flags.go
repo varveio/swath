@@ -98,13 +98,19 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "replace a previous dataset in -o"})
 	def(source.Flag{Name: "work-dir", Value: source.Text(&o.workDir), Metavar: "DIR", Group: source.GroupOutput, Commands: writing,
 		Usage: "with a bucket -o: the local work directory (lock, journal, spill)",
-		Long:  "Required when -o is a bucket prefix (GCS), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve."})
+		Long:  "Required when -o is a bucket prefix (GCS or S3), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve."})
 	def(source.Flag{Name: "output-gcs-credentials-file", Value: source.Text(&o.outputCreds), Metavar: "FILE", Group: source.GroupOutput, Commands: writing,
 		Usage: "credentials for a GCS -o (default: Application Default Credentials)",
 		Long:  "A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume."})
+	def(source.Flag{Name: "output-s3-region", Familiar: []string{"output-region"}, Value: source.Text(&o.outputRegion), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+		Usage: "the region of an S3 -o",
+		Long:  "Default: AWS_REGION, AWS_DEFAULT_REGION, the --output-s3-profile's, else us-east-1. The region resolved is fixed for the run."})
+	def(source.Flag{Name: "output-s3-profile", Familiar: []string{"output-profile"}, Value: source.Text(&o.outputProfile), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+		Usage: "the shared config profile an S3 -o takes credentials (and region) from",
+		Long:  "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS). The destination's own: the source's credentials and --anonymous never apply to it, and its requests are always signed. It may change on resume."})
 	def(source.Flag{Name: "output-endpoint-url", Shown: source.ShownURL, Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
-		Usage: "the JSON API base of a GCS -o (default: Google's)",
-		Long:  "As the SDK takes it (https://storage.googleapis.com/storage/v1/); fixed for the run."})
+		Usage: "the endpoint of a bucket -o (default: the provider's)",
+		Long:  "GCS's JSON API base, or an S3-compatible endpoint URL. GCS: as the SDK takes it (https://storage.googleapis.com/storage/v1/). S3: addressed path-style; AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_S3 are never applied to the destination. Fixed for the run."})
 
 	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",

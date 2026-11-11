@@ -17,14 +17,15 @@ Without `-o`, or with `-o -`, the rows go to stdout: a table on a terminal, TSV 
 `table`, `tsv` or `jsonl`). `-o NAME.tsv` or `-o NAME.jsonl`, optionally ending in `.gz` or `.zst`, writes
 that file, compressed as its name says. Any other `-o` name, and any name ending in `/`, is a directory that
 receives a [swath dataset](../dataset.md): sorted Parquet parts and a `manifest.json` that commits them.
-`-o gs://BUCKET[/PREFIX] --work-dir DIR` writes the dataset straight to Google Cloud Storage
-([A dataset in a bucket](../dataset.md#a-dataset-in-a-bucket)): its parts are uploaded as they close, its
-manifest is created only if the prefix holds none, and `DIR` is a local work directory for the lock, the
-journal and spill, which [`swath resume DIR`](swath-resume.md) continues. The destination has its own
-credentials (`--output-gcs-credentials-file`, else Application Default Credentials) and endpoint
-(`--output-endpoint-url`). A name ending in an extension swath does not write (`.csv`, `.json`, `.txt`, a bare
-`.gz`, ...), an `s3://` or `az://` destination, `--overwrite` of a bucket prefix and a destination that
-overlaps a `gs://` SOURCE are refused.
+`-o gs://BUCKET[/PREFIX] --work-dir DIR` or `-o s3://BUCKET[/PREFIX] --work-dir DIR` writes the dataset
+straight to Google Cloud Storage or S3 ([A dataset in a bucket](../dataset.md#a-dataset-in-a-bucket)): its
+parts are uploaded as they close, its manifest is created only if the prefix holds none, and `DIR` is a local
+work directory for the lock, the journal and spill, which [`swath resume DIR`](swath-resume.md) continues. The
+destination has its own credentials (GCS: `--output-gcs-credentials-file`, else Application Default
+Credentials; S3: `--output-s3-profile`, else the AWS SDK's chain, always signed), region
+(`--output-s3-region`) and endpoint (`--output-endpoint-url`, path-style for S3). A name ending in an extension
+swath does not write (`.csv`, `.json`, `.txt`, a bare `.gz`, ...), an `az://` destination, `--overwrite` of a
+bucket prefix and a destination that overlaps a `gs://` or `s3://` SOURCE are refused.
 
 TSV and JSONL rows carry the source's columns under the dataset's names, by default `key` first, then `size`,
 `last_modified` and the rest of the source's schema; `--columns` chooses them and their order, and the table
@@ -60,19 +61,31 @@ Output:
                                 terminal the rows are then TSV.
       --overwrite             replace a previous dataset in -o
       --work-dir DIR          with a bucket -o: the local work directory (lock, journal, spill)
-                                Required when -o is a bucket prefix (GCS), and only then. It holds
-                                what a resume needs, never a part: swath resume DIR continues the
-                                run. Size it for the spill budget, the journal and receipts, and a
-                                reserve.
+                                Required when -o is a bucket prefix (GCS or S3), and only then. It
+                                holds what a resume needs, never a part: swath resume DIR continues
+                                the run. Size it for the spill budget, the journal and receipts, and
+                                a reserve.
       --output-gcs-credentials-file FILE
                               credentials for a GCS -o (default: Application Default Credentials)
                                 A service account key or authorized-user JSON, with the read-write
                                 scope. The destination's own: the source's credentials and
                                 --anonymous never apply to it. It may change on resume.
+      --output-s3-region NAME
+                              the region of an S3 -o
+                                Default: AWS_REGION, AWS_DEFAULT_REGION, the --output-s3-profile's,
+                                else us-east-1. The region resolved is fixed for the run.
+      --output-s3-profile NAME
+                              the shared config profile an S3 -o takes credentials (and region) from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS). The destination's own: the source's
+                                credentials and --anonymous never apply to it, and its requests are
+                                always signed. It may change on resume.
       --output-endpoint-url URL
-                              the JSON API base of a GCS -o (default: Google's)
-                                As the SDK takes it (https://storage.googleapis.com/storage/v1/);
-                                fixed for the run.
+                              the endpoint of a bucket -o (default: the provider's)
+                                GCS's JSON API base, or an S3-compatible endpoint URL. GCS: as the
+                                SDK takes it (https://storage.googleapis.com/storage/v1/). S3:
+                                addressed path-style; AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_S3 are
+                                never applied to the destination. Fixed for the run.
 
 Filters:
       --include GLOB          keep keys this glob matches (repeatable: any of them)
@@ -336,7 +349,7 @@ DIR/error.json                the outcome of an attempt that did not complete
 DIR/.swath/                   swath's workspace: the lock, the journal, spill, progress.json
 ```
 
-A dataset in a bucket (`-o gs://BUCKET/PREFIX --work-dir DIR`) holds `PREFIX/manifest.json`,
+A dataset in a bucket (`-o gs://BUCKET/PREFIX` or `-o s3://BUCKET/PREFIX`, with `--work-dir DIR`) holds `PREFIX/manifest.json`,
 `PREFIX/data/RUN/ATTEMPT/part-NNNNN.parquet` and `PREFIX/run.json`; its work directory holds `DIR/.swath/` (the
 lock, the journal, spill, and `remote/`: the allocated names, the claim receipts, the candidate manifest),
 `DIR/error.json` and, once committed, `DIR/commit.json`.

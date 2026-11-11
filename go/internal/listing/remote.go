@@ -28,19 +28,31 @@ import (
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/remote"
+	"github.com/varveio/swath/go/objfile/s3"
 )
 
-// RemoteOutput is a dataset written straight to an object store (gs://
-// only, for now): its parts are uploaded as they close and its manifest,
-// created only if absent, is the commit. OutputConfig.Dir is then the work
+// RemoteOutput is a dataset written straight to an object store (gs:// or
+// s3://): its parts are uploaded as they close and its manifest, created
+// only if absent, is the commit. OutputConfig.Dir is then the work
 // directory: the lock, the journal, spill, the claim receipts and the
 // candidate manifest, never a part.
 type RemoteOutput struct {
-	Location        string // gs://BUCKET[/PREFIX]
-	Endpoint        string // the destination's JSON API base ("": the default); frozen
-	CredentialsFile string // the destination's credentials ("": ADC); resolved again on resume
-	// ChunkSize is an upload's chunk (0: gcs.DefaultChunkSize), and the
-	// memory admitted per encoder beside its writer.
+	Location string // gs://BUCKET[/PREFIX] or s3://BUCKET[/PREFIX]
+	// Endpoint is the destination's GCS JSON API base, or its
+	// S3-compatible endpoint URL ("": the provider's); frozen.
+	Endpoint string
+	// CredentialsFile is a GCS destination's credentials ("": ADC);
+	// Profile an S3 destination's shared config profile ("": the AWS
+	// SDK's chain). Resolved again on resume.
+	CredentialsFile, Profile string
+	// Region is an S3 destination's region ("": AWS_REGION,
+	// AWS_DEFAULT_REGION or the profile's, else us-east-1); the one
+	// resolved is frozen.
+	Region string
+	// ChunkSize is an upload's buffer, sent as one request: a GCS chunk
+	// (0: gcs.DefaultChunkSize), an S3 part (0: s3.DefaultPartSize; at
+	// least 5 MiB). It is the memory admitted per encoder beside its
+	// writer.
 	ChunkSize int
 	// CommitTimeout bounds the commit (the manifest's creation and its
 	// read-back; 0: DefaultCommitTimeout); FinalizeTimeout the aftermath
@@ -82,8 +94,11 @@ type Remote struct {
 	// the chunk before it to be sent).
 	Uploads        int64 `json:"uploads"`
 	UploadsAborted int64 `json:"uploads_aborted"`
-	UploadBytes    int64 `json:"upload_bytes"`
-	UploadWaitNs   int64 `json:"upload_wait_ns"`
+	// AbortsUnconfirmed: aborted uploads whose abort the store did not
+	// confirm (S3: the parts stay until the bucket's lifecycle rule).
+	AbortsUnconfirmed int64 `json:"aborts_unconfirmed,omitempty"`
+	UploadBytes       int64 `json:"upload_bytes"`
+	UploadWaitNs      int64 `json:"upload_wait_ns"`
 	// Retries are the attempts the SDK retried, by failure class
 	// (http_STATUS, timeout, connection, other).
 	Retries      int64            `json:"retries"`
@@ -127,27 +142,50 @@ var ErrDestinationExists = errors.New("the destination already holds a dataset (
 var ErrOverlap = errors.New("the destination overlaps the listed source")
 
 // ParseDestination parses a dataset destination URI (objfile.ParseLocation)
-// that this build writes: gs:// only; s3:// and az:// are refused.
+// that this build writes: gs:// or s3://; az:// is refused.
 func ParseDestination(raw string) (objfile.Location, error) {
 	l, err := objfile.ParseLocation(raw)
 	if err != nil {
 		return l, err
 	}
-	if l.Scheme != "gs" {
-		return l, fmt.Errorf("writing a dataset to %s:// is not supported yet (gs:// only)", l.Scheme)
+	if l.Scheme != "gs" && l.Scheme != "s3" {
+		return l, fmt.Errorf("writing a dataset to %s:// is not supported yet (gs:// and s3:// only)", l.Scheme)
 	}
 	return l, nil
 }
 
-// remoteLocation parses the destination.
-func remoteLocation(r *RemoteOutput) (objfile.Location, error) { return ParseDestination(r.Location) }
+// Check refuses a destination this build does not write
+// (ParseDestination), and options of another provider than the
+// destination's: a credentials file is GCS's, a profile and a region
+// S3's.
+func (r *RemoteOutput) Check() error {
+	l, err := ParseDestination(r.Location)
+	switch {
+	case err != nil:
+		return err
+	case l.Scheme != "gs" && r.CredentialsFile != "":
+		return errors.New("a credentials file (--output-gcs-credentials-file) is for a GCS destination")
+	case l.Scheme != "s3" && (r.Profile != "" || r.Region != ""):
+		return errors.New("a profile and a region (--output-s3-profile, --output-s3-region) are for an S3 destination")
+	}
+	return nil
+}
+
+// remoteLocation parses the destination, its options checked.
+func remoteLocation(r *RemoteOutput) (objfile.Location, error) {
+	if err := r.Check(); err != nil {
+		return objfile.Location{}, err
+	}
+	return ParseDestination(r.Location)
+}
 
 // destinationIdentity is the destination's part of the resume identity:
 // its root as opened (the endpoint resolved, the environment's emulator
-// included).
+// included; S3's region resolved).
 func destinationIdentity(d *dataset.Remote) *journal.Destination {
 	l := d.Location
-	return &journal.Destination{Provider: l.Scheme, Bucket: l.Container, Prefix: l.Prefix, Endpoint: d.Endpoint, Emulator: d.Emulator, Layout: dataset.RemoteLayout}
+	return &journal.Destination{Provider: l.Scheme, Bucket: l.Container, Prefix: l.Prefix, Endpoint: d.Endpoint, Emulator: d.Emulator, Region: d.Region,
+		Layout: dataset.RemoteLayout}
 }
 
 // sourceSchemes are the destination schemes of the source kinds a
@@ -184,16 +222,22 @@ func openRemote(ctx context.Context, r *RemoteOutput) (*remoteState, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The route is resolved once (the flag, else the environment's
-	// emulator) and given to the client explicitly: the identity freezes
-	// it, so a resume under another environment is refused.
-	endpoint, emulator := remote.ResolveEndpoint(r.Endpoint)
+	// The route is resolved once (the flag, else for GCS the environment's
+	// emulator; S3 never takes one from the environment) and given to the
+	// client explicitly: the identity freezes it, so a resume under another
+	// environment is refused.
+	endpoint, emulator := r.Endpoint, false
+	if l.Scheme == "gs" {
+		endpoint, emulator = remote.ResolveEndpoint(r.Endpoint)
+	}
 	dst, err := remote.Create(ctx, r.Location, remote.CreateOptions{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
-		Write: gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried}})
+		Region: r.Region, Profile: r.Profile,
+		Write:   gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
+		S3Write: s3.WriteOptions{PartSize: int64(r.ChunkSize), Retried: rs.stats.Retried}})
 	if err != nil {
 		return nil, fmt.Errorf("destination: %w", err)
 	}
-	rs.d = &dataset.Remote{Location: l, Endpoint: endpoint, Emulator: emulator, Opener: dst, Writer: dst.Writer()}
+	rs.d = &dataset.Remote{Location: l, Endpoint: endpoint, Emulator: emulator, Region: dst.Region(), Opener: dst, Writer: dst.Writer()}
 	rs.closeFn = dst.Close
 	return rs, nil
 }
@@ -208,9 +252,23 @@ func (rs *remoteState) close() {
 	}
 }
 
-// uploadBytes is the memory admitted per encoder for its upload: one chunk,
-// as the SDK rounds it.
-func uploadBytes(r *RemoteOutput) int64 { return int64(gcs.ChunkBytes(r.ChunkSize)) }
+// uploadBytes is the memory admitted per encoder for its upload: the one
+// buffer an upload holds, as its provider's writer sizes it.
+func uploadBytes(r *RemoteOutput) int64 {
+	scheme, _, _ := strings.Cut(r.Location, "://")
+	switch scheme {
+	case "gs":
+		return int64(gcs.ChunkBytes(r.ChunkSize))
+	case "s3":
+		// One part of exactly ChunkSize: a size out of S3's range is
+		// refused, never rounded.
+		if r.ChunkSize > 0 {
+			return int64(r.ChunkSize)
+		}
+		return s3.DefaultPartSize
+	}
+	return int64(r.ChunkSize) // a destination ParseDestination refuses
+}
 
 // checkFresh refuses a fresh run whose destination holds a manifest, within
 // the commit's time bound.
@@ -550,7 +608,7 @@ func (rs *remoteState) report(ws string) *Remote {
 		return nil
 	}
 	r := &Remote{Destination: rs.d.URI(), WorkDir: ws, Commit: rs.outcome,
-		Uploads: rs.stats.Uploads.Load(), UploadsAborted: rs.stats.Aborted.Load(), UploadBytes: rs.stats.Bytes.Load(), UploadWaitNs: rs.stats.WaitNs.Load(),
+		Uploads: rs.stats.Uploads.Load(), UploadsAborted: rs.stats.Aborted.Load(), AbortsUnconfirmed: rs.stats.AbortsUnconfirmed.Load(), UploadBytes: rs.stats.Bytes.Load(), UploadWaitNs: rs.stats.WaitNs.Load(),
 		Retries: rs.stats.Retries.Load(), RetryClasses: rs.stats.Classes(), ObjectsVerified: rs.verified,
 		OrphansDeleted: rs.orphans.Deleted, OrphansGone: rs.orphans.Gone, OrphansLeft: rs.orphans.Failed, OrphansUnproven: rs.orphans.Unproven}
 	if rs.outcome == dataset.CommitCreated || rs.outcome == dataset.CommitConfirmed || rs.outcome == "resumed" {

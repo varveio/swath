@@ -85,7 +85,7 @@ credentials through `objfile/remote`, and its create-only write side; [../../obj
 `go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
 specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. It imports
 `go/objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
-conditional creation and the read-back of retained parts go through `objfile/gcs` and `objfile/remote.Create`,
+conditional creation and the read-back of retained parts go through `objfile/gcs` or `objfile/s3` and `objfile/remote.Create`,
 which links `cloud.google.com/go/storage` into the swath binary
 ([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister.
 
