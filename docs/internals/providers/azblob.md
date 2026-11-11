@@ -173,8 +173,8 @@ container; a flat run forced on one fails its order check (`--azure-assume-flat`
   resume yet. Identity: the flat fields plus `listing` `tree` (absent for flat accounts, so neither journal
   resumes as the other). Report: `listing` `tree`, the walk's `files`, `dirs`, `bytes` in the brief, the
   engine's, client's, adapter's and the tree core's counters (`tree.*`).
-- **Cost.** At least one request per directory: `bingmlbuildings` `delta/2023-04-25/` (52,342 directories, one
-  file each) took 52,377 requests for 104,399 keys, where a flat container would take about 105.
+- **Cost.** At least one request per directory: a Hive layout with one file per partition directory costs
+  about one request per file, where a flat container costs one per 1,000.
 - **Tests.** `TestTreeListsHNS` (`azblobtest.TreeStore`: tree order, directory entries, UTF-16 siblings,
   non-ASCII Hive names, a 3,000-file directory with a directory candidate; 1/4/16 workers, pages 1 to
   1,000), `TestTreeScopedToDirectory`, `TestTreeCancelMidDirectory`, `TestTreeIdentityAndReport`,

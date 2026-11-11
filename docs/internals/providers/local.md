@@ -13,7 +13,7 @@ The walk is the [tree core](../tree-sources.md)'s: `tree.Walker` is the `source.
 `Reader` (its engines below read, sort and stat a directory; `emit` is the walk decision per row: a
 directory is walked, pruned by `--one-file-system` or omitted as the excluded output), chunks are the
 walker's segments, and `files`, `dirs`, `bytes`, `skipped_dirs` and `other_device_dirs` are the walker's
-counts. Listings and count reports were byte-identical before and after the move (1.2M entries).
+counts. Listings and count reports are unchanged by the move.
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or

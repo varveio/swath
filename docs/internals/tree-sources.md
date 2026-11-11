@@ -111,8 +111,8 @@ The engine works on keys; the store seeks by name. `Ordered`'s fetch translates 
   belongs to the range but lies behind its seek. The fetch resolves A's candidates from what was read of the
   directory (the name intervals listed and the directories seen there) and asks `Lookup` only for a
   candidate outside them (`tree.lookups`); a present one starts the chain held (`tree.candidate_dirs`). A
-  cursor's candidates were all read; a pivot's may not be: on `overturemapswestus2` with 20-entry pages each
-  of 31 splits cost one lookup (`part-00150` lies beyond the parent's last name). At the default page of
+  cursor's candidates were all read; a pivot's may not be, and then a split costs one lookup (`part-00150` lying
+  beyond the parent's last name). At the default page of
   1,000 a split already costs at least two pages (the admission gates), so a lookup per split adds at most a
   third; skipping lookups whose candidate the lower child is certain to read is open.
 - **Bounds.** `T` is not sent: the engine trims keys past it. A directory held past `T` belongs to the next
