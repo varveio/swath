@@ -43,8 +43,8 @@ const DefaultPartSize = 8 << 20
 // DefaultMaxAttempts bounds each request's attempts, the first included.
 const DefaultMaxAttempts = 5
 
-// DefaultAbortTimeout bounds the abort of a multipart upload, which runs
-// under a context of its own: the upload's may be the one cancelled.
+// DefaultAbortTimeout bounds multipart initiation and each abort-and-confirm
+// attempt, which run under contexts independent of upload cancellation.
 const DefaultAbortTimeout = 30 * time.Second
 
 // WriteOptions configure a Writer.
@@ -52,7 +52,7 @@ type WriteOptions struct {
 	// PartSize is an upload's buffer and the size of each part but the
 	// last (0: DefaultPartSize); MinPartSize to MaxPartSize. An object of
 	// PartSize bytes or fewer is created by one PutObject; a larger one is
-	// a multipart upload, so the largest object is MaxParts × PartSize.
+	// a multipart upload. The writer accepts at most MaxParts × PartSize bytes.
 	PartSize int64
 	// MinPartSize is the store's smallest part (0: S3's, MinPartSize).
 	// Lower it only for a store that takes smaller parts, such as a test's
@@ -63,7 +63,8 @@ type WriteOptions struct {
 	// (5xx, 429, throttling, connection failures) is retried, and on
 	// PutObject also 409 ConditionalRequestConflict.
 	MaxAttempts int
-	// AbortTimeout bounds an abort (0: DefaultAbortTimeout).
+	// AbortTimeout bounds multipart initiation and each abort-and-confirm
+	// attempt (0: DefaultAbortTimeout), independently of upload cancellation.
 	AbortTimeout time.Duration
 	// Retried, if set, is called with each failed attempt the client's
 	// policy retries, and the operation it belongs to. It must return
@@ -77,6 +78,25 @@ type WriteOptions struct {
 // CompleteMultipartUpload that creates the object, which S3 checks when
 // it creates it. Content is stored as given, typed
 // application/octet-stream, with a CRC32 checksum the service verifies.
+// Each upload buffers one part and blocks Write while sending it. Part transfers
+// and final object creation use the upload's context, without a separate part-transfer
+// timeout. Multipart initiation and abort cleanup use independent contexts bounded
+// by AbortTimeout. Initiation waits for the upload id even after cancellation so
+// cleanup can abort it; a lost initiation response can still leave an orphan.
+//
+// Failed uploads attempt to abort and confirm their multipart resources;
+// ErrAbortUnconfirmed reports cleanup that could not be confirmed. Incomplete
+// multipart uploads do not expire automatically, including those left by a
+// process crash. Configure the bucket's AbortIncompleteMultipartUpload lifecycle
+// rule to remove them and stop storage charges. Aborting multipart resources
+// cannot undo an object created by an unresolved completion.
+//
+// DeleteIf treats a quoted identity as an ETag and sends If-Match against the
+// current object. Other non-empty identities delete that version id only,
+// even when a newer version is current. A replacement with the same ETag also
+// matches. A service that ignores If-Match on DeleteObject can delete an object
+// with a different ETag. An absent target may succeed; a service 404 wraps
+// fs.ErrNotExist and a 412 wraps objfile.ErrObjectChanged.
 func NewWriter(client *s3.Client, bucket string, o WriteOptions) (objfile.Writer, error) {
 	if o.MinPartSize <= 0 {
 		o.MinPartSize = MinPartSize
@@ -147,8 +167,8 @@ func (c counted) GetRetryToken(ctx context.Context, err error) (func(error) erro
 	return release, terr
 }
 
-// NewWriter starts name's upload, CreateOnly; nothing is sent until its
-// first part is full, or Close.
+// NewWriter starts name's upload, CreateOnly; requests begin when more bytes
+// follow the first full part, or at Close.
 func (w *writer) NewWriter(ctx context.Context, name string, c objfile.Condition) (objfile.Upload, error) {
 	if c != objfile.CreateOnly {
 		return nil, fmt.Errorf("objfile/s3: write %s: unsupported condition %d", name, c)
@@ -368,8 +388,10 @@ const maxAbortRounds = 3
 
 // ErrAbortUnconfirmed reports a multipart upload whose abort failed, or
 // could not be confirmed (ListParts still finds it, or cannot tell): its
-// parts are stored, and billed, until an abort succeeds or the bucket's
-// lifecycle rule for incomplete multipart uploads removes them.
+// parts may remain stored and billed until an abort succeeds or the bucket's
+// lifecycle rule for incomplete multipart uploads removes them. A failed Close
+// joins this error after the upload's original error. A later Abort retries cleanup,
+// up to three attempts in total; each attempt sends at most three aborts.
 var ErrAbortUnconfirmed = errors.New("objfile/s3: the multipart upload's abort is not confirmed")
 
 // abortUpload aborts the open multipart upload, if any, under a bounded
@@ -428,10 +450,11 @@ func apiCode(err error) string {
 
 // Abort cancels the upload: a request in flight is cancelled, then the
 // multipart upload, if one is open, is aborted (its parts deleted) and the
-// abort confirmed, under a bounded context of its own. No object is
-// created. Abort may be called from another goroutine than Write's: it
-// waits only for the cancelled request to return. An abort that fails or
-// is not confirmed returns an ErrAbortUnconfirmed, and a later Abort
+// abort confirmed, under a bounded context of its own. Before Close, this
+// prevents object creation; after Close sends its creating request, Abort
+// cannot undo creation or settle an unresolved outcome. Abort may cancel
+// Write from another goroutine and waits for the request and cleanup. An abort
+// that fails or is not confirmed returns an ErrAbortUnconfirmed, and a later Abort
 // tries again (up to maxAborts attempts over the upload's life); Abort
 // after a successful Close does nothing.
 func (u *upload) Abort() error {
@@ -491,11 +514,7 @@ func (w *writer) PutIfAbsent(ctx context.Context, name string, data []byte) (obj
 	return r, nil
 }
 
-// DeleteIf deletes the version identity names: a version id (in a
-// versioned bucket) is deleted by its id, which removes that version
-// only; an ETag (quoted, as S3 sends it) is sent as If-Match, which S3
-// checks against the live object. A store that ignores If-Match on
-// DeleteObject deletes the live object whatever it holds.
+// DeleteIf sends a quoted identity as If-Match, otherwise as VersionId.
 func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 	if identity == "" {
 		return &fs.PathError{Op: "delete", Path: name, Err: fmt.Errorf("%w: no identity", fs.ErrInvalid)}
