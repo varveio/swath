@@ -4,7 +4,7 @@
 // Package s3fake is an in-process fake of the S3 calls the objfile
 // packages make, for tests: HeadObject, ranged GetObject with If-Match and
 // a version id, PutObject, the multipart calls (create, upload part,
-// complete, abort, list), and DeleteObject with If-Match or a version id.
+// complete, abort, list parts), and DeleteObject with If-Match or a version id.
 // If-None-Match: * on PutObject and on CompleteMultipartUpload is evaluated
 // atomically with the creation, so of two creators of one name exactly one
 // succeeds. The bucket is addressed path-style (/BUCKET/KEY); a request
@@ -18,8 +18,10 @@
 // Authorization is ignored), checksums (accepted, never verified), object
 // metadata beyond size and ETag, lifecycle rules (an incomplete upload
 // lives until aborted), S3's 409 ConditionalRequestConflict except as an
-// injected fault, a 200 answer carrying an error, eventual consistency,
-// listing objects, or anything of another bucket.
+// injected fault, a 200 answer carrying an error except as an injected
+// fault, a request that goes on after its client gave up except as a late
+// part (LateParts), suspended versioning or delete markers, eventual
+// consistency, listing objects, or anything of another bucket.
 package s3fake
 
 import (
@@ -46,6 +48,7 @@ const (
 	OpChunk    = "chunk"    // UploadPart
 	OpCreate   = "create"   // the request that creates an object: PutObject or CompleteMultipartUpload
 	OpAbort    = "abort"    // AbortMultipartUpload
+	OpParts    = "parts"    // ListParts
 )
 
 // MinPartSize is S3's smallest part (all but the last of an upload), and
@@ -73,6 +76,11 @@ type Server struct {
 	// MinPartSize is the smallest part but the last that a completion
 	// accepts (New: MinPartSize).
 	MinPartSize int64
+	// LateParts is the aborts still to answer 204 while the upload stays
+	// listed with its parts, as a part in flight when the abort ran can
+	// leave it (AWS: it may be necessary to abort an upload more than
+	// once). Set it before the requests it affects.
+	LateParts int
 
 	mu       sync.Mutex
 	seq      int64
@@ -82,6 +90,7 @@ type Server struct {
 	fault    Fault
 	counts   map[string]int64
 	uploaded int64
+	newID    func(int64) string
 }
 
 // Object is one stored version.
@@ -97,9 +106,17 @@ type upload struct {
 }
 
 // New returns a fake of bucket.
-func New(bucket string) *Server {
+func New(bucket string) *Server { return NewWithIDs(bucket, nil) }
+
+// NewWithIDs returns a fake of bucket whose multipart upload ids id makes
+// (n counts from 1); nil is "upload-%08d". A test gives ids with reserved
+// characters, as S3's may hold.
+func NewWithIDs(bucket string, id func(n int64) string) *Server {
+	if id == nil {
+		id = func(n int64) string { return fmt.Sprintf("upload-%08d", n) }
+	}
 	return &Server{Bucket: bucket, MinPartSize: MinPartSize, objects: map[string]*Object{}, versions: map[string][]*Object{},
-		uploads: map[string]*upload{}, counts: map[string]int64{}}
+		uploads: map[string]*upload{}, counts: map[string]int64{}, newID: id}
 }
 
 // SetFault installs f (nil: none).
@@ -228,6 +245,8 @@ func (s *Server) faulted(w http.ResponseWriter, r *http.Request, op, name string
 	return false
 }
 
+// ServeHTTP answers one request of the calls the package comment lists,
+// path-style; any other is refused.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name, ok := strings.CutPrefix(r.URL.Path, "/"+s.Bucket+"/")
 	if !ok || name == "" {
@@ -252,6 +271,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.head(w, r, name)
 	case r.Method == http.MethodGet && id == "":
 		s.read(w, r, name)
+	case r.Method == http.MethodGet:
+		s.listParts(w, r, name, id)
 	case r.Method == http.MethodPut && id != "":
 		s.part(w, r, name, id, body)
 	case r.Method == http.MethodPut:
@@ -412,7 +433,7 @@ func (s *Server) initiate(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	s.seq++
-	id := fmt.Sprintf("upload-%08d", s.seq)
+	id := s.newID(s.seq)
 	s.uploads[id] = &upload{name: name, parts: map[int][]byte{}}
 	if s.faulted(w, r, OpSession, name, true) {
 		return
@@ -529,11 +550,48 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, name, id string) 
 	if s.session(w, r, name, id) == nil {
 		return
 	}
-	delete(s.uploads, id)
+	if s.LateParts > 0 {
+		s.LateParts-- // a late part keeps the upload
+	} else {
+		delete(s.uploads, id)
+	}
 	if s.faulted(w, r, OpAbort, name, true) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listParts(w http.ResponseWriter, r *http.Request, name, id string) {
+	if s.faulted(w, r, OpParts, name, false) {
+		return
+	}
+	u := s.session(w, r, name, id)
+	if u == nil {
+		return
+	}
+	type part struct {
+		PartNumber int
+		ETag       string
+		Size       int
+	}
+	res := struct {
+		XMLName  xml.Name `xml:"ListPartsResult"`
+		Bucket   string
+		Key      string
+		UploadId string
+		Parts    []part `xml:"Part"`
+	}{Bucket: s.Bucket, Key: name, UploadId: id}
+	nums := make([]int, 0, len(u.parts))
+	for n := range u.parts {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	for _, n := range nums {
+		sum := md5.Sum(u.parts[n])
+		res.Parts = append(res.Parts, part{PartNumber: n, ETag: `"` + hex.EncodeToString(sum[:]) + `"`, Size: len(u.parts[n])})
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	_ = xml.NewEncoder(w).Encode(res)
 }
 
 // delete removes a version by its id (versionId), or the live object

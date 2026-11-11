@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -133,6 +134,8 @@ func (c counted) GetRetryToken(ctx context.Context, err error) (func(error) erro
 	return release, terr
 }
 
+// NewWriter starts name's upload, CreateOnly; nothing is sent until its
+// first part is full, or Close.
 func (w *writer) NewWriter(ctx context.Context, name string, c objfile.Condition) (objfile.Upload, error) {
 	if c != objfile.CreateOnly {
 		return nil, fmt.Errorf("objfile/s3: write %s: unsupported condition %d", name, c)
@@ -157,13 +160,19 @@ type upload struct {
 
 	mu      sync.Mutex // held by Write, Close and Abort while they work
 	buf     *[]byte
-	id      string // the multipart upload's, once created
+	id      string // the multipart upload to complete or abort; "" once neither is due
+	everID  string // the multipart upload's id, kept for redaction
 	parts   []types.CompletedPart
 	n       int64 // bytes written
 	state   int   // 0 open, 1 closed, 2 failed
 	receipt objfile.Receipt
+
+	aborts   int   // abort attempts made (abortUpload)
+	abortErr error // the last abort's failure, while id is still due
 }
 
+// Write buffers p, sending each full buffer as a part once more bytes
+// follow it. A failed part fails the upload, which is aborted.
 func (u *upload) Write(p []byte) (int, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -221,7 +230,7 @@ func (u *upload) sendPart() error {
 		if aws.ToString(out.UploadId) == "" {
 			return errors.New("CreateMultipartUpload returned no upload id")
 		}
-		u.id = *out.UploadId
+		u.id, u.everID = *out.UploadId, *out.UploadId
 	}
 	num := int32(len(u.parts) + 1)
 	out, err := u.w.client.UploadPart(u.ctx, &s3.UploadPartInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id, PartNumber: &num,
@@ -234,17 +243,23 @@ func (u *upload) sendPart() error {
 	return nil
 }
 
+// Close creates the object (complete) and, on failure, aborts the
+// multipart upload; the failure is objfile.ErrUnresolved when the creating
+// request's outcome is unknown.
 func (u *upload) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err := u.usable(); err != nil {
 		return err
 	}
-	err := u.complete()
+	completion, err := u.complete()
 	u.release()
 	u.cancel()
 	if err != nil {
 		u.state = 2
+		if completion {
+			err = completionError(err)
+		}
 		return u.fail(err)
 	}
 	u.state = 1
@@ -253,7 +268,9 @@ func (u *upload) Close() error {
 
 // complete creates the object: by PutObject when no part was sent, else
 // the last part and CompleteMultipartUpload, both If-None-Match: *.
-func (u *upload) complete() error {
+// completion says the error, if any, is the creating request's (whose
+// failure may leave an object), not an earlier part's.
+func (u *upload) complete() (completion bool, err error) {
 	var data []byte
 	if u.buf != nil {
 		data = *u.buf
@@ -261,23 +278,26 @@ func (u *upload) complete() error {
 	if u.id == "" {
 		r, err := u.w.put(u.ctx, u.name, data)
 		u.receipt = r
-		return err
+		return true, err
 	}
 	if len(data) > 0 {
 		if err := u.sendPart(); err != nil {
-			return err
+			return false, err
 		}
 	}
 	out, err := u.w.client.CompleteMultipartUpload(u.ctx, &s3.CompleteMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id,
 		MultipartUpload: &types.CompletedMultipartUpload{Parts: u.parts}, IfNoneMatch: aws.String("*"), MpuObjectSize: aws.Int64(u.n)},
 		u.w.opts("CompleteMultipartUpload"))
 	if err != nil {
-		return err
+		return true, err
 	}
 	u.id = "" // completed: nothing to abort
 	r, err := receiptOf(u.name, u.n, out.ETag, out.VersionId)
 	u.receipt = r
-	return err
+	if err != nil {
+		err = fmt.Errorf("%w: %w", objfile.ErrUnresolved, err) // created, but not as the answer says
+	}
+	return true, err
 }
 
 // release returns the buffer to the pool.
@@ -289,47 +309,121 @@ func (u *upload) release() {
 	}
 }
 
-// fail ends a failed upload: its multipart upload, if any, is aborted, and
-// err is returned in objfile's terms with the upload id redacted.
+// fail ends a failed upload: its multipart upload, if one is open, is
+// aborted, and err is returned in objfile's terms, redacted (redact). An
+// abort that fails or is not confirmed is joined to err (an
+// ErrAbortUnconfirmed), err first: the upload's own failure is never
+// masked, and a later Abort tries again.
 func (u *upload) fail(err error) error {
-	id := u.id
-	u.abortUpload()
-	return u.pathError(classify(redact.Error(err, id, "[upload-id]")))
+	err = u.pathError(classify(err))
+	if aerr := u.abortUpload(); aerr != nil {
+		err = errors.Join(err, aerr)
+	}
+	return u.redact(err)
 }
 
-// abortUpload aborts the multipart upload, if one was created, under a
-// context of its own (the upload's may be cancelled). An abort that fails
-// leaves the upload's parts stored until a lifecycle rule removes them.
-func (u *upload) abortUpload() {
-	if u.id == "" {
-		return
+// redact keeps the upload's id out of err's text: every URL in it loses its
+// query (redact.URLs), and the id itself, raw or URL-escaped, is replaced
+// wherever else it appears. errors.Is and errors.As still see err.
+func (u *upload) redact(err error) error {
+	err = redact.URLs(err)
+	if u.everID != "" {
+		for _, form := range []string{u.everID, url.QueryEscape(u.everID), url.PathEscape(u.everID)} {
+			err = redact.Error(err, form, "[upload-id]")
+		}
 	}
+	return err
+}
+
+// maxAborts bounds the abort attempts of one upload, over Close's failure
+// and every Abort.
+const maxAborts = 3
+
+// maxAbortRounds bounds the aborts one attempt sends while the upload is
+// still listed after one (a part that was in flight can keep it).
+const maxAbortRounds = 3
+
+// ErrAbortUnconfirmed reports a multipart upload whose abort failed, or
+// could not be confirmed (ListParts still finds it, or cannot tell): its
+// parts are stored, and billed, until an abort succeeds or the bucket's
+// lifecycle rule for incomplete multipart uploads removes them.
+var ErrAbortUnconfirmed = errors.New("objfile/s3: the multipart upload's abort is not confirmed")
+
+// abortUpload aborts the open multipart upload, if any, under a bounded
+// context of its own (the upload's may be cancelled), and confirms it: a
+// ListParts must find no such upload, else the abort is sent again (a part
+// that was in flight can outlive an abort), up to maxAbortRounds. A
+// confirmed abort clears the id; a failed or unconfirmed one keeps it for
+// the next attempt (at most maxAborts in all) and returns an
+// ErrAbortUnconfirmed.
+func (u *upload) abortUpload() error {
+	if u.id == "" {
+		return nil
+	}
+	if u.aborts >= maxAborts {
+		return u.abortErr
+	}
+	u.aborts++
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), u.w.o.AbortTimeout)
 	defer cancel()
-	_, _ = u.w.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id}, u.w.opts("AbortMultipartUpload"))
-	u.id = ""
+	var err error
+	for range maxAbortRounds {
+		_, aerr := u.w.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id}, u.w.opts("AbortMultipartUpload"))
+		if aerr != nil && !noSuchUpload(aerr) {
+			err = fmt.Errorf("abort: %w", aerr)
+			break
+		}
+		_, lerr := u.w.client.ListParts(ctx, &s3.ListPartsInput{Bucket: &u.w.bucket, Key: &u.name, UploadId: &u.id}, u.w.opts("ListParts"))
+		if noSuchUpload(lerr) {
+			u.id, u.abortErr = "", nil
+			return nil
+		}
+		if lerr != nil {
+			err = fmt.Errorf("confirm the abort: %w", lerr)
+			break
+		}
+		err = fmt.Errorf("the upload is still listed after %d aborts", maxAbortRounds)
+	}
+	u.abortErr = u.redact(u.pathError(fmt.Errorf("%w: %w", ErrAbortUnconfirmed, err)))
+	return u.abortErr
+}
+
+// noSuchUpload reports S3's answer for an upload that is gone (completed
+// or aborted): NoSuchUpload, or a 404 without a code.
+func noSuchUpload(err error) bool {
+	return err != nil && (apiCode(err) == "NoSuchUpload" || status(err) == http.StatusNotFound && apiCode(err) == "")
+}
+
+// apiCode is the S3 error code of err ("" for none).
+func apiCode(err error) string {
+	var ae smithy.APIError
+	if errors.As(err, &ae) {
+		return ae.ErrorCode()
+	}
+	return ""
 }
 
 // Abort cancels the upload: a request in flight is cancelled, then the
-// multipart upload, if one was created, is aborted (its parts deleted)
-// under a bounded context of its own. No object is created. Abort may be
-// called from another goroutine than Write's: it waits only for the
-// cancelled request to return.
+// multipart upload, if one is open, is aborted (its parts deleted) and the
+// abort confirmed, under a bounded context of its own. No object is
+// created. Abort may be called from another goroutine than Write's: it
+// waits only for the cancelled request to return. An abort that fails or
+// is not confirmed returns an ErrAbortUnconfirmed, and a later Abort
+// tries again (up to maxAborts attempts over the upload's life); Abort
+// after a successful Close does nothing.
 func (u *upload) Abort() error {
-	if u.aborted.Swap(true) {
-		return nil
-	}
+	u.aborted.Store(true)
 	u.cancel()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.state == 1 {
 		return nil // completed: Abort does nothing
 	}
-	u.abortUpload()
 	u.release()
-	return nil
+	return u.abortUpload()
 }
 
+// Receipt is the created object's, once Close has succeeded.
 func (u *upload) Receipt() (objfile.Receipt, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -363,10 +457,11 @@ func receiptOf(name string, size int64, etag, version *string) (objfile.Receipt,
 	return objfile.Receipt{Name: name, Size: size, Identity: id}, nil
 }
 
+// PutIfAbsent creates name holding data by one PutObject, If-None-Match: *.
 func (w *writer) PutIfAbsent(ctx context.Context, name string, data []byte) (objfile.Receipt, error) {
 	r, err := w.put(ctx, name, data)
 	if err != nil {
-		return objfile.Receipt{}, &fs.PathError{Op: "write", Path: name, Err: classify(err)}
+		return objfile.Receipt{}, redact.URLs(&fs.PathError{Op: "write", Path: name, Err: classify(completionError(err))})
 	}
 	return r, nil
 }
@@ -395,7 +490,28 @@ func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 	case s == http.StatusPreconditionFailed:
 		err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
 	}
-	return &fs.PathError{Op: "delete", Path: name, Err: err}
+	return redact.URLs(&fs.PathError{Op: "delete", Path: name, Err: err})
+}
+
+// completionError marks a failed creating request (PutObject, or
+// CompleteMultipartUpload) whose object may exist, or may yet, as
+// objfile.ErrUnresolved: a transport failure, a timeout, a cancellation,
+// a server error (an error in a 200 answer included), 408 or 429, and
+// NoSuchUpload, which a completion retried after its first attempt
+// succeeded unseen meets. A refusal (another 4xx: 412 and 409 are
+// classify's) leaves none.
+func completionError(err error) error {
+	code := status(err)
+	switch {
+	case errors.Is(err, objfile.ErrUnresolved):
+		return err
+	case apiCode(err) == "NoSuchUpload":
+	case code == http.StatusPreconditionFailed || code == http.StatusConflict:
+		return err
+	case code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
+		return err
+	}
+	return fmt.Errorf("%w: %w", objfile.ErrUnresolved, err)
 }
 
 // classify marks a failed write in objfile's terms: a failed precondition
@@ -403,11 +519,10 @@ func (w *writer) DeleteIf(ctx context.Context, name, identity string) error {
 // conditional write, after PutObject's retries; at once for a
 // completion, whose upload is then aborted) is ErrConflict.
 func classify(err error) error {
-	var ae smithy.APIError
 	switch {
 	case status(err) == http.StatusPreconditionFailed:
 		return fmt.Errorf("%w: %w", objfile.ErrExists, err)
-	case status(err) == http.StatusConflict, errors.As(err, &ae) && ae.ErrorCode() == "ConditionalRequestConflict":
+	case status(err) == http.StatusConflict, apiCode(err) == "ConditionalRequestConflict":
 		return fmt.Errorf("%w: %w", objfile.ErrConflict, err)
 	}
 	return err

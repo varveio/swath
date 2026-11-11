@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,11 +36,28 @@ import (
 // multipart upload takes kilobytes, not megabytes.
 const part = 64 << 10
 
+// uploadID makes the fake's upload ids with characters a URL reserves,
+// as S3's may hold.
+func uploadID(n int64) string { return fmt.Sprintf("private+upload/%d=id", n) }
+
+// leaks says whether text shows any form of an upload id the fake made.
+func leaks(text string) bool {
+	for n := int64(1); n < 64; n++ {
+		id := uploadID(n)
+		for _, form := range []string{id, url.QueryEscape(id), url.PathEscape(id), strings.ReplaceAll(url.QueryEscape(id), "+", "%20")} {
+			if strings.Contains(text, form) {
+				return true
+			}
+		}
+	}
+	return strings.Contains(text, "uploadId=")
+}
+
 // writeFake is s3fake behind an httptest server (through wrap) and an SDK
 // client whose retries do not wait.
 func writeFake(t testing.TB, versioned bool, wrap func(http.Handler) http.Handler) (*s3fake.Server, *awss3.Client) {
 	t.Helper()
-	f := s3fake.New(bucket)
+	f := s3fake.NewWithIDs(bucket, uploadID)
 	f.Versioned, f.MinPartSize = versioned, part
 	var h http.Handler = f
 	if wrap != nil {
@@ -336,32 +355,206 @@ func TestTransient(t *testing.T) {
 	})
 }
 
-// TestUploadIDRedacted: a transport failure names the request's URL, which
-// holds the multipart upload's id; the upload's error does not, and still
-// tells a connection failure.
+// TestUploadIDRedacted: a transport failure names the request's URL,
+// which holds the multipart upload's id (here with characters a URL
+// escapes); neither the upload's error nor its rendering shows the id in
+// any form, and the error still tells a connection failure. So for a part,
+// for the completion (then unresolved) and for the abort.
 func TestUploadIDRedacted(t *testing.T) {
-	x := newFixture(t, false, func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("partNumber") == "2" {
-				c, _, _ := w.(http.Hijacker).Hijack()
-				_ = c.Close()
-				return
+	for _, c := range []struct {
+		name string
+		cut  func(r *http.Request) bool
+	}{
+		{"part", func(r *http.Request) bool { return r.URL.Query().Get("partNumber") == "2" }},
+		{"completion", func(r *http.Request) bool { return r.Method == http.MethodPost && r.URL.Query().Get("uploadId") != "" }},
+		{"abort", func(r *http.Request) bool {
+			return r.URL.Query().Get("partNumber") == "2" || r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") != ""
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFixture(t, false, func(h http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if c.cut(r) {
+						conn, _, _ := w.(http.Hijacker).Hijack()
+						_ = conn.Close()
+						return
+					}
+					h.ServeHTTP(w, r)
+				})
+			}, s3.WriteOptions{PartSize: part, MinPartSize: part, MaxAttempts: 2})
+			_, err := upload(t, x.w, "obj", objfiletest.Data(3*part, 1))
+			if err == nil {
+				t.Fatal("succeeded")
 			}
-			h.ServeHTTP(w, r)
+			for _, text := range []string{err.Error(), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err.Error())} {
+				if leaks(text) {
+					t.Fatalf("the upload id is shown: %s", text)
+				}
+			}
+			var ne net.Error
+			if !errors.As(err, &ne) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !strings.Contains(err.Error(), "EOF") {
+				t.Fatalf("the connection failure's class is lost: %v", err)
+			}
+			if c.name == "completion" && !errors.Is(err, objfile.ErrUnresolved) {
+				t.Fatalf("a completion cut in transport: %v, want ErrUnresolved", err)
+			}
+			if c.name == "abort" && !errors.Is(err, s3.ErrAbortUnconfirmed) {
+				t.Fatalf("an abort cut in transport: %v, want ErrAbortUnconfirmed", err)
+			}
 		})
-	}, s3.WriteOptions{PartSize: part, MinPartSize: part, MaxAttempts: 2})
-	_, err := upload(t, x.w, "obj", objfiletest.Data(3*part, 1))
-	var ne net.Error
-	var nerr *net.OpError
-	if err == nil || strings.Contains(err.Error(), "upload-0") || !strings.Contains(err.Error(), "[upload-id]") {
-		t.Fatalf("error %v: the upload id is shown, or the failure is not", err)
 	}
-	if !errors.As(err, &ne) && !errors.As(err, &nerr) && !strings.Contains(err.Error(), "EOF") {
-		t.Fatalf("the connection failure's class is lost: %v", err)
+}
+
+// TestAbortRefused: an abort the service refuses (403) is reported, not
+// taken for done: Abort returns ErrAbortUnconfirmed, the upload stays
+// listed, and a later Abort sends it again (and succeeds once allowed),
+// within maxAborts attempts; a Close whose upload failed reports its own
+// failure first, the refused abort joined.
+func TestAbortRefused(t *testing.T) {
+	x := newFixture(t, false, nil, s3.WriteOptions{})
+	var refuse atomic.Bool
+	refuse.Store(true)
+	x.f.SetFault(func(op, _ string, after bool) int {
+		if op == s3fake.OpAbort && !after && refuse.Load() {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	u, _ := x.w.NewWriter(context.Background(), "obj", objfile.CreateOnly)
+	if _, err := u.Write(objfiletest.Data(3*part, 1)); err != nil {
+		t.Fatal(err)
 	}
-	if len(x.f.Uploads()) != 0 {
-		t.Fatalf("the failed upload is open: %v", x.f.Uploads())
+	if err := u.Abort(); !errors.Is(err, s3.ErrAbortUnconfirmed) || leaks(err.Error()) {
+		t.Fatalf("a refused abort: %v", err)
 	}
+	if len(x.f.Uploads()) != 1 {
+		t.Fatalf("uploads %v", x.f.Uploads())
+	}
+	if err := u.Abort(); !errors.Is(err, s3.ErrAbortUnconfirmed) || x.f.Count(s3fake.OpAbort) != 2 {
+		t.Fatalf("the second Abort: %v, %d abort requests", err, x.f.Count(s3fake.OpAbort))
+	}
+	refuse.Store(false)
+	if err := u.Abort(); err != nil || len(x.f.Uploads()) != 0 {
+		t.Fatalf("the third Abort: %v, uploads %v", err, x.f.Uploads())
+	}
+	if err := u.Abort(); err != nil || x.f.Count(s3fake.OpAbort) != 3 {
+		t.Fatalf("an Abort after a confirmed one: %v, %d abort requests", err, x.f.Count(s3fake.OpAbort))
+	}
+
+	// Bounded: a refusal that never ends stops after maxAborts attempts.
+	refuse.Store(true)
+	u, _ = x.w.NewWriter(context.Background(), "obj2", objfile.CreateOnly)
+	_, _ = u.Write(objfiletest.Data(3*part, 1))
+	before := x.f.Count(s3fake.OpAbort)
+	for range 5 {
+		_ = u.Abort()
+	}
+	if got := x.f.Count(s3fake.OpAbort) - before; got != 3 {
+		t.Fatalf("%d abort requests over 5 Aborts, want 3", got)
+	}
+
+	// Close fails on its completion (403) and its abort is refused: the
+	// completion's failure comes first, the abort's is joined.
+	x.f.SetFault(func(op, _ string, after bool) int {
+		if (op == s3fake.OpCreate || op == s3fake.OpAbort) && !after {
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	u, _ = x.w.NewWriter(context.Background(), "obj3", objfile.CreateOnly)
+	_, _ = u.Write(objfiletest.Data(3*part, 1))
+	err := u.Close()
+	if err == nil || !errors.Is(err, s3.ErrAbortUnconfirmed) || errors.Is(err, objfile.ErrUnresolved) || !strings.HasPrefix(err.Error(), "write obj3: ") {
+		t.Fatalf("Close refused, abort refused: %v", err)
+	}
+	if !strings.Contains(strings.SplitN(err.Error(), "\n", 2)[0], "403") {
+		t.Fatalf("the completion's own failure is not first: %v", err)
+	}
+}
+
+// TestAbortLatePart: a part in flight when the abort ran can leave the
+// upload listed after it (the fake's LateParts); the abort is confirmed by
+// ListParts and sent again until the upload is gone, so nothing stays
+// stored. One that stays listed through every round is unconfirmed.
+func TestAbortLatePart(t *testing.T) {
+	x := newFixture(t, false, nil, s3.WriteOptions{})
+	x.f.LateParts = 1
+	u, _ := x.w.NewWriter(context.Background(), "obj", objfile.CreateOnly)
+	_, _ = u.Write(objfiletest.Data(3*part, 1))
+	if err := u.Abort(); err != nil || len(x.f.Uploads()) != 0 {
+		t.Fatalf("abort with a late part: %v, uploads %v", err, x.f.Uploads())
+	}
+	if x.f.Count(s3fake.OpAbort) != 2 || x.f.Count(s3fake.OpParts) != 2 {
+		t.Fatalf("%d aborts, %d listings, want 2 and 2", x.f.Count(s3fake.OpAbort), x.f.Count(s3fake.OpParts))
+	}
+	x.f.LateParts = 100
+	u, _ = x.w.NewWriter(context.Background(), "obj2", objfile.CreateOnly)
+	_, _ = u.Write(objfiletest.Data(3*part, 1))
+	if err := u.Abort(); !errors.Is(err, s3.ErrAbortUnconfirmed) || len(x.f.Uploads()) != 1 {
+		t.Fatalf("an upload listed after every abort: %v, uploads %v", err, x.f.Uploads())
+	}
+}
+
+// TestCompletionUnresolved: a completion whose outcome is unknown is
+// objfile.ErrUnresolved, never a clean failure: its answer lost after it
+// took effect (the retry then meets NoSuchUpload, and the object exists),
+// a transport failure, a server error that persists; a refusal (403) is a
+// clean failure, and leaves no object. So for PutObject too.
+func TestCompletionUnresolved(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		size   int
+		fault  func(op string, after bool, n int32) int
+		object bool // the object exists afterwards
+		want   error
+	}{
+		{"lost answer", 3 * part, func(op string, after bool, n int32) int {
+			return iff(op == s3fake.OpCreate && after && n == 1, http.StatusServiceUnavailable)
+		}, true, objfile.ErrUnresolved},
+		{"server error", 3 * part, func(op string, after bool, _ int32) int {
+			return iff(op == s3fake.OpCreate && !after, http.StatusInternalServerError)
+		}, false, objfile.ErrUnresolved},
+		{"refused", 3 * part, func(op string, after bool, _ int32) int {
+			return iff(op == s3fake.OpCreate && !after, http.StatusForbidden)
+		}, false, nil},
+		{"put refused", 100, func(op string, after bool, _ int32) int {
+			return iff(op == s3fake.OpCreate && !after, http.StatusForbidden)
+		}, false, nil},
+		{"put server error", 100, func(op string, after bool, _ int32) int {
+			return iff(op == s3fake.OpCreate && !after, http.StatusServiceUnavailable)
+		}, false, objfile.ErrUnresolved},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFixture(t, false, nil, s3.WriteOptions{})
+			var n atomic.Int32
+			x.f.SetFault(func(op, _ string, after bool) int {
+				if op == s3fake.OpCreate && after {
+					return c.fault(op, after, n.Add(1))
+				}
+				return c.fault(op, after, n.Load())
+			})
+			_, err := upload(t, x.w, "obj", objfiletest.Data(c.size, 1))
+			if err == nil {
+				t.Fatal("succeeded")
+			}
+			if c.want != nil && !errors.Is(err, c.want) || c.want == nil && errors.Is(err, objfile.ErrUnresolved) {
+				t.Fatalf("%v, want %v", err, c.want)
+			}
+			if _, ok := x.f.Get("obj"); ok != c.object {
+				t.Fatalf("object exists: %v, want %v", ok, c.object)
+			}
+			if len(x.f.Uploads()) != 0 || leaks(err.Error()) {
+				t.Fatalf("uploads %v; error %v", x.f.Uploads(), err)
+			}
+		})
+	}
+}
+
+func iff(c bool, status int) int {
+	if c {
+		return status
+	}
+	return 0
 }
 
 // TestAbort: an aborted upload creates nothing, before a byte, in its
