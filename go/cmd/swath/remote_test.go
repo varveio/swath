@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
 )
@@ -167,6 +169,42 @@ func TestRemoteListAndResume(t *testing.T) {
 	})
 	if _, err := os.Stat(filepath.Join(work, dataset.DataDir)); err == nil {
 		t.Fatal("the work directory holds data/")
+	}
+	// Resumed again, the complete run has nothing to do: exit 0.
+	if err := resume(ctx, []string{work}, io.Discard); err != nil {
+		t.Fatalf("resume of a complete run: %v", err)
+	}
+}
+
+// TestRemoteOutcomes: how the failures of a dataset in a bucket end: a
+// destination that holds a manifest, or overlaps the source, is refused
+// (exit 2); an unresolved commit is resumable (exit 75) when the work
+// directory's journal is intact; a candidate mismatch, a lost race and an
+// altered retained part need a person (exit 1).
+func TestRemoteOutcomes(t *testing.T) {
+	work := t.TempDir()
+	j, err := journal.Create(work, journal.Identity{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	for _, c := range []struct {
+		err       error
+		class     string
+		code      int
+		resumable bool
+	}{
+		{listing.ErrDestinationExists, listing.ClassRefused, exitUsage, true},
+		{listing.ErrOverlap, listing.ClassRefused, exitUsage, true},
+		{fmt.Errorf("publish: %w", dataset.ErrCommitUnresolved), listing.ClassUnresolved, exitStuck, true},
+		{fmt.Errorf("%w: %w", dataset.ErrCommitUnresolved, dataset.ErrCandidateMismatch), listing.ClassFatal, exitFatal, false},
+		{&dataset.LostRaceError{}, listing.ClassFatal, exitFatal, false},
+		{fmt.Errorf("resume: %w", dataset.ErrRemoteAltered), listing.ClassFatal, exitFatal, false},
+	} {
+		o := classify(c.err, nil, work)
+		if o.Class != c.class || o.ExitCode != c.code || o.Resumable != c.resumable {
+			t.Errorf("%v: %+v, want %s, exit %d, resumable %v", c.err, o, c.class, c.code, c.resumable)
+		}
 	}
 }
 

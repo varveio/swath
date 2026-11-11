@@ -6,6 +6,7 @@ package dataset
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -415,4 +416,28 @@ func Unfinalized(dir string) bool {
 	}
 	var rec RemoteCommitRecord
 	return json.Unmarshal(b, &rec) == nil && !rec.Finalized
+}
+
+// CommittedCandidate returns the manifest the work directory dir committed:
+// its candidate, when the commit marker records that candidate's SHA-256
+// (a read-only look by pathname, for the command's account of a complete
+// run).
+func CommittedCandidate(dir string) ([]byte, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	rec, err := ReadCommitMarker(r)
+	if err != nil || rec == nil {
+		return nil, errors.Join(err, fs.ErrNotExist)
+	}
+	b, err := ReadCandidate(r)
+	if err != nil || b == nil {
+		return nil, errors.Join(err, fs.ErrNotExist)
+	}
+	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != rec.ManifestSHA256 {
+		return nil, fmt.Errorf("%s: the candidate is not the manifest the marker records", CandidateRel)
+	}
+	return b, nil
 }

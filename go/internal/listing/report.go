@@ -201,6 +201,10 @@ const (
 	ClassDeadline    = "deadline"
 	ClassInterrupted = "interrupted"
 	ClassTerminated  = "terminated"
+	// ClassUnresolved: a dataset in a bucket whose manifest's creation
+	// could not be confirmed or refuted; everything is kept, and a resume
+	// creates the same manifest again.
+	ClassUnresolved = "unresolved"
 )
 
 // Outcome is how the run ended.
