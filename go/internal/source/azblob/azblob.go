@@ -504,13 +504,16 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 const defaultPageSize = 1000
 
 // engineOptions is the range engine's options for p: pages of
-// defaultPageSize unless the policy asks for another size.
+// defaultPageSize unless the policy asks for another size, and of the
+// service's largest (client.MaxPageSize) with a counted prior, whose tiles
+// hold whole pages of keys each, so a range's last page discards little;
+// Azure bills per request.
 func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
 	eo := opt.Policy.Options()
 	eo.Prefix, eo.Workers, eo.ClientOff = opt.Prefix, opt.Workers, opt.Admission.Off(own)
 	if eo.PageSize <= 0 {
-		eo.PageSize = defaultPageSize
+		eo.PageSize, eo.PriorPageSize = defaultPageSize, client.MaxPageSize
 	}
 	return eo
 }

@@ -188,6 +188,10 @@ type Options struct {
 	Resume    *Resume       // continue after a journaled run's last published key
 	Prior     *source.Prior // parallel: tile the scope at a prior's cuts instead of the seed (SeedFrom)
 	PageSize  int           // the nominal page size: data and seed requests (0 = PageKeys)
+	// PriorPageSize, when above PageSize, is the page size a counted prior
+	// (SeedFrom) sets instead: the provider's largest page, worth asking
+	// once the prior's tiles hold pages of keys each (Azure's 5,000).
+	PriorPageSize int
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.

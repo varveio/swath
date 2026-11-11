@@ -42,7 +42,8 @@ func priorOf(keys []string, step int) *Prior {
 // cuts the provider vetoes), tile counts and resume keys, the tiles ascend
 // strictly bytewise, all lie after the resume key and inside the scope,
 // number at most k-1, end at the last usable cut, and carry the mass of
-// every cut after the resume key.
+// every cut after the resume key, whether cut by equal mass or into
+// whole pages (fill).
 func TestTilePriorBounds(t *testing.T) {
 	alpha := []string{"a", "b", "z", "/", "0", "9", "é", "日", "\U0001F600", "\U0010FFFF", "5"}
 	veto := func(s string) bool { return Safe(s) && !strings.Contains(s, "5") }
@@ -78,8 +79,12 @@ func TestTilePriorBounds(t *testing.T) {
 			after = keys[rng.Intn(len(keys))]
 		}
 		k := 2 + rng.Intn(40)
-		tiles, _ := tilePrior(pr, k, after, scope, veto, safeStart)
-		what := fmt.Sprintf("seed %d k %d after %q", seed, k, after)
+		fill := 0.0
+		if pr.Counted && seed%3 > 0 {
+			fill = float64(1 + rng.Intn(40000)) // whole-page tiles, also past k-1 of them
+		}
+		tiles, _ := tilePrior(pr, k, fill, after, scope, veto, safeStart)
+		what := fmt.Sprintf("seed %d k %d fill %v after %q", seed, k, fill, after)
 		if len(tiles) > k-1 {
 			t.Fatalf("%s: %d tiles, at most %d", what, len(tiles), k-1)
 		}
