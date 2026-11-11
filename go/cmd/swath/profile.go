@@ -107,7 +107,8 @@ type profFile struct {
 	w                       *errWriter
 }
 
-// errWriter writes to f and keeps the first write error: runtime/pprof's
+// errWriter writes to f and keeps the first write error (a short write's
+// included): runtime/pprof's
 // CPU profile writer reports none.
 type errWriter struct {
 	f   *os.File
@@ -119,8 +120,33 @@ func (w *errWriter) Write(b []byte) (int, error) {
 		return 0, w.err
 	}
 	n, err := w.f.Write(b)
+	if err == nil && n < len(b) {
+		err = io.ErrShortWrite
+	}
 	w.err = err
 	return n, err
+}
+
+// fanout writes each Write to every one of its files independently: one
+// that fails (its errWriter keeps the error and takes no more) does not
+// stop the others, as io.MultiWriter's first failure would. It fails only
+// once every file has.
+type fanout []*profFile
+
+func (o fanout) Write(b []byte) (int, error) {
+	var err error
+	ok := false
+	for _, f := range o {
+		if _, e := f.w.Write(b); e == nil {
+			ok = true
+		} else {
+			err = e
+		}
+	}
+	if !ok {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // startProfiles starts the profiles cpu and mem name ("" off; resolved by
@@ -160,14 +186,16 @@ func (p *profiler) planLocked(kind string, paths ...string) []*profFile {
 	return fs
 }
 
-// settle records how the writes of fs went (err: all of them failed).
-// A failure is warned of after mu is released: stderr may block.
+// settle records how the writes of fs went: each file's own write or
+// close error, else err (a failure of them all: an open, the profile's
+// encoding). Only a file with neither is written. A failure is warned of
+// after mu is released: stderr may block.
 func (p *profiler) settle(fs []*profFile, err error) {
 	var failed []string
 	p.mu.Lock()
 	for _, f := range fs {
 		e := err
-		if e == nil && f.w != nil {
+		if f.w != nil && f.w.err != nil {
 			e = f.w.err
 		}
 		if e != nil {
@@ -189,7 +217,6 @@ func (p *profiler) settle(fs []*profFile, err error) {
 // open creates fs's files; it closes those it opened and returns the first
 // error if one fails.
 func open(fs []*profFile) (io.Writer, error) {
-	ws := make([]io.Writer, 0, len(fs))
 	for i, f := range fs {
 		file, err := createNoFollow(f.path)
 		if err != nil {
@@ -197,9 +224,8 @@ func open(fs []*profFile) (io.Writer, error) {
 			return nil, err
 		}
 		f.w = &errWriter{f: file}
-		ws = append(ws, f.w)
 	}
-	return io.MultiWriter(ws...), nil
+	return fanout(fs), nil
 }
 
 // closeFiles closes fs's open files, recording a close error as a write
@@ -250,9 +276,6 @@ func (p *profiler) writeMem(fs []*profFile) {
 	if err == nil {
 		err = pprof.Lookup("allocs").WriteTo(w, 0)
 		closeFiles(fs)
-		if slices.ContainsFunc(fs, func(f *profFile) bool { return f.w.err != nil }) {
-			err = nil // a file's own write error, recorded on that file only
-		}
 	}
 	p.settle(fs, err)
 }
