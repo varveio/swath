@@ -36,7 +36,9 @@ A run that writes to a bucket (`-o gs://BUCKET/PREFIX --work-dir DIR`) is resume
 `swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
 prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
 generation, size and SHA-256), and a resume of a run that reached its commit first reads the bucket's manifest
-back: the run's own means the run is complete. The destination's credentials may be given again
+back: the run's own means the run is complete, and the resume first finishes what the commit left (this run's
+leftover parts deleted, `run.json` beside the manifest). A commit that ended unresolved (exit 75) is resumed the
+same way: the resume creates the very manifest the run saved. The destination's credentials may be given again
 (`--output-gcs-credentials-file`); its bucket, prefix and endpoint are fixed. A lost work directory loses the
 resume: the parts already uploaded are not reused, and a new run writes to a new prefix.
 

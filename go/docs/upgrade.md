@@ -347,7 +347,8 @@ are delta coded and zstd compressed by default.
 (`-o gs://...`): `destination`, `work_dir`, `commit`, `manifest`, `manifest_identity`, `manifest_sha256`,
 `uploads`, `uploads_aborted`, `upload_bytes`, `upload_wait_ns`, `retries`, `retry_classes`,
 `objects_verified`, `orphans_deleted`, `orphans_gone`, `orphans_left` and `orphans_unproven`; a version 5 reader reads it by
-ignoring it. The journal's version is 10 (it names a bucket dataset's part objects); this build reads the
+ignoring it. `outcome.class` gains `unresolved` (exit 75, `cause` `commit_unresolved`), and `outcome.cause`
+`lost_race`, `remote_altered` and `candidate_mismatch`, all for a dataset in a bucket. The journal's version is 10 (it names a bucket dataset's part objects); this build reads the
 version 9 journals of earlier builds, which an earlier build cannot do the other way round.
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
