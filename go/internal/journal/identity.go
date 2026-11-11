@@ -36,14 +36,16 @@ type Identity struct {
 	Destination *Destination `json:"destination,omitempty"`
 }
 
-// Destination is a remote dataset's frozen root: the provider ("gs" or
-// "s3"), the bucket, the literal prefix ("" or ending in "/"), the
+// Destination is a remote dataset's frozen root: the provider ("gs", "s3"
+// or "az"), the Azure storage account ("" for another provider), the
+// bucket (or container), the literal prefix ("" or ending in "/"), the
 // effective endpoint ("" for the provider's default; an emulator's host
 // when the environment named one), the region (S3's, as resolved; "" for
-// GCS) and the layout version (dataset.RemoteLayout). It holds no
+// another) and the layout version (dataset.RemoteLayout). It holds no
 // credential: credentials are resolved again on a resume.
 type Destination struct {
 	Provider string `json:"provider"`
+	Account  string `json:"account,omitempty"`
 	Bucket   string `json:"bucket"`
 	Prefix   string `json:"prefix"`
 	Endpoint string `json:"endpoint,omitempty"`
@@ -163,6 +165,9 @@ func checkDestination(stored, requested *Destination) error {
 		if d == nil {
 			return "a local dataset"
 		}
+		if d.Account != "" {
+			return d.Provider + "://" + d.Account + "/" + d.Bucket + "/" + d.Prefix
+		}
 		return d.Provider + "://" + d.Bucket + "/" + d.Prefix
 	}
 	switch {
@@ -170,7 +175,7 @@ func checkDestination(stored, requested *Destination) error {
 		return nil
 	case stored == nil || requested == nil:
 		return &MismatchError{"destination", show(stored), show(requested)}
-	case stored.Provider != requested.Provider || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
+	case stored.Provider != requested.Provider || stored.Account != requested.Account || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
 		return &MismatchError{"destination", show(stored), show(requested)}
 	case stored.Endpoint != requested.Endpoint || stored.Emulator != requested.Emulator:
 		return &MismatchError{"endpoint", redactEndpoint(stored.Endpoint), redactEndpoint(requested.Endpoint)}
@@ -214,6 +219,9 @@ func (id Identity) Hash() string {
 	}
 	if d := id.Destination; d != nil {
 		put("destination.provider=", d.Provider)
+		if d.Account != "" {
+			put("destination.account=", d.Account) // Azure's only: the others' hashes are as before
+		}
 		put("destination.bucket=", d.Bucket)
 		put("destination.prefix=", d.Prefix)
 		put("destination.endpoint=", d.Endpoint)
