@@ -28,6 +28,8 @@ import (
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
@@ -602,6 +604,52 @@ func TestRemoteRefusals(t *testing.T) {
 		cfg.Output.Remote = &RemoteOutput{Location: dst}
 		if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrOverlap) && dst != "gs://bkt/out" {
 			t.Errorf("source gs://bkt/a, destination %s: %v", dst, err)
+		}
+	}
+}
+
+// TestMeasureRemoteOverhead compares a local and a remote run of one
+// in-process listing (SWATH_MEASURE_REMOTE=1 runs it): wall time, process
+// CPU (the fakes' included), peak heap and the remote run's upload wait.
+// It records numbers; it asserts nothing about them.
+func TestMeasureRemoteOverhead(t *testing.T) {
+	if os.Getenv("SWATH_MEASURE_REMOTE") == "" {
+		t.Skip("SWATH_MEASURE_REMOTE=1 runs it")
+	}
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, gcstest.Keys(400_000))))
+	d := newDestination(t, nil)
+	cfg := func(ws string, remote bool) Config {
+		c := crashConfig(url, ws, false)
+		c.Limits.PartSize, c.Limits.RowBudget, c.Limits.Encoders = 256<<10, 64<<20, 4
+		if remote {
+			c.Output.Remote = d.output("measure" + filepath.Base(ws))
+			c.Output.Remote.ChunkSize = 8 << 20
+		}
+		return c
+	}
+	var prev int64 // getrusage is cumulative: each run's CPU is the difference
+	for i := range 3 {
+		for _, remote := range []bool{false, true} {
+			ws := filepath.Join(t.TempDir(), fmt.Sprintf("w%d", i))
+			start := time.Now()
+			sum, err := Run(context.Background(), cfg(ws, remote))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wall := time.Since(start)
+			u, s := int64(0), int64(0)
+			if sum.Timings.UserCPUMs != nil {
+				u, s = *sum.Timings.UserCPUMs, *sum.Timings.SysCPUMs
+			}
+			line := fmt.Sprintf("remote=%v wall=%v cpu=%dms parts=%d bytes=%d heap=%d", remote, wall.Round(time.Millisecond), u+s-prev, sum.Output.PartsWritten, sum.Output.OutputBytes, sum.Resources.PeakHeapLiveBytes)
+			prev = u + s
+			if r := sum.Output.Remote; r != nil {
+				line += fmt.Sprintf(" upload_wait=%v uploads=%d", time.Duration(r.UploadWaitNs).Round(time.Millisecond), r.Uploads)
+			}
+			t.Log(line)
 		}
 	}
 }
