@@ -276,12 +276,12 @@ func TestRemoteS3ListAndResume(t *testing.T) {
 	t.Setenv("AWS_DEFAULT_REGION", "")
 	awsProfiles(t, "first", "second")
 	var srcAuth sync.Map
-	h := s3test.Handler(s3test.Backend(t, s3test.Keys(20000, 7)))
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(60000, 7)))
 	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a := r.Header.Get("Authorization"); a != "" {
 			srcAuth.Store(a, true)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond) // 60 pages over 2 workers: the run outlasts its deadline
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(src.Close)
@@ -300,7 +300,7 @@ func TestRemoteS3ListAndResume(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
 	args := []string{"s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--workers", "2", "--part-size", "4KiB",
 		"-o", "s3://dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL, "--output-s3-profile", "first", "--output-s3-region", "eu-west-3"}
-	if c := exitCode(t, run(ctx, append(args, "--max-duration", "400ms"), io.Discard, false)); c != exitDeadline {
+	if c := exitCode(t, run(ctx, append(args, "--max-duration", "1500ms"), io.Discard, false)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
 	}
 	st, err := journal.Read(work)
@@ -325,7 +325,7 @@ func TestRemoteS3ListAndResume(t *testing.T) {
 	for _, p := range m.Parts {
 		rows += p.Rows
 	}
-	if rows != 20000 {
+	if rows != 60000 {
 		t.Fatalf("%d rows committed", rows)
 	}
 	mu.Lock()
