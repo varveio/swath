@@ -59,7 +59,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 6) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 5) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 [upgrade.md](../upgrade.md#run-report-and-counters). It accounts for this invocation (rows it fetched
@@ -69,7 +69,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 6 |
+| `report_version` | 5 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -173,4 +173,14 @@ sample is dropped and the interval doubles), and the last at the end. Each of `s
 `inflight`, `limit` (the limiter's, 0 without one), `spill_bytes` (live), `free_disk_bytes` (absent without an
 output) and `rss_bytes` (the resident set now; Linux only, absent elsewhere). Absent for a run that stopped
 before listing.
+
+**Profiles** (`profiles`, development only). Present when `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE` is set
+([diagnostics.md](../internals/diagnostics.md#phase-profiles)): `phase_boundary_at`, the logical boundary between
+the phases (the event `timings.listing_done_at` records, microseconds later; absent when listing never finished),
+`cpu_cut_delay_ns` (from the boundary to the listing phase's CPU profile's stop: the listing file holds that much
+of the tail), `cpu_gap_ns` (from that stop to the tail's CPU profile's start, which neither covers),
+`mem_profile_rate` (bytes allocated per memory profile sample, 0: none), and `files`, each with `kind`
+(`cpu_listing`, `cpu_tail`, `mem_listing`, `mem_exit`), `path`, `status` (`planned`: written later in the run;
+`written`; `failed`, with `error`). `run.json`, written at the commit, has the tail's and the exit's files
+`planned`; `--report`, written as the process ends, has every file's final status.
 <!-- report:end -->

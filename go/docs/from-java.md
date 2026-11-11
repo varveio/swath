@@ -69,7 +69,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 | Java | This tool |
 |---|---|
-| `schema_version` | `report_version` (6) |
+| `schema_version` | `report_version` (5) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.object_bytes` (object sizes); the dataset's own size is `output.output_bytes` |

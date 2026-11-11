@@ -210,7 +210,7 @@ What each one means and what to do: [reference/exit-codes.md](../reference/exit-
 | `TZ` | the time zone of the tables' local times |
 | `TMPDIR` | where text rows on stdout spill (see [running.md](../running.md#sizing-a-run)) |
 | `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [sources.md](../sources.md) |
-| `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE` | write a Go CPU or heap profile to that file |
+| `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE` | write Go CPU and allocation profiles to that file and beside it, split at the end of listing: `FILE.listing`, `FILE.tail` (CPU), `FILE.exit` (allocations); `SWATH_MEMPROFILERATE` sets the allocation sample rate ([phase profiles](../internals/diagnostics.md#phase-profiles)) |
 
 ## See also
 
