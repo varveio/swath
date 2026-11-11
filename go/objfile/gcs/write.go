@@ -111,6 +111,10 @@ func (w writer) NewWriter(ctx context.Context, name string, c objfile.Condition)
 	// by ChunkRetryDeadline).
 	chunk, perRequest := int64(w.o.ChunkSize), int64(w.o.MaxAttempts-1)
 	obj := w.object(name, func() bool {
+		// A retried attempt failed in a way that may have reached the
+		// service: whatever the last attempt says, the completion is
+		// unresolved unless it succeeds (completionError).
+		u.uncertain.Store(true)
 		return u.retries.Add(1) <= perRequest*(1+u.written.Load()/chunk)
 	})
 	switch c {
@@ -139,6 +143,7 @@ type upload struct {
 	cancel context.CancelFunc
 
 	written, retries atomic.Int64 // bytes written; retried attempts (read on the SDK's goroutine)
+	uncertain        atomic.Bool  // an attempt was retried after an ambiguous failure
 
 	// wmu serializes the SDK writer's Write and Close: Abort cancels the
 	// context first, which ends a Write blocked on the network, then takes
@@ -200,7 +205,7 @@ func (u *upload) Close() error {
 	}
 	u.cancel()
 	if err != nil {
-		return completionError(u.name, err)
+		return completionError(u.name, err, u.uncertain.Load())
 	}
 	return nil
 }
@@ -277,16 +282,18 @@ func (w writer) deleteIf(ctx context.Context, name, identity string) error {
 
 // completionError classifies a failed completion (the request that creates
 // the object): a failed precondition is objfile.ErrExists; a service answer
-// that refuses the request (4xx but 408 and 429) leaves no object; anything
-// else (a transport failure, a timeout, a cancellation in flight, a server
-// error, a throttle a proxy may have answered for a request still in
-// flight) is objfile.ErrUnresolved. The text is redacted.
-func completionError(name string, err error) error {
+// that refuses the request (4xx but 408 and 429) leaves no object, unless
+// an earlier attempt of the upload failed ambiguously (uncertain: the SDK
+// retried it), which the refusal does not undo; anything else (a transport
+// failure, a timeout, a cancellation in flight, a server error, a throttle
+// a proxy may have answered for a request still in flight) is
+// objfile.ErrUnresolved. The text is redacted.
+func completionError(name string, err error, uncertain bool) error {
 	switch code := status(err); {
 	case errors.Is(err, objfile.ErrUnresolved):
 	case code == http.StatusPreconditionFailed:
 		err = fmt.Errorf("%w: %w", objfile.ErrExists, err)
-	case code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
+	case code >= 400 && code < 500 && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests && !uncertain:
 	default:
 		err = fmt.Errorf("%w: %w", objfile.ErrUnresolved, err)
 	}

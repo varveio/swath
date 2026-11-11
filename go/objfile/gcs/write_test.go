@@ -408,6 +408,26 @@ func TestUnresolved(t *testing.T) {
 	}
 }
 
+// TestUnresolvedSticks: a completion refused (403) after an attempt that
+// failed ambiguously (503, retried by the SDK) is still unresolved: the
+// first attempt may yet create the object.
+func TestUnresolvedSticks(t *testing.T) {
+	f, w, _, _ := writerOf(t)
+	var n atomic.Int64
+	f.SetFault(func(op, _ string, after bool) int {
+		if op == gcsfake.OpCreate && !after {
+			if n.Add(1) == 1 {
+				return http.StatusServiceUnavailable
+			}
+			return http.StatusForbidden
+		}
+		return 0
+	})
+	if _, err := w.PutIfAbsent(context.Background(), "m", []byte("x")); !errors.Is(err, objfile.ErrUnresolved) {
+		t.Fatalf("a refusal after an ambiguous attempt: %v", err)
+	}
+}
+
 // TestConcurrentAbort: Abort from another goroutine ends a writer that
 // keeps writing, without a data race and without waiting on the network.
 func TestConcurrentAbort(t *testing.T) {
