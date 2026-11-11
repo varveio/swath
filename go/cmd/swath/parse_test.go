@@ -271,7 +271,7 @@ func TestOutputDestination(t *testing.T) {
 		{[]string{"-o", "x.gz"}, "", "does not write .gz"},
 		{[]string{"-o", "x.zst"}, "", "does not write .zst"},
 		{[]string{"-o", "x.xz"}, "", "does not write .xz"},
-		{[]string{"-o", "s3://bkt/out"}, "", "not supported yet"},
+		{[]string{"-o", "s3://bkt/out"}, "", "needs --work-dir"},
 		{[]string{"-o", "gs://bkt/out"}, "", "needs --work-dir"},
 		{[]string{"-o", "https://acct.blob.core.windows.net/c"}, "", "want s3://BUCKET"},
 	} {

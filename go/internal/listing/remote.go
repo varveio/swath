@@ -151,8 +151,30 @@ func ParseDestination(raw string) (objfile.Location, error) {
 	return l, nil
 }
 
-// remoteLocation parses the destination.
-func remoteLocation(r *RemoteOutput) (objfile.Location, error) { return ParseDestination(r.Location) }
+// Check refuses a destination this build does not write
+// (ParseDestination), and options of another provider than the
+// destination's: a credentials file is GCS's, a profile and a region
+// S3's.
+func (r *RemoteOutput) Check() error {
+	l, err := ParseDestination(r.Location)
+	switch {
+	case err != nil:
+		return err
+	case l.Scheme != "gs" && r.CredentialsFile != "":
+		return errors.New("a credentials file (--output-gcs-credentials-file) is for a GCS destination")
+	case l.Scheme != "s3" && (r.Profile != "" || r.Region != ""):
+		return errors.New("a profile and a region (--output-s3-profile, --output-s3-region) are for an S3 destination")
+	}
+	return nil
+}
+
+// remoteLocation parses the destination, its options checked.
+func remoteLocation(r *RemoteOutput) (objfile.Location, error) {
+	if err := r.Check(); err != nil {
+		return objfile.Location{}, err
+	}
+	return ParseDestination(r.Location)
+}
 
 // destinationIdentity is the destination's part of the resume identity:
 // its root as opened (the endpoint resolved, the environment's emulator
