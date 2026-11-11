@@ -25,8 +25,9 @@ import (
 // buffers in memory (one chunk an upload, held for a retry).
 const DefaultChunkSize = 8 << 20
 
-// DefaultMaxAttempts bounds each request's attempts, the SDK's retries
-// included.
+// DefaultMaxAttempts sets the retry allowance: MaxAttempts each for a
+// metadata read or a delete; for an upload, MaxAttempts-1 retries for its
+// first request and as many more for each chunk sent (WriteOptions).
 const DefaultMaxAttempts = 5
 
 // DefaultChunkTransferTimeout bounds one chunk request of a resumable
@@ -39,11 +40,12 @@ type WriteOptions struct {
 	// DefaultChunkSize). The SDK rounds it up to a multiple of 256 KiB. An
 	// object smaller than one chunk is created in one request.
 	ChunkSize int
-	// MaxAttempts bounds each request's attempts (0: DefaultMaxAttempts).
-	// The SDK's upload loops count no attempts, so an upload is given
-	// MaxAttempts-1 retries for its first request and as many more for
-	// each chunk it has sent; a chunk's retries also stop at
-	// ChunkRetryDeadline. The SDK retries what its policy deems transient
+	// MaxAttempts sets the retry allowance (0: DefaultMaxAttempts). The
+	// SDK's upload loops count no attempts, so an upload's allowance is
+	// cumulative: MaxAttempts-1 retries for its first request and as many
+	// more for each chunk it has sent, spent wherever its failures fall
+	// (one chunk may use more than MaxAttempts-1 of them); a chunk's
+	// retries also stop at ChunkRetryDeadline. The SDK retries what its policy deems transient
 	// (408, 429, 5xx, connection resets), including requests made under a
 	// generation precondition, which are idempotent.
 	MaxAttempts int

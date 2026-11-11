@@ -215,8 +215,11 @@ upload, and the SDK's transport errors quote it. `Abort` may run while a `Write`
 `gcs.NewWriter` uploads in resumable sessions of `WriteOptions.ChunkSize` (8 MiB by default; the SDK rounds to
 256 KiB): the SDK buffers one chunk an upload and blocks `Write` while it is in flight, so memory is a chunk per
 open upload and a slow store holds the writer back. An object smaller than a chunk goes in one request. Retries
-are the SDK's, bounded: `MaxAttempts` a request (5 by default), and `ChunkRetryDeadline` for a session's chunk;
-`Retried` is told each attempt its policy retries. `Abort` cancels the session's request; a session the service
+are the SDK's, bounded per upload: the SDK's upload loops count no attempts, so an upload has a cumulative
+allowance of `MaxAttempts`-1 retries (4 by default) for its first request and as many more for each chunk it has
+sent, spent wherever its failures fall (not a strict per-chunk limit), and each chunk's retries also stop at
+`ChunkRetryDeadline`; metadata reads and deletes get `MaxAttempts` each. `Retried` is told each attempt its policy
+retries. `Abort` cancels the session's request; a session the service
 holds expires on its own (GCS keeps one for a week), and its URI, a bearer credential for the upload, never
 leaves the process.
 
@@ -225,8 +228,9 @@ read-write client it owns, with its own credentials (`CreateOptions.CredentialsF
 Credentials) and endpoint, shared with no read client. Only `gs://` is written; `s3://` and `az://` are
 refused. The SDK's logger is silenced, since its debug output writes request headers unredacted. The endpoint
 is resolved once (`ResolveEndpoint`: the option, else `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly,
-so a caller that records it is never redirected by the environment later. A response's headers are awaited two
-minutes at most (`RequestTimeout`), a chunk's transfer two minutes, and reads get at most five attempts.
+so a caller that records it is never redirected by the environment later. For `gs://`, a response's headers are
+awaited two minutes at most (`RequestTimeout`), a resumable upload's chunk transfer two minutes
+(`gcs.DefaultChunkTransferTimeout`), and reads get at most five attempts.
 
 `gcs/gcsfake` is the in-process fake the GCS tests use: JSON metadata and deletes, XML ranged reads, and
 uploads both single-request and resumable, with `ifGenerationMatch` evaluated atomically at creation and a

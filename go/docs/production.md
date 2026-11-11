@@ -151,8 +151,11 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
 - **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
   only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe.
-- **Debug logging:** `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` does not log the destination's tokens or session URLs;
-  the storage SDK may still log request names and URLs.
+- **Debug logging:** the destination's credentials and clients are built with a logger that discards
+  everything, as the GCS source's client is, so `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` never logs a token, a signed
+  assertion or a session URL. The storage SDK (v1.70.0) does not hand that logger to the JSON API client it
+  builds inside, so with the variable set that client may still log request lines: the method, the object name
+  and a URL without credentials.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week).

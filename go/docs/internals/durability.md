@@ -241,8 +241,10 @@ read-write scoped, built apart from the source's, and the source's `--anonymous`
 transport errors quote the request URL: every error the objfile writer returns passes through
 `objfile.RedactError`, which keeps the error chain and drops every URL's query and user information from its
 text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`). Requests are
-bounded: a response's headers within two minutes, a chunk's transfer within two minutes (then retried, within
-the chunk's retry deadline), reads within five attempts, the commit and the aftermath within their own time
+bounded: a response's headers within two minutes; a GCS resumable upload's chunk transfer within two minutes
+(then retried, within the chunk's retry deadline), an upload's retries within a cumulative allowance that grows
+with the chunks it has sent (four for its first request and four more a chunk, spent wherever its failures fall:
+not a per-chunk limit); reads within five attempts; the commit and the aftermath within their own time
 bounds. Token exchanges for the destination's credentials go through a client of their own, bounded the same
 way (headers and body), and are fetched with the context of the request that needs one; the SDK's debug logging
 (`GOOGLE_SDK_GO_LOGGING_LEVEL`) is off for the destination's credentials and clients, so no token or signed
@@ -262,7 +264,7 @@ its verification and after it; `TestRemoteMultiChunk` drops a connection in a mi
 upload and kills a run inside a later chunk. A failed upload, a cancellation, a lost manifest answer, a delayed
 creation, a race of two work directories with different rows, retained objects replaced, deleted or altered,
 links in the work directory, a damaged header and a drifted endpoint have their own tests
-(`internal/listing/remote_test.go`, `remote_review_test.go`), all against the in-process fake
+(`internal/listing/remote_test.go`, `remote_faults_test.go`), all against the in-process fake
 (`objfile/gcs/gcsfake`): a fake is not the service, and its preconditions and resumable sessions follow the
 documented protocol, not observed GCS behavior.
 
