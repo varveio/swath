@@ -119,6 +119,9 @@ type Range struct {
 	// past it are boundary overfetch (resume.reuse.boundary_overfetch_keys).
 	cert   int
 	gapEnd bool
+	// scope is the listing prefix of a range a caller tiled itself
+	// (Within), inherited by its children; "" is the engine's scope.
+	scope string
 }
 
 // estimate is the range's remainder before its first page: +Inf on the
@@ -506,6 +509,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		}
 	}()
 	in := p.query()
+	if r.scope != "" {
+		in.Prefix = r.scope
+	}
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
@@ -753,9 +759,30 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 // on the open frontier the scope's prefixCeil, or nothing (bounded false).
 func (p *Engine[P]) ceiling(r Range) (string, bool) {
 	if r.open {
+		if r.scope != "" {
+			return prefixCeil(r.scope)
+		}
 		return prefixCeil(p.opt.Prefix)
 	}
 	return r.hi, true
+}
+
+// Within is a range a caller tiles itself: the keys of scope after after,
+// listed with scope as the request prefix (the tree core hands the engine
+// one directory's rest this way, docs/internals/tree-sources.md). It is
+// (after, prefixCeil(scope)] when scope has a ceiling, else open. The
+// caller emits it as a child; it counts as queued work until expanded, and
+// its children inherit its scope. Seed, prior and structure probes are the
+// engine's scope's and do not apply to it.
+func (p *Engine[P]) Within(scope, after string) Range {
+	hi, bounded := prefixCeil(scope)
+	r := Range{lo: after, hi: hi, open: !bounded, scope: scope, born: fromSeed, id: p.ids.Add(1)}
+	p.lock()
+	p.account(time.Now())
+	p.queued++
+	p.c.Max(cMaxQueued, int64(p.queued))
+	p.unlock()
+	return r
 }
 
 // proposal is a split's pivot as the policy places it (propose), computed
@@ -1072,9 +1099,9 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	p.c.Max(cMaxQueued, int64(p.queued))
 	depth := r.depth + 1
 	p.c.Max(cSplitMaxDepth, depth)
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
+	lower = Range{lo: c, hi: m, scope: r.scope, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
+	upper = Range{lo: m, hi: r.hi, open: r.open, scope: r.scope, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
 		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
 		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
