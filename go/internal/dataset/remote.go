@@ -66,11 +66,13 @@ func RemotePartName(run, attempt string, i int) string {
 }
 
 // Remote is a remote dataset's root: its location, the endpoint it is
-// reached at ("" for the provider's default), and a reader and a writer of
-// the names under its prefix.
+// reached at ("" for the provider's default), its region (S3's, as
+// resolved; "" for GCS), and a reader and a writer of the names under its
+// prefix.
 type Remote struct {
 	Location objfile.Location
 	Endpoint string
+	Region   string
 	Opener   objfile.Opener
 	Writer   objfile.Writer
 	// Emulator says Endpoint is an emulator's host, reached without
@@ -100,7 +102,8 @@ type UploadStats struct {
 	classes map[string]int64
 }
 
-// Retried counts one retried attempt of err (objfile/gcs WriteOptions.Retried).
+// Retried counts one retried attempt of err (the Retried of objfile/gcs's
+// and objfile/s3's WriteOptions).
 func (s *UploadStats) Retried(_ string, err error) {
 	s.Retries.Add(1)
 	s.mu.Lock()
@@ -126,13 +129,17 @@ func (s *UploadStats) Classes() map[string]int64 {
 }
 
 // FailureClass names a store failure for a report: http_STATUS for a
-// service answer, timeout, connection, or other.
+// service answer (GCS's, or an AWS SDK response error), timeout,
+// connection, or other.
 func FailureClass(err error) string {
 	var ge *googleapi.Error
+	var re interface{ HTTPStatusCode() int }
 	var ne net.Error
 	switch {
 	case errors.As(err, &ge):
 		return "http_" + strconv.Itoa(ge.Code)
+	case errors.As(err, &re) && re.HTTPStatusCode() > 0:
+		return "http_" + strconv.Itoa(re.HTTPStatusCode())
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.As(err, &ne) && ne.Timeout():

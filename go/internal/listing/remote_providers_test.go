@@ -12,12 +12,18 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/go/objfile/s3/s3fake"
 )
 
 // The remote dataset tests run once per destination provider, each
@@ -74,7 +80,7 @@ type provider struct {
 }
 
 // providers are the destinations every remote test runs against.
-var providers = []provider{gcsProvider}
+var providers = []provider{gcsProvider, s3Provider}
 
 // eachProvider runs f once per provider, as a subtest named for it.
 func eachProvider(t *testing.T, f func(t *testing.T, p provider)) {
@@ -152,3 +158,57 @@ func (f gcsFake) Put(name string, data []byte) { f.Server.Put(name, data) }
 func (f gcsFake) OpenUploads() int { return f.OpenSessions() }
 
 func (f gcsFake) SetFault(fn func(op, name string, after bool) int) { f.Server.SetFault(fn) }
+
+// s3Part is the S3 harness's part size, the fake's minimum lowered to it:
+// a part of the listing's (about 6 KiB) is a multipart upload of two.
+const s3Part = 4 << 10
+
+// s3Provider writes through objfile/s3 to s3fake, path-style, in parts of
+// the output's ChunkSize (s3Part unless a test sets another); the SDK's
+// retries do not wait.
+var s3Provider = provider{name: "s3", scheme: "s3",
+	fake: func() bucketFake {
+		f := s3fake.New(dstBucket)
+		f.MinPartSize = s3Part
+		return s3Fake{f}
+	},
+	output: func(url, prefix string) *RemoteOutput {
+		loc := "s3://" + dstBucket + "/" + prefix
+		r := &RemoteOutput{Location: loc, ChunkSize: s3Part}
+		r.Open = func(ctx context.Context, stats *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+			c := awss3.New(awss3.Options{BaseEndpoint: aws.String(url), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{},
+				Retryer: retry.NewStandard(func(o *retry.StandardOptions) {
+					o.Backoff = retry.BackoffDelayerFunc(func(int, error) (time.Duration, error) { return time.Millisecond, nil })
+					o.RateLimiter = ratelimit.None
+				})})
+			l, err := objfile.ParseLocation(loc)
+			if err != nil {
+				return nil, nil, err
+			}
+			w, err := s3.NewWriter(c, dstBucket, s3.WriteOptions{PartSize: int64(r.ChunkSize), MinPartSize: s3Part, MaxAttempts: 2, Retried: stats.Retried})
+			if err != nil {
+				return nil, nil, err
+			}
+			return &dataset.Remote{Location: l, Region: "us-east-1", Opener: objfile.Root(s3.New(c, dstBucket), l.Prefix), Writer: objfile.RootWriter(w, l.Prefix)},
+				func() error { return nil }, nil
+		}
+		return r
+	},
+	uploading: func(r *http.Request) bool {
+		return r.Method == http.MethodPut || r.Method == http.MethodPost
+	},
+	aborts: true,
+}
+
+type s3Fake struct{ *s3fake.Server }
+
+func (f s3Fake) Object(name string) ([]byte, bool) {
+	o, ok := f.Get(name)
+	return o.Data, ok
+}
+
+func (f s3Fake) Put(name string, data []byte) { f.Server.Put(name, data) }
+
+func (f s3Fake) OpenUploads() int { return len(f.Uploads()) }
+
+func (f s3Fake) SetFault(fn func(op, name string, after bool) int) { f.Server.SetFault(fn) }

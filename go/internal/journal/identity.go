@@ -36,11 +36,12 @@ type Identity struct {
 	Destination *Destination `json:"destination,omitempty"`
 }
 
-// Destination is a remote dataset's frozen root: the provider ("gs"), the
-// bucket, the literal prefix ("" or ending in "/"), the effective endpoint
-// ("" for the provider's default; an emulator's host when the environment
-// named one) and the layout version (dataset.RemoteLayout).
-// It holds no credential: credentials are resolved again on a resume.
+// Destination is a remote dataset's frozen root: the provider ("gs" or
+// "s3"), the bucket, the literal prefix ("" or ending in "/"), the
+// effective endpoint ("" for the provider's default; an emulator's host
+// when the environment named one), the region (S3's, as resolved; "" for
+// GCS) and the layout version (dataset.RemoteLayout). It holds no
+// credential: credentials are resolved again on a resume.
 type Destination struct {
 	Provider string `json:"provider"`
 	Bucket   string `json:"bucket"`
@@ -49,6 +50,7 @@ type Destination struct {
 	// Emulator says Endpoint is an emulator's host, reached without
 	// credentials (STORAGE_EMULATOR_HOST, resolved when the run started).
 	Emulator bool   `json:"emulator,omitempty"`
+	Region   string `json:"region,omitempty"`
 	Layout   string `json:"layout"`
 }
 
@@ -172,6 +174,8 @@ func checkDestination(stored, requested *Destination) error {
 		return &MismatchError{"destination", show(stored), show(requested)}
 	case stored.Endpoint != requested.Endpoint || stored.Emulator != requested.Emulator:
 		return &MismatchError{"endpoint", redactEndpoint(stored.Endpoint), redactEndpoint(requested.Endpoint)}
+	case stored.Region != requested.Region:
+		return &MismatchError{"destination region", stored.Region, requested.Region}
 	case stored.Layout != requested.Layout:
 		return &MismatchError{"destination layout", stored.Layout, requested.Layout}
 	}
@@ -215,6 +219,9 @@ func (id Identity) Hash() string {
 		put("destination.endpoint=", d.Endpoint)
 		if d.Emulator {
 			put("destination.emulator=", "true")
+		}
+		if d.Region != "" {
+			put("destination.region=", d.Region) // GCS has none: its hashes are as before
 		}
 		put("destination.layout=", d.Layout)
 	}

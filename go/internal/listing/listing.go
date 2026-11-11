@@ -577,7 +577,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if r := cfg.Output.Remote; r != nil {
 		// The destination is fixed before anything is owned: its distance
 		// from the source, its client, then its identity as opened (the
-		// route resolved).
+		// route and region resolved).
 		l, err := remoteLocation(r)
 		if err == nil {
 			err = checkOverlap(src.Locator(), l)

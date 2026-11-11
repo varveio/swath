@@ -560,7 +560,7 @@ func TestRemoteRefusals(t *testing.T) {
 	for name, c := range map[string]func(*Config){
 		"replace":  func(c *Config) { c.Output.Replace = true },
 		"no dir":   func(c *Config) { c.Output.Dir = "" },
-		"s3 dest":  func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "s3://b/p"} },
+		"az dest":  func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "az://acct/c/p"} },
 		"bad dest": func(c *Config) { c.Output.Remote = &RemoteOutput{Location: "gs://B/p"} },
 	} {
 		cfg := remoteConfig(url, ws, false, d.output("x"))
@@ -581,6 +581,18 @@ func TestRemoteRefusals(t *testing.T) {
 		if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrOverlap) && dst != "gs://bkt/out" {
 			t.Errorf("source gs://bkt/a, destination %s: %v", dst, err)
 		}
+	}
+	// S3 alike: the listed s3://bkt/a holds, or is held by, these (a
+	// destination elsewhere is opened, so none is tried here).
+	for _, dst := range []string{"s3://bkt", "s3://bkt/a", "s3://bkt/ab/c"} {
+		cfg := remoteConfig(url, ws, false, &RemoteOutput{Location: dst})
+		cfg.Source.URI = "s3://bkt/a"
+		if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrOverlap) {
+			t.Errorf("source s3://bkt/a, destination %s: %v", dst, err)
+		}
+	}
+	if _, err := os.Stat(ws); err == nil {
+		t.Fatal("a refused run created its work directory")
 	}
 }
 

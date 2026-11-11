@@ -406,3 +406,31 @@ func TestMismatchDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// TestDestinationIdentity: a remote destination's provider, bucket,
+// prefix, endpoint, region and layout are each frozen (compared and
+// hashed).
+func TestDestinationIdentity(t *testing.T) {
+	base := Destination{Provider: "s3", Bucket: "b", Prefix: "p/", Endpoint: "http://h", Region: "eu-west-3", Layout: "swath/remote-1"}
+	id := Identity{Destination: &base}
+	if err := Check(id, id); err != nil {
+		t.Fatal(err)
+	}
+	for field, change := range map[string]func(*Destination){
+		"destination":        func(d *Destination) { d.Provider = "gs" },
+		"endpoint":           func(d *Destination) { d.Endpoint = "" },
+		"destination region": func(d *Destination) { d.Region = "us-east-1" },
+		"destination layout": func(d *Destination) { d.Layout = "x" },
+	} {
+		d := base
+		change(&d)
+		other := Identity{Destination: &d}
+		var m *MismatchError
+		if err := Check(id, other); !errors.As(err, &m) || m.Field != field {
+			t.Errorf("%s changed: %v", field, err)
+		}
+		if other.Hash() == id.Hash() {
+			t.Errorf("%s changed: same hash", field)
+		}
+	}
+}
