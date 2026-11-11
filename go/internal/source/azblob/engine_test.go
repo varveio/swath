@@ -503,3 +503,42 @@ func TestAzureResumeAfterCrash(t *testing.T) {
 		}
 	}
 }
+
+// TestAzureSplitsReadNothingTwice: with owner splits at every other page
+// on a coin, at 8 workers and pages of 100, every item the service
+// returned is an object listed once, a split cursor's own name (the seek
+// after a listed name returns it first, and rule 1 drops it) or one read
+// past a range's end (order_overlap_rows): one read per page leaves a
+// split no buffered surplus for its children to read again. The split
+// children's first pages end one item short (order_short_pages).
+func TestAzureSplitsReadNothingTwice(t *testing.T) {
+	var keys []string
+	for i := range 20000 {
+		keys = append(keys, fmt.Sprintf("d%02d/obj%06d", i%13, i))
+	}
+	slices.Sort(keys)
+	st := azblobtest.NewStore(keys)
+	p := azureEngine(t, st, keyrange.Options{Workers: 8, PageSize: 100, SplitCoin: coin(7)})
+	c := &collect{}
+	if err := runRows(t, context.Background(), p, 8, c); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysOf(c.rows); !slices.Equal(got, keys) {
+		t.Fatalf("%d keys, want %d", len(got), len(keys))
+	}
+	returned, cursors := 0, 0
+	for _, r := range st.Log() {
+		returned += len(r.Names)
+		if r.In.StartFrom != "" && r.In.Marker == "" && len(r.Names) > 0 && r.Names[0] == r.In.StartFrom {
+			cursors++
+		}
+	}
+	v := p.Stats().Counters.Value
+	if v("split.accepted_frontier")+v("split.accepted_bounded") == 0 || v("order_short_pages") == 0 {
+		t.Fatalf("no split (%d, %d) or no short page (%d)", v("split.accepted_frontier"), v("split.accepted_bounded"), v("order_short_pages"))
+	}
+	if want := len(keys) + cursors + int(v("order_overlap_rows")); returned != want {
+		t.Fatalf("the service returned %d items: %d keys, %d cursors and %d past ranges' ends make %d", returned, len(keys), cursors,
+			v("order_overlap_rows"), want)
+	}
+}
