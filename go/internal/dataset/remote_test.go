@@ -334,7 +334,7 @@ func TestRemoteStateRefusesLinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(target, filepath.Join(ws.Name(), rel)); err != nil {
-				t.Fatal(err)
+				t.Skipf("no symbolic link here: %v", err) // Windows without the privilege
 			}
 			if err := CheckRemoteLayout(ws); !errors.Is(err, ErrUnsafeLayout) {
 				t.Fatalf("layout check: %v", err)

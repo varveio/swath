@@ -244,6 +244,9 @@ a part still in flight when an abort was sent: the bucket's lifecycle rule for i
 removes them ([production.md](../production.md#writing-to-a-bucket)). Nothing remote
 is deleted during recovery; the crashed attempts' orphans go at the commit.
 
+On Windows a bucket run of an object store is refused as any journaled run is (`listing.ErrUnenforced`: the work
+directory's entries cannot be synced); an unjournaled one (a local tree) runs, without resume.
+
 **Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
 (the flag, or for GCS the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and
 passed to the client explicitly; an S3 destination never takes one from the environment: `AWS_ENDPOINT_URL`,
