@@ -6,10 +6,12 @@ package tree
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/varveio/swath/internal/counters"
 	"github.com/varveio/swath/internal/schema"
@@ -70,6 +72,8 @@ const (
 	cDroppedRows
 	cCandidateDirs
 	cLookups
+	cFirstRequeues
+	cRecordResets
 )
 
 // OrderedCounters are the ordered mode's engagement counters, registered
@@ -79,10 +83,12 @@ var OrderedCounters = []counters.Def{
 	{Key: "tree.dirs_whole", Kind: counters.Count, Unit: "directories", Help: "directories that fit their first page"},
 	{Key: "tree.dirs_split", Kind: counters.Count, Unit: "directories", Help: "directories larger than a page, whose rest went to the range engine as a segment"},
 	{Key: "tree.held_dirs", Kind: counters.Count, Unit: "directories", Help: "directory rows emitted after a sibling the store lists after them (a-b before a/)"},
-	{Key: "tree.resolve_pages", Kind: counters.Count, Unit: "requests", Help: "name pages read past a page's end because every entry read was a directory row held"},
+	{Key: "tree.resolve_pages", Kind: counters.Count, Unit: "requests", Help: "name pages read past a page's end because no row could be emitted yet (directories held, or rows dropped)"},
 	{Key: "tree.dropped_rows", Kind: counters.Count, Unit: "rows", Help: "rows read again after a seek and dropped: at or before the range's start key"},
 	{Key: "tree.candidate_dirs", Kind: counters.Count, Unit: "directories", Help: "directories behind a range's seek by name that belong to it by key (part before part-0015)"},
 	{Key: "tree.lookups", Kind: counters.Count, Unit: "requests", Help: "directory lookups for such candidates outside the names already read"},
+	{Key: "tree.first_page_requeues", Kind: counters.Count, Unit: "requests", Help: "directories' first pages asked again after the client's retries were exhausted"},
+	{Key: "tree.record_resets", Kind: counters.Count, Unit: "directories", Help: "split directories' records of what was read dropped at their cap (later candidates are looked up)"},
 }
 
 // OrderedRange is a range of the ordered mode: a directory (named by its
@@ -99,6 +105,9 @@ type Ordered[P any] struct {
 	eng  *keyrange.Engine[P]
 	base counters.ID
 	page int
+	// requeue is the provider's predicate (keyrange.Description.Requeue)
+	// for a first page asked again after its retries were exhausted.
+	requeue func(error) bool
 
 	mu    sync.Mutex
 	known map[string]*known[P] // per directory: what has been read of it
@@ -111,7 +120,7 @@ var _ Reader[struct{}, keyrange.Range, int] = (*Ordered[int])(nil)
 // by OrderedCounters). The engine's fetch is the mode's own; eo should turn
 // off the seed and structure probes, which are for a flat scope.
 func NewOrdered[P any](l Lister[P], eo keyrange.Options, d keyrange.Description[P]) (*Ordered[P], error) {
-	o := &Ordered[P]{l: l, known: map[string]*known[P]{}}
+	o := &Ordered[P]{l: l, known: map[string]*known[P]{}, requeue: d.Requeue}
 	n := len(d.Counters)
 	d.Counters = slices.Concat(d.Counters, OrderedCounters)
 	eng, err := keyrange.New(eo, d, o.fetch)
@@ -146,10 +155,27 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 	k := o.know(r.Prefix)
 	q := &keyrange.Query{Prefix: r.Prefix, Max: o.page}
 	var pg *keyrange.Page[P]
+	wait := requeueFirstWait
 	for {
 		var err error
 		if pg, err = o.list(ctx, q, k); err != nil {
-			return err
+			// As the engine does for its pages: a first page whose retries
+			// were exhausted is asked again after a backoff, for as long as
+			// the run lives (tree mode cannot resume, so failing would lose
+			// the run).
+			if o.requeue == nil || !o.requeue(err) || ctx.Err() != nil {
+				return err
+			}
+			o.add(cFirstRequeues, 1)
+			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return context.Cause(ctx)
+			case <-t.C:
+			}
+			wait = min(2*wait, requeueMaxWait)
+			continue
 		}
 		if !pg.Truncated || len(pg.Rows) > 0 {
 			break
@@ -322,7 +348,9 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 				put(schema.Row[P]{Key: key, Data: e.Data})
 			}
 		}
-		k.read(in, pg)
+		if k.read(in, pg) {
+			o.add(cRecordResets, 1)
+		}
 		in.Token = pg.Token
 		switch {
 		case !pg.Truncated:
@@ -379,6 +407,15 @@ func (o *Ordered[P]) forget(dir string) {
 	delete(o.known, dir)
 }
 
+// maxKnownDirs caps the directories a split directory's record holds;
+// requeueFirstWait and requeueMaxWait bound a requeued first page's
+// backoff.
+var (
+	maxKnownDirs     = 100_000
+	requeueFirstWait = 1 * time.Second
+	requeueMaxWait   = 30 * time.Second
+)
+
 // known is what has been read of one directory: the name intervals listed
 // and the directories in them, and candidates looked up.
 type known[P any] struct {
@@ -401,7 +438,7 @@ func (s span) holds(n string) bool {
 
 // read records a page: its names (after in.After on a chain's first page,
 // from its first entry on a continuation) and its directories.
-func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) {
+func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) (reset bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	s := span{lo: in.After, end: !pg.Truncated}
@@ -422,6 +459,15 @@ func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) {
 			k.dirs[e.Name] = e
 		}
 	}
+	if len(k.dirs) > maxKnownDirs {
+		// The record only saves lookups: dropped whole (spans with the
+		// directories they hold), later candidates are looked up instead,
+		// and a split directory of millions of subdirectories (users/<id>/)
+		// no longer holds them all for the run.
+		k.spans, k.dirs, k.none = nil, map[string]Entry[P]{}, nil
+		return true
+	}
+	return false
 }
 
 // dirAt reports what is known of name: sure when it lies in a read

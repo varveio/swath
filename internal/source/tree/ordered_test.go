@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/counters"
 	"github.com/varveio/swath/internal/order"
@@ -112,7 +113,8 @@ func (h *hns) List(ctx context.Context, q *DirQuery) (*DirPage[obj], error) {
 	names := h.dirs[q.Dir]
 	pos := sort.Search(len(names), func(i int) bool { return strings.TrimSuffix(names[i], "/") > q.After })
 	if q.Token != "" {
-		bind, p, ok := strings.Cut(q.Token, "@")
+		i := strings.LastIndexByte(q.Token, '@') // the bound may hold '@' (an engine pivot)
+		bind, p, ok := q.Token[:max(i, 0)], q.Token[i+1:], i >= 0
 		if !ok || bind != q.Dir+"\x00"+q.After {
 			return nil, fmt.Errorf("token %q resent with another query", q.Token)
 		}
@@ -335,5 +337,80 @@ func TestOrderedInvalidPage(t *testing.T) {
 	_, _, _, err := walkOrdered(t, h, 1, 1000, false)
 	if !errors.Is(err, source.ErrProtocol) {
 		t.Fatalf("err %v, want a protocol violation", err)
+	}
+}
+
+// TestOrderedCandidatePastFirstPage: big/part/ lies past its directory's
+// first page (2,000 names sort before it), so a segment whose pivot is a
+// part-NNNNN name must look the directory up rather than find it in what
+// was read; the output is still the oracle's.
+func TestOrderedCandidatePastFirstPage(t *testing.T) {
+	keys := manyKeys(3000)
+	for i := range 2000 {
+		keys = append(keys, fmt.Sprintf("big/a-%05d", i))
+	}
+	h := newHNS(keys)
+	c, _, o, err := walkOrdered(t, h, 8, 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.keys, h.oracle()) {
+		t.Fatal("output differs from the oracle")
+	}
+	if counter(o, "tree.lookups") == 0 {
+		t.Fatal("no lookup: big/part is past the first page of big/")
+	}
+}
+
+// TestOrderedFirstPageRequeued: a directory's first page whose retries were
+// exhausted is asked again (the provider's Requeue), as the engine asks its
+// own pages, instead of failing the run.
+func TestOrderedFirstPageRequeued(t *testing.T) {
+	old := requeueFirstWait
+	requeueFirstWait = time.Millisecond
+	t.Cleanup(func() { requeueFirstWait = old })
+	transient := errors.New("exhausted")
+	h := newHNS(siblingKeys)
+	h.fail = func(n int64) error {
+		if n == 1 { // the root's first page
+			return transient
+		}
+		return nil
+	}
+	o, err := NewOrdered[obj](h, keyrange.Options{Workers: 2, PageSize: 3},
+		keyrange.Description[obj]{Target: "hns", Listing: keyrange.Listing, Requeue: func(err error) bool { return errors.Is(err, transient) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := NewWalker[struct{}, keyrange.Range, obj](OrderedRange{}, o, Options[obj]{})
+	c := &collect{}
+	if _, err := order.Run[OrderedRange, obj](context.Background(), w, c, &testSchema, order.Options{Workers: 2, Budget: 1 << 24}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.keys, h.oracle()) || counter(o, "tree.first_page_requeues") != 1 {
+		t.Fatalf("requeues %d", counter(o, "tree.first_page_requeues"))
+	}
+}
+
+// TestOrderedRecordCapped: a split directory's record is dropped at its cap
+// (later candidates are looked up instead) and the output is unchanged.
+func TestOrderedRecordCapped(t *testing.T) {
+	old := maxKnownDirs
+	maxKnownDirs = 3
+	t.Cleanup(func() { maxKnownDirs = old })
+	keys := manyKeys(2000)
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("big/d%05d/f", i))
+	}
+	h := newHNS(keys)
+	c, _, o, err := walkOrdered(t, h, 8, 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.keys, h.oracle()) {
+		t.Fatal("output differs from the oracle")
+	}
+	if counter(o, "tree.record_resets") == 0 {
+		t.Fatal("the record was never dropped")
 	}
 }

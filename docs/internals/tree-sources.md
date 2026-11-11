@@ -125,12 +125,16 @@ engine's splits and their lookups. The first page is never read twice: the segme
 
 A reader returns an error only when the run must stop. localfs counts open, read and stat errors per
 directory with samples (unchanged); Azure's request failures are the client's (retries, requeue through the
-engine for segments, fatal for a first page after retries). The walker checks the context before every
+engine for segments and, the same way, for a directory's first page: `tree.first_page_requeues`, since tree
+mode cannot resume). The walker checks the context before every
 `Read`; readers check it in long loops (localfs as before; `Ordered` per name page). Engagement counters:
 the walker's (`tree.Stats`: files, dirs, bytes, pruned, excluded, omitted, segments; localfs reports them in its own
 fields), the ordered mode's (`tree.first_pages`, `tree.dirs_whole`,
 `tree.dirs_split`, `tree.held_dirs`, `tree.resolve_pages`, `tree.dropped_rows`, `tree.candidate_dirs`,
-`tree.lookups`), and the engine's own for segments.
+`tree.lookups`, `tree.first_page_requeues`, `tree.record_resets`), and the engine's own for segments. A split
+directory's record of what was read only saves lookups: past 100,000 directories it is dropped
+(`tree.record_resets`) and later candidates are looked up, so a directory of millions of subdirectories
+does not hold them all for the run.
 
 ## Composition with the order stage and counts
 

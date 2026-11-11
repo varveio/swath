@@ -160,7 +160,9 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
   has no columns for (open).
 - **Rows.** A directory is a row keyed with its name plus `/` in `swath/azblob-objects/v1` (size 0, its Etag,
   times, BlockBlob and tier as listed), followed by its subtree; a file is its blob name. No schema change:
-  a key ending in `/` is a directory (an HNS path cannot end in `/`). Flat-account output is unchanged.
+  in a tree-mode dataset a key ending in `/` is a directory (an HNS path cannot end in `/`); in a flat
+  account's dataset it may be a blob (a folder marker), so the report's `listing: tree` tells them apart.
+  Directory rows count as objects in `du`. Flat-account output is unchanged.
 - **Large directories** go to one shared range engine as segments (`keyrange.Engine.Within`), seed and
   structure probes off; the engine's `AcceptBound`, requeue and counters are the flat provider's.
 - **Recursive excludes.** The registered `treeOpened.Run` installs the filter package's descendant
