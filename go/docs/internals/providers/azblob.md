@@ -93,11 +93,18 @@ account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
 with the configured account, no port and no path; with any other `--endpoint-url` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
-passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
-Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
+passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
+`EndpointUnsupportedAccountFeatures` there ("This endpoint does not support BlobStorageEvents or SoftDelete") also
+passes (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
+without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
+([soft delete overview](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)). Most
+public open-data accounts answer it: 60 of the 64 Planetary Computer containers, and NOAA's GOES, HRRR, GFS and NWM and
+NAIP (checked live on 2026-11-11). A 403 `AuthorizationPermissionMismatch` there proves nothing: a container SAS met
+it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
+there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
-`filesystem properties` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`filesystem properties`, `filesystem endpoint blocked` or `asserted`, with a warning), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page

@@ -425,8 +425,10 @@ func (h hostFake) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // TestAdmissionFallback: when Get Account Information is refused (401,
 // as Azure answers any anonymous caller, or 403) or silent, the Data Lake
-// host's Filesystem Get Properties decides: false lists, true refuses; an
-// absent header or a refusal there is unknown, which refuses unless
+// host's Filesystem Get Properties decides: false lists, true refuses, a
+// 409 EndpointUnsupportedAccountFeatures (Azure's answer for a flat account
+// with soft delete or blob events) lists; an absent header, another code or
+// a refusal there is unknown, which refuses unless
 // --azure-assume-flat asserts a flat namespace (frozen in the identity, shown in
 // the report, warned about). A hierarchical namespace refuses whatever is
 // asserted, and an endpoint that is not ACCOUNT.blob.core.windows.net has
@@ -440,7 +442,7 @@ func TestAdmissionFallback(t *testing.T) {
 			w.WriteHeader(status)
 		}
 	}
-	dfs := func(status int, enabled string, asked *int) http.HandlerFunc {
+	dfs := func(status int, enabled, code string, asked *int) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			*asked++
 			if r.Method != http.MethodHead || r.URL.Query().Get("resource") != "filesystem" || r.URL.Path != "/c" {
@@ -449,6 +451,9 @@ func TestAdmissionFallback(t *testing.T) {
 			}
 			if enabled != "" {
 				w.Header().Set("x-ms-namespace-enabled", enabled)
+			}
+			if code != "" {
+				w.Header().Set("x-ms-error-code", code)
 			}
 			w.WriteHeader(status)
 		}
@@ -462,21 +467,27 @@ func TestAdmissionFallback(t *testing.T) {
 		admitted     string // Stats.Namespace, "" when refused
 		hierarchical bool
 		dfsNotAsked  bool
+		dfsCode      string // the Data Lake host's x-ms-error-code
 	}{
-		{"401, dfs false", blob(401, ""), 200, "false", false, "filesystem properties", false, false},
-		{"403, dfs false", blob(403, ""), 200, "false", false, "filesystem properties", false, false},
-		{"silent, dfs false", blob(200, ""), 200, "false", false, "filesystem properties", false, false},
-		{"401, dfs true", blob(401, ""), 200, "true", false, "", true, false},
-		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "", true, false},
-		{"401, dfs absent", blob(401, ""), 200, "", false, "", false, false},
-		{"401, dfs absent, asserted", blob(401, ""), 200, "", true, "asserted", false, false},
-		{"401, dfs 401, asserted", blob(401, ""), 401, "", true, "asserted", false, false},
-		{"blob false", blob(200, "false"), 200, "true", false, "account information", false, true},
-		{"blob true, asserted", blob(200, "true"), 200, "false", true, "", true, true},
-		{"blob 500, asserted", blob(500, ""), 200, "false", true, "asserted", false, true},
+		{"401, dfs false", blob(401, ""), 200, "false", false, "filesystem properties", false, false, ""},
+		{"403, dfs false", blob(403, ""), 200, "false", false, "filesystem properties", false, false, ""},
+		{"silent, dfs false", blob(200, ""), 200, "false", false, "filesystem properties", false, false, ""},
+		{"401, dfs true", blob(401, ""), 200, "true", false, "", true, false, ""},
+		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "", true, false, ""},
+		{"401, dfs absent", blob(401, ""), 200, "", false, "", false, false, ""},
+		{"401, dfs absent, asserted", blob(401, ""), 200, "", true, "asserted", false, false, ""},
+		{"401, dfs 401, asserted", blob(401, ""), 401, "", true, "asserted", false, false, ""},
+		{"blob false", blob(200, "false"), 200, "true", false, "account information", false, true, ""},
+		{"blob true, asserted", blob(200, "true"), 200, "false", true, "", true, true, ""},
+		{"blob 500, asserted", blob(500, ""), 200, "false", true, "asserted", false, true, ""},
+		{"401, dfs 409 soft delete or events", blob(401, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
+		{"403, dfs 409 soft delete or events", blob(403, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
+		{"401, dfs 409 soft delete or events, asserted", blob(401, ""), 409, "", true, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
+		{"401, dfs 409 another code", blob(401, ""), 409, "", false, "", false, false, "ContainerBeingDeleted"},
+		{"401, dfs 403 permission mismatch", blob(401, ""), 403, "", false, "", false, false, "AuthorizationPermissionMismatch"},
 	} {
 		asked := 0
-		hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": c.blob, "acct.dfs.core.windows.net": dfs(c.dfsStatus, c.dfsEnabled, &asked)}}
+		hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": c.blob, "acct.dfs.core.windows.net": dfs(c.dfsStatus, c.dfsEnabled, c.dfsCode, &asked)}}
 		cl, err := client.New(context.Background(), client.Config{Account: "acct", Anonymous: true, HTTPClient: hc, Retry: objhttp.Retry{MaxAttempts: 1}})
 		if err != nil {
 			t.Fatal(err)

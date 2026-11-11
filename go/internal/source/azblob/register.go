@@ -45,7 +45,7 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "azure-sas-token", Shown: source.ShownNever, Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
 		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
 	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
-		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent; a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
+		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	return o
 }
 

@@ -137,7 +137,8 @@ run's identity.
 **Flat namespace only.** Before listing, swath asks the account whether it has a hierarchical namespace
 (Data Lake Storage Gen2), and refuses one that does, with exit 2 and cause `unsupported`. When the account
 will not say (an anonymous caller is always refused that question, and swath then asks the account's Data
-Lake host, which answers public containers), the run is refused too, unless `--azure-assume-flat` asserts a
+Lake host, which answers public containers, or refuses a flat account that has blob soft delete or events on,
+which also establishes a flat namespace), the run is refused too, unless `--azure-assume-flat` asserts a
 flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
 reports a hierarchical namespace is refused whatever is asserted. A credential the service refuses during
 these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`). Versions, snapshots and deleted blobs are not

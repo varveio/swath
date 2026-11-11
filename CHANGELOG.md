@@ -5,6 +5,13 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Fixed: Go port, Azure Blob: admission refused most public open-data containers (60 of the 64 Planetary Computer
+  containers; NOAA's GOES, HRRR, GFS and NWM; NAIP) unless `--azure-assume-flat` was given (#457). Asked anonymously or
+  with a container SAS, Get Account Information does not answer, and those accounts' Data Lake host answers 409
+  `EndpointUnsupportedAccountFeatures`, which Azure documents as the answer for a flat account with blob soft delete
+  on (a hierarchical one keeps its Data Lake endpoint). That answer now establishes a flat namespace; the report's
+  `namespace` reads `filesystem endpoint blocked`.
+
 - Go port: `go/reader`'s `Dataset.Totals` scans in parallel shards over borrowed batches, as `Scan` does, with
   `runtime.GOMAXPROCS(0)` goroutines, instead of one serial pass of owning rows; it plans only the paths not
   inside another (the same rows) and takes each `Count` from the rows its scan reads instead of a count plan
