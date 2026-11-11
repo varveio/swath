@@ -60,7 +60,9 @@ are priced at 3,072 bytes; S3 and GCS at 1,024 bytes. All these schemas price a 
 state. The measurement dates and margins are in the writer-admission row above.
 
 Resource admission limits the default encoder count; an explicit `--encoders N` bypasses its
-memory and descriptor limits, with a warning on a shortfall. At a 128 MiB allowance,
+memory and descriptor limits, with a warning on a shortfall. The allowance is its own, 1/16 of the memory
+found (at most 1 GiB), not `--sort-buffer`; a dataset written to a bucket adds its upload chunk to each
+encoder's price ([encoder admission](ordering.md#the-budget)). At a 128 MiB allowance,
 S3 current objects admit 4 encoders and GCS current objects 3, subject to cores and descriptors.
 After listing, the allowance adds 1 MiB per worker: at 64 workers the calculated counts are
 6 for S3 and 5 for GCS; at 256 workers, 12 and 11. Explicit counts are never raised. See

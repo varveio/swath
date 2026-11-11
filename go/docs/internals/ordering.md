@@ -161,9 +161,12 @@ headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (sy
 by about 15 MiB at the smallest `--sort-buffer`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
-a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it,
-each priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
-`registry.Factory.EncoderBytes`). [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
+a floor of one: as many encoders as fit in an encoder allowance of their own, apart from the row budget, each
+priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
+`registry.Factory.EncoderBytes`) plus, for a dataset in a bucket, its upload's buffer (one 8 MiB chunk, or the
+chunk asked rounded up to 256 KiB as the SDK sends it). The allowance is the default row budget's share of the
+memory found (1/16, at least 128 KiB, at most 1 GiB; 128 MiB when no limit is found), whatever `--sort-buffer`
+says: the sort buffer sizes row storage only, and a small one no longer starves the writers. [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
 own the calculation, per-schema prices and measured margins. Descriptors bound the default count too:
 as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker
 and a reserve of 32 (`listing.admitEncoders`). An explicit `--encoders N` bypasses default memory
@@ -172,13 +175,25 @@ and descriptor admission and is honored with a warning on a resource shortfall.
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
-1,000-key S3 response and its arena) is added to the writer allowance, still at most `GOMAXPROCS` and the
-descriptors. 128 MiB at 64 workers carries 6 for S3, at 256 workers 12. The router holds the extra slots from the
+1,000-key S3 response and its arena) is added to the encoder allowance, still at most `GOMAXPROCS` and the
+descriptors. For S3's schema (31.5 MiB a writer, 39.5 MiB with an upload chunk), before `GOMAXPROCS` caps it:
+
+| Memory | Allowance | Output | At start | After listing, 64 / 256 workers |
+|---|---|---|---|---|
+| 2 GiB | 128 MiB | local | 4 | 6 / 12 |
+| 2 GiB | 128 MiB | GCS | 3 | 4 / 9 |
+| 8 GiB | 512 MiB | local | 16 | 18 / 24 |
+| 8 GiB | 512 MiB | GCS | 12 | 14 / 19 |
+
+An 8-vCPU host with 8 GiB therefore starts eight writers, local or GCS, whatever `--sort-buffer` is. The router holds the extra slots from the
 start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
 goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
 An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
 `encoders_after_listing` and `encoder_admission`: `listing_done`, `explicit`, `at_cap` (the start already
-admitted the most the host carries) or `not_reached` (listing never finished).
+admitted the most the host carries) or `not_reached` (listing never finished); beside them the allowance
+(`encoder_allowance_bytes`), an encoder's prices (`encoder_writer_bytes`, `encoder_upload_bytes`) and what bound
+each count (`encoders_at_start_bound_by`, `encoders_after_listing_bound_by`: `memory`, `cpu`, `descriptors`,
+`minimum` or `explicit`).
 
 ## The waits
 

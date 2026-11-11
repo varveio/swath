@@ -97,7 +97,7 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `remote` is a
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `encoder_allowance`, `encoders`, `gzip`). `remote` is a
 dataset written to a bucket's (`-o gs://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
 `destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
 `confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
@@ -174,7 +174,10 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
 `per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`); and `encoders_at_start`, `encoders_after_listing`,
-`encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+`encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
+`--sort-buffer` says), `encoder_writer_bytes` and `encoder_upload_bytes` (one encoder's prices), and
+`encoders_at_start_bound_by` and `encoders_after_listing_bound_by` (`memory`, `cpu`, `descriptors`, `minimum`,
+`explicit`). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).

@@ -96,6 +96,8 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
 | `drain.segments.budget_waits`, `.budget_wait_ns`, `.max_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit, and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered) |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
+| `drain.encoder_allowance_bytes`, `.encoder_writer_bytes`, `.encoder_upload_bytes` | bytes | the memory encoders are admitted against (1/16 of memory, whatever `--sort-buffer` says) and one encoder's prices: its writer, and a dataset in a bucket's upload chunk |
+| `drain.encoders_at_start_bound_by`, `.encoders_after_listing_bound_by` | name | what bound each count: `memory` (the allowance), `cpu` (GOMAXPROCS), `descriptors`, `minimum` (one), `explicit` |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `invocation.sort_buffer_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 
 A text run's sink (run summary, `output.text`):
@@ -106,7 +108,7 @@ A text run's sink (run summary, `output.text`):
 | `output_wait_ns` | ns | handing bytes on: to the compressor (a synchronous encoder compressing, or every parallel job busy), or to the file or stream uncompressed; by the order stage with one formatter, by the sequencer with more |
 | `formatters` | goroutines | rows formatted at once: `--encoders` (as admitted) for a file, 1 (the order stage) for stdout |
 | `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
-| `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `row_budget` (16 MiB each of an allowance equal to the row budget carries fewer), `encoders` (asked), `gzip` (one stream) |
+| `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `encoder_allowance` (16 MiB each of the encoder allowance carries fewer), `encoders` (asked), `gzip` (one stream) |
 
 A count (`swath du`, `swath diag count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
 and `frontier_stuck_max_ns` are 0 and `spill` is absent.

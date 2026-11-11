@@ -358,7 +358,12 @@ bucket bounds, and the exact `max`); `opens` counts one open per read handle mis
 `orphans_left` and `orphans_unproven`. `outcome.class` gains `unresolved` (exit 75, `cause`
 `commit_unresolved`), and `outcome.cause` `lost_race`, `remote_altered` and `candidate_mismatch`, all for a
 dataset in a bucket. The journal's version is 10 (it names a bucket dataset's part objects); this build reads
-the version 9 journals of earlier builds, which an earlier build cannot do the other way round. A version 4 reader ignores
+the version 9 journals of earlier builds, which an earlier build cannot do the other way round. Version 5 also reports what the Parquet encoders were admitted against, beside their counts in
+`resources.drain`: `encoder_allowance_bytes`, `encoder_writer_bytes`, `encoder_upload_bytes`,
+`encoders_at_start_bound_by` and `encoders_after_listing_bound_by`; encoders are now admitted against an
+allowance of their own, 1/16 of memory (at most 1 GiB) whatever `--sort-buffer` says, where earlier builds
+divided the sort buffer, and a text output's `compressor.jobs_reason` `row_budget` is `encoder_allowance`.
+A version 4 reader ignores
 the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
 of historical reports accepts both.
 
