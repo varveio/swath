@@ -123,6 +123,19 @@ func TestDecodeAzblobObject(t *testing.T) {
 	if _, err := DecodeAzblobObject(row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{"blob_type": absent})); !errors.Is(err, ErrSchema) {
 		t.Fatalf("blob_type absent: %v", err)
 	}
+	// The columns added later: read where present, nil where a part
+	// written before lacks them.
+	r = row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{
+		"access_tier_inferred": val(parquet.BooleanValue(true)), "lease_state": val(parquet.ByteArrayValue([]byte("leased"))),
+		"tag_count": val(parquet.Int64Value(3)), "metadata": val(parquet.ByteArrayValue([]byte(`{"a":"1"}`))),
+		"legal_hold": val(parquet.BooleanValue(false)), "last_access_time": val(parquet.Int64Value(1_767_225_600_000_000)),
+		"archive_status": absent, "server_encrypted": absent,
+	})
+	o, err = DecodeAzblobObject(r)
+	if err != nil || !*o.AccessTierInferred || *o.LeaseState != "leased" || *o.TagCount != 3 || *o.Metadata != `{"a":"1"}` ||
+		*o.LegalHold || o.LastAccessTime.Unix() != 1_767_225_600 || o.ArchiveStatus != nil || o.ServerEncrypted != nil || o.Tags != nil {
+		t.Fatalf("decoded %+v, %v", o, err)
+	}
 }
 
 func TestDecodeObject(t *testing.T) {

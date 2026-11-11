@@ -102,6 +102,13 @@ type Options struct {
 	// AllVersions is refused: versions, snapshots and deleted blobs are
 	// not supported.
 	AllVersions bool
+	// FetchMetadata, FetchTags and FetchImmutability add the user
+	// metadata, the blob index tags, and the immutability policy and legal
+	// hold to each row (include=metadata, tags, immutabilitypolicy and
+	// legalhold); their columns are null otherwise. Tags need the right
+	// to read them, which a listing does not: without it every request
+	// fails.
+	FetchMetadata, FetchTags, FetchImmutability bool
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -249,7 +256,41 @@ func (p *Provider) description() keyrange.Description[Object] {
 // adapter is a byte-order adapter over the provider's client, counting in
 // the provider's counters.
 func (p *Provider) adapter() *order.Adapter {
-	return order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
+	a := order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
+	a.Include = p.include()
+	return a
+}
+
+// include is the listing's include= (the adapter leaves out of probes what
+// only rows carry).
+func (p *Provider) include() client.Include {
+	return client.Include{Metadata: p.opt.FetchMetadata, Tags: p.opt.FetchTags, Immutability: p.opt.FetchImmutability}
+}
+
+// fill sets what the run asked for and a blob has none of to its empty
+// value, so that null means "not asked" (or, for metadata, unreadable: a
+// blob encrypted with a customer-provided key lists none, whatever it
+// holds): metadata and tags "{}", the legal hold false.
+func (p *Provider) fill(o *Object) {
+	if p.opt.FetchMetadata && o.Metadata == "" && o.CustomerProvidedKeySHA256 == "" {
+		o.Metadata = "{}"
+	}
+	if p.opt.FetchTags && o.Tags == "" {
+		o.Tags = "{}"
+	}
+	if p.opt.FetchImmutability && o.LegalHold == client.Unset {
+		o.LegalHold = client.False
+	}
+}
+
+// tagsRefused names what a refused listing that asked for tags most
+// likely lacks; any other error is returned as it is.
+func (p *Provider) tagsRefused(err error) error {
+	if p.opt.FetchTags && refused(err) {
+		return fmt.Errorf("%w (--azure-fetch-tags needs the right to read blob index tags: a SAS with the t permission, "+
+			"or an Entra ID role with the tags read data action such as Storage Blob Data Owner; an anonymous caller has none)", err)
+	}
+	return err
 }
 
 // adapterKey carries an Expand's adapter on its context.
@@ -480,7 +521,7 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 	}
 	out, err := a.Fetch(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, p.tagsRefused(err)
 	}
 	nblobs := 0
 	for i := range out.Items {
@@ -495,8 +536,15 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 			page.Prefixes = append(page.Prefixes, it.Name)
 			continue
 		}
-		page.Rows = append(page.Rows, Row{Key: it.Name, Data: Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime,
-			ETag: it.ETag, ContentMD5: it.ContentMD5, ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier}})
+		page.Rows = append(page.Rows, Row{Key: it.Name, Data: p.object(it)})
 	}
 	return page, nil
+}
+
+// object is a listed blob's row payload.
+func (p *Provider) object(it *client.Item) Object {
+	o := Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
+		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	p.fill(&o)
+	return o
 }

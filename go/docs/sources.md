@@ -147,6 +147,24 @@ listed, and `--all-versions` is refused.
 **Permissions.** Permission to list the container's blobs: a SAS with the list permission, or an Entra ID
 role that includes it.
 
+**Properties.** Each row carries what List Blobs returns for every blob: besides size, times, ETag, MD5,
+content type, blob type and access tier, whether the tier is inferred and when it last changed, a pending
+rehydration from Archive (`archive_status`, `rehydrate_priority`), the last access time (only where the
+account tracks it), content encoding, server encryption, encryption scope and customer-provided key hash,
+lease state and tag count. These come in the same responses at no extra request; a column is null where
+Azure lists nothing. Three switches ask for more, at the cost of larger responses:
+
+| Switch | Fills | Needs |
+|---|---|---|
+| `--azure-fetch-metadata` | `metadata`: the user metadata as a JSON object, keys sorted (`{}` for none) | listing permission; up to 8 KiB a blob |
+| `--azure-fetch-tags` | `tags`: the blob index tags as a JSON object (`{}` for none) | the right to read tags: a SAS with the `t` permission, or an Entra ID role with the tags read data action (Storage Blob Data Owner); never anonymous |
+| `--azure-fetch-immutability` | `immutability_policy_until`, `immutability_policy_mode`, `legal_hold` | listing permission |
+
+Without a switch its columns are null. Azure refuses a whole listing that asks for tags without the right to
+read them (401 anonymously, 403 `AuthorizationPermissionMismatch` with a SAS); swath then stops with that
+error and names the permission, and never lists without the tags it was asked for. A blob encrypted with a
+customer-provided key lists no metadata: its `metadata` is null. The switches are part of the run's identity.
+
 **Credentials,** in this order: `--anonymous`; a SAS from `--azure-sas-token`, else from the source URL's query
 (`az://account/container?sv=...&sig=...`), else `AZURE_STORAGE_SAS_TOKEN`; an account key from
 `AZURE_STORAGE_KEY` (Shared Key); else Entra ID through the Azure SDK's default chain (environment, workload

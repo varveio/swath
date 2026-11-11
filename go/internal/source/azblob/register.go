@@ -44,6 +44,11 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	source.Define(f, source.Flag{Name: "azure-sas-token", Shown: source.ShownNever, Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
 		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
+	source.Define(f, source.Flag{Name: "azure-fetch-metadata", Value: source.Switch(&o.FetchMetadata), Usage: "fill the metadata column with each blob's user metadata",
+		Long: "A JSON object, keys sorted; {} for a blob without any, null for one encrypted with a customer-provided key. Up to 8 KiB a blob: it grows the responses, the memory a row holds and the dataset."})
+	source.Define(f, source.Flag{Name: "azure-fetch-tags", Value: source.Switch(&o.FetchTags), Usage: "fill the tags column with each blob's index tags",
+		Long: "A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included."})
+	source.Define(f, source.Flag{Name: "azure-fetch-immutability", Value: source.Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
 	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
 		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	return o
@@ -141,13 +146,24 @@ func (o *opened) endpoint() string {
 // route (Routed), or the run declines resume.
 func (o *opened) Identity() source.Identity {
 	ep := o.endpoint()
-	return source.Identity{Provider: "azblob", Fields: []source.IdentityField{
+	id := source.Identity{Provider: "azblob", Fields: []source.IdentityField{
 		{Name: "source", Value: o.p.target()},
 		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
 		{Name: "account", Value: o.p.opt.Account},
 		{Name: "container", Value: o.p.opt.Container},
 		{Name: "flat_asserted", Value: strconv.FormatBool(o.p.opt.Flat)},
 	}}
+	// What a run asked for beyond the default columns, only when asked,
+	// so a default run's identity is as before they existed.
+	for _, f := range []struct {
+		name string
+		on   bool
+	}{{"fetch_metadata", o.p.opt.FetchMetadata}, {"fetch_tags", o.p.opt.FetchTags}, {"fetch_immutability", o.p.opt.FetchImmutability}} {
+		if f.on {
+			id.Fields = append(id.Fields, source.IdentityField{Name: f.name, Value: "true"})
+		}
+	}
+	return id
 }
 
 // Capabilities: the byte-order adapter serves byte-ordered pages from

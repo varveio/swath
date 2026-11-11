@@ -99,6 +99,27 @@ type AzblobObject struct {
 	BlobType     *string // BlockBlob, PageBlob or AppendBlob
 	AccessTier   *string
 	CreationTime *time.Time
+	// The properties added to the schema id later: nil in a part written
+	// before, and where Azure lists none.
+	AccessTierInferred        *bool
+	AccessTierChangeTime      *time.Time
+	ArchiveStatus             *string // rehydrate-pending-to-hot, -cool or -cold
+	RehydratePriority         *string
+	LastAccessTime            *time.Time // only with the account's last access tracking on
+	ContentEncoding           *string
+	ServerEncrypted           *bool
+	EncryptionScope           *string
+	CustomerProvidedKeySHA256 *string
+	LeaseState                *string
+	TagCount                  *int64
+	// Asked for (nil unless the run asked): user metadata and blob index
+	// tags as JSON objects, keys sorted; the immutability policy and the
+	// legal hold.
+	Metadata                *string
+	Tags                    *string
+	ImmutabilityPolicyUntil *time.Time
+	ImmutabilityPolicyMode  *string
+	LegalHold               *bool
 }
 
 // LocalEntry is a swath/local-entries/v1 row: one filesystem entry below the root.
@@ -147,10 +168,22 @@ func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
 // DecodeAzblobObject decodes a swath/azblob-objects/v1 row.
 func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error) {
 	d := decoder{spec: schemas[AzblobObjectsV1], row: &row}
-	o := AzblobObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		ETag: d.string("etag"), ContentMD5: d.string("content_md5"), ContentType: d.string("content_type"),
-		BlobType: d.string("blob_type"), AccessTier: d.string("access_tier"), CreationTime: d.time("creation_time")}
+	o := d.azblobObject()
 	return o, d.err
+}
+
+func (d *decoder) azblobObject() AzblobObject {
+	return AzblobObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
+		ETag: d.string("etag"), ContentMD5: d.string("content_md5"), ContentType: d.string("content_type"),
+		BlobType: d.string("blob_type"), AccessTier: d.string("access_tier"), CreationTime: d.time("creation_time"),
+		AccessTierInferred: d.bool("access_tier_inferred"), AccessTierChangeTime: d.time("access_tier_change_time"),
+		ArchiveStatus: d.string("archive_status"), RehydratePriority: d.string("rehydrate_priority"),
+		LastAccessTime: d.time("last_access_time"), ContentEncoding: d.string("content_encoding"),
+		ServerEncrypted: d.bool("server_encrypted"), EncryptionScope: d.string("encryption_scope"),
+		CustomerProvidedKeySHA256: d.string("customer_provided_key_sha256"), LeaseState: d.string("lease_state"),
+		TagCount: d.int64("tag_count"), Metadata: d.string("metadata"), Tags: d.string("tags"),
+		ImmutabilityPolicyUntil: d.time("immutability_policy_until"), ImmutabilityPolicyMode: d.string("immutability_policy_mode"),
+		LegalHold: d.bool("legal_hold")}
 }
 
 // objectColumns returns the columns DecodeObject reads for a schema id,
@@ -287,6 +320,15 @@ func (d *decoder) int64(name string) *int64 {
 	}
 	n := v.Int64()
 	return &n
+}
+
+func (d *decoder) bool(name string) *bool {
+	v, ok := d.value(name)
+	if !ok {
+		return nil
+	}
+	b := v.Boolean()
+	return &b
 }
 
 func (d *decoder) uint32(name string) *uint32 {

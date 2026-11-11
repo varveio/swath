@@ -53,6 +53,9 @@ _swath_list() {
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '--one-file-system[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
+        '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
+        '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
+        '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
@@ -115,6 +118,9 @@ _swath_du() {
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '--one-file-system[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
+        '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
+        '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
+        '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
@@ -192,6 +198,9 @@ _swath_diag_list() {
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '--one-file-system[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
+        '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
+        '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
+        '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \
@@ -264,6 +273,9 @@ _swath_diag_count() {
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '--one-file-system[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
+        '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
+        '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
+        '--azure-fetch-immutability[fill the immutability policy and legal hold columns]' \
         '--azure-assume-flat[assume a flat namespace where the account will not tell]' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--gcs-billing-project=[bill a requester-pays bucket'\''s requests to this project]:NAME: ' \

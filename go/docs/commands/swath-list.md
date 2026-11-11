@@ -139,6 +139,17 @@ Azure Blob:
                                 Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
                                 none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra
                                 ID (DefaultAzureCredential). Give it again to swath resume.
+      --azure-fetch-metadata  fill the metadata column with each blob's user metadata
+                                A JSON object, keys sorted; {} for a blob without any, null for one
+                                encrypted with a customer-provided key. Up to 8 KiB a blob: it grows
+                                the responses, the memory a row holds and the dataset.
+      --azure-fetch-tags      fill the tags column with each blob's index tags
+                                A JSON object, keys sorted; {} for a blob without any. Needs the
+                                right to read tags (a SAS with the t permission, or an Entra ID role
+                                such as Storage Blob Data Owner); without it every request fails,
+                                anonymous ones included.
+      --azure-fetch-immutability
+                              fill the immutability policy and legal hold columns
       --azure-assume-flat     assume a flat namespace where the account will not tell
                                 For when Get Account Information and the Data Lake host's Filesystem
                                 Get Properties are both refused or silent (a Data Lake host that

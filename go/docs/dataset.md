@@ -167,7 +167,7 @@ quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STR
 **`swath/gcs-objects/v1`**: `key` (the object name), `size` int64, `last_modified` timestamp (`updated`), `etag`
 STRING (the JSON API's opaque entity tag), `generation` and `metageneration` int64, `storage_class` STRING, `md5`
 and `crc32c` STRING (base64, as listed), `content_type` STRING, and last `time_created` timestamp
-(`timeCreated`). `time_created` is the one column a part may lack: parts written before the lister recorded it
+(`timeCreated`). `time_created` is the one column of this id a part may lack: parts written before the lister recorded it
 do not have it, and a reader reads it as null there. `last_modified` also moves when only the object's metadata
 changes, and `etag` is not a content hash. Compare content with `md5` or `crc32c`. GCS gives no `md5` for composite
 objects and neither hash for objects encrypted with customer-managed or customer-supplied keys.
@@ -180,7 +180,18 @@ live generation. There is no `is_latest`.
 as listed; null when absent, as for blobs uploaded in blocks without one), `content_type` STRING, `blob_type`
 STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `access_tier` STRING (null when absent), `creation_time`
 timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a
-content hash: compare content with `content_md5`, and never compare ETags across stores.
+content hash: compare content with `content_md5`, and never compare ETags across stores. Then the columns added
+to the schema id later, which a part written before lacks (read them as null there): `access_tier_inferred` bool
+(true when the tier is the account's default, not set on the blob), `access_tier_change_time` timestamp,
+`archive_status` STRING (`rehydrate-pending-to-hot`, `-cool`, `-cold`), `rehydrate_priority` STRING (`High`,
+`Standard`), `last_access_time` timestamp (only with the account's last access tracking on),
+`content_encoding` STRING, `server_encrypted` bool, `encryption_scope` STRING, `customer_provided_key_sha256`
+STRING, `lease_state` STRING (`available`, `leased`, `expired`, `breaking`, `broken`), `tag_count` int64, and
+the columns a run asks for, null unless it did: `metadata` and `tags` STRING (a JSON object of names to
+values, keys sorted; `{}` for none; `metadata` null for a blob encrypted with a customer-provided key, whose
+metadata a listing cannot read), `immutability_policy_until` timestamp, `immutability_policy_mode` STRING
+(`Unlocked`, `Locked`) and `legal_hold` bool (false for none). Each is as Azure lists it, null where it lists
+nothing.
 
 **`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them and
 records `no_dirs` in `coverage.filters`):

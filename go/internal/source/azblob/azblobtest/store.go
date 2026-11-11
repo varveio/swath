@@ -78,7 +78,8 @@ func NewStore(keys []string) *Store {
 }
 
 // NewEntryStore is a store of a versioned or soft-deleting container:
-// entries are blobs whose names may repeat, a name's entries listed in the
+// entries are blobs whose names may repeat (their metadata, tags and
+// immutability listed only with the include that asks for them), a name's entries listed in the
 // order given (Azure's within a name: snapshots and versions oldest first,
 // the base blob or current version last). An entry is listed only with the
 // include it needs (Listed); startFrom lists from a name's first entry, and
@@ -110,6 +111,9 @@ func (s *Store) view(inc client.Include) []client.Item {
 		return v
 	}
 	v := slices.DeleteFunc(slices.Clone(s.entries), func(it client.Item) bool { return !Listed(&it, inc) })
+	for i := range v {
+		v[i] = strip(v[i], inc)
+	}
 	if s.views == nil {
 		s.views = map[client.Include][]client.Item{}
 	}
@@ -269,6 +273,21 @@ func page(view []client.Item, prefix, delimiter string, pos, size int) ([]client
 		i++
 	}
 	return items, i
+}
+
+// strip is it as a listing with inc lists it: user metadata, tags, the
+// immutability policy and the legal hold only when asked for.
+func strip(it client.Item, inc client.Include) client.Item {
+	if !inc.Metadata {
+		it.Metadata = ""
+	}
+	if !inc.Tags {
+		it.Tags = ""
+	}
+	if !inc.Immutability {
+		it.ImmutabilityMode, it.ImmutabilityUntil, it.LegalHold = "", 0, client.Unset
+	}
+	return it
 }
 
 // AccountInfo answers that the account's namespace is flat.

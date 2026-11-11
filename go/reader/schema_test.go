@@ -3,7 +3,10 @@
 
 package reader
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestSchema(t *testing.T) {
 	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
@@ -31,7 +34,7 @@ func TestSchema(t *testing.T) {
 		t.Errorf("local key %+v, max %d", local.Key, local.MaxKeyBytes)
 	}
 	az, _ := Schema(AzblobObjectsV1)
-	if az.Key.Type != TypeString || az.MaxKeyBytes != 3072 || len(az.Columns) != 8 {
+	if az.Key.Type != TypeString || az.MaxKeyBytes != 3072 || len(az.Columns) != 24 {
 		t.Errorf("azblob %+v", az)
 	}
 	for _, name := range []string{"content_md5", "access_tier", "blob_type"} {
@@ -51,8 +54,22 @@ func TestSchema(t *testing.T) {
 			}
 		}
 	}
-	if len(absent) != 2 || absent[0] != "swath/gcs-objects/v1 time_created" || absent[1] != "swath/gcs-generations/v1 time_created" {
-		t.Errorf("columns a part may lack: %q", absent)
+	// The Azure Blob columns added after the first eight: the properties
+	// every listing carries, then those a run asks for.
+	added := []string{"access_tier_inferred", "access_tier_change_time", "archive_status", "rehydrate_priority",
+		"last_access_time", "content_encoding", "server_encrypted", "encryption_scope", "customer_provided_key_sha256",
+		"lease_state", "tag_count", "metadata", "tags", "immutability_policy_until", "immutability_policy_mode", "legal_hold"}
+	want := []string{"swath/gcs-objects/v1 time_created", "swath/gcs-generations/v1 time_created"}
+	for _, name := range added {
+		want = append(want, "swath/azblob-objects/v1 "+name)
+	}
+	if !slices.Equal(absent, want) {
+		t.Errorf("columns a part may lack: %q, want %q", absent, want)
+	}
+	for i, c := range az.Columns {
+		if c.MayBeAbsent != (i >= 8) || c.Required {
+			t.Errorf("azblob column %d %+v", i, c)
+		}
 	}
 }
 

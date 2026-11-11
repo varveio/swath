@@ -17,12 +17,14 @@ import os
 import sys
 
 from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
-                            GCS_VERSIONS, AZBLOB_CURRENT, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS, sql_string)
+                            GCS_VERSIONS, AZBLOB_CURRENT, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS, AZBLOB_ADDED,
+                            sql_string)
 
 
 # Physical type, repetition and logical annotation for every declared GCS
 # column. Nullable values still require a column in each part; only the
-# historical current-object time_created column may be absent (docs/dataset.md).
+# columns added to a schema id later may be absent: GCS's current-object
+# time_created and Azure's AZBLOB_ADDED (docs/dataset.md).
 GCS_CONTRACT = {
     name: ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
     if name in {"key", "etag", "storage_class", "md5", "crc32c", "content_type"}
@@ -30,9 +32,13 @@ GCS_CONTRACT = {
     for name in GCS_COLUMNS
 }
 
+AZBLOB_INTS = {"size", "tag_count"}
+AZBLOB_TIMES = {"last_modified", "creation_time", "access_tier_change_time", "last_access_time", "immutability_policy_until"}
+AZBLOB_BOOLS = {"access_tier_inferred", "server_encrypted", "legal_hold"}
 AZBLOB_CONTRACT = {
-    name: ("INT64", "OPTIONAL", "Int" if name == "size" else "Timestamp")
-    if name in {"size", "last_modified", "creation_time"}
+    name: ("INT64", "OPTIONAL", "Int") if name in AZBLOB_INTS
+    else ("INT64", "OPTIONAL", "Timestamp") if name in AZBLOB_TIMES
+    else ("BOOLEAN", "OPTIONAL", "Bool") if name in AZBLOB_BOOLS
     else ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
     for name in AZBLOB_COLUMNS
 }
@@ -57,13 +63,15 @@ def check_object_schema(con, path, sid, check):
     print(f"\nColumn-by-column against {sid}: {path}")
     for name, (physical, repetition, annotation) in contract.items():
         matches = [row for row in got if row[0] == name]
-        if not matches and sid == GCS_CURRENT and name == "time_created":
+        if not matches and (sid == GCS_CURRENT and name == "time_created" or sid == AZBLOB_CURRENT and name in AZBLOB_ADDED):
             continue
         row = matches[0] if matches else (name, None, None, None, None)
         logical = str(row[3] or "")
         good = len(matches) == 1 and row[1:3] == (physical, repetition)
         if annotation == "String":
             good = good and logical.startswith("String")
+        elif annotation == "Bool":
+            good = good and not logical
         elif annotation == "Int":
             good = good and ((logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64")
                              or (sid == AZBLOB_CURRENT and not logical and row[4] in (None, "INT_64")))

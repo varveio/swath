@@ -5,6 +5,17 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port, Azure Blob: rows carry the properties List Blobs returns for every blob that swath dropped:
+  `access_tier_inferred`, `access_tier_change_time`, `archive_status` and `rehydrate_priority` (a pending
+  rehydration from Archive), `last_access_time`, `content_encoding`, `server_encrypted`, `encryption_scope`,
+  `customer_provided_key_sha256`, `lease_state` and `tag_count`. They come in the same responses, so they cost
+  no request. `--azure-fetch-metadata`, `--azure-fetch-tags` and `--azure-fetch-immutability` fill `metadata`
+  and `tags` (JSON objects) and the immutability policy and legal hold columns, null otherwise; tags need the
+  SAS `t` permission or an Entra ID role that reads tags, and a listing refused for it stops naming the
+  permission. The columns are added to `swath/azblob-objects/v1` as optional columns, as the dataset evolution
+  policy allows: parts written before lack them, and readers read them as null there (`go/reader`'s
+  `AzblobObject` decodes them). A dataset of the same container therefore gains these columns.
+
 - Fixed: Go port, Azure Blob: admission refused most public open-data containers (60 of the 64 Planetary Computer
   containers; NOAA's GOES, HRRR, GFS and NWM; NAIP) unless `--azure-assume-flat` was given (#457). Asked anonymously or
   with a container SAS, Get Account Information does not answer, and those accounts' Data Lake host answers 409

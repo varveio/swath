@@ -159,6 +159,37 @@ var (
 		{Name: "content_type", Type: TypeString},
 		{Name: "time_created", Type: TypeTimestampMicros, MayBeAbsent: true},
 	}
+	// azblobColumns: every column is nullable: content_md5 and access_tier
+	// where Azure lists none, the others where a listing omits them. The
+	// columns from access_tier_inferred on were added to the schema id
+	// later: a part written before lacks them. metadata, tags and the
+	// immutability columns are null unless the run asked for them.
+	azblobColumns = []ColumnSpec{
+		{Name: "size", Type: TypeInt64},
+		{Name: "last_modified", Type: TypeTimestampMicros},
+		{Name: "etag", Type: TypeString},
+		{Name: "content_md5", Type: TypeString},
+		{Name: "content_type", Type: TypeString},
+		{Name: "blob_type", Type: TypeString},
+		{Name: "access_tier", Type: TypeString},
+		{Name: "creation_time", Type: TypeTimestampMicros},
+		{Name: "access_tier_inferred", Type: TypeBool, MayBeAbsent: true},
+		{Name: "access_tier_change_time", Type: TypeTimestampMicros, MayBeAbsent: true},
+		{Name: "archive_status", Type: TypeString, MayBeAbsent: true},
+		{Name: "rehydrate_priority", Type: TypeString, MayBeAbsent: true},
+		{Name: "last_access_time", Type: TypeTimestampMicros, MayBeAbsent: true},
+		{Name: "content_encoding", Type: TypeString, MayBeAbsent: true},
+		{Name: "server_encrypted", Type: TypeBool, MayBeAbsent: true},
+		{Name: "encryption_scope", Type: TypeString, MayBeAbsent: true},
+		{Name: "customer_provided_key_sha256", Type: TypeString, MayBeAbsent: true},
+		{Name: "lease_state", Type: TypeString, MayBeAbsent: true},
+		{Name: "tag_count", Type: TypeInt64, MayBeAbsent: true},
+		{Name: "metadata", Type: TypeString, MayBeAbsent: true},
+		{Name: "tags", Type: TypeString, MayBeAbsent: true},
+		{Name: "immutability_policy_until", Type: TypeTimestampMicros, MayBeAbsent: true},
+		{Name: "immutability_policy_mode", Type: TypeString, MayBeAbsent: true},
+		{Name: "legal_hold", Type: TypeBool, MayBeAbsent: true},
+	}
 )
 
 var schemas = map[SchemaID]SchemaSpec{
@@ -176,18 +207,7 @@ var schemas = map[SchemaID]SchemaSpec{
 	GCSGenerationsV1: {ID: GCSGenerationsV1, Key: textKey, MaxKeyBytes: maxObjectKeyBytes, Columns: concat(gcsColumns,
 		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros}),
 		Versions: VersionSpec{ID: "generation", DeletedAt: "time_deleted"}},
-	// Every column is nullable: content_md5 and access_tier where Azure
-	// lists none, the others where a listing omits them.
-	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: []ColumnSpec{
-		{Name: "size", Type: TypeInt64},
-		{Name: "last_modified", Type: TypeTimestampMicros},
-		{Name: "etag", Type: TypeString},
-		{Name: "content_md5", Type: TypeString},
-		{Name: "content_type", Type: TypeString},
-		{Name: "blob_type", Type: TypeString},
-		{Name: "access_tier", Type: TypeString},
-		{Name: "creation_time", Type: TypeTimestampMicros},
-	}},
+	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: azblobColumns},
 	// Names are bytes; identifiers are unsigned; allocated_bytes is
 	// st_blocks × 512 and metadata_changed_at is ctime.
 	LocalV1: {ID: LocalV1, Key: binaryKey, UniqueKeys: true, Columns: []ColumnSpec{

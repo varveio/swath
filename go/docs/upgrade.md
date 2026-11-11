@@ -423,7 +423,7 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
 - **Dispatch on the schema id.** Use the exact registered id (`swath/s3-objects/v1`, `swath/gcs-objects/v1`,
   `swath/azblob-objects/v1`, `swath/local-entries/v1` and the versions ids), with the columns
   [dataset.md](dataset.md#schema-registry) gives it. Its column set is not closed: ignore columns the id does not
-  define, and read an optional column that a part lacks as null (`time_created` on GCS). A run resumed by a build
+  define, and read an optional column that a part lacks as null (`time_created` on GCS, the later Azure Blob properties). A run resumed by a build
   that writes a newly added optional column mixes parts with and without it under one id.
 - **Columns Java wrote and the current-object schemas do not.** `version_id`, `is_latest`, `is_delete_marker` and
   `row_type` are gone from `swath/s3-objects/v1` ([S3 schema](#s3-schema)). Every version and delete marker is in

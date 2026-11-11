@@ -35,7 +35,19 @@ service's fallback, not swath's. An XML page must have an `EnumerationResults` r
 element in it, and must hold `Blobs`; an Arrow page must read without error, with `NextMarker` and
 `NumberOfRecords` in its schema metadata, that many rows, and each column behind what swath writes in a type the SDK reads; other columns, which swath
 never reads, may have any type ([clients.md](../clients.md#azure-decoding-and-requests)).
-Both convert to the same page (`TestArrowEquivalence`, recorded live). The `list_format.*` counters say which format
+Both convert to the same page (`TestArrowEquivalence`, recorded live). Besides the first eight columns'
+fields an item carries the entry fields of a grouped listing (below) and the properties every listing returns
+(`client.Props`: access tier inferred and change time, archive status, rehydrate priority, last access time,
+content encoding, server encryption, encryption scope, customer-provided key hash, lease state, tag count),
+and, when a request's `client.Include` asks (`--azure-fetch-metadata`, `--azure-fetch-tags`,
+`--azure-fetch-immutability`), the user metadata and index tags as JSON objects with sorted keys, the
+immutability policy and the legal hold. Arrow and XML carry each of them (`TestGroupedPage`); each column
+behind one is held to a type the SDK reads. `Content-CRC64` is not read: azblob 1.8.3's Arrow decoder drops
+it, so it would be null or not by format. The zero `Include` sends no `include`. The provider sets an empty
+`metadata` or `tags` asked for to `{}` and an absent legal hold to false, so null means not asked; metadata
+stays null for a blob with a customer-provided key (List Blobs cannot decrypt it). A refused listing that
+asked for tags (401, or 403 `AuthorizationPermissionMismatch` for a SAS without `t`: the service refuses the
+whole request) keeps its class and gains the permission it needs in its message (`TestFetchTagsRefused`). The `list_format.*` counters say which format
 each valid page came in. A hierarchy page's blobs and prefixes, which the SDK returns
 apart, are merged back into wire order (UTF-16 code-unit order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.
 The accepted success-body limit is 64 MiB; a listing page past it fails the request
@@ -158,12 +170,18 @@ to `Prefixes`, with the adapter's `Truncated` and token.
 
 **Schema** `swath/azblob-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
 from the reader. [dataset.md](../../dataset.md#schema-registry) owns column semantics; the provider uses
-`MaxKeyBytes` 3,072 and dictionary encoding for `blob_type`. Its spill codec uses
-[the shared payload delta encoding](../ordering.md#payload-delta-codec).
+`MaxKeyBytes` 3,072, dictionary encoding for `blob_type` and the other short strings, and `DELTA_BYTE_ARRAY`
+for `etag`, `metadata` and `tags`. The sixteen columns after `creation_time` were added to the id later
+(`MayBeAbsent`), as dataset.md's evolution policy allows. A row's logical size counts an added integer or
+boolean only when it has a value, so a listing whose blobs carry none of them cuts its parts as before. Its
+spill codec uses [the shared payload delta encoding](../ordering.md#payload-delta-codec) in three groups
+(eight strings at most each: the first columns, the properties, the tags) and one byte packing the three
+optional booleans (`TestDeltaHistoricalBytes` pins the first group's bytes, `TestCodecProperties` the rest).
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
-are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`). Credentials may change, a SAS among them. A run with
+are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`), and `fetch_metadata`, `fetch_tags`, `fetch_immutability` only when
+given (a default run's identity is as before they existed). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles`,
 `timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`

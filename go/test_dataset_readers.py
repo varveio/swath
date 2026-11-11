@@ -11,7 +11,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from dataset_schema import COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
+from dataset_schema import AZBLOB_ADDED, COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
 from bench.diffds import compare
 
 FIXTURES = Path(__file__).parent / "testdata" / "readers"
@@ -270,7 +270,8 @@ class VerifierSchema(unittest.TestCase):
             for dataset in sorted((self.base / schema).iterdir()):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)
-                    allowed = dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
+                    allowed = (dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
+                               or (schema == "azblob" and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
                     self.assertEqual(status == 0, allowed, output)
                     if not allowed:
                         column = dataset.name.split("_", 1)[1].removeprefix("type_")
