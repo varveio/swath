@@ -94,6 +94,9 @@ func checkDest(o options, p string) error {
 	if o.text == nil && !o.countOnly && o.out != "" {
 		out = resolvePath(o.out)
 	}
+	if o.remote != nil {
+		out = resolvePath(o.workDir) // the run owns its work directory, never the bucket's names
+	}
 	// The output and its entries are found by identity (samePlace), not by
 	// spelling: on a case-insensitive filesystem base/out is base/OUT.
 	isOut := func(d string) bool { return out != "" && samePlace(d, out) }

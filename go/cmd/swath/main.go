@@ -39,6 +39,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/go/objfile"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -172,8 +173,11 @@ func newAttempt() *listing.Attempt {
 // cfgOut is the output directory a run with o would own ("" for swath
 // count).
 func cfgOut(o options) string {
-	if o.countOnly || o.text != nil {
+	switch {
+	case o.countOnly || o.text != nil:
 		return ""
+	case o.remote != nil:
+		return o.workDir
 	}
 	return o.out
 }
@@ -531,6 +535,11 @@ type options struct {
 	allocated, linksOnce          bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
+	// A gs:// -o: its work directory, its credentials and endpoint
+	// (--work-dir, --output-gcs-credentials-file, --output-endpoint-url),
+	// and the location, resolved (nil for any other output).
+	workDir, outputCreds, outputEndpoint string
+	remote                               *objfile.Location
 }
 
 // swath du's --sort orders.
@@ -559,7 +568,8 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
+	"output-gcs-credentials-file"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -845,6 +855,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
+	}
+	if o.remote != nil {
+		// The dataset goes to the bucket; the work directory is owned as a
+		// dataset directory is (lock, journal, spill, receipts).
+		cfg.Output.Dir = o.workDir
+		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds}
 	}
 	stopProfile, err := profile(o.cpuProfile, o.memProfile)
 	if err != nil {

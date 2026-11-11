@@ -96,6 +96,15 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Value: source.Func(names(&o.columns))})
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
+	def(source.Flag{Name: "work-dir", Value: source.Text(&o.workDir), Metavar: "DIR", Group: source.GroupOutput, Commands: writing,
+		Usage: "with a bucket -o: the local work directory (lock, journal, spill)",
+		Long:  "Required when -o is a bucket prefix (GCS), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve."})
+	def(source.Flag{Name: "output-gcs-credentials-file", Value: source.Text(&o.outputCreds), Metavar: "FILE", Group: source.GroupOutput, Commands: writing,
+		Usage: "credentials for a GCS -o (default: Application Default Credentials)",
+		Long:  "A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume."})
+	def(source.Flag{Name: "output-endpoint-url", Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
+		Usage: "the JSON API base of a GCS -o (default: Google's)",
+		Long:  "As the SDK takes it (https://storage.googleapis.com/storage/v1/); fixed for the run."})
 
 	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",

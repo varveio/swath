@@ -32,6 +32,14 @@ logs.parquet is already complete: nothing to resume
 
 [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
+A run that writes to a bucket (`-o gs://BUCKET/PREFIX --work-dir DIR`) is resumed by its work directory:
+`swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
+prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
+generation, size and SHA-256), and a resume of a run that reached its commit first reads the bucket's manifest
+back: the run's own means the run is complete. The destination's credentials may be given again
+(`--output-gcs-credentials-file`); its bucket, prefix and endpoint are fixed. A lost work directory loses the
+resume: the parts already uploaded are not reused, and a new run writes to a new prefix.
+
 Rows listed but not yet in a published part are listed again, except those a validated spill file still
 holds ([running.md](../running.md#stopping-and-resuming)).
 
@@ -58,6 +66,13 @@ resumes, and a text file `rows.tsv` is refused as text output.
 
 <!-- flags:begin -->
 ```text
+Output:
+      --output-gcs-credentials-file FILE
+                              credentials for a GCS -o (default: Application Default Credentials)
+                                A service account key or authorized-user JSON, with the read-write
+                                scope. The destination's own: the source's credentials and
+                                --anonymous never apply to it. It may change on resume.
+
 Object stores:
       --anonymous             send no credentials (a public bucket or container)
                                 Ignores any configured. Without it a source with no usable
