@@ -913,6 +913,12 @@ envelope, and the Guard's one allocation and copy of the body, which is most of 
 allocates beyond the page. `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it
 replaced (kept in `xml_old_test.go`): the same pages, the same errors.
 
+Of that client cost, about 11 µs per request was `debug.ReadBuildInfo` parsing the build info for the User-Agent
+token: the SDK runs API options on every call. The token is now read once per client. `BenchmarkDecode`, ten
+alternated runs: blockchain 536.5 → 519.0 ns/object (−3.2 %), list 903.6 → 878.6 (−2.8 %), versions 957.8 → 930.6
+(−2.8 %), full 843.2 → 822.6 (−2.4 %), all p ≤ 0.001; 451 → 364 allocations per page. The GCS client still reads
+it per listing request (`gcs/client/list.go`); not measured.
+
 ### Pivot density step cost (2026-11-11)
 
 The same blockchain profile put `keyrange.extrapolateWhy`, the density step `propose` runs after every continuing

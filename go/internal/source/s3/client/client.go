@@ -139,15 +139,21 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		DisableS3ExpressSessionAuth: aws.Bool(true), // directory buckets are refused before any request
 		RequestChecksumCalculation:  aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation:  aws.ResponseChecksumValidationWhenRequired,
-		APIOptions:                  []func(*smithymiddleware.Stack) error{prependUserAgent, allowGzip},
+		APIOptions:                  []func(*smithymiddleware.Stack) error{prependUserAgent(buildinfo.UserAgent()), allowGzip},
 	})
 	return c, nil
 }
 
-// prependUserAgent runs after the SDK builds its header: its AddUserAgent
-// helpers append products, and AddUserAgentKey also replaces the slash.
-func prependUserAgent(stack *smithymiddleware.Stack) error {
-	token := buildinfo.UserAgent()
+// prependUserAgent puts swath's token first, after the SDK builds its
+// header: its AddUserAgent helpers append products, and AddUserAgentKey
+// also replaces the slash. The token is read once per client: API options
+// run on every call, and reading the build info parses it (about 11 µs a
+// request, BenchmarkDecode).
+func prependUserAgent(token string) func(*smithymiddleware.Stack) error {
+	return func(stack *smithymiddleware.Stack) error { return insertUserAgent(stack, token) }
+}
+
+func insertUserAgent(stack *smithymiddleware.Stack, token string) error {
 	return stack.Build.Insert(smithymiddleware.BuildMiddlewareFunc("SwathUserAgent", func(ctx context.Context, in smithymiddleware.BuildInput, next smithymiddleware.BuildHandler) (
 		smithymiddleware.BuildOutput, smithymiddleware.Metadata, error,
 	) {
