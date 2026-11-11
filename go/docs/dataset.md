@@ -73,8 +73,8 @@ lists), `run.json` (the run report: operational, written after the commit and ne
 
 ## A dataset in a bucket
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` writes the same dataset straight to Google Cloud
-Storage; nothing of it is written to local disk. Readers see the same profile, with two differences in layout:
+`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`) writes the same dataset
+straight to Google Cloud Storage (or S3); nothing of it is written to local disk. Readers see the same profile, with two differences in layout:
 
 - **Part names are unique to a run and an attempt:** `PREFIX/data/RUN/ATTEMPT/part-NNNNN.parquet`, where RUN is
   the run's UUID (kept across its resumes) and ATTEMPT the invocation's id. Ordinals stay dense and in key
@@ -82,14 +82,15 @@ Storage; nothing of it is written to local disk. Readers see the same profile, w
   resumed. The manifest's `parts[].path` names each one; a reader takes them from the manifest and never from a
   listing of `data/`, which may also hold parts no manifest names (below).
 - **The manifest is created, never replaced:** `PREFIX/manifest.json` is written only if absent (GCS
-  `ifGenerationMatch=0`), so of two runs writing one prefix exactly one commits. `PREFIX/run.json` is written by
+  `ifGenerationMatch=0`, S3 `If-None-Match: *`), so of two runs writing one prefix exactly one commits. `PREFIX/run.json` is written by
   the run that committed, after the commit, only if absent. A prefix that already holds a manifest is refused
   before the run starts: a dataset in a bucket is not replaced (choose a new prefix per run).
 
 Parts are uploaded as they close and are individually visible before the commit; an upload aborted before
 its completion leaves no object, and one whose completion failed ambiguously may. Until the manifest exists the
 prefix holds no dataset, whatever `data/` holds. The committing run deletes every part object it created that
-its manifest does not name, only at the generation its upload recorded (retries, attempts cut short); a run
+its manifest does not name, only at the version its upload recorded (the GCS generation; the S3 version id,
+or its ETag as `If-Match`) (retries, attempts cut short); a run
 that loses the race deletes its own. An object at one of the run's names that it never recorded creating is
 left. A commit whose outcome is unknown (the creation failed ambiguously and no manifest is there yet) deletes
 nothing: the manifest may still appear, and every part it names must then exist. Objects a killed run left

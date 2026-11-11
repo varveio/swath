@@ -66,11 +66,13 @@ func RemotePartName(run, attempt string, i int) string {
 }
 
 // Remote is a remote dataset's root: its location, the endpoint it is
-// reached at ("" for the provider's default), and a reader and a writer of
-// the names under its prefix.
+// reached at ("" for the provider's default), its region (S3's, as
+// resolved; "" for GCS), and a reader and a writer of the names under its
+// prefix.
 type Remote struct {
 	Location objfile.Location
 	Endpoint string
+	Region   string
 	Opener   objfile.Opener
 	Writer   objfile.Writer
 	// Emulator says Endpoint is an emulator's host, reached without
@@ -90,7 +92,12 @@ func (r *Remote) URI() string {
 type UploadStats struct {
 	Uploads atomic.Int64 // completed
 	Aborted atomic.Int64 // ended without an object
-	Bytes   atomic.Int64 // bytes handed to uploads
+	// AbortsUnconfirmed are aborts the store did not confirm (an S3
+	// multipart upload whose abort failed or that is still listed: its
+	// parts stay until an abort succeeds or the bucket's lifecycle rule
+	// removes them).
+	AbortsUnconfirmed atomic.Int64
+	Bytes             atomic.Int64 // bytes handed to uploads
 	// WaitNs is the time encoders spent in upload writes and completions:
 	// a write blocks while the previous chunk is in flight.
 	WaitNs  atomic.Int64
@@ -100,7 +107,8 @@ type UploadStats struct {
 	classes map[string]int64
 }
 
-// Retried counts one retried attempt of err (objfile/gcs WriteOptions.Retried).
+// Retried counts one retried attempt of err (the Retried of objfile/gcs's
+// and objfile/s3's WriteOptions).
 func (s *UploadStats) Retried(_ string, err error) {
 	s.Retries.Add(1)
 	s.mu.Lock()
@@ -126,13 +134,17 @@ func (s *UploadStats) Classes() map[string]int64 {
 }
 
 // FailureClass names a store failure for a report: http_STATUS for a
-// service answer, timeout, connection, or other.
+// service answer (GCS's, or an AWS SDK response error), timeout,
+// connection, or other.
 func FailureClass(err error) string {
 	var ge *googleapi.Error
+	var re interface{ HTTPStatusCode() int }
 	var ne net.Error
 	switch {
 	case errors.As(err, &ge):
 		return "http_" + strconv.Itoa(ge.Code)
+	case errors.As(err, &re) && re.HTTPStatusCode() > 0:
+		return "http_" + strconv.Itoa(re.HTTPStatusCode())
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.As(err, &ne) && ne.Timeout():
@@ -228,7 +240,11 @@ func (a *remoteArtifact) Close() error {
 		return nil
 	}
 	a.stats.Aborted.Add(1)
-	return a.u.Abort()
+	err := a.u.Abort()
+	if err != nil {
+		a.stats.AbortsUnconfirmed.Add(1)
+	}
+	return err
 }
 
 // ClaimReceipt is a part's claim, durable before the journal record that

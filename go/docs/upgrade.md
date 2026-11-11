@@ -352,8 +352,9 @@ profiles' files and phase boundary, present only with `SWATH_CPUPROFILE` or `SWA
 `resources.spill.read_handles` (the spill read handles' `hits`, `misses`, `raced`, `evictions` by reason and
 `peak_open`) and `frame_bytes` and `frame_rows` (the row frames written by size: `p50`, `p90`, `p99` as power-of-two
 bucket bounds, and the exact `max`); `opens` counts one open per read handle miss, not one per frame read; and
-`output.remote`, present only for a dataset written to a bucket (`-o gs://...`): `destination`, `work_dir`,
-`commit`, `manifest`, `manifest_identity`, `manifest_sha256`, `uploads`, `uploads_aborted`, `upload_bytes`,
+`output.remote`, present only for a dataset written to a bucket (`-o gs://...` or `-o s3://...`): `destination`, `work_dir`,
+`commit`, `manifest`, `manifest_identity`, `manifest_sha256`, `uploads`, `uploads_aborted`,
+`aborts_unconfirmed`, `upload_bytes`,
 `upload_wait_ns`, `retries`, `retry_classes`, `objects_verified`, `orphans_deleted`, `orphans_gone`,
 `orphans_left` and `orphans_unproven`. `outcome.class` gains `unresolved` (exit 75, `cause`
 `commit_unresolved`), and `outcome.cause` `lost_race`, `remote_altered` and `candidate_mismatch`, all for a

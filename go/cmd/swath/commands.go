@@ -119,11 +119,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	// The recorded flags without --overwrite (the output is resumed, not
 	// replaced), then the overrides, then the directory as given (it may
-	// have moved: the dataset directory, or a gs:// dataset's work
+	// have moved: the dataset directory, or a bucket dataset's work
 	// directory, whose -o stays as recorded), then SOURCE.
 	var cmd []string
 	var secrets []string // secret flags the run had, whose values were not recorded
-	remote := false      // a gs:// -o: DIR is its work directory, the bucket stays as recorded
+	remote := false      // a bucket -o: DIR is its work directory, the bucket stays as recorded
 	for _, a := range flags {
 		name, v, eq := strings.Cut(strings.TrimPrefix(a, "--"), "=")
 		if name == "overwrite" && (!eq || v == "true") {

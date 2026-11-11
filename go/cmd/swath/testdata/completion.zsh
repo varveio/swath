@@ -13,7 +13,9 @@ _swath_list() {
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
-        '--output-endpoint-url=[the JSON API base of a GCS -o (default: Google'\''s)]:URL: ' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -143,7 +145,9 @@ _swath_diag_list() {
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
-        '--output-endpoint-url=[the JSON API base of a GCS -o (default: Google'\''s)]:URL: ' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -223,7 +227,9 @@ _swath_diag_count() {
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
-        '--output-endpoint-url=[the JSON API base of a GCS -o (default: Google'\''s)]:URL: ' \
+        '--output-s3-region=[the region of an S3 -o]:NAME: ' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
+        '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -293,6 +299,7 @@ _swath_diag_count() {
 _swath_resume() {
     _arguments \
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
+        '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \

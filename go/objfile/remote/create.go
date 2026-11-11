@@ -18,40 +18,61 @@ import (
 	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/storage"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/config"
+	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/logging"
 	"google.golang.org/api/option"
 	htransport "google.golang.org/api/transport/http"
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/go/objfile/s3"
 )
 
 // CreateOptions configure a Destination. Nothing in them is shared with
 // any client the caller reads with: a destination's credentials are its
 // own.
 type CreateOptions struct {
-	// CredentialsFile is a Google credentials JSON file (a service
+	// CredentialsFile (gs://) is a Google credentials JSON file (a service
 	// account's key, or authorized-user credentials) read for the
 	// destination; "" uses Application Default Credentials. Either way the
 	// read-write scope is requested.
 	CredentialsFile string
-	// Endpoint is the JSON API base the client sends to
+	// Endpoint is, for gs://, the JSON API base the client sends to
 	// (https://storage.googleapis.com/storage/v1/ by default), as the SDK
 	// takes it; "" is the default, or the emulator STORAGE_EMULATOR_HOST
-	// names (then without credentials: ResolveEndpoint). It may not carry
-	// user information, a query or a fragment.
+	// names (then without credentials: ResolveEndpoint). For s3://, it is
+	// an S3-compatible endpoint URL, addressed path-style (/BUCKET/KEY); ""
+	// is AWS's regional endpoint (virtual-hosted), and the environment's
+	// endpoint variables (AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, FIPS,
+	// dual-stack) are not applied: the destination is the one named. It
+	// may not carry user information, a query or a fragment.
 	Endpoint string
 	// Emulator says Endpoint is an emulator's host or URL, reached without
 	// credentials (what ResolveEndpoint returns for STORAGE_EMULATOR_HOST).
 	// A caller that freezes the route resolves it once and passes both, so
-	// the environment is not read again.
+	// the environment is not read again. gs:// only.
 	Emulator bool
 	// RequestTimeout bounds the wait for a response's headers once a
 	// request is sent, so a stalled request fails (and is retried) instead
 	// of hanging (0: DefaultRequestTimeout).
 	RequestTimeout time.Duration
-	// Write configures the uploads (chunk size, retries, their account).
+	// Region (s3://) is the bucket's region, which requests are signed for;
+	// "" is AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
+	// us-east-1. Destination.Region is the one resolved.
+	Region string
+	// Profile (s3://) is the shared config profile the credentials (and,
+	// without Region, the region) come from; "" is the AWS SDK's default
+	// chain (environment, AWS_PROFILE or default, SSO, web identity,
+	// container and instance roles). Requests are always signed.
+	Profile string
+	// Write configures gs:// uploads (chunk size, retries, their account).
 	Write gcs.WriteOptions
+	// S3Write configures s3:// uploads (part size, retries, their account).
+	S3Write s3.WriteOptions
 }
 
 // Destination is a dataset root opened for writing by Create: a Writer and
@@ -59,24 +80,30 @@ type CreateOptions struct {
 // location's prefix, through one client it owns. It is safe for concurrent
 // use.
 type Destination struct {
-	o     objfile.Opener
-	w     objfile.Writer
-	scope string
-	close func() error
+	o      objfile.Opener
+	w      objfile.Writer
+	scope  string
+	region string
+	close  func() error
 }
 
 // Create returns the Destination of location, a URI ParseLocation accepts.
-// Only gs:// is supported for writing; s3:// and az:// are refused. It makes
-// no request: a missing bucket or a refused credential fails the first
+// gs:// and s3:// are supported for writing; az:// is refused. It makes no
+// request: a missing bucket or a refused credential fails the first
 // request. Credentials are loaded now (a file that cannot be read fails
-// Create); the Destination outlives ctx.
+// Create; an AWS chain resolves its credentials at the first request); the
+// Destination outlives ctx.
 func Create(ctx context.Context, location string, o CreateOptions) (*Destination, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {
 		return nil, err
 	}
-	if l.Scheme != "gs" {
-		return nil, fmt.Errorf("remote: writing to %s:// is not supported (gs:// only)", l.Scheme)
+	switch l.Scheme {
+	case "gs":
+	case "s3":
+		return createS3(ctx, l, o)
+	default:
+		return nil, fmt.Errorf("remote: writing to %s:// is not supported (gs:// and s3:// only)", l.Scheme)
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
 	pool.ResponseHeaderTimeout = o.RequestTimeout
@@ -201,6 +228,80 @@ func ResolveEndpoint(endpoint string) (string, bool) {
 	}
 	return "", false
 }
+
+// createS3 is Create of an s3:// location: a client of its own over its
+// own connection pool, from the AWS SDK's configuration with o's profile
+// and region, signing every request.
+func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destination, error) {
+	d := &Destination{scope: l.String()}
+	s := &Store{scope: d.scope}
+	if err := s.at(o.Endpoint); err != nil {
+		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
+	}
+	d.scope = s.scope
+	timeout := o.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	// The SDK's buildable client (which answers a redirect with itself, and
+	// has a pool of its own), so the configuration can add a CA bundle to it
+	// (AWS_CA_BUNDLE, a profile's ca_bundle), which a plain *http.Client
+	// refuses.
+	hc := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.ResponseHeaderTimeout = timeout })
+	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(hc), config.WithLogger(logging.Nop{})}
+	if o.Profile != "" {
+		opts = append(opts, config.WithSharedConfigProfile(o.Profile))
+	}
+	if o.Region != "" {
+		opts = append(opts, config.WithRegion(o.Region))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("remote: destination configuration: %w", err)
+	}
+	d.region = cfg.Region
+	if d.region == "" {
+		d.region = "us-east-1"
+	}
+	var frozen *http.Client // the client requests go through, its pool closed by Close
+	client := s3sdk.NewFromConfig(cfg, func(so *s3sdk.Options) {
+		// The buildable client as configured (the CA bundle, the defaults'
+		// timeouts) is frozen into the *http.Client it builds, whose pool
+		// Close can then close.
+		if bc, ok := so.HTTPClient.(*awshttp.BuildableClient); ok {
+			if hc, ok := bc.Freeze().(*http.Client); ok {
+				so.HTTPClient, frozen = hc, hc
+			}
+		}
+		so.Region = d.region
+		// The endpoint named, or AWS's for the region: never one the
+		// environment sets, so the destination is what its identity says.
+		so.BaseEndpoint, so.UsePathStyle = nil, false
+		if o.Endpoint != "" {
+			so.BaseEndpoint, so.UsePathStyle = aws.String(o.Endpoint), true
+		}
+		// Nothing is logged: no request, response or credential.
+		so.Logger, so.ClientLogMode = logging.Nop{}, 0
+		so.EndpointOptions.UseFIPSEndpoint = aws.FIPSEndpointStateDisabled
+		so.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateDisabled
+	})
+	w, err := s3.NewWriter(client, l.Container, o.S3Write)
+	if err != nil {
+		return nil, err
+	}
+	d.o = objfile.Root(s3.New(client, l.Container), l.Prefix)
+	d.w = objfile.RootWriter(w, l.Prefix)
+	d.close = func() error {
+		if frozen != nil {
+			frozen.CloseIdleConnections()
+		}
+		return nil
+	}
+	return d, nil
+}
+
+// Region is an s3:// destination's region, as resolved ("" for gs://).
+func (d *Destination) Region() string { return d.region }
 
 // Writer is the Destination's writer of names under the location's
 // prefix.
