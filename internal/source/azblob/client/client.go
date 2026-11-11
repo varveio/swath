@@ -96,13 +96,22 @@ type ListInput struct {
 	Marker     string
 	MaxResults int     // 0: the server default (5,000, also the cap)
 	Include    Include // the zero value sends no include
+	// Tree reads a delimiter listing of a hierarchical namespace's
+	// directory: its BlobPrefix items are the subdirectories, listed by
+	// name ('/' sorts lowest: Guinea/ before Guinea-Bissau) with their own
+	// properties. Each becomes an Item with Dir set, named without the
+	// trailing '/', and blobs and directories merge by name.
+	Tree bool
 }
 
 // Item is one listed entry: a blob, or with Prefix a BlobPrefix (a
-// delimiter roll-up, of which only Name is set).
+// delimiter roll-up, of which only Name is set), or with Dir a
+// hierarchical namespace's directory (ListInput.Tree; ResourceType
+// directory).
 type Item struct {
 	Name         string
 	Prefix       bool
+	Dir          bool
 	Size         int64
 	LastModified int64 // Unix microseconds; 0 when absent
 	CreationTime int64 // Unix microseconds; 0 when absent

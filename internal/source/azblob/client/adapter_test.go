@@ -366,7 +366,7 @@ func TestMergeOrder(t *testing.T) {
 				seg.BlobItems = append(seg.BlobItems, &container.BlobItem{Name: &name})
 			}
 		}
-		out, err := merge(seg, nil)
+		out, err := merge(seg, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
