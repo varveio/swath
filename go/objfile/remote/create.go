@@ -5,6 +5,7 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/auth"
+	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/storage"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
-	"google.golang.org/api/option/internaloption"
 	htransport "google.golang.org/api/transport/http"
 
 	"github.com/varveio/swath/go/objfile"
@@ -108,25 +109,14 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 // unredacted, the bearer token included.
 func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions) (*storage.Client, error) {
 	tr := ranged.Transport(pool)
-	opts := []option.ClientOption{option.WithLogger(slog.New(slog.DiscardHandler))}
-	switch {
-	case o.Emulator:
-	case o.CredentialsFile != "":
-		b, err := os.ReadFile(o.CredentialsFile)
+	quiet := slog.New(slog.DiscardHandler)
+	opts := []option.ClientOption{option.WithLogger(quiet)}
+	if !o.Emulator {
+		creds, err := writeCredentials(o, quiet)
 		if err != nil {
-			return nil, fmt.Errorf("remote: destination credentials: %w", err)
-		}
-		// The token source keeps this context for every refresh.
-		creds, err := google.CredentialsFromJSON(context.WithoutCancel(ctx), b, storage.ScopeReadWrite)
-		if err != nil {
-			return nil, fmt.Errorf("remote: destination credentials %s: %w", o.CredentialsFile, err)
-		}
-		if tr, err = htransport.NewTransport(ctx, tr, option.WithTokenSource(creds.TokenSource)); err != nil {
 			return nil, err
 		}
-	default:
-		var err error
-		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadWrite), internaloption.EnableNewAuthLibrary()); err != nil {
+		if tr, err = htransport.NewTransport(ctx, tr, option.WithAuthCredentials(creds), option.WithLogger(quiet)); err != nil {
 			return nil, err
 		}
 	}
@@ -155,7 +145,46 @@ func writeClient(ctx context.Context, pool http.RoundTripper, o CreateOptions) (
 	return c, nil
 }
 
-// DefaultRequestTimeout bounds the wait for a response's headers.
+// writeCredentials loads the destination's credentials with the read-write
+// scope: the file o names (a service account key or authorized-user
+// credentials, refused otherwise), else Application Default Credentials.
+// Their token exchanges go through a client of their own, bounded by the
+// request timeout (headers and body), and are fetched with the context of
+// the request that needs one; their debug logging is off whatever the
+// environment says (it would print tokens and signed assertions).
+func writeCredentials(o CreateOptions, quiet *slog.Logger) (*auth.Credentials, error) {
+	timeout := o.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	dopts := &credentials.DetectOptions{Scopes: []string{storage.ScopeReadWrite}, Logger: quiet,
+		Client: &http.Client{Timeout: timeout, Transport: http.DefaultTransport.(*http.Transport).Clone()}}
+	if o.CredentialsFile == "" {
+		creds, err := credentials.DetectDefault(dopts)
+		if err != nil {
+			return nil, fmt.Errorf("remote: destination credentials: %w", err)
+		}
+		return creds, nil
+	}
+	b, err := os.ReadFile(o.CredentialsFile)
+	if err != nil {
+		return nil, fmt.Errorf("remote: destination credentials: %w", err)
+	}
+	var kind struct {
+		Type credentials.CredType `json:"type"`
+	}
+	if err := json.Unmarshal(b, &kind); err != nil || kind.Type != credentials.ServiceAccount && kind.Type != credentials.AuthorizedUser {
+		return nil, fmt.Errorf("remote: destination credentials %s: want a service account key or authorized-user credentials", o.CredentialsFile)
+	}
+	creds, err := credentials.NewCredentialsFromJSON(kind.Type, b, dopts)
+	if err != nil {
+		return nil, fmt.Errorf("remote: destination credentials %s: %w", o.CredentialsFile, err)
+	}
+	return creds, nil
+}
+
+// DefaultRequestTimeout bounds the wait for a response's headers, and a
+// token exchange.
 const DefaultRequestTimeout = 2 * time.Minute
 
 // ResolveEndpoint is the destination endpoint the options' Endpoint
