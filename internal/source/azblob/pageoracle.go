@@ -27,7 +27,9 @@ import (
 //	trim: min(n+2, the nominal page size): no growth, almost no rows past
 //	      a range's end (what an exact end bound would give at 1,000).
 //
-// It bounds what a page policy could gain; it is never a policy.
+// The adapters read once per page (order.Adapter.OneReadPerPage), so no
+// read's surplus is carried into the counted read. It bounds what a page
+// policy could gain; it is never a policy.
 const pageOracleEnv = "SWATH_EXP_PAGE_ORACLE"
 
 type pageOracle struct {

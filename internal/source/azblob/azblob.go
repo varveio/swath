@@ -285,6 +285,9 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 		return nil, fmt.Errorf("Azure Blob: --azure-page-policy %q: want %s, %s or %s", opt.PagePolicy, pageFixed, pageOneRead, pageGrow)
 	}
 	if oracle != nil && !eo.Sequential {
+		// One read per page: a read of the counted size into a chain that
+		// holds a read's surplus would end past the range by that surplus.
+		p.oneRead = true
 		eo.PageFor, eo.PageMax = oracle.pageFor(client.MaxPageSize), client.MaxPageSize
 	}
 	e, err := keyrange.New(eo, p.description(), p.fetch)
