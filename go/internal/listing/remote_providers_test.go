@@ -1,0 +1,154 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package listing
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
+
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/gcs"
+	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
+)
+
+// The remote dataset tests run once per destination provider, each
+// through its in-process fake. A provider gives the harness a bucket fake
+// (bucketFake: the objects, another writer's puts and deletes, request
+// counts and faults) and a RemoteOutput writing to it through the
+// provider's objfile writer, with small upload buffers so that a part
+// takes several requests.
+
+const dstBucket = "dst"
+
+// Fault steps both fakes name alike.
+const (
+	opCreate = "create" // the request that creates an object
+	opRead   = "read"   // a ranged read
+)
+
+// bucketFake is a provider's fake bucket as the tests use it.
+type bucketFake interface {
+	http.Handler
+	// Object is name's live bytes.
+	Object(name string) ([]byte, bool)
+	// Put creates or replaces name, as another writer would; Remove
+	// deletes it.
+	Put(name string, data []byte)
+	Remove(name string)
+	// Names are the live objects, sorted.
+	Names() []string
+	// Count is the requests of a fault step answered.
+	Count(op string) int64
+	// OpenUploads is the uploads started and neither completed nor
+	// aborted (GCS: resumable sessions, which expire; S3: multipart
+	// uploads, which do not).
+	OpenUploads() int
+	// SetFault decides a request's fate before (after false) the fake
+	// acts on it, or after (its answer lost): a status other than 0 is
+	// sent instead.
+	SetFault(f func(op, name string, after bool) int)
+}
+
+// provider is a destination provider under test.
+type provider struct {
+	name   string
+	scheme string
+	fake   func() bucketFake
+	// output is a RemoteOutput writing SCHEME://dst/prefix through the
+	// fake served at url.
+	output func(url, prefix string) *RemoteOutput
+	// uploading tells a request that carries an upload's bytes.
+	uploading func(r *http.Request) bool
+	// aborts: an upload that ends without its object ends its session at
+	// the store (S3's AbortMultipartUpload); GCS's SDK only cancels.
+	aborts bool
+}
+
+// providers are the destinations every remote test runs against.
+var providers = []provider{gcsProvider}
+
+// eachProvider runs f once per provider, as a subtest named for it.
+func eachProvider(t *testing.T, f func(t *testing.T, p provider)) {
+	for _, p := range providers {
+		t.Run(p.name, func(t *testing.T) { f(t, p) })
+	}
+}
+
+// destination is a provider's fake bucket for remote datasets.
+type destination struct {
+	bucketFake
+	p   provider
+	url string
+}
+
+// newDestination serves a fake of p's through wrap (nil: as is).
+func newDestination(t *testing.T, p provider, wrap func(http.Handler) http.Handler) *destination {
+	t.Helper()
+	f := p.fake()
+	var h http.Handler = f
+	if wrap != nil {
+		h = wrap(f)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return &destination{bucketFake: f, p: p, url: srv.URL}
+}
+
+// output is a RemoteOutput writing the provider's dst/prefix through d.
+func (d *destination) output(prefix string) *RemoteOutput { return d.p.output(d.url, prefix) }
+
+// gcs is the GCS fake under d (nil for another provider's), for the tests
+// of GCS behaviour.
+func (d *destination) gcs() *gcsfake.Server {
+	f, _ := d.bucketFake.(gcsFake)
+	return f.Server
+}
+
+// uri is the destination's URI of prefix.
+func (d *destination) uri(prefix string) string { return d.p.scheme + "://" + dstBucket + "/" + prefix }
+
+// gcsProvider writes through objfile/gcs to gcsfake, in chunks of 256 KiB
+// (the SDK's smallest).
+var gcsProvider = provider{name: "gcs", scheme: "gs",
+	fake: func() bucketFake { return gcsFake{gcsfake.New(dstBucket)} },
+	output: func(url, prefix string) *RemoteOutput {
+		loc := "gs://" + dstBucket + "/" + prefix
+		return &RemoteOutput{Location: loc, ChunkSize: 256 << 10, Open: func(ctx context.Context, stats *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+			c, err := storage.NewClient(ctx, option.WithEndpoint(url+"/storage/v1/"), option.WithoutAuthentication())
+			if err != nil {
+				return nil, nil, err
+			}
+			l, err := objfile.ParseLocation(loc)
+			if err != nil {
+				return nil, nil, err
+			}
+			w := gcs.NewWriter(c, dstBucket, gcs.WriteOptions{ChunkSize: 256 << 10, Retried: stats.Retried, MaxAttempts: 2, ChunkRetryDeadline: 2 * time.Second})
+			return &dataset.Remote{Location: l, Opener: objfile.Root(gcs.New(c, dstBucket), l.Prefix), Writer: objfile.RootWriter(w, l.Prefix)}, c.Close, nil
+		}}
+	},
+	uploading: func(r *http.Request) bool {
+		return r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/upload/")
+	},
+}
+
+type gcsFake struct{ *gcsfake.Server }
+
+func (f gcsFake) Object(name string) ([]byte, bool) {
+	o, ok := f.Get(name)
+	return o.Data, ok
+}
+
+func (f gcsFake) Put(name string, data []byte) { f.Server.Put(name, data) }
+
+func (f gcsFake) OpenUploads() int { return f.OpenSessions() }
+
+func (f gcsFake) SetFault(fn func(op, name string, after bool) int) { f.Server.SetFault(fn) }

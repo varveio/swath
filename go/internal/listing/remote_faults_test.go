@@ -64,7 +64,7 @@ func treeConfig(root, ws string, out *RemoteOutput) Config {
 // names exists.
 func committedPartsExist(t *testing.T, d *destination, prefix string) {
 	t.Helper()
-	o, ok := d.Get(prefix + "/" + dataset.ManifestName)
+	o, ok := d.gcs().Get(prefix + "/" + dataset.ManifestName)
 	if !ok {
 		t.Fatal("no manifest")
 	}
@@ -73,7 +73,7 @@ func committedPartsExist(t *testing.T, d *destination, prefix string) {
 		t.Fatal(err)
 	}
 	for _, p := range m.Parts {
-		if _, ok := d.Get(prefix + "/" + p.Path); !ok {
+		if _, ok := d.gcs().Get(prefix + "/" + p.Path); !ok {
 			t.Fatalf("the committed manifest names %s, which is gone", p.Path)
 		}
 	}
@@ -102,7 +102,7 @@ func (w *delayedWriter) PutIfAbsent(ctx context.Context, n string, b []byte) (ob
 // journaled run creates the very same candidate.
 func TestRemoteDelayedCommit(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
-		d := newDestination(t, nil)
+		d := newDestination(t, gcsProvider, nil)
 		out := d.output("late")
 		open := out.Open
 		var w *delayedWriter
@@ -118,7 +118,7 @@ func TestRemoteDelayedCommit(t *testing.T) {
 		if !errors.Is(err, dataset.ErrCommitUnresolved) || rep.Output.Remote.Commit != "unresolved" || rep.Output.Remote.OrphansDeleted != 0 {
 			t.Fatalf("%v, %+v", err, rep.Output.Remote)
 		}
-		d.Put("late/"+dataset.ManifestName, w.pending) // the accepted request lands
+		d.gcs().Put("late/"+dataset.ManifestName, w.pending) // the accepted request lands
 		committedPartsExist(t, d, "late")
 	})
 	t.Run("transport", func(t *testing.T) {
@@ -177,13 +177,13 @@ func TestRemoteDelayedCommit(t *testing.T) {
 		if f.Count(gcsfake.OpDelete) != 0 {
 			t.Fatal("parts were deleted after an unresolved commit")
 		}
-		committedPartsExist(t, &destination{Server: f}, "http")
+		committedPartsExist(t, &destination{bucketFake: gcsFake{f}, p: gcsProvider}, "http")
 	})
 	t.Run("proxy 503", func(t *testing.T) {
 		url := crashBucket(t)
 		delayed := make(chan func(), 1)
 		var once sync.Once
-		d := newDestination(t, func(h http.Handler) http.Handler {
+		d := newDestination(t, gcsProvider, func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost && r.URL.Query().Get("uploadType") == "multipart" {
 					body, _ := io.ReadAll(r.Body)
@@ -227,7 +227,7 @@ func TestRemoteDelayedCommit(t *testing.T) {
 	t.Run("resume retries the candidate", func(t *testing.T) {
 		datasettest.RequireJournal(t)
 		url := crashBucket(t)
-		d := newDestination(t, nil)
+		d := newDestination(t, gcsProvider, nil)
 		ws := filepath.Join(t.TempDir(), "work")
 		out := d.output("same")
 		open := out.Open
@@ -247,7 +247,7 @@ func TestRemoteDelayedCommit(t *testing.T) {
 		if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("same"))); err != nil {
 			t.Fatal(err)
 		}
-		if o, _ := d.Get("same/" + dataset.ManifestName); !bytes.Equal(o.Data, cand) {
+		if o, _ := d.gcs().Get("same/" + dataset.ManifestName); !bytes.Equal(o.Data, cand) {
 			t.Fatal("the resume committed another manifest than the unresolved candidate")
 		}
 	})
@@ -316,7 +316,7 @@ func TestRemoteSessionSecrecy(t *testing.T) {
 func TestRemoteWorkDirLinks(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	for i, c := range []struct {
 		name, point, rel string
 	}{{"remote", "upload-completed", dataset.RemoteRel}, {"claims", "allocated", dataset.ClaimsRel}} {
@@ -374,7 +374,7 @@ func TestRemoteWorkDirLinks(t *testing.T) {
 func TestRemoteDamagedHeader(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	crashRemote(t, url, ws, d.output("header"), false, "recorded", 3)
 	if err := os.WriteFile(journal.Path(ws), nil, 0o644); err != nil {
@@ -405,7 +405,7 @@ func readLedger(ws string) (dataset.Ledger, error) {
 func TestRemoteEndpointFrozen(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
-	a, b := newDestination(t, nil), newDestination(t, nil)
+	a, b := newDestination(t, gcsProvider, nil), newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	out := &RemoteOutput{Location: "gs://" + dstBucket + "/route", ChunkSize: 256 << 10}
 	t.Setenv("STORAGE_EMULATOR_HOST", a.url)
@@ -423,7 +423,7 @@ func TestRemoteEndpointFrozen(t *testing.T) {
 	if _, err := Run(context.Background(), remoteConfig(url, ws, true, out)); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := a.Get("route/" + dataset.ManifestName); !ok {
+	if _, ok := a.Object("route/" + dataset.ManifestName); !ok {
 		t.Fatal("not committed at the recorded endpoint")
 	}
 }
@@ -436,7 +436,7 @@ func TestRemoteCommitBounded(t *testing.T) {
 	hang := make(chan struct{})
 	t.Cleanup(func() { close(hang) })
 	var committing atomic.Bool // the fresh run's check reads the manifest too: only the commit's read-back hangs
-	d := newDestination(t, func(h http.Handler) http.Handler {
+	d := newDestination(t, gcsProvider, func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "bounded%2Fmanifest.json") || strings.HasSuffix(r.URL.Path, "bounded/manifest.json") {
 				if r.Method == http.MethodGet && committing.Load() {
@@ -500,7 +500,7 @@ func TestRemoteMultiChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dropped atomic.Int64
-	d := newDestination(t, func(h http.Handler) http.Handler {
+	d := newDestination(t, gcsProvider, func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cr := r.Header.Get("Content-Range")
 			if r.URL.Query().Get("upload_id") != "" && strings.HasSuffix(cr, "/*") && !strings.HasPrefix(cr, "bytes 0-") && dropped.Add(1) == 1 {
@@ -575,7 +575,7 @@ func (w *mixedWriter) PutIfAbsent(ctx context.Context, n string, b []byte) (objf
 // landing later commits a dataset whose parts all exist.
 func TestRemoteAmbiguityKept(t *testing.T) {
 	t.Run("commit retry", func(t *testing.T) {
-		d := newDestination(t, nil)
+		d := newDestination(t, gcsProvider, nil)
 		out := d.output("mixed")
 		open := out.Open
 		var w *mixedWriter
@@ -601,7 +601,7 @@ func TestRemoteAmbiguityKept(t *testing.T) {
 		// SDK's two attempts); every later creation is refused.
 		var pending func()
 		var attempts int
-		d := newDestination(t, func(h http.Handler) http.Handler {
+		d := newDestination(t, gcsProvider, func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
 				if q.Method == http.MethodPost && q.URL.Query().Get("name") == "httpmixed/manifest.json" {
 					attempts++
@@ -641,7 +641,7 @@ func TestRemoteAmbiguityKept(t *testing.T) {
 func TestRemoteCandidateKept(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	out := d.output("cand")
 	open := out.Open
@@ -669,7 +669,7 @@ func TestRemoteCandidateKept(t *testing.T) {
 	if !errors.Is(err, dataset.ErrCandidateMismatch) || !errors.Is(err, dataset.ErrCommitUnresolved) {
 		t.Fatalf("resume with another candidate's parts: %v", err)
 	}
-	if _, ok := d.Get("cand/" + dataset.ManifestName); ok {
+	if _, ok := d.Object("cand/" + dataset.ManifestName); ok {
 		t.Fatal("a manifest was created")
 	}
 	r, err := os.OpenRoot(ws)
@@ -680,7 +680,7 @@ func TestRemoteCandidateKept(t *testing.T) {
 	if cand, _ := dataset.ReadCandidate(r); !bytes.Equal(cand, pending) {
 		t.Fatal("the unresolved candidate was replaced")
 	}
-	d.Put("cand/"+dataset.ManifestName, pending) // the earlier creation lands
+	d.gcs().Put("cand/"+dataset.ManifestName, pending) // the earlier creation lands
 	committedPartsExist(t, d, "cand")
 }
 
@@ -708,7 +708,7 @@ func TestRemoteResumeBounded(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	t.Run("open", func(t *testing.T) {
-		d := newDestination(t, nil)
+		d := newDestination(t, gcsProvider, nil)
 		ws := filepath.Join(t.TempDir(), "work")
 		out := d.output("boundresume")
 		crashRemote(t, url, ws, out, false, "candidate-saved", 1)
@@ -736,7 +736,7 @@ func TestRemoteResumeBounded(t *testing.T) {
 	})
 	t.Run("stalled body", func(t *testing.T) {
 		var stall atomic.Bool
-		d := newDestination(t, func(h http.Handler) http.Handler {
+		d := newDestination(t, gcsProvider, func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
 				if stall.Load() && q.Method == http.MethodGet && strings.Contains(q.URL.Path, "manifest.json") {
 					w.Header().Set("Content-Type", "application/json")
@@ -772,7 +772,7 @@ func TestRemoteFinalizeRetried(t *testing.T) {
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	crashRemote(t, url, ws, d.output("refin"), false, "upload-completed", 1)
 	d.SetFault(func(op, _ string, after bool) int {
@@ -816,7 +816,7 @@ func TestRemoteFinalizeRetried(t *testing.T) {
 func TestRemoteLostRaceResumed(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
 	crashRemote(t, url, ws, d.output("lostresume"), false, "candidate-saved", 1)
 	d.Put("lostresume/"+dataset.ManifestName, []byte(`{"other":1}`))
@@ -847,7 +847,7 @@ func TestRemoteLostRaceResumed(t *testing.T) {
 	if !errors.Is(err, dataset.ErrLostRace) || rep.Output.Remote.Commit != "lost_race" || rep.Output.Remote.OrphansDeleted == 0 || ours() != 0 {
 		t.Fatalf("%v; %+v; %d parts left", err, rep.Output.Remote, ours())
 	}
-	if o, _ := d.Get("lostresume/" + dataset.ManifestName); string(o.Data) != `{"other":1}` {
+	if o, _ := d.Object("lostresume/" + dataset.ManifestName); string(o) != `{"other":1}` {
 		t.Fatal("the winner's manifest changed")
 	}
 }
@@ -863,7 +863,7 @@ func TestRemoteWithProfilesAndSpill(t *testing.T) {
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
-	d := newDestination(t, nil)
+	d := newDestination(t, gcsProvider, nil)
 	cfg := remoteConfig(url, filepath.Join(t.TempDir(), "work"), false, d.output("prof"))
 	cfg.Limits.Spill.Off = false
 	var done atomic.Int64
