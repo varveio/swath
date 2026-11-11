@@ -84,11 +84,11 @@ is [reference/run-report.md](reference/run-report.md).
 
 ## What is not here
 
-- **Azure hierarchical namespaces and Azure versions.** Go lists current blobs in flat namespaces;
-  it does not list hierarchical namespaces, blob versions, snapshots or deleted blobs.
+- **Azure hierarchical namespaces.** Go lists flat namespaces only; with `--all-versions` it also lists
+  blob versions, snapshots and soft-deleted blobs.
 - **S3 directory buckets and GCS soft-deleted objects.** These are outside the supported listing scope.
-  Go does support `--all-versions` for S3 versions and delete markers and GCS live and noncurrent
-  generations, under their own schemas. The Java release does not implement these modes.
+  Go does support `--all-versions` for S3 versions and delete markers, GCS live and noncurrent
+  generations and Azure Blob versions, snapshots and soft-deleted blobs, under their own schemas. The Java release does not implement these modes.
 - **Java's thief splits, unsorted Parquet (`--no-sort`), the SQLite checkpoint, OTLP metrics, partitioned
   text datasets and `--tune`.** Each decision and its reason is in [internals/cli-inventory.md](internals/cli-inventory.md).
 

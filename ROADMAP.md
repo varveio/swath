@@ -27,9 +27,9 @@ command describes an existing dataset or interrupted run, not an unlisted source
 
 ### Versioned-listing coverage
 
-S3 `--all-versions` and GCS generations are implemented in Go under their own schemas.
-Large versioned-bucket measurements and GCS soft-deleted objects remain future work.
-Azure version, snapshot and deleted-blob listing are not implemented.
+S3 `--all-versions`, GCS generations and Azure Blob versions, snapshots and soft-deleted blobs are implemented
+in Go under their own schemas. Large versioned-bucket measurements, a live check of Azure versions and snapshots
+against a writable account, and GCS soft-deleted objects remain future work.
 
 ### Supplied keyspace hints
 

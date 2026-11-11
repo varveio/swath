@@ -3,15 +3,18 @@
 
 package reader
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestSchema(t *testing.T) {
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, ok := Schema(id)
 		if !ok || s.ID != id || s.Key.Name != "key" || !s.Key.Required || len(s.Columns) == 0 {
 			t.Fatalf("%s: %+v, %v", id, s, ok)
 		}
-		grouped := id == S3VersionsV1 || id == GCSGenerationsV1
+		grouped := id == S3VersionsV1 || id == GCSGenerationsV1 || id == AzblobVersionsV1
 		if s.UniqueKeys == grouped {
 			t.Errorf("%s: UniqueKeys %v", id, s.UniqueKeys)
 		}
@@ -31,7 +34,7 @@ func TestSchema(t *testing.T) {
 		t.Errorf("local key %+v, max %d", local.Key, local.MaxKeyBytes)
 	}
 	az, _ := Schema(AzblobObjectsV1)
-	if az.Key.Type != TypeString || az.MaxKeyBytes != 3072 || len(az.Columns) != 8 {
+	if az.Key.Type != TypeString || az.MaxKeyBytes != 3072 || len(az.Columns) != 24 {
 		t.Errorf("azblob %+v", az)
 	}
 	for _, name := range []string{"content_md5", "access_tier", "blob_type"} {
@@ -43,7 +46,7 @@ func TestSchema(t *testing.T) {
 		t.Errorf("azblob creation_time: %+v", c)
 	}
 	var absent []string
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, _ := Schema(id)
 		for _, c := range s.Columns {
 			if c.MayBeAbsent {
@@ -51,8 +54,30 @@ func TestSchema(t *testing.T) {
 			}
 		}
 	}
-	if len(absent) != 2 || absent[0] != "swath/gcs-objects/v1 time_created" || absent[1] != "swath/gcs-generations/v1 time_created" {
-		t.Errorf("columns a part may lack: %q", absent)
+	// The Azure Blob columns added after the first eight: the properties
+	// every listing carries, then those a run asks for.
+	added := []string{"access_tier_inferred", "access_tier_change_time", "archive_status", "rehydrate_priority",
+		"last_access_time", "content_encoding", "server_encrypted", "encryption_scope", "customer_provided_key_sha256",
+		"lease_state", "tag_count", "metadata", "tags", "immutability_policy_until", "immutability_policy_mode", "legal_hold"}
+	// Only the objects id predates them; the versions id was created with
+	// them, so every one of its parts has every column.
+	want := []string{"swath/gcs-objects/v1 time_created", "swath/gcs-generations/v1 time_created"}
+	for _, name := range added {
+		want = append(want, "swath/azblob-objects/v1 "+name)
+	}
+	// The versions schema: the current columns, then the entry's.
+	av, _ := Schema(AzblobVersionsV1)
+	if names := av.ColumnNames(); !slices.Equal(names[:24], az.ColumnNames()) ||
+		!slices.Equal(names[24:], []string{"version_id", "is_latest", "snapshot", "is_deleted", "deleted_time", "remaining_retention_days"}) {
+		t.Errorf("azblob versions columns %q", names)
+	}
+	if !slices.Equal(absent, want) {
+		t.Errorf("columns a part may lack: %q, want %q", absent, want)
+	}
+	for i, c := range az.Columns {
+		if c.MayBeAbsent != (i >= 8) || c.Required {
+			t.Errorf("azblob column %d %+v", i, c)
+		}
 	}
 }
 
@@ -63,8 +88,9 @@ func TestVersionSpecs(t *testing.T) {
 	want := map[SchemaID]VersionSpec{
 		S3VersionsV1:     {ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"},
 		GCSGenerationsV1: {ID: "generation", DeletedAt: "time_deleted"},
+		AzblobVersionsV1: {ID: "version_id", Latest: "is_latest"},
 	}
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, _ := Schema(id)
 		if s.Versions != want[id] {
 			t.Errorf("%s: versions %+v, want %+v", id, s.Versions, want[id])

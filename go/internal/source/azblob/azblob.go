@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/azblob/order"
@@ -99,9 +100,16 @@ type Options struct {
 	Workers int
 	Warn    func(string) // one-time warnings for the user; may be nil
 	Client  API          // optional; built from the options above when nil
-	// AllVersions is refused: versions, snapshots and deleted blobs are
-	// not supported.
+	// AllVersions lists every entry of each name (NewVersions): its
+	// versions, snapshots and soft-deleted blobs beside its current blob.
 	AllVersions bool
+	// FetchMetadata, FetchTags and FetchImmutability add the user
+	// metadata, the blob index tags, and the immutability policy and legal
+	// hold to each row (include=metadata, tags, immutabilitypolicy and
+	// legalhold); their columns are null otherwise. Tags need the right
+	// to read them, which a listing does not: without it every request
+	// fails.
+	FetchMetadata, FetchTags, FetchImmutability bool
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -189,9 +197,19 @@ type Stats struct {
 	Counters    counters.Snapshot `json:"counters"`
 }
 
-// Provider is the range engine bound to List Blobs.
-type Provider struct {
-	*keyrange.Engine[Object]
+// Provider is the range engine bound to List Blobs: the current blobs,
+// rows of swath/azblob-objects/v1.
+type Provider = provider[Object]
+
+// VersionsProvider is the --all-versions listing (Options.AllVersions):
+// every entry of each name, its versions, snapshots and soft-deleted blobs
+// beside its current blob (include=versions,snapshots,deleted), rows of
+// swath/azblob-versions/v1.
+type VersionsProvider = provider[Version]
+
+// provider is an Azure Blob listing with payload P.
+type provider[P any] struct {
+	*keyrange.Engine[P]
 	objhttp.Activity // the client's, observed once it is chosen
 	opt              Options
 	client           API
@@ -199,27 +217,48 @@ type Provider struct {
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace        string // how admission found the namespace flat (Stats.Namespace)
+	schema           *schema.Schema[P]
+	row              func(*provider[P], *client.Item) P // a listed blob's payload
+	size             func(*P) int64
 }
 
 // Range is the engine's range.
 type Range = keyrange.Range
 
-var _ source.Provider[Range, Object] = (*Provider)(nil)
+var (
+	_ source.Provider[Range, Object]  = (*Provider)(nil)
+	_ source.Provider[Range, Version] = (*VersionsProvider)(nil)
+)
 
-// New builds a provider and admits the account (admit): its namespace
-// must be positively flat, or the run is refused (source.Unsupported)
-// before any listing request: on a hierarchical-namespace account '/' sorts
-// lowest, and after a byte cursor "a.z" the key "a/child" is still in range,
-// but a seek that sorts '/' lowest skips it while every page still ascends,
-// so nothing downstream could notice.
+// New builds a provider of the current blobs and admits the account
+// (admit): its namespace must be positively flat, or the run is refused
+// (source.Unsupported) before any listing request: on a hierarchical-namespace
+// account '/' sorts lowest, and after a byte cursor "a.z" the key "a/child" is
+// still in range, but a seek that sorts '/' lowest skips it while every page
+// still ascends, so nothing downstream could notice.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
-		return nil, source.Unsupported(errors.New("Azure Blob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
+		return nil, errors.New("Azure Blob: Options.AllVersions lists every entry: use NewVersions")
 	}
-	p, own, err := connect(ctx, opt)
+	return build(ctx, opt, &Schema, (*Provider).object, func(o *Object) int64 { return o.Size })
+}
+
+// NewVersions builds a provider of every entry of each name (versions,
+// snapshots, soft-deleted blobs and the current blob), admitted as New
+// admits. A name's entries are consecutive rows in Azure's order; the
+// engine completes a name before it splits, cuts a part or records it
+// (keyrange's group mode).
+func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
+	opt.AllVersions = true
+	return build(ctx, opt, &VersionSchema, (*VersionsProvider).version, func(v *Version) int64 { return v.Size })
+}
+
+func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row func(*provider[P], *client.Item) P, size func(*P) int64) (*provider[P], error) {
+	p, own, err := connect[P](ctx, opt)
 	if err != nil {
 		return nil, err
 	}
+	p.schema, p.row, p.size = s, row, size
 	if err := p.admit(ctx); err != nil {
 		return nil, err
 	}
@@ -232,24 +271,71 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 }
 
 // description is what the range engine must know about the provider.
-func (p *Provider) description() keyrange.Description[Object] {
-	return keyrange.Description[Object]{
+func (p *provider[P]) description() keyrange.Description[P] {
+	d := keyrange.Description[P]{
 		Target: p.target(),
 		// The adapter serves every page in byte order, from any start
-		// name, after After (exclusive) and up to Through.
+		// name, after After (exclusive: every entry of After is dropped)
+		// and up to Through.
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
-		Size:        func(o *Object) int64 { return o.Size },
+		Size:        p.size,
 		Counters:    slices.Concat(client.CounterDefs, order.CounterDefs),
 	}
+	if p.schema.Groups {
+		// A name's entries are a group: held until a later name or the
+		// chain's end proves it complete, never split.
+		d.Groups, d.Detach = true, p.schema.Detach
+	}
+	return d
 }
 
 // adapter is a byte-order adapter over the provider's client, counting in
 // the provider's counters.
-func (p *Provider) adapter() *order.Adapter {
-	return order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
+func (p *provider[P]) adapter() *order.Adapter {
+	a := order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
+	a.Include = p.include()
+	return a
+}
+
+// include is the listing's include= (the adapter leaves out of probes what
+// only rows carry).
+func (p *provider[P]) include() client.Include {
+	all := p.opt.AllVersions
+	return client.Include{Versions: all, Snapshots: all, Deleted: all,
+		Metadata: p.opt.FetchMetadata, Tags: p.opt.FetchTags, Immutability: p.opt.FetchImmutability}
+}
+
+// fill sets what the run asked for and a blob has none of to its empty
+// value, so that null means "not asked" (or, for metadata, unreadable: a
+// blob encrypted with a customer-provided key lists none, whatever it
+// holds): metadata and tags "{}", the legal hold false.
+func (p *provider[P]) fill(o *Object) {
+	if p.opt.FetchMetadata && o.Metadata == "" && o.CustomerProvidedKeySHA256 == "" {
+		o.Metadata = "{}"
+	}
+	if p.opt.FetchTags && o.Tags == "" {
+		o.Tags = "{}"
+	}
+	if p.opt.FetchImmutability && o.LegalHold == client.Unset {
+		o.LegalHold = client.False
+	}
+}
+
+// tagsRefused names what a listing that asked for tags lacks when Azure
+// refuses it the way it refuses include=tags (403
+// AuthorizationPermissionMismatch, or an anonymous caller's 401
+// NoAuthenticationInformation); any other error, a rejected credential
+// among them, is returned as it is.
+func (p *provider[P]) tagsRefused(err error) error {
+	f := objhttp.Normalize(err)
+	if p.opt.FetchTags && f != nil && (f.Code == "AuthorizationPermissionMismatch" || p.unsigned() && f.Code == "NoAuthenticationInformation") {
+		return fmt.Errorf("%w (--azure-fetch-tags needs the right to read blob index tags: a SAS with the t permission, "+
+			"or an Entra ID role with the tags read data action such as Storage Blob Data Owner; an anonymous caller has none)", err)
+	}
+	return err
 }
 
 // adapterKey carries an Expand's adapter on its context.
@@ -260,7 +346,7 @@ type adapterKey struct{}
 // the listing and its probes) are released however Expand returns (the
 // specification's §5 lifetime: the engine joins its probes and seed work
 // before Expand returns, and children carry bounds, not tokens).
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
+func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range, P]) error {
 	a := p.adapter()
 	defer a.Release()
 	return p.Engine.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
@@ -279,7 +365,7 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // could not be had, or that the service refused (a signed caller's 401 or
 // 403), are that failure (class auth or access denied), as on any later
 // request: the Data Lake host would need the same.
-func (p *Provider) admit(ctx context.Context) error {
+func (p *provider[P]) admit(ctx context.Context) error {
 	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
 		return fmt.Errorf("Azure Blob client: %w", err)
@@ -322,7 +408,7 @@ func (p *Provider) admit(ctx context.Context) error {
 
 // unsigned says requests go anonymous, which Get Account Information
 // refuses (401) whatever the namespace.
-func (p *Provider) unsigned() bool {
+func (p *provider[P]) unsigned() bool {
 	if c, ok := p.client.(interface{ Credentials() (string, bool) }); ok {
 		_, anonymous := c.Credentials()
 		return anonymous
@@ -375,11 +461,11 @@ func class(err error) objhttp.Class {
 }
 
 // connect builds the client unless Options.Client supplies one (own).
-func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
+func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error) {
 	if opt.Account == "" || opt.Container == "" {
 		return nil, false, errors.New("Azure Blob: no account or container")
 	}
-	p := &Provider{opt: opt, client: opt.Client}
+	p := &provider[P]{opt: opt, client: opt.Client}
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
@@ -418,19 +504,22 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 const defaultPageSize = 1000
 
 // engineOptions is the range engine's options for p: pages of
-// defaultPageSize unless the policy asks for another size.
-func (p *Provider) engineOptions(own bool) keyrange.Options {
+// defaultPageSize unless the policy asks for another size, and of the
+// service's largest (client.MaxPageSize) with a counted prior, whose tiles
+// hold whole pages of keys each, so a range's last page discards little;
+// Azure bills per request.
+func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
 	eo := opt.Policy.Options()
 	eo.Prefix, eo.Workers, eo.ClientOff = opt.Prefix, opt.Workers, opt.Admission.Off(own)
 	if eo.PageSize <= 0 {
-		eo.PageSize = defaultPageSize
+		eo.PageSize, eo.PriorPageSize = defaultPageSize, client.MaxPageSize
 	}
 	return eo
 }
 
 // target is the listed root, without credentials.
-func (p *Provider) target() string {
+func (p *provider[P]) target() string {
 	t := "az://" + p.opt.Account + "/" + p.opt.Container
 	if p.opt.Prefix != "" {
 		t += "/" + p.opt.Prefix
@@ -459,7 +548,7 @@ func AcceptBound(s string) bool {
 }
 
 // Stats snapshots the counters.
-func (p *Provider) Stats() Stats {
+func (p *provider[P]) Stats() Stats {
 	p.Activity.Store(p.Set(), p.ID(0))
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
@@ -482,14 +571,14 @@ func (p *Provider) Stats() Stats {
 
 // fetch lists one page in byte order through the Expand's adapter and
 // converts its items to rows and prefixes.
-func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
+func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[P], error) {
 	a, ok := ctx.Value(adapterKey{}).(*order.Adapter)
 	if !ok || a == nil {
 		return nil, source.Violation(errors.New("Azure Blob: fetch without an Expand adapter"))
 	}
 	out, err := a.Fetch(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, p.tagsRefused(err)
 	}
 	nblobs := 0
 	for i := range out.Items {
@@ -497,15 +586,22 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 			nblobs++
 		}
 	}
-	page := &keyrange.Page[Object]{Rows: make([]Row, 0, nblobs), Truncated: out.Truncated, Token: out.Token}
+	page := &keyrange.Page[P]{Rows: make([]schema.Row[P], 0, nblobs), Truncated: out.Truncated, Token: out.Token}
 	for i := range out.Items {
 		it := &out.Items[i]
 		if it.Prefix {
 			page.Prefixes = append(page.Prefixes, it.Name)
 			continue
 		}
-		page.Rows = append(page.Rows, Row{Key: it.Name, Data: Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime,
-			ETag: it.ETag, ContentMD5: it.ContentMD5, ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier}})
+		page.Rows = append(page.Rows, schema.Row[P]{Key: it.Name, Data: p.row(p, it)})
 	}
 	return page, nil
+}
+
+// object is a listed blob's row payload.
+func (p *provider[P]) object(it *client.Item) Object {
+	o := Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
+		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	p.fill(&o)
+	return o
 }

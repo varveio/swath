@@ -52,6 +52,7 @@ func DecodeS3Object(row seekparquet.Row) (S3Object, error)
 func DecodeS3Version(row seekparquet.Row) (S3Version, error)
 func DecodeGCSObject(row seekparquet.Row) (GCSObject, error)
 func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error)
+func DecodeAzblobVersion(row seekparquet.Row) (AzblobVersion, error)
 func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error)
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error)
 
@@ -377,7 +378,7 @@ be UTF-8 for `swath/local-entries/v1`. Byte values share the `seekparquet.Row`'s
 Every row keeps its key and its `Offset` in its group of equal keys, so a page that ends inside a group
 continues from the row (`Cursor`). Rows of one key stay separate rows in file order: nothing collects a key's
 versions, whose group can be longer than any page. An S3 delete marker's `Size` is nil, never 0; a GCS
-generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it.
+generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it. An Azure entry is its name's current blob when `IsLatest`; a snapshot has no `VersionID`, and a soft-deleted entry keeps its `Size`.
 
 `Object` is the small projection a reader of current objects needs (key, size, modification time, ETag,
 storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/gcs-objects/v1` and

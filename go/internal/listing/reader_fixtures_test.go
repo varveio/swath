@@ -33,6 +33,8 @@ func TestVerifierFixtures(t *testing.T) {
 	writeVerifierFixtures(t, filepath.Join(base, "generations"), "gcs", gcs.GenerationSchema,
 		gcs.Generation{Object: gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5}, TimeDeleted: 20})
 	writeVerifierFixtures(t, filepath.Join(base, "azblob"), "azblob", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
+	writeVerifierFixtures(t, filepath.Join(base, "azblobversions"), "azblob", azblob.VersionSchema,
+		azblob.Version{Object: azblob.Object{Size: 7, Mtime: 10, CreationTime: 5}, VersionID: "2026-01-01T00:00:00.0000000Z", IsLatest: true})
 }
 
 func writeVerifierFixtures[P any](t *testing.T, base, kind string, original schema.Schema[P], value P) {
@@ -42,6 +44,9 @@ func writeVerifierFixtures[P any](t *testing.T, base, kind string, original sche
 		name := col.Name
 		variants["missing_"+name] = func(s *schema.Schema[P]) {
 			s.Columns = slices.DeleteFunc(s.Columns, func(c schema.Column[P]) bool { return c.Name == name })
+		}
+		if col.Required {
+			continue // nothing to mutate: the contract requires it already
 		}
 		variants["required_"+name] = func(s *schema.Schema[P]) {
 			for i := range s.Columns {
