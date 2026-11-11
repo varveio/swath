@@ -1727,7 +1727,7 @@ Every difference reported is one of [replay-java.md](replay-java.md)'s accepted 
 divergences (Go answering as live S3; each listed with both answers), the request-framing residuals (two of the
 five sent per S3 run, reported and not judged), the Azure route's error documents of the S3 route (3 a run),
 and token and marker bytes, which bind each fixture's identity (GCS and Azure answers that agree once each token
-or marker is read for its effect; S3 runs also list 3,510 requests whose answers differ only in token bytes).
+or marker is read for its effect; the six S3 runs also list 3,504 requests whose answers differ only in token bytes, and each Azure run's S3 check one more).
 No Azure answer needed the segment improvement (`-accept-segment-improvement` counted 0 in every Azure run).
 The three GCS foreign-token cases per run (each server sent the other's token) were refused by both servers.
 
