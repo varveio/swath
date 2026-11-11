@@ -167,10 +167,14 @@ written without listing the bucket. The part writer writes into an artifact (`da
 the SDK's writer: SeekParquet's `Seal` calls `Sync` then `Close`, and its `Abort` calls `Close`, so the remote
 artifact's `Sync` completes the upload (the GCS resumable session's last request; S3's last part and
 `CompleteMultipartUpload`, or the one `PutObject` of a part no larger than an upload part) and its `Close`
-aborts the upload unless `Sync` completed it (S3: `AbortMultipartUpload`, under a bounded context of its own).
-Once the upload completes, the identity it created (the GCS generation; the S3 version id, or its ETag in an
-unversioned bucket) is appended to the same
-log (`C NAME GENERATION`) and fsynced: the only evidence cleanup accepts that an object is this run's. A torn
+aborts the upload unless `Sync` completed it (S3: `AbortMultipartUpload`, under a bounded context of its own,
+confirmed by `ListParts` and sent again while the upload is still listed; an abort that fails or stays
+unconfirmed is counted in `aborts_unconfirmed` and left to the bucket's lifecycle rule). A completion whose
+outcome is unknown (S3: a transport failure, a server error, or `NoSuchUpload` after a retried completion) is
+`objfile.ErrUnresolved`: the part fails, and its object, if one was created, is never claimed and is not this
+run's to delete (no completion was recorded for it). Once the upload completes, the identity it created (the GCS
+generation; the S3 version id, or its ETag in an unversioned bucket) is appended to the same log
+(`C NAME GENERATION`) and fsynced: the only evidence cleanup accepts that an object is this run's. A torn
 last line (an append cut short) is cut, durably, when the log is opened again, before the next line follows.
 The module's running SHA-256 is the digest recorded; nothing is read back. The ordered committer then, for one
 part at a time:
@@ -254,11 +258,14 @@ own: the client is read-write scoped (GCS) or always signing (S3), built apart f
 **Secrets and bounds.** A resumable session's URI is a bearer capability for its upload, an S3 upload id
 names one, and the SDKs' transport errors quote the request URL: every error the objfile writer returns passes through
 `objfile.RedactError`, which keeps the error chain and drops every URL's query and user information from its
-text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`). Requests are
-bounded: a response's headers within two minutes; a GCS resumable upload's chunk transfer within two minutes
-(then retried, within the chunk's retry deadline), an upload's retries within a cumulative allowance that grows
-with the chunks it has sent (four for its first request and four more a chunk, spent wherever its failures fall:
-not a per-chunk limit); reads within five attempts; the commit and the aftermath within their own time
+text, so no session URI reaches a report, an outcome file or stderr (`TestRemoteSessionSecrecy`); the S3
+writer also removes the upload id wherever else its text holds it, raw or URL-escaped
+(`TestRemoteS3UploadIDSecrecy`). Requests are bounded: a response's headers within two minutes; a GCS resumable
+upload's chunk transfer within two minutes (then retried, within the chunk's retry deadline), an upload's
+retries within a cumulative allowance that grows with the chunks it has sent (four for its first request and
+four more a chunk, spent wherever its failures fall: not a per-chunk limit); an S3 write request within its own
+`MaxAttempts` (five), under its operation's context, with no per-part transfer timeout; reads within five
+attempts; the commit and the aftermath within their own time
 bounds. Token exchanges for the destination's credentials go through a client of their own, bounded the same
 way (headers and body), and are fetched with the context of the request that needs one; the SDK's debug logging
 (`GOOGLE_SDK_GO_LOGGING_LEVEL`) is off for the destination's credentials and clients, so no token or signed

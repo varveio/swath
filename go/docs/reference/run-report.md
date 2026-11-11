@@ -104,7 +104,9 @@ dataset written to a bucket's (`-o gs://...` or `-o s3://...`, absent otherwise;
 `resumed`: a resume found the commit made and finished its aftermath; `lost_race`: another run's manifest is
 there; `unresolved`: neither could be established, and everything is kept; empty when the run did not reach its
 commit), `manifest`, `manifest_identity` (its GCS generation, or S3 version id or ETag) and `manifest_sha256` once committed,
-`uploads` (completed), `uploads_aborted`, `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
+`uploads` (completed), `uploads_aborted`, `aborts_unconfirmed` (aborted uploads whose abort the store did not
+confirm: an S3 multipart upload whose abort failed or that stayed listed, its parts kept until the bucket's
+lifecycle rule removes them; absent when none), `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
 upload writes and completions: a write waits for the chunk or part before it), `retries` and `retry_classes` (attempts
 the SDK retried, by `http_STATUS`, `timeout`, `connection`, `other`), `objects_verified` (retained parts a resume
 read whole and checked), and the orphans (objects this run created, by the generation its upload recorded, that no committed

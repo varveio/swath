@@ -92,7 +92,12 @@ func (r *Remote) URI() string {
 type UploadStats struct {
 	Uploads atomic.Int64 // completed
 	Aborted atomic.Int64 // ended without an object
-	Bytes   atomic.Int64 // bytes handed to uploads
+	// AbortsUnconfirmed are aborts the store did not confirm (an S3
+	// multipart upload whose abort failed or that is still listed: its
+	// parts stay until an abort succeeds or the bucket's lifecycle rule
+	// removes them).
+	AbortsUnconfirmed atomic.Int64
+	Bytes             atomic.Int64 // bytes handed to uploads
 	// WaitNs is the time encoders spent in upload writes and completions:
 	// a write blocks while the previous chunk is in flight.
 	WaitNs  atomic.Int64
@@ -235,7 +240,11 @@ func (a *remoteArtifact) Close() error {
 		return nil
 	}
 	a.stats.Aborted.Add(1)
-	return a.u.Abort()
+	err := a.u.Abort()
+	if err != nil {
+		a.stats.AbortsUnconfirmed.Add(1)
+	}
+	return err
 }
 
 // ClaimReceipt is a part's claim, durable before the journal record that

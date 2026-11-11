@@ -149,11 +149,13 @@ run's metadata.
   `s3:AbortMultipartUpload` on `PREFIX/*`. The region is `--output-s3-region`, else `AWS_REGION`,
   `AWS_DEFAULT_REGION` or the profile's, else `us-east-1`; the one resolved, and `--output-endpoint-url`
   (an S3-compatible store, addressed path-style), are fixed for the run. The environment's endpoint variables
-  (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, FIPS, dual-stack) are never applied to the destination. The
-  profile may change on resume.
+  (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, FIPS, dual-stack) are never applied to the destination; a CA
+  bundle is (`AWS_CA_BUNDLE`, or the profile's `ca_bundle`). The profile may change on resume.
 - **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
-  A failed or cancelled upload is aborted, but one a killed process leaves is not (its id dies with it), and S3
-  keeps an incomplete upload's parts, billed and invisible to listings, until it is aborted. Set a lifecycle
+  A failed or cancelled upload is aborted and the abort confirmed, but one a killed process leaves is not (its
+  id dies with it), nor one whose abort the bucket refused or did not confirm (the report's
+  `aborts_unconfirmed`), and S3 keeps an incomplete upload's parts, billed and invisible to listings, until it
+  is aborted. Set a lifecycle
   rule on the bucket that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`,
   `DaysAfterInitiation` 1 or more, on the prefix or the bucket) before writing to it.
 - **One prefix and one work directory per run:** a prefix that holds a `manifest.json` is refused; datasets in
@@ -181,7 +183,8 @@ run's metadata.
   creates the very same manifest again. A run without a journal (a local tree) cannot resume: check the prefix
   for a manifest before deleting anything under it.
 - **Report:** `output.remote` in the report ([run report](reference/run-report.md)): the commit's outcome, the
-  uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads) and the orphans deleted.
+  uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads), the orphans deleted and,
+  for S3, `aborts_unconfirmed` (multipart uploads the lifecycle rule must remove).
   Uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
 
 ## Disk sizing

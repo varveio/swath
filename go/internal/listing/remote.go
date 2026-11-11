@@ -94,8 +94,11 @@ type Remote struct {
 	// the chunk before it to be sent).
 	Uploads        int64 `json:"uploads"`
 	UploadsAborted int64 `json:"uploads_aborted"`
-	UploadBytes    int64 `json:"upload_bytes"`
-	UploadWaitNs   int64 `json:"upload_wait_ns"`
+	// AbortsUnconfirmed: aborted uploads whose abort the store did not
+	// confirm (S3: the parts stay until the bucket's lifecycle rule).
+	AbortsUnconfirmed int64 `json:"aborts_unconfirmed,omitempty"`
+	UploadBytes       int64 `json:"upload_bytes"`
+	UploadWaitNs      int64 `json:"upload_wait_ns"`
 	// Retries are the attempts the SDK retried, by failure class
 	// (http_STATUS, timeout, connection, other).
 	Retries      int64            `json:"retries"`
@@ -599,7 +602,7 @@ func (rs *remoteState) report(ws string) *Remote {
 		return nil
 	}
 	r := &Remote{Destination: rs.d.URI(), WorkDir: ws, Commit: rs.outcome,
-		Uploads: rs.stats.Uploads.Load(), UploadsAborted: rs.stats.Aborted.Load(), UploadBytes: rs.stats.Bytes.Load(), UploadWaitNs: rs.stats.WaitNs.Load(),
+		Uploads: rs.stats.Uploads.Load(), UploadsAborted: rs.stats.Aborted.Load(), AbortsUnconfirmed: rs.stats.AbortsUnconfirmed.Load(), UploadBytes: rs.stats.Bytes.Load(), UploadWaitNs: rs.stats.WaitNs.Load(),
 		Retries: rs.stats.Retries.Load(), RetryClasses: rs.stats.Classes(), ObjectsVerified: rs.verified,
 		OrphansDeleted: rs.orphans.Deleted, OrphansGone: rs.orphans.Gone, OrphansLeft: rs.orphans.Failed, OrphansUnproven: rs.orphans.Unproven}
 	if rs.outcome == dataset.CommitCreated || rs.outcome == dataset.CommitConfirmed || rs.outcome == "resumed" {
