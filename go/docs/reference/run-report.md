@@ -97,7 +97,17 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `remote` is a
+dataset written to a bucket's (`-o gs://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
+`destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
+`confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
+`lost_race`: another run's manifest is there; `unresolved`: neither could be established; empty when the run did
+not reach its commit), `manifest`, `manifest_identity` (its generation) and `manifest_sha256` once committed,
+`uploads` (completed), `uploads_aborted`, `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
+upload writes and completions: a write waits for the chunk before it), `retries` and `retry_classes` (attempts
+the SDK retried, by `http_STATUS`, `timeout`, `connection`, `other`), `objects_verified` (retained parts a resume
+read whole and checked), and the orphans (objects this run created that no committed manifest names):
+`orphans_deleted`, `orphans_gone`, `orphans_left`. `totals` is a
 `swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
 `objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete

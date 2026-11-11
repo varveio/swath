@@ -26,8 +26,9 @@ import (
 // and requests.failure_warnings. 5: invocation.row_budget_bytes is
 // invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
 // (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens.
-const ReportVersion = 5
+// and opens. 6 adds output.remote (a dataset written to a bucket: its
+// destination, uploads, retries, commit and orphan cleanup).
+const ReportVersion = 6
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -305,6 +306,9 @@ type Output struct {
 	// Totals is swath du's per-prefix totals: the depth, the prefixes and
 	// their cap, the column summed and the total (nil without them).
 	Totals *totals.Stats `json:"totals,omitempty"`
+	// Remote is a remote dataset's account: its destination, uploads,
+	// commit and orphan cleanup (nil for a local dataset).
+	Remote *Remote `json:"remote,omitempty"`
 }
 
 // TextOutput is a text run's destination and what reached it. A run that

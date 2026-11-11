@@ -72,6 +72,9 @@ type runJournal struct {
 	// why it is off when it could not be set up.
 	cache *order.Cache
 	off   string
+	// remote is a remote dataset's run (nil for a local dataset): its
+	// parts are uploaded, claimed by receipt and recorded by object name.
+	remote *remoteState
 }
 
 // rooted opens jr.root (once, before the router starts) and checks the
@@ -165,6 +168,11 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 		if _, err := dataset.Usable(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
+		if cfg.remote != nil {
+			if err := cfg.remote.checkFresh(ctx); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if !journal.LockEnforced && cfg.Warn != nil {
 		cfg.Warn("the output lock is not enforced on this platform: nothing stops a second run from writing the same output directory")
@@ -180,10 +188,21 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	if resumable {
 		jr, err = openLocked(ctx, cfg, path, id, lock)
 	} else if err = lock.Verify(); err != nil {
-	} else if err = dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
+	} else if err = prepareOutput(cfg, path, id); err != nil {
 		err = prepareError(cfg.Output.Dir, err)
 	} else {
 		jr = &runJournal{out: cfg.Output.Dir, lock: lock}
+	}
+	if err == nil && cfg.remote != nil {
+		if err = jr.attachRemote(cfg, cfg.remote); err != nil {
+			jr.cache.Close()
+			if jr.j != nil {
+				jr.j.Close()
+			}
+			if jr.root != nil {
+				jr.root.Close()
+			}
+		}
 	}
 	if err != nil {
 		// Still owned: the caller settles the failure, then releases.
@@ -297,7 +316,7 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		return nil, err
 	}
 	if !cfg.Output.Resume {
-		if err := dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
+		if err := prepareOutput(cfg, path, id); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
 		if cfg.Output.NoJournal {
@@ -322,6 +341,13 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	}
 	if dataset.Committed(cfg.Output.Dir) {
 		return nil, ErrComplete
+	}
+	if cfg.remote != nil {
+		// A run that reached its commit: the destination says whether the
+		// commit happened.
+		if err := cfg.remote.preflight(ctx, cfg.Output.Dir); err != nil {
+			return nil, err
+		}
 	}
 	// Recovery reads the journal and acts through the output root, opened
 	// and then checked to be the directory the lock is on (as
@@ -379,7 +405,12 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	sus, err := recoverParts(verifier{ctx, cfg.Progress}, r, cfg.Output.Dir, st, lock)
+	var sus *suspect
+	if cfg.remote != nil {
+		sus, err = recoverRemote(verifier{ctx, cfg.Progress}, cfg.remote, cfg.Output.Dir, st, lock)
+	} else {
+		sus, err = recoverParts(verifier{ctx, cfg.Progress}, r, cfg.Output.Dir, st, lock)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -854,6 +885,9 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 		parts := make([]dataset.Part, len(jr.state.Records))
 		for i, rec := range jr.state.Records {
 			parts[i] = dataset.Part{Path: filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i)), PartInfo: rec.Part}
+			if jr.remote != nil {
+				parts[i].Path, parts[i].Identity = rec.Object, rec.Identity
+			}
 		}
 		o.Resume = &parquetout.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
 	}
@@ -886,6 +920,9 @@ func (jr *runJournal) verifyOption(o *parquetout.Options) error {
 // dataset. The router calls it for one part at a time, in ordinal order: it
 // is the one ordered committer.
 func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
+	if jr.remote != nil {
+		return jr.publishRemote(ordinal, p, limit, rows, final)
+	}
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}

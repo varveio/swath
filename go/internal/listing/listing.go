@@ -85,6 +85,9 @@ type Config struct {
 	// terminal accounts (cmd/swath's forced exit). An error returned
 	// without running step means not committed. nil runs step.
 	Commit func(step func() error) error
+
+	// remote is the remote dataset's run, once its destination is opened.
+	remote *remoteState
 }
 
 // finalize applies Finalize to r once: the first call on a terminal report
@@ -125,6 +128,9 @@ type OutputConfig struct {
 	// Text, if set, writes the rows as text (stdout or one file) instead of
 	// a dataset; Dir must be empty. Such a run keeps no journal.
 	Text *textout.Config
+	// Remote, if set, writes the dataset to an object store; Dir is then
+	// its work directory (the lock, journal, spill and claim receipts).
+	Remote *RemoteOutput
 }
 
 // Limits are the execution limits; none changes the dataset's content.
@@ -305,6 +311,12 @@ func (c *Config) resolve() error {
 		return bad("replace needs an output directory")
 	case o.Text != nil && (o.Dir != "" || o.Resume):
 		return bad("text output excludes a dataset directory and resume")
+	case o.Remote != nil && o.Dir == "":
+		return bad("a remote dataset needs a work directory")
+	case o.Remote != nil && o.Replace:
+		return bad("replacing a remote dataset is not supported")
+	case o.Remote != nil && o.Text != nil:
+		return bad("text output excludes a remote dataset")
 	case (c.Totals != nil || c.Deliver != nil) && !dryRun(*c):
 		return bad("per-prefix totals need a count (no dataset, no text)")
 	}
@@ -314,6 +326,11 @@ func (c *Config) resolve() error {
 	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, readMemoryLimits())
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
 	l.encoderBytes = encoderPrice(c.Source.URI)
+	if o.Remote != nil {
+		// Each encoder's part is an upload holding one chunk: admitted with
+		// its writer, before listing and after it alike.
+		l.encoderBytes += uploadBytes(o.Remote)
+	}
 	if l.Encoders == 0 {
 		l.Encoders = min(runtime.GOMAXPROCS(0), admit(*c))
 		if c.Output.Text == nil { // Parquet writers only: a text output's jobs are not raised
@@ -324,6 +341,8 @@ func (c *Config) resolve() error {
 		l.PartSize = DefaultPartSize
 	}
 	switch {
+	case l.Spill.Reserve == 0 && o.Remote != nil:
+		l.Spill.Reserve = minSpillReserve // parts are uploaded, never written beside spill
 	case l.Spill.Reserve == 0:
 		l.Spill.Reserve = spillReserve(l.Encoders, l.PartSize)
 	case l.Spill.Reserve < 0:
@@ -540,6 +559,26 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		}
 	}
 	id := identity(src, s, cfg)
+	if r := cfg.Output.Remote; r != nil {
+		// The destination is fixed before anything is owned: its identity,
+		// its distance from the source, then its client.
+		d, err := destinationIdentity(r)
+		if err == nil {
+			err = checkOverlap(src.Locator(), d)
+		}
+		if err == nil {
+			cfg.remote, err = openRemote(ctx, r)
+		}
+		if err != nil {
+			rep, err := sum.failed(fmt.Errorf("destination: %w", err))
+			cfg.finalize(&rep, err)
+			rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
+			return rep, err
+		}
+		defer cfg.remote.close()
+		id.Destination = d
+		sum.Output.Remote = cfg.remote.report(cfg.Output.Dir)
+	}
 	sum.ArgsHash, sum.src = id.Hash(), src
 	jr, err := openJournal(ctx, cfg, src, id)
 	if err != nil {
@@ -548,6 +587,12 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		// failed recovery) is settled before the lock is released, except
 		// a dataset completed or a run gone by the time the lock was held:
 		// another process's outcome stands.
+		if cfg.remote != nil {
+			sum.Output.Remote = cfg.remote.report(cfg.Output.Dir)
+			if errors.Is(err, dataset.ErrLostRace) {
+				sum.Output.Remote.Commit = "lost_race"
+			}
+		}
 		rep, err := sum.failed(err)
 		cfg.finalize(&rep, err)
 		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
@@ -637,7 +682,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	env := registry.Env{Empty: jr.complete()}
 	watchSource(cfg.Progress, &sum, src, &env)
 	if cfg.Output.Dir != "" {
-		ropt, err := routerOptions(cfg, jr, shared, cancel)
+		ropt, err := routerOptions(ctx, cfg, jr, shared, cancel)
 		if err != nil {
 			return sum.failed(err)
 		}
@@ -646,7 +691,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// A dry run counts: nothing consumes its rows in order, so it holds
 	// no reorder storage and never spills (order.Count).
 	env.Count = dryRun(cfg)
-	a := &attempt{cfg: cfg, jr: jr, sum: sum}
+	a := &attempt{ctx: ctx, cfg: cfg, jr: jr, sum: sum}
 	oopt, scratch, err := orderOptions(cfg, jr, sum.Invocation.RowBudgetBytes, shared)
 	if err != nil {
 		return a.sum.failed(err)
@@ -862,12 +907,17 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 // routerOptions configures the Parquet router: parts journaled as they
 // close, their queues charged to the shared row budget, and an encoder
 // failure cancelling the run with its cause.
-func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) (*parquetout.Options, error) {
+func routerOptions(ctx context.Context, cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) (*parquetout.Options, error) {
 	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, MaxEncoders: cfg.Limits.maxEncoders, Account: shared.Add,
 		Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
 	jr.routerOptions(&ropt)
 	if err := jr.verifyOption(&ropt); err != nil {
 		return nil, err
+	}
+	if jr != nil && jr.remote != nil {
+		// Uploads run under the pipeline's context: a failure anywhere
+		// cancels it, and every upload in flight is aborted.
+		jr.remoteRouter(ctx, &ropt)
 	}
 	if pr := cfg.Progress; pr != nil {
 		ropt.Encoded = &pr.encoded
@@ -993,6 +1043,7 @@ func dryRun(cfg Config) bool { return cfg.Output.Dir == "" && cfg.Output.Text ==
 // attempt is one pipeline run's report and the state its failure and
 // commit paths share.
 type attempt struct {
+	ctx    context.Context // the pipeline's
 	cfg    Config
 	jr     *runJournal
 	router parquetout.Encoder
@@ -1218,8 +1269,12 @@ func (a *attempt) fail(err error) (Report, error) {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(a.cfg.Output.Dir)
 		}
+		a.failRemote(err)
 	}
 	a.durable()
+	if jr != nil {
+		a.sum.Output.Remote = jr.remote.report(a.cfg.Output.Dir)
+	}
 	return a.sum.failed(err)
 }
 
@@ -1277,12 +1332,22 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if cfg.Commit != nil {
 		commit = func(install func() error) error { return cfg.Commit(func() error { return step(install) }) }
 	}
-	if err := dataset.Publish(cfg.Output.Dir, meta, parts, commit); err != nil {
+	var err2 error
+	if jr != nil && jr.remote != nil {
+		err2 = a.commitRemote(meta, parts, commit, &committed)
+		sum.Output.Remote = jr.remote.report(cfg.Output.Dir)
+	} else {
+		err2 = dataset.Publish(cfg.Output.Dir, meta, parts, commit)
+	}
+	if err := err2; err != nil {
 		if committed { // only an injected crash follows the commit
 			return *sum, err
 		}
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
+			if !errors.Is(err, dataset.ErrLostRace) && !errors.Is(err, dataset.ErrCommitUnresolved) {
+				a.failRemote(err) // not committed, never to be: its parts go
+			}
 		}
 		a.durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
@@ -1294,6 +1359,10 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
 			cfg.Warn("run report not written: " + err.Error())
+		}
+	} else if jr != nil && jr.remote != nil {
+		if err := a.writeRemoteReport(*sum); err != nil && cfg.Warn != nil {
+			cfg.Warn(err.Error())
 		}
 	} else if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())
