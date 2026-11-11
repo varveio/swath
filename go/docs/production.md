@@ -132,14 +132,30 @@ warns at start.
 
 ## Writing to a bucket
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` puts the dataset in GCS and keeps nothing large on the
-runner: the parts go up as they close, and `DIR` holds only spill and the run's metadata.
+`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`) puts the dataset in GCS
+(or S3) and keeps nothing large on the runner: the parts go up as they close, and `DIR` holds only spill and the
+run's metadata.
 
-- **Credentials:** the destination's are its own: `--output-gcs-credentials-file FILE` (a service account
+- **Credentials (GCS):** the destination's are its own: `--output-gcs-credentials-file FILE` (a service account
   key or authorized-user JSON) or Application Default Credentials, with the read-write scope. It needs
   `storage.objects.create`, `get` and `delete` on the prefix (delete removes this run's own orphans, by
   generation). The source's `--anonymous` or credentials never apply to it. A rotated key file is given to
   `swath resume DIR` again; the endpoint (`--output-endpoint-url`) is fixed for the run.
+- **Credentials (S3):** `--output-s3-profile NAME` (a shared config profile: keys, SSO, an assumed role, a
+  credential process) or the AWS SDK's default chain (environment, `AWS_PROFILE`, web identity, container and
+  instance roles); requests are always signed, whatever the source's `--anonymous` or `--s3-profile`. Note that
+  the default chain reads the same environment as the source's: give the destination a profile when the two
+  must differ. It needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` (orphans, by ETag or version id) and
+  `s3:AbortMultipartUpload` on `PREFIX/*`. The region is `--output-s3-region`, else `AWS_REGION`,
+  `AWS_DEFAULT_REGION` or the profile's, else `us-east-1`; the one resolved, and `--output-endpoint-url`
+  (an S3-compatible store, addressed path-style), are fixed for the run. The environment's endpoint variables
+  (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, FIPS, dual-stack) are never applied to the destination. The
+  profile may change on resume.
+- **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
+  A failed or cancelled upload is aborted, but one a killed process leaves is not (its id dies with it), and S3
+  keeps an incomplete upload's parts, billed and invisible to listings, until it is aborted. Set a lifecycle
+  rule on the bucket that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`,
+  `DaysAfterInitiation` 1 or more, on the prefix or the bucket) before writing to it.
 - **One prefix and one work directory per run:** a prefix that holds a `manifest.json` is refused; datasets in
   a bucket are not replaced. Write each run to a dated prefix and let readers find the newest by its manifest.
   A work directory belongs to its run (`--overwrite` is refused with a bucket): a new run takes a new or empty
@@ -158,7 +174,8 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
   and a URL without credentials.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
-  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week).
+  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week); S3's
+  incomplete multipart uploads do not (the rule above).
 - **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
   whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which
   creates the very same manifest again. A run without a journal (a local tree) cannot resume: check the prefix
@@ -184,8 +201,8 @@ runner: the parts go up as they close, and `DIR` holds only spill and the run's 
   plus metadata plus the 1 GiB reserve: set `--spill-budget` explicitly (the default, half the free space,
   follows whatever disk there is), and allow for the metadata, which grows with the parts (a claim receipt of
   under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
-  the 100,000-part limit). Memory grows instead by one upload chunk (8 MiB) per encoder, admitted with its
-  writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
+  the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk or S3 part) per
+  encoder, admitted with its writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
   run's `resources.spill.peak_bytes` before shrinking the disk.
 - **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;
   so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less

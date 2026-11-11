@@ -1492,6 +1492,30 @@ fell by a quarter to a third at 8 MiB on `smalldirs` (fewer opens, and no 64 KiB
 wall or tail change is measurable on this host. On the Mac, where the open and close were the expensive part
 (162 s of system CPU), the same counters predict about a third fewer opens; Batch and the Mac decide the wall.
 
+## S3 uploads, on the fake (2026-11-11)
+
+The same measurements for a dataset written to S3 (`objfile/s3`'s writer: 8 MiB parts, a multipart upload per
+part larger than one, CRC32 checksums), on the same kind of 4-vCPU VM, shared with other jobs during the run
+(load average 10 to 18): `BenchmarkUpload` (`go test ./s3 -run X -bench BenchmarkUpload -benchtime 10x` in
+`go/objfile`) writes a 64 MiB object 4 KiB at a time to `s3/s3fake`, and the GCS benchmark ran in the same
+invocation for comparison:
+
+| Writer, server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| S3, the fake keeping the bytes (and each part's MD5, its ETag) | 144 MB/s | 431 MB (the fake's own copies) | 5,439 |
+| S3, parts read and dropped (the client's cost) | 857 MB/s | 3.2 MB (the part buffer is pooled across uploads) | 5,473 |
+| GCS, the fake keeping the bytes | 310 MB/s | 514 MB | 2,112 |
+| GCS, middle chunks read and dropped | 1,332 MB/s | 8.8 MB | 1,758 |
+
+So the S3 client spends about 78 ms per 64 MiB object (8 `UploadPart` requests, the creation and the
+completion), against GCS's 50 ms on the same run: it sends each part from `Write` (nothing overlaps the
+buffering of the next part) and computes each part's CRC32 before sending it. Both are small beside a part's
+encoding. `TestMeasureRemoteOverhead` now runs per provider: for S3, with the listing's 256 KiB parts (one
+`PutObject` each), wall time 1.12 to 1.42 s remote and 1.13 to 1.37 s local, process CPU 3.2 to 3.9 s remote and
+3.2 s local (after each provider's first run, whose CPU figure includes the setup), and `upload_wait_ns` 0.26 to
+0.32 s summed over the 4 encoders (GCS in the same run: 0.46 to 1.04 s). These are fake, single-host smoke
+numbers; a real bucket's latency, bandwidth and request rates are not measured here.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured
