@@ -873,6 +873,71 @@ commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 b
 S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
 and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
+### S3 scanner cost (2026-11-11)
+
+A CPU profile of a full listing of `aws-public-blockchain` (143,008,674 objects, sorted Parquet, 256 workers on 8
+vCPUs against the Go replay server; swath-notes `2026-11-11-swath-go-campaign/result-r2-profile.md`, a private run
+summary) put the scanner at 252 of 714 CPU-seconds, 35 %, about 1.76 µs per object. Microbenchmarks on the build host
+(4-vCPU GCP VM, Intel Xeon Platinum 8581C, Go 1.27.4; shared with other work, so the ratios are the result), the
+commit before the change and the change alternated as two test binaries, eight runs each at `-benchtime=1500x`,
+medians compared with benchstat (± is benchstat's confidence interval; every change p=0.000). `BenchmarkDecodeBody`
+is the scanner alone, `BenchmarkDecode` one full `ListObjectsV2` or `ListObjectVersions` call through the SDK stack
+and the Guard over an in-memory 1,000-entry page. Pages: `list` and `versions` are the older synthetic pages
+(URL-encoded keys, owners, checksums); `blockchain` and `full` are in the replay server's bytes, keys shaped like
+`aws-public-blockchain`'s (every key holds an escaped `=`), `full` with checksums, owners, multipart ETags and escaped
+spaces and UTF-8:
+
+| Benchmark | Page | Before ns/object | After ns/object | Change | B/object | allocs/object |
+|---|---|---:|---:|---:|---:|---:|
+| `DecodeBody` | list | 1,161 ± 2 % | 726 ± 2 % | −37 % | 271, unchanged | 0.003 (3 per page), unchanged |
+| `DecodeBody` | versions | 1,181 ± 2 % | 764 ± 2 % | −35 % | 329, unchanged | 0.003, unchanged |
+| `DecodeBody` | blockchain | 750 ± 2 % | 389 ± 2 % | **−48 %** | 279, unchanged | 0.003, unchanged |
+| `DecodeBody` | full | 1,158 ± 2 % | 660 ± 1 % | −43 % | 279, unchanged | 0.003, unchanged |
+| `Decode` | list | 1,333 ± 1 % | 897 ± 1 % | −33 % | 911, unchanged | 0.45 (451 per page), unchanged |
+| `Decode` | versions | 1,366 ± 1 % | 950 ± 1 % | −30 % | 983, unchanged | 0.45, unchanged |
+| `Decode` | blockchain | 890 ± 1 % | 537 ± 2 % | −40 % | 716, unchanged | 0.45, unchanged |
+| `Decode` | full | 1,329 ± 2 % | 835 ± 2 % | −37 % | 922, unchanged | 0.45, unchanged |
+
+What changed, in the order applied, each measured against the step before on the body-only benchmark (blockchain
+page; the other pages moved the same way or less): the URL decoding of a key moves the runs between escapes as
+blocks instead of byte by byte (−14 %); the `]]>` search on the scalar fast path runs only when the text holds a `]`
+(−3 %); a `<` that is not followed by `!` or `?` goes straight to the tag reader instead of four prefix tests for
+comments, CDATA, processing instructions and directives, measured together with the same `]` test in the general
+text decoder (−18 %); the five predefined entities are a switch, not a map (−4 %); a tag name ends at
+a byte-table lookup (−8 %); text with references that ends at its own end tag (every ETag's two `&quot;`) is decoded
+on the fast path instead of the general loop (−11 %); a `<` already at the cursor skips the search for it (−3 %). Two
+ideas did not win and are not in: one table-driven pass over a scalar's text in place of the byte searches (+4 %),
+and a byte loop in place of `IndexByte` for the namespace colon (+2 %). The full-client cost above the scanner is
+about 145 ns per object (145 µs per page) before and after: the SDK's middleware, its decoding of the minimal
+envelope, and the Guard's one allocation and copy of the body, which is most of the 437 B/object the full call
+allocates beyond the page. `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it
+replaced (kept in `xml_old_test.go`): the same pages, the same errors.
+
+Of that client cost, about 11 µs per request was `debug.ReadBuildInfo` parsing the build info for the User-Agent
+token: the SDK runs API options on every call. The token is now read once per client. `BenchmarkDecode`, ten
+alternated runs: blockchain 536.5 → 519.0 ns/object (−3.2 %), list 903.6 → 878.6 (−2.8 %), versions 957.8 → 930.6
+(−2.8 %), full 843.2 → 822.6 (−2.4 %), all p ≤ 0.001; 451 → 364 allocations per page. The GCS client still reads
+it per listing request (`gcs/client/list.go`); not measured.
+
+### Pivot density step cost (2026-11-11)
+
+The same blockchain profile put `keyrange.extrapolateWhy`, the density step `propose` runs after every continuing
+page (138,485 split decisions considered in 149,783 pages), at 24 of 714 CPU-seconds, 3.4 %: 15 s in its own loop over
+every byte of the page, 4 s in `isSafe`, 1.6 s in `growslice` (`append(page, c)` copied the 1,000-key page whenever
+it had no spare capacity, and otherwise wrote the cursor into that capacity), about 3 s in `math/big` (three values of
+about 80 digits per call, not one per key). `BenchmarkExtrapolate`, one call over a 1,000-key blockchain-shaped page
+(stride 64), on the build host as above, old and new binaries alternated eight times at `-benchtime=3000x`:
+
+| Case | Before | After | Change | B/op | allocs/op |
+|---|---:|---:|---:|---|---|
+| frontier | 82.9 µs ± 3 % | 25.7 µs ± 5 % | −69 % | 25.5 KiB → 1.5 KiB | 19, unchanged |
+| bounded | 83.0 µs ± 3 % | 27.2 µs ± 6 % | −67 % | 25.8 KiB → 1.8 KiB | 24, unchanged |
+
+The page and the cursor are scanned in place (no copy), every byte is marked in a 256-entry table eight bytes per
+step, and the alphabet's safety is checked once over the table instead of per byte (−33 % from the first two, a
+further −51 % from the unrolled marking). `TestExtrapolateMatchesOld` holds the result, pivot and reason, to the one
+it replaced (kept in `extrapolate_test.go`).
+
 ### azblob v1.7.0 to v1.8.3 (2026-11-10)
 
 `BenchmarkList` (`internal/source/azblob/client`), main `05e36feb` (azblob v1.7.0, azcore v1.21.1) against the

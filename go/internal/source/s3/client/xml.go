@@ -534,7 +534,28 @@ func (p *parser) text(s span) string {
 // space), as the AWS SDKs decode encoding-type=url responses.
 func (p *parser) unescape(s *span) error {
 	b := p.arena[s.off : s.off+s.n]
-	if bytes.IndexByte(b, '%') < 0 && bytes.IndexByte(b, '+') < 0 {
+	pct, plus := bytes.IndexByte(b, '%'), bytes.IndexByte(b, '+')
+	if pct < 0 && plus < 0 {
+		return nil
+	}
+	if plus < 0 {
+		// Only escapes: the runs between them move as blocks.
+		w := pct
+		for r := pct; ; {
+			if r+2 >= len(b) || !ishex(b[r+1]) || !ishex(b[r+2]) {
+				return syntax("invalid URL escape in %q", b)
+			}
+			b[w] = unhex(b[r+1])<<4 | unhex(b[r+2])
+			w, r = w+1, r+3
+			n := bytes.IndexByte(b[r:], '%')
+			if n < 0 {
+				w += copy(b[w:], b[r:])
+				break
+			}
+			w += copy(b[w:], b[r:r+n])
+			r += n
+		}
+		s.n = uint32(w)
 		return nil
 	}
 	w := 0
@@ -591,11 +612,16 @@ func (p *parser) closes(self, end []byte) error {
 func (p *parser) next() (kind int, name []byte, empty bool, err error) {
 	b := p.b
 	for {
-		j := bytes.IndexByte(b[p.i:], '<')
-		if j < 0 {
-			return 0, nil, false, syntax("unexpected end of document")
+		if p.i >= len(b) || b[p.i] != '<' { // S3 writes tags back to back
+			j := bytes.IndexByte(b[p.i:], '<')
+			if j < 0 {
+				return 0, nil, false, syntax("unexpected end of document")
+			}
+			p.i += j
 		}
-		p.i += j
+		if !markup(b, p.i) {
+			return p.tag()
+		}
 		if err := p.skipMarkup(); err != errNotMarkup {
 			if err != nil {
 				return 0, nil, false, err
@@ -607,6 +633,13 @@ func (p *parser) next() (kind int, name []byte, empty bool, err error) {
 }
 
 var errNotMarkup = errors.New("not markup")
+
+// markup reports whether the '<' at i may open a comment, CDATA section,
+// processing instruction or directive (all start "<!" or "<?"): when not,
+// it is a tag, and skipMarkup need not look.
+func markup(b []byte, i int) bool {
+	return i+1 < len(b) && (b[i+1] == '!' || b[i+1] == '?')
+}
 
 // skipMarkup skips a comment, CDATA section, processing instruction or
 // directive at p.i, or returns errNotMarkup when p.i starts a tag.
@@ -679,7 +712,7 @@ func (p *parser) tag() (kind int, name []byte, empty bool, err error) {
 		k++
 	}
 	s := k
-	for k < len(b) && !isSpace(b[k]) && b[k] != '>' && b[k] != '/' {
+	for k < len(b) && !nameEnd[b[k]] {
 		k++
 	}
 	name = b[s:k]
@@ -707,7 +740,8 @@ func (p *parser) tag() (kind int, name []byte, empty bool, err error) {
 	return 0, nil, false, syntax("unterminated tag <%s", name)
 }
 
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+// nameEnd is the bytes that end a tag's name: XML space, '>' and '/'.
+var nameEnd = [256]bool{' ': true, '\t': true, '\n': true, '\r': true, '>': true, '/': true}
 
 // skip skips the rest of element name.
 func (p *parser) skip(name []byte, empty bool) error {
@@ -736,15 +770,23 @@ func (p *parser) scalar(name []byte, empty bool) ([]byte, error) {
 		return nil, nil
 	}
 	b := p.b
-	// Fast path: plain text then the end tag.
+	// Fast path: character data then the element's own end tag. Plain
+	// text is returned in place; text with references or \r is decoded
+	// as the general loop below would (its first appendText, then the
+	// end tag).
 	if j := bytes.IndexByte(b[p.i:], '<'); j >= 0 {
 		t := b[p.i : p.i+j]
 		e := p.i + j
 		if e+2+len(name) < len(b) && b[e+1] == '/' && bytes.Equal(b[e+2:e+2+len(name)], name) &&
-			b[e+2+len(name)] == '>' && bytes.IndexByte(t, '&') < 0 && bytes.IndexByte(t, '\r') < 0 &&
-			!bytes.Contains(t, []byte("]]>")) {
+			b[e+2+len(name)] == '>' {
 			p.i = e + 3 + len(name)
-			return t, nil
+			if bytes.IndexByte(t, '&') < 0 && bytes.IndexByte(t, '\r') < 0 &&
+				(bytes.IndexByte(t, ']') < 0 || !bytes.Contains(t, []byte("]]>"))) {
+				return t, nil
+			}
+			var err error
+			p.tmp, err = appendText(p.tmp[:0], t)
+			return p.tmp, err
 		}
 	}
 	p.tmp = p.tmp[:0]
@@ -793,7 +835,7 @@ func (p *parser) scalar(name []byte, empty bool) ([]byte, error) {
 // appendText appends character data with entities decoded and line endings
 // normalised (encoding/xml's text()).
 func appendText(dst, t []byte) ([]byte, error) {
-	if bytes.Contains(t, []byte("]]>")) {
+	if bytes.IndexByte(t, ']') >= 0 && bytes.Contains(t, []byte("]]>")) {
 		return nil, syntax("unescaped ]]> in character data")
 	}
 	for len(t) > 0 {
@@ -820,7 +862,7 @@ func appendText(dst, t []byte) ([]byte, error) {
 			}
 			dst = utf8.AppendRune(dst, rune(n))
 		default:
-			r, ok := entities[string(ent)]
+			r, ok := entity(ent)
 			if !ok {
 				return nil, syntax("invalid character entity &%s;", ent)
 			}
@@ -831,7 +873,23 @@ func appendText(dst, t []byte) ([]byte, error) {
 	return dst, nil
 }
 
-var entities = map[string]byte{"lt": '<', "gt": '>', "amp": '&', "apos": '\'', "quot": '"'}
+// entity is the byte a predefined entity names; a switch, not a map: an
+// ETag's two &quot; are on every entry.
+func entity(name []byte) (byte, bool) {
+	switch string(name) {
+	case "quot":
+		return '"', true
+	case "amp":
+		return '&', true
+	case "lt":
+		return '<', true
+	case "gt":
+		return '>', true
+	case "apos":
+		return '\'', true
+	}
+	return 0, false
+}
 
 // appendNormalised turns \r\n and lone \r into \n.
 func appendNormalised(dst, t []byte) []byte {
