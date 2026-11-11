@@ -94,7 +94,8 @@ type ListInput struct {
 	Delimiter  string
 	StartFrom  string
 	Marker     string
-	MaxResults int // 0: the server default (5,000, also the cap)
+	MaxResults int     // 0: the server default (5,000, also the cap)
+	Include    Include // the zero value sends no include
 }
 
 // Item is one listed entry: a blob, or with Prefix a BlobPrefix (a
@@ -110,6 +111,13 @@ type Item struct {
 	ContentType  string
 	BlobType     string
 	AccessTier   string
+	// Entry is what tells a name's entries apart in a listing with
+	// Include.Grouped; zero otherwise (but a versioned account lists the
+	// current blob's VersionID and IsCurrentVersion in any listing).
+	Entry
+	// Props are the properties every listing carries beyond the ones
+	// above, and the ones an Include asks for.
+	Props
 }
 
 // ListOutput is one page: blobs and prefixes in wire order, which ascends

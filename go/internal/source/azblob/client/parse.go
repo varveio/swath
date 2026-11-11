@@ -24,11 +24,15 @@ const MaxPageSize = 5000
 // Validate holds a page to the listing contract: names (blobs and
 // prefixes together, in wire order) ascend strictly in UTF-16 code-unit
 // order, and the next marker is not the one sent (the listing would loop).
-// An empty NextMarker is the end.
-func (p *ListOutput) Validate(sent string) error {
+// An empty NextMarker is the end. A grouped listing (Include.Grouped)
+// lists a name once per entry: its blobs' names ascend or repeat, a
+// prefix still never repeats.
+func (p *ListOutput) Validate(sent string, grouped bool) error {
 	for i := 1; i < len(p.Items); i++ {
-		if a, b := p.Items[i-1].Name, p.Items[i].Name; utf16order.Compare(a, b) >= 0 {
-			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", objhttp.ErrInvalidPage, b, a)
+		a, b := &p.Items[i-1], &p.Items[i]
+		c := utf16order.Compare(a.Name, b.Name)
+		if c > 0 || c == 0 && (!grouped || a.Prefix || b.Prefix) {
+			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", objhttp.ErrInvalidPage, b.Name, a.Name)
 		}
 	}
 	if p.NextMarker != "" && p.NextMarker == sent {

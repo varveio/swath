@@ -143,6 +143,12 @@ type Adapter struct {
 	container string
 	set       *counters.Set
 	base      counters.ID
+	// Include is the listing's include= (set before the first Fetch).
+	// With Include.Grouped a name repeats, once per entry (its versions,
+	// snapshots, soft-deleted blobs), its entries consecutive in Azure's
+	// order and served so: they are in one span, since spans are intervals
+	// of names (§3).
+	Include client.Include
 
 	mu     sync.Mutex
 	chains map[uint64]*chain
@@ -181,6 +187,7 @@ type chain struct {
 	prefix, delimiter string
 	after, through    string
 	bounded           bool
+	include           client.Include // the adapter's, for this chain's query (include)
 
 	stack []span
 	limit int // stackBound of the chain's bounds
@@ -239,7 +246,7 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 	var base, c *chain
 	if q.Token == "" {
 		c = &chain{prefix: q.Prefix, delimiter: q.Delimiter, after: q.After, through: q.Through, bounded: q.Bounded,
-			limit: stackBound(q.After, q.Through)}
+			include: include(a.Include, q), limit: stackBound(q.After, q.Through)}
 		spans := decompose(normalise(q.Prefix, q.After, q.Through, q.Bounded), q.Through)
 		for i := len(spans) - 1; i >= 0; i-- {
 			c.stack = append(c.stack, a.newSpan(c, spans[i]))
@@ -322,6 +329,24 @@ func (a *Adapter) evict() bool {
 	return true
 }
 
+// include is inc as q sends it. A probe (keyrange.Query.Probe: the seed's
+// and structure's pages, whose rows are never emitted) leaves out what
+// only rows carry: metadata, tags, immutability. A delimiter query, which
+// only probes send, leaves out snapshots: List Blobs documents
+// delimiter with include=snapshots as 400 InvalidQueryParameter (the
+// service answered 200 on 2026-11-11, service version 2026-06-06), and a
+// snapshot never holds a name alone (its base blob is listed, or listed
+// deleted), so no roll-up is lost.
+func include(inc client.Include, q *keyrange.Query) client.Include {
+	if q.Probe {
+		inc.Metadata, inc.Tags, inc.Immutability = false, false, false
+	}
+	if q.Delimiter != "" {
+		inc.Snapshots = false
+	}
+	return inc
+}
+
 func parseToken(t string) (id, seq uint64, err error) {
 	a, b, ok := strings.Cut(t, ":")
 	if ok {
@@ -359,7 +384,7 @@ func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) 
 		if split {
 			continue
 		}
-		if c.any && it.Name <= c.last {
+		if c.any && (it.Name < c.last || it.Name == c.last && !a.Include.Grouped()) {
 			return nil, invariant("%q emitted after %q", it.Name, c.last)
 		}
 		top.buf = top.buf[1:]
@@ -388,7 +413,7 @@ func (a *Adapter) read(ctx context.Context, c *chain, i, limit int) error {
 		a.add(CSeeks, 1)
 	}
 	out, err := a.l.List(ctx, &client.ListInput{Container: a.container, Prefix: c.prefix, Delimiter: c.delimiter,
-		StartFrom: sp.sk.wire, Marker: sp.sk.marker, MaxResults: limit})
+		StartFrom: sp.sk.wire, Marker: sp.sk.marker, MaxResults: limit, Include: c.include})
 	if err != nil {
 		return err
 	}
@@ -426,12 +451,14 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 		}
 		sp.buf = append(sp.buf, items[k])
 		sp.sk.accepted = true
-		if c.bounded && n == c.through {
+		if c.bounded && n == c.through && !c.include.Grouped() {
 			// Through ends its span: §3.1 cuts Through's path at every
 			// group boundary, so no member of its span follows it in
 			// Azure's order (a later one would differ from Through first
 			// at an EE..EF byte against F0..F4, which a cut separates).
-			// The read stops here instead of reading past it.
+			// The read stops here instead of reading past it. In a
+			// grouped listing Through's own later entries follow it, so
+			// the span ends at the first item past them (rule 3).
 			a.end(sp)
 			a.add(COverlapRows, int64(len(items)-k-1))
 			return
