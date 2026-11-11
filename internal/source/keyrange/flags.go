@@ -91,11 +91,11 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
 			Usage: "with --sequential, stop after N objects (marked incomplete)"})
-		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d; default the provider's)", PageKeys),
+		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d, capped at the provider's maximum; default the provider's)", MaxPageFlag),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
-				if err != nil || n < 1 || n > PageKeys {
-					return fmt.Errorf("want 1 to %d", PageKeys)
+				if err != nil || n < 1 || n > MaxPageFlag {
+					return fmt.Errorf("want 1 to %d", MaxPageFlag)
 				}
 				p.PageSize = n
 				return nil

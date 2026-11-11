@@ -164,7 +164,16 @@ type Adapter struct {
 
 	// trace, when set (tests), sees every span created.
 	trace func(span)
+	// oneRead: a page that holds rows is returned rather than read again
+	// (OneReadPerPage).
+	oneRead bool
 }
+
+// OneReadPerPage makes every page that holds rows end at its first read's
+// last member (experimental, #449): a page is then at most one listing
+// read, and a chain holds no surplus of that read for a split to abandon,
+// whatever page size each query asks. Set before the first Fetch.
+func (a *Adapter) OneReadPerPage(on bool) { a.oneRead = on }
 
 // New builds an adapter listing container through l. The counters of
 // CounterDefs are added to set from ID base (the provider's registration);
@@ -387,7 +396,11 @@ func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) 
 				c.stack = c.stack[:len(c.stack)-1]
 				continue
 			}
-			if len(p.Items) > 0 {
+			if a.oneRead && len(p.Items) > 0 {
+				// One read per page: the page's rows came from a read
+				// already, so it ends short rather than read again for its
+				// rest and keep that read's surplus buffered (a seek after
+				// a listed name, which rule 1 drops, leaves limit-1).
 				a.add(CShortPages, 1)
 				a.add(CShortRows, int64(limit-len(p.Items)))
 				break

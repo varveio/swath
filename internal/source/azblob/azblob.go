@@ -110,6 +110,10 @@ type Options struct {
 	// to read them, which a listing does not: without it every request
 	// fails.
 	FetchMetadata, FetchTags, FetchImmutability bool
+	// PagePolicy is the experimental page policy (#449, diagnostic):
+	// "" or fixed, one-read (order.Adapter.OneReadPerPage) or grow
+	// (one-read and keyrange.GrowPage up to client.MaxPageSize).
+	PagePolicy string
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -220,6 +224,7 @@ type provider[P any] struct {
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
+	oneRead          bool // the adapters read once per page (Options.PagePolicy)
 }
 
 // Range is the engine's range.
@@ -262,7 +267,27 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 	if err := p.admit(ctx); err != nil {
 		return nil, err
 	}
-	e, err := keyrange.New(p.engineOptions(own), p.description(), p.fetch)
+	eo := p.engineOptions(own)
+	oracle, err := loadPageOracle(opt.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	switch opt.PagePolicy {
+	case "", pageFixed:
+	case pageOneRead:
+		p.oneRead = true
+	case pageGrow:
+		p.oneRead = true
+		if !eo.Sequential {
+			eo.PageFor, eo.PageMax = keyrange.GrowPage(client.MaxPageSize), client.MaxPageSize
+		}
+	default:
+		return nil, fmt.Errorf("Azure Blob: --azure-page-policy %q: want %s, %s or %s", opt.PagePolicy, pageFixed, pageOneRead, pageGrow)
+	}
+	if oracle != nil && !eo.Sequential {
+		eo.PageFor, eo.PageMax = oracle.pageFor(client.MaxPageSize), client.MaxPageSize
+	}
+	e, err := keyrange.New(eo, p.description(), p.fetch)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +322,7 @@ func (p *provider[P]) description() keyrange.Description[P] {
 func (p *provider[P]) adapter() *order.Adapter {
 	a := order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
 	a.Include = p.include()
+	a.OneReadPerPage(p.oneRead)
 	return a
 }
 
@@ -337,6 +363,13 @@ func (p *provider[P]) tagsRefused(err error) error {
 	}
 	return err
 }
+
+// The experimental page policies (Options.PagePolicy).
+const (
+	pageFixed   = "fixed"
+	pageOneRead = "one-read"
+	pageGrow    = "grow"
+)
 
 // adapterKey carries an Expand's adapter on its context.
 type adapterKey struct{}
