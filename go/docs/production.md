@@ -132,8 +132,9 @@ warns at start.
 
 ## Writing to a bucket
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`) puts the dataset in GCS
-(or S3) and keeps nothing large on the runner: the parts go up as they close, and `DIR` holds only spill and the
+`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`, or
+`-o az://ACCOUNT/CONTAINER/PREFIX`) puts the dataset in GCS (or S3, or Azure Blob Storage) and keeps nothing
+large on the runner: the parts go up as they close, and `DIR` holds only spill and the
 run's metadata.
 
 - **Credentials (GCS):** the destination's are its own: `--output-gcs-credentials-file FILE` (a service account
@@ -155,6 +156,25 @@ run's metadata.
   (an S3-compatible store, addressed path-style), are fixed for the run. The environment's endpoint variables
   (`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3`, FIPS, dual-stack) are never applied to the destination; a CA
   bundle is (`AWS_CA_BUNDLE`, or the profile's `ca_bundle`). The profile may change on resume.
+- **Credentials (Azure):** `--output-azure-sas-token TOKEN` (a SAS, the query string the portal or
+  `az storage container generate-sas` prints), else Entra ID through `DefaultAzureCredential` (environment,
+  workload identity, managed identity, the Azure CLI's login), whatever the source's SAS, account key or
+  `--anonymous`; account keys and connection strings are not taken for a destination (make a SAS from the key).
+  The SAS is never recorded: give it to every `swath resume DIR` (a rotated one is fine). It needs read, write
+  and delete on the container's blobs (`sp=rwd`, a container SAS `sr=c`, or an account SAS for the blob service
+  with `srt=o`); a container listing is not needed. An Entra ID identity needs a data role on the container
+  (or its account), `Storage Blob Data Contributor`, or a custom role with the data actions
+  `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read`, `.../blobs/write` (Put Blob, Put Block
+  and Put Block List) and `.../blobs/delete` (orphans); a control-plane role such as `Contributor` is not
+  enough. Entra ID needs an `https://` endpoint: an emulator (Azurite) is reached with a SAS. The endpoint
+  (`--output-endpoint-url`, the blob service base with the account as its first path segment, as Azurite's
+  `http://127.0.0.1:10000`) is `https://ACCOUNT.blob.core.windows.net` by default, is never taken from the
+  environment, and is fixed for the run, as are the account and container.
+- **Azure staged blocks need no rule:** a part larger than 8 MiB is staged in blocks and created by its block
+  list. Blocks an aborted, failed or killed upload staged are uncommitted: never a blob, never visible, and the
+  service discards them a week after the last was staged (or when a blob is created at the name), so no
+  lifecycle rule is needed for them. In an account with blob versioning or soft delete, the orphans swath
+  deletes are kept as previous versions or soft-deleted blobs for the account's retention, and billed meanwhile.
 - **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
   A failed or cancelled upload is aborted and the abort confirmed, but one a killed process leaves is not (its
   id dies with it), nor one whose abort the bucket refused or did not confirm (the report's
@@ -182,11 +202,12 @@ run's metadata.
   assertion or a session URL. The storage SDK (v1.70.0) does not hand that logger to the JSON API client it
   builds inside, so with the variable set that client may still log request lines: the method, the object name
   and a URL without credentials. An S3 destination's AWS SDK logs nothing: its logger discards everything and
-  its request logging is off, whatever the AWS configuration says.
+  its request logging is off, whatever the AWS configuration says. The Azure SDK's log is off in swath
+  (`AZURE_SDK_GO_LOGGING=all` prints nothing), for the destination as for the source.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
-  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week); S3's
-  incomplete multipart uploads do not (the rule above).
+  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
+  Azure's uncommitted blocks (a week); S3's incomplete multipart uploads do not (the rule above).
 - **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
   whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which
   creates the very same manifest again. A run without a journal (a local tree) cannot resume: check the prefix

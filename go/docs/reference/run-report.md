@@ -98,16 +98,17 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `remote` is a
-dataset written to a bucket's (`-o gs://...` or `-o s3://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
+dataset written to a bucket's (`-o gs://...`, `-o s3://...` or `-o az://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
 `destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
 `confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
 `resumed`: a resume found the commit made and finished its aftermath; `lost_race`: another run's manifest is
 there; `unresolved`: neither could be established, and everything is kept; empty when the run did not reach its
-commit), `manifest`, `manifest_identity` (its GCS generation, or S3 version id or ETag) and `manifest_sha256` once committed,
+commit), `manifest`, `manifest_identity` (its GCS generation, S3 version id or ETag, or Azure ETag) and `manifest_sha256` once committed,
 `uploads` (completed), `uploads_aborted`, `aborts_unconfirmed` (aborted uploads whose abort the store did not
 confirm: an S3 multipart upload whose abort failed or that stayed listed, its parts kept until the bucket's
-lifecycle rule removes them; absent when none), `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
-upload writes and completions: a write waits for the chunk or part before it), `retries` and `retry_classes` (attempts
+lifecycle rule removes them; absent when none, and always for GCS and Azure, whose aborts send nothing to
+confirm), `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
+upload writes and completions: a write waits for the chunk, part or block before it), `retries` and `retry_classes` (attempts
 the SDK retried, by `http_STATUS`, `timeout`, `connection`, `other`), `objects_verified` (retained parts a resume
 read whole and checked), and the orphans (objects this run created, by the generation its upload recorded, that no committed
 manifest names): `orphans_deleted`, `orphans_gone` (absent, or replaced since: not this run's),
