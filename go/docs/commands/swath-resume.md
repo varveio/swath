@@ -32,15 +32,16 @@ logs.parquet is already complete: nothing to resume
 
 [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
-A run that writes to a bucket (`-o gs://BUCKET/PREFIX` or `-o s3://BUCKET/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
+A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
 `swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
 prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
-version: the GCS generation, the S3 version id or ETag; its size and SHA-256), and a resume of a run that reached
+version: the GCS generation, the S3 version id or ETag, the Azure ETag; its size and SHA-256), and a resume of a run that reached
 its commit first reads the bucket's manifest back: the run's own means the run is complete, and the resume first
 finishes what the commit left (this run's leftover parts deleted, `run.json` beside the manifest). A commit that
 ended unresolved (exit 75) is resumed the same way: the resume creates the very manifest the run saved. The
-destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`); its
-bucket, prefix, endpoint and S3 region are fixed. A lost work directory loses the
+destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`), and an
+Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azure: account and container),
+prefix, endpoint and S3 region are fixed. A lost work directory loses the
 resume: the parts already uploaded are not reused, and a new run writes to a new prefix.
 
 Rows listed but not yet in a published part are listed again, except those a validated spill file still
@@ -81,6 +82,11 @@ Output:
                                 SSO, web identity, IMDS). The destination's own: the source's
                                 credentials and --anonymous never apply to it, and its requests are
                                 always signed. It may change on resume.
+      --output-azure-sas-token TOKEN
+                              a shared access signature for an Azure -o; never recorded
+                                Default: Entra ID (DefaultAzureCredential). The destination's own:
+                                the source's SAS, key and --anonymous never apply to it. Give it
+                                again to swath resume; it may change there.
 
 Object stores:
       --anonymous             send no credentials (a public bucket or container)

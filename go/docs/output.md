@@ -7,6 +7,7 @@ swath list s3://bucket/logs/ -o rows.tsv.zst # a compressed TSV file
 swath list s3://bucket/logs/ -o logs.parquet # a sorted Parquet dataset
 swath list s3://bucket/logs/ -o gs://out/logs/2026-11-11 --work-dir work  # the dataset in a GCS bucket
 swath list s3://bucket/logs/ -o s3://out/logs/2026-11-11 --work-dir work  # the dataset in an S3 bucket
+swath list s3://bucket/logs/ -o az://acct/out/logs/2026-11-11 --work-dir work  # in an Azure Blob container
 swath du s3://bucket -d 1                    # totals per prefix
 ```
 
@@ -17,7 +18,7 @@ swath du s3://bucket -d 1                    # totals per prefix
 | text rows on stdout | you read the rows, or pipe them to `head`, `grep`, `awk`, `jq` |
 | a `.tsv` or `.jsonl` file | another program reads the rows once, or you keep a small listing |
 | a dataset (`-o DIR`) | you query the listing with SQL or DataFrames, keep it, compare it with a later one, or list a large source: only a dataset run can be resumed, and it says whether it is complete |
-| a dataset in a bucket (`-o gs://BUCKET/PREFIX` or `-o s3://BUCKET/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS or S3: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [production.md](production.md#writing-to-a-bucket)) |
+| a dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS, S3 or Azure Blob Storage: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [production.md](production.md#writing-to-a-bucket)) |
 | `swath du` | you want sizes and counts, not rows |
 
 A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `manifest.json` that commits them.

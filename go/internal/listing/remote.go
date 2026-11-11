@@ -26,32 +26,36 @@ import (
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/remote"
 	"github.com/varveio/swath/go/objfile/s3"
 )
 
-// RemoteOutput is a dataset written straight to an object store (gs:// or
-// s3://): its parts are uploaded as they close and its manifest, created
+// RemoteOutput is a dataset written straight to an object store (gs://,
+// s3:// or az://): its parts are uploaded as they close and its manifest, created
 // only if absent, is the commit. OutputConfig.Dir is then the work
 // directory: the lock, the journal, spill, the claim receipts and the
 // candidate manifest, never a part.
 type RemoteOutput struct {
-	Location string // gs://BUCKET[/PREFIX] or s3://BUCKET[/PREFIX]
-	// Endpoint is the destination's GCS JSON API base, or its
-	// S3-compatible endpoint URL ("": the provider's); frozen.
+	Location string // gs://BUCKET[/PREFIX], s3://BUCKET[/PREFIX] or az://ACCOUNT/CONTAINER[/PREFIX]
+	// Endpoint is the destination's GCS JSON API base, its S3-compatible
+	// endpoint URL, or its Azure blob service base, which takes the
+	// account as its first path segment ("": the provider's); frozen.
 	Endpoint string
 	// CredentialsFile is a GCS destination's credentials ("": ADC);
 	// Profile an S3 destination's shared config profile ("": the AWS
-	// SDK's chain). Resolved again on resume.
-	CredentialsFile, Profile string
+	// SDK's chain); SAS an Azure destination's shared access signature
+	// ("": DefaultAzureCredential), never recorded. Resolved again on
+	// resume.
+	CredentialsFile, Profile, SAS string
 	// Region is an S3 destination's region ("": AWS_REGION,
 	// AWS_DEFAULT_REGION or the profile's, else us-east-1); the one
 	// resolved is frozen.
 	Region string
 	// ChunkSize is an upload's buffer, sent as one request: a GCS chunk
 	// (0: gcs.DefaultChunkSize), an S3 part (0: s3.DefaultPartSize; at
-	// least 5 MiB). It is the memory admitted per encoder beside its
+	// least 5 MiB), an Azure block (0: azblob.DefaultBlockSize). It is the memory admitted per encoder beside its
 	// writer.
 	ChunkSize int
 	// CommitTimeout bounds the commit (the manifest's creation and its
@@ -141,23 +145,16 @@ var ErrDestinationExists = errors.New("the destination already holds a dataset (
 // ErrOverlap: the destination is inside the listed namespace, or holds it.
 var ErrOverlap = errors.New("the destination overlaps the listed source")
 
-// ParseDestination parses a dataset destination URI (objfile.ParseLocation)
-// that this build writes: gs:// or s3://; az:// is refused.
+// ParseDestination parses a dataset destination URI (objfile.ParseLocation):
+// gs://, s3:// or az://, each of which this build writes.
 func ParseDestination(raw string) (objfile.Location, error) {
-	l, err := objfile.ParseLocation(raw)
-	if err != nil {
-		return l, err
-	}
-	if l.Scheme != "gs" && l.Scheme != "s3" {
-		return l, fmt.Errorf("writing a dataset to %s:// is not supported yet (gs:// and s3:// only)", l.Scheme)
-	}
-	return l, nil
+	return objfile.ParseLocation(raw)
 }
 
 // Check refuses a destination this build does not write
 // (ParseDestination), and options of another provider than the
 // destination's: a credentials file is GCS's, a profile and a region
-// S3's.
+// S3's, a SAS Azure's.
 func (r *RemoteOutput) Check() error {
 	l, err := ParseDestination(r.Location)
 	switch {
@@ -167,6 +164,8 @@ func (r *RemoteOutput) Check() error {
 		return errors.New("a credentials file (--output-gcs-credentials-file) is for a GCS destination")
 	case l.Scheme != "s3" && (r.Profile != "" || r.Region != ""):
 		return errors.New("a profile and a region (--output-s3-profile, --output-s3-region) are for an S3 destination")
+	case l.Scheme != "az" && r.SAS != "":
+		return errors.New("a shared access signature (--output-azure-sas-token) is for an Azure destination")
 	}
 	return nil
 }
@@ -184,25 +183,28 @@ func remoteLocation(r *RemoteOutput) (objfile.Location, error) {
 // included; S3's region resolved).
 func destinationIdentity(d *dataset.Remote) *journal.Destination {
 	l := d.Location
-	return &journal.Destination{Provider: l.Scheme, Bucket: l.Container, Prefix: l.Prefix, Endpoint: d.Endpoint, Emulator: d.Emulator, Region: d.Region,
+	return &journal.Destination{Provider: l.Scheme, Account: l.Account, Bucket: l.Container, Prefix: l.Prefix, Endpoint: d.Endpoint, Emulator: d.Emulator, Region: d.Region,
 		Layout: dataset.RemoteLayout}
 }
 
 // sourceSchemes are the destination schemes of the source kinds a
 // destination can overlap.
-var sourceSchemes = map[string]string{"gcs": "gs", "s3": "s3"}
+var sourceSchemes = map[string]string{"gcs": "gs", "s3": "s3", "azblob": "az"}
 
 // checkOverlap refuses a destination the listing would list, or one that
-// holds the listed namespace: the same provider and bucket, one prefix a
-// prefix of the other (a listing prefix is a key prefix, not a
-// directory). Endpoints and regions are not compared: the same bucket name
-// is refused on any.
+// holds the listed namespace: the same provider, account and bucket (or
+// container), one prefix a prefix of the other (a listing prefix is a key
+// prefix, not a directory). Endpoints and regions are not compared: the
+// same bucket name is refused on any.
 func checkOverlap(loc source.Locator, l objfile.Location) error {
-	scheme := sourceSchemes[loc.Kind]
-	if scheme != l.Scheme || loc.Container != l.Container {
+	base := l.Scheme + "://" + l.Container
+	if l.Account != "" {
+		base = l.Scheme + "://" + l.Account + "/" + l.Container
+	}
+	rest, ok := strings.CutPrefix(loc.Root, base)
+	if sourceSchemes[loc.Kind] != l.Scheme || loc.Container != l.Container || !ok || rest != "" && rest[0] != '/' {
 		return nil
 	}
-	rest, _ := strings.CutPrefix(loc.Root, scheme+"://"+loc.Container)
 	src := strings.TrimPrefix(rest, "/")
 	if strings.HasPrefix(l.Prefix, src) || strings.HasPrefix(src, l.Prefix) {
 		return fmt.Errorf("%w: %s and %s", ErrOverlap, l.String(), loc.Root)
@@ -223,7 +225,7 @@ func openRemote(ctx context.Context, r *RemoteOutput) (*remoteState, error) {
 		return nil, err
 	}
 	// The route is resolved once (the flag, else for GCS the environment's
-	// emulator; S3 never takes one from the environment) and given to the
+	// emulator; S3 and Azure never take one from the environment) and given to the
 	// client explicitly: the identity freezes it, so a resume under another
 	// environment is refused.
 	endpoint, emulator := r.Endpoint, false
@@ -231,9 +233,10 @@ func openRemote(ctx context.Context, r *RemoteOutput) (*remoteState, error) {
 		endpoint, emulator = remote.ResolveEndpoint(r.Endpoint)
 	}
 	dst, err := remote.Create(ctx, r.Location, remote.CreateOptions{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
-		Region: r.Region, Profile: r.Profile,
-		Write:   gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
-		S3Write: s3.WriteOptions{PartSize: int64(r.ChunkSize), Retried: rs.stats.Retried}})
+		Region: r.Region, Profile: r.Profile, SAS: r.SAS,
+		Write:      gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
+		S3Write:    s3.WriteOptions{PartSize: int64(r.ChunkSize), Retried: rs.stats.Retried},
+		AzureWrite: azblob.WriteOptions{BlockSize: int64(r.ChunkSize), Retried: rs.stats.Retried}})
 	if err != nil {
 		return nil, fmt.Errorf("destination: %w", err)
 	}
@@ -253,13 +256,15 @@ func (rs *remoteState) close() {
 }
 
 // uploadBytes is the memory admitted per encoder for its upload: one
-// chunk, or one part.
+// chunk, part or block.
 func uploadBytes(r *RemoteOutput) int64 {
 	switch {
 	case r.ChunkSize > 0:
 		return int64(r.ChunkSize)
 	case strings.HasPrefix(r.Location, "s3://"):
 		return s3.DefaultPartSize
+	case strings.HasPrefix(r.Location, "az://"):
+		return azblob.DefaultBlockSize
 	}
 	return gcs.DefaultChunkSize
 }

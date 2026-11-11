@@ -1519,6 +1519,36 @@ encoding. `TestMeasureRemoteOverhead` now runs per provider (the same tree and d
 0.32 s summed over the 4 encoders (GCS in the same run: 0.46 to 1.04 s). These are fake, single-host smoke
 numbers; a real bucket's latency, bandwidth and request rates are not measured here.
 
+## Azure uploads, on the fake (2026-11-11)
+
+The same measurements for a dataset written to Azure Blob Storage (`objfile/azblob`'s writer: 8 MiB blocks,
+staged and committed by a block list for a part larger than one, each body's CRC64 computed over the buffer),
+on the same kind of 4-vCPU VM, shared with other jobs (load average 3 to 4): `BenchmarkUpload`
+(`go test ./azblob ./s3 ./gcs -run X -bench BenchmarkUpload -benchtime 10x` in `go/objfile`) writes a 64 MiB
+object 4 KiB at a time to `azblob/azfake`, with the S3 and GCS benchmarks in the same invocation. Measured on
+`go/azblob-output` once the CLI took `-o az://` (the commit "cmd/swath: -o az://ACCOUNT/CONTAINER/PREFIX, with
+--output-azure-sas-token"); the raw output is not kept in the repository, so rerun the command to reproduce:
+
+| Writer, server | Throughput | Bytes allocated per object | Allocations per object |
+|---|---|---|---|
+| Azure, the fake keeping the bytes (and checking each CRC64) | 336 MB/s | 446 MB (the fake's own copies) | 2,007 |
+| Azure, blocks read and dropped (the client's cost) | 1,070 MB/s | 1.3 MB (the block buffer is pooled across uploads) | 1,687 |
+| S3, the fake keeping the bytes | 184 MB/s | 442 MB | 5,464 |
+| S3, parts read and dropped | 950 MB/s | 3.3 MB | 5,984 |
+| GCS, the fake keeping the bytes | 391 MB/s | 529 MB | 2,235 |
+| GCS, middle chunks read and dropped | 1,555 MB/s | 8.9 MB | 1,880 |
+
+So the Azure client spends about 63 ms per 64 MiB object (8 `Put Block` requests and the `Put Block List`),
+between GCS's 43 ms and S3's 71 ms on the same run: like S3's, it sends each block from `Write`, and computes
+each block's CRC64 before sending it. The SDK's own CRC64 option copies the body before hashing it (137 MB
+allocated per object in a first version of the writer); the writer hashes the buffer itself and passes the sum.
+`TestMeasureRemoteOverhead` (`SWATH_MEASURE_REMOTE=1`, 400,000 keys, 4 encoders, 256 KiB parts: 28 parts,
+each one `Put Blob`), three runs a provider in one invocation: for Azure, wall time 0.89 to 1.03 s remote and
+0.85 to 1.04 s local, process CPU 3.1 to 3.7 s remote and 3.1 s local (after the first run, whose CPU figure
+includes the setup), and `upload_wait_ns` 0.24 to 0.35 s summed over the encoders (S3 in the same run: 0.21 to
+0.29 s; GCS: 0.28 to 0.78 s). These are fake, single-host smoke numbers; a real account's latency, bandwidth,
+request rates and throttling are not measured here.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ import (
 	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/storage"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -27,8 +31,10 @@ import (
 	htransport "google.golang.org/api/transport/http"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/go/objfile/internal/redact"
 	"github.com/varveio/swath/go/objfile/s3"
 )
 
@@ -48,8 +54,11 @@ type CreateOptions struct {
 	// an S3-compatible endpoint URL, addressed path-style (/BUCKET/KEY); ""
 	// is AWS's regional endpoint (virtual-hosted), and the environment's
 	// endpoint variables (AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, FIPS,
-	// dual-stack) are not applied: the destination is the one named. It
-	// may not carry user information, a query or a fragment.
+	// dual-stack) are not applied: the destination is the one named. For
+	// az://, it is a blob service base URL that takes the account as its
+	// first path segment, as an emulator's does (ENDPOINT/ACCOUNT/CONTAINER);
+	// "" is https://ACCOUNT.blob.core.windows.net. It may not carry user
+	// information, a query or a fragment.
 	Endpoint string
 	// Emulator says Endpoint is an emulator's host or URL, reached without
 	// credentials (what ResolveEndpoint returns for STORAGE_EMULATOR_HOST).
@@ -69,10 +78,18 @@ type CreateOptions struct {
 	// chain (environment, AWS_PROFILE or default, SSO, web identity,
 	// container and instance roles). Requests are always signed.
 	Profile string
+	// SAS (az://) is a shared access signature (a query string, with or
+	// without a leading '?') appended to every request; "" uses Entra ID
+	// through azidentity's DefaultAzureCredential, which needs an https
+	// endpoint. No error or Scope holds it.
+	SAS string
 	// Write configures gs:// uploads (chunk size, retries, their account).
 	Write gcs.WriteOptions
 	// S3Write configures s3:// uploads (part size, retries, their account).
 	S3Write s3.WriteOptions
+	// AzureWrite configures az:// uploads (block size, retries, their
+	// account).
+	AzureWrite azblob.WriteOptions
 }
 
 // Destination is a dataset root opened for writing by Create: a Writer and
@@ -87,11 +104,11 @@ type Destination struct {
 	close  func() error
 }
 
-// Create returns the Destination of location, a URI ParseLocation accepts.
-// gs:// and s3:// are supported for writing; az:// is refused. It makes no
-// request: a missing bucket or a refused credential fails the first
-// request. Credentials are loaded now (a file that cannot be read fails
-// Create; an AWS chain resolves its credentials at the first request); the
+// Create returns the Destination of location, a URI ParseLocation accepts:
+// gs://, s3:// or az://. It makes no request: a missing bucket or
+// container, or a refused credential, fails the first request. Credentials
+// are loaded now (a file that cannot be read fails Create; an AWS chain
+// and DefaultAzureCredential resolve theirs at the first request); the
 // Destination outlives ctx.
 func Create(ctx context.Context, location string, o CreateOptions) (*Destination, error) {
 	l, err := objfile.ParseLocation(location)
@@ -102,8 +119,8 @@ func Create(ctx context.Context, location string, o CreateOptions) (*Destination
 	case "gs":
 	case "s3":
 		return createS3(ctx, l, o)
-	default:
-		return nil, fmt.Errorf("remote: writing to %s:// is not supported (gs:// and s3:// only)", l.Scheme)
+	case "az":
+		return createAzure(l, o)
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
 	pool.ResponseHeaderTimeout = o.RequestTimeout
@@ -300,7 +317,94 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 	return d, nil
 }
 
-// Region is an s3:// destination's region, as resolved ("" for gs://).
+// createAzure is Create of an az:// location: a client of its own over its
+// own connection pool, authorized by o's SAS or by DefaultAzureCredential.
+func createAzure(l objfile.Location, o CreateOptions) (*Destination, error) {
+	d := &Destination{scope: l.String()}
+	s := &Store{scope: d.scope}
+	if err := s.at(o.Endpoint); err != nil {
+		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
+	}
+	d.scope = s.scope
+	timeout := o.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	pool := http.DefaultTransport.(*http.Transport).Clone()
+	pool.ResponseHeaderTimeout = timeout
+	service := azureService(l.Account, o.Endpoint)
+	sas := strings.TrimPrefix(o.SAS, "?")
+	q, err := url.ParseQuery(sas)
+	if err != nil {
+		return nil, errors.New("remote: the destination's shared access signature is not a query string") // the parse error would quote it
+	}
+	var tr http.RoundTripper = pool
+	if q.Has("sig") {
+		tr = scrubbed{next: pool, scrub: redact.SAS(sas)}
+	}
+	opts := &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: tr}}}
+	var client *azsdk.Client
+	if sas != "" {
+		if client, err = azsdk.NewClientWithNoCredential(service+"?"+sas, opts); err != nil {
+			return nil, objfile.RedactError(err)
+		}
+	} else {
+		// Token exchanges go through a client of their own, bounded by the
+		// request timeout.
+		cred, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+			ClientOptions: azcore.ClientOptions{Transport: &http.Client{Timeout: timeout, Transport: http.DefaultTransport.(*http.Transport).Clone()}}})
+		if err != nil {
+			return nil, fmt.Errorf("remote: destination credentials: %w", err)
+		}
+		if client, err = azsdk.NewClient(service, cred, opts); err != nil {
+			return nil, err
+		}
+	}
+	w, err := azblob.NewWriter(client, l.Container, o.AzureWrite)
+	if err != nil {
+		return nil, err
+	}
+	d.o = objfile.Root(azblob.New(client, l.Container), l.Prefix)
+	d.w = objfile.RootWriter(w, l.Prefix)
+	d.close = func() error { pool.CloseIdleConnections(); return nil }
+	return d, nil
+}
+
+// azureService is the blob service URL of account: on endpoint, the
+// account its first path segment, as an emulator's; else the account's
+// own host.
+func azureService(account, endpoint string) string {
+	if endpoint == "" {
+		return "https://" + account + ".blob.core.windows.net/"
+	}
+	return strings.TrimSuffix(endpoint, "/") + "/" + account + "/"
+}
+
+// scrubbed scrubs the body of every error response, which an SDK error
+// quotes: a service that echoes a request's query back would otherwise put
+// a SAS's signature in an error's text, however it spelled it.
+type scrubbed struct {
+	next  http.RoundTripper
+	scrub func(string) string
+}
+
+// maxErrorBody bounds the error body scrubbed and kept.
+const maxErrorBody = 64 << 10
+
+func (s scrubbed) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := s.next.RoundTrip(req)
+	if err != nil || resp.StatusCode < 400 {
+		return resp, err
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	_ = resp.Body.Close()
+	clean := s.scrub(string(b))
+	resp.Body, resp.ContentLength = io.NopCloser(strings.NewReader(clean)), int64(len(clean))
+	resp.Header.Del("Content-Length")
+	return resp, err
+}
+
+// Region is an s3:// destination's region, as resolved ("" for another).
 func (d *Destination) Region() string { return d.region }
 
 // Writer is the Destination's writer of names under the location's
