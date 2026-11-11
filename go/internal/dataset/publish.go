@@ -56,9 +56,36 @@ type PartInfo struct {
 
 // Part is a written part at run time: its file and its PartInfo.
 type Part struct {
-	Path string // temporary path while unpublished, the final path once published
+	// Path is a local part's temporary path while unpublished, its final
+	// path once published; a remote part's object name, relative to the
+	// dataset root (RemotePartName).
+	Path string
+	// Identity is a remote part's object version (the GCS generation),
+	// "" for a local part.
+	Identity string
+	// Columns and CreatedBy are the part's footer columns (the key first)
+	// and created_by, as written: what a resume needs to reproduce it
+	// (a remote part's claim receipt holds them).
+	Columns   []string
+	CreatedBy string
 	PartInfo
 }
+
+// Artifact is where one part's bytes go: the SeekParquet part writer's
+// file (Write, a Sync that makes the bytes durable, Close) and the part's
+// name. A local artifact is a file under the workspace; a remote one an
+// upload, which Sync completes and Close aborts unless Sync succeeded.
+type Artifact interface {
+	Write(p []byte) (int, error)
+	Sync() error
+	Close() error
+	// Name is the part's Path (Part.Path).
+	Name() string
+	// Identity is the written object's version once Sync succeeded ("" for
+	// a local file).
+	Identity() string
+}
+
 
 // SegmentPlan is a sink's cut rule for the rows still to come, as the
 // order stage cuts the rest into segments with it (order.Segmenter; the
