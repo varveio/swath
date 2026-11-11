@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -346,12 +345,12 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	}
 	ctx, cancel := context.WithTimeout(ctx, orDefault(rs.cfg.FinalizeTimeout, DefaultFinalizeTimeout))
 	defer cancel()
-	obj, err := rs.d.Opener.Open(ctx, dataset.ManifestName)
-	if err != nil {
-		return fmt.Errorf("resume: the committed manifest: %w", objfile.RedactError(err))
+	// One request; a manifest over the limit is not the one this run
+	// committed, which was within it.
+	b, _, err := objfile.ReadObject(ctx, rs.d.Opener, dataset.ManifestName, dataset.ManifestLimits.ManifestBytes)
+	if errors.Is(err, objfile.ErrTooLarge) {
+		return fmt.Errorf("%w: the destination's manifest is not the one this run committed (%v)", journal.ErrCorrupt, objfile.RedactError(err))
 	}
-	b, err := io.ReadAll(io.NewSectionReader(obj.WithContext(ctx), 0, obj.Size()))
-	obj.Close()
 	if err != nil {
 		return fmt.Errorf("resume: the committed manifest: %w", objfile.RedactError(err))
 	}

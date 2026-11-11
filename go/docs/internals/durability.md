@@ -232,13 +232,15 @@ name. An unjournaled run that fails before commit deletes its recorded creations
 unresolved.
 
 **Resume.** `swath resume DIR` replays the recorded command with DIR as the work directory (the recorded `-o`
-stays). Before recovery, when the run saved a candidate manifest, the destination's manifest is read: the
+stays). Before recovery, when the run saved a candidate manifest, the destination's manifest is read, whole in
+one request (`objfile.ReadObject`, bounded by the manifest limit): the
 candidate means the commit happened (the marker is written and the aftermath finished, and the run is
 complete); another manifest, a lost race (refused); none, recovery goes on and the commit creates that
 candidate. Recovery (`listing.recoverRemote`) then syncs the journal, refuses a receipt beyond the ordinal
 after the last record (an acknowledged record was lost), and checks every recorded part: the object at its name
 must still be the recorded version (generation, version id or ETag), and its bytes, read whole through that
-pinned version as a stream,
+pinned version as a stream (opened at the recorded size, with no metadata request: the first read checks the
+size and the version before any more is read),
 must have the recorded size and SHA-256 (`dataset.VerifyObject`); a replaced, deleted or altered object is
 refused (`dataset.ErrRemoteAltered`) before anything is listed. A receipt at the next ordinal is the suspect:
 the resume cuts that part at the receipt's rows, writes it with its columns and `created_by`, and records it

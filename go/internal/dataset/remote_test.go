@@ -195,7 +195,8 @@ func TestPublishRemote(t *testing.T) {
 	t.Run("unresolved read", func(t *testing.T) {
 		f, r := fakeRemote(t)
 		f.SetFault(func(op, name string, after bool) int {
-			if !after && (op == gcsfake.OpCreate || op == gcsfake.OpMetadata) {
+			// The read-back is one read of the whole manifest.
+			if !after && (op == gcsfake.OpCreate || op == gcsfake.OpRead) {
 				return http.StatusForbidden // not retried
 			}
 			return 0
