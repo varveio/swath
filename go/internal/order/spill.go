@@ -580,10 +580,12 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 				if err != nil && errors.Is(err, syscall.ENOSPC) {
 					if verr := s.check(); verr != nil {
 						err = verr // replaced mid-write: fatal, nothing more touched
-					} else if fh.Truncate(f.size) == nil {
-						err = errSpillFull // the torn frame is gone: back off as if refused
+					} else {
+						s.h.retire(f, evictTruncated) // no cached read handle outlives a truncation
+						if s.truncate(f, fh) == nil {
+							err = errSpillFull // the torn frame is gone: back off as if refused
+						}
 					}
-					s.h.retire(f, evictTruncated) // no read handle outlives a truncation
 				}
 			}
 			if cerr := fh.Close(); err == nil {
@@ -638,6 +640,29 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 	}
 	s.bytes.Add(n)
 	return nil
+}
+
+// truncate cuts f back to its size before a torn frame. The append
+// descriptor fh truncates where it may; on Windows an O_APPEND handle has
+// no FILE_WRITE_DATA access, which SetEndOfFile needs, so the file is
+// reopened for writing without append (a durable one through the output
+// root) and truncated there.
+func (s *spiller[P]) truncate(f *spillFile, fh *os.File) error {
+	if fh.Truncate(f.size) == nil {
+		return nil
+	}
+	s.opens.Add(1)
+	var w *os.File
+	var err error
+	if f.d != nil {
+		w, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_WRONLY, 0)
+	} else {
+		w, err = os.OpenFile(f.path, os.O_WRONLY, 0)
+	}
+	if err != nil {
+		return err
+	}
+	return errors.Join(w.Truncate(f.size), w.Close())
 }
 
 // buffer is a writer's frame or body buffer from the pool (put back by the
