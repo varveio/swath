@@ -1682,21 +1682,94 @@ over the run (`/usr/bin/time -v`) was 147 MB with the index and 97 MB without. `
 excludes the build, read 879 ms with the index and 157 ms without in the first pair, and 201, 179 and 194 ms
 (on, off, on) in three later starts: the 879 ms was a one-off.
 
-## Go and Java replay servers on converted fixtures (#352), 2026-11-??
+## Go and Java replay servers on converted fixtures (#352), 2026-11-11
 
-**Placeholder: filled from the GCP Batch run of
-[`bench/replay/java-compare.sh`](../../bench/replay/java-compare.sh) before #352 closes; nothing here is
-measured yet.** The run serves the Java replay server each Java-era fixture and the Go server its footer-only
-SeekParquet conversion (the list index on, the default). It will record: the machine, the swath commit and the
-converter commit; each conversion's input and output SHA-256, shared data bytes and `seekparquet validate`
-result; `replaydiff` on the S3, GCS and Azure routes for synthetic-10k, synthetic-1m sorted and rolled and
-evidence-gcs, with only the accepted deviations of [replay-java.md](replay-java.md); a full `swath list` through
-each server and `bench/diffds.py` on every fixture pair, NARA, FourCast and blockchain included; and each
-server's exec-to-healthy time and RSS at readiness per fixture, with the listing's peak RSS (VmHWM) apart. The starts
-are fresh processes with the OS page cache not dropped (cache-uncontrolled, generally warm: the fixtures were
-just written, converted and read), Java's starts before Go's for each fixture. evidence-azure is not in the comparison (the Java sort-fixture
-refuses its names). Capacity is the s3-listing-study replay qualification's (varveio/s3-listing-study#37), not
-measured again here.
+The functional comparison of the Go and Java replay servers for #352: the Java server on each Java-era fixture,
+the Go server on its footer-only SeekParquet conversion with the list index on (its default). One GCP Batch run,
+`20261111-0013`, of [`bench/replay/java-compare.sh`](../../bench/replay/java-compare.sh), 00:14:30 to 00:53:00 UTC,
+verdict PASS, task status 0; receipts in
+`gs://s3-listing-study-results-29c02004/swath-352/20261111-0013/receipts/` (`summary.md`, `summary.json`, one
+directory per step). It is functional evidence and descriptive startup and resource figures, not a performance
+comparison: capacity is the s3-listing-study replay qualification's (varveio/s3-listing-study#37), not measured
+here.
+
+**Configuration.** swath `ff20e3df` (both servers, the lister, `replaydiff`, `diffds`); the converter
+`bench/replay/adoptfixture` at `cd453c59` (`archive/replay-adopt-fixture`, built in a separate checkout, not
+merged). One n4-standard-16 (16 vCPU, Xeon Platinum 8581C, 64 GB), Spot, nothing else running; container
+`eclipse-temurin:25-jdk-noble` (Temurin 25.0.4+7, the base `Dockerfile.replay` pins), Go 1.27.4, Python 3.12.3,
+DuckDB 1.4.1. The Java server at the launcher's defaults (no `SWATH_REPLAY_OPTS`, `JAVA_OPTS` or
+`JAVA_TOOL_OPTIONS`; maximum heap 16.9 GB), both servers `--serving-mode sorted` with their other flags at their
+defaults. The binaries' SHA-256 and `go version -m` are in `build/`.
+
+**Fixtures and conversion.** make-fixtures.sh's synthetic-10k, synthetic-1m (sorted, and rolled into 6 parts
+and 110 row groups) and evidence-gcs, written by the Java `sort-fixture` in the run; the study's NARA
+(`nara-1950-census`, 13,540,310 rows, 4 parts), FourCast (`noaa-nws-fourcastnetgfs-pds`, 4,081,170, 1 part)
+and blockchain (`aws-public-blockchain`, 143,008,674, 4 parts) Java-era fixtures, their pinned study digests
+checked. Every part of every conversion: input and output SHA-256 equal to the manifest's, the bytes before
+each footer (located from each file's own Parquet trailer) of equal extent and byte-identical, and
+`seekparquet validate --level full` complete. The three study conversions' parts are byte-identical to the
+study's own staged conversions. evidence-azure is not compared: the Java `sort-fixture` refuses its names, so
+there is no Java-era fixture; its coverage stays the Azure evidence replay's.
+
+**replaydiff** (the Java server with `-fixture` on the Java-era fixture, the Go server with `-go-fixture` on
+its conversion; 1M fixtures: walks `1,7,1000` (Azure `1,7,5000`) at `-walk-limit 400`, then a `-full` run of
+the largest page size to the end with `-random 0`): 18 runs, 29,150 requests compared (336,698 HTTP requests),
+0 failed, 0 skipped.
+
+| Fixture | S3 compared (divergences, residuals) | GCS compared (by token effect) | Azure compared (by marker effect) |
+|---|---|---|---|
+| synthetic-10k | 1,948 (129, 2) | 2,082 (39,057) | 1,807 (35,062) |
+| synthetic-1m sorted | 1,948 (129, 2); full 1,392 (109, 2) | 2,082 (5,746); full 1,568 (4,096) | 1,807 (5,059); full 1,293 (1,548) |
+| synthetic-1m rolled | 1,948 (129, 2); full 1,392 (109, 2) | 2,082 (5,746); full 1,568 (4,096) | 1,807 (5,059); full 1,293 (1,548) |
+| evidence-gcs | 1,103 (192, 2) | 1,068 (4,401) | 962 (3,642) |
+
+Every difference reported is one of [replay-java.md](replay-java.md)'s accepted deviations: the documented S3
+divergences (Go answering as live S3; each listed with both answers), the request-framing residuals (two of the
+five sent per S3 run, reported and not judged), the Azure route's error documents of the S3 route (3 a run),
+and token and marker bytes, which bind each fixture's identity (GCS and Azure answers that agree once each token
+or marker is read for its effect; S3 runs also list 3,510 requests whose answers differ only in token bytes).
+No Azure answer needed the segment improvement (`-accept-segment-improvement` counted 0 in every Azure run).
+The three GCS foreign-token cases per run (each server sent the other's token) were refused by both servers.
+
+**Full listings and startup.** `swath list s3://BUCKET --workers 64` through each server, then
+`bench/diffds.py` (its streaming method on NARA and blockchain, the SQL method on the others): both listings of every fixture had the fixture's row count,
+and diffds found every pair identical (rows, ordered sequence, multisets, key order and bounds), blockchain's
+143,008,674 rows included. Startup is exec to the first 200 from `/healthz`, median of 3 starts (the ranges were
+within 5%), and VmRSS then; the starts are fresh processes without dropping the OS page cache, so
+cache-uncontrolled and generally warm (the fixtures had just been written, converted, hashed and read), and for
+each fixture the Java server started first. Ready ms and RSS at ready are those startup medians; the listing columns are
+the listing's wall time and the server's peak RSS over the listing's own start and the listing (VmHWM).
+
+| Fixture | Server | Ready ms | RSS at ready MiB | Listing wall s | Listing VmHWM MiB |
+|---|---|---:|---:|---:|---:|
+| synthetic-10k | Java | 1,242 | 204 | 0.5 | 615 |
+| | Go | 25 | 16 | 0.2 | 71 |
+| synthetic-1m sorted | Java | 1,249 | 202 | 1.7 | 1,245 |
+| | Go | 78 | 22 | 0.9 | 452 |
+| synthetic-1m rolled | Java | 1,866 | 248 | 1.9 | 1,427 |
+| | Go | 92 | 28 | 0.9 | 467 |
+| evidence-gcs | Java | 1,234 | 210 | 0.3 | 256 |
+| | Go | 26 | 14 | 0.1 | 28 |
+| NARA | Java | 1,746 | 252 | 13.5 | 7,795 |
+| | Go | 506 | 34 | 9.2 | 1,182 |
+| FourCast | Java | 1,315 | 203 | 8.0 | 6,932 |
+| | Go | 146 | 37 | 5.8 | 1,404 |
+| blockchain | Java | 2,845 | 607 | 84.5 | 7,985 |
+| | Go | 3,591 | 95 | 81.6 | 1,487 |
+
+The Go server builds the list index before it serves: 3.38 s of blockchain's start (371 row groups indexed,
+139,818 key pages, 1.2 MB retained), 0.46 s of NARA's, 0.11 s of FourCast's, 0.04 s of synthetic-1m rolled's
+(its `list_index` startup line, in `logs/`). The listings are single runs, one server at a time, for the row
+comparison; their wall times are recorded, not compared.
+
+**Runs before this one** (receipts beside it, under `swath-352/`): `20261110-2248-probe` (synthetic-10k only,
+swath `2f9805bd`, before the review fixes to the script) passed. `20261110-2303` (swath `32050133`) failed on
+blockchain only: every replaydiff run passed and six of seven fixture pairs were diffds-identical, both
+blockchain listings had 143,008,674 rows, but `diffds.py`'s SQL `EXCEPT ALL` ran out of memory (50.2 GiB of
+50.2 GiB pinned); diffds gained its bounded streaming method for that. `20261110-2354` (swath `3e46d3d2`, the
+first streaming method, since revised after review) was cancelled and superseded by this run. After this run
+`969dfd9a` changed only how diffds's streaming method compares float columns, which the listing schema does not
+have.
 
 ## SeekParquet conformance
 
