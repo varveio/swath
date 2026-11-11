@@ -45,7 +45,9 @@ when the report says so.
   in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB
   (`invocation.sort_buffer`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
   spill to disk: a listing whose waiting rows fit in the budget never spills. It is
-  not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The measurements
+  not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The
+  writers are admitted against their own allowance, the same 1/16 of memory whatever `--sort-buffer` says
+  (`resources.drain.encoder_allowance_bytes`), so a smaller sort buffer does not mean fewer encoders. The measurements
   that follow were taken at a 128 MiB budget, the default before 0.4.0: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
@@ -237,7 +239,7 @@ run's metadata.
   plus metadata plus the 1 GiB reserve: set `--spill-budget` explicitly (the default, half the free space,
   follows whatever disk there is), and allow for the metadata, which grows with the parts (a claim receipt of
   under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
-  the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk or S3 part) per
+  the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk, S3 part or Azure block) per
   encoder, admitted with its writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
   run's `resources.spill.peak_bytes` before shrinking the disk.
 - **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;

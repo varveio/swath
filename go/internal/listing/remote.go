@@ -54,9 +54,10 @@ type RemoteOutput struct {
 	// resolved is frozen.
 	Region string
 	// ChunkSize is an upload's buffer, sent as one request: a GCS chunk
-	// (0: gcs.DefaultChunkSize), an S3 part (0: s3.DefaultPartSize; at
-	// least 5 MiB), an Azure block (0: azblob.DefaultBlockSize). It is the memory admitted per encoder beside its
-	// writer.
+	// (0: gcs.DefaultChunkSize; rounded up to 256 KiB), an S3 part (0:
+	// s3.DefaultPartSize; at least 5 MiB), an Azure block (0:
+	// azblob.DefaultBlockSize). It is the memory admitted per encoder
+	// beside its writer (uploadBytes).
 	ChunkSize int
 	// CommitTimeout bounds the commit (the manifest's creation and its
 	// read-back; 0: DefaultCommitTimeout); FinalizeTimeout the aftermath
@@ -255,18 +256,29 @@ func (rs *remoteState) close() {
 	}
 }
 
-// uploadBytes is the memory admitted per encoder for its upload: one
-// chunk, part or block.
+// uploadBytes is the memory admitted per encoder for its upload: the one
+// buffer an upload holds (a chunk, part or block), as its provider's
+// writer sizes it.
 func uploadBytes(r *RemoteOutput) int64 {
-	switch {
-	case r.ChunkSize > 0:
-		return int64(r.ChunkSize)
-	case strings.HasPrefix(r.Location, "s3://"):
+	scheme, _, _ := strings.Cut(r.Location, "://")
+	switch scheme {
+	case "gs":
+		return int64(gcs.ChunkBytes(r.ChunkSize))
+	case "s3":
+		// One part of exactly ChunkSize: a size out of S3's range is
+		// refused, never rounded.
+		if r.ChunkSize > 0 {
+			return int64(r.ChunkSize)
+		}
 		return s3.DefaultPartSize
-	case strings.HasPrefix(r.Location, "az://"):
+	case "az":
+		// One block of exactly ChunkSize, likewise.
+		if r.ChunkSize > 0 {
+			return int64(r.ChunkSize)
+		}
 		return azblob.DefaultBlockSize
 	}
-	return gcs.DefaultChunkSize
+	return int64(r.ChunkSize) // a destination ParseDestination refuses
 }
 
 // checkFresh refuses a fresh run whose destination holds a manifest, within

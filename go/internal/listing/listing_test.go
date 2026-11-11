@@ -23,6 +23,7 @@ import (
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source/localfs"
 	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/go/objfile/gcs"
 )
 
 func mk(t *testing.T, root string, files ...string) {
@@ -217,8 +218,8 @@ func TestConfigRejectsInvalid(t *testing.T) {
 	}
 }
 
-// TestResourceAdmission: encoders are admitted against a writer
-// allowance equal to the row budget and the descriptor limit, never below one; the
+// TestResourceAdmission: encoders are admitted against an encoder
+// allowance and the descriptor limit, never below one; the
 // default spill reserve is derived from the encoders' parts, and the
 // default spill cap is half the free space after it; a negative one is none.
 func TestResourceAdmission(t *testing.T) {
@@ -288,5 +289,150 @@ func TestResourceAdmission(t *testing.T) {
 	free := order.FreeBytes(dir)
 	if got := spillMax(SpillLimits{Reserve: 1 << 20}, filepath.Join(dir, "not", "yet")); free != order.Unlimited && got != (free-(1<<20))/2 && got > free/2 {
 		t.Errorf("derived cap %d, free %d", got, free)
+	}
+}
+
+// withMemory makes the memory limits found m for t.
+func withMemory(t *testing.T, m memoryLimits) {
+	t.Helper()
+	old := readMemoryLimits
+	t.Cleanup(func() { readMemoryLimits = old })
+	readMemoryLimits = func() memoryLimits { return m }
+}
+
+// TestEncoderAllowance: encoders are admitted against an allowance of
+// their own, the default row budget's share of the memory found (1/16,
+// within the minimum and 1 GiB, 128 MiB unknown), whatever --sort-buffer
+// says, each at its writer's price plus, for a dataset in a bucket, its
+// upload chunk's; the count is then capped by the processors and the
+// descriptors, raised to one, and raised after listing by the workers'
+// pages; an explicit count stands. The arithmetic for the S3 schema
+// (31.5 MiB a writer, 39.5 MiB with an 8 MiB upload chunk) at 128 MiB of
+// rows:
+//
+//	memory  allowance  output  start  after listing (64 / 256 workers)
+//	2 GiB   128 MiB    local   4      6 / 12
+//	2 GiB   128 MiB    GCS     3      4 / 9
+//	8 GiB   512 MiB    local   16     18 / 24
+//	8 GiB   512 MiB    GCS     12     14 / 19
+//
+// before the processors cap them (8 on an 8-vCPU host).
+func TestEncoderAllowance(t *testing.T) {
+	// The table's bucket rows hold for each provider: their default
+	// upload buffers are the same 8 MiB (below).
+	writer := encoderPrice("s3://b")
+	upload := int64(gcs.DefaultChunkSize)
+	if writer != 31*mib+mib/2 || upload != 8*mib {
+		t.Fatalf("prices: writer %d, upload %d", writer, upload)
+	}
+	// Each provider's upload is priced at the buffer its writer holds:
+	// GCS rounds a chunk up to the SDK's 256 KiB; S3 sends a part, and
+	// Azure stages a block, of exactly the size given.
+	for _, c := range []struct {
+		out  RemoteOutput
+		want int64
+	}{
+		{RemoteOutput{Location: "gs://d/p"}, 8 * mib},
+		{RemoteOutput{Location: "gs://d/p", ChunkSize: 300 << 10}, 512 << 10},
+		{RemoteOutput{Location: "s3://d/p"}, 8 * mib},
+		{RemoteOutput{Location: "s3://d/p", ChunkSize: 5<<20 + 300<<10}, 5<<20 + 300<<10},
+		{RemoteOutput{Location: "az://a/c/p"}, 8 * mib},
+		{RemoteOutput{Location: "az://a/c/p", ChunkSize: 300 << 10}, 300 << 10},
+	} {
+		if got := uploadBytes(&c.out); got != c.want {
+			t.Errorf("%s, chunk %d: upload priced %d, want %d", c.out.Location, c.out.ChunkSize, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		memory                   int64
+		remote                   bool
+		start, after64, after256 int
+	}{
+		{2 * gib, false, 4, 6, 12},
+		{2 * gib, true, 3, 4, 9},
+		{8 * gib, false, 16, 18, 24},
+		{8 * gib, true, 12, 14, 19},
+	} {
+		allowance, _ := rowBudgetFor(0, memoryLimits{physical: c.memory})
+		per := writer
+		if c.remote {
+			per += upload
+		}
+		start, by := admission(allowance, per, 64, 0, 1<<20)
+		after64, _ := admission(allowance+64*listingPageBytes, per, 64, 0, 1<<20)
+		after256, _ := admission(allowance+256*listingPageBytes, per, 256, 0, 1<<20)
+		if start != c.start || after64 != c.after64 || after256 != c.after256 || by != BoundMemory {
+			t.Errorf("%d GiB, remote %v: %d (%s), %d, %d; want %d, %d, %d", c.memory/gib, c.remote, start, by, after64, after256, c.start, c.after64, c.after256)
+		}
+		// The processors and the descriptors cap it; one is the floor.
+		if n, by := admission(allowance, per, 64, 0, 8); n != min(8, c.start) || (c.start > 8) != (by == BoundCPU) {
+			t.Errorf("8 processors: %d (%s)", n, by)
+		}
+		if n, by := admission(allowance, per, 64, 16+128+32+2, 1<<20); n != 2 || by != BoundDescriptors {
+			t.Errorf("descriptors for 2: %d (%s)", n, by)
+		}
+		if n, by := admission(allowance, per, 64, 100, 1<<20); n != 1 || by != BoundMinimum {
+			t.Errorf("no descriptors: %d (%s)", n, by)
+		}
+	}
+	// Resolved: the sort buffer is 128 MiB as given, the allowance is the
+	// memory's share; a dataset in a bucket prices its upload, rounded up
+	// to the SDK's 256 KiB; an explicit count stands.
+	withMemory(t, memoryLimits{physical: 8 * gib})
+	resolve := func(c Config) Limits {
+		t.Helper()
+		if err := c.resolve(); err != nil {
+			t.Fatal(err)
+		}
+		return c.Limits
+	}
+	procs := runtime.GOMAXPROCS(0)
+	l := resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 128 * mib, Workers: 64}})
+	if want, by := admission(512*mib, writer, 64, fdLimit(), procs); l.RowBudget != 128*mib || l.encoderAllowance != 512*mib || l.Encoders != want || l.startBy != by || l.uploadBytes != 0 {
+		t.Errorf("local: %+v, want %d encoders (%s)", l, want, by)
+	}
+	l = resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir(), Remote: &RemoteOutput{Location: "gs://d/p", ChunkSize: 300 << 10}},
+		Limits: Limits{RowBudget: 128 * mib, Workers: 256}})
+	if l.uploadBytes != 512<<10 || l.encoderBytes != writer+512<<10 {
+		t.Errorf("a 300 KiB chunk is priced %d (encoder %d), want 512 KiB as the SDK sends it", l.uploadBytes, l.encoderBytes)
+	}
+	if want, by := admission(512*mib+256*listingPageBytes, l.encoderBytes, 256, fdLimit(), procs); l.maxEncoders != max(want, l.Encoders) || l.afterBy == "" || want == l.maxEncoders && l.afterBy != by {
+		t.Errorf("GCS after listing: %d (%s), want %d (%s)", l.maxEncoders, l.afterBy, want, by)
+	}
+	l = resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 128 * mib, Encoders: 3}})
+	if l.Encoders != 3 || l.maxEncoders != 3 || l.startBy != BoundExplicit || l.afterBy != BoundExplicit {
+		t.Errorf("explicit: %+v", l)
+	}
+	// The constraint reported after listing is the planned one only once
+	// listing raised the count to it: 2 GiB, local, 5 processors start 4
+	// encoders (memory) and plan 5 (cpu); a run stopped before listing
+	// ended still has 4, bound by memory.
+	withMemory(t, memoryLimits{physical: 2 * gib})
+	prev := runtime.GOMAXPROCS(5)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+	l = resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 128 << 10, Workers: 64}})
+	if l.Encoders != 4 || l.startBy != BoundMemory || l.maxEncoders != 5 || l.afterBy != BoundCPU {
+		t.Fatalf("2 GiB on 5 processors: %d (%s), after listing %d (%s)", l.Encoders, l.startBy, l.maxEncoders, l.afterBy)
+	}
+	if by := l.boundAfterListing(4, false); by != BoundMemory {
+		t.Errorf("listing not done, 4 encoders: bound by %s, want memory", by)
+	}
+	if by := l.boundAfterListing(5, true); by != BoundCPU {
+		t.Errorf("listing done, 5 encoders: bound by %s, want cpu", by)
+	}
+	// On 4 processors listing raises nothing: 4 by memory at start, and
+	// still after listing, though the plan is bound by cpu.
+	runtime.GOMAXPROCS(4)
+	l = resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 128 << 10, Workers: 64}})
+	if l.Encoders != 4 || l.maxEncoders != 4 || l.afterBy != BoundCPU {
+		t.Fatalf("2 GiB on 4 processors: %d (%s), after listing %d (%s)", l.Encoders, l.startBy, l.maxEncoders, l.afterBy)
+	}
+	if by := l.boundAfterListing(4, true); by != BoundMemory {
+		t.Errorf("listing done, count not raised: bound by %s, want memory", by)
+	}
+	// Unknown memory: the allowance is the fallback, 128 MiB.
+	withMemory(t, memoryLimits{})
+	if l := resolve(Config{Source: SourceConfig{URI: "s3://b"}, Output: OutputConfig{Dir: t.TempDir()}, Limits: Limits{RowBudget: 1 << 30}}); l.encoderAllowance != DefaultRowBudget {
+		t.Errorf("unknown memory: allowance %d", l.encoderAllowance)
 	}
 }

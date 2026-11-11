@@ -47,8 +47,10 @@ func crashBackend(t *testing.T) (string, *s3mem.Backend) {
 
 func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
-	// interleaved, so crashes during listing find published parts.
-	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+	// interleaved, so crashes during listing find published parts. One
+	// encoder: no other upload is in flight when a crash or a failure
+	// lands, so every object a resume finds is proven or deleted.
+	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Encoders: 1, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,

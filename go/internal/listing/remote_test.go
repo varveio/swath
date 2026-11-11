@@ -133,6 +133,12 @@ func TestRemoteDataset(t *testing.T) {
 		if !sum.Outcome.Complete || sum.Outcome.Status != StatusCommitted {
 			t.Fatalf("outcome %+v", sum.Outcome)
 		}
+		// Each encoder was admitted at its writer's price plus its upload's
+		// buffer: the provider's chunk or part.
+		if dr := sum.Resources.Drain; dr == nil || dr.EncoderUploadBytes != int64(d.output("ds").ChunkSize) || dr.EncoderWriterBytes != encoderPrice("s3://b") ||
+			dr.EncoderAllowanceBytes == 0 || dr.EncodersAtStartBoundBy == "" || dr.EncodersAfterListingBoundBy == "" {
+			t.Fatalf("admission account %+v", dr)
+		}
 		if !dataset.Committed(ws) || dataset.Resumable(ws) {
 			t.Fatal("the work directory does not record the commit")
 		}

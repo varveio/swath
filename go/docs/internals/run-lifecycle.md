@@ -156,8 +156,9 @@ does not close a part whose boundary a resume fixed.
 
 The default `--encoders` is GOMAXPROCS lowered to what the resources carry: one writer's working set and one
 state of the shared codec, priced from the provider's schema
-([per-schema sizes](parquet-output.md#writer-buffers-and-admission)), each from an allowance equal to
-`--sort-buffer`, apart from the rows, and the descriptor limit (after the spill readers, the workers'
+([per-schema sizes](parquet-output.md#writer-buffers-and-admission)) plus a dataset in a bucket's upload
+chunk, each from an encoder allowance of 1/16 of the memory found (at most 1 GiB, whatever `--sort-buffer`
+says), apart from the rows, and the descriptor limit (after the spill readers, the workers'
 connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given; it bypasses
 default resource admission, with a warning when the resources cannot carry it. For a `.zst` text file the same
 flag is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a

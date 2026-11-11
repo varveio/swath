@@ -17,7 +17,7 @@ swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling. A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
 | Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `invocation.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
-| Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by the schema's calculated working set and the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
+| Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by an encoder allowance of 1/16 of memory (at most 1 GiB, whatever `--sort-buffer` says), each encoder priced at the schema's calculated working set plus, writing to a bucket, its upload buffer (a GCS chunk, an S3 part or an Azure block), and by the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
 
@@ -39,9 +39,11 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 
 ### Memory
 
-swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output and, through
-encoder admission, how many writers run; `GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on
-RSS; an OS or container limit can stop the process when memory cannot be reclaimed. A run holds:
+swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output only; how many
+writers run is admitted against an allowance of their own, 1/16 of the memory found (at most 1 GiB) whatever
+`--sort-buffer` says ([encoder admission](internals/ordering.md#the-budget)), and `--encoders N` sets fewer.
+`GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on RSS; an OS or container limit can stop the
+process when memory cannot be reclaimed. A run holds:
 
 - **Rows in flight, bounded by `--sort-buffer`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
@@ -62,7 +64,7 @@ RSS; an OS or container limit can stop the process when memory cannot be reclaim
   each directory whole for a count too.
 - **A `.zst` text file's compressor, outside it:** as many parallel jobs as `--encoders`, about 5 to 13 MiB
   each; lower `--encoders` to lower it. Gzip is one stream. The report's `output.text.compressor` names the
-  jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`); the rows being
+  jobs and why (`jobs_reason`: `cores`, `encoder_allowance`, `encoders` when asked, `gzip`); the rows being
   formatted for the file are rows in flight, charged to `--sort-buffer`
   ([how](internals/run-lifecycle.md#encoder-sizing)).
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
