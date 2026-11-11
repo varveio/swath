@@ -372,8 +372,11 @@ func TestMarkerBoundToQuery(t *testing.T) {
 func TestFailureRepeatsThePage(t *testing.T) {
 	keys := []string{"a" + E, "a" + S}
 	q := keyrange.Query{Prefix: "a", After: "a" + D7FF + E, Max: 1000}
-	// Row 9's four seeks in one Fetch; the third fails. Two responses
-	// before it, four in the retry: six, in seven attempts.
+	// Row 9's four seeks: the first two bring the first page no member
+	// (their items lie past their spans), the third its one member, so
+	// the first Fetch takes three and the second the fourth (one read per
+	// page). The third fails: two responses before it, then three in the
+	// retry and one for the second page: six, in seven attempts.
 	st := azblobtest.NewStore(keys)
 	st.Fail = azblobtest.FailAt(2)
 	a := New(st, "c", nil, 0)
@@ -384,8 +387,13 @@ func TestFailureRepeatsThePage(t *testing.T) {
 		t.Fatal("a chain's failed first page registered it")
 	}
 	p, err := a.Fetch(context.Background(), &q)
-	if err != nil || p.Truncated || !slices.Equal(names(p.Items), oracle(keys, q)) {
-		t.Fatalf("retry: %+v %v", p, err)
+	if err != nil || !p.Truncated || !slices.Equal(names(p.Items), oracle(keys, q)[:1]) || st.Responses() != 5 {
+		t.Fatalf("retry: %+v %v, %d responses", p, err, st.Responses())
+	}
+	rest := q
+	rest.Token = p.Token
+	if got := pages(t, a, rest, st); !slices.Equal(slices.Concat(got...), oracle(keys, q)[1:]) {
+		t.Fatalf("after the retry: %q", got)
 	}
 	if st.Responses() != 6 || st.Attempts() != 7 {
 		t.Errorf("%d responses, %d attempts\n%s", st.Responses(), st.Attempts(), st)

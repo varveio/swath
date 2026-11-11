@@ -54,6 +54,8 @@ const (
 	CResponses
 	CChainsEvicted
 	CChainsMax
+	CShortPages
+	CShortRows
 )
 
 // CounterDefs are the adapter's counters (§6), for the provider to
@@ -70,6 +72,8 @@ var CounterDefs = []counters.Def{
 	{Key: "order_responses", Kind: counters.Count, Unit: "responses", Help: "listing responses the adapter consumed, empty continuing pages and the work of failed pages included"},
 	{Key: "order_chains_evicted", Kind: counters.Count, Unit: "chains", Help: "idle chains dropped, least recently used first, past MaxChains; their tokens are refused"},
 	{Key: "order_chains_max", Kind: counters.Max, Unit: "chains", Help: "the most chains an adapter held registered"},
+	{Key: "order_short_pages", Kind: counters.Count, Unit: "pages", Help: "pages ended short of the query's Max because filling them would take a second listing read (one read per page)"},
+	{Key: "order_short_rows", Kind: counters.Count, Unit: "items", Help: "the items those pages were short of the query's Max"},
 }
 
 // MaxChains is the most chains one adapter keeps registered; past it the
@@ -127,7 +131,9 @@ func invariant(format string, args ...any) error {
 
 // Page is one page in byte order: blobs and, with a delimiter, BlobPrefix
 // roll-ups (Item.Prefix), together ascending in unsigned byte order. Rows
-// plus prefixes never exceed the query's Max.
+// plus prefixes never exceed the query's Max, and a page that holds items
+// takes at most one listing read (fill), so a truncated page may hold
+// fewer.
 type Page struct {
 	Items     []client.Item
 	Truncated bool
@@ -337,6 +343,17 @@ func parseToken(t string) (id, seq uint64, err error) {
 
 // fill assembles one page (§4.3, page assembly): members from the top
 // span's buffer, reading or splitting as needed, until limit or the end.
+//
+// One read per page: once the page holds an item, a span that needs
+// another read ends the page short instead (order_short_pages). Reading
+// again for the page's rest would leave most of that read buffered in the
+// chain, and the engine abandons a chain at every split, its children
+// reading those rows again; a seek after a listed name (rule 1, every
+// split's lower child) leaves its first read one item short of limit, so
+// at a fixed page size nearly every such chain would carry a read's
+// surplus. Buffered items are still emitted without a read, and reads
+// that bring the page no member (empty continuing pages, empty spans) do
+// not count as its read.
 func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) {
 	p := &Page{}
 	for len(p.Items) < limit && len(c.stack) > 0 {
@@ -345,6 +362,11 @@ func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) 
 			if top.st == exhausted {
 				c.stack = c.stack[:len(c.stack)-1]
 				continue
+			}
+			if len(p.Items) > 0 {
+				a.add(CShortPages, 1)
+				a.add(CShortRows, int64(limit-len(p.Items)))
+				break
 			}
 			if err := a.read(ctx, c, len(c.stack)-1, limit); err != nil {
 				return nil, err
