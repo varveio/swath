@@ -795,17 +795,22 @@ func TestRootWriter(t *testing.T) {
 // TestUnresolvedSticks: a creating request refused (403) after an attempt
 // that failed ambiguously (503, retried by the SDK) is still unresolved:
 // the first attempt may yet create the object. So for PutIfAbsent and for
-// a multipart completion; a 409 retried before a refusal is not ambiguous.
+// a multipart completion. A final 409 can match both ErrConflict and
+// ErrUnresolved; the latter must govern the caller's outcome handling.
+// A 409 retried before a refusal is not ambiguous.
 func TestUnresolvedSticks(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		first int
+		last  int
 		size  int
 		want  bool // unresolved
 	}{
-		{"put", http.StatusServiceUnavailable, 0, true},
-		{"completion", http.StatusServiceUnavailable, 3 * part, true},
-		{"put after 409", http.StatusConflict, 0, false},
+		{"put", http.StatusServiceUnavailable, http.StatusForbidden, 0, true},
+		{"completion", http.StatusServiceUnavailable, http.StatusForbidden, 3 * part, true},
+		{"put after 409", http.StatusConflict, http.StatusForbidden, 0, false},
+		{"put ending in 409", http.StatusServiceUnavailable, http.StatusConflict, 0, true},
+		{"completion ending in 409", http.StatusServiceUnavailable, http.StatusConflict, 3 * part, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newFixture(t, false, nil, s3.WriteOptions{})
@@ -815,7 +820,7 @@ func TestUnresolvedSticks(t *testing.T) {
 					if n.Add(1) == 1 {
 						return c.first
 					}
-					return http.StatusForbidden
+					return c.last
 				}
 				return 0
 			})
@@ -827,6 +832,9 @@ func TestUnresolvedSticks(t *testing.T) {
 			}
 			if err == nil || errors.Is(err, objfile.ErrUnresolved) != c.want {
 				t.Fatalf("a refusal after a %d: %v, unresolved %v wanted", c.first, err, c.want)
+			}
+			if c.last == http.StatusConflict && !errors.Is(err, objfile.ErrConflict) {
+				t.Fatalf("a final 409: %v, want ErrConflict as well as ErrUnresolved", err)
 			}
 		})
 	}

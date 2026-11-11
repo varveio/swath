@@ -1,8 +1,9 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package gcs opens objects of a Google Cloud Storage bucket as objfile Objects
-// with cloud.google.com/go/storage. Open learns the object's size and
+// Package gcs reads and creates objects in a Google Cloud Storage bucket with
+// cloud.google.com/go/storage. New supplies an objfile.Opener; NewWriter supplies
+// an objfile.Writer. Open learns the object's size and
 // generation from its attributes; OpenSized takes the generation from the
 // first read. Every later read is a range reader of that generation, of the
 // stored bytes (no decompressive transcoding). A read of a generation that no
@@ -12,9 +13,11 @@
 // The SDK's reader requests the rest of a range by itself when a body fails
 // part way, checks only that answer's status, and for one labelled
 // Content-Encoding: gzip skips as many bytes of it as it had read. The client
-// objfile/remote builds ends such a body instead, and objfile requests and
-// checks the rest; on a client the caller builds, such a read may return
-// wrong bytes without an error.
+// objfile/remote builds validates every range response's status, Content-Range,
+// length and lack of transport decompression, then ends a failed body with EOF
+// so objfile requests and checks the rest. A caller-supplied client needs the
+// same transport behavior; otherwise a failed-body retry may return wrong
+// bytes without an error.
 package gcs
 
 import (

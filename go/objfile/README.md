@@ -1,371 +1,174 @@
 # objfile
 
-`github.com/varveio/swath/go/objfile` opens an object in an object store as a file read by byte range, with
-one stored version of the object pinned for the file's lifetime. A reader that takes an `io.ReaderAt` and a
-size (the [SeekParquet](https://github.com/varveio/seekparquet) module's `OpenDataset`, parquet-go's
-`OpenFile`) can then read a remote dataset without seeing two versions of one file.
+`github.com/varveio/swath/go/objfile` provides random-access reads and create-only
+uploads for S3, Google Cloud Storage, and Azure Blob Storage. It turns an object
+into an `io.ReaderAt` with a known size and a pinned identity, suitable for
+[SeekParquet](https://github.com/varveio/seekparquet), parquet-go, and other file
+readers. Writes stream through bounded buffers and return the created object's
+identity for read-back or conditional deletion.
 
-It is a nested Go module. It does not import the swath lister (`github.com/varveio/swath/go`). Its go.mod
-lists all three SDKs, so they are in a consumer's module graph, but a program links only the SDK of the store
-package it imports.
+This is a nested Go module, independently importable from the swath lister. The
+core package uses only the standard library. Provider packages use their official
+SDKs; all three SDKs appear in the module graph, but a program links only the
+providers it imports. Importing `objfile/remote` links all three.
 
-## API
+objfile handles individual objects. It does not list, cache, plan reads, rename,
+or overwrite them; dataset publication and recovery belong to the application.
 
-```go
-type Object interface {
-	io.ReaderAt                                 // io.EOF at the end, as io.ReaderAt says
-	Size() int64                                // the size when opened
-	Identity() string                           // the pinned version
-	Close() error                               // later reads fail with fs.ErrClosed
-	WithContext(ctx context.Context) io.ReaderAt // reads bounded by ctx
-}
+## Read a remote file
 
-type Opener interface {
-	Open(ctx context.Context, name string) (Object, error)                  // one metadata request, then pinned
-	OpenSized(ctx context.Context, name string, size int64) (Object, error) // no request; the first read pins
-}
+`remote.Open` builds a read-only store with default credentials. Locations are
+`s3://BUCKET[/PREFIX]`, `gs://BUCKET[/PREFIX]`, or
+`az://ACCOUNT/CONTAINER[/PREFIX]`. The prefix is a dataset root; object names below
+it are literal relative paths, without empty, `.` or `..` segments. Location URIs
+cannot carry credentials, queries, or fragments.
 
-var ErrObjectChanged error                     // the pinned version is gone
-func CheckPath(name string) error              // SeekParquet's PART-1 path rule
-func Root(o Opener, prefix string) Opener      // a dataset root: CheckPath, then prefix/name
-func Limit(o Opener, n int) Opener             // at most n requests in flight
-
-func s3.New(client *s3.Client, bucket string) objfile.Opener           // AWS SDK for Go v2
-func gcs.New(client *storage.Client, bucket string) objfile.Opener     // cloud.google.com/go/storage
-func azblob.New(client *azsdk.Client, container string) objfile.Opener // azblob SDK
-
-func Pin(o Opener, scope string) *Pinned                                 // pins across opens
-func Restore(o Opener, scope string, snapshot []byte) (*Pinned, error)   // pins across restarts
-func (p *Pinned) Open(ctx context.Context, name string) (Object, error)
-func (p *Pinned) Snapshot() ([]byte, error)
-var ErrInvalidSnapshot error
-
-type Location struct{ Scheme, Account, Container, Prefix string }       // String() is the canonical URI
-func ParseLocation(raw string) (Location, error)
-
-func remote.Open(ctx context.Context, location string) (*remote.Store, error) // default credentials
-type remote.Store struct{ ... }                                                // objfile.Opener and io.Closer
-func (s *remote.Store) Scope() string                                          // the scope for Pin and Restore
-
-// The write side (GCS, S3 and Azure): create-only uploads, conditional deletes.
-type Condition int
-const CreateOnly Condition                              // GCS ifGenerationMatch=0, S3 and Azure If-None-Match: *
-var ErrExists error                                    // a CreateOnly write found an object (412)
-var ErrConflict error                                  // a concurrent conditional write conflicted (S3 409)
-var ErrUnresolved error                                // the write's outcome is unknown: read the name back
-func RedactError(err error) error                      // URLs in the text lose query and user information
-type Receipt struct{ Name string; Size int64; Identity string }
-type Upload interface {
-	io.Writer
-	Close() error // completes: the object exists only after a nil Close
-	Abort() error // no object; nothing after a successful Close
-	Receipt() (Receipt, bool)
-}
-type Writer interface {
-	NewWriter(ctx context.Context, name string, c Condition) (Upload, error)
-	PutIfAbsent(ctx context.Context, name string, data []byte) (Receipt, error)
-	DeleteIf(ctx context.Context, name, identity string) error // only that version
-}
-func RootWriter(w Writer, prefix string) Writer
-func gcs.NewWriter(client *storage.Client, bucket string, o gcs.WriteOptions) objfile.Writer
-func s3.NewWriter(client *s3.Client, bucket string, o s3.WriteOptions) (objfile.Writer, error)
-func azblob.NewWriter(client *azsdk.Client, container string, o azblob.WriteOptions) (objfile.Writer, error)
-func remote.Create(ctx context.Context, location string, o remote.CreateOptions) (*remote.Destination, error)
-func remote.ResolveEndpoint(endpoint string) (string, bool) // the flag, or STORAGE_EMULATOR_HOST (emulator)
-```
-
-The store packages take the caller's own SDK client, with its credentials, endpoint, transport and retry
-settings, and have no credential handling; `objfile/remote` builds clients with the default credentials for a
-caller that has no settings to give. A missing object fails `Open`, or the first read of an `OpenSized` file, with an
-error wrapping `fs.ErrNotExist`. Requests are retried by the SDK; objfile adds only this: a response body cut
-short is requested again from where it stopped, at most twice, which is safe because the request is pinned.
-
-An `Object` satisfies SeekParquet's `SourceFile` and `ContextBinder`. Its `Source.Open` returns SeekParquet's own
-interface type, which Go does not match against `Object`, so a reader adapts an `Opener` in four lines:
+This example reads a Parquet footer without downloading the whole object:
 
 ```go
-type source struct{ objfile.Opener }
+import (
+    "context"
 
-func (s source) Open(ctx context.Context, name string) (seekparquet.SourceFile, error) {
-	f, err := s.Opener.Open(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
+    "github.com/parquet-go/parquet-go"
+    "github.com/varveio/swath/go/objfile/remote"
+)
+
+func rowCount(ctx context.Context) (int64, error) {
+    store, err := remote.Open(ctx, "s3://bucket/dataset")
+    if err != nil {
+        return 0, err
+    }
+    defer store.Close()
+
+    object, err := store.Open(ctx, "part-00000.parquet")
+    if err != nil {
+        return 0, err
+    }
+    defer object.Close()
+
+    file, err := parquet.OpenFile(object.WithContext(ctx), object.Size())
+    if err != nil {
+        return 0, err
+    }
+    return file.NumRows(), nil
 }
-
-d, err := seekparquet.OpenDataset(ctx, source{objfile.Root(s3.New(client, "bucket"), "datasets/ds")}, seekparquet.Options{})
 ```
 
-## The pinning guarantee
+`Object` is safe for concurrent reads. Use `WithContext(ctx)` to cancel reads;
+plain `ReadAt` uses `context.Background()`. Keep the store open until its objects
+are finished. A missing object wraps `fs.ErrNotExist`; reads after an object's
+`Close` wrap `fs.ErrClosed`.
 
-Every read of a `Object` returns bytes of the version it pinned, or fails with `ErrObjectChanged` and returns
-none of another version's bytes. A read also fails with `ErrObjectChanged` when the response states a total
-size other than the file's.
+Each object pins the identity learned by `Open`: an S3 version id and ETag, a GCS
+generation, or an Azure ETag. Reads check the returned identity, size, offset, and
+length. A changed or deleted pinned object yields `ErrObjectChanged`; an invalid
+range response yields an error. S3 objects without a unique version id (including
+`"null"`) use the ETag as `Identity`: a replacement with the same ETag and size
+cannot be distinguished. Pinning does not provide a dataset-wide snapshot.
 
-What each store pins with, taken from the metadata request of `Open` or the first read of an `OpenSized` file:
+**Custom GCS clients need care:** after a response body fails partway, the SDK can
+retry a range without checking its offset and return wrong bytes without an
+error. The clients built by `remote.Open` and `remote.OpenDestination` install a
+validating transport. See the [GCS package contract](gcs/gcs.go) before supplying
+your own client.
 
-- **S3:** the ETag, sent as `If-Match` on every ranged GetObject, and in a versioned bucket also the version id
-  (`VersionId`), so a replaced key still reads the pinned version.
-- **GCS:** the generation, set on the object handle (`Generation`) of every range reader, which reads the stored
-  bytes (`ReadCompressed`, no decompressive transcoding).
-- **Azure:** the ETag, sent as `If-Match` on every ranged download.
+For more control:
 
-A 412, a 404 after open, or a response naming another ETag or version is `ErrObjectChanged`. Pinning is a
-cheap guard over the reads, not a versions API: there are no options to choose a pinning mode, and no Azure
-snapshot or version-id reads.
+- Build an SDK client and pass it to `s3.New`, `gcs.New`, or `azblob.New`; wrap the
+  opener with `Root` for path confinement and `Limit` for bounded requests.
+- Use `OpenSized` when a manifest already gives the size. It skips the metadata
+  request and pins on the first read; `Identity()` is empty until then.
+- Use `Pin` across opens and `Snapshot`/`Restore` across restarts. Compose it
+  outermost: `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
+  `Pinned` has no `OpenSized`: it must check identity at open. A restored snapshot
+  permits only recorded names and rechecks the current objects, rather than
+  reopening historical versions. It records only objects actually opened; the
+  application must establish that every required object is covered. Use the
+  store's `Scope()` to bind snapshots to its namespace.
 
-`Identity` is the S3 version id, the GCS generation, or the Azure ETag; an `OpenSized` file returns `""` until
-its first read. An S3 object without a version id, or with the version id `null` (written before versioning was
-enabled, or while it is suspended), is identified by its ETag instead: S3 keeps the id `null` when it overwrites
-such an object, so a replacement of the same size would otherwise keep the same `Identity`.
+## Upload an object
 
-## The range guarantee
+`remote.OpenDestination` builds an independently authenticated destination with a
+`Writer` and an `Opener`. Opening it creates no object. `NewWriter` starts an
+upload; `Close` completes it under the `CreateOnly` condition.
 
-A read returns exactly the requested bytes `[off, off+n)` of the pinned object, or fails: with
-`ErrObjectChanged` when the object changed, and with a plain error when the store ignored the range or served
-another one. Every response is checked for the offset it starts at (its `Content-Range`, or for GCS the
-reader's `StartOffset`; a response without one starts at byte 0), the total size and its length.
+```go
+import (
+    "context"
+    "errors"
+    "io"
 
-The GCS SDK's reader also requests the rest of a range by itself, when a body fails part way, checks only that
-answer's status, not its range, and for an answer labelled `Content-Encoding: gzip` skips as many of its bytes
-as it had already read. The client `remote.Open` builds has a transport that refuses every answer to a range
-request unless it is a 206 of exactly that range, of that length, not decompressed in transit, and that ends a
-body failing part way where it failed, so the SDK never requests the rest: objfile does, checked as every
-request is. **On a GCS client the caller builds, a read whose body fails part way may return wrong bytes without
-an error** (another range's, or two parts of the object joined), unless the caller's transport does the same.
-The S3 and Azure SDKs retry whole requests only, so the response objfile checks is the one served.
+    "github.com/varveio/swath/go/objfile"
+    "github.com/varveio/swath/go/objfile/remote"
+)
 
-## Pins across opens and restarts
+func upload(ctx context.Context, body io.Reader) (objfile.Receipt, error) {
+    dst, err := remote.OpenDestination(ctx, "s3://bucket/dataset", remote.DestinationOptions{})
+    if err != nil {
+        return objfile.Receipt{}, err
+    }
+    defer dst.Close()
 
-An `Object` pins one version for its lifetime. `Pin` extends that across opens: a `Pinned` records the size and
-`Identity` of each name at its first successful `Open`, and every later `Open` of that name must find the same,
-or it fails with `ErrObjectChanged` (a deleted object too). A recorded pin is never replaced, and an `Open` that
-loses a race to record one is checked against the winner's and closes its object when they differ. This
-re-proves that the current object is the one pinned; it never reads an older version by its recorded identity.
-
-`Snapshot` returns the pins as versioned JSON, the same bytes for the same pins:
-
-```json
-{"version":1,"scope":"s3://bkt/datasets/ds/","objects":{"manifest.json":{"size":812,"identity":"3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"}}}
+    u, err := dst.Writer().NewWriter(ctx, "part-00000.parquet", objfile.CreateOnly)
+    if err != nil {
+        return objfile.Receipt{}, err
+    }
+    if _, err := io.Copy(u, body); err != nil {
+        return objfile.Receipt{}, errors.Join(err, u.Abort())
+    }
+    if err := u.Close(); err != nil {
+        return objfile.Receipt{}, err
+    }
+    receipt, _ := u.Receipt() // valid after a successful Close
+    return receipt, nil
+}
 ```
 
-`Restore` reads one back for a restart. Its `Pinned` is sealed: a name the snapshot lacks fails with an error
-wrapping `fs.ErrNotExist` before any request. The decode is strict: exactly these members, each once, version 1,
-names `CheckPath` accepts, sizes of at least 0, identities non-empty without control characters, and the scope
-the caller passes; anything else is `ErrInvalidSnapshot`. The scope names the storage namespace (provider,
-bucket or account and container, a custom endpoint, the root prefix), so a snapshot is never applied to another
-store; `remote.Store.Scope` is one, and holds no credentials. Restore reads version 1 only: a change to the
-format is a new version number, which an older objfile refuses, with no fallback.
+For an in-memory value, `PutIfAbsent` performs the same conditional creation.
+For an existing SDK client, use the provider's `NewWriter` and `RootWriter`.
+Uploads send one chunk, part, or block at a time, blocking on the store before
+accepting more bytes. Buffer sizes, object-size limits, retries, and cleanup
+settings belong to each provider's `WriteOptions`.
 
-A snapshot proves the files that were opened, nothing more: that it holds every file a dataset needs is the
-application's to establish, by opening every one of them (`reader.Dataset.CheckSchema` opens every part), not
-objfile's. `Pinned` has no `OpenSized`, whose
-Object learns its identity only at its first read. Compose it outermost:
-`objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
+Handle completion and cleanup explicitly. When classifying errors with
+`errors.Is`, check `ErrUnresolved` before `ErrConflict` if both match:
 
-## Locations and default credentials
+- A nil `Close` confirms creation and makes `Receipt` valid. `ErrExists` means the
+  name was occupied; after a lost response and retry, that may be this upload's
+  own object. Read back and compare when the distinction matters.
+- `ErrUnresolved` means creation may have happened or may still happen. A read
+  finding nothing does not prove failure while a request could remain in flight.
+  `Abort` cannot settle or undo an uncertain completion. `ErrConflict` means a
+  conditional write conflicted; retry the upload from its first byte.
+- `Abort` cancels unfinished work and may run concurrently with `Write`. It does
+  not delete a completed object. S3 cleanup can return `s3.ErrAbortUnconfirmed`;
+  a later `Abort` may retry. **Configure an S3 lifecycle rule to abort incomplete
+  multipart uploads:** crashes or failed cleanup otherwise leave billed parts
+  indefinitely. GCS sessions and Azure uncommitted blocks expire automatically.
+- `DeleteIf(ctx, receipt.Name, receipt.Identity)` uses the receipt's identity.
+  S3 version ids and GCS generations select that exact stored version, even after
+  replacement; S3 ETags and Azure ETags condition deletion on the current object.
+  An S3 ETag cannot distinguish a replacement with the same ETag. Azure soft
+  delete or versioning can retain deleted data and charges.
 
-`ParseLocation` reads a dataset root: `s3://BUCKET[/PREFIX]`, `gs://BUCKET[/PREFIX]` or
-`az://ACCOUNT/CONTAINER[/PREFIX]`. The prefix is literal (nothing is decoded) and a dataset root: it gains a
-trailing `/`, and its path must be one `CheckPath` accepts. A query, fragment, user information, port, empty
-or upper-case bucket, a bucket, account or container named `.` or `..`, or a `.` or `..` prefix segment is
-refused; `Location.String` is the canonical URI. Refusal errors show clean locations and replace
-a location with `[redacted]` when it contains `?` or `#`, when its authority (the bucket, or the
-account) contains `@` or a colon, or when it has no `://` and contains `@`. An `@` in the prefix is
-literal and is shown.
-Ranged-response validation errors keep the request scheme, host and escaped path, excluding
-user information, query and fragment.
+Writer errors redact request URL credentials and upload session handles while
+preserving error chains for `errors.Is` and `errors.As`.
 
-`remote.Open` opens a location with each provider's default credentials, read-only: the AWS SDK's default
-configuration (which also gives the region and an `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` endpoint), Google
-Application Default Credentials with the read-only scope or the `STORAGE_EMULATOR_HOST` emulator, and Azure's
-`DefaultAzureCredential` on `ACCOUNT.blob.core.windows.net`. The `Store` is `Root(provider.New(client,
-container), prefix)` over clients and a connection pool it owns; `Close` releases them and closes the pool's
-idle connections. An endpoint from the environment that carries user information, a query or a fragment is
-refused, so `Scope` never holds a credential. It takes no options and does not bound
-concurrency: a program that needs a region, endpoint, anonymous access or a test transport builds the SDK client
-itself and uses `s3.New`, `gcs.New` or `azblob.New` with `Root`; one that needs a bound wraps the `Store` in
-`Limit`. Importing `objfile/remote` links all three providers' SDKs; a program that reads from one provider
-builds that SDK's client and uses its `New` with `Root` the same way.
+## API and provider details
 
-The `Store` outlives the context `Open` is given: every request runs under the context of the `Open` or read
-that makes it, so a `Store` opened while serving one request can be kept for later ones. Google's credentials
-come from the newer auth library (`cloud.google.com/go/auth`), which fetches a token a request waits for with
-that request's context, so cancelling the request cancels that exchange; a refresh the library starts early,
-before a token expires, runs in the background with its own context and is not cancelled by any request.
+The source comments own the API contract and provider settings:
 
-The swath CLI parses the same schemes for a listing root, with other semantics: a listing prefix is a key
-prefix, not a directory, and an `az://` root may carry a SAS query. It keeps its own parser.
+- [Objects, openers, roots, limits](objfile.go), [pins and snapshots](pin.go),
+  [uploads, receipts, errors, and conditional deletion](write.go).
+- [Remote stores](remote/remote.go) and [destinations](remote/create.go): credentials,
+  endpoints, client ownership, timeouts, and `DestinationOptions` (including
+  `GCSWrite`, `S3Write`, and `AzureWrite`). Read and write clients have distinct
+  credential and endpoint policies.
+- [S3 reads](s3/s3.go) / [writes](s3/write.go),
+  [GCS reads](gcs/gcs.go) / [writes](gcs/write.go),
+  [Azure reads](azblob/azblob.go) / [writes](azblob/write.go).
 
-## Writing
-
-The write side creates whole objects under a precondition and nothing else: no rename, no listing, no
-overwrite, and a delete only of the version named by its identity. `NewWriter` starts an upload whose bytes are
-sent as they are written; the object exists only once `Close` returns nil, and its `Receipt` then names the
-created version, as a read's `Identity` names it (the GCS generation; the S3 version id, or the ETag without
-one; the Azure ETag). `Abort` ends an upload without an object. `CreateOnly` is checked by the service when the
-object is created (GCS `ifGenerationMatch=0`, S3 and Azure `If-None-Match: *`), so of two writers of one name exactly one succeeds
-and the other gets `ErrExists`. After a lost response the SDK sends the request again, and a `PutIfAbsent`
-retry then finds the write's own object and returns `ErrExists`: a caller that must tell the two apart reads the
-object back and compares it with what it wrote. A completion that fails in transport, times out, is cancelled
-in flight or is answered with a server error (or 408, 429) is `ErrUnresolved`: the service may have applied it,
-or may still (a request accepted behind a failed connection), so a read that finds nothing proves nothing yet;
-only a refusal (another 4xx) leaves no object for certain, and only when no earlier attempt of the same request
-failed ambiguously and was retried by the SDK (that attempt may still land, so the completion stays
-`ErrUnresolved`). Every error a writer returns has passed through
-`RedactError`, which keeps the error chain for `errors.Is` and `errors.As` but drops every URL's query, user
-information and fragment from the text: a GCS resumable session URI is a bearer capability for its upload, and
-the SDK's transport errors quote it.
-
-Every provider's writer has one shape: an upload buffers one chunk (GCS), part (S3) or block (Azure) and sends
-it before `Write` takes more, so memory is one buffer per open upload and a slow store holds the writer back;
-retries are the SDK's, bounded (GCS: a cumulative allowance per upload, below; S3 and Azure: `MaxAttempts` per
-request), and `Retried` is told each one; `Abort` may be called from another goroutine
-while `Write` waits on the store (it cancels first); and an upload's session handle (a GCS session URI, an S3
-upload id, Azure block ids) never appears in an error.
-
-`gcs.NewWriter` uploads in resumable sessions of `WriteOptions.ChunkSize` (8 MiB by default; the SDK rounds to
-256 KiB): the SDK buffers one chunk an upload and blocks `Write` while it is in flight, so memory is a chunk per
-open upload and a slow store holds the writer back. An object smaller than a chunk goes in one request. Retries
-are the SDK's, bounded per upload: the SDK's upload loops count no attempts, so an upload has a cumulative
-allowance of `MaxAttempts`-1 retries (4 by default) for its first request and as many more for each chunk it has
-sent, spent wherever its failures fall (not a strict per-chunk limit), and each chunk's retries also stop at
-`ChunkRetryDeadline`; metadata reads and deletes get `MaxAttempts` each. `Retried` is told each attempt its policy
-retries. `Abort` cancels the session's request; a session the service
-holds expires on its own (GCS keeps one for a week), and its URI, a bearer credential for the upload, never
-leaves the process.
-
-`s3.NewWriter` sends an object of at most `WriteOptions.PartSize` (8 MiB by default) as one `PutObject`, and a
-larger one as a multipart upload of `PartSize` parts and a last: `CreateMultipartUpload` once the first part is
-full, `UploadPart` for each, `CompleteMultipartUpload` with `If-None-Match: *` and the object's size
-(`x-amz-mp-object-size`). Parts carry a CRC32 checksum the service verifies. S3's limits are the writer's own,
-whatever the caller's object size: a part size of 5 MiB to 5 GiB, and at most 10,000 parts, so the largest
-object is 10,000 × `PartSize` (78 GiB at 8 MiB); the write past it fails before sending.
-
-A failed `Close`, and `Abort`, abort the multipart upload under a context of their own (`AbortTimeout`, 30 s),
-since the upload's may be the one cancelled, and confirm it. The upload's creation is not cancelled with it
-either (it is bounded the same way): a creation the service completed after its client gave up would leave an
-upload whose id nothing knows. The confirmation: `ListParts` must answer `NoSuchUpload`, else the
-abort is sent again (a part in flight when the abort ran can keep the upload, and S3 asks for repeated aborts
-then), three times at most. An abort that fails or stays unconfirmed is `s3.ErrAbortUnconfirmed`: `Abort` returns
-it, a failed `Close` joins it after its own failure, and a later `Abort` tries again, three attempts over the
-upload's life. S3 answers a conditional write that races another with 409 `ConditionalRequestConflict`: a
-`PutObject` is sent again (within `MaxAttempts`, 5 by default); a completion is not (its parts are gone once
-aborted), and the upload ends with `ErrConflict`, which a caller retries from the first byte. The creating
-request (`PutObject`, or `CompleteMultipartUpload`) is `ErrUnresolved` when its outcome is unknown: a transport
-failure, a timeout, a cancellation, a server error (an error in a 200 answer included: the SDK retries it as a
-500), 408, 429, and `NoSuchUpload`, which a completion meets when its first attempt took effect and its answer
-was lost; another 4xx is a refusal, and leaves no object, unless the SDK retried the request after an ambiguous
-failure first (a retried 409 is not one). `DeleteIf` sends an ETag identity as `If-Match`, and
-deletes a version id by its id (that version only). Every error passes through `RedactError`, and the upload id
-is then removed in any spelling, raw or URL-escaped. **S3 never expires an incomplete multipart upload:** one a
-crash leaves, or whose abort was not confirmed, holds its parts, billed, until it is aborted; a bucket written to
-needs a lifecycle rule that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`, a day or more
-after initiation).
-
-`azblob.NewWriter` writes block blobs: an object of at most `WriteOptions.BlockSize` (8 MiB by default) by one
-`Put Blob`, a larger one staged in `BlockSize` blocks (`Put Block`, from `Write` once a block is full and more
-follows) and created at `Close` by `Put Block List`, both with `If-None-Match: *`. Each body carries a CRC64
-the writer computes over its buffer, which the service verifies. Block ids are fixed-width and the upload's
-own, a random nonce and the block's index, Base64: the service keeps a name's uncommitted blocks together, and
-two uploads of one name must not replace each other's. The service's limits are the writer's own: a block
-size of 1 byte to 256 MiB (the SDK's `MaxUploadBlobBytes`, since the buffer is also a `Put Blob` body) and at
-most 50,000 blocks, so the largest object is 50,000 × `BlockSize` (390 GiB at 8 MiB); the write past it fails
-before sending. `Abort` sends nothing: staged blocks are uncommitted, never a blob or visible as one, and the
-service discards them when a blob is created at the name or a week after the last was staged, so no
-lifecycle rule is needed. A blob found at the name is `ErrExists` (Azure answers 409 `BlobAlreadyExists`; a 412
-is taken the same way); the service serializes conditional writes of a name, so no answer is `ErrConflict`, and
-another 409 (a lease, an immutability policy) is a refusal. The creating request is `ErrUnresolved` as S3's is
-(a transport failure, a timeout, a cancellation, 5xx, 408, 429, or a refusal after an ambiguous attempt was
-retried). Retries take the writer's options per request (azcore's per-call retry options, which replace the
-client's for that call): `MaxAttempts`, azcore's exponential backoff from `RetryDelay` up to `MaxRetryDelay`,
-and what azcore retries by default; a `Retry-After` over `MaxRetryDelay` is not retried. `Retried` is told of a
-retry once the attempt it made has ended normally: the retries counted are those whose attempt ended normally,
-so a retry azcore declines, or one cancelled in its backoff, is not counted, and a run cancelled mid-retry can
-under-report by one.
-`DeleteIf` sends the ETag as `If-Match`; with soft delete the deleted blob is kept until the retention period
-expires, and with versioning it becomes a previous version, kept (and billed) until it is deleted explicitly or
-by a lifecycle rule. Every error passes through `RedactError`, and the upload's block ids (their shared
-prefix, raw or URL-escaped) are removed wherever else its text holds them.
-
-`remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a client
-and connection pool it owns, with its own credentials and endpoint, shared with no read client. For `gs://`:
-`CreateOptions.CredentialsFile`, or Application Default Credentials, with the read-write scope. For `s3://`:
-the AWS SDK's configuration with `CreateOptions.Profile` and `Region` (else `AWS_REGION`, `AWS_DEFAULT_REGION`,
-the profile's, then `us-east-1`; `Destination.Region` is the one resolved), every request signed, through the
-SDK's own HTTP client, so a CA bundle the configuration names (`AWS_CA_BUNDLE`, a profile's `ca_bundle`) is the
-destination's trust; an `Endpoint` is addressed path-style, and none set by the environment (`AWS_ENDPOINT_URL`, FIPS, dual-stack) is
-applied. For `az://`: `CreateOptions.SAS`, appended to every request, or Entra ID through a
-`DefaultAzureCredential` of its own (which needs an `https://` endpoint); the blob service is
-`ACCOUNT.blob.core.windows.net`, or an `Endpoint` that takes the account as its first path segment, as an
-emulator's does, and no endpoint is taken from the environment. The SAS is in no error or `Scope`: URLs lose
-their query, and the body of every error answer is scrubbed before the SDK quotes it: the SAS's signature and
-every parameter it names, found by name however the body spells it (decoded, escaped in either case, escaped
-again), as swath's Azure source scrubs its own.
-Account keys and connection strings are not taken. The SDKs' loggers are silenced, since the GCS SDK's debug output writes request
-headers unredacted. The GCS endpoint is resolved once (`ResolveEndpoint`: the option, else
-`STORAGE_EMULATOR_HOST`) and given to the SDK explicitly, so a caller that records it is never redirected by the
-environment later. A response's headers are awaited two minutes at most (`RequestTimeout`, every provider).
-For `gs://`, a resumable upload's chunk transfer is also bounded, two minutes (`gcs.DefaultChunkTransferTimeout`),
-and reads get at most five attempts; for `s3://` and `az://`, each write request's attempts are bounded
-(`MaxAttempts`) and every request runs under its operation's context, with no per-part or per-block transfer
-timeout.
-
-`gcs/gcsfake`, `s3/s3fake` and `azblob/azfake` are the in-process fakes the write tests use. `gcsfake`: JSON metadata and
-deletes, XML ranged reads, and uploads both single-request and resumable, with `ifGenerationMatch` evaluated
-atomically at creation. `s3fake`: HeadObject, ranged GetObject with `If-Match` and version ids, PutObject, the
-multipart calls (`ListParts` included) and DeleteObject, path-style, an optionally versioned bucket, upload ids a
-test chooses (with characters a URL escapes), `If-None-Match: *` evaluated atomically with the creation on both
-PutObject and CompleteMultipartUpload, the part rules (order, ETags, the minimum part size, 10,000 parts),
-aws-chunked bodies, and a part that lands after its upload's abort (`LateParts`); it does not model signatures,
-checksum verification, lifecycle rules, a 409 or an error in a 200 answer except as an injected fault, a
-request that goes on after its client gave up, suspended versioning, or eventual consistency. `azfake`: Get
-Blob Properties, ranged Get Blob with `If-Match`, Put Blob, Put Block, Put Block List and Delete Blob with
-`If-Match`, addressed as an emulator is (`/ACCOUNT/CONTAINER/NAME`), `If-None-Match: *` evaluated atomically
-with the creation, the block id rules (Base64, at most 64 bytes, one length a blob), at most 50,000 blocks a
-list, uncommitted blocks kept apart from blobs and discarded at a creation, and `x-ms-content-crc64` verified;
-it does not model authorization (a SAS is ignored), the week after which the service collects uncommitted
-blocks, versioning, soft delete, snapshots, leases or tiers. Each has a fault hook that fails a
-request before it acts, or loses its response after.
-
-## What it is not
-
-There is no listing, no caching and no read planning. Reading a dataset from a store has three
-layers, and objfile is the first:
-
-1. **Storage source** (objfile): ranged reads of one pinned version, cancellation, bounded concurrency.
-2. **Reader-side planning** (the SeekParquet module, storage-agnostic): which ranges to read, read-ahead for
-   index loads and page walks, coalesced range reads.
-3. **Caching** (later, an optional wrapper around an `Opener`): bytes keyed by name and `Identity`, so a
-   cached range can never be served for another version.
-
-## Tests
-
-`go test -race ./...` in this directory. Each store runs one behaviour suite (`internal/objfiletest`) through
-both `Open` and `OpenSized` against an in-process fake: gofakes3 for S3 (wrapped to answer a mismatched
-`If-Match` on GET with 412, which gofakes3 checks only on writes) and small `httptest` servers for the GCS
-JSON and XML APIs (`gcs/gcsfake`, which also takes uploads) and Azure Blob (`azblob/azfake`). `gcs/write_test.go` uploads
-through a single request and resumable sessions, races a creation against an upload, aborts and cancels, fails
-and loses responses at each upload step, and deletes by generation. `s3/write_test.go` does the same for
-multipart uploads, with upload ids holding reserved characters, and checks the part limits, 409 against 412,
-the completions whose outcome is unknown (a lost answer, a transport failure, a server error) against refusals,
-an abort on cancellation under its own context, a refused abort retried by a later `Abort`, a late part that
-needs a second abort, a concurrent `Abort`, the upload id kept out of every error, and deletes by ETag and by
-version id. `azblob/write_test.go` checks block blobs alike: one `Put Blob` or blocks and a list, the block
-limits, block ids of one width that keep two uploads of a name apart, staged blocks never visible (and `Abort`
-sending nothing), 409 `BlobAlreadyExists` and 412 as `ErrExists` and another 409 as a refusal, transient
-retries and their bound, the creations whose outcome is unknown against refusals, block ids and a SAS kept out
-of every error (one an error body quotes back included), a cancelled and a concurrent `Abort`, and deletes by
-ETag. `remote`'s `TestCreateAzure` writes and reads back through an endpoint with a SAS on every request, and
-`TestCreateS3CABundle` reaches a TLS endpoint through `AWS_CA_BUNDLE` and a profile's
-`ca_bundle`. `s3/dataset_test.go` writes a dataset with SeekParquet's `local.WriteDir`,
-uploads it to gofakes3 and compares a Range and a List read through objfile with the local read. `gcs/range_test.go`
-serves ignored, shifted and cut-then-shifted ranges, with and without the transport `remote.Open` installs.
-`remote` opens each provider's location against an in-process server through the environment (the S3 endpoint
-variables, `STORAGE_EMULATOR_HOST`; the Azure client is replaced in the test).
-`TestOpenGCSCredentialsOutliveContext` opens a `gs://` Store with user credentials (an application-default
-login), their token endpoint dialled to a test server, cancels the opening context, and reads twice across a
-token expiry, so the token is refreshed after that context ended (on Google's older auth path the exchange
-fails with the opening context's cancellation); it then cancels a read during its token exchange and checks
-the exchange was cancelled.
+For dataset reading, see the [swath reader](../reader/README.md). For swath's
+publication and recovery protocol, see [durability](../docs/internals/durability.md)
+and [Parquet output](../docs/internals/parquet-output.md). Run this module's tests
+with `go test -race ./...` from `go/objfile`.
