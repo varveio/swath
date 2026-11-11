@@ -155,13 +155,13 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 		return nil, ErrUnenforced
 	case cfg.Output.Resume && !resumable:
 		return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
-	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir):
+	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir) && !(cfg.remote != nil && dataset.Unfinalized(cfg.Output.Dir)):
 		return nil, ErrComplete
 	case cfg.Output.Resume:
 		// An unfinished run has a journal file (a workspace alone, empty
 		// or holding only the lock, is nothing to resume, and is left as
 		// it is: no lock is created).
-		if !dataset.Resumable(cfg.Output.Dir) {
+		if !dataset.Resumable(cfg.Output.Dir) && !(cfg.remote != nil && dataset.Unfinalized(cfg.Output.Dir)) {
 			return nil, ErrNothingToResume
 		}
 	default:
@@ -188,7 +188,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	if resumable {
 		jr, err = openLocked(ctx, cfg, path, id, lock)
 	} else if err = lock.Verify(); err != nil {
-	} else if err = prepareOutput(cfg, path, id); err != nil {
+	} else if err = prepareOutput(cfg, path, id, lock); err != nil {
 		err = prepareError(cfg.Output.Dir, err)
 	} else {
 		jr = &runJournal{out: cfg.Output.Dir, lock: lock}
@@ -316,7 +316,7 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		return nil, err
 	}
 	if !cfg.Output.Resume {
-		if err := prepareOutput(cfg, path, id); err != nil {
+		if err := prepareOutput(cfg, path, id, lock); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
 		if cfg.Output.NoJournal {
@@ -339,15 +339,8 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		}
 		return jr, nil
 	}
-	if dataset.Committed(cfg.Output.Dir) {
+	if cfg.remote == nil && dataset.Committed(cfg.Output.Dir) {
 		return nil, ErrComplete
-	}
-	if cfg.remote != nil {
-		// A run that reached its commit: the destination says whether the
-		// commit happened.
-		if err := cfg.remote.preflight(ctx, cfg.Output.Dir); err != nil {
-			return nil, err
-		}
 	}
 	// Recovery reads the journal and acts through the output root, opened
 	// and then checked to be the directory the lock is on (as
@@ -360,6 +353,26 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	if err := lock.Verify(); err != nil {
 		r.Close()
 		return nil, err
+	}
+	if cfg.remote != nil {
+		// A run that reached its commit: the destination says whether the
+		// commit happened; a commit made (now, or by an earlier attempt)
+		// has its aftermath finished, and the run is complete.
+		err := dataset.CheckRemoteLayout(r)
+		if err == nil {
+			err = cfg.remote.preflight(ctx, r)
+		}
+		var marker *dataset.RemoteCommitRecord
+		if err == nil {
+			marker, err = dataset.ReadCommitMarker(r)
+		}
+		if err == nil && marker != nil {
+			err = cfg.remote.finalizeCommitted(ctx, cfg, r)
+		}
+		if err != nil {
+			r.Close()
+			return nil, err
+		}
 	}
 	jr, err := recoverLocked(ctx, cfg, r, id, lock)
 	if err != nil || jr == nil {
@@ -387,6 +400,16 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 		if !dataset.Resumable(cfg.Output.Dir) {
 			return nil, ErrNothingToResume
 		}
+		if cfg.remote != nil {
+			// A remote run's parts are in the bucket, not here: what proves
+			// its header was durable is its remote state (names allocated,
+			// receipts, a candidate), written only after the header. A
+			// damaged header then is corruption, never a fresh start that
+			// would discard acknowledged parts.
+			if ev, err := dataset.Evidence(r); err != nil || ev {
+				return nil, fmt.Errorf("%w: the journal's header is damaged but the work directory holds a remote run's state (%v)", journal.ErrCorrupt, err)
+			}
+		}
 		// The restart's preparation removes the workspace's entries: the
 		// suspect and temporary parts in it are regular files first.
 		for _, d := range []string{suspectRel, partsRel} {
@@ -407,7 +430,7 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 	}
 	var sus *suspect
 	if cfg.remote != nil {
-		sus, err = recoverRemote(verifier{ctx, cfg.Progress}, cfg.remote, cfg.Output.Dir, st, lock)
+		sus, err = recoverRemote(verifier{ctx, cfg.Progress}, cfg.remote, r, st, lock)
 	} else {
 		sus, err = recoverParts(verifier{ctx, cfg.Progress}, r, cfg.Output.Dir, st, lock)
 	}

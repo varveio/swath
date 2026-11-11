@@ -37,14 +37,18 @@ type Identity struct {
 }
 
 // Destination is a remote dataset's frozen root: the provider ("gs"), the
-// bucket, the literal prefix ("" or ending in "/"), the endpoint ("" for
-// the provider's default) and the layout version (dataset.RemoteLayout).
+// bucket, the literal prefix ("" or ending in "/"), the effective endpoint
+// ("" for the provider's default; an emulator's host when the environment
+// named one) and the layout version (dataset.RemoteLayout).
 // It holds no credential: credentials are resolved again on a resume.
 type Destination struct {
 	Provider string `json:"provider"`
 	Bucket   string `json:"bucket"`
 	Prefix   string `json:"prefix"`
 	Endpoint string `json:"endpoint,omitempty"`
+	// Emulator says Endpoint is an emulator's host, reached without
+	// credentials (STORAGE_EMULATOR_HOST, resolved when the run started).
+	Emulator bool   `json:"emulator,omitempty"`
 	Layout   string `json:"layout"`
 }
 
@@ -166,7 +170,7 @@ func checkDestination(stored, requested *Destination) error {
 		return &MismatchError{"destination", show(stored), show(requested)}
 	case stored.Provider != requested.Provider || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
 		return &MismatchError{"destination", show(stored), show(requested)}
-	case stored.Endpoint != requested.Endpoint:
+	case stored.Endpoint != requested.Endpoint || stored.Emulator != requested.Emulator:
 		return &MismatchError{"endpoint", redactEndpoint(stored.Endpoint), redactEndpoint(requested.Endpoint)}
 	case stored.Layout != requested.Layout:
 		return &MismatchError{"destination layout", stored.Layout, requested.Layout}
@@ -209,6 +213,9 @@ func (id Identity) Hash() string {
 		put("destination.bucket=", d.Bucket)
 		put("destination.prefix=", d.Prefix)
 		put("destination.endpoint=", d.Endpoint)
+		if d.Emulator {
+			put("destination.emulator=", "true")
+		}
 		put("destination.layout=", d.Layout)
 	}
 	return hex.EncodeToString(h.Sum(nil))

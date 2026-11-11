@@ -101,13 +101,16 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 dataset written to a bucket's (`-o gs://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
 `destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
 `confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
-`lost_race`: another run's manifest is there; `unresolved`: neither could be established; empty when the run did
-not reach its commit), `manifest`, `manifest_identity` (its generation) and `manifest_sha256` once committed,
+`resumed`: a resume found the commit made and finished its aftermath; `lost_race`: another run's manifest is
+there; `unresolved`: neither could be established, and everything is kept; empty when the run did not reach its
+commit), `manifest`, `manifest_identity` (its generation) and `manifest_sha256` once committed,
 `uploads` (completed), `uploads_aborted`, `upload_bytes` (handed to uploads), `upload_wait_ns` (encoder time in
 upload writes and completions: a write waits for the chunk before it), `retries` and `retry_classes` (attempts
 the SDK retried, by `http_STATUS`, `timeout`, `connection`, `other`), `objects_verified` (retained parts a resume
-read whole and checked), and the orphans (objects this run created that no committed manifest names):
-`orphans_deleted`, `orphans_gone`, `orphans_left`. `totals` is a
+read whole and checked), and the orphans (objects this run created, by the generation its upload recorded, that no committed
+manifest names): `orphans_deleted`, `orphans_gone` (absent, or replaced since: not this run's),
+`orphans_left` (a delete failed) and `orphans_unproven` (names allocated with no recorded creation, never
+touched). `totals` is a
 `swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
 `objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete

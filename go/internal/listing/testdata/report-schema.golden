@@ -71,6 +71,7 @@ output.remote.objects_verified int64
 output.remote.orphans_deleted int64
 output.remote.orphans_gone int64
 output.remote.orphans_left int64
+output.remote.orphans_unproven int64
 output.remote.retries int64
 output.remote.retry_classes map
 output.remote.upload_bytes int64

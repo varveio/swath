@@ -15,9 +15,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -75,6 +73,9 @@ type Remote struct {
 	Endpoint string
 	Opener   objfile.Opener
 	Writer   objfile.Writer
+	// Emulator says Endpoint is an emulator's host, reached without
+	// credentials (STORAGE_EMULATOR_HOST, resolved when it was opened).
+	Emulator bool
 }
 
 // URI is the root's canonical URI, and " at " its endpoint when set.
@@ -83,98 +84,6 @@ func (r *Remote) URI() string {
 		return r.Location.String() + " at " + r.Endpoint
 	}
 	return r.Location.String()
-}
-
-func remotePath(ws string, name ...string) string {
-	return filepath.Join(append([]string{ws, Workspace, RemoteDir}, name...)...)
-}
-
-// CandidatePath is where the candidate manifest is saved.
-func CandidatePath(ws string) string { return remotePath(ws, CandidateName) }
-
-// ClaimPathOf is part i's claim receipt.
-func ClaimPathOf(ws string, i int) string { return remotePath(ws, ClaimsDir, PartName(i)+".json") }
-
-// PrepareWorkspace makes ws (a work directory Usable allowed) a remote
-// run's workspace: the claims directory, synced with its parents.
-func PrepareWorkspace(ws string) error {
-	if err := os.MkdirAll(remotePath(ws, ClaimsDir), 0o755); err != nil {
-		return fmt.Errorf("create work directory: %w", err)
-	}
-	if err := errors.Join(syncDir(remotePath(ws)), syncDir(filepath.Join(ws, Workspace)), syncDir(ws), syncDir(filepath.Dir(ws))); err != nil {
-		return fmt.Errorf("sync work directory: %w", err)
-	}
-	return nil
-}
-
-// Allocations is the log of part names allocated: each name is durable in
-// it before its upload begins, so recovery and cleanup know every name a
-// run may have created, without listing the bucket.
-type Allocations struct {
-	mu     sync.Mutex
-	f      *os.File
-	synced bool // the file's entry is durable
-}
-
-// OpenAllocations opens ws's allocation log for appending.
-func OpenAllocations(ws string) (*Allocations, error) {
-	f, err := os.OpenFile(remotePath(ws, AllocatedName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("allocation log: %w", err)
-	}
-	return &Allocations{f: f}, nil
-}
-
-// Allocate appends name and returns once it is durable.
-func (a *Allocations) Allocate(name string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, err := faults.Write(a.f, []byte(name+"\n")); err != nil {
-		return fmt.Errorf("allocation log: %w", err)
-	}
-	if err := faults.Sync(a.f); err != nil {
-		return fmt.Errorf("allocation log: %w", err)
-	}
-	if !a.synced {
-		if err := syncDir(filepath.Dir(a.f.Name())); err != nil {
-			return fmt.Errorf("allocation log: %w", err)
-		}
-		a.synced = true
-	}
-	return nil
-}
-
-// Close closes the log.
-func (a *Allocations) Close() error {
-	if a == nil {
-		return nil
-	}
-	return a.f.Close()
-}
-
-// ReadAllocations returns the names ws's log holds, in order, each once. A
-// last line without its newline was never acknowledged (its upload never
-// began) and is left out.
-func ReadAllocations(ws string) ([]string, error) {
-	b, err := os.ReadFile(remotePath(ws, AllocatedName))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("allocation log: %w", err)
-	}
-	if i := bytes.LastIndexByte(b, '\n'); i+1 < len(b) {
-		b = b[:i+1] // a torn last line
-	}
-	var names []string
-	seen := map[string]bool{}
-	for line := range strings.SplitSeq(string(b), "\n") {
-		if line != "" && !seen[line] {
-			seen[line] = true
-			names = append(names, line)
-		}
-	}
-	return names, nil
 }
 
 // UploadStats account a remote dataset's uploads.
@@ -258,7 +167,7 @@ func (rp *RemoteParts) Create(ordinal int) (Artifact, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create part: %w", err)
 	}
-	return &remoteArtifact{u: u, name: name, stats: rp.Stats}, nil
+	return &remoteArtifact{u: u, name: name, stats: rp.Stats, alloc: rp.Alloc}, nil
 }
 
 // uploadFaultEvery spaces the upload-chunk crash point: at an upload's
@@ -269,6 +178,7 @@ const uploadFaultEvery = 64 << 10
 // completes the upload, Close aborts it unless Sync completed it.
 type remoteArtifact struct {
 	u        objfile.Upload
+	alloc    *Allocations
 	name     string
 	identity string
 	stats    *UploadStats
@@ -304,6 +214,12 @@ func (a *remoteArtifact) Sync() error {
 	r, _ := a.u.Receipt()
 	a.done, a.identity = true, r.Identity
 	a.stats.Uploads.Add(1)
+	// The creation identity, durable: cleanup deletes this generation and
+	// no other (an object at this name that a record does not name is
+	// never proven ours).
+	if err := a.alloc.Created(a.name, r.Identity); err != nil {
+		return fmt.Errorf("upload %s: %w", a.name, err)
+	}
 	return faults.At("upload-completed")
 }
 
@@ -326,53 +242,6 @@ type ClaimReceipt struct {
 	Part      PartInfo `json:"part"`
 	Columns   []string `json:"columns"`
 	CreatedBy string   `json:"created_by"`
-}
-
-// WriteClaim makes part's receipt durable (replacing an earlier one of its
-// ordinal: a reproduction of the same bytes).
-func WriteClaim(ws string, c ClaimReceipt) error {
-	if err := faults.At("claim-receipt"); err != nil {
-		return err
-	}
-	if err := ReplaceJSON(ClaimPathOf(ws, c.Ordinal), c, Durable); err != nil {
-		return fmt.Errorf("claim part %d: %w", c.Ordinal, err)
-	}
-	return faults.At("claimed")
-}
-
-// ReadClaims returns ws's receipts by ordinal. A temporary file of an
-// interrupted replacement is not a receipt; a name of another shape, or a
-// receipt that does not parse or names another ordinal, is corruption.
-func ReadClaims(ws string) (map[int]ClaimReceipt, error) {
-	dir := remotePath(ws, ClaimsDir)
-	ents, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := map[int]ClaimReceipt{}
-	for _, e := range ents {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp") {
-			continue
-		}
-		i, ok := PartOrdinal(strings.TrimSuffix(name, ".json"))
-		if !ok || !strings.HasSuffix(name, ".json") || !e.Type().IsRegular() {
-			return nil, fmt.Errorf("claim receipts: unexpected entry %s in %s", name, dir)
-		}
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return nil, err
-		}
-		var c ClaimReceipt
-		if err := json.Unmarshal(b, &c); err != nil || c.Ordinal != i || c.Object == "" {
-			return nil, fmt.Errorf("claim receipts: %s is damaged", name)
-		}
-		out[i] = c
-	}
-	return out, nil
 }
 
 // newManifest is the manifest of parts (already gated), part i at
@@ -467,24 +336,38 @@ func ResolveManifest(ctx context.Context, r *Remote, candidate []byte) (Manifest
 
 // PublishRemote commits parts (already gated, uploaded and, when the run
 // is journaled, recorded) at r: the manifest naming them by their object
-// names is saved durably in ws as the candidate, then created at the
-// destination only if no manifest is there. That creation is the commit;
-// commit, if set, runs it (install) as Publish's does. A creation whose
-// answer is lost or refused is resolved by reading the manifest back:
-// the candidate is this run's commit, another manifest a lost race
-// (*LostRaceError), and a read that fails ErrCommitUnresolved. The
-// manifest is never replaced or deleted. Once committed, the commit
-// marker is written in ws (its failure is RemoteCommit.MarkerErr).
-func PublishRemote(ctx context.Context, ws string, r *Remote, meta Meta, parts []Part, commit func(install func() error) error) (RemoteCommit, error) {
+// names is saved durably in the work directory ws as the candidate, then
+// created at the destination only if no manifest is there. That creation
+// is the commit; commit, if set, runs it (install) as Publish's does.
+//
+// prior is a candidate an earlier attempt saved: when it names exactly
+// these parts, its bytes are created again (the same manifest, its
+// publication time included), so a creation still in flight from that
+// attempt and this one are the same commit.
+//
+// A creation that is not answered with success is resolved by reading the
+// manifest back: the candidate's bytes are this run's commit; other bytes
+// a lost race (*LostRaceError). Absence settles nothing after an
+// unresolved failure (objfile.ErrUnresolved: a request may still be in
+// flight): the same bytes are created again, a few times, and if that
+// never resolves the commit is ErrCommitUnresolved. Only a creation the
+// store refused outright (absent afterwards) is no commit. A read that
+// fails is ErrCommitUnresolved too. Nothing is removed on the way: the
+// manifest is never replaced or deleted, and the parts and the candidate
+// stay. Once committed, the commit marker is written in ws, not finalized
+// (its failure is RemoteCommit.MarkerErr).
+func PublishRemote(ctx context.Context, ws *os.Root, r *Remote, meta Meta, parts []Part, prior []byte, commit func(install func() error) error) (RemoteCommit, error) {
 	var rc RemoteCommit
-	m := newManifest(meta, parts, func(_ int, p Part) string { return p.Path })
-	b, err := EncodeJSON(m)
-	if err != nil {
-		return rc, err
+	b := prior
+	if b == nil || !sameParts(b, parts) {
+		var err error
+		if b, err = EncodeJSON(newManifest(meta, parts, func(_ int, p Part) string { return p.Path })); err != nil {
+			return rc, err
+		}
 	}
 	sum := sha256.Sum256(b)
 	rc.SHA256 = hex.EncodeToString(sum[:])
-	if err := Replace(CandidatePath(ws), b, Durable); err != nil {
+	if err := SaveCandidate(ws, b); err != nil {
 		return rc, fmt.Errorf("save candidate manifest: %w", err)
 	}
 	if err := faults.At("candidate-saved"); err != nil {
@@ -494,27 +377,11 @@ func PublishRemote(ctx context.Context, ws string, r *Remote, meta Meta, parts [
 		if err := faults.At("manifest-put"); err != nil {
 			return err
 		}
-		rec, perr := r.Writer.PutIfAbsent(ctx, ManifestName, b)
-		if perr == nil {
-			rc.Outcome, rc.Identity = CommitCreated, rec.Identity
-		} else {
-			state, other, id, rerr := ResolveManifest(ctx, r, b)
-			switch state {
-			case ManifestOurs:
-				rc.Outcome, rc.Identity = CommitConfirmed, id
-			case ManifestOther:
-				return &LostRaceError{Winner: other}
-			case ManifestAbsent:
-				if errors.Is(perr, objfile.ErrExists) {
-					// Refused as existing, and gone when read: not ours to
-					// judge.
-					return fmt.Errorf("%w: the creation was refused as existing (%v) and no manifest is there now", ErrCommitUnresolved, perr)
-				}
-				return fmt.Errorf("create manifest: %w", perr) // not created: a resume commits again
-			default:
-				return fmt.Errorf("%w: create: %v; read back: %v", ErrCommitUnresolved, perr, rerr)
-			}
+		outcome, id, err := createManifest(ctx, r, b)
+		if err != nil {
+			return err
 		}
+		rc.Outcome, rc.Identity = outcome, id
 		if err := faults.At("manifest-created"); err != nil {
 			return err
 		}
@@ -530,63 +397,95 @@ func PublishRemote(ctx context.Context, ws string, r *Remote, meta Meta, parts [
 	return rc, faults.At("manifest")
 }
 
-// RemoteCommitRecord is the commit marker: the run in the work directory
-// committed its dataset.
-type RemoteCommitRecord struct {
-	Destination      string    `json:"destination"`
-	ManifestIdentity string    `json:"manifest_identity,omitempty"`
-	ManifestSHA256   string    `json:"manifest_sha256"`
-	CommittedAt      time.Time `json:"committed_at"`
-}
+// createAttempts bounds the creations of one candidate in one commit.
+const createAttempts = 3
 
-// WriteCommitMarker records a commit in ws, durably.
-func WriteCommitMarker(ws string, rec RemoteCommitRecord) error {
-	if rec.CommittedAt.IsZero() {
-		rec.CommittedAt = time.Now().UTC()
+// createManifest creates the manifest b, resolving every failure by a
+// read-back (PublishRemote).
+func createManifest(ctx context.Context, r *Remote, b []byte) (outcome, identity string, err error) {
+	rec, perr := r.Writer.PutIfAbsent(ctx, ManifestName, b)
+	if perr == nil {
+		return CommitCreated, rec.Identity, nil
 	}
-	return ReplaceJSON(filepath.Join(ws, RemoteCommitName), rec, Durable)
-}
-
-// ReadCandidate returns the candidate manifest saved in ws (nil when
-// there is none).
-func ReadCandidate(ws string) ([]byte, error) {
-	b, err := os.ReadFile(CandidatePath(ws))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+	for attempt := 1; ; attempt++ {
+		state, other, id, rerr := ResolveManifest(ctx, r, b)
+		switch state {
+		case ManifestOurs:
+			return CommitConfirmed, id, nil
+		case ManifestOther:
+			return "", "", &LostRaceError{Winner: other}
+		case ManifestUnknown:
+			return "", "", fmt.Errorf("%w: create: %v; read back: %v", ErrCommitUnresolved, perr, objfile.RedactError(rerr))
+		}
+		// Absent.
+		if !ambiguous(perr) && !errors.Is(perr, objfile.ErrConflict) {
+			return "", "", fmt.Errorf("create manifest: %w", perr) // refused: not created, never to be
+		}
+		if attempt >= createAttempts || ctx.Err() != nil {
+			return "", "", fmt.Errorf("%w: the creation failed (%v) and no manifest is there yet; it may still appear", ErrCommitUnresolved, perr)
+		}
+		// The same bytes again (a conflict with another conditional write
+		// created nothing and may be made again): whichever creation
+		// lands, it is this one.
+		if rec, perr = r.Writer.PutIfAbsent(ctx, ManifestName, b); perr == nil {
+			return CommitCreated, rec.Identity, nil
+		}
 	}
-	return b, err
 }
 
-// CleanupStats account orphan cleanup.
+// ambiguous reports whether a failed creation may still create its
+// object: the Writer says so (objfile.ErrUnresolved), it was refused as
+// existing (a retry of its own success, or a racer's), or the error is a
+// cancellation, a deadline or a transport failure a Writer did not
+// classify. Only a refusal the store answered is definite.
+func ambiguous(err error) bool {
+	var ne net.Error
+	return errors.Is(err, objfile.ErrUnresolved) || errors.Is(err, objfile.ErrExists) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne)
+}
+
+// sameParts reports whether the manifest b names exactly parts.
+func sameParts(b []byte, parts []Part) bool {
+	var m Manifest
+	if json.Unmarshal(b, &m) != nil || len(m.Parts) != len(parts) {
+		return false
+	}
+	for i, p := range parts {
+		if m.Parts[i].Path != p.Path || m.Parts[i].PartInfo != p.PartInfo {
+			return false
+		}
+	}
+	return true
+}
+
+// CleanupStats account orphan cleanup: deleted; gone (no object, or
+// another generation there now, which is not this run's); failed; and
+// unproven: names allocated with no creation recorded (an upload that
+// failed or never completed, or completed unrecorded), which are left.
 type CleanupStats struct {
-	Deleted, Gone, Failed int64
+	Deleted, Gone, Failed, Unproven int64
 }
 
-// DeleteOwned deletes the objects at names (names this run allocated)
-// that keep does not hold: each at the generation it is found at, so an
-// object written there since is never removed. A name with no object is
-// counted gone; a failure is counted and left.
-func DeleteOwned(ctx context.Context, r *Remote, names []string, keep map[string]bool) CleanupStats {
+// DeleteOwned deletes the objects this run created (l.Created: the name
+// and the generation its upload created) that keep does not hold, each
+// only at that generation (DeleteIf). An allocated name with no recorded
+// creation is never touched: whatever is there is not proven this run's.
+func DeleteOwned(ctx context.Context, r *Remote, l Ledger, keep map[string]bool) CleanupStats {
 	var st CleanupStats
-	for _, n := range names {
+	for _, n := range l.Names {
 		if keep[n] {
 			continue
 		}
-		obj, err := r.Opener.Open(ctx, n)
-		if errors.Is(err, fs.ErrNotExist) {
-			st.Gone++
+		id, ok := l.Created[n]
+		if !ok {
+			st.Unproven++
 			continue
 		}
-		if err != nil {
-			st.Failed++
-			continue
-		}
-		id := obj.Identity()
-		_ = obj.Close()
 		switch err := r.Writer.DeleteIf(ctx, n, id); {
 		case err == nil:
 			st.Deleted++
-		case errors.Is(err, fs.ErrNotExist):
+		case errors.Is(err, fs.ErrNotExist), errors.Is(err, objfile.ErrObjectChanged):
 			st.Gone++
 		default:
 			st.Failed++

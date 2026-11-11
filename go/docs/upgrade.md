@@ -346,7 +346,7 @@ are delta coded and zstd compressed by default.
 **Run report: version 6.** Version 6 adds `output.remote`, present only for a dataset written to a bucket
 (`-o gs://...`): `destination`, `work_dir`, `commit`, `manifest`, `manifest_identity`, `manifest_sha256`,
 `uploads`, `uploads_aborted`, `upload_bytes`, `upload_wait_ns`, `retries`, `retry_classes`,
-`objects_verified`, `orphans_deleted`, `orphans_gone` and `orphans_left`; a version 5 reader reads it by
+`objects_verified`, `orphans_deleted`, `orphans_gone`, `orphans_left` and `orphans_unproven`; a version 5 reader reads it by
 ignoring it. The journal's version is 10 (it names a bucket dataset's part objects); this build reads the
 version 9 journals of earlier builds, which an earlier build cannot do the other way round.
 

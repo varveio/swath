@@ -560,11 +560,12 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	id := identity(src, s, cfg)
 	if r := cfg.Output.Remote; r != nil {
-		// The destination is fixed before anything is owned: its identity,
-		// its distance from the source, then its client.
-		d, err := destinationIdentity(r)
+		// The destination is fixed before anything is owned: its distance
+		// from the source, its client, then its identity as opened (the
+		// route resolved).
+		l, err := remoteLocation(r)
 		if err == nil {
-			err = checkOverlap(src.Locator(), d)
+			err = checkOverlap(src.Locator(), l)
 		}
 		if err == nil {
 			cfg.remote, err = openRemote(ctx, r)
@@ -576,7 +577,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 			return rep, err
 		}
 		defer cfg.remote.close()
-		id.Destination = d
+		id.Destination = destinationIdentity(cfg.remote.d)
 		sum.Output.Remote = cfg.remote.report(cfg.Output.Dir)
 	}
 	sum.ArgsHash, sum.src = id.Hash(), src
@@ -1361,8 +1362,8 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 			cfg.Warn("run report not written: " + err.Error())
 		}
 	} else if jr != nil && jr.remote != nil {
-		if err := a.writeRemoteReport(*sum); err != nil && cfg.Warn != nil {
-			cfg.Warn(err.Error())
+		if err := a.finalizeRemote(parts, sum); err != nil {
+			return *sum, err
 		}
 	} else if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())

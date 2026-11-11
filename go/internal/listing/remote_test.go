@@ -208,18 +208,20 @@ func TestRemoteDataset(t *testing.T) {
 
 // remotePoints are the crash points a remote run crosses: the listing's,
 // the upload's (a name allocated, a chunk sent, an upload completed), the
-// claim's and the record's, and the commit's (the candidate saved, the
-// manifest about to be created, created, and the commit done).
+// claim's and the record's, the commit's (the candidate saved, the
+// manifest about to be created, created, and the commit done) and its
+// aftermath's (the run report, the marker finalized).
 var remotePoints = []string{"response-read", "split", "range-done", "encoding", "allocated", "upload-chunk", "upload-completed",
 	"part-closed", "claim-receipt", "claimed", "journal-append", "journal-sync", "recorded",
-	"candidate-saved", "manifest-put", "manifest-created", "manifest"}
+	"candidate-saved", "manifest-put", "manifest-created", "manifest", "run-report", "finalized"}
 
 // TestRemoteCrashMatrix kills a remote run at each of its crash points, at
 // a first and a later occurrence, with spill off and on (its durable
 // spill's certificates retired as K moves), and resumes it: the resumed dataset
 // holds the uninterrupted run's parts byte for byte, and every object the
 // crashed attempts left that the manifest does not name is deleted. A kill
-// once the manifest exists leaves a run a resume finds complete.
+// once the manifest exists leaves a run whose resume finishes the
+// aftermath (orphans deleted, the run report) and reports it complete.
 func TestRemoteCrashMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
@@ -264,11 +266,13 @@ func TestRemoteCrashMatrix(t *testing.T) {
 					}
 					_, err = Run(context.Background(), remoteConfig(url, ws, true, d.output(prefix)))
 					switch point {
-					case "manifest-created", "manifest":
+					case "manifest-created", "manifest", "run-report", "finalized":
+						// Committed: the resume finishes the aftermath (orphans,
+						// run report) and reports the run complete.
 						if !errors.Is(err, ErrComplete) {
 							t.Fatalf("resume after the manifest's creation: %v", err)
 						}
-						d.sameAsLocal(t, point, ref, prefix, false)
+						d.sameAsLocal(t, point, ref, prefix, true)
 						return
 					}
 					if err != nil {
