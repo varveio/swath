@@ -86,7 +86,6 @@ type Artifact interface {
 	Identity() string
 }
 
-
 // SegmentPlan is a sink's cut rule for the rows still to come, as the
 // order stage cuts the rest into segments with it (order.Segmenter; the
 // Parquet router's Plan): a part closes after the row whose logical bytes
@@ -108,9 +107,10 @@ type InvariantError struct{ Reason string }
 
 func (e *InvariantError) Error() string { return "dataset invariant violated: " + e.Reason }
 
-// Check is the publication gate: dense ordinals (part i at TempPath i, or
-// at its final name once published early), strictly ascending disjoint key
-// ranges, and rows written == rows routed.
+// Check is the publication gate: dense ordinals (part i at TempPath i, at
+// its final name once published early, or a remote part's object named for
+// ordinal i), strictly ascending disjoint key ranges, and rows written ==
+// rows routed.
 func Check(parts []Part, rows int64) error {
 	var n int64
 	for i, p := range parts {
@@ -290,22 +290,14 @@ func WriteReport(out string, v any) error {
 // the same step, or refuses it (an error without calling install).
 func Publish(out string, meta Meta, parts []Part, commit func(install func() error) error) error {
 	data := filepath.Join(out, DataDir)
-	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
-		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
-	if m.Coverage.Exclusions == nil {
-		m.Coverage.Exclusions = []string{}
-	}
-	if m.Coverage.Filters == nil {
-		m.Coverage.Filters = []string{}
-	}
 	for i, p := range parts {
 		if final := filepath.Join(data, PartName(i)); p.Path != final {
 			if err := os.Rename(p.Path, final); err != nil {
 				return fmt.Errorf("publish part %d: %w", i, err)
 			}
 		}
-		m.Parts = append(m.Parts, ManifestPart{Path: DataDir + "/" + PartName(i), PartInfo: p.PartInfo})
 	}
+	m := newManifest(meta, parts, func(i int, _ Part) string { return DataDir + "/" + PartName(i) })
 	if err := syncDir(data); err != nil {
 		return fmt.Errorf("sync data directory: %w", err)
 	}
@@ -323,10 +315,16 @@ func Publish(out string, meta Meta, parts []Part, commit func(install func() err
 	return faults.At("manifest")
 }
 
-// Committed reports whether out holds a committed dataset (its manifest).
+// Committed reports whether out holds a committed dataset (its
+// manifest), or is the work directory of a remote dataset committed (its
+// commit marker, RemoteCommitName).
 func Committed(out string) bool {
-	fi, err := os.Stat(filepath.Join(out, ManifestName))
-	return err == nil && fi.Mode().IsRegular()
+	for _, n := range []string{ManifestName, RemoteCommitName} {
+		if fi, err := os.Stat(filepath.Join(out, n)); err == nil && fi.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(dir, name string, v any) error {
