@@ -206,8 +206,8 @@ loser does). Absence settles nothing after an ambiguous failure (`objfile.ErrUnr
 a transport failure, a timeout, a cancellation in flight, a server error; a request the service accepted can
 outlive its failed connection and still create the manifest later): the same bytes are created again, up to
 three creations in all, so whichever lands is this commit; if none is answered the commit is unresolved
-(`dataset.ErrCommitUnresolved`). Only a creation the service refused outright (another 4xx) and absent
-afterwards is no commit (the run fails; resumable when journaled). A read-back that fails, or a commit that
+(`dataset.ErrCommitUnresolved`). Only a creation the service refused outright (another 4xx, with no earlier
+attempt of it retried after an ambiguous failure, GCS's or S3's alike) and absent afterwards is no commit (the run fails; resumable when journaled). A read-back that fails, or a commit that
 runs out of time, is unresolved too. An unresolved commit removes nothing: the parts and the candidate stay,
 and a resume reads the manifest back and creates the same candidate again. The manifest is never overwritten
 or deleted (`TestRemoteDelayedCommit` replays a creation that lands after the run gave up).
