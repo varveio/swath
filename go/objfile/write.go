@@ -18,8 +18,8 @@ import (
 type Condition int
 
 // CreateOnly creates the object only if no object has the name: GCS
-// ifGenerationMatch=0, S3 If-None-Match: *. A write that finds one fails
-// with ErrExists.
+// ifGenerationMatch=0, S3 and Azure If-None-Match: *. A write that finds
+// one fails with ErrExists.
 const CreateOnly Condition = 1
 
 // ErrExists reports a CreateOnly write that found an object at its name
