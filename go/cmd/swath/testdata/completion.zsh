@@ -45,7 +45,7 @@ _swath_list() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
+        '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
@@ -110,7 +110,7 @@ _swath_du() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
+        '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
@@ -183,7 +183,7 @@ _swath_diag_list() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
+        '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \
@@ -258,7 +258,7 @@ _swath_diag_count() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
+        '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \

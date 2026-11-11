@@ -8,6 +8,7 @@ S3_VERSIONS = "swath/s3-versions/v1"
 GCS_CURRENT = "swath/gcs-objects/v1"
 GCS_VERSIONS = "swath/gcs-generations/v1"
 AZBLOB_CURRENT = "swath/azblob-objects/v1"
+AZBLOB_VERSIONS = "swath/azblob-versions/v1"
 LOCAL = "swath/local-entries/v1"
 S3_COLUMNS = ["key", "size", "last_modified", "etag", "storage_class", "owner_id",
               "owner_display_name", "checksum_algorithm", "checksum_type"]
@@ -27,8 +28,10 @@ COLUMNS = {
     GCS_CURRENT: GCS_COLUMNS,
     GCS_VERSIONS: GCS_COLUMNS + ["time_deleted"],
     AZBLOB_CURRENT: AZBLOB_COLUMNS,
+    AZBLOB_VERSIONS: AZBLOB_COLUMNS + ["version_id", "is_latest", "snapshot", "is_deleted", "deleted_time",
+                                       "remaining_retention_days"],
 }
-VERSION_IDS = {S3_VERSIONS, GCS_VERSIONS}
+VERSION_IDS = {S3_VERSIONS, GCS_VERSIONS, AZBLOB_VERSIONS}
 SUPPORTED = set(COLUMNS) | {LOCAL, "swath/canonical"}
 
 

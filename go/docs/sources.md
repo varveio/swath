@@ -132,7 +132,8 @@ run's identity.
 ## Azure Blob Storage
 
 `az://ACCOUNT/CONTAINER[/PREFIX]`, or the same as
-`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`, lists a container's current blobs.
+`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`, lists a container's current blobs;
+`--all-versions` lists every entry: blob versions, snapshots and soft-deleted blobs beside the current blobs.
 
 **Flat namespace only.** Before listing, swath asks the account whether it has a hierarchical namespace
 (Data Lake Storage Gen2), and refuses one that does, with exit 2 and cause `unsupported`. When the account
@@ -141,11 +142,20 @@ Lake host, which answers public containers, or refuses a flat account that has b
 which also establishes a flat namespace), the run is refused too, unless `--azure-assume-flat` asserts a
 flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
 reports a hierarchical namespace is refused whatever is asserted. A credential the service refuses during
-these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`). Versions, snapshots and deleted blobs are not
-listed, and `--all-versions` is refused.
+these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`).
 
 **Permissions.** Permission to list the container's blobs: a SAS with the list permission, or an Entra ID
-role that includes it.
+role that includes it. `--all-versions` needs no more: Azure lists versions, snapshots and soft-deleted blobs to
+anyone who may list, anonymous callers of a public container included.
+
+**Every entry** (`--all-versions`, schema `swath/azblob-versions/v1`). Each version, snapshot and soft-deleted
+blob is a row, with `version_id`, `snapshot`, `is_deleted`, `deleted_time` and `remaining_retention_days`;
+`is_latest` marks the row a current listing has. A name's rows are consecutive, in Azure's order: snapshots and
+versions oldest first, the current blob last. Soft-deleted blobs exist only while the account's retention keeps
+them (`remaining_retention_days`), so two listings days apart differ. A container without versions, snapshots or
+deleted blobs lists the same rows as without the switch, every one `is_latest`. Each entry is a row, so a
+container with a long history lists more pages, each a billed listing operation; the format does not change
+(Arrow where the account has it).
 
 **Properties.** Each row carries what List Blobs returns for every blob: besides size, times, ETag, MD5,
 content type, blob type and access tier, whether the tier is inferred and when it last changed, a pending

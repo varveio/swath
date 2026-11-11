@@ -19,6 +19,7 @@ const (
 	GCSObjectsV1     SchemaID = "swath/gcs-objects/v1"     // Cloud Storage live objects
 	GCSGenerationsV1 SchemaID = "swath/gcs-generations/v1" // Cloud Storage generations (--all-versions)
 	AzblobObjectsV1  SchemaID = "swath/azblob-objects/v1"  // Azure Blob current blobs
+	AzblobVersionsV1 SchemaID = "swath/azblob-versions/v1" // Azure Blob versions, snapshots and soft-deleted blobs (--all-versions)
 	LocalV1          SchemaID = "swath/local-entries/v1"   // a filesystem tree
 )
 
@@ -208,6 +209,19 @@ var schemas = map[SchemaID]SchemaSpec{
 		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros}),
 		Versions: VersionSpec{ID: "generation", DeletedAt: "time_deleted"}},
 	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: azblobColumns},
+	// The azblob-objects/v1 columns, then the entry's identity: its
+	// version id (null for a snapshot, and on an account without
+	// versioning), is_latest (the name's current blob: what a current
+	// listing lists), its snapshot time (null unless a snapshot), whether
+	// it is soft-deleted, when, and the days its retention has left.
+	AzblobVersionsV1: {ID: AzblobVersionsV1, Key: textKey, MaxKeyBytes: maxBlobNameBytes, Columns: concat(azblobColumns,
+		ColumnSpec{Name: "version_id", Type: TypeString},
+		ColumnSpec{Name: "is_latest", Type: TypeBool, Required: true},
+		ColumnSpec{Name: "snapshot", Type: TypeString},
+		ColumnSpec{Name: "is_deleted", Type: TypeBool, Required: true},
+		ColumnSpec{Name: "deleted_time", Type: TypeTimestampMicros},
+		ColumnSpec{Name: "remaining_retention_days", Type: TypeInt64}),
+		Versions: VersionSpec{ID: "version_id", Latest: "is_latest"}},
 	// Names are bytes; identifiers are unsigned; allocated_bytes is
 	// st_blocks × 512 and metadata_changed_at is ctime.
 	LocalV1: {ID: LocalV1, Key: binaryKey, UniqueKeys: true, Columns: []ColumnSpec{

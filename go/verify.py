@@ -6,7 +6,8 @@
 Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
 versions keys are nondecreasing within a part and strict across parts. Checks
 the manifest's SeekParquet members and key declaration, the swath extension,
-S3 version nullability, per-part GCS and Azure schemas, generation ordering, manifest row
+S3 version nullability, per-part GCS and Azure schemas, generation ordering, an Azure name's latest
+entry last, manifest row
 counts, byte-exact bounds, part SHA-256 digests and footer stamps. Optional reference-dir compares ordered
 whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
@@ -17,8 +18,8 @@ import os
 import sys
 
 from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
-                            GCS_VERSIONS, AZBLOB_CURRENT, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS, AZBLOB_ADDED,
-                            sql_string)
+                            GCS_VERSIONS, AZBLOB_CURRENT, AZBLOB_VERSIONS, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS,
+                            AZBLOB_ADDED, sql_string)
 
 
 # Physical type, repetition and logical annotation for every declared GCS
@@ -45,9 +46,15 @@ AZBLOB_CONTRACT = {
 
 
 def check_object_schema(con, path, sid, check):
-    contract = dict(AZBLOB_CONTRACT if sid == AZBLOB_CURRENT else GCS_CONTRACT)
+    azure = sid in (AZBLOB_CURRENT, AZBLOB_VERSIONS)
+    contract = dict(AZBLOB_CONTRACT if azure else GCS_CONTRACT)
     if sid == GCS_VERSIONS:
         contract["time_deleted"] = ("INT64", "OPTIONAL", "Timestamp")
+    if sid == AZBLOB_VERSIONS:
+        contract.update({"version_id": ("BYTE_ARRAY", "OPTIONAL", "String"), "is_latest": ("BOOLEAN", "REQUIRED", "Bool"),
+                         "snapshot": ("BYTE_ARRAY", "OPTIONAL", "String"), "is_deleted": ("BOOLEAN", "REQUIRED", "Bool"),
+                         "deleted_time": ("INT64", "OPTIONAL", "Timestamp"),
+                         "remaining_retention_days": ("INT64", "OPTIONAL", "Int")})
     rows = con.execute(f"SELECT name, type, repetition_type, logical_type, converted_type, num_children "
                        f"FROM parquet_schema({sql_string(path)})").fetchall()[1:]
     # Inspect top-level fields only: an extra struct's nested field cannot
@@ -63,7 +70,7 @@ def check_object_schema(con, path, sid, check):
     print(f"\nColumn-by-column against {sid}: {path}")
     for name, (physical, repetition, annotation) in contract.items():
         matches = [row for row in got if row[0] == name]
-        if not matches and (sid == GCS_CURRENT and name == "time_created" or sid == AZBLOB_CURRENT and name in AZBLOB_ADDED):
+        if not matches and (sid == GCS_CURRENT and name == "time_created" or azure and name in AZBLOB_ADDED):
             continue
         row = matches[0] if matches else (name, None, None, None, None)
         logical = str(row[3] or "")
@@ -74,7 +81,7 @@ def check_object_schema(con, path, sid, check):
             good = good and not logical
         elif annotation == "Int":
             good = good and ((logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64")
-                             or (sid == AZBLOB_CURRENT and not logical and row[4] in (None, "INT_64")))
+                             or (azure and not logical and row[4] in (None, "INT_64")))
         else:
             good = good and logical.startswith("Timestamp") and "isAdjustedToUTC=1" in logical and "MICROS=MicroSeconds" in logical
         check(good, f"  {name}: {row[1]} {row[2]} {row[3]}")
@@ -118,7 +125,7 @@ def main(out, reference=None):
     s3 = sid in (S3_CURRENT, S3_VERSIONS)
     check(m.get("key") == {"column": "key", "unique": not groups}, f"key declaration {m.get('key')} (unique unless the schema repeats keys)")
     source_kinds = {S3_CURRENT: "s3", S3_VERSIONS: "s3", GCS_CURRENT: "gcs",
-                    GCS_VERSIONS: "gcs", AZBLOB_CURRENT: "azblob"}
+                    GCS_VERSIONS: "gcs", AZBLOB_CURRENT: "azblob", AZBLOB_VERSIONS: "azblob"}
     check(ext.get("source", {}).get("kind") == source_kinds.get(sid, "local-fs"),
           "source kind agrees with schema id")
     report = "run.json"
@@ -131,7 +138,7 @@ def main(out, reference=None):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
-    if sid in (GCS_CURRENT, GCS_VERSIONS, AZBLOB_CURRENT):
+    if sid in (GCS_CURRENT, GCS_VERSIONS, AZBLOB_CURRENT, AZBLOB_VERSIONS):
         schemas_valid = True
         for path in paths:
             schemas_valid = check_object_schema(con, path, sid, check) and schemas_valid
@@ -204,6 +211,14 @@ def main(out, reference=None):
         """).fetchone()
         cnt, bmin, bmax, first, last, bad = r
         bmin, bmax, first, last = bytes(bmin), bytes(bmax), bytes(first), bytes(last)
+        if sid == AZBLOB_VERSIONS:
+            # A name's latest entry is its last (Azure lists its current
+            # blob after its snapshots and versions), and at most one.
+            bad_latest = con.execute(f"""SELECT count(*) FROM (
+                SELECT key, is_latest, lead(key) OVER (ORDER BY file_row_number) AS nk
+                FROM read_parquet('{p}', file_row_number=true))
+                WHERE is_latest AND key = nk""").fetchone()[0]
+            check(bad_latest == 0, "  a name's latest entry is its last")
         if sid == GCS_VERSIONS:
             bad_generations = con.execute(f"""SELECT count(*) FROM (
                 SELECT key, generation, lag(key) OVER (ORDER BY file_row_number) AS pk,

@@ -2,8 +2,8 @@
 
 ## Support and differences
 
-`az://account/container[/prefix]` lists current blobs in flat namespaces. Hierarchical
-namespaces, versions, snapshots and deleted blobs are unsupported. Namespace admission is
+`az://account/container[/prefix]` lists current blobs in flat namespaces, and with `--all-versions` every
+entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Hierarchical namespaces are unsupported. Namespace admission is
 required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
 an account reported as hierarchical.
 [Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
@@ -120,8 +120,7 @@ The assertion is the identity's `flat_asserted` field and the report's `namespac
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
-still ascends. `--all-versions` is refused with the same outcome; versions, snapshots and deleted
-blobs are unsupported. Admission runs before the range engine is constructed, so exhausted admission
+still ascends. `--all-versions` is admitted as any listing. Admission runs before the range engine is constructed, so exhausted admission
 calls do not reach engine requeue.
 
 ## Order: the byte-order adapter
@@ -167,6 +166,44 @@ control character, not ending in `.` (Azure's name rules). `Requeue` is `objhttp
 ([shared failure vocabulary](../clients.md)). Pages are 1,000 entries (`defaultPageSize`; the
 service's cap is 5,000, `client.MaxPageSize`) unless the diagnostic `--page-size` (1 to 1,000) sets another size: a range reads to its first non-member, so the rest of its last page is discarded unless a sibling span takes it over, and at 5,000 that was 62% of the rows read on the measured listing ([measurements](../measurements.md#azure-page-size-2026-11-10)). An adapter page maps `Blob` items to rows and `BlobPrefix` items
 to `Prefixes`, with the adapter's `Truncated` and token.
+
+**Every entry** (`--all-versions`: `NewVersions`, rows `Version`, schema `swath/azblob-versions/v1`). Every
+listing request sends `include=versions,snapshots,deleted` (`client.Include`), so a name is listed once per entry:
+its snapshots, its previous versions, its soft-deleted blobs and its current blob. Not `deletedwithversions`:
+it adds, to a listing without `versions`, one placeholder (`HasVersionsOnly`) per deleted name that still has
+versions; with `versions` those versions are rows themselves. The facts the design rests on:
+
+- *A name's entries are consecutive, keyed by their time within the name.* List Blobs documents names in order
+  and snapshots oldest to newest; the SDKs' recorded responses (azure-sdk-for-js, -python, -java session
+  records) list snapshots oldest first then the base blob, versions oldest first then the current version, and a
+  deleted base blob after its snapshots. Azure's continuation marker decodes to the next entry's name and a
+  timestamp, the base blob's `9999-12-31T23:59:59.9999999Z` (decoded live on 2026-11-11). No column is taken as
+  an ordinal (`GroupOrdinal` is unset): rows keep the wire order within a name, as on S3.
+- *A marker continues inside a name.* It names an entry, not only a name, so a chain's next page resumes at the
+  entry after the last one returned; the adapter's chains, like every chain, keep their marker only within one
+  range's read.
+- *`startFrom` enters a name at its first entry.* It is a name bound; the adapter's exclusive start drops every
+  entry equal to it (rule 1 drops by name, over as many pages as the name fills). Checked live for soft-deleted
+  entries on 2026-11-11 (NOAA GFS: `startFrom` a deleted name lists it first); not checked live for versions or
+  snapshots, for want of a public container with any. `azblobtest.NewEntryStore` models it so.
+- *Soft-deleted entries interleave with live ones in name order* (NOAA GFS, 2026-11-11; the recorded page
+  `client/testdata/deleted.*`).
+
+The engine runs in group mode (`Description.Groups`, keyrange's `groups.go`): it holds a page's trailing name
+until a later name or the chain's end shows it complete, never splits inside a name, and cuts parts and records
+the journal only between complete names; a resume restarts after the last complete name, whose entries the
+adapter's exclusive start drops. The adapter serves grouped pages unchanged but for two rules: it may emit the
+last name again, and a range bounded at a name no longer ends its span at that name's first entry (its later
+entries follow it; the span ends at the first item past them, rule 3). Probes send no `metadata`, `tags` or
+immutability include, and delimiter queries (probes only) no `snapshots`: List Blobs documents
+`delimiter` with `include=snapshots` as 400 `InvalidQueryParameter`, although the service answered 200 on
+2026-11-11, and a snapshot never holds a name alone. `latest` sets `is_latest` on the base blob that is neither a
+snapshot nor soft-deleted and is the current version, or lists no version id (a blob written before versioning
+was enabled, or an account without versioning). `TestVersionsListing` and `TestVersionsRestart` list names with
+up to five entries at page sizes that put seams inside names, with splits, and resume after names;
+`order`'s `TestGroupedProperty` walks random grouped queries. swath-replay refuses `include=` (its conformance
+profile); `cmd/swath`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
+it as Azure answers it over a container of current blobs only: the plain listing (identical bytes, live).
 
 **Schema** `swath/azblob-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
 from the reader. [dataset.md](../../dataset.md#schema-registry) owns column semantics; the provider uses

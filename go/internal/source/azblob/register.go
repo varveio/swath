@@ -113,28 +113,35 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		}
 	}
 	opt.Account, opt.Container, opt.Prefix, opt.Workers, opt.Warn = account, container, prefix, req.Workers, req.Warn
+	if opt.AllVersions {
+		p, err := NewVersions(ctx, opt)
+		if err != nil {
+			return nil, err
+		}
+		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionSchema), Registered: p, p: p}, nil
+	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil
 }
 
-type opened struct {
-	registry.Bound[Object]
+type opened[P any] struct {
+	registry.Bound[P]
 	keyrange.Registered
-	p *Provider
+	p *provider[P]
 }
 
 // Locator records the root without its SAS.
-func (o *opened) Locator() source.Locator {
+func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "azblob", Root: o.p.target(), Container: o.p.opt.Container}
 }
 
 // endpoint is the account's blob service URL as the client requests it
 // (the route without the container): https://ACCOUNT.blob.core.windows.net,
 // or an endpoint with the account path segment.
-func (o *opened) endpoint() string {
+func (o *opened[P]) endpoint() string {
 	return strings.TrimSuffix(strings.TrimSuffix(o.p.route, o.p.opt.Container), "/")
 }
 
@@ -144,7 +151,7 @@ func (o *opened) endpoint() string {
 // may change, a SAS among them. flat_asserted is --azure-assume-flat, so a
 // resume cannot add or drop the assertion. A supplied client must name its
 // route (Routed), or the run declines resume.
-func (o *opened) Identity() source.Identity {
+func (o *opened[P]) Identity() source.Identity {
 	ep := o.endpoint()
 	id := source.Identity{Provider: "azblob", Fields: []source.IdentityField{
 		{Name: "source", Value: o.p.target()},
@@ -171,11 +178,11 @@ func (o *opened) Identity() source.Identity {
 // lists one marker chain. A run with an object-count cap, or through a
 // supplied client that does not name its route, cannot resume (as for S3
 // and GCS).
-func (o *opened) Capabilities() source.Capabilities {
+func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
 }
 
-func (o *opened) Report() source.Report {
+func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("azblob", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
 }
@@ -184,11 +191,16 @@ func (o *opened) Report() source.Report {
 // optional interfaces a range-engine provider gives the pipeline); a
 // capability whose method went missing would silently be off.
 var (
-	_ registry.Source     = (*opened)(nil)
-	_ keyrange.Registered = (*opened)(nil)
-	_ source.Identified   = (*opened)(nil)
-	_ source.Capable      = (*opened)(nil)
-	_ source.Reporter     = (*opened)(nil)
+	_ registry.Source     = (*opened[Object])(nil)
+	_ keyrange.Registered = (*opened[Object])(nil)
+	_ source.Identified   = (*opened[Object])(nil)
+	_ source.Capable      = (*opened[Object])(nil)
+	_ source.Reporter     = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Version])(nil)
+	_ keyrange.Registered = (*opened[Version])(nil)
+	_ source.Identified   = (*opened[Version])(nil)
+	_ source.Capable      = (*opened[Version])(nil)
+	_ source.Reporter     = (*opened[Version])(nil)
 )
 
 // keyPrefix is the name prefix a root names (registry.Factory.KeyPrefix).

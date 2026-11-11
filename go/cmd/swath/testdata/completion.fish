@@ -88,7 +88,7 @@ complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l endpo
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l ca-bundle -r -F -d 'trust the certificates in this PEM file besides the system\'s'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l no-verify-ssl -d 'do not verify the service\'s TLS certificate (warns)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l request-timeout -x -d 'per-request timeout; a request over it is retried'
-complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l all-versions -d 'S3 and GCS: list every version, S3 delete markers too (not Azure Blob)'
+complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l all-versions -d 'list every version of every key, not only the current objects'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l request-rate -x -d 'cap every HTTP attempt at N per second (0: no cap)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l no-adaptive-limit -d 'do not lower concurrency when the service throttles requests'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l metadata -x -a 'names stat statx' -d 'what is read per entry (statx adds birth_time; Linux)'

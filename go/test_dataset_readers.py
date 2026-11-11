@@ -59,9 +59,13 @@ class DuckDBComparison(unittest.TestCase):
         sid = fixture["schema_id"]
         # Exact schema types keep null-only string fields from being inferred as integers.
         strings = {"key", "etag", "storage_class", "owner_id", "owner_display_name",
-                   "checksum_algorithm", "checksum_type", "version_id", "md5", "crc32c", "content_type"}
+                   "checksum_algorithm", "checksum_type", "version_id", "md5", "crc32c", "content_type",
+                   "content_md5", "blob_type", "access_tier", "archive_status", "rehydrate_priority", "content_encoding",
+                   "encryption_scope", "customer_provided_key_sha256", "lease_state", "metadata", "tags",
+                   "immutability_policy_mode", "snapshot"}
+        booleans = {"access_tier_inferred", "server_encrypted", "legal_hold"}
         cols = COLUMNS[sid]
-        types = ["VARCHAR" if c in strings else "BOOLEAN" if c.startswith("is_") else "BIGINT" for c in cols]
+        types = ["VARCHAR" if c in strings else "BOOLEAN" if c.startswith("is_") or c in booleans else "BIGINT" for c in cols]
         con = duckdb.connect()
         con.execute("CREATE TABLE rows(" + ",".join(f'"{c}" {t}' for c, t in zip(cols, types)) + ")")
         con.executemany("INSERT INTO rows VALUES (" + ",".join("?" for _ in cols) + ")",
@@ -266,12 +270,12 @@ class VerifierSchema(unittest.TestCase):
         self.assertIn("whole-row ordered sequence and multiset match reference", proc.stdout)
 
     def test_complete_object_contract_in_every_part(self):
-        for schema in ("current", "generations", "azblob"):
+        for schema in ("current", "generations", "azblob", "azblobversions"):
             for dataset in sorted((self.base / schema).iterdir()):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)
                     allowed = (dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
-                               or (schema == "azblob" and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
+                               or (schema.startswith("azblob") and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
                     self.assertEqual(status == 0, allowed, output)
                     if not allowed:
                         column = dataset.name.split("_", 1)[1].removeprefix("type_")

@@ -319,3 +319,64 @@ func TestAzureSDKLogProcess(t *testing.T) {
 		t.Fatal("no request reached the server")
 	}
 }
+
+// TestAzblobAllVersions: --all-versions on Azure Blob writes
+// swath/azblob-versions/v1 with repeating keys declared, every entry once in
+// byte order, and reports the versions counts. The replay refuses include=
+// (its conformance profile); a proxy in front of it answers every listing
+// request, each of which must ask for versions, snapshots and soft-deleted
+// blobs, as Azure answers it over a container that holds none (the plain
+// listing's bytes, checked live): every row is its name's latest and the
+// counts equal the keys. The engine's group mode over names with several
+// entries is azblob's TestVersionsListing.
+func TestAzblobAllVersions(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	keys := azblobtest.Keys()
+	r := azblobtest.Serve(t, keys)
+	u, _ := url.Parse(azEndpoint(r))
+	px := httputil.NewSingleHostReverseProxy(u)
+	var asked, other atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if q := req.URL.Query(); q.Get("comp") == "list" {
+			if q.Get("include") == "deleted,snapshots,versions" || q.Get("delimiter") != "" && q.Get("include") == "deleted,versions" {
+				asked.Add(1)
+			} else {
+				other.Add(1)
+			}
+			q.Del("include")
+			req.URL.RawQuery = q.Encode()
+		}
+		px.ServeHTTP(w, req)
+	}))
+	t.Cleanup(srv.Close)
+	out := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{"az://replay/corpus", "--endpoint-url", srv.URL, "--anonymous", "--workers", "8",
+		"--all-versions", "--part-size", "4KiB", "-o", out}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := datasetKeys(t, out); !slices.Equal(got, keys) {
+		t.Fatalf("%d keys, want %d in byte order", len(got), len(keys))
+	}
+	if m := readManifest(t, out); m.SchemaID != "swath/azblob-versions/v1" || m.Key.Unique {
+		t.Fatalf("schema %s, key %+v", m.SchemaID, m.Key)
+	}
+	var rj struct {
+		Output struct {
+			Versions     *int64 `json:"versions"`
+			Noncurrent   *int64 `json:"noncurrent"`
+			LiveObjects  *int64 `json:"live_objects"`
+			DistinctKeys *int64 `json:"distinct_keys"`
+		} `json:"output"`
+	}
+	readJSON(t, filepath.Join(out, dataset.ReportName), &rj)
+	n := int64(len(keys))
+	o := rj.Output
+	if o.Versions == nil || o.LiveObjects == nil || o.Noncurrent == nil || o.DistinctKeys == nil ||
+		*o.Versions != n || *o.LiveObjects != n || *o.Noncurrent != 0 || *o.DistinctKeys != n {
+		t.Fatalf("output counts %+v", o)
+	}
+	if asked.Load() == 0 || other.Load() != 0 {
+		t.Fatalf("%d listings asked for every entry, %d did not", asked.Load(), other.Load())
+	}
+}

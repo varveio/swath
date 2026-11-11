@@ -124,10 +124,11 @@ Object stores:
                                 AWS_CA_BUNDLE.
       --no-verify-ssl         do not verify the service's TLS certificate (warns)
                                 For a test endpoint only. A resume replays it, and warns again.
-      --all-versions          S3 and GCS: list every version, S3 delete markers too (not Azure Blob)
+      --all-versions          list every version of every key, not only the current objects
                                 S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                                generations, live and noncurrent. Refused on Azure Blob. A key's
-                                rows are consecutive and never split across parts.
+                                generations, live and noncurrent. Azure Blob: versions, snapshots
+                                and soft-deleted blobs. A key's rows are consecutive and never split
+                                across parts.
 
 S3:
       --s3-region NAME        the bucket's region

@@ -122,6 +122,20 @@ type AzblobObject struct {
 	LegalHold               *bool
 }
 
+// AzblobVersion is a swath/azblob-versions/v1 row: one entry of a blob
+// name, a version, a snapshot or a soft-deleted blob (or the current
+// blob), consecutive with the name's other entries in Azure's order:
+// snapshots and versions oldest first, the current blob last.
+type AzblobVersion struct {
+	AzblobObject
+	VersionID              *string // null for a snapshot, and on an account without versioning
+	IsLatest               bool    // the name's current blob, live: the row a current listing has
+	Snapshot               *string // the snapshot's time, as listed; null unless a snapshot
+	IsDeleted              bool    // soft-deleted
+	DeletedTime            *time.Time
+	RemainingRetentionDays *int64
+}
+
 // LocalEntry is a swath/local-entries/v1 row: one filesystem entry below the root.
 // Key is the path's bytes, which need not be UTF-8.
 type LocalEntry struct {
@@ -228,6 +242,15 @@ func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error) {
 	d := decoder{spec: schemas[GCSGenerationsV1], row: &row}
 	g := GCSGeneration{GCSObject: d.gcsObject(), TimeDeleted: d.time("time_deleted")}
 	return g, d.err
+}
+
+// DecodeAzblobVersion decodes a swath/azblob-versions/v1 row.
+func DecodeAzblobVersion(row seekparquet.Row) (AzblobVersion, error) {
+	d := decoder{spec: schemas[AzblobVersionsV1], row: &row}
+	v := AzblobVersion{AzblobObject: d.azblobObject(), VersionID: d.string("version_id"),
+		IsLatest: d.required("is_latest").Boolean(), Snapshot: d.string("snapshot"), IsDeleted: d.required("is_deleted").Boolean(),
+		DeletedTime: d.time("deleted_time"), RemainingRetentionDays: d.int64("remaining_retention_days")}
+	return v, d.err
 }
 
 // DecodeLocalEntry decodes a swath/local-entries/v1 row.

@@ -9,12 +9,12 @@ import (
 )
 
 func TestSchema(t *testing.T) {
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, ok := Schema(id)
 		if !ok || s.ID != id || s.Key.Name != "key" || !s.Key.Required || len(s.Columns) == 0 {
 			t.Fatalf("%s: %+v, %v", id, s, ok)
 		}
-		grouped := id == S3VersionsV1 || id == GCSGenerationsV1
+		grouped := id == S3VersionsV1 || id == GCSGenerationsV1 || id == AzblobVersionsV1
 		if s.UniqueKeys == grouped {
 			t.Errorf("%s: UniqueKeys %v", id, s.UniqueKeys)
 		}
@@ -46,7 +46,7 @@ func TestSchema(t *testing.T) {
 		t.Errorf("azblob creation_time: %+v", c)
 	}
 	var absent []string
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, _ := Schema(id)
 		for _, c := range s.Columns {
 			if c.MayBeAbsent {
@@ -60,8 +60,16 @@ func TestSchema(t *testing.T) {
 		"last_access_time", "content_encoding", "server_encrypted", "encryption_scope", "customer_provided_key_sha256",
 		"lease_state", "tag_count", "metadata", "tags", "immutability_policy_until", "immutability_policy_mode", "legal_hold"}
 	want := []string{"swath/gcs-objects/v1 time_created", "swath/gcs-generations/v1 time_created"}
-	for _, name := range added {
-		want = append(want, "swath/azblob-objects/v1 "+name)
+	for _, id := range []string{"swath/azblob-objects/v1 ", "swath/azblob-versions/v1 "} {
+		for _, name := range added {
+			want = append(want, id+name)
+		}
+	}
+	// The versions schema: the current columns, then the entry's.
+	av, _ := Schema(AzblobVersionsV1)
+	if names := av.ColumnNames(); !slices.Equal(names[:24], az.ColumnNames()) ||
+		!slices.Equal(names[24:], []string{"version_id", "is_latest", "snapshot", "is_deleted", "deleted_time", "remaining_retention_days"}) {
+		t.Errorf("azblob versions columns %q", names)
 	}
 	if !slices.Equal(absent, want) {
 		t.Errorf("columns a part may lack: %q, want %q", absent, want)
@@ -80,8 +88,9 @@ func TestVersionSpecs(t *testing.T) {
 	want := map[SchemaID]VersionSpec{
 		S3VersionsV1:     {ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"},
 		GCSGenerationsV1: {ID: "generation", DeletedAt: "time_deleted"},
+		AzblobVersionsV1: {ID: "version_id", Latest: "is_latest"},
 	}
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1} {
 		s, _ := Schema(id)
 		if s.Versions != want[id] {
 			t.Errorf("%s: versions %+v, want %+v", id, s.Versions, want[id])
