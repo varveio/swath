@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // ErrInvalidSnapshot reports a snapshot that Restore cannot take: malformed,
@@ -71,7 +72,7 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 		return nil, err
 	}
 	p.mu.Lock()
-	want, recorded := p.pins[name]
+	_, recorded := p.pins[name]
 	p.mu.Unlock()
 	if p.sealed && !recorded {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: not in the pin snapshot", fs.ErrNotExist)}
@@ -83,25 +84,157 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 		}
 		return nil, err
 	}
-	got := pin{Size: f.Size(), Identity: f.Identity()}
-	if got.Identity == "" {
+	if err := p.check(name, "open", pin{Size: f.Size(), Identity: f.Identity()}); err != nil {
 		f.Close()
-		return nil, &fs.PathError{Op: "open", Path: name, Err: errors.New("the object has no identity to pin")}
+		return nil, err
+	}
+	return f, nil
+}
+
+// OpenSized opens name, a path CheckPath accepts, of size bytes, without a
+// request (Opener.OpenSized), and checks it against its pin at its first
+// read: a recorded pin of another size fails at once with ErrObjectChanged;
+// otherwise the first read that pins the Object records its size and
+// Identity, or must find the recorded ones, else it fails with
+// ErrObjectChanged and returns none of the bytes it read. Until then the
+// Object's reads go to the store, so the current object is re-proved as
+// Open re-proves it. Size 0, which no read reaches the store for, is Open.
+func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object, error) {
+	if size == 0 {
+		return p.Open(ctx, name)
+	}
+	if err := CheckPath(name); err != nil {
+		return nil, err
 	}
 	p.mu.Lock()
-	want, recorded = p.pins[name]
+	want, recorded := p.pins[name]
+	p.mu.Unlock()
+	if p.sealed && !recorded {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: not in the pin snapshot", fs.ErrNotExist)}
+	}
+	if recorded && want.Size != size {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: opened as %d bytes, pinned %d bytes at %q",
+			ErrObjectChanged, size, want.Size, want.Identity)}
+	}
+	f, err := p.o.OpenSized(ctx, name, size)
+	if err != nil {
+		return nil, err
+	}
+	return &pinnedObject{Object: f, p: p, name: name, recorded: recorded}, nil
+}
+
+// ReadObject reads name, a path CheckPath accepts, whole (ObjectReader)
+// and checks it against its pin as Open does: the first read records the
+// object's size and Identity, and a later one must find the same. An
+// object over limit is ErrTooLarge, or ErrObjectChanged when its Identity
+// is not the recorded one; it records nothing.
+func (p *Pinned) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	if err := CheckPath(name); err != nil {
+		return nil, "", err
+	}
+	p.mu.Lock()
+	_, recorded := p.pins[name]
+	p.mu.Unlock()
+	if p.sealed && !recorded {
+		return nil, "", &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("%w: not in the pin snapshot", fs.ErrNotExist)}
+	}
+	b, id, err := ReadObject(ctx, p.o, name, limit)
+	switch {
+	case errors.Is(err, ErrTooLarge):
+		p.mu.Lock()
+		want, recorded := p.pins[name]
+		p.mu.Unlock()
+		if recorded && (id != want.Identity || want.Size <= limit) {
+			return nil, "", &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("%w: more than %d bytes at %q, pinned %d bytes at %q",
+				ErrObjectChanged, limit, id, want.Size, want.Identity)}
+		}
+		return nil, id, err
+	case err != nil:
+		if recorded && errors.Is(err, fs.ErrNotExist) {
+			err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
+		}
+		return nil, "", err
+	}
+	if err := p.check(name, "read", pin{Size: int64(len(b)), Identity: id}); err != nil {
+		return nil, "", err
+	}
+	return b, id, nil
+}
+
+// check records got as name's pin when none is, and otherwise fails with
+// ErrObjectChanged unless got is the recorded pin.
+func (p *Pinned) check(name, op string, got pin) error {
+	if got.Identity == "" {
+		return &fs.PathError{Op: op, Path: name, Err: errors.New("the object has no identity to pin")}
+	}
+	p.mu.Lock()
+	want, recorded := p.pins[name]
 	if !recorded {
 		p.pins[name] = got
 		want = got
 	}
 	p.mu.Unlock()
 	if got != want {
-		f.Close()
-		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes at %q, pinned %d bytes at %q",
+		return &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%w: %d bytes at %q, pinned %d bytes at %q",
 			ErrObjectChanged, got.Size, got.Identity, want.Size, want.Identity)}
 	}
-	return f, nil
+	return nil
 }
+
+// pinnedObject is an Object of Pinned.OpenSized: its reads are checked
+// against the pin until one has pinned the Object and matched it.
+type pinnedObject struct {
+	Object
+	p        *Pinned
+	name     string
+	recorded bool // the name had a pin when opened
+	checked  atomic.Bool
+}
+
+// confirm checks the Object against its pin once a read has pinned it. A
+// read that failed before pinning (Identity still "") is not checked: it
+// returned no bytes. A missing object of a recorded pin is ErrObjectChanged.
+func (f *pinnedObject) confirm(err error) error {
+	if f.checked.Load() {
+		return err
+	}
+	if err != nil && f.recorded && errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %w", ErrObjectChanged, err)
+	}
+	if f.Identity() == "" {
+		return err
+	}
+	if cerr := f.p.check(f.name, "read", pin{Size: f.Size(), Identity: f.Identity()}); cerr != nil {
+		return cerr
+	}
+	f.checked.Store(true)
+	return err
+}
+
+func (f *pinnedObject) ReadAt(p []byte, off int64) (int, error) {
+	return f.readAt(context.Background(), p, off)
+}
+
+func (f *pinnedObject) WithContext(ctx context.Context) io.ReaderAt {
+	return readerFunc(func(p []byte, off int64) (int, error) { return f.readAt(ctx, p, off) })
+}
+
+func (f *pinnedObject) readAt(ctx context.Context, p []byte, off int64) (int, error) {
+	n, err := f.Object.WithContext(ctx).ReadAt(p, off)
+	if f.checked.Load() {
+		return n, err
+	}
+	if cerr := f.confirm(err); cerr != err {
+		return 0, cerr
+	}
+	return n, err
+}
+
+func (f *pinnedObject) ReadRanges(ctx context.Context, ranges []Range) error {
+	return f.confirm(ReadRanges(ctx, f.Object, ranges))
+}
+
+func (f *pinnedObject) batchPolicy() BatchPolicy { return policyOf(f.Object) }
 
 // Snapshot returns the pins recorded so far as versioned JSON,
 // {"version":1,"scope":...,"objects":{name:{"size":n,"identity":s}}}, with

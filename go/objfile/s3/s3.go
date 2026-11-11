@@ -3,9 +3,10 @@
 
 // Package s3 opens objects of an S3 bucket as objfile Objects with the AWS SDK
 // for Go v2. Open learns the object's size, ETag and, in a versioned bucket,
-// its version id with HeadObject; OpenSized takes them from the first read.
-// Every later read is a ranged GetObject with If-Match on that ETag and, when
-// there is one, that version id. A 412, a 404, or a response naming another
+// its version id with HeadObject; OpenSized takes them from the first read,
+// and ReadObject from its one GetObject of the whole object. Every later read
+// is a ranged GetObject with If-Match on that ETag and, when there is one,
+// that version id. A 412, a 404, or a response naming another
 // ETag, version or size fails the read with objfile.ErrObjectChanged.
 package s3
 
@@ -35,30 +36,45 @@ type opener struct {
 }
 
 func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
+	size, pin, err := o.stat(ctx, name)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+	return ranged.New(name, size, pin, o.getter(name)), nil
+}
+
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	return ranged.NewSized(name, size, o.getter(name), func(ctx context.Context) (int64, ranged.Pin, error) {
+		return o.stat(ctx, name)
+	}), nil
+}
+
+// ReadObject reads name whole with one GetObject, with no Range.
+func (o opener) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	return ranged.ReadObject(ctx, name, limit, o.getter(name))
+}
+
+// stat is HeadObject: the object's size and pin.
+func (o opener) stat(ctx context.Context, name string) (int64, ranged.Pin, error) {
 	head, err := o.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &o.bucket, Key: &name})
 	if err != nil {
 		if status(err) == http.StatusNotFound {
 			err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 		}
-		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+		return 0, ranged.Pin{}, err
 	}
 	pin := pinOf(head.ETag, head.VersionId)
 	if pin.ETag == "" {
-		return nil, &fs.PathError{Op: "open", Path: name, Err: errors.New("HeadObject returned no ETag to pin")}
+		return 0, ranged.Pin{}, errors.New("HeadObject returned no ETag to pin")
 	}
-	return ranged.New(name, aws.ToInt64(head.ContentLength), pin, o.getter(name)), nil
-}
-
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
-	return ranged.New(name, size, ranged.Pin{}, o.getter(name)), nil
+	return aws.ToInt64(head.ContentLength), pin, nil
 }
 
 func (o opener) getter(name string) ranged.Getter {
 	return func(ctx context.Context, off, n int64, pin ranged.Pin) (ranged.Response, error) {
-		in := &s3.GetObjectInput{
-			Bucket: &o.bucket,
-			Key:    &name,
-			Range:  aws.String(fmt.Sprintf("bytes=%d-%d", off, off+n-1)),
+		in := &s3.GetObjectInput{Bucket: &o.bucket, Key: &name}
+		if n >= 0 {
+			in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", off, off+n-1))
 		}
 		if pin.ETag != "" {
 			in.IfMatch = aws.String(pin.ETag)

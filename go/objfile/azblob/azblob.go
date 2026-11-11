@@ -3,7 +3,8 @@
 
 // Package azblob opens blobs of an Azure Blob Storage container as objfile
 // Objects with the azblob SDK. Open learns the blob's size and ETag from its
-// properties; OpenSized takes the ETag from the first read. Every later read
+// properties; OpenSized takes the ETag from the first read, and ReadObject
+// from its one download of the whole blob. Every later read
 // is a ranged download with If-Match on that ETag. A 412, a 404, or a
 // response naming another ETag or size fails the read with
 // objfile.ErrObjectChanged.
@@ -41,27 +42,47 @@ type opener struct {
 
 func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	b := o.container.NewBlobClient(name)
+	size, pin, err := stat(ctx, b)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+	return ranged.New(name, size, pin, getter(b)), nil
+}
+
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	b := o.container.NewBlobClient(name)
+	return ranged.NewSized(name, size, getter(b), func(ctx context.Context) (int64, ranged.Pin, error) {
+		return stat(ctx, b)
+	}), nil
+}
+
+// ReadObject reads name whole with one download, with no range.
+func (o opener) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	return ranged.ReadObject(ctx, name, limit, getter(o.container.NewBlobClient(name)))
+}
+
+// stat is the blob's properties: its size and ETag.
+func stat(ctx context.Context, b *blob.Client) (int64, ranged.Pin, error) {
 	props, err := b.GetProperties(ctx, nil)
 	if err != nil {
 		if status(err) == http.StatusNotFound {
 			err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 		}
-		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+		return 0, ranged.Pin{}, err
 	}
 	pin := ranged.Pin{ETag: string(deref(props.ETag))}
 	if pin.ETag == "" {
-		return nil, &fs.PathError{Op: "open", Path: name, Err: errors.New("GetProperties returned no ETag to pin")}
+		return 0, ranged.Pin{}, errors.New("GetProperties returned no ETag to pin")
 	}
-	return ranged.New(name, deref(props.ContentLength), pin, getter(b)), nil
-}
-
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
-	return ranged.New(name, size, ranged.Pin{}, getter(o.container.NewBlobClient(name))), nil
+	return deref(props.ContentLength), pin, nil
 }
 
 func getter(b *blob.Client) ranged.Getter {
 	return func(ctx context.Context, off, n int64, pin ranged.Pin) (ranged.Response, error) {
-		opt := &blob.DownloadStreamOptions{Range: blob.HTTPRange{Offset: off, Count: n}}
+		opt := &blob.DownloadStreamOptions{}
+		if n >= 0 {
+			opt.Range = blob.HTTPRange{Offset: off, Count: n}
+		}
 		if pin.ETag != "" {
 			etag := azcore.ETag(pin.ETag)
 			opt.AccessConditions = &blob.AccessConditions{

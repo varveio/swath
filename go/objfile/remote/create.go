@@ -421,6 +421,12 @@ func (d *Destination) OpenSized(ctx context.Context, name string, size int64) (o
 	return d.o.OpenSized(ctx, name, size)
 }
 
+// ReadObject reads name under the location's prefix whole in one request
+// (objfile.ObjectReader).
+func (d *Destination) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	return objfile.ReadObject(ctx, d.o, name, limit)
+}
+
 // Scope names the destination's namespace: the location's canonical URI,
 // and " at " the endpoint when one is set. It holds no credentials.
 func (d *Destination) Scope() string { return d.scope }
@@ -430,5 +436,6 @@ func (d *Destination) Close() error { return d.close() }
 
 var _ interface {
 	objfile.Opener
+	objfile.ObjectReader
 	io.Closer
 } = (*Destination)(nil)

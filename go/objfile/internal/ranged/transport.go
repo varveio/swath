@@ -16,7 +16,10 @@ import (
 // "Range: bytes=first-last", on its way to the SDK: unless it is a 206 whose
 // Content-Range states exactly that range of an object larger than last,
 // whose Content-Length is the range's length, and whose body Go's transport
-// did not decompress, the request fails. A Getter checks the response it is
+// did not decompress, the request fails. A request for the rest of an object,
+// "bytes=first-" (the SDK's request for the rest of a whole-object read whose
+// body failed), is checked alike, its range being first to the object's last
+// byte. A Getter checks the response it is
 // given; Transport also checks the requests an SDK sends on its own.
 //
 // A body that fails part way ends there instead (io.EOF), so that the SDK
@@ -65,7 +68,8 @@ func (b endOnFailure) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// requested parses a Range header naming one closed byte range.
+// requested parses a Range header naming one byte range, closed or to the
+// object's end (last -1).
 func requested(v string) (first, last int64, ok bool) {
 	rng, ok := strings.CutPrefix(v, "bytes=")
 	a, b, ok2 := strings.Cut(rng, "-")
@@ -73,6 +77,9 @@ func requested(v string) (first, last int64, ok bool) {
 		return 0, 0, false
 	}
 	first, err1 := strconv.ParseInt(a, 10, 64)
+	if b == "" {
+		return first, -1, err1 == nil && first >= 0
+	}
 	last, err2 := strconv.ParseInt(b, 10, 64)
 	return first, last, err1 == nil && err2 == nil && first >= 0 && last >= first
 }
@@ -83,6 +90,9 @@ func served(res *http.Response, first, last int64) error {
 	}
 	cr := res.Header.Get("Content-Range")
 	a, b, total, ok := ContentRange(cr)
+	if ok && last < 0 && b == total-1 {
+		last = b // to the end: the object's last byte
+	}
 	if !ok || a != first || b != last || total <= last {
 		return fmt.Errorf("the store served Content-Range %q for bytes %d-%d", cr, first, last)
 	}

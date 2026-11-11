@@ -179,6 +179,12 @@ func (s *Store) OpenSized(ctx context.Context, name string, size int64) (objfile
 	return s.o.OpenSized(ctx, name, size)
 }
 
+// ReadObject reads name, a path objfile.CheckPath accepts, under the
+// location's prefix, whole in one request (objfile.ObjectReader).
+func (s *Store) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	return objfile.ReadObject(ctx, s.o, name, limit)
+}
+
 // Scope names the Store's storage namespace for objfile.Pin and
 // objfile.Restore: the location's canonical URI, followed by " at " and the
 // endpoint when one is set by the environment. It holds no credentials.
@@ -186,6 +192,7 @@ func (s *Store) Scope() string { return s.scope }
 
 var _ interface {
 	objfile.Opener
+	objfile.ObjectReader
 	io.Closer
 } = (*Store)(nil)
 

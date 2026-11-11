@@ -4,7 +4,7 @@
 // Package gcs opens objects of a Google Cloud Storage bucket as objfile Objects
 // with cloud.google.com/go/storage. Open learns the object's size and
 // generation from its attributes; OpenSized takes the generation from the
-// first read. Every later read is a range reader of that generation, of the
+// first read, and ReadObject from its one request for the whole object. Every later read is a range reader of that generation, of the
 // stored bytes (no decompressive transcoding). A read of a generation that no
 // longer exists, or one finding another size, fails with
 // objfile.ErrObjectChanged; one served from another offset fails.
@@ -41,19 +41,34 @@ type opener struct {
 }
 
 func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
+	size, pin, err := o.stat(ctx, name)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+	return ranged.New(name, size, pin, o.getter(name)), nil
+}
+
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	return ranged.NewSized(name, size, o.getter(name), func(ctx context.Context) (int64, ranged.Pin, error) {
+		return o.stat(ctx, name)
+	}), nil
+}
+
+// ReadObject reads name whole with one media request, with no Range.
+func (o opener) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
+	return ranged.ReadObject(ctx, name, limit, o.getter(name))
+}
+
+// stat is the object's attributes: its size and generation.
+func (o opener) stat(ctx context.Context, name string) (int64, ranged.Pin, error) {
 	attrs, err := o.bucket.Object(name).Attrs(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
 			err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 		}
-		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+		return 0, ranged.Pin{}, err
 	}
-	pin := ranged.Pin{Version: strconv.FormatInt(attrs.Generation, 10)}
-	return ranged.New(name, attrs.Size, pin, o.getter(name)), nil
-}
-
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
-	return ranged.New(name, size, ranged.Pin{}, o.getter(name)), nil
+	return attrs.Size, ranged.Pin{Version: strconv.FormatInt(attrs.Generation, 10)}, nil
 }
 
 func (o opener) getter(name string) ranged.Getter {
