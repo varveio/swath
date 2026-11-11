@@ -27,6 +27,12 @@ const CreateOnly Condition = 1
 // found may be the write's own: a caller that must know reads it back.
 var ErrExists = errors.New("objfile: an object already exists at the name")
 
+// ErrConflict reports a CreateOnly write the store refused because another
+// conditional write of the name was in progress (S3's 409
+// ConditionalRequestConflict). No object was created by it; the write may
+// be made again, from its first byte (an upload's sent bytes are gone).
+var ErrConflict = errors.New("objfile: a concurrent conditional write of the name conflicted")
+
 // Receipt identifies an object a write created: its name as the caller
 // gave it, its size and its Identity (the GCS generation, as Object's
 // Identity names it).
