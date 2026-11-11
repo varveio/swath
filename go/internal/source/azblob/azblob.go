@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"slices"
@@ -179,7 +180,9 @@ type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
 	Credentials string `json:"credentials,omitempty"`
 	// Namespace is how admission found the namespace flat: "account
-	// information", "filesystem properties" or "asserted" (--azure-assume-flat).
+	// information", "filesystem properties", "filesystem endpoint blocked"
+	// (the Data Lake host refused the flat account for soft delete or blob
+	// events) or "asserted" (--azure-assume-flat).
 	Namespace   string            `json:"namespace"`
 	NoVerifySSL bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	MeanActive  float64           `json:"mean_active"`
@@ -269,7 +272,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // answer to any anonymous caller, or 403) or the header is absent,
 // Filesystem Get Properties on the account's Data Lake host (only for an
 // ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
-// false passes and true refuses; (3) anything else is unknown, which
+// false passes and true refuses, and whose 409
+// EndpointUnsupportedAccountFeatures passes (flatFeatures); (3) anything
+// else is unknown, which
 // refuses unless Options.Flat asserts a flat namespace. Credentials that
 // could not be had, or that the service refused (a signed caller's 401 or
 // 403), are that failure (class auth or access denied), as on any later
@@ -284,6 +289,11 @@ func (p *Provider) admit(ctx context.Context) error {
 		if n, ok := p.client.(namespaced); ok {
 			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
 				hns, err, how = h, nil, "filesystem properties"
+			} else if flatFeatures(nerr) && (p.unsigned() || class(err) != objhttp.ClassAuth) {
+				// The Data Lake host answers this 409 before it checks
+				// credentials, so a signed caller's rejected credential
+				// (Get Account Information's auth failure) stays that failure.
+				hns, err, how = false, nil, "filesystem endpoint blocked"
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
 				err = fmt.Errorf("%w; filesystem properties: %w", err, nerr)
 			}
@@ -320,6 +330,24 @@ func (p *Provider) unsigned() bool {
 	return p.anonymous
 }
 
+// codeEndpointUnsupported is the Data Lake host's refusal of an account
+// for its Blob-only features.
+const codeEndpointUnsupported = "EndpointUnsupportedAccountFeatures"
+
+// flatFeatures: the Data Lake host refused the account with 409
+// EndpointUnsupportedAccountFeatures ("This endpoint does not support
+// BlobStorageEvents or SoftDelete"). Azure documents that blob soft delete
+// blocks the Data Lake endpoint only on an account without a hierarchical
+// namespace; with one, that endpoint is the account's own API and works
+// with soft delete on. The answer therefore establishes a flat namespace.
+// Most public open-data accounts answer it (60 of the 64 Planetary
+// Computer containers; NOAA GOES, HRRR, GFS, NWM; NAIP; checked live on
+// 2026-11-11).
+func flatFeatures(err error) bool {
+	f := objhttp.Normalize(err)
+	return f != nil && f.Status == http.StatusConflict && f.Code == codeEndpointUnsupported
+}
+
 // fallback: Get Account Information was refused or answered without the
 // header, so the Data Lake host may tell.
 func fallback(err error) bool {
@@ -329,15 +357,21 @@ func fallback(err error) bool {
 // refused: the service refused the caller (class auth or access denied, by
 // Azure's status and code).
 func refused(err error) bool {
+	c := class(err)
+	return c == objhttp.ClassAuth || c == objhttp.ClassAccessDenied
+}
+
+// class is the service's classification of err (by Azure's status and
+// code); the zero class when err is not a service answer.
+func class(err error) objhttp.Class {
 	if errors.Is(err, source.ErrUnsupported) {
-		return false
+		return ""
 	}
 	f := objhttp.Normalize(err)
 	if f == nil {
-		return false
+		return ""
 	}
-	classified := (&client.Error{Status: f.Status, Code: f.Code}).Failure()
-	return classified.Class == objhttp.ClassAuth || classified.Class == objhttp.ClassAccessDenied
+	return (&client.Error{Status: f.Status, Code: f.Code}).Failure().Class
 }
 
 // connect builds the client unless Options.Client supplies one (own).
