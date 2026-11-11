@@ -60,7 +60,9 @@ test through one lock, so two runs never contend for the cores and skew each oth
 flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB go test -race -count=1 -p 1 -run '^TestCrashMatrix$' ./internal/listing
 ```
 
-`BenchmarkDecode` (`internal/source/s3/client`) measures the scanner through the real SDK stack, and
+`BenchmarkDecode` (`internal/source/s3/client`) measures the scanner through the real SDK stack and
+`BenchmarkDecodeBody` the scanner alone, per entry, over synthetic and replay-shaped pages
+([measurements](measurements.md#s3-scanner-cost-2026-11-11)), and
 `BenchmarkList` (`internal/source/azblob/client`, sub-benchmarks `flat` and `hierarchy`) one Azure `List` call
 ([measurements](measurements.md#sdk-backed-clients-2026-11-09)).
 
@@ -489,6 +491,11 @@ against `bench/s3fake`.
   same page. `TestEveryTruncationFails` holds that no proper prefix of a page parses, so a cut body is never
   taken for a shorter page; the shared contract (`TestRetryContract`) that such a body is retried and counted. The
   scanner reads the whole body before parsing, so network chunk boundaries never fall inside a token.
+  `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it replaced on 2026-11-11 (kept
+  as `xml_old_test.go`): on every fixture, every prefix of the short ones, 50,000 generated documents (entities,
+  references, CDATA, comments, `\r\n`, namespaces, attributes, child elements, good and bad URL escapes, missing and
+  mismatched end tags) and their truncations and byte edits, both as a ListBucketResult and as a
+  ListVersionsResult, the same page or the same error text.
 - **GCS client vs Google's JSON API client:** the client is Google's generated `storage/v1` client with
   swath's envelope checks. `TestClientPagesMatchGoogleClient` sends the same requests through the client and
   the plain generated client to a fake JSON server and compares every field the schema keeps (names,
@@ -777,6 +784,7 @@ Run it locally the same way: `cd go && ../scripts/ci/seekparquet-conformance.sh 
 go test -run XXX -fuzz FuzzParseDirents ./internal/source/localfs         # getdents record parser
 go test -run XXX -fuzz FuzzParseList -fuzztime 2m ./internal/source/s3/client
 go test -run XXX -fuzz FuzzParseFields -fuzztime 1m ./internal/source/s3/client
+go test -run XXX -fuzz FuzzScannerMatchesOld -fuzztime 4m ./internal/source/s3/client   # scanner vs the one it replaced
 go test -run XXX -fuzz FuzzPropose -fuzztime 1m ./internal/source/keyrange   # pivot policy
 ```
 

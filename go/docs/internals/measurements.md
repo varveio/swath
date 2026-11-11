@@ -873,6 +873,46 @@ commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 b
 S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
 and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
+### S3 scanner cost (2026-11-11)
+
+A CPU profile of a full listing of `aws-public-blockchain` (143,008,674 objects, sorted Parquet, 256 workers on 8
+vCPUs against the Go replay server; swath-notes `2026-11-11-swath-go-campaign/result-r2-profile.md`, a private run
+summary) put the scanner at 252 of 714 CPU-seconds, 35 %, about 1.76 µs per object. Microbenchmarks on the build host
+(4-vCPU GCP VM, Intel Xeon Platinum 8581C, Go 1.27.4; shared with other work, so the ratios are the result), the
+commit before the change and the change alternated as two test binaries, eight runs each at `-benchtime=1500x`,
+medians compared with benchstat (± is benchstat's confidence interval; every change p=0.000). `BenchmarkDecodeBody`
+is the scanner alone, `BenchmarkDecode` one full `ListObjectsV2` or `ListObjectVersions` call through the SDK stack
+and the Guard over an in-memory 1,000-entry page. Pages: `list` and `versions` are the older synthetic pages
+(URL-encoded keys, owners, checksums); `blockchain` and `full` are in the replay server's bytes, keys shaped like
+`aws-public-blockchain`'s (every key holds an escaped `=`), `full` with checksums, owners, multipart ETags and escaped
+spaces and UTF-8:
+
+| Benchmark | Page | Before ns/object | After ns/object | Change | B/object | allocs/object |
+|---|---|---:|---:|---:|---:|---:|
+| `DecodeBody` | list | 1,161 ± 2 % | 726 ± 2 % | −37 % | 271, unchanged | 0.003 (3 per page), unchanged |
+| `DecodeBody` | versions | 1,181 ± 2 % | 764 ± 2 % | −35 % | 329, unchanged | 0.003, unchanged |
+| `DecodeBody` | blockchain | 750 ± 2 % | 389 ± 2 % | **−48 %** | 279, unchanged | 0.003, unchanged |
+| `DecodeBody` | full | 1,158 ± 2 % | 660 ± 1 % | −43 % | 279, unchanged | 0.003, unchanged |
+| `Decode` | list | 1,333 ± 1 % | 897 ± 1 % | −33 % | 911, unchanged | 0.45 (451 per page), unchanged |
+| `Decode` | versions | 1,366 ± 1 % | 950 ± 1 % | −30 % | 983, unchanged | 0.45, unchanged |
+| `Decode` | blockchain | 890 ± 1 % | 537 ± 2 % | −40 % | 716, unchanged | 0.45, unchanged |
+| `Decode` | full | 1,329 ± 2 % | 835 ± 2 % | −37 % | 922, unchanged | 0.45, unchanged |
+
+What changed, in the order applied, each measured against the step before on the body-only benchmark (blockchain
+page; the other pages moved the same way or less): the URL decoding of a key moves the runs between escapes as
+blocks instead of byte by byte (−14 %); the `]]>` search on the scalar fast path runs only when the text holds a `]`
+(−3 %); a `<` that is not followed by `!` or `?` goes straight to the tag reader instead of four prefix tests for
+comments, CDATA, processing instructions and directives, measured together with the same `]` test in the general
+text decoder (−18 %); the five predefined entities are a switch, not a map (−4 %); a tag name ends at
+a byte-table lookup (−8 %); text with references that ends at its own end tag (every ETag's two `&quot;`) is decoded
+on the fast path instead of the general loop (−11 %); a `<` already at the cursor skips the search for it (−3 %). Two
+ideas did not win and are not in: one table-driven pass over a scalar's text in place of the byte searches (+4 %),
+and a byte loop in place of `IndexByte` for the namespace colon (+2 %). The full-client cost above the scanner is
+about 145 ns per object (145 µs per page) before and after: the SDK's middleware, its decoding of the minimal
+envelope, and the Guard's one allocation and copy of the body, which is most of the 437 B/object the full call
+allocates beyond the page. `TestScannerMatchesOld` and `FuzzScannerMatchesOld` hold the scanner to the one it
+replaced (kept in `xml_old_test.go`): the same pages, the same errors.
+
 ### azblob v1.7.0 to v1.8.3 (2026-11-10)
 
 `BenchmarkList` (`internal/source/azblob/client`), main `05e36feb` (azblob v1.7.0, azcore v1.21.1) against the
