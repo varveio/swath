@@ -307,3 +307,55 @@ func TestCreateS3Refusals(t *testing.T) {
 		t.Error("a missing profile: accepted")
 	}
 }
+
+// TestCreateS3CABundle: a CA bundle the AWS configuration names
+// (AWS_CA_BUNDLE, or a profile's ca_bundle) is the destination's trust: an
+// endpoint whose certificate it holds is reached, and without it the
+// same endpoint is refused.
+func TestCreateS3CABundle(t *testing.T) {
+	awsEnv(t)
+	f := s3fake.New("bkt")
+	srv := httptest.NewTLSServer(f)
+	t.Cleanup(srv.Close)
+	bundle := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "s3cr3t")
+	put := func(name string, o CreateOptions) error {
+		o.Endpoint = srv.URL
+		d, err := Create(context.Background(), "s3://bkt/ds", o)
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+		_, err = d.Writer().PutIfAbsent(context.Background(), name, []byte(`{}`))
+		return err
+	}
+	if err := put("none.json", CreateOptions{S3Write: s3.WriteOptions{MaxAttempts: 1}}); err == nil {
+		t.Fatal("an endpoint no bundle trusts was reached")
+	}
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv("AWS_CA_BUNDLE", bundle)
+		if err := put("env.json", CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("profile", func(t *testing.T) {
+		cfg := filepath.Join(t.TempDir(), "config")
+		if err := os.WriteFile(cfg, []byte("[profile dst]\naws_access_key_id = AKID\naws_secret_access_key = s3cr3t\nca_bundle = "+bundle+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWS_CONFIG_FILE", cfg)
+		if err := put("profile.json", CreateOptions{Profile: "dst"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, ok := f.Get("ds/env.json"); !ok {
+		t.Fatalf("objects %v", f.Names())
+	}
+	if _, ok := f.Get("ds/profile.json"); !ok {
+		t.Fatalf("objects %v", f.Names())
+	}
+}

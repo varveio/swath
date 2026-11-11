@@ -237,23 +237,33 @@ larger one as a multipart upload of `PartSize` parts and a last: `CreateMultipar
 full, `UploadPart` for each, `CompleteMultipartUpload` with `If-None-Match: *` and the object's size
 (`x-amz-mp-object-size`). Parts carry a CRC32 checksum the service verifies. S3's limits are the writer's own,
 whatever the caller's object size: a part size of 5 MiB to 5 GiB, and at most 10,000 parts, so the largest
-object is 10,000 × `PartSize` (78 GiB at 8 MiB); the write past it fails before sending. A failed `Close`, and
-`Abort`, abort the multipart upload under a context of their own (`AbortTimeout`, 30 s), since the upload's may
-be the one cancelled. S3 answers a conditional write that races another with 409
-`ConditionalRequestConflict`: a `PutObject` is sent again (within `MaxAttempts`, 5 by default); a completion is
-not (its parts are gone once aborted), and the upload ends with `ErrConflict`, which a caller retries from the
-first byte. A 200 answer carrying an error is the SDK's to detect (it retries it as a 500). `DeleteIf` sends
-an ETag identity as `If-Match`, and deletes a version id by its id (that version only). **S3 never expires an
-incomplete multipart upload:** one a crash leaves holds its parts, billed, until it is aborted; a bucket written
-to needs a lifecycle rule that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`, a day or
-more after initiation).
+object is 10,000 × `PartSize` (78 GiB at 8 MiB); the write past it fails before sending.
+
+A failed `Close`, and `Abort`, abort the multipart upload under a context of their own (`AbortTimeout`, 30 s),
+since the upload's may be the one cancelled, and confirm it: `ListParts` must answer `NoSuchUpload`, else the
+abort is sent again (a part in flight when the abort ran can keep the upload, and S3 asks for repeated aborts
+then), three times at most. An abort that fails or stays unconfirmed is `s3.ErrAbortUnconfirmed`: `Abort` returns
+it, a failed `Close` joins it after its own failure, and a later `Abort` tries again, three attempts over the
+upload's life. S3 answers a conditional write that races another with 409 `ConditionalRequestConflict`: a
+`PutObject` is sent again (within `MaxAttempts`, 5 by default); a completion is not (its parts are gone once
+aborted), and the upload ends with `ErrConflict`, which a caller retries from the first byte. The creating
+request (`PutObject`, or `CompleteMultipartUpload`) is `ErrUnresolved` when its outcome is unknown: a transport
+failure, a timeout, a cancellation, a server error (an error in a 200 answer included: the SDK retries it as a
+500), 408, 429, and `NoSuchUpload`, which a completion meets when its first attempt took effect and its answer
+was lost; another 4xx is a refusal, and leaves no object. `DeleteIf` sends an ETag identity as `If-Match`, and
+deletes a version id by its id (that version only). Every error passes through `RedactError`, and the upload id
+is then removed in any spelling, raw or URL-escaped. **S3 never expires an incomplete multipart upload:** one a
+crash leaves, or whose abort was not confirmed, holds its parts, billed, until it is aborted; a bucket written to
+needs a lifecycle rule that aborts incomplete multipart uploads (`AbortIncompleteMultipartUpload`, a day or more
+after initiation).
 
 `remote.Create` builds a destination: a `Writer` and an `Opener` under the location's prefix, through a client
 and connection pool it owns, with its own credentials and endpoint, shared with no read client. For `gs://`:
 `CreateOptions.CredentialsFile`, or Application Default Credentials, with the read-write scope. For `s3://`:
 the AWS SDK's configuration with `CreateOptions.Profile` and `Region` (else `AWS_REGION`, `AWS_DEFAULT_REGION`,
-the profile's, then `us-east-1`; `Destination.Region` is the one resolved), every request signed; an
-`Endpoint` is addressed path-style, and none set by the environment (`AWS_ENDPOINT_URL`, FIPS, dual-stack) is
+the profile's, then `us-east-1`; `Destination.Region` is the one resolved), every request signed, through the
+SDK's own HTTP client, so a CA bundle the configuration names (`AWS_CA_BUNDLE`, a profile's `ca_bundle`) is the
+destination's trust; an `Endpoint` is addressed path-style, and none set by the environment (`AWS_ENDPOINT_URL`, FIPS, dual-stack) is
 applied. `az://` is refused. The SDKs' loggers are silenced, since the GCS SDK's debug output writes request
 headers unredacted. The GCS endpoint is resolved once (`ResolveEndpoint`: the option, else
 `STORAGE_EMULATOR_HOST`) and given to the SDK explicitly, so a caller that records it is never redirected by the
@@ -265,10 +275,12 @@ every request runs under its operation's context, with no per-part transfer time
 `gcs/gcsfake` and `s3/s3fake` are the in-process fakes the write tests use. `gcsfake`: JSON metadata and
 deletes, XML ranged reads, and uploads both single-request and resumable, with `ifGenerationMatch` evaluated
 atomically at creation. `s3fake`: HeadObject, ranged GetObject with `If-Match` and version ids, PutObject, the
-multipart calls and DeleteObject, path-style, an optionally versioned bucket, `If-None-Match: *` evaluated
-atomically with the creation on both PutObject and CompleteMultipartUpload, the part rules (order, ETags, the
-minimum part size, 10,000 parts) and aws-chunked bodies; it does not model signatures, checksum verification,
-lifecycle rules, a 409 except as an injected fault, or eventual consistency. Each has a fault hook that fails a
+multipart calls (`ListParts` included) and DeleteObject, path-style, an optionally versioned bucket, upload ids a
+test chooses (with characters a URL escapes), `If-None-Match: *` evaluated atomically with the creation on both
+PutObject and CompleteMultipartUpload, the part rules (order, ETags, the minimum part size, 10,000 parts),
+aws-chunked bodies, and a part that lands after its upload's abort (`LateParts`); it does not model signatures,
+checksum verification, lifecycle rules, a 409 or an error in a 200 answer except as an injected fault, a
+request that goes on after its client gave up, suspended versioning, or eventual consistency. Each has a fault hook that fails a
 request before it acts, or loses its response after.
 
 ## What it is not
@@ -289,7 +301,13 @@ both `Open` and `OpenSized` against an in-process fake: gofakes3 for S3 (wrapped
 `If-Match` on GET with 412, which gofakes3 checks only on writes) and small `httptest` servers for the GCS
 JSON and XML APIs (`gcs/gcsfake`, which also takes uploads) and Azure Blob. `gcs/write_test.go` uploads
 through a single request and resumable sessions, races a creation against an upload, aborts and cancels, fails
-and loses responses at each upload step, and deletes by generation. `s3/dataset_test.go` writes a dataset with SeekParquet's `local.WriteDir`,
+and loses responses at each upload step, and deletes by generation. `s3/write_test.go` does the same for
+multipart uploads, with upload ids holding reserved characters, and checks the part limits, 409 against 412,
+the completions whose outcome is unknown (a lost answer, a transport failure, a server error) against refusals,
+an abort on cancellation under its own context, a refused abort retried by a later `Abort`, a late part that
+needs a second abort, a concurrent `Abort`, the upload id kept out of every error, and deletes by ETag and by
+version id. `remote`'s `TestCreateS3CABundle` reaches a TLS endpoint through `AWS_CA_BUNDLE` and a profile's
+`ca_bundle`. `s3/dataset_test.go` writes a dataset with SeekParquet's `local.WriteDir`,
 uploads it to gofakes3 and compares a Range and a List read through objfile with the local read. `gcs/range_test.go`
 serves ignored, shifted and cut-then-shifted ranges, with and without the transport `remote.Open` installs.
 `remote` opens each provider's location against an in-process server through the environment (the S3 endpoint

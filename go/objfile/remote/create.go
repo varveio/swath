@@ -19,6 +19,7 @@ import (
 	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/storage"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/logging"
@@ -238,13 +239,15 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
 	}
 	d.scope = s.scope
-	pool := http.DefaultTransport.(*http.Transport).Clone()
-	pool.ResponseHeaderTimeout = o.RequestTimeout
-	if pool.ResponseHeaderTimeout <= 0 {
-		pool.ResponseHeaderTimeout = DefaultRequestTimeout
+	timeout := o.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
 	}
-	// As the SDK's own client: a redirect is the answer.
-	hc := &http.Client{Transport: pool, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// The SDK's buildable client (which answers a redirect with itself, and
+	// has a pool of its own), so the configuration can add a CA bundle to it
+	// (AWS_CA_BUNDLE, a profile's ca_bundle), which a plain *http.Client
+	// refuses.
+	hc := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.ResponseHeaderTimeout = timeout })
 	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(hc), config.WithLogger(logging.Nop{})}
 	if o.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(o.Profile))
@@ -260,7 +263,16 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 	if d.region == "" {
 		d.region = "us-east-1"
 	}
+	var frozen *http.Client // the client requests go through, its pool closed by Close
 	client := s3sdk.NewFromConfig(cfg, func(so *s3sdk.Options) {
+		// The buildable client as configured (the CA bundle, the defaults'
+		// timeouts) is frozen into the *http.Client it builds, whose pool
+		// Close can then close.
+		if bc, ok := so.HTTPClient.(*awshttp.BuildableClient); ok {
+			if hc, ok := bc.Freeze().(*http.Client); ok {
+				so.HTTPClient, frozen = hc, hc
+			}
+		}
 		so.Region = d.region
 		// The endpoint named, or AWS's for the region: never one the
 		// environment sets, so the destination is what its identity says.
@@ -277,7 +289,12 @@ func createS3(ctx context.Context, l objfile.Location, o CreateOptions) (*Destin
 	}
 	d.o = objfile.Root(s3.New(client, l.Container), l.Prefix)
 	d.w = objfile.RootWriter(w, l.Prefix)
-	d.close = func() error { pool.CloseIdleConnections(); return nil }
+	d.close = func() error {
+		if frozen != nil {
+			frozen.CloseIdleConnections()
+		}
+		return nil
+	}
 	return d, nil
 }
 
