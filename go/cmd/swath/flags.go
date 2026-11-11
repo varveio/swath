@@ -102,7 +102,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "output-gcs-credentials-file", Value: source.Text(&o.outputCreds), Metavar: "FILE", Group: source.GroupOutput, Commands: writing,
 		Usage: "credentials for a GCS -o (default: Application Default Credentials)",
 		Long:  "A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume."})
-	def(source.Flag{Name: "output-endpoint-url", Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
+	def(source.Flag{Name: "output-endpoint-url", Shown: source.ShownURL, Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
 		Usage: "the JSON API base of a GCS -o (default: Google's)",
 		Long:  "As the SDK takes it (https://storage.googleapis.com/storage/v1/); fixed for the run."})
 

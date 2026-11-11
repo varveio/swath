@@ -18,11 +18,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
@@ -84,9 +85,9 @@ func serviceAccount(t *testing.T, token string) string {
 
 // TestRemoteListAndResume: swath list -o gs://... writes the dataset to
 // the bucket through its own credentials (the destination's token on every
-// upload, none on the anonymous source's requests), is stopped by its
-// deadline, and swath resume WORK_DIR, given a rotated credentials file,
-// completes it there.
+// upload, none on the anonymous source's requests), is stopped once its
+// first part is durable, and swath resume WORK_DIR, given a rotated
+// credentials file, completes it there.
 func TestRemoteListAndResume(t *testing.T) {
 	datasettest.RequireJournal(t)
 	captureStderr(t)
@@ -98,7 +99,6 @@ func TestRemoteListAndResume(t *testing.T) {
 		if a := r.Header.Get("Authorization"); a != "" {
 			srcAuth.Store(a, true)
 		}
-		time.Sleep(50 * time.Millisecond)
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(src.Close)
@@ -116,11 +116,23 @@ func TestRemoteListAndResume(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
 	args := []string{"s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--workers", "2", "--part-size", "4KiB",
 		"-o", "gs://dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL + "/storage/v1/", "--output-gcs-credentials-file", serviceAccount(t, "first")}
-	if c := exitCode(t, run(ctx, append(args, "--max-duration", "400ms"), io.Discard, false)); c != exitDeadline {
-		t.Fatalf("first attempt: exit %d", c)
+	// The first attempt stops once its first part is durable (recorded
+	// in the journal), whatever the machine's speed: a kill, as far as the
+	// work directory and the bucket can tell.
+	var recorded atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "recorded" && recorded.Add(1) == 1 {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	err := run(ctx, args, io.Discard, false)
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("first attempt: %v", err)
 	}
 	st, err := journal.Read(work)
-	if err != nil || len(st.Records) == 0 || st.Header.Identity.Destination == nil || st.Records[0].Object == "" {
+	if err != nil || len(st.Records) != 1 || st.Header.Identity.Destination == nil || st.Records[0].Object == "" {
 		t.Fatalf("the work directory's journal: %v, %+v", err, st)
 	}
 	if _, ok := f.Get("ds/" + dataset.ManifestName); ok {
@@ -155,5 +167,33 @@ func TestRemoteListAndResume(t *testing.T) {
 	})
 	if _, err := os.Stat(filepath.Join(work, dataset.DataDir)); err == nil {
 		t.Fatal("the work directory holds data/")
+	}
+}
+
+// TestOutputEndpointRedaction: --output-endpoint-url's user information
+// and query never reach a recorded command line: the command's canonical
+// argv, the library's second pass, or the report of a run refused early.
+func TestOutputEndpointRedaction(t *testing.T) {
+	const secret = "SECRETVALUE"
+	ep := "https://user:" + secret + "@example.invalid/storage/v1/?token=" + secret
+	args := []string{"s3://src", "-o", "gs://dst/ds", "--work-dir", filepath.Join(t.TempDir(), "work"), "--output-endpoint-url", ep}
+	o, _, err := parseList(args, io.Discard, command{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{o.argv, redactArgv(o.argv), redactArgv([]string{"list", "--output-endpoint-url=" + ep, "--output-endpoint-url", ep, "s3://src"})} {
+		if got := strings.Join(argv, " "); strings.Contains(got, secret) {
+			t.Fatalf("the endpoint's credentials are in %s", got)
+		}
+	}
+	report := filepath.Join(t.TempDir(), "report.json")
+	captureStderr(t)
+	_ = run(context.Background(), append(args, "--report", report), io.Discard, false)
+	b, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), secret) {
+		t.Fatalf("the report holds the endpoint's credentials: %s", b)
 	}
 }

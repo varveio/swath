@@ -75,7 +75,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// A text run keeps no journal: there is nothing to continue.
 		return stop(usageError{errText})
 	}
-	if dataset.Committed(dir) {
+	if dataset.Committed(dir) && !dataset.Unfinalized(dir) {
+		// A bucket dataset's work directory committed but not finalized goes
+		// on: the run finishes the commit's aftermath, then reports complete.
 		return stop(listing.ErrComplete)
 	}
 	st, err := journal.Read(dir)
