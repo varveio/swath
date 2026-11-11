@@ -13,19 +13,27 @@ canonical values for Java comparisons. Unknown or incompatible ids are refused.
 Two methods give the same answer. The SQL method runs the comparisons as DuckDB
 queries over both whole datasets; its EXCEPT ALL holds every row, so its memory
 grows with the dataset (143 million rows exhausted 50 GiB). The streaming method
-reads both datasets once, part by part in manifest order and each part in
-file-row order (checked against file_row_number), and compares them row by row
-in bounded memory: the ordered sequences, the key order and bounds, and the
-columns that differ at the same position. Equal sequences are equal multisets;
-when the sequences differ, a second pass counts the multiset differences
-exactly by merging the two streams in key order (each key's rows compared as a
-multiset): the file order when both sides are in key order, else each side
-sorted by key by DuckDB, which spills to a temporary directory under the
-working directory. Without --stream or --sql the streaming method is used when
-the two datasets hold more than STREAM_ROWS rows together. DIFFDS_MEMORY sets
-each streaming scan's DuckDB memory limit (default 4GB; two run at a time).
+reads each dataset as the SQL method's view reads it (every part, union_by_name,
+the same projection and defaults), every column cast to the type both sides'
+union takes (the type the SQL method's set operations compare in), in manifest
+part and file-row order (checked against the part index and file_row_number),
+(a timestamp or other value Python would not compare exactly as its VARCHAR
+rendering) and compares the two row by row in bounded memory: the ordered sequences, the
+key order (each key against its immediate predecessor, as the SQL method's lag)
+and bounds, and the columns that differ at the same position. Equal sequences
+are equal multisets. When the sequences differ, the multiset differences are
+counted by the SQL method's EXCEPT ALL, bucket by bucket: both sides are written
+to Parquet partitioned by a hash of the whole cast row (equal rows share a
+bucket, so the buckets' counts add up to the whole one's) under a temporary
+directory in the working directory, as many buckets as keep each to about one
+row per BUCKET_ROW_BYTES of the memory limit, and each bucket is compared alone.
+(Copies of one identical row all share a bucket.) Without
+--stream or --sql the streaming method is used when the two datasets hold more
+than STREAM_ROWS rows together. DIFFDS_MEMORY sets the DuckDB memory limit of
+each streaming connection (default 4GB; two scans run at a time).
 """
 from collections import Counter
+import glob
 import json
 import os
 from pathlib import Path
@@ -44,8 +52,13 @@ CURRENT_OBJECT = {"version_id": "NULL::VARCHAR", "is_latest": "NULL::BOOLEAN", "
                   "row_type": "'OBJECT'"}
 # Above this many rows (both datasets together) the streaming method is the default.
 STREAM_ROWS = 20_000_000
-# Rows the streaming method fetches from DuckDB at a time, and its per-scan limits.
+# Rows the streaming method fetches from DuckDB at a time, and the streaming
+# connections' limits. A multiset bucket holds BUCKET_ROWS rows on average, by
+# default one per BUCKET_ROW_BYTES of the memory limit: DuckDB's EXCEPT ALL holds
+# its input in memory (the blockchain pair failed at 50 GiB, over 175 bytes a row).
 BATCH_ROWS = 65_536
+BUCKET_ROWS = None
+BUCKET_ROW_BYTES = 2048
 STREAM_THREADS = 2
 STREAM_MEMORY = os.environ.get("DIFFDS_MEMORY", "4GB")
 
@@ -75,10 +88,7 @@ def columns_of(con, paths):
     return {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet({listing(paths)}, union_by_name=true)").fetchall()}
 
 
-def selection(have, ts_ms, sid, cols, union=None):
-    """The projection of cols over files holding the columns have. Reading one file of several,
-    union is all the files' columns: one only some of them hold is null in the others, as
-    union_by_name reads it."""
+def selection(have, ts_ms, sid, cols):
     sel = []
     for c in cols:
         if c not in have:
@@ -86,8 +96,6 @@ def selection(have, ts_ms, sid, cols, union=None):
                 sel.append(f"{CURRENT_OBJECT[c]} AS {c}")
             elif sid == GCS_CURRENT and c == "time_created":
                 sel.append("NULL::TIMESTAMP AS time_created")
-            elif union is not None and c in union:
-                sel.append(f"NULL AS {c}")
             else:
                 raise ValueError(f"schema {sid} is missing column {c}")
         elif c == "last_modified" and sid not in VERSION_IDS:
@@ -214,30 +222,70 @@ def key_bytes(k):
     return k.encode() if isinstance(k, str) else bytes(k)
 
 
-def stream(paths, ts_ms, sid, columns):
-    """Yields (part index, row) in manifest part order and file-row order. Each part's
-    file_row_number must run 0, 1, 2, ...: the order is the file's, not the scan's."""
+def projected(con, paths, ts_ms, sid, columns, extra=""):
+    """The SQL method's view of a dataset, as a query: every part through union_by_name and
+    the same projection (selection over the whole dataset's columns)."""
+    sel = selection(columns_of(con, paths), ts_ms, sid, columns)
+    return f"SELECT {', '.join(sel)}{extra} FROM read_parquet({listing(paths)}, union_by_name=true, filename=true, file_row_number=true)"
+
+
+def common_types(pa, pb, sa, sb, columns, ts_ms):
+    """Each column's type in the union of the two views: the type the SQL method's set
+    operations compare the two sides in. A column null on both sides is VARCHAR."""
+    con = connect()
+    try:
+        q = f"{projected(con, pa, ts_ms, sa, columns)} UNION ALL {projected(con, pb, ts_ms, sb, columns)}"
+        types = [r[1] for r in con.execute(f"DESCRIBE {q}").fetchall()]
+    finally:
+        con.close()
+    return ["VARCHAR" if t in ("NULL", '"NULL"') else t for t in types]
+
+
+def cast(columns, types):
+    return ", ".join(f"CAST({c} AS {t}) AS {c}" for c, t in zip(columns, types))
+
+
+# Types whose Python values compare exactly as DuckDB compares them. A column of another type
+# (timestamps, of any precision and zone; anything else) is streamed as the VARCHAR rendering
+# of its common-type value, which is one string per value.
+PYTHON_EXACT = {"VARCHAR", "BLOB", "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+                "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"}
+
+
+def stream_cast(columns, types):
+    return ", ".join(f"CAST({c} AS {t}) AS {c}" if t in PYTHON_EXACT else f"CAST(CAST({c} AS {t}) AS VARCHAR) AS {c}"
+                     for c, t in zip(columns, types))
+
+
+def stream(paths, ts_ms, sid, columns, types):
+    """Yields (part index, row) of the view, cast to types (stream_cast), in manifest part order and
+    file-row order: each row's part must not go back, and its file_row_number must run
+    0, 1, 2, ... within the part (an empty part yields nothing)."""
     con = connect(threads=STREAM_THREADS, memory=STREAM_MEMORY)
     try:
-        union = columns_of(con, paths)
-        for i, p in enumerate(paths):
-            sel = selection(columns_of(con, [p]), ts_ms, sid, columns, union)
-            cur = con.execute(f"SELECT {', '.join(sel)}, file_row_number FROM read_parquet({sql_string(p)}, file_row_number=true)")
-            n = 0
-            while batch := cur.fetchmany(BATCH_ROWS):
-                for row in batch:
-                    if row[-1] != n:
-                        raise ValueError(f"{p}: the scan returned file row {row[-1]} at position {n}")
-                    n += 1
-                    yield i, row[:-1]
+        files = "[" + ",".join(sql_string(p) for p in paths) + "]"
+        inner = projected(con, paths, ts_ms, sid, columns, f", list_position({files}, filename) AS part_index, file_row_number")
+        cur = con.execute(f"SELECT {stream_cast(columns, types)}, part_index, file_row_number FROM ({inner})")
+        part, n = 0, 0
+        while batch := cur.fetchmany(BATCH_ROWS):
+            for row in batch:
+                if row[-2] != part:
+                    if row[-2] is None or row[-2] < part or row[-1] != 0:
+                        raise ValueError(f"the scan of {paths[0]}... left manifest order at part {row[-2]} row {row[-1]}")
+                    part, n = row[-2], 0
+                elif row[-1] != n:
+                    raise ValueError(f"the scan returned file row {row[-1]} of part {part} at position {n}")
+                n += 1
+                yield part, row[:-2]
     finally:
         con.close()
 
 
 class Order:
-    """The SQL method's ascending check one row at a time: within a part each key above the
-    one before (at or above it for a versions schema); each part's smallest key above the
-    largest key of the part before it that has keys; the dataset's smallest and largest key."""
+    """The SQL method's ascending check one row at a time: within a part each key against its
+    immediate predecessor (a pair with a null key is not compared, as lag's null predicate);
+    each part's smallest non-null key above the largest of the part before it that has keys;
+    the dataset's smallest and largest non-null key."""
 
     def __init__(self, groups):
         self.groups, self.bad = groups, 0
@@ -256,11 +304,11 @@ class Order:
                 self.close_part()
             self.part, self.last, self.part_lo, self.part_hi = part, None, None, None
         k = key_bytes(key)
-        if k is None:
-            return
-        if self.last is not None and (self.last > k if self.groups else self.last >= k):
+        if k is not None and self.last is not None and (self.last > k if self.groups else self.last >= k):
             self.bad += 1
         self.last = k
+        if k is None:
+            return
         if self.part_lo is None or k < self.part_lo:
             self.part_lo = k
         if self.part_hi is None or k > self.part_hi:
@@ -276,56 +324,63 @@ class Order:
         return self.bad, self.lo, self.hi
 
 
-def groups_of(rows):
-    """Consecutive rows of one key: (key bytes, Counter of the rows)."""
-    key, group = None, Counter()
-    for _, row in rows:
-        k = key_bytes(row[0])
-        if group and k != key:
-            yield key, group
-            group = Counter()
-        key = k
-        group[row] += 1
-    if group:
-        yield key, group
+def memory_bytes(limit):
+    """DIFFDS_MEMORY in bytes: a number with KB, MB, GB, TB (powers of 1000) or KiB, MiB,
+    GiB, TiB (powers of 1024), as DuckDB's memory_limit reads it."""
+    units = {"KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12, "KIB": 2**10, "MIB": 2**20, "GIB": 2**30, "TIB": 2**40, "B": 1}
+    text = limit.strip().upper().replace(" ", "")
+    for unit in sorted(units, key=len, reverse=True):
+        if text.endswith(unit):
+            return int(float(text[:-len(unit)]) * units[unit])
+    raise ValueError(f"DIFFDS_MEMORY {limit!r} is not a size such as 4GB")
 
 
-def sorted_stream(paths, ts_ms, sid, columns, temp):
-    """Yields (0, row) for every row, sorted by key bytes (an external sort: DuckDB spills
-    to temp past its memory limit)."""
-    con = connect(threads=STREAM_THREADS, memory=STREAM_MEMORY, temp=temp)
+def multiset_buckets(pa, pb, sa, sb, columns, ts_ms, types, rows):
+    """The SQL method's two EXCEPT ALL counts, bucket by bucket: each side's cast rows written
+    to Parquet partitioned by hash(row) % buckets, then each bucket's EXCEPT ALL in both
+    directions. Equal rows hash alike, so no row's match is in another bucket. Memory is
+    DuckDB's, bounded by DIFFDS_MEMORY, spilling under the temporary directory."""
+    per_bucket = BUCKET_ROWS or max(1, memory_bytes(STREAM_MEMORY) // BUCKET_ROW_BYTES)
+    buckets = max(1, -(-rows // per_bucket))
+    cols = ", ".join(columns)
+    temp = tempfile.mkdtemp(prefix=".diffds-", dir=os.getcwd())
     try:
-        sel = selection(columns_of(con, paths), ts_ms, sid, columns)
-        cur = con.execute(f"SELECT {', '.join(sel)} FROM read_parquet({listing(paths)}, union_by_name=true) ORDER BY encode(key)")
-        while batch := cur.fetchmany(BATCH_ROWS):
-            for row in batch:
-                yield 0, row
+        con = connect(threads=STREAM_THREADS, memory=STREAM_MEMORY, temp=os.path.join(temp, "spill"))
+        con.execute("SET preserve_insertion_order = false")
+        for side, paths, sid in (("a", pa, sa), ("b", pb, sb)):
+            rows_cast = f"SELECT {cast(columns, types)} FROM ({projected(con, paths, ts_ms, sid, columns)})"
+            con.execute(f"COPY (SELECT hash({cols}) % {buckets} AS bucket, {cols} FROM ({rows_cast})) "
+                        f"TO {sql_string(os.path.join(temp, side))} (FORMAT parquet, PARTITION_BY (bucket))")
+        a_b = b_a = 0
+        for i in range(buckets):
+            fa = sorted(glob.glob(os.path.join(temp, "a", f"bucket={i}", "*.parquet")))
+            fb = sorted(glob.glob(os.path.join(temp, "b", f"bucket={i}", "*.parquet")))
+            ra = f"SELECT {cols} FROM read_parquet({listing(fa)}, hive_partitioning=false)" if fa else None
+            rb = f"SELECT {cols} FROM read_parquet({listing(fb)}, hive_partitioning=false)" if fb else None
+            if ra and rb:
+                a_b += con.execute(f"SELECT count(*) FROM ({ra} EXCEPT ALL {rb})").fetchone()[0]
+                b_a += con.execute(f"SELECT count(*) FROM ({rb} EXCEPT ALL {ra})").fetchone()[0]
+            elif ra:
+                a_b += con.execute(f"SELECT count(*) FROM ({ra})").fetchone()[0]
+            elif rb:
+                b_a += con.execute(f"SELECT count(*) FROM ({rb})").fetchone()[0]
+        con.close()
+        return a_b, b_a
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
+def row_count(paths):
+    con = connect()
+    try:
+        return con.execute(f"SELECT count(*) FROM read_parquet({listing(paths)})").fetchone()[0]
     finally:
         con.close()
 
 
-def multiset_merge(ra, rb):
-    """Exact EXCEPT ALL counts of two streams in key order (each key's rows consecutive):
-    merged by key, each key's rows compared as multisets."""
-    a_b = b_a = 0
-    ga, gb = groups_of(ra), groups_of(rb)
-    x, y = next(ga, None), next(gb, None)
-    while x is not None or y is not None:
-        if y is None or (x is not None and x[0] < y[0]):
-            a_b += sum(x[1].values())
-            x = next(ga, None)
-        elif x is None or y[0] < x[0]:
-            b_a += sum(y[1].values())
-            y = next(gb, None)
-        else:
-            a_b += sum((x[1] - y[1]).values())
-            b_a += sum((y[1] - x[1]).values())
-            x, y = next(ga, None), next(gb, None)
-    return a_b, b_a
-
-
 def compare_stream(pa, pb, sa, sb, columns, ts_ms):
-    ia, ib = stream(pa, ts_ms, sa, columns), stream(pb, ts_ms, sb, columns)
+    types = common_types(pa, pb, sa, sb, columns, ts_ms)
+    ia, ib = stream(pa, ts_ms, sa, columns, types), stream(pb, ts_ms, sb, columns, types)
     oa, ob = Order(sa in VERSION_IDS), Order(sb in VERSION_IDS)
     na = nb = sequence = reverse = 0
     percol = Counter()
@@ -350,19 +405,15 @@ def compare_stream(pa, pb, sa, sb, columns, ts_ms):
             sequence += 1
         else:
             reverse += 1
+    for n, paths in ((na, pa), (nb, pb)):
+        if n != row_count(paths):
+            raise ValueError(f"the scan of {paths[0]}... returned {n} rows, the parts hold {row_count(paths)}")
     bad_a, mina, maxa = oa.finish()
     bad_b, minb, maxb = ob.finish()
     if sequence == 0 and reverse == 0:
         a_b = b_a = 0  # equal sequences are equal multisets
-    elif bad_a == 0 and bad_b == 0:
-        a_b, b_a = multiset_merge(stream(pa, ts_ms, sa, columns), stream(pb, ts_ms, sb, columns))
     else:
-        temp = tempfile.mkdtemp(prefix=".diffds-", dir=os.getcwd())
-        try:
-            a_b, b_a = multiset_merge(sorted_stream(pa, ts_ms, sa, columns, os.path.join(temp, "a")),
-                                      sorted_stream(pb, ts_ms, sb, columns, os.path.join(temp, "b")))
-        finally:
-            shutil.rmtree(temp, ignore_errors=True)
+        a_b, b_a = multiset_buckets(pa, pb, sa, sb, columns, ts_ms, types, na + nb)
     return verdict([sa, sb], na, nb, a_b, b_a, sequence, reverse, bad_a, bad_b, mina, minb, maxa, maxb, percol)
 
 
