@@ -29,10 +29,10 @@ signature, then the archive, before extracting or running it. For example, on Li
 ```bash
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v0.4.0-rc.2 \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify swath-0.4.0-rc.2-linux-amd64.tar.gz --repo varveio/swath
-tar -xzf swath-0.4.0-rc.2-linux-amd64.tar.gz
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS && \
+sha256sum --check --ignore-missing SHA256SUMS && \
+gh attestation verify swath-0.4.0-rc.2-linux-amd64.tar.gz --repo varveio/swath && \
+tar -xzf swath-0.4.0-rc.2-linux-amd64.tar.gz && \
 ./swath-0.4.0-rc.2-linux-amd64/swath --version
 ```
 

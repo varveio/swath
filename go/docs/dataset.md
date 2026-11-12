@@ -74,7 +74,7 @@ and supports this dataset's format (format version 0, draft revision 1), run the
 revision or one with a matching format, rather than assuming a published tag includes the command.
 
 ```bash
-go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset
+go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
 go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
 ```
 
