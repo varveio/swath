@@ -126,6 +126,13 @@ by the SDK; a body of unknown length that fails, or is cancelled, fails the read
 
 For more control:
 
+- A `remote.Store`'s connection pool keeps up to 64 idle connections to its host,
+  for four concurrent default batches (16 requests each) or a `Limit` of up to 64, so
+  a burst after the first finds its connections open; active connections are not
+  bounded. For a client of your own, keep idle connections per host for the requests
+  it may have in flight: the `Limit` you wrap it in, or else
+  `BatchPolicy.MaxConcurrent` times the batches you run at once (Go's default
+  transport keeps 2).
 - Build an SDK client and pass it to `s3.New`, `gcs.New`, or `azblob.New`; wrap the
   opener with `Root` for path confinement and `Limit` for bounded requests. `Limit`
   holds a slot per request: each `Open`, `OpenSized(…, 0)`, `ReadObject` and `ReadAt`,

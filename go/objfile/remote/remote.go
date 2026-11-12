@@ -46,7 +46,8 @@ import (
 // Store is a dataset root opened by Open: an objfile.Opener of the names
 // under the location's prefix, through clients it owns. It is safe for
 // concurrent use. It does not bound the requests in flight; wrap it with
-// objfile.Limit for that.
+// objfile.Limit for that. Its connection pool keeps idle connections for
+// 64 requests to its host (see Open).
 type Store struct {
 	o      objfile.Opener
 	scope  string
@@ -65,6 +66,15 @@ type Store struct {
 //   - az: azidentity's DefaultAzureCredential, on the account's
 //     blob.core.windows.net endpoint.
 //
+// The Store's connection pool keeps up to 64 idle connections to its host,
+// so that the requests of four concurrent batches under
+// objfile.DefaultBatchPolicy (16 each), or of an objfile.Limit of up to 64,
+// find their connections open after the first burst; it does not bound the
+// active connections. A client built by the caller keeps its own pool:
+// size its idle connections per host to the requests it may have in
+// flight (a Limit's n, or else BatchPolicy.MaxConcurrent times the batches
+// run at once).
+//
 // Open makes no object-store request; a missing bucket or insufficient
 // permissions fail the first operation on the Store. Credential setup may
 // fail during Open. The Store outlives ctx: each request runs under
@@ -78,6 +88,7 @@ func Open(ctx context.Context, location string) (*Store, error) {
 		return nil, err
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
+	sizeTransport(pool, poolRequests)
 	// Every attempt the SDKs make, their retries included, is observed
 	// (objfile.Observer), below any check that may refuse a response.
 	observed := ranged.Observe(pool)
@@ -119,6 +130,29 @@ func Open(ctx context.Context, location string) (*Store, error) {
 	}
 	s.o = objfile.Root(o, l.Prefix)
 	return s, nil
+}
+
+// poolRequests is how many requests to one host the connection pool of a
+// Store keeps connections for between bursts: the idle connections it
+// keeps per host (and in all) are at least this many. It is
+// objfile.DefaultBatchPolicy's MaxConcurrent requests for each of four
+// concurrent batches, and the bound for objfile.Limit a Store is wrapped
+// in. The rule: keep idle connections for the requests a Store may have
+// in flight to its host, a Limit's n or else MaxConcurrent times the
+// batches run at once, so that a burst after the first finds its
+// connections open. A Store's active connections are not bounded.
+const poolRequests = 64
+
+// sizeTransport raises idle connection capacity on an unused, exclusively
+// owned transport, for requests in flight to one host: MaxIdleConnsPerHost
+// and MaxIdleConns at least requests. It keeps active connection limits
+// (MaxConnsPerHost), which may be intentional. Call before the transport's
+// first use.
+func sizeTransport(t *http.Transport, requests int) {
+	t.MaxIdleConnsPerHost = max(t.MaxIdleConnsPerHost, requests)
+	if t.MaxIdleConns != 0 { // 0 is no limit
+		t.MaxIdleConns = max(t.MaxIdleConns, requests)
+	}
 }
 
 // observing records client, whose transport is the Store's observing one,
