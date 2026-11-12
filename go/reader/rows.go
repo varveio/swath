@@ -25,20 +25,8 @@ type Position struct {
 }
 
 // Cursor returns the cursor after this row, owning its key bytes.
-func (p Position) Cursor() *Cursor {
-	return &Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
-}
-
-// Object is a current object, or a filesystem entry, as a reader of any
-// source's current objects sees it: an S3, Cloud Storage, Azure Blob or
-// filesystem row (DecodeObject). An Azure blob's StorageClass is its
-// access tier; ETag and StorageClass are nil for a filesystem entry.
-type Object struct {
-	Position
-	Size         *int64
-	LastModified *time.Time
-	ETag         *string
-	StorageClass *string
+func (p Position) Cursor() *seekparquet.Cursor {
+	return &seekparquet.Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
 }
 
 // S3Object is a swath/s3-objects/v1 row: one current S3 object.
@@ -161,47 +149,6 @@ type LocalEntry struct {
 // another type is a SemanticError of KindSchema; a null in a required
 // column is one of KindRow.
 
-// DecodeObject decodes a current object of swath/s3-objects/v1,
-// swath/gcs-objects/v1 or swath/azblob-objects/v1, or an entry of
-// swath/local-entries/v1, the schema id of the row's dataset. Every other id is a
-// KindSchema error: a versions row is not a current object.
-func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
-	columns := objectColumns(id)
-	if columns == nil {
-		return Object{}, semantic(KindSchema, "", nil, "schema id %q holds no current objects", id)
-	}
-	return decodeFields(id, row, columns, AllObjectFields)
-}
-
-// decodeFields decodes the fields of a current object of id, whose
-// columns are columns (objectColumns): its key and size, and the
-// optional fields of fields; a field left out stays nil.
-func decodeFields(id SchemaID, row seekparquet.Row, columns []string, fields ObjectFields) (Object, error) {
-	d := decoder{spec: schemas[id], row: &row}
-	o := Object{Position: d.position(), Size: d.int64("size")}
-	if fields&FieldLastModified != 0 {
-		o.LastModified = d.time("last_modified")
-	}
-	if len(columns) > 2 && fields&FieldETag != 0 {
-		o.ETag = d.string("etag")
-	}
-	if len(columns) > 2 && fields&FieldStorageClass != 0 {
-		o.StorageClass = d.string(columns[3])
-	}
-	return o, d.err
-}
-
-// fieldColumns is the columns (objectColumns) of the size and of fields.
-func fieldColumns(columns []string, fields ObjectFields) []string {
-	out := columns[:1:1]
-	for i, field := range []ObjectFields{FieldLastModified, FieldETag, FieldStorageClass} {
-		if fields&field != 0 && i+1 < len(columns) {
-			out = append(out, columns[i+1])
-		}
-	}
-	return out
-}
-
 // DecodeAzblobObject decodes a swath/azblob-objects/v1 row.
 func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error) {
 	d := decoder{spec: schemas[AzblobObjectsV1], row: &row}
@@ -221,21 +168,6 @@ func (d *decoder) azblobObject() AzblobObject {
 		TagCount: d.int64("tag_count"), Metadata: d.string("metadata"), Tags: d.string("tags"),
 		ImmutabilityPolicyUntil: d.time("immutability_policy_until"), ImmutabilityPolicyMode: d.string("immutability_policy_mode"),
 		LegalHold: d.bool("legal_hold")}
-}
-
-// objectColumns returns the columns DecodeObject reads for a schema id,
-// nil for one that holds no current objects; the fourth, where there is
-// one, is the storage class.
-func objectColumns(id SchemaID) []string {
-	switch id {
-	case S3ObjectsV1, GCSObjectsV1:
-		return []string{"size", "last_modified", "etag", "storage_class"}
-	case AzblobObjectsV1:
-		return []string{"size", "last_modified", "etag", "access_tier"} // the tier is its storage class
-	case LocalV1:
-		return []string{"size", "last_modified"}
-	}
-	return nil
 }
 
 // DecodeS3Object decodes a swath/s3-objects/v1 row.

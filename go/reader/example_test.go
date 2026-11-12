@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/reader"
 )
 
@@ -36,7 +38,7 @@ func wholeSource(m reader.Metadata, want string) bool {
 // the metadata on.
 func Example() {
 	ctx := context.Background()
-	d, err := reader.OpenDir(ctx, photos, reader.Options{})
+	d, err := reader.OpenDir(ctx, photos, seekparquet.OpenOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -48,8 +50,15 @@ func Example() {
 	if err := d.CheckSchema(ctx); err != nil {
 		log.Fatal(err)
 	}
-	err = d.StreamLocal(ctx, func(e reader.LocalEntry) error {
-		fmt.Printf("%-4s %5d %s\n", e.Kind, *e.Size, e.Key)
+	spec, _ := reader.Schema(m.SchemaID)
+	err = d.SeekParquet().Scan(ctx, seekparquet.Query{Columns: spec.ColumnNames()}, nil, func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			e, err := reader.DecodeLocalEntry(b.Row(i))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%-4s %5d %s\n", e.Kind, *e.Size, e.Key)
+		}
 		return nil
 	})
 	if err != nil {
@@ -70,17 +79,17 @@ func Example() {
 // common prefix stands for every key below it (here a directory's own row
 // and its contents), and each page continues from the
 // cursor of the last entry of the one before.
-func ExampleDataset_List() {
+func ExampleDataset_SeekParquet() {
 	ctx := context.Background()
-	d, err := reader.OpenDir(ctx, photos, reader.Options{})
+	d, err := reader.OpenDir(ctx, photos, seekparquet.OpenOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer d.Close()
 
-	req := reader.ListRequest{Delimiter: '/', Limit: 2}
+	req := seekparquet.ListQuery{Delimiter: '/', Limit: 2}
 	for {
-		page, err := d.List(ctx, req)
+		page, err := d.SeekParquet().List(ctx, req, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -92,7 +101,7 @@ func ExampleDataset_List() {
 			if e.CommonPrefix != nil {
 				fmt.Printf("prefix %s\n", e.CommonPrefix)
 			} else {
-				fmt.Printf("entry  %s\n", e.Local.Key)
+				fmt.Printf("entry  %s\n", e.Row.Key)
 			}
 		}
 		req.Cursor = page[len(page)-1].Cursor()

@@ -150,28 +150,3 @@ func TestDecodeAzblobVersion(t *testing.T) {
 		t.Fatalf("null is_latest: %v", err)
 	}
 }
-
-func TestDecodeObject(t *testing.T) {
-	values := map[string]seekparquet.Value{"size": seekparquet.Int64Value(7), "storage_class": seekparquet.ByteArrayValue([]byte("STANDARD"))}
-	for _, id := range []SchemaID{S3ObjectsV1, GCSObjectsV1} {
-		o, err := DecodeObject(id, row(t, id, "k", 0, values))
-		if err != nil || *o.Size != 7 || *o.StorageClass != "STANDARD" || o.ETag != nil || o.LastModified != nil || string(o.Key) != "k" {
-			t.Fatalf("%s: %+v, %v", id, o, err)
-		}
-	}
-	// An Azure blob's storage class is its access tier.
-	o, err := DecodeObject(AzblobObjectsV1, row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{
-		"size": seekparquet.Int64Value(7), "access_tier": seekparquet.ByteArrayValue([]byte("Cool"))}))
-	if err != nil || *o.Size != 7 || *o.StorageClass != "Cool" {
-		t.Fatalf("azblob: %+v, %v", o, err)
-	}
-	local := row(t, LocalV1, "d/", 0, map[string]seekparquet.Value{"size": seekparquet.Int64Value(0), "kind": seekparquet.ByteArrayValue([]byte("DIR"))})
-	if o, err := DecodeObject(LocalV1, local); err != nil || *o.Size != 0 || o.LastModified != nil || o.ETag != nil || o.StorageClass != nil || string(o.Key) != "d/" {
-		t.Fatalf("%s: %+v, %v", LocalV1, o, err)
-	}
-	for _, id := range []SchemaID{S3VersionsV1, GCSGenerationsV1, AzblobVersionsV1, "swath/canonical"} {
-		if _, err := DecodeObject(id, row(t, S3ObjectsV1, "k", 0, values)); !errors.Is(err, ErrSchema) {
-			t.Errorf("%s: %v, want a schema error", id, err)
-		}
-	}
-}

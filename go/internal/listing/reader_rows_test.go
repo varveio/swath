@@ -17,6 +17,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/azblob"
 	"github.com/varveio/swath/go/internal/source/gcs"
 	"github.com/varveio/swath/go/internal/source/localfs"
 	"github.com/varveio/swath/go/internal/source/s3"
@@ -33,15 +34,15 @@ func readAll[P, T any](t *testing.T, s *schema.Schema[P], kind string, rows []sc
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, kind, s, rows, maxRows)
 	ctx := context.Background()
-	d, err := seekparquet.OpenDir(ctx, dir, seekparquet.OpenOptions{})
+	d, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	meta, err := reader.ParseMetadata(d.Metadata())
-	if err != nil {
+	if err := d.CheckSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
+	meta := d.Metadata()
 	spec, ok := reader.Schema(meta.SchemaID)
 	if !ok {
 		t.Fatalf("schema id %q: no reader spec", meta.SchemaID)
@@ -49,7 +50,7 @@ func readAll[P, T any](t *testing.T, s *schema.Schema[P], kind string, rows []sc
 	var out []T
 	var cur *seekparquet.Cursor
 	for {
-		page, err := d.Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Cursor: cur}, Limit: int64(limit), Columns: spec.ColumnNames()}, nil)
+		page, err := d.SeekParquet().Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Cursor: cur}, Limit: int64(limit), Columns: spec.ColumnNames()}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,11 +108,6 @@ func TestReaderDecodesS3Objects(t *testing.T) {
 		*meta.Coverage.SkippedEntries != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 || *meta.Coverage.Snapshot {
 		t.Fatalf("metadata %+v", meta)
 	}
-	objects, _ := readAll(t, &s3.Schema, "s3", rows, 0, 10, func(r seekparquet.Row) (reader.Object, error) { return reader.DecodeObject(reader.S3ObjectsV1, r) },
-		func(o *reader.Object) reader.Position { return o.Position })
-	if o := objects[0]; string(o.Key) != rows[0].Key || *o.Size != 12 || *o.ETag != rows[0].Data.ETag || *o.StorageClass != "STANDARD" || objects[1].ETag != nil {
-		t.Fatalf("objects %+v", objects)
-	}
 }
 
 // TestReaderPagesS3VersionGroups: a key's versions are separate rows in
@@ -167,9 +163,6 @@ func TestReaderPagesS3VersionGroups(t *testing.T) {
 	page, err := d.Rows(context.Background(), seekparquet.Query{Limit: 1, Columns: []string{"size"}}, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := reader.DecodeObject(reader.S3VersionsV1, page[0]); !errors.Is(err, reader.ErrSchema) {
-		t.Fatalf("a versions row as a current object: %v, want a schema error", err)
 	}
 	if _, err := reader.DecodeS3Version(page[0]); !errors.Is(err, reader.ErrSchema) {
 		t.Fatalf("a row without the projected columns: %v, want a schema error", err)
@@ -270,5 +263,31 @@ func TestReaderDecodesLocalEntries(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) || meta.SchemaID != reader.LocalV1 || meta.Manifest.Key.Unique != true {
 		t.Fatalf("decoded\n%+v\nwant\n%+v (%s)", got, want, meta.SchemaID)
+	}
+}
+
+// TestReaderDecodesAzure checks both production writer schemas against the
+// registry and their concrete decoders, keeping access tier and version fields.
+func TestReaderDecodesAzure(t *testing.T) {
+	blob := azblob.Object{Size: 7, Mtime: 11, CreationTime: 5, ETag: "opaque", AccessTier: "Cool", BlobType: "BlockBlob"}
+	want := reader.AzblobObject{Position: reader.Position{Key: []byte("blob")}, Size: ptr(int64(7)), LastModified: micros(11),
+		CreationTime: micros(5), ETag: ptr("opaque"), AccessTier: ptr("Cool"), BlobType: ptr("BlockBlob")}
+	objects, _ := readAll(t, &azblob.Schema, "azblob", []azblob.Row{{Key: "blob", Data: blob}}, 0, 1,
+		reader.DecodeAzblobObject, func(o *reader.AzblobObject) reader.Position { return o.Position })
+	if !reflect.DeepEqual(objects, []reader.AzblobObject{want}) {
+		t.Fatalf("objects %+v, want %+v", objects, want)
+	}
+	versions, _ := readAll(t, &azblob.VersionSchema, "azblob", []azblob.VersionRow{
+		{Key: "blob", Data: azblob.Version{Object: blob, VersionID: "v1"}},
+		{Key: "blob", Data: azblob.Version{Object: blob, IsLatest: true}},
+	}, 0, 1, reader.DecodeAzblobVersion, func(v *reader.AzblobVersion) reader.Position { return v.Position })
+	latest := want
+	latest.Offset = 1
+	wantVersions := []reader.AzblobVersion{
+		{AzblobObject: want, VersionID: ptr("v1")},
+		{AzblobObject: latest, IsLatest: true},
+	}
+	if !reflect.DeepEqual(versions, wantVersions) {
+		t.Fatalf("versions %+v, want %+v", versions, wantVersions)
 	}
 }

@@ -5,20 +5,18 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: `go/reader` reads through SeekParquet's redesigned Go API (seekparquet `b26862f2b4c8`); its own
-  package no longer imports parquet-go. Observable changes: a negative `Options.Limits` field fails `Open` and
-  `OpenDir` with `ErrInvalidRequest` (it used to select the default), and `Limits` gains `GetRows`; a limit
-  failure is a `*seekparquet.LimitError` (`errors.As`), still wrapping `ErrLimitExceeded`; `RefusalError.Code`
-  is a `seekparquet.RefusalCode` and `UnsupportedError.Code` an `UnsupportedCode`; a part's cached refusal or
-  unsupported error is a copy per read, so its pointer can differ between reads; the statistics of `Scan`,
-  `ScanBatches`, `Page` and the aggregates include a failed plan's or split's reads, and `Page`'s (and
-  `StreamStats`') sums now include the list-index and read-ahead counters the old sum omitted; `ReadStats`
-  gains `Add` and the read-ahead counters; `ListRequest` (and so `PageRequest`) gains `ReadAhead`, the
-  listing's key-page read-ahead (default 0, none); a `Scan`/`ScanBatches` callback's `seekparquet.Stop` is
-  returned like any other error; `CheckSchema` prints an unannotated column's logical type as `NONE`. `Scan`
-  decodes each object from the borrowed batch instead of an owning copy of each row: 19–28% faster, a third
-  fewer bytes and a quarter fewer allocations in the reader benchmarks; the other reads are within noise
-  ([measurements](go/docs/internals/measurements.md#reader-on-the-redesigned-seekparquet-api-2026-11-12)).
+- Go port: `go/reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
+  decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
+  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `7264a9f88420`).
+  The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
+  `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
+  and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.
+  Callers use SeekParquet types and errors directly; see the [reader guide](go/reader/README.md).
+
+- Go port: `go/reader.Open` and `OpenDir` take `seekparquet.OpenOptions`; negative `Limits` fields fail
+  with `seekparquet.ErrInvalidRequest`, and limit failures are `*seekparquet.LimitError` wrapping
+  `seekparquet.ErrLimitExceeded`. SeekParquet owns read statistics, listing read-ahead and callback stop
+  behavior. `CheckSchema` prints an unannotated column's logical type as `NONE`.
 
 - Go port, Azure Blob: `--all-versions` lists every entry of each name: blob versions, snapshots and
   soft-deleted blobs beside the current blob (`include=versions,snapshots,deleted`), under the new schema
@@ -47,19 +45,11 @@ Notable changes per release. The full human summary for the current release is i
   on (a hierarchical one keeps its Data Lake endpoint). That answer now establishes a flat namespace; the report's
   `namespace` reads `filesystem endpoint blocked`.
 
-- Go port: `go/reader`'s `Dataset.Totals` scans in parallel shards over borrowed batches, as `Scan` does, with
-  `runtime.GOMAXPROCS(0)` goroutines, instead of one serial pass of owning rows; it plans only the paths not
-  inside another (the same rows) and takes each `Count` from the rows its scan reads instead of a count plan
-  per path. Totals, checks and API are unchanged; with several rows that fail, which one's error is returned is
-  now unspecified, as with `Scan`. `Aggregates` sums in one shard, as before, but no longer plans a prefix
-  inside another, so it can decode fewer key pages.
-
-- Fixed: `go/reader`'s sharded reads (`Scan`, `ScanBatches` since they shard, and `Totals`) did not check the
-  key order across shards: each shard's scan checks only its own keys, so a key below the one before it, or
-  repeating a unique key, where a row group begins (and past the pages a `CheckSchema` decodes) was read as a
-  success, with wrong totals. Each shard's first key is now checked against the last of the shard before it,
-  failing with SeekParquet's `key_order` refusal naming the key, as one pass refuses it; `Scan` and
-  `ScanBatches` return it after the shards' objects were handed on.
+- Go port: parallel scans use SeekParquet's `Plan.ScanParallel` over borrowed batches; totals use
+  `Dataset.Aggregate` with named reductions and caller-selected workers and value budgets. A complete
+  parallel scan checks key order across shards, including repeated unique keys at row-group boundaries;
+  aggregation requests this validation with `AggregateOptions.CheckKeys`. See
+  [reading through SeekParquet](go/reader/README.md#reading-through-seekparquet).
 
 - Go port, Azure Blob: listings ask for the Arrow format and read XML wherever the service answers XML
   (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay) (#440). On the 468,557-blob
@@ -92,13 +82,9 @@ Notable changes per release. The full human summary for the current release is i
   and Buildx v0.38.1 with BuildKit v0.34.2 pinned by digest in `release.yml` (#444); the next release
   candidate is the first `release.yml` run with these pins.
 
-- Go port: `go/reader`'s `Dataset.Stream` and `StreamLocal` read the dataset in one ordered pass, one
-  unlimited SeekParquet `Dataset.Scan` request, instead of ⌈N/1,024⌉+1 paged requests that each re-seeked after
-  the last. Objects, order, values and row errors are unchanged. `StreamStats.Requests` counts those requests,
-  one per stream on every platform; a failing part or page now
-  ends the stream after the objects of the pages before it (a paged request read 1,024 keys before handing
-  any on); `fn` runs inside the read, so `Close` waits for it and `fn` must not call `Close`; each stream's
-  `StreamStats` are added once, when it returns.
+- Go port: ordered streaming uses SeekParquet's `Dataset.Scan` with a zero limit for one pass to the end
+  of the span. Callers select columns and optionally decode owning rows with `go/reader`'s concrete
+  decoders. SeekParquet reports per-call `ReadStats`; `Close` waits for callbacks, which must not call it.
 
 - Release: the Go archives and both images carry `THIRD_PARTY_NOTICES`, generated by
   `go/notices.sh`, which fails the image build and the release on a linked module whose license
@@ -139,13 +125,11 @@ Notable changes per release. The full human summary for the current release is i
   Azure binds its producer schema to the reader specification. Shared conformance tests check
   client and provider integration. Listing behavior, diagnostics and persisted bytes are unchanged;
   provider-specific credentials, endpoint rules and retry signals remain explicit.
-- Go port: `go/reader` reads a filesystem's entries typed: `Dataset.StreamLocal` hands on every `LocalEntry`
-  (every column, nulls kept), `List` and `Page` return an entry's `Entry.Local` (a directory's prefix `d/` paired
-  with its own row), and `Stream` refuses a local dataset. `Totals` and `Aggregates` total local entries of every
-  kind and their summed `st_size` (entry bytes, directories' own sizes included); `PathTotals.Bytes` is now
-  `*int64`, nil when an entry has no size (`--metadata names`). `Dataset.Scan` scans the current objects under a
-  prefix with several goroutines (`ScanRequest{Prefix, Workers, Stats}`), in batches. `Totals` of an Azure
-  dataset no longer panics on an exact blob (it read `storage_class`; the access tier is `access_tier`).
+- Go port: `go/reader.DecodeLocalEntry` preserves every filesystem column and its nulls. SeekParquet's
+  `List` and `Page` expose a common prefix's exact row for optional typed decoding. Local `CountRows` and
+  `Sum(size)` reductions include directories and their own `st_size`; sums skip null/absent sizes, so request
+  `CountNulls` and `CountAbsent` to detect unknown bytes under `--metadata names`. Azure rows decode
+  `access_tier` with `DecodeAzblobObject`. See the [reader guide](go/reader/README.md).
 - Go port: `--no-dirs` is recorded in a local dataset's `coverage.filters` (`no_dirs`).
 - Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
   JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
@@ -155,8 +139,8 @@ Notable changes per release. The full human summary for the current release is i
   exactly the requested bytes or fails.
 - Go port: `go/reader` opens and reads; it does not judge a dataset. `Open` exposes the manifest's source, scope
   and coverage through `Metadata()`, and the application decides what to do with them; part digests are not
-  checked on read. `IsRefusal` tells the data's refusals from other errors, and `Dataset.Page` is a listing page
-  with its next cursor and its prefixes' totals.
+  checked on read. `IsRefusal` tells the data's refusals from other errors. Browse through SeekParquet's
+  `Dataset.Page`, which returns a listing page with its next cursor and requested prefix reductions.
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
   accounts (`--azure-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.

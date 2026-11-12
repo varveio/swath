@@ -29,8 +29,7 @@ import (
 // A disagreement with the spec is a SemanticError of KindSchema naming the
 // column and the part; the module's refusals (*seekparquet.RefusalError)
 // and storage errors are returned unchanged. It reads nothing beyond
-// Verify's reads: neither the values (Stream checks the
-// rows it reads) nor the parts' digests are checked.
+// Verify's reads: neither the values nor the parts' digests are checked.
 func (d *Dataset) CheckSchema(ctx context.Context) error {
 	if err := d.checkKey(); err != nil {
 		return err
@@ -43,7 +42,6 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	d.checked.Store(true)
 	return nil
 }
 

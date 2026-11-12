@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -173,9 +172,19 @@ func TestOpenRecordsCoverage(t *testing.T) {
 	dir := writeGeometry(t, s, rows[:3], 2, 2)
 	appendPart(t, dir, writeGeometry(t, s, rows[3:], 2, 2))
 
-	d, src := openSource(t, dir)
-	if opens, _ := src.taken(); !reflect.DeepEqual(opens, []string{seekparquet.ManifestName}) {
-		t.Fatalf("opened %q, want the manifest alone", opens)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	src := &openRecorder{root: root}
+	d, err := Open(context.Background(), src, seekparquet.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if !reflect.DeepEqual(src.opens, []string{seekparquet.ManifestName}) {
+		t.Fatalf("opened %q, want the manifest alone", src.opens)
 	}
 	m := d.Metadata()
 	c := m.Coverage
@@ -283,156 +292,6 @@ func appendPart(t testing.TB, dir, from string) {
 	}
 }
 
-func stream(t *testing.T, d *Dataset) ([]Object, error) {
-	t.Helper()
-	var out []Object
-	err := d.Stream(context.Background(), func(o Object) error {
-		out = append(out, o)
-		return nil
-	})
-	return out, err
-}
-
-func TestStreamObjects(t *testing.T) {
-	rows := s3Rows(2500)
-	rows[7].Size, rows[7].LastModified, rows[7].StorageClass = ptr(int64(0)), nil, nil
-	d := openDir(t, writeDataset(t, s3Spec(), rows))
-	got, err := stream(t, d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := make([]Object, len(rows))
-	for i, r := range rows {
-		want[i] = Object{Position: Position{Key: []byte(r.Key)}, Size: r.Size, ETag: r.ETag, StorageClass: r.StorageClass}
-		if r.LastModified != nil {
-			want[i].LastModified = ptr(time.UnixMicro(*r.LastModified).UTC())
-		}
-	}
-	if len(got) != len(want) {
-		t.Fatalf("streamed %d objects, want %d", len(got), len(want))
-	}
-	for i := range got {
-		if !reflect.DeepEqual(got[i], want[i]) {
-			t.Fatalf("object %d: %+v, want %+v", i, got[i], want[i])
-		}
-	}
-	st := d.StreamStats()
-	if st.Requests != 1 || st.Objects != int64(len(rows)) ||
-		st.KeysDecoded < int64(len(rows)) || st.ValuePagesDecoded == 0 || st.SourceReads == 0 || st.PartsOpened != 1 {
-		t.Fatalf("stats %+v, want one request", st)
-	}
-}
-
-func TestStreamRefusesVersions(t *testing.T) {
-	s := s3Spec()
-	s.id, s.key.Unique = S3VersionsV1, false
-	d := openDir(t, writeDataset[s3Row](t, s, nil))
-	if _, err := stream(t, d); !errors.Is(err, ErrSchema) {
-		t.Fatalf("stream versions: %v, want a schema error", err)
-	}
-	if st := d.StreamStats(); st.Requests != 0 {
-		t.Fatalf("read before refusing: %+v", st)
-	}
-}
-
-func TestStreamRowChecks(t *testing.T) {
-	year10000 := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
-	year0 := time.Date(0, 12, 31, 23, 59, 59, 999999000, time.UTC).UnixMicro()
-	for _, tc := range []struct {
-		name   string
-		row    s3Row
-		column string
-	}{
-		{"null size", s3Row{Key: "b"}, "size"},
-		{"negative size", s3Row{Key: "b", Size: ptr(int64(-1))}, "size"},
-		{"after 9999", s3Row{Key: "b", Size: ptr(int64(1)), LastModified: ptr(year10000)}, "last_modified"},
-		{"before year 1", s3Row{Key: "b", Size: ptr(int64(1)), LastModified: ptr(year0)}, "last_modified"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := openDir(t, writeDataset(t, s3Spec(), []s3Row{{Key: "a", Size: ptr(int64(1))}, tc.row, {Key: "c", Size: ptr(int64(1))}}))
-			got, err := stream(t, d)
-			se := semanticAt(t, err, KindRow, tc.column)
-			if se.Row == nil || string(se.Row.Key) != "b" || len(got) != 1 || !errors.Is(err, ErrRow) {
-				t.Fatalf("%v after %d objects", err, len(got))
-			}
-		})
-	}
-}
-
-func TestStreamCancel(t *testing.T) {
-	d := openDir(t, writeDataset(t, s3Spec(), s3Rows(2500)))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	n := 0
-	err := d.Stream(ctx, func(Object) error {
-		if n++; n == 1500 {
-			cancel()
-		}
-		return nil
-	})
-	if !errors.Is(err, context.Canceled) || n != 1500 || d.StreamStats().Objects != 1500 {
-		t.Fatalf("after cancelling at 1,500: %v, %d objects", err, n)
-	}
-}
-
-func TestStreamCallbackError(t *testing.T) {
-	d := openDir(t, writeDataset(t, s3Spec(), s3Rows(10)))
-	stop := errors.New("stop")
-	n := 0
-	err := d.Stream(context.Background(), func(Object) error {
-		n++
-		return stop
-	})
-	if err != stop || n != 1 || d.StreamStats().Objects != 1 {
-		t.Fatalf("fn's error: %v after %d objects, %d counted", err, n, d.StreamStats().Objects)
-	}
-}
-
-// TestStreamCallbackOwnsKey: fn changing an object's key, the last of a
-// page included, changes neither the rows after it nor the page that
-// continues from it.
-func TestStreamCallbackOwnsKey(t *testing.T) {
-	rows := s3Rows(2500)
-	d := openDir(t, writeDataset(t, s3Spec(), rows))
-	var keys []string
-	err := d.Stream(context.Background(), func(o Object) error {
-		keys = append(keys, string(o.Key))
-		o.Key[0] = 0xff
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(keys) != len(rows) {
-		t.Fatalf("streamed %d objects, want %d", len(keys), len(rows))
-	}
-	for i, r := range rows {
-		if keys[i] != r.Key {
-			t.Fatalf("object %d: key %q, want %q", i, keys[i], r.Key)
-		}
-	}
-}
-
-func TestStreamRefusalUnchanged(t *testing.T) {
-	dir := writeDataset(t, s3Spec(), s3Rows(5))
-	appendPart(t, dir, writeDataset(t, s3Spec(), []s3Row{{Key: "z", Size: ptr(int64(1))}}))
-	if err := os.Remove(filepath.Join(dir, "data", "part-00001.parquet")); err != nil {
-		t.Fatal(err)
-	}
-	d := openDir(t, dir)
-	got, err := stream(t, d)
-	var refusal *seekparquet.RefusalError
-	if !errors.As(err, &refusal) || refusal.Code != seekparquet.CodeMissingPart {
-		t.Fatalf("stream with a part missing: %v", err)
-	}
-	if len(got) != 5 {
-		t.Fatalf("%d objects before the part that failed, want the 5 before it", len(got))
-	}
-	if err := d.CheckSchema(context.Background()); seekparquet.RefusalCodeOf(err) != seekparquet.CodeMissingPart {
-		t.Fatalf("check schema with a part missing: %v", err)
-	}
-}
-
 // TestCheckSchemaReadsTheVerifiedPart: CheckSchema checks the columns of the
 // part file the module verified and reads, not of a file put at its path
 // since: a part whose last_modified is not a timestamp, replaced after
@@ -454,3 +313,29 @@ func TestCheckSchemaReadsTheVerifiedPart(t *testing.T) {
 	}
 	semanticAt(t, d.CheckSchema(ctx), KindSchema, "last_modified")
 }
+
+// openRecorder records files opened while reading the manifest.
+type openRecorder struct {
+	root  *os.Root
+	opens []string
+}
+
+func (s *openRecorder) Open(ctx context.Context, name string) (seekparquet.SourceFile, error) {
+	s.opens = append(s.opens, name)
+	f, err := s.root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return openRecordedFile{File: f, size: info.Size()}, nil
+}
+
+type openRecordedFile struct {
+	*os.File
+	size int64
+}
+
+func (f openRecordedFile) Size() int64 { return f.size }

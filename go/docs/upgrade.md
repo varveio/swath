@@ -472,9 +472,9 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
   to 9999. A local dataset's directory rows are entries whose keys end in `/`.
 - **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
-  `Open` (the manifest, the schema id and the metadata, with the coverage and the source), `CheckSchema` (key and
-  columns), and `Stream` and `List` (current objects, with the row checks above). Judging the coverage and the
-  source is the caller's.
+  `Open` (manifest, schema id and metadata), `CheckSchema` (key and columns), and concrete
+  typed row decoders. Use `Dataset.SeekParquet()` for scans, listings, aggregation and pagination.
+  Coverage/source admission and the downstream reader's size/time rules remain application policy.
 - **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
   and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown

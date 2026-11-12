@@ -77,7 +77,7 @@ transitively.
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
 inherit the lister's dependencies: `go/reader` (`github.com/varveio/swath/go/reader`: the schema ids and their
 columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that opens a
-dataset, hands on its metadata, checks its schema, and streams and lists its current objects; the SeekParquet module
+dataset, hands on its metadata, checks its schema, and exposes the underlying SeekParquet dataset for reads; the SeekParquet module
 and the standard library only; [../../reader/README.md](../../reader/README.md)) and `go/objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
 credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The lister imports
@@ -90,11 +90,10 @@ which links `cloud.google.com/go/storage` into the swath binary
 The optional objfile byte cache rejects an already cancelled read context before
 lookup, for both scalar and batched reads ([cache contract](../../objfile/cache.go)).
 The reader and SeekParquet adapter preserve the caller's cache policy in the
-context. Callers of bulk operations (`Stream`, `StreamLocal`, `Scan`,
-`ScanBatches` and `Totals`) choose whether their Source should cache those reads;
+context. Callers of SeekParquet bulk scans and aggregations choose whether their
+Source should cache those reads;
 with objfile they can mark `objfile.CacheBypass` to avoid byte-cache lookup and
-admission. The policy also covers planning, splitting and `Totals`' exact-key
-projections. Point lookups, browse pages, counts and
+admission. The policy also covers planning, splitting and exact-key projections. Point lookups, browse pages, counts and
 aggregate sums use the policy their caller supplies. SeekParquet reports logical
 and format work; objfile's observer reports physical requests and byte-cache hits,
 and `objfile.Limit` bounds request concurrency. See the
