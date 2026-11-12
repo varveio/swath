@@ -4,9 +4,11 @@ swath completion prints a shell completion script for bash, zsh or fish.
 
 ## Synopsis
 
+<!-- synopsis:begin -->
 ```text
 swath completion bash|zsh|fish
 ```
+<!-- synopsis:end -->
 
 ## Description
 
