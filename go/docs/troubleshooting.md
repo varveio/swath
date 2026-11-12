@@ -63,13 +63,8 @@ commits an empty dataset.
 ## The bucket is in another region
 
 Exit 1, cause `region_redirect`, not resumable. S3 answered that the bucket is in another region and named it
-(`X-Amz-Bucket-Region`); the message says which, as "the bucket is in REGION: give --s3-region REGION". Run
-again with that `--s3-region`.
-
-## The bucket is in another region
-
-The error names the bucket's region and the option to give, such as `give --s3-region eu-west-1`. swath does not
-follow S3's redirects or discover a bucket's region; pass `--s3-region` (or set `AWS_REGION`).
+(`X-Amz-Bucket-Region`); the error says which and the option to give, such as `give --s3-region eu-west-1`.
+swath does not follow S3's redirects or discover a bucket's region; pass `--s3-region` (or set `AWS_REGION`).
 
 ## Unknown flag
 
