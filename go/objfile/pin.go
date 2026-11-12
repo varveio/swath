@@ -121,12 +121,27 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 			ErrObjectChanged, size, want.Size, want.Identity)}
 	}
 	if size == 0 {
-		f, err := p.Open(ctx, name) // checked against a recorded pin
-		if err == nil && f.Size() != 0 {
+		// No read reaches the store: the metadata request proves the
+		// object, its size compared before any pin is recorded.
+		f, err := p.o.Open(ctx, name)
+		if err != nil {
+			if recorded && errors.Is(err, fs.ErrNotExist) {
+				err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
+			}
+			return nil, err
+		}
+		if f.Size() != 0 {
 			f.Close()
+			if recorded { // the recorded pin is of size 0
+				return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes, pinned 0 bytes at %q", ErrObjectChanged, f.Size(), want.Identity)}
+			}
 			return nil, &fs.PathError{Op: "open", Path: name, Err: &SizeMismatchError{Name: name, Expected: 0, Actual: f.Size()}}
 		}
-		return f, err
+		if err := p.check(name, "open", pin{Size: 0, Identity: f.Identity()}); err != nil {
+			f.Close()
+			return nil, err
+		}
+		return f, nil
 	}
 	f, err := p.o.OpenSized(ctx, name, size)
 	if err != nil {
@@ -252,12 +267,12 @@ func (f *pinnedObject) readAt(ctx context.Context, p []byte, off int64) (int, er
 	return n, err
 }
 
+// ReadRanges runs the batch through the Object's own checked reads, under
+// the policy of the Object it wraps, so that the first read's check against
+// the pin comes before the rest of the batch is sent, and a mismatch stops
+// it.
 func (f *pinnedObject) ReadRanges(ctx context.Context, ranges []Range) error {
-	err := ReadRanges(ctx, f.Object, ranges)
-	if replaced, cerr := f.confirm(err); replaced {
-		return cerr
-	}
-	return err
+	return ReadRangesWith(ctx, f, ranges, policyOf(f.Object))
 }
 
 func (f *pinnedObject) batchPolicy() BatchPolicy { return policyOf(f.Object) }

@@ -95,6 +95,10 @@ func (e *BatchError) Unwrap() []error {
 // is DefaultBatchPolicy(). A negative field, or a MaxOverRead that is not a
 // number, is invalid (Validate).
 type BatchPolicy struct {
+	// DisableGapBridging reads no gap: only ranges that touch or overlap
+	// are merged, and MaxGap and MaxOverRead are not used.
+	DisableGapBridging bool
+
 	MaxGap           int64
 	MaxRequest       int64
 	MaxOverRead      float64
@@ -202,7 +206,8 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 			return fmt.Errorf("objfile: range %d (%d bytes at %d) is not within the object's %d bytes: %w",
 				i, n, r.Off, size, fs.ErrInvalid)
 		}
-		if total += n; total > MaxBatchBytes { // no overflow: each step adds at most MaxBatchBytes+1
+		var ok bool
+		if total, ok = addBatchBytes(total, n); !ok {
 			return fmt.Errorf("objfile: a batch of more than %d bytes: %w", MaxBatchBytes, fs.ErrInvalid)
 		}
 		if pieces += n/p.MaxRequest + 2; pieces > maxBatchPieces {
@@ -222,6 +227,15 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 		return nil
 	}
 	return &BatchError{Errs: errs}
+}
+
+// addBatchBytes adds n to a batch's total, or reports that the sum is over
+// MaxBatchBytes; it is checked before adding, so it never overflows.
+func addBatchBytes(total, n int64) (int64, bool) {
+	if n < 0 || n > MaxBatchBytes-total {
+		return total, false
+	}
+	return total + n, true
 }
 
 // batch is a planned batch: the requests (spans) that cover its ranges'
@@ -291,7 +305,7 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 				s := &b.spans[last]
 				gap := off - s.end
 				joined := end - s.off
-				if gap > 0 && gap <= p.MaxGap && joined <= p.MaxRequest &&
+				if !p.DisableGapBridging && gap > 0 && gap <= p.MaxGap && joined <= p.MaxRequest &&
 					float64(joined-useful-(end-off)) <= p.MaxOverRead*float64(useful+end-off) {
 					s.end = end
 					useful += end - off
@@ -366,10 +380,10 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy) {
 			inBytes -= b.spans[res.k].end - b.spans[res.k].off
 			if alone {
 				switch {
+				case res.err != nil && terminal(res.err):
+					stop = res.err // the object is not the one expected: no more requests
 				case res.err == nil || f.Identity() != "":
 					alone = false // pinned (or never will be): the rest at once
-				case terminal(res.err):
-					stop = res.err // the object is not the one expected: no more requests
 				}
 			}
 		case <-cancelled:

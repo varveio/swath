@@ -100,16 +100,21 @@ fewest requests). The requests run concurrently, at most 16 and 64 MiB a batch
 after a cut body as a `ReadAt` is. A ranged GET costs about one round trip whether
 it returns 4 KiB or 4 MiB, so the policy saves round trips at a bounded over-read.
 `Batch` sets another policy; a field left 0 takes the default (the zero policy is
-the default), and a negative one is refused. Cancelling the context cancels the
+the default), and a negative one is refused; `DisableGapBridging` reads no gap,
+merging only ranges that touch or overlap. Cancelling the context cancels the
 requests in flight, and `ReadRanges` returns once they have stopped. A failed
 request fails only the ranges it covers (`BatchError`).
 
 A batch is at most `MaxBatchRanges` ranges (4096) and `MaxBatchBytes` (128 MiB);
 a larger one, or a range outside the object, fails whole before any request.
 Empty ranges, through the object's end, need none. The buffers of one batch must
-not share memory. While an `OpenSized` object is not yet pinned, a batch sends
-its requests one at a time until one pins it; one that shows the object missing,
-changed or of another size ends the batch, failing every range it has not read.
+not share memory. While an `OpenSized` object is not yet pinned, its reads, of a
+batch or not, are sent one at a time until one pins it, so that no response holds
+a connection that the metadata request a proof may need is waiting for; one that
+shows the object missing, changed or of another size ends a batch, failing every
+range it has not read. Through `Pinned`, each of a batch's requests is checked
+against the recorded pin as it ends, so a replaced object stops the batch at its
+first request.
 
 `ReadObject` reads a small object, such as a manifest, whole in one request with
 no metadata request first, refusing one larger than its limit (`ErrTooLarge`,

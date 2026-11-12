@@ -443,7 +443,14 @@ func TestPinOpenSizedZero(t *testing.T) {
 	if _, err := p.OpenSized(ctx, "full", 0); !errors.As(err, &sm) || sm.Actual != 4 || errors.Is(err, objfile.ErrObjectChanged) {
 		t.Fatalf("OpenSized(0) of a non-empty object = %v, want a SizeMismatchError of 4 bytes", err)
 	}
-	// That Open recorded the object's pin: now 0 is a change.
+	// The failed open recorded nothing: no pin, and the object opens at
+	// its own size.
+	if snap, _ := p.Snapshot(); strings.Contains(string(snap), `"full"`) {
+		t.Fatalf("a failed OpenSized(0) recorded a pin: %s", snap)
+	}
+	if _, err := p.Open(ctx, "full"); err != nil { // records it
+		t.Fatal(err)
+	}
 	if _, err := p.OpenSized(ctx, "full", 0); !errors.Is(err, objfile.ErrObjectChanged) {
 		t.Fatalf("OpenSized(0) of a pinned non-empty object = %v, want ErrObjectChanged", err)
 	}
