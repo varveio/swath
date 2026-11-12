@@ -170,12 +170,14 @@ rows, projecting `SchemaSpec.ColumnNames()`:
 
 ```go
 spec, ok := reader.Schema(d.Metadata().SchemaID) // S3VersionsV1, say
-rows, err := d.SeekParquet().Range(ctx, seekparquet.Range{Prefix: []byte("logs/"), Limit: 1000, Columns: spec.ColumnNames()})
+q := seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.PrefixSpan([]byte("logs/"))},
+	Limit: 1000, Columns: spec.ColumnNames()}
+rows, err := d.SeekParquet().Rows(ctx, q, nil)
 for _, r := range rows {
 	v, err := reader.DecodeS3Version(r)
 	// ...
 }
-// the next page: Range{..., Cursor: last.Cursor()}
+// the next page: q.Cursor = last.Cursor()
 ```
 
 
@@ -219,7 +221,7 @@ Azure versions schema.
   column and the part. It reads nothing beyond Verify's reads.
 - **`Stream`.** Current objects only: a versions schema, and a filesystem's entries (`StreamLocal`'s), are
   refused (`KindSchema`) before any read. Every object in dataset order in one ordered pass of borrowed
-  batches (`seekparquet.Dataset.RangeBatches`, no plan), projecting `size`, `last_modified` and, for S3,
+  batches (`seekparquet.Dataset.Scan`, no plan and no limit), projecting `size`, `last_modified` and, for S3,
   Cloud Storage and Azure, `etag` and the storage class (Azure's `access_tier`). The pass opens each part, row group
   and projected column chunk when it reaches it, so a part is checked then, not before the first object. The
   module checks every key page it decodes (order, bounds, page index). Each row is decoded by the schema's
@@ -233,9 +235,8 @@ Azure versions schema.
   `ScanBatches`' callback does: `Close` from another goroutine waits for the running `fn` to return (if it
   returns nil, the rest of its batch is still handed on, then the stream ends with `ErrClosed`), and `fn` must not call
   `Close` or wait for a goroutine that does. `StreamStats` sums every Stream's (and StreamLocal's) requests
-  (`RangeBatches` calls: one for each stream that reaches the read, whatever it ends in: an empty dataset, a
-  context ended before it starts, a failure; none for a refusal before the read; only a dataset of more than
-  `math.MaxInt` rows, where `int` is 32 bits, takes ⌊N/`math.MaxInt`⌋+1), objects handed to `fn` (counted
+  (`Dataset.Scan` calls: one for each stream that reaches the read, whatever it ends in: an empty dataset, a
+  context ended before it starts, a failure; none for a refusal before the read), objects handed to `fn` (counted
   before the call) and `ReadStats` (the reads', failures included). A stream's fields are added together, once,
   when it returns: `StreamStats` holds nothing of a stream still running.
 - **`StreamLocal`.** `swath/local-entries/v1` only (any other schema id is `KindSchema`, before any read). Every
@@ -245,8 +246,8 @@ Azure versions schema.
   (`UNKNOWN` included), a size, when present, at least 0 and a modification time, when present, in the years 1
   to 9999 (`KindRow`). Its errors are `Stream`'s.
 - **`Scan(req)`.** Current objects only, refused as `Stream` refuses, before any read; `Stats` reset first. One
-  plan of `Prefix`'s rows (`seekparquet.Dataset.PlanRanges`, projecting the columns `Object` holds, which checks
-  every part holding them), divided into shards (`RangePlan.Split`: consecutive rows cut at row group boundaries,
+  plan of `Prefix`'s rows (`seekparquet.Dataset.Plan`, projecting the columns `Object` holds, which checks
+  every part holding them), divided into shards (`Plan.Split`: consecutive rows cut at row group boundaries,
   balanced by projected bytes): one for one worker, otherwise at most eight a worker (`shardsPerWorker`), and a
   plan with fewer row groups has fewer shards. `Workers` goroutines (0 or less is 1) each take the next shard not
   yet taken until none is left, so a worker whose shards go fast takes more of them instead of waiting on a slow
@@ -262,9 +263,8 @@ Azure versions schema.
   batch was handed on: a key out of order where a row group begins, which no single shard sees, is refused
   as one pass refuses it. `ScanBatches` and `Totals` share this check. Batches already handed on stay handed
   on; a failed scan is no result.
-  `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too, with Page's exception:
-  a plan (`PlanRanges`) or split (`Split`) that fails returns no statistics, so its own reads are missing, while
-  every completed plan, split and shard scan is counted. The context is checked before planning, before each
+  `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too, a failed plan's or
+  split's own reads included. The context is checked before planning, before each
   batch and after the shards end: a scan whose context ended never succeeds, even one that read nothing. `Scan`
   does not add to `StreamStats`.
 - **`ScanBatches(req)`.** The same current-object scope, parallel ordering, cancellation, error propagation
@@ -297,7 +297,7 @@ Azure versions schema.
   a `CommonPrefix`, owning its bytes. A `CommonPrefix` also has `Object` (`Local`) set to the row stored at the
   prefix's exact key (an S3-style `a/` folder object under its children, or a directory's own row `d/`, so an
   empty directory lists as its prefix with its row; no directory metadata is made up for a prefix), from
-  the module's exact row (`seekparquet.Entry.Exact`, spec LIST-8) in the same request, when that object is the
+  the module's exact row (`seekparquet.ListEntry.Exact`, spec LIST-8) in the same request, when that object is the
   first key the listing reached under the prefix. That holds without a cursor and after every cursor a page
   returned: a prefix cursor resumes after all of its prefix's keys, and an object's row cursor never lies inside
   a prefix of the same listing. Only a cursor made up inside a prefix's keys (a row cursor, or a prefix cursor
@@ -314,7 +314,7 @@ Azure versions schema.
 - **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
   a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
   other path only the object whose key equals it. Paths may repeat, nest and overlap; each total is independent.
-  The rows of all paths are planned at once (`seekparquet.Dataset.PlanRanges` of the paths not inside another,
+  The rows of all paths are planned at once (`seekparquet.Dataset.Plan` of the paths not inside another,
   projecting `size` and `last_modified`), which checks every part holding them, and scanned once as `Scan` scans,
   in shards read by `runtime.GOMAXPROCS(0)` goroutines over borrowed batches, so a row several paths select is
   read once; the shards' totals are added up when all have succeeded, their keys in order across shards (as
@@ -340,7 +340,7 @@ Azure versions schema.
   alone. Only a prefix with a known count is summed (a count of 0 sums to 0 without a read); a sum plans the
   rows projecting `size` and scans them once. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
   them in ascending key order and sums one when the compressed size-page bytes it adds to those already
-  selected (`RangePlan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
+  selected (`Plan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
   shared with a prefix already selected counted once) fit what remains of `SumBudgetBytes` (0:
   `DefaultSumBudget`); a prefix inside one already selected adds nothing. Footers, key pages and page indexes
   read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
@@ -360,9 +360,8 @@ Azure versions schema.
   `AggregateOptions`', not a bound on the page's reads. A `Limit` that is not positive or is `math.MaxInt`, and
   an invalid `AggregateOptions`, wrap `ErrInvalidRequest` before any read. Otherwise the errors are `List`'s and
   `Aggregates`'; a context that ends between the two is its error. No entries come with an error. `Stats` is
-  reset at the start and receives the listing's and the aggregation's statistics, on failure too, except that
-  an aggregation plan (`seekparquet.Dataset.PlanRanges`) that fails while planning returns no statistics: its own
-  planning reads are missing, while the listing's and every completed plan's and scan's are counted.
+  reset at the start and receives the listing's and the aggregation's statistics, on failure too, a failed
+  plan's included.
 - **Not checked.** The parts' digests, by any call: they are for checking a dataset after it is copied or moved.
   Whether the listing's source, scope and coverage suit the application: that is the caller's. Rows no request
   decodes, and columns a request does not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull`
@@ -435,8 +434,8 @@ error, a module refusal returned unchanged, and the refusal of a versions schema
 
 `stream_test.go` holds the one-pass `Stream` to the paged `Stream` it replaced (`streamPages`, kept as the
 oracle): the same objects in the same order over the batch scan's, the scan's and a generated fixture (S3, GCS
-and Azure; parts, row groups, 31- to 1,024-row pages), also with the request limit lowered so a pass continues
-after its last row (`StreamStats` holding nothing of the stream during its second request); one request whose `ReadStats` equal one `Range` of every row; an error decoded from a real batch keeps its
+and Azure; parts, row groups, 31- to 1,024-row pages), in one unlimited request (`StreamStats` holding nothing of
+the stream while it runs); one request whose `ReadStats` equal one `Rows` of every row; an error decoded from a real batch keeps its
 kind, column, key and offset when the batch's borrowed keys are overwritten after it; the same row errors (kind,
 column, key) after the same objects, deep in a later page, row group or part, and a part lacking a column;
 a missing part refused after the objects before it; a Source failure at reads spread over the pass returned unchanged after a
@@ -456,7 +455,7 @@ with its own row and entry bytes nil, never 0, without sizes; a kind the schema 
 statistics against a plan, split and shard scans made by hand (1, 8 and 16 shards a worker), a failing row,
 `fn`'s error stopping each shard at its first batch, cancellation (by `fn` on the last batch, and before a scan
 of an empty dataset: never a success), a Source failure while planning (returned unchanged, the failed plan's
-reads absent from `Stats`) and a versions refusal before any read. `TestScanShardsPerWorker` runs `Scan` and
+reads, the part it opened and the read that failed, in `Stats`) and a versions refusal before any read. `TestScanShardsPerWorker` runs `Scan` and
 `ScanBatches` at 1, 2, 4, 8 and 16 shards a worker and 1, 2 and 7 workers: Stream's objects, each batch
 ascending, no more calls of `fn` at once than workers, a bad row's position, and `fn`'s error after at most one
 call a worker. `TestScanSlowShardDoesNotHoldTheRest` holds the first key's batch until the other worker has
@@ -469,7 +468,7 @@ storage class) and its prefixes' aggregates.
 several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects and prefixes; checks an entry's
 values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
 after a prefix's keys, a NUL delimiter, the refusal of a versions schema before any read (statistics reset), a row check failing the listing with its statistics kept, a missing part's
-refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset`. The lister's
+refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset` The lister's
 `TestReaderStreams*` tests open, check and stream datasets its own writer wrote, with the metadata it recorded: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 through `StreamLocal` (kinds, a link target, one without a size kept nil; `Stream` refuses them), and both
 versions schemas opened and refused by `Stream`.

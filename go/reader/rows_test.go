@@ -8,7 +8,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -21,21 +20,19 @@ func row(t *testing.T, id SchemaID, key string, offset int64, values map[string]
 	for _, name := range r.Columns {
 		v, ok := values[name]
 		if !ok {
-			v = seekparquet.Value{Value: parquet.NullValue()}
+			v = seekparquet.NullValue()
 		}
 		r.Values = append(r.Values, v)
 	}
 	return r
 }
 
-func val(v parquet.Value) seekparquet.Value { return seekparquet.Value{Value: v} }
-
-var absent = seekparquet.Value{Absent: true, Value: parquet.NullValue()}
+var absent = seekparquet.AbsentValue()
 
 func TestDecodeKeepsNullsAndPosition(t *testing.T) {
 	r := row(t, S3VersionsV1, "k", 3, map[string]seekparquet.Value{
-		"last_modified": val(parquet.Int64Value(-1)), "version_id": val(parquet.ByteArrayValue([]byte("null"))),
-		"is_latest": val(parquet.BooleanValue(false)), "is_delete_marker": val(parquet.BooleanValue(true)),
+		"last_modified": seekparquet.Int64Value(-1), "version_id": seekparquet.ByteArrayValue([]byte("null")),
+		"is_latest": seekparquet.BooleanValue(false), "is_delete_marker": seekparquet.BooleanValue(true),
 	})
 	v, err := DecodeS3Version(r)
 	if err != nil {
@@ -53,8 +50,8 @@ func TestDecodeKeepsNullsAndPosition(t *testing.T) {
 func TestDecodeUnsignedAndBinary(t *testing.T) {
 	target := []byte{0xff, 0x00, 0xfe}
 	r := row(t, LocalV1, "\xff\x00", 0, map[string]seekparquet.Value{
-		"kind": val(parquet.ByteArrayValue([]byte("SYMLINK"))), "mode": val(parquet.Int32Value(-1)), "gid": val(parquet.Int32Value(0)),
-		"inode": val(parquet.Int64Value(-1)), "dev": val(parquet.Int64Value(1 << 62)), "link_target": val(parquet.ByteArrayValue(target)),
+		"kind": seekparquet.ByteArrayValue([]byte("SYMLINK")), "mode": seekparquet.Int32Value(-1), "gid": seekparquet.Int32Value(0),
+		"inode": seekparquet.Int64Value(-1), "dev": seekparquet.Int64Value(1 << 62), "link_target": seekparquet.ByteArrayValue(target),
 	})
 	e, err := DecodeLocalEntry(r)
 	if err != nil {
@@ -67,7 +64,7 @@ func TestDecodeUnsignedAndBinary(t *testing.T) {
 }
 
 func TestDecodeErrors(t *testing.T) {
-	ok := map[string]seekparquet.Value{"kind": val(parquet.ByteArrayValue([]byte("FILE")))}
+	ok := map[string]seekparquet.Value{"kind": seekparquet.ByteArrayValue([]byte("FILE"))}
 	with := func(name string, v seekparquet.Value) map[string]seekparquet.Value {
 		m := map[string]seekparquet.Value{"kind": ok["kind"]}
 		m[name] = v
@@ -82,8 +79,8 @@ func TestDecodeErrors(t *testing.T) {
 		{"null in a required column", row(t, LocalV1, "k", 0, nil), ErrRow, "kind"},
 		{"absent column", row(t, LocalV1, "k", 0, with("uid", absent)), ErrSchema, "uid"},
 		{"absent required column", row(t, LocalV1, "k", 0, with("kind", absent)), ErrSchema, "kind"},
-		{"another type", row(t, LocalV1, "k", 0, with("size", val(parquet.Int32Value(1)))), ErrSchema, "size"},
-		{"another type, a time", row(t, LocalV1, "k", 0, with("atime", val(parquet.ByteArrayValue([]byte("x"))))), ErrSchema, "atime"},
+		{"another type", row(t, LocalV1, "k", 0, with("size", seekparquet.Int32Value(1))), ErrSchema, "size"},
+		{"another type, a time", row(t, LocalV1, "k", 0, with("atime", seekparquet.ByteArrayValue([]byte("x")))), ErrSchema, "atime"},
 		{"not projected", seekparquet.Row{Key: []byte("k"), Columns: []string{"kind"}, Values: []seekparquet.Value{ok["kind"]}}, ErrSchema, "size"},
 	} {
 		_, err := DecodeLocalEntry(tc.row)
@@ -110,9 +107,9 @@ func TestDecodeErrors(t *testing.T) {
 // TestDecodeAzblobObject: every column of an Azure row, nulls kept nil.
 func TestDecodeAzblobObject(t *testing.T) {
 	r := row(t, AzblobObjectsV1, "dir/blob", 0, map[string]seekparquet.Value{
-		"size": val(parquet.Int64Value(42)), "last_modified": val(parquet.Int64Value(1_767_225_600_000_000)),
-		"etag": val(parquet.ByteArrayValue([]byte("0x8DE"))), "content_type": val(parquet.ByteArrayValue([]byte("text/plain"))),
-		"blob_type": val(parquet.ByteArrayValue([]byte("BlockBlob"))), "creation_time": val(parquet.Int64Value(1_767_225_000_000_000)),
+		"size": seekparquet.Int64Value(42), "last_modified": seekparquet.Int64Value(1_767_225_600_000_000),
+		"etag": seekparquet.ByteArrayValue([]byte("0x8DE")), "content_type": seekparquet.ByteArrayValue([]byte("text/plain")),
+		"blob_type": seekparquet.ByteArrayValue([]byte("BlockBlob")), "creation_time": seekparquet.Int64Value(1_767_225_000_000_000),
 	})
 	o, err := DecodeAzblobObject(r)
 	if err != nil || *o.Size != 42 || *o.ETag != "0x8DE" || *o.ContentType != "text/plain" || *o.BlobType != "BlockBlob" ||
@@ -126,9 +123,9 @@ func TestDecodeAzblobObject(t *testing.T) {
 	// The columns added later: read where present, nil where a part
 	// written before lacks them.
 	r = row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{
-		"access_tier_inferred": val(parquet.BooleanValue(true)), "lease_state": val(parquet.ByteArrayValue([]byte("leased"))),
-		"tag_count": val(parquet.Int64Value(3)), "metadata": val(parquet.ByteArrayValue([]byte(`{"a":"1"}`))),
-		"legal_hold": val(parquet.BooleanValue(false)), "last_access_time": val(parquet.Int64Value(1_767_225_600_000_000)),
+		"access_tier_inferred": seekparquet.BooleanValue(true), "lease_state": seekparquet.ByteArrayValue([]byte("leased")),
+		"tag_count": seekparquet.Int64Value(3), "metadata": seekparquet.ByteArrayValue([]byte(`{"a":"1"}`)),
+		"legal_hold": seekparquet.BooleanValue(false), "last_access_time": seekparquet.Int64Value(1_767_225_600_000_000),
 		"archive_status": absent, "server_encrypted": absent,
 	})
 	o, err = DecodeAzblobObject(r)
@@ -141,9 +138,9 @@ func TestDecodeAzblobObject(t *testing.T) {
 // TestDecodeAzblobVersion: an entry's identity and the current columns.
 func TestDecodeAzblobVersion(t *testing.T) {
 	v, err := DecodeAzblobVersion(row(t, AzblobVersionsV1, "a", 2, map[string]seekparquet.Value{
-		"size": val(parquet.Int64Value(5)), "snapshot": val(parquet.ByteArrayValue([]byte("2026-01-01T00:00:00.0000000Z"))),
-		"is_latest": val(parquet.BooleanValue(false)), "is_deleted": val(parquet.BooleanValue(true)),
-		"deleted_time": val(parquet.Int64Value(1_767_225_600_000_000)), "remaining_retention_days": val(parquet.Int64Value(0)),
+		"size": seekparquet.Int64Value(5), "snapshot": seekparquet.ByteArrayValue([]byte("2026-01-01T00:00:00.0000000Z")),
+		"is_latest": seekparquet.BooleanValue(false), "is_deleted": seekparquet.BooleanValue(true),
+		"deleted_time": seekparquet.Int64Value(1_767_225_600_000_000), "remaining_retention_days": seekparquet.Int64Value(0),
 	}))
 	if err != nil || *v.Size != 5 || v.VersionID != nil || *v.Snapshot != "2026-01-01T00:00:00.0000000Z" || v.IsLatest || !v.IsDeleted ||
 		v.DeletedTime.Unix() != 1_767_225_600 || *v.RemainingRetentionDays != 0 || v.Offset != 2 {
@@ -155,7 +152,7 @@ func TestDecodeAzblobVersion(t *testing.T) {
 }
 
 func TestDecodeObject(t *testing.T) {
-	values := map[string]seekparquet.Value{"size": val(parquet.Int64Value(7)), "storage_class": val(parquet.ByteArrayValue([]byte("STANDARD")))}
+	values := map[string]seekparquet.Value{"size": seekparquet.Int64Value(7), "storage_class": seekparquet.ByteArrayValue([]byte("STANDARD"))}
 	for _, id := range []SchemaID{S3ObjectsV1, GCSObjectsV1} {
 		o, err := DecodeObject(id, row(t, id, "k", 0, values))
 		if err != nil || *o.Size != 7 || *o.StorageClass != "STANDARD" || o.ETag != nil || o.LastModified != nil || string(o.Key) != "k" {
@@ -164,11 +161,11 @@ func TestDecodeObject(t *testing.T) {
 	}
 	// An Azure blob's storage class is its access tier.
 	o, err := DecodeObject(AzblobObjectsV1, row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{
-		"size": val(parquet.Int64Value(7)), "access_tier": val(parquet.ByteArrayValue([]byte("Cool")))}))
+		"size": seekparquet.Int64Value(7), "access_tier": seekparquet.ByteArrayValue([]byte("Cool"))}))
 	if err != nil || *o.Size != 7 || *o.StorageClass != "Cool" {
 		t.Fatalf("azblob: %+v, %v", o, err)
 	}
-	local := row(t, LocalV1, "d/", 0, map[string]seekparquet.Value{"size": val(parquet.Int64Value(0)), "kind": val(parquet.ByteArrayValue([]byte("DIR")))})
+	local := row(t, LocalV1, "d/", 0, map[string]seekparquet.Value{"size": seekparquet.Int64Value(0), "kind": seekparquet.ByteArrayValue([]byte("DIR"))})
 	if o, err := DecodeObject(LocalV1, local); err != nil || *o.Size != 0 || o.LastModified != nil || o.ETag != nil || o.StorageClass != nil || string(o.Key) != "d/" {
 		t.Fatalf("%s: %+v, %v", LocalV1, o, err)
 	}

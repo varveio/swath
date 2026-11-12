@@ -75,7 +75,7 @@ func (e Entry) Cursor() *Cursor {
 // column of LocalEntry. Repeating the request with the Cursor of each
 // page's last entry returns every entry once. A common prefix carries the
 // row at its exact key (Entry) from the module's exact row
-// (seekparquet.Entry.Exact), without another request.
+// (seekparquet.ListEntry.Exact), without another request.
 //
 // A versions schema is refused with a SemanticError of KindSchema before
 // any read, as Stream refuses it. Each row, a prefix's included, is
@@ -96,8 +96,8 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	if local {
 		columns = d.spec.ColumnNames()
 	}
-	got, err := d.sp.List(ctx, seekparquet.List{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
-		Limit: req.Limit, Columns: columns, Stats: req.Stats})
+	got, err := d.sp.List(ctx, seekparquet.ListQuery{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
+		Limit: req.Limit, Columns: columns}, req.Stats)
 	if err != nil {
 		return nil, err
 	}

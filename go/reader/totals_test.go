@@ -404,7 +404,7 @@ func (s *countingSource) taken() ([]string, []sourceRead) {
 func openSource(t *testing.T, dir string) (*Dataset, *countingSource) {
 	t.Helper()
 	src := newCountingSource(t, dir)
-	d, err := Open(context.Background(), src, seekparquet.Options{})
+	d, err := Open(context.Background(), src, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestTotalsHonorCancellationOnWarmDirectory(t *testing.T) {
 
 // TestTotalsAfterCloseFails (varve TestTotalsAfterCloseFails).
 func TestTotalsAfterCloseFails(t *testing.T) {
-	d, err := OpenDir(context.Background(), writeDataset(t, s3Spec(), s3Rows(5)), seekparquet.Options{})
+	d, err := OpenDir(context.Background(), writeDataset(t, s3Spec(), s3Rows(5)), seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,6 +727,19 @@ type serialSpanSums struct {
 	exact map[string]Object
 }
 
+// eachRow is a batch callback handing fn an owning copy of every row of
+// each batch (Batch.Row), as the module's row-callback Plan.Scan did.
+func eachRow(fn func(seekparquet.Row) error) func(*seekparquet.Batch) error {
+	return func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			if err := fn(b.Row(i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 // serialSumSpans plans the rows of spans projecting columns ("size", and
 // "last_modified" when it is to be summed too) and scans them once, adding
 // each object to every span holding its key. It records each object whose
@@ -736,11 +749,12 @@ func serialSumSpans(ctx context.Context, d *Dataset, spans []keySpan, columns []
 	if len(spans) == 0 {
 		return out, nil
 	}
-	plan, err := d.sp.PlanRanges(ctx, ranges(spans), columns)
+	var planned ReadStats
+	plan, err := d.sp.Plan(ctx, selections(spans), columns, &planned)
+	addStats(st, planned)
 	if err != nil {
 		return serialSpanSums{}, err
 	}
-	addStats(st, plan.Stats())
 	order := make([]int, len(spans))
 	for i := range order {
 		order[i] = i
@@ -755,7 +769,7 @@ func serialSumSpans(ctx context.Context, d *Dataset, spans []keySpan, columns []
 	next := 0
 	var scanned ReadStats
 	defer func() { addStats(st, scanned) }()
-	err = plan.Scan(ctx, &scanned, func(r seekparquet.Row) error {
+	err = plan.Scan(ctx, &scanned, eachRow(func(r seekparquet.Row) error {
 		dec := decoder{spec: d.spec, row: &r}
 		o := Object{Position: dec.position(), Size: dec.int64("size")}
 		if timed {
@@ -780,7 +794,7 @@ func serialSumSpans(ctx context.Context, d *Dataset, spans []keySpan, columns []
 			out.exact[string(r.Key)] = o
 		}
 		return nil
-	})
+	}))
 	if err != nil {
 		return serialSpanSums{}, err
 	}

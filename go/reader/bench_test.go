@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 
 // benchWarm opens the dataset and reads it once through read, untimed.
 func benchWarm(b *testing.B, dir string, read func(*Dataset)) *Dataset {
-	d, err := OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}

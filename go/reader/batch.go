@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -49,7 +48,7 @@ type BatchScanRequest struct {
 type ObjectBatch struct {
 	raw                         *seekparquet.Batch
 	fields                      ObjectFields
-	size, modified, etag, class []parquet.Value
+	size, modified, etag, class seekparquet.ColumnView
 }
 
 // Fields returns the requested optional fields.
@@ -62,28 +61,27 @@ func (b *ObjectBatch) Len() int { return b.raw.Len() }
 func (b *ObjectBatch) Key(i int) []byte { return b.raw.Key(i) }
 
 // Size returns object i's size, checked present and non-negative.
-func (b *ObjectBatch) Size(i int) int64 { return b.size[i].Int64() }
+func (b *ObjectBatch) Size(i int) int64 { return b.size.Int64(i) }
 
 // LastModified returns UTC microseconds since the Unix epoch and whether
 // object i's last_modified is non-null. Requires FieldLastModified.
 func (b *ObjectBatch) LastModified(i int) (micros int64, ok bool) {
 	b.require(FieldLastModified)
-	v := b.modified[i]
-	return v.Int64(), !v.IsNull()
+	return b.modified.Int64(i), !b.modified.IsNull(i)
 }
 
 // ETag returns object i's borrowed ETag bytes and whether it is non-null.
 // Requires FieldETag. Empty and null are distinct.
 func (b *ObjectBatch) ETag(i int) ([]byte, bool) {
 	b.require(FieldETag)
-	return batchBytes(b.etag[i])
+	return b.etag.Bytes(i), !b.etag.IsNull(i)
 }
 
 // StorageClass returns object i's borrowed storage class (access_tier on
 // Azure) and whether it is non-null. Requires FieldStorageClass.
 func (b *ObjectBatch) StorageClass(i int) ([]byte, bool) {
 	b.require(FieldStorageClass)
-	return batchBytes(b.class[i])
+	return b.class.Bytes(i), !b.class.IsNull(i)
 }
 
 // Cursor returns an owning cursor after object i, safe to retain.
@@ -93,11 +91,6 @@ func (b *ObjectBatch) require(field ObjectFields) {
 	if b.fields&field == 0 {
 		panic("reader: object field was not requested")
 	}
-}
-
-func batchBytes(v parquet.Value) ([]byte, bool) {
-	p := v.ByteArray()
-	return p[:len(p):len(p)], !v.IsNull()
 }
 
 // ScanBatches hands fn borrowed column batches of current S3, GCS or Azure
@@ -144,16 +137,16 @@ func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func
 		}
 	}
 	return d.scan(ctx, ScanRequest{Prefix: req.Prefix, Workers: req.Workers, Stats: req.Stats}, columns, func() shardScan {
-		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error {
+		return func(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys) error {
 			return d.scanBatchShard(ctx, shard, st, keys, req.Fields, columns, fn)
 		}
 	})
 }
 
-func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
+func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
 	b := ObjectBatch{fields: fields}
 	part := -1
-	return shard.ScanBatches(ctx, st, func(raw *seekparquet.Batch) error {
+	return shard.Scan(ctx, st, func(raw *seekparquet.Batch) error {
 		b.raw = raw
 		// Release all borrowed references before returning to the decoder,
 		// including on errors. The wrapper itself is reused within this shard.
@@ -166,14 +159,14 @@ func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePl
 				return err
 			}
 		}
-		b.size, _ = raw.Column(0)
+		b.size = raw.Column(0)
 		c := 1
 		for _, slot := range []struct {
 			field  ObjectFields
-			values *[]parquet.Value
+			values *seekparquet.ColumnView
 		}{{FieldLastModified, &b.modified}, {FieldETag, &b.etag}, {FieldStorageClass, &b.class}} {
 			if fields&slot.field != 0 {
-				*slot.values, _ = raw.Column(c)
+				*slot.values = raw.Column(c)
 				c++
 			}
 		}
@@ -220,15 +213,20 @@ func (d *Dataset) checkBatchColumns(ctx context.Context, part int, names []strin
 	return nil
 }
 
+// check checks every size and requested modification time of the batch.
+// The part's columns were checked (checkBatchColumns): size and
+// last_modified are present INT64 columns, so their typed accessors apply.
 func (b *ObjectBatch) check() error {
-	for i, v := range b.size {
-		if err := checkSize(v.Int64(), !v.IsNull(), false); err != nil {
+	size := b.size
+	for i, n := 0, size.Len(); i < n; i++ {
+		if err := checkSize(size.Int64(i), !size.IsNull(i), false); err != nil {
 			return &SemanticError{Kind: KindRow, Column: "size", Row: b.position(i), Err: err}
 		}
 	}
-	for i, v := range b.modified {
-		if !v.IsNull() && !objectMicrosInRange(v.Int64()) {
-			return semantic(KindRow, "last_modified", b.position(i), "%d µs is outside the years 1 to 9999", v.Int64())
+	modified := b.modified // not Present, of no rows, when not requested
+	for i, n := 0, modified.Len(); i < n; i++ {
+		if t := modified.Int64(i); !modified.IsNull(i) && !objectMicrosInRange(t) {
+			return semantic(KindRow, "last_modified", b.position(i), "%d µs is outside the years 1 to 9999", t)
 		}
 	}
 	return nil

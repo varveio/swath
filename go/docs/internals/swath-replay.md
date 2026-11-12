@@ -246,8 +246,9 @@ Windows are evicted least recently used first, past `--prefetch-max-windows` win
 windows serves 96 walks); a window's rows are held packed, the keys and each text column in one array
 apiece (about 130 bytes a row for the canonical schema with 44-byte keys). A fill packs straight from the
 decoded pages: over a SeekParquet dataset it takes the seekparquet module's borrowed batches
-(`Dataset.RangeBatches`) and copies each key and value once, into the packed arrays, with no owning row or
-cloned value between (`store` `TestSeekScanPacksAsOwnedRows`). A fill whose keys or a text column would
+(`Dataset.Scan`), reads each projected column through its column view's typed accessors (`ColumnView.Int64`,
+`Bytes`, `IsNull`) and copies each key and value once, into the packed arrays, with no owning row,
+cloned value or intermediate value slice between (`store` `TestSeekScanPacksAsOwnedRows`). A fill whose keys or a text column would
 outgrow the packed offsets stops reading at the next batch and is read again unpacked. With the defaults the cache holds
 up to 2.4 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
 turns the cache off: every read then decodes its pages from the fixture. The cache's meters are `prefetch.*`

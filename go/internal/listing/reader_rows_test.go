@@ -33,7 +33,7 @@ func readAll[P, T any](t *testing.T, s *schema.Schema[P], kind string, rows []sc
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, kind, s, rows, maxRows)
 	ctx := context.Background()
-	d, err := seekparquet.OpenDir(ctx, dir, seekparquet.Options{})
+	d, err := seekparquet.OpenDir(ctx, dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func readAll[P, T any](t *testing.T, s *schema.Schema[P], kind string, rows []sc
 	var out []T
 	var cur *seekparquet.Cursor
 	for {
-		page, err := d.Range(ctx, seekparquet.Range{Cursor: cur, Limit: limit, Columns: spec.ColumnNames()})
+		page, err := d.Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Cursor: cur}, Limit: int64(limit), Columns: spec.ColumnNames()}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,12 +159,12 @@ func TestReaderPagesS3VersionGroups(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, "s3", &s3.VersionsSchema, rows, 0)
-	d, err := seekparquet.OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := seekparquet.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	page, err := d.Range(context.Background(), seekparquet.Range{Limit: 1, Columns: []string{"size"}})
+	page, err := d.Rows(context.Background(), seekparquet.Query{Limit: 1, Columns: []string{"size"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,13 +217,13 @@ func TestReaderDecodesGCS(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, "gcs", without(gcs.Schema, "md5"), rows, 0)
-	d, err := seekparquet.OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := seekparquet.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
 	spec, _ := reader.Schema(reader.GCSObjectsV1)
-	page, err := d.Range(context.Background(), seekparquet.Range{Limit: 1, Columns: spec.ColumnNames()})
+	page, err := d.Rows(context.Background(), seekparquet.Query{Limit: 1, Columns: spec.ColumnNames()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

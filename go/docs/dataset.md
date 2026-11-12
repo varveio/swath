@@ -46,8 +46,8 @@ manifest declaring `key_unique: false`, all of which `Scan` accepts (optional co
 selected). Part schema errors name the part and have `Row == nil`; value errors name the bad row.
 The borrowed batch lifetime, null semantics and errors are defined by the [reader API](../reader/README.md).
 
-`reader.Stream` (and `StreamLocal`) reads the whole dataset in one ordered pass of SeekParquet's limited
-batch reads (`Dataset.RangeBatches`, no plan) and hands on complete owning Objects, decoded and checked by the
+`reader.Stream` (and `StreamLocal`) reads the whole dataset in one ordered pass of SeekParquet's
+batch reads (`Dataset.Scan`, no plan, no limit) and hands on complete owning Objects, decoded and checked by the
 schema's row decoder. It opens and checks each part when the pass reaches it, not before the first object, so a
 part or page that fails ends the stream after the objects of the pages before it. Its errors, cancellation,
 `Close` rule and `StreamStats` are defined by the [reader API](../reader/README.md).
@@ -303,7 +303,7 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   cursor `(key, offset)` continues after that row, at offset + 1 of the same key, then at the next key
   ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md)). A cursor is
   always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key `k`". To skip every row
-  of `k`, use an exclusive key bound (`seekparquet.Range` with `Start` = `k` and `StartExclusive`), which skips the group's
+  of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k` and `StartExclusive`), which skips the group's
   remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
 - **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
   so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.

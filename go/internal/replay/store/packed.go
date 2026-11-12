@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // packed holds a window's rows column by column in arrays without
@@ -48,7 +49,7 @@ func textFields(o *Object) [8]**string {
 	return [8]**string{&o.ETag, &o.StorageClass, &o.OwnerID, &o.OwnerDisplayName, &o.ChecksumAlgorithm, &o.ChecksumType, &o.ContentType, &o.MD5}
 }
 
-// packer is the legacy.ColumnSink that packs a read for the
+// packer is the columnSink that packs a read for the
 // projection: the Objects it unpacks are those objectProjection.object
 // makes of the same rows (a column the read did not project, or a null
 // value, is a nil field). Offsets are uint32 to keep a window's index
@@ -179,6 +180,32 @@ func (k *packer) Values(c int, values []parquet.Value) {
 			arena.Write(v.ByteArray())
 			col.end = append(col.end, uint32(arena.Len()))
 			col.null = append(col.null, v.IsNull())
+		}
+	}
+}
+
+// View packs a column view as Values packs page values, through the view's
+// typed accessors: a packed column is INT64 or BYTE_ARRAY
+// (legacy.CheckColumns), whose nulls read as 0 and no bytes.
+func (k *packer) View(c int, values seekparquet.ColumnView) {
+	n := values.Len()
+	switch slot, col := k.slots[c], k.ints(k.slots[c]); {
+	case slot < 0 || k.overflow:
+	case col != nil:
+		for i := 0; i < n; i++ {
+			col.values = append(col.values, values.Int64(i))
+			col.null = append(col.null, values.IsNull(i))
+		}
+	default:
+		col, arena := k.text(slot)
+		for i := 0; i < n; i++ {
+			v := values.Bytes(i)
+			if !k.fits(arena.Len(), len(v)) {
+				return
+			}
+			arena.Write(v)
+			col.end = append(col.end, uint32(arena.Len()))
+			col.null = append(col.null, values.IsNull(i))
 		}
 	}
 }

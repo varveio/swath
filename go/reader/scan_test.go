@@ -95,21 +95,21 @@ func TestScanStats(t *testing.T) {
 		for _, workers := range []int{1, 7} {
 			ctx := context.Background()
 			sp := openDir(t, dir).SeekParquet()
-			plan, err := sp.PlanRanges(ctx, []seekparquet.Range{{}}, objectColumns(S3ObjectsV1))
+			var want, st ReadStats
+			plan, err := sp.Plan(ctx, []seekparquet.Selection{{}}, objectColumns(S3ObjectsV1), &st)
+			addStats(&want, st)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := plan.Stats()
-			shards, err := plan.Split(ctx, scanShards(workers))
+			shards, err := plan.Split(ctx, scanShards(workers), &st)
+			addStats(&want, st)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, shard := range shards {
-				var st ReadStats
-				if err := shard.Scan(ctx, &st, func(seekparquet.Row) error { return nil }); err != nil {
+				if err := shard.Scan(ctx, &st, func(*seekparquet.Batch) error { return nil }); err != nil {
 					t.Fatal(err)
 				}
-				addStats(&want, shard.Stats())
 				addStats(&want, st)
 			}
 			got := ReadStats{PartsOpened: -1}
@@ -186,7 +186,7 @@ func BenchmarkScan(b *testing.B) {
 	for _, workers := range []int{1, runtime.GOMAXPROCS(0)} {
 		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
 			for b.Loop() {
-				d, err := OpenDir(context.Background(), dir, seekparquet.Options{})
+				d, err := OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -229,24 +229,27 @@ func TestScanContextEnded(t *testing.T) {
 }
 
 // TestScanPlanFailureStats: a Source failure while planning is returned
-// unchanged, and, as documented, the failed plan's own reads are not in
-// Stats, which holds no other work.
+// unchanged, and, as documented, the failed plan's own reads are in Stats
+// (the part it opened to check and the read that failed), which holds no
+// other work.
 func TestScanPlanFailureStats(t *testing.T) {
 	d, src := openSource(t, scanDir(t, 3000, 200))
 	failure := errors.New("failing read")
 	src.mu.Lock()
 	src.failAt, src.failErr = len(src.reads)+1, failure
+	opened := len(src.reads)
 	src.mu.Unlock()
 	st := ReadStats{PartsOpened: 7}
 	err := d.Scan(context.Background(), ScanRequest{Workers: 4, Stats: &st}, func([]Object) error {
 		t.Fatal("fn called")
 		return nil
 	})
-	if !errors.Is(err, failure) || st != (ReadStats{}) {
-		t.Fatalf("plan failure: %v, stats %+v", err, st)
+	_, reads := src.taken()
+	if len(reads) != opened+1 {
+		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
 	}
-	if _, reads := src.taken(); len(reads) == 0 {
-		t.Fatal("planning read nothing")
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
+		t.Fatalf("plan failure: %v, stats %+v, want %+v", err, st, want)
 	}
 }
 

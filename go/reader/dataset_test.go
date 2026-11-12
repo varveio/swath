@@ -135,7 +135,7 @@ func (r *rowReader) ReadRows(out []parquet.Row) (int, error) {
 
 func openDir(t *testing.T, dir string) *Dataset {
 	t.Helper()
-	d, err := OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,15 +189,15 @@ func TestOpenRecordsCoverage(t *testing.T) {
 func TestOpenUnknownSchemaID(t *testing.T) {
 	s := s3Spec()
 	s.id = "swath/canonical"
-	_, err := OpenDir(context.Background(), writeDataset[s3Row](t, s, nil), seekparquet.Options{})
+	_, err := OpenDir(context.Background(), writeDataset[s3Row](t, s, nil), seekparquet.OpenOptions{})
 	if !errors.Is(err, ErrSchema) {
 		t.Fatalf("open: %v, want a schema error", err)
 	}
 }
 
 func TestOpenRefusalUnchanged(t *testing.T) {
-	_, err := OpenDir(context.Background(), t.TempDir(), seekparquet.Options{})
-	if seekparquet.CodeOf(err) != seekparquet.CodeNoManifest {
+	_, err := OpenDir(context.Background(), t.TempDir(), seekparquet.OpenOptions{})
+	if seekparquet.RefusalCodeOf(err) != seekparquet.CodeNoManifest {
 		t.Fatalf("open an empty directory: %v", err)
 	}
 }
@@ -428,7 +428,7 @@ func TestStreamRefusalUnchanged(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("%d objects before the part that failed, want the 5 before it", len(got))
 	}
-	if err := d.CheckSchema(context.Background()); seekparquet.CodeOf(err) != seekparquet.CodeMissingPart {
+	if err := d.CheckSchema(context.Background()); seekparquet.RefusalCodeOf(err) != seekparquet.CodeMissingPart {
 		t.Fatalf("check schema with a part missing: %v", err)
 	}
 }

@@ -268,11 +268,11 @@ func TestAggregatesSumsStayWithinBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ranges []seekparquet.Range
+	var ranges []seekparquet.Selection
 	for _, c := range children {
-		ranges = append(ranges, seekparquet.PrefixRange(c, 0))
+		ranges = append(ranges, seekparquet.Selection{Span: seekparquet.PrefixSpan(c)})
 	}
-	plan, err := openDir(t, dir).SeekParquet().PlanRanges(context.Background(), ranges, []string{"size"})
+	plan, err := openDir(t, dir).SeekParquet().Plan(context.Background(), ranges, []string{"size"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestAggregatesSumsStayWithinBudget(t *testing.T) {
 	// first has paid for the page, and is summed with it.
 	siblings := [][]byte{[]byte("a/"), []byte("b/")}
 	sd := openDir(t, writeDataset(t, s3Spec(), keyRows([]string{"a/1", "b/1"})))
-	page, err := sd.SeekParquet().PlanRanges(context.Background(), []seekparquet.Range{seekparquet.PrefixRange(siblings[0], 0)}, []string{"size"})
+	page, err := sd.SeekParquet().Plan(context.Background(), []seekparquet.Selection{seekparquet.Selection{Span: seekparquet.PrefixSpan(siblings[0])}}, []string{"size"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestAggregatesCountsUseOnlyVerifiedRowCounts(t *testing.T) {
 			t.Errorf("sums %d: b/ %s, want count 1 and bytes 2 when summed", sums, describeAggregate(b))
 		}
 	}
-	if _, err := d.SeekParquet().Range(context.Background(), seekparquet.PrefixRange([]byte("a/"), 10)); seekparquet.CodeOf(err) == "" {
+	if _, err := d.SeekParquet().Rows(context.Background(), seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.PrefixSpan([]byte("a/"))}, Limit: 10}, nil); seekparquet.RefusalCodeOf(err) == "" {
 		t.Errorf("a read of a/: %v, want a refusal", err)
 	}
 }
@@ -413,7 +413,7 @@ func TestAggregatesOneByteSumBudgetOpensNothingNew(t *testing.T) {
 	prefixes := [][]byte{[]byte("a/"), []byte("b/")}
 	request := func(opt AggregateOptions) ([]PrefixAggregate, []string, []sourceRead) {
 		d, src := openSource(t, dir)
-		if _, err := d.SeekParquet().Range(context.Background(), seekparquet.PrefixRange([]byte("a/"), 1000)); err != nil {
+		if _, err := d.SeekParquet().Rows(context.Background(), seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.PrefixSpan([]byte("a/"))}, Limit: 1000}, nil); err != nil {
 			t.Fatal(err)
 		}
 		src.reset()

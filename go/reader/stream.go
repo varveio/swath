@@ -7,20 +7,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"slices"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // StreamStats is the work of the Streams on a Dataset, summed over every
-// request they made: the requests (the seekparquet.Dataset.RangeBatches
-// calls: one for each Stream that reaches the read, whether it succeeds,
-// fails or finds its context ended, none for one refused before it; only
-// a dataset of more than math.MaxInt rows, where int is 32 bits, takes
-// more, floor(rows/math.MaxInt)+1), the objects handed to fn, and the
-// module's counts (seekparquet.ReadStats, including a failed read's),
-// which are diagnostics, not a contract.
+// request they made: the requests (the seekparquet.Dataset.Scan calls: one
+// for each Stream that reaches the read, whether it succeeds, fails or
+// finds its context ended, none for one refused before it), the objects
+// handed to fn, and the module's counts (seekparquet.ReadStats, including
+// a failed read's), which are diagnostics, not a contract.
 type StreamStats struct {
 	Requests int64
 	Objects  int64
@@ -40,7 +37,7 @@ func (d *Dataset) StreamStats() StreamStats {
 // Stream hands fn every current object of the dataset (an S3, Cloud
 // Storage or Azure Blob object) in dataset order: ascending unsigned byte
 // order of the keys. It reads the dataset in one ordered pass of borrowed
-// batches (seekparquet.Dataset.RangeBatches, with no plan), projecting
+// batches (seekparquet.Dataset.Scan, with no plan and no limit), projecting
 // only the columns Object holds, and opens each part, row group and
 // projected column chunk as the pass reaches it. Each Object owns its
 // memory (its Key and strings are copies), so fn may keep or change it.
@@ -99,12 +96,7 @@ func (d *Dataset) batchObject(b *seekparquet.Batch, i int, columns []string, val
 // key and values (b.Row(i) without the copies), its Values in values.
 func batchRow(b *seekparquet.Batch, i int, columns []string, values []seekparquet.Value) seekparquet.Row {
 	for c := range values {
-		col, ok := b.Column(c)
-		if ok {
-			values[c] = seekparquet.Value{Value: col[i]}
-		} else {
-			values[c] = seekparquet.Value{Absent: true}
-		}
+		values[c] = b.Column(c).Value(i)
 	}
 	return seekparquet.Row{Key: b.Key(i), Offset: b.Offset(i), Columns: columns, Values: values}
 }
@@ -128,17 +120,11 @@ func (d *Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) er
 	}, fn)
 }
 
-// streamLimit is the Limit of one Stream request: RangeBatches' largest,
-// so a pass reads the whole dataset, unless it has more rows (int of 32
-// bits); a test lowers it.
-var streamLimit = math.MaxInt
-
 // streamRows reads the dataset in one ordered pass of batches projecting
-// columns, and hands fn what decode returns for each row. A pass that
-// stops at streamLimit continues in another request after its last row.
-// An error of the callback (the context's, decode's or fn's) is returned
-// as it is, never wrapped by the module's ErrClosed. The stream's
-// statistics are summed here and added to the Dataset's once, on return.
+// columns, one unlimited request, and hands fn what decode returns for
+// each row. An error of the callback (the context's, decode's or fn's) is
+// returned as it is, never wrapped by the module's ErrClosed. The stream's
+// statistics are added to the Dataset's once, on return.
 func streamRows[T any](ctx context.Context, d *Dataset, columns []string, decode func(*seekparquet.Batch, int) (T, error), fn func(T) error) error {
 	var stats StreamStats
 	defer func() {
@@ -146,9 +132,8 @@ func streamRows[T any](ctx context.Context, d *Dataset, columns []string, decode
 		defer d.statsMu.Unlock()
 		d.stats.Requests += stats.Requests
 		d.stats.Objects += stats.Objects
-		addStats(&d.stats.ReadStats, stats.ReadStats)
+		d.stats.ReadStats.Add(stats.ReadStats)
 	}()
-	var cursor *seekparquet.Cursor
 	var stop error
 	each := func(b *seekparquet.Batch, i int) error {
 		if err := ctx.Err(); err != nil {
@@ -161,30 +146,19 @@ func streamRows[T any](ctx context.Context, d *Dataset, columns []string, decode
 		stats.Objects++
 		return fn(v)
 	}
-	for {
-		var st seekparquet.ReadStats
-		rows := 0
-		err := d.sp.RangeBatches(ctx, seekparquet.Range{Cursor: cursor, Limit: streamLimit, Columns: columns, Stats: &st},
-			func(b *seekparquet.Batch) error {
-				for i := range b.Len() {
-					if stop = each(b, i); stop != nil {
-						return stop
-					}
-				}
-				if rows += b.Len(); rows == streamLimit {
-					cursor = b.Cursor(b.Len() - 1)
-				}
-				return nil
-			})
-		stats.Requests++
-		addStats(&stats.ReadStats, st)
-		if stop != nil {
-			return stop
+	err := d.sp.Scan(ctx, seekparquet.Query{Columns: columns}, &stats.ReadStats, func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			if stop = each(b, i); stop != nil {
+				return stop
+			}
 		}
-		if err != nil || rows < streamLimit {
-			return err
-		}
+		return nil
+	})
+	stats.Requests++
+	if stop != nil {
+		return stop
 	}
+	return err
 }
 
 // currentColumns returns the columns Stream and Scan project, refusing a
@@ -266,18 +240,7 @@ func objectMicrosInRange(micros int64) bool {
 
 // addStats adds a request's statistics to s, when s is not nil.
 func addStats(s *ReadStats, st ReadStats) {
-	if s == nil {
-		return
+	if s != nil {
+		s.Add(st)
 	}
-	s.PartsOpened += st.PartsOpened
-	s.KeyPagesDecoded += st.KeyPagesDecoded
-	s.ValuePagesDecoded += st.ValuePagesDecoded
-	s.KeysDecoded += st.KeysDecoded
-	s.RowGroupsOpened += st.RowGroupsOpened
-	s.IndexLoads += st.IndexLoads
-	s.PageIndexSeeks += st.PageIndexSeeks
-	s.PrefixSkips += st.PrefixSkips
-	s.GroupsSkipped += st.GroupsSkipped
-	s.SourceReads += st.SourceReads
-	s.SourceBytes += st.SourceBytes
 }

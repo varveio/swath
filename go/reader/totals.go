@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -54,8 +53,8 @@ type PathTotals struct {
 // equals it. Paths may repeat, nest and overlap; each total is
 // independent and inclusive.
 //
-// Totals plans the rows of every path at once (seekparquet.Dataset.
-// PlanRanges of the paths not inside another, projecting size and
+// Totals plans the rows of every path at once (seekparquet.Dataset.Plan
+// of the paths not inside another, projecting size and
 // last_modified), which checks every part holding one of them, and scans
 // that plan as Scan does, in shards of consecutive rows read by
 // runtime.GOMAXPROCS(0) goroutines at once over borrowed batches: a row
@@ -150,25 +149,38 @@ func (d *Dataset) totals(ctx context.Context, paths []string, workers int) ([]Pa
 // found, by one plan of their keys.
 func (d *Dataset) fillExact(ctx context.Context, totals []PathTotals, columns []string) error {
 	at := make(map[string]*Object)
-	var ranges []seekparquet.Range
+	var selections []seekparquet.Selection
 	for i := range totals {
 		if o := totals[i].Exact; o != nil && len(columns) > 0 {
 			at[string(o.Key)] = o
-			ranges = append(ranges, seekparquet.KeyRange(o.Key, 0))
+			selections = append(selections, seekparquet.Selection{Span: seekparquet.KeySpan(o.Key)})
 		}
 	}
-	if len(ranges) == 0 {
+	if len(selections) == 0 {
 		return nil
 	}
-	plan, err := d.sp.PlanRanges(ctx, ranges, columns)
+	plan, err := d.sp.Plan(ctx, selections, columns, nil)
 	if err != nil {
 		return err
 	}
-	return plan.Scan(ctx, nil, func(r seekparquet.Row) error {
-		o := at[string(r.Key)]
-		dec := decoder{spec: d.spec, row: &r}
-		o.ETag, o.StorageClass = dec.string(columns[0]), dec.string(columns[1])
-		return dec.err
+	values := make([]seekparquet.Value, len(columns))
+	return plan.Scan(ctx, nil, func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			// A borrowed row: the decoder copies the strings it keeps.
+			r := batchRow(b, i, columns, values)
+			o := at[string(r.Key)]
+			dec := decoder{spec: d.spec, row: &r}
+			o.ETag, o.StorageClass = dec.string(columns[0]), dec.string(columns[1])
+			if dec.err != nil {
+				// Decoded again from an owning row, so the error owns its key.
+				r = b.Row(i)
+				dec = decoder{spec: d.spec, row: &r}
+				dec.string(columns[0])
+				dec.string(columns[1])
+				return dec.err
+			}
+		}
+		return nil
 	})
 }
 
@@ -178,7 +190,7 @@ func (d *Dataset) usable(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := d.sp.PlanRanges(ctx, nil, nil)
+	_, err := d.sp.Plan(ctx, nil, nil, nil)
 	return err
 }
 
@@ -203,11 +215,11 @@ func prefixSpan(prefix []byte) keySpan {
 // keySpanOf is key alone.
 func keySpanOf(key []byte) keySpan { return keySpan{lo: key, hi: append(bytes.Clone(key), 0)} }
 
-func (s keySpan) rng() seekparquet.Range {
+func (s keySpan) selection() seekparquet.Selection {
 	if len(s.lo) == 0 {
-		return seekparquet.Range{End: s.hi}
+		return seekparquet.Selection{Span: seekparquet.Span{End: s.hi}}
 	}
-	return seekparquet.Range{Start: s.lo, End: s.hi}
+	return seekparquet.Selection{Span: seekparquet.Span{Start: s.lo, End: s.hi}}
 }
 
 // contains reports whether s holds every key of t.
@@ -215,10 +227,10 @@ func (s keySpan) contains(t keySpan) bool {
 	return bytes.Compare(s.lo, t.lo) <= 0 && (s.hi == nil || t.hi != nil && bytes.Compare(t.hi, s.hi) <= 0)
 }
 
-func ranges(spans []keySpan) []seekparquet.Range {
-	out := make([]seekparquet.Range, len(spans))
+func selections(spans []keySpan) []seekparquet.Selection {
+	out := make([]seekparquet.Selection, len(spans))
 	for i, s := range spans {
-		out[i] = s.rng()
+		out[i] = s.selection()
 	}
 	return out
 }
@@ -241,13 +253,15 @@ func distinct[T ~string | ~[]byte](in []T) (unique []T, of []int) {
 }
 
 // count returns the number of rows of span, nil when the plan's count
-// relies on a part no read has checked.
+// relies on a part no read has checked. Planning's reads are added to st,
+// a failed plan's too.
 func (d *Dataset) count(ctx context.Context, span keySpan, st *ReadStats) (*int64, error) {
-	plan, err := d.sp.PlanRanges(ctx, []seekparquet.Range{span.rng()}, nil)
+	var planned ReadStats
+	plan, err := d.sp.Plan(ctx, []seekparquet.Selection{span.selection()}, nil, &planned)
+	addStats(st, planned)
 	if err != nil {
 		return nil, err
 	}
-	addStats(st, plan.Stats())
 	n, exact := plan.Count()
 	if !exact {
 		return nil, nil
@@ -265,7 +279,7 @@ type spanSums struct {
 // sumSpans plans the rows of spans projecting columns ("size", and
 // "last_modified" when it is to be summed too), as ranges of the spans not
 // inside another, and scans them once, in shards of consecutive rows read
-// by up to workers goroutines at once (scanRanges). Each shard adds its
+// by up to workers goroutines at once (scanSelections). Each shard adds its
 // objects to every span holding them, over borrowed batches, and the
 // shards' sums are added up when they all succeed. It records each object
 // whose key is a span's lower bound, with what columns gives of it. The
@@ -291,9 +305,9 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 		}
 	}
 	var mu sync.Mutex
-	scan := func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error {
+	scan := func(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys) error {
 		s := d.newSpanScan(spans, order, columns)
-		if err := shard.ScanBatches(ctx, st, func(b *seekparquet.Batch) error {
+		if err := shard.Scan(ctx, st, func(b *seekparquet.Batch) error {
 			keys.noteBatch(b)
 			return s.batch(b)
 		}); err != nil {
@@ -307,7 +321,7 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 		maps.Copy(out.exact, s.exact)
 		return nil
 	}
-	err := d.scanRanges(ctx, ranges(outer), workers, st, columns, func() shardScan { return scan })
+	err := d.scanSelections(ctx, selections(outer), workers, st, columns, func() shardScan { return scan })
 	if err != nil {
 		return spanSums{}, err
 	}
@@ -328,6 +342,10 @@ type spanScan struct {
 	nullSize, nullTime bool
 	sums               []objectSum
 	exact              map[string]Object
+	// The batch's size and time columns, and whether the fast path reads
+	// them: both present and of INT64 values (any other is decoded).
+	sizes, times seekparquet.ColumnView
+	fast         bool
 }
 
 func (d *Dataset) newSpanScan(spans []keySpan, order []int, columns []string) *spanScan {
@@ -342,11 +360,12 @@ func (d *Dataset) newSpanScan(spans []keySpan, order []int, columns []string) *s
 // keys at which the spans holding them change are summed once, and that
 // sum added to each of those spans.
 func (s *spanScan) batch(b *seekparquet.Batch) error {
-	sizes, _ := b.Column(0)
-	var times []parquet.Value
+	s.sizes, s.times = b.Column(0), seekparquet.ColumnView{}
 	if s.timed {
-		times, _ = b.Column(1)
+		s.times = b.Column(1)
 	}
+	s.fast = s.sizes.Kind() == seekparquet.KindInt64 && (!s.timed || s.times.Kind() == seekparquet.KindInt64)
+	defer func() { s.sizes, s.times = seekparquet.ColumnView{}, seekparquet.ColumnView{} }() // hold no borrowed page
 	for i, n := 0, b.Len(); i < n; {
 		key := b.Key(i)
 		end := s.enter(key)
@@ -357,7 +376,7 @@ func (s *spanScan) batch(b *seekparquet.Batch) error {
 		exact := s.next > 0 && bytes.Equal(s.spans[s.order[s.next-1]].lo, key)
 		var run objectSum
 		for r := i; r < j; r++ {
-			v, err := s.value(b, r, sizes, times)
+			v, err := s.value(b, r)
 			if err != nil {
 				return err
 			}
@@ -409,21 +428,22 @@ type rowValue struct {
 // owning row (sumObject), which gives its error, or its values where the
 // decoder accepts what the fast path does not (a column its part may
 // lack).
-func (s *spanScan) value(b *seekparquet.Batch, r int, sizes, times []parquet.Value) (rowValue, error) {
-	if sizes != nil && (times != nil || !s.timed) {
+func (s *spanScan) value(b *seekparquet.Batch, r int) (rowValue, error) {
+	if s.fast {
 		var v rowValue
-		size := sizes[r]
-		ok := s.nullSize && size.IsNull()
-		if !size.IsNull() && size.Kind() == parquet.Int64 && size.Int64() >= 0 {
-			v.size, v.sized, ok = size.Int64(), true, true
+		sizes := s.sizes
+		null := sizes.IsNull(r)
+		ok := s.nullSize && null
+		if size := sizes.Int64(r); !null && size >= 0 {
+			v.size, v.sized, ok = size, true, true
 		}
 		if ok && s.timed {
-			t := times[r]
-			switch {
-			case t.IsNull():
+			times := s.times
+			switch t := times.Int64(r); {
+			case times.IsNull(r):
 				ok = s.nullTime
-			case t.Kind() == parquet.Int64 && objectMicrosInRange(t.Int64()):
-				v.micros, v.dated = t.Int64(), true
+			case objectMicrosInRange(t):
+				v.micros, v.dated = t, true
 			default:
 				ok = false
 			}

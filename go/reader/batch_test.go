@@ -317,7 +317,7 @@ func TestScanBatchesLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Internal assertion: reader holds no borrowed buffers after callback.
-	if wrapper.raw != nil || wrapper.size != nil || wrapper.modified != nil || wrapper.etag != nil || wrapper.class != nil {
+	if !reflect.DeepEqual(*wrapper, ObjectBatch{fields: wrapper.fields}) {
 		t.Fatal("borrowed data retained")
 	}
 	if err := d.ScanBatches(context.Background(), BatchScanRequest{Fields: AllObjectFields}, func(*ObjectBatch) error { return nil }); err != nil {
@@ -333,7 +333,7 @@ func TestScanBatchesLifetime(t *testing.T) {
 	}
 	stop := errors.New("stop")
 	err = d.ScanBatches(context.Background(), BatchScanRequest{}, func(b *ObjectBatch) error { wrapper = b; return stop })
-	if err != stop || wrapper.raw != nil || wrapper.size != nil {
+	if err != stop || !reflect.DeepEqual(*wrapper, ObjectBatch{}) {
 		t.Fatalf("callback error retains data: %v", err)
 	}
 }
@@ -402,21 +402,21 @@ func TestScanBatchesStatsAndSourceError(t *testing.T) {
 	ctx := context.Background()
 	for _, workers := range []int{1, 4} {
 		sp := openDir(t, dir).SeekParquet()
-		plan, err := sp.PlanRanges(ctx, []seekparquet.Range{{}}, []string{"size", "last_modified", "storage_class"})
+		var want, st ReadStats
+		plan, err := sp.Plan(ctx, []seekparquet.Selection{{}}, []string{"size", "last_modified", "storage_class"}, &st)
+		addStats(&want, st)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := plan.Stats()
-		shards, err := plan.Split(ctx, scanShards(workers))
+		shards, err := plan.Split(ctx, scanShards(workers), &st)
+		addStats(&want, st)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, shard := range shards {
-			var st ReadStats
-			if err := shard.ScanBatches(ctx, &st, func(*seekparquet.Batch) error { return nil }); err != nil {
+			if err := shard.Scan(ctx, &st, func(*seekparquet.Batch) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			addStats(&want, shard.Stats())
 			addStats(&want, st)
 		}
 		var got ReadStats
@@ -431,11 +431,18 @@ func TestScanBatchesStatsAndSourceError(t *testing.T) {
 	failure := fmt.Errorf("source failed")
 	src.mu.Lock()
 	src.failAt, src.failErr = len(src.reads)+1, failure
+	opened := len(src.reads)
 	src.mu.Unlock()
 	st := ReadStats{PartsOpened: 99}
 	err := d.ScanBatches(ctx, BatchScanRequest{Stats: &st}, func(*ObjectBatch) error { t.Error("callback"); return nil })
-	if !errors.Is(err, failure) || st != (ReadStats{}) {
-		t.Fatalf("%v %+v", err, st)
+	// The failed plan's reads are in the statistics: the part it opened
+	// to check and the read that failed.
+	_, reads := src.taken()
+	if len(reads) != opened+1 {
+		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
+	}
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
+		t.Fatalf("%v %+v, want %+v", err, st, want)
 	}
 }
 
