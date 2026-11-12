@@ -86,9 +86,19 @@ specs (`schema.Bind`), so what swath writes and what a reader decodes are descri
 `go/objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
 conditional creation and the read-back of retained parts go through `objfile/gcs`, `objfile/s3` or `objfile/azblob` and `objfile/remote.OpenDestination`,
 which links `cloud.google.com/go/storage` into the swath binary
-([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister.
+([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister or the other nested module.
 The optional objfile byte cache rejects an already cancelled read context before
 lookup, for both scalar and batched reads ([cache contract](../../objfile/cache.go)).
+The reader and SeekParquet adapter preserve the caller's cache policy in the
+context. Callers of bulk operations (`Stream`, `StreamLocal`, `Scan`,
+`ScanBatches` and `Totals`) choose whether their Source should cache those reads;
+with objfile they can mark `objfile.CacheBypass` to avoid byte-cache lookup and
+admission. The policy also covers planning, splitting and `Totals`' exact-key
+projections. Point lookups, browse pages, counts and
+aggregate sums use the policy their caller supplies. SeekParquet reports logical
+and format work; objfile's observer reports physical requests and byte-cache hits,
+and `objfile.Limit` bounds request concurrency. See the
+[reader API](../../reader/README.md) and [objfile API](../../objfile/README.md).
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`localfs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`

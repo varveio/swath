@@ -118,6 +118,11 @@ func (b *ObjectBatch) require(field ObjectFields) {
 // Return an error or cancel the context to stop, then close after this returns.
 // Close from another goroutine waits for active callbacks; a later part's
 // schema check may return ErrClosed once closing has begun.
+//
+// This is a bulk read. With a Source that caches bytes, callers that want
+// to avoid filling the cache mark ctx with their storage's bypass policy
+// (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
+// objfile). The reader passes that policy through to SeekParquet.
 func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func(*ObjectBatch) error) error {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}

@@ -66,6 +66,11 @@ func (d *Dataset) StreamStats() StreamStats {
 // its batch is still handed on and the stream then ends with ErrClosed.
 // fn must not call Close, nor wait for a goroutine that does: that would
 // deadlock.
+//
+// This is a bulk read. With a Source that caches bytes, callers that want
+// to avoid filling the cache mark ctx with their storage's bypass policy
+// (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
+// objfile). The reader passes that policy through to SeekParquet.
 func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 	columns, err := d.currentColumns()
 	if err != nil {
@@ -113,6 +118,11 @@ func batchRow(b *seekparquet.Batch, i int, columns []string, values []seekparque
 // modification time, when present, in the years 1 to 9999, else the
 // stream ends with a SemanticError of KindRow. Its errors,
 // statistics and checks are otherwise Stream's.
+//
+// This is a bulk read. With a Source that caches bytes, callers that want
+// to avoid filling the cache mark ctx with their storage's bypass policy
+// (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
+// objfile). The reader passes that policy through to SeekParquet.
 func (d *Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) error {
 	if d.spec.ID != LocalV1 {
 		return semantic(KindSchema, "", nil, "%s holds no filesystem entries", d.spec.ID)

@@ -14,6 +14,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 )
 
 // fake is an Opener and ObjectReader whose calls return the errors set,
@@ -254,9 +255,15 @@ func TestReadRangesSharesBuffers(t *testing.T) {
 // and observer it carries, is the one every objfile call receives.
 func TestContextReachesObjfile(t *testing.T) {
 	type key struct{}
-	ctx := seekparquet.WithCacheMode(context.WithValue(context.Background(), key{}, "op"), seekparquet.CacheBypass)
+	obs := &objfiletest.Observer{}
+	ctx := objfile.WithObserver(objfile.WithCacheMode(context.WithValue(context.Background(), key{}, "op"), objfile.CacheBypass), obs)
 	o := &fake{data: []byte("abcd")}
 	s := New(o)
+	opened, err := s.Open(ctx, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
 	f, err := s.OpenSized(ctx, "p", 4)
 	if err != nil {
 		t.Fatal(err)
@@ -270,12 +277,11 @@ func TestContextReachesObjfile(t *testing.T) {
 	if _, _, err := s.ReadManifest(ctx, 4); err != nil {
 		t.Fatal(err)
 	}
-	if len(o.ctxs) != 4 {
-		t.Fatalf("%d calls took a context, want 4", len(o.ctxs))
+	if len(o.ctxs) != 5 {
+		t.Fatalf("%d calls took a context, want 5", len(o.ctxs))
 	}
 	for i, c := range o.ctxs {
-		if c.Value(key{}) != "op" || seekparquet.CacheModeFromContext(c) != seekparquet.CacheBypass ||
-			objfile.CacheModeFromContext(c) != objfile.CacheBypass {
+		if c != ctx || c.Value(key{}) != "op" || objfile.CacheModeFromContext(c) != objfile.CacheBypass || objfile.ObserverFromContext(c) != obs {
 			t.Fatalf("call %d lost the operation's context", i)
 		}
 	}
@@ -295,7 +301,7 @@ func TestCacheMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { f.Close() })
-			bypass := seekparquet.WithCacheMode(ctx, seekparquet.CacheBypass)
+			bypass := objfile.WithCacheMode(ctx, objfile.CacheBypass)
 			read := func(ctx context.Context, wantReads int) {
 				t.Helper()
 				o.ctxs = nil

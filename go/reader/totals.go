@@ -83,6 +83,11 @@ type PathTotals struct {
 // before and after the reads; a closed Dataset fails it with
 // seekparquet.ErrClosed, whatever the paths. No totals are returned with
 // an error.
+//
+// A prefix path is a bulk read. With a Source that caches bytes, callers that want
+// to avoid filling the cache mark ctx with their storage's bypass policy
+// (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
+// objfile). The reader passes that policy through to SeekParquet.
 func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error) {
 	return d.totals(ctx, paths, runtime.GOMAXPROCS(0))
 }

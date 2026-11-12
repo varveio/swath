@@ -77,6 +77,11 @@ func scanShards(workers int) int {
 // group), returned after the shards' objects were handed on. Objects
 // already handed to fn stay handed: a failed scan is no result. Scan does
 // not add to StreamStats.
+//
+// This is a bulk read. With a Source that caches bytes, callers that want
+// to avoid filling the cache mark ctx with their storage's bypass policy
+// (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
+// objfile). The reader passes that policy through to SeekParquet.
 func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Object) error) error {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}

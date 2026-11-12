@@ -485,7 +485,7 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 		}},
 		{name: "one-part scan", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			n := 0
-			mustDo(t, d.SeekParquet().Scan(ctx, seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{
+			mustDo(t, d.SeekParquet().Scan(objfile.WithCacheMode(ctx, objfile.CacheBypass), seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{
 				Start: part.MinKey, End: append(bytes.Clone(part.MaxKey), 0)}}, Columns: []string{"size"}}, nil,
 				func(b *seekparquet.Batch) error { n += b.Len(); return nil }))
 			if int64(n) != part.Rows {

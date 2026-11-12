@@ -22,6 +22,17 @@ library only: no cloud SDK, and not the swath lister (`github.com/varveio/swath/
 The lister's producers bind their schemas to the specs here (`internal/schema.Bind`), so what swath writes and
 what a reader decodes are described once.
 
+`Stream`, `StreamLocal`, `Scan`, `ScanBatches` and `Totals` read in bulk. With a
+Source that caches bytes, a caller that does not want those reads to fill the
+cache marks the context it passes with that storage's bypass policy. For
+swath's objfile, for example, pass
+`objfile.WithCacheMode(ctx, objfile.CacheBypass)`. The reader makes no cache
+decision: it passes the caller's context to SeekParquet without changing its
+cache policy, including for planning, splitting and `Totals`' exact-key
+projections. Storage and caching implementations are the caller's choice.
+SeekParquet's logical and format counters remain in `ReadStats`; the storage
+implementation owns physical request observation and concurrency limits.
+
 ## API
 
 ```go
