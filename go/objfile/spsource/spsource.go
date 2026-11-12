@@ -66,7 +66,7 @@ var (
 
 // Open opens path by the Opener's Open, which learns its size.
 func (s *Source) Open(ctx context.Context, path string) (seekparquet.SourceFile, error) {
-	f, err := s.o.Open(ctx, path)
+	f, err := s.o.Open(objfileContext(ctx), path)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -76,7 +76,7 @@ func (s *Source) Open(ctx context.Context, path string) (seekparquet.SourceFile,
 // OpenSized opens path at the size its manifest entry gives, by the
 // Opener's OpenSized: the first read proves the size.
 func (s *Source) OpenSized(ctx context.Context, path string, expectedSize int64) (seekparquet.SourceFile, error) {
-	f, err := s.o.OpenSized(ctx, path, expectedSize)
+	f, err := s.o.OpenSized(objfileContext(ctx), path, expectedSize)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -87,7 +87,7 @@ func (s *Source) OpenSized(ctx context.Context, path string, expectedSize int64)
 // objfile.ReadObject: one request when the Opener is an
 // objfile.ObjectReader.
 func (s *Source) ReadManifest(ctx context.Context, maxBytes int64) ([]byte, string, error) {
-	b, id, err := objfile.ReadObject(ctx, s.o, ManifestName, maxBytes)
+	b, id, err := objfile.ReadObject(objfileContext(ctx), s.o, ManifestName, maxBytes)
 	if err != nil {
 		return nil, "", mapError(err)
 	}
@@ -106,7 +106,7 @@ func (f file) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f file) WithContext(ctx context.Context) io.ReaderAt {
-	return reader{f.f.WithContext(ctx)}
+	return reader{f.f.WithContext(objfileContext(ctx))}
 }
 
 // ReadRanges reads ranges by objfile.ReadRanges. The descriptors are
@@ -116,7 +116,7 @@ func (f file) ReadRanges(ctx context.Context, ranges []seekparquet.ReadRange) er
 	for i, r := range ranges {
 		rs[i] = objfile.Range{Off: r.Off, Buf: r.Buf}
 	}
-	err := objfile.ReadRanges(ctx, f.f, rs)
+	err := objfile.ReadRanges(objfileContext(ctx), f.f, rs)
 	var be *objfile.BatchError
 	switch {
 	case err == nil:
@@ -140,6 +140,15 @@ func (r reader) ReadAt(p []byte, off int64) (int, error) {
 	n, err := r.r.ReadAt(p, off)
 	return n, mapError(err)
 }
+
+// objfileContext is the context of the objfile call that serves an
+// operation of SeekParquet carrying ctx. It is the seam where SeekParquet's
+// operation values become objfile's own, once objfile has them: the cache
+// mode (seekparquet.CacheModeFromContext to objfile's) and the physical
+// observer (seekparquet.IOObserverFromContext, adapted to objfile's
+// observer), with IOReporter on Source and file reporting what objfile
+// reports. Until then ctx goes unchanged, its values included.
+func objfileContext(ctx context.Context) context.Context { return ctx }
 
 // mapError gives err the SeekParquet error objfile's says the same of,
 // keeping err in the chain. io.EOF, which ReadAt returns with a read cut
