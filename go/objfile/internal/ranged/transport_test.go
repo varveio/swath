@@ -132,6 +132,11 @@ func TestReadObjectThroughTransport(t *testing.T) {
 		{"cancelled as the body ends", func(cancel context.CancelFunc) []step {
 			return []step{{b: data}, {err: context.Canceled, before: cancel}}
 		}, true},
+		// The body ends cleanly (io.EOF, no failure to keep) just after
+		// the context is cancelled: only the context tells.
+		{"cancelled before a clean end", func(cancel context.CancelFunc) []step {
+			return []step{{b: data}, {err: io.EOF, before: cancel}}
+		}, true},
 	} {
 		ctx, cancel := context.WithCancel(context.Background())
 		base := roundTripper(func(r *http.Request) (*http.Response, error) {
@@ -161,6 +166,9 @@ func TestReadObjectThroughTransport(t *testing.T) {
 		}
 		if c.cancel && !errors.Is(err, context.Canceled) {
 			t.Errorf("%s: %v, want context.Canceled", c.name, err)
+		}
+		if b != nil {
+			t.Errorf("%s: %d bytes returned with the error", c.name, len(b))
 		}
 		cancel()
 	}
