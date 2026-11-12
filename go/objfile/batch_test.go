@@ -630,9 +630,11 @@ func TestBatchInFlightBytesBelowRequest(t *testing.T) {
 	// Ranges over the byte bound are split to fit it; none is let through
 	// over it.
 	o = newCounting(20000)
-	if err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 1000, 5000, 1000), p); err != nil || o.maxBytes > 250 {
+	rs = ranges(0, 1000, 5000, 1000)
+	if err := objfile.ReadRangesWith(context.Background(), o, rs, p); err != nil || o.maxBytes > 250 {
 		t.Fatalf("ranges over the byte bound: %v, %d bytes in flight at most; want at most 250", err, o.maxBytes)
 	}
+	checkFilled(t, o, rs)
 	for _, r := range o.requests() {
 		if r.n > 250 {
 			t.Fatalf("a request of %d bytes, over the in-flight bound of 250", r.n)
@@ -782,10 +784,10 @@ func TestBatchBounds(t *testing.T) {
 	if err := objfile.ReadRangesWith(ctx, o, over, policy()); !errors.Is(err, fs.ErrInvalid) || len(o.reqs) != 0 {
 		t.Fatalf("%d MiB: %v after %d requests; want fs.ErrInvalid before any", len(over), err, len(o.reqs))
 	}
-	// 4096 ranges of the same 64 KiB at one byte a request: within the
+	// 4096 ranges of the same 16 KiB at one byte a request: within the
 	// byte bound, but planning would be quadratic.
 	var dup []objfile.Range
-	buf := make([]byte, 64<<10)
+	buf := make([]byte, 16<<10)
 	for range objfile.MaxBatchRanges {
 		dup = append(dup, objfile.Range{Off: 0, Buf: buf})
 	}

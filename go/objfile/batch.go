@@ -380,6 +380,11 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy) {
 			}
 		}
 	}
+	if stop == nil && next < len(b.spans) {
+		// Unreachable while every request fits MaxInFlightBytes (normal);
+		// never let an unsent span pass for a filled one.
+		stop = errors.New("objfile: a request larger than the batch's in-flight byte bound")
+	}
 	for ; next < len(b.spans); next++ {
 		b.spans[next].err = stop
 	}
