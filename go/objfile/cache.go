@@ -32,7 +32,7 @@ type ByteCache struct {
 	entries       int       // entries published and admissions reserved, at most maxCacheEntries
 	lru           list.List // of *cacheEntry, most recently used at the front
 	objects       map[cacheObject][]*cacheEntry
-	admitReserved func() // test handshake between reservation and publication
+	admitReserved func() // test-only handshake between reservation and publication
 }
 
 // maxCacheEntries bounds a ByteCache's bookkeeping apart from its bytes:
@@ -138,6 +138,15 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 	c.used += n // reserved, with an entry's slot
 	c.entries++
 	c.mu.Unlock()
+	published := false
+	defer func() {
+		if !published {
+			c.mu.Lock()
+			c.used -= n
+			c.entries--
+			c.mu.Unlock()
+		}
+	}()
 	if c.admitReserved != nil {
 		c.admitReserved()
 	}
@@ -148,8 +157,6 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.find(obj, off, n) != nil { // admitted meanwhile
-		c.used -= n
-		c.entries--
 		return
 	}
 	e := &cacheEntry{obj: obj, off: off, data: data}
@@ -162,6 +169,7 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 		return 1
 	})
 	c.objects[obj] = slices.Insert(es, i, e)
+	published = true
 }
 
 // dropOldest drops the least recently used entry, reporting whether there

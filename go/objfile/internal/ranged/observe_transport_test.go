@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -170,8 +171,16 @@ func TestObservedTransportResend(t *testing.T) {
 	client := &http.Client{Transport: Observe(transport)}
 	get := httpGetter(client, "http://store/b/obj")
 	f := New("b/obj", 1000, Pin{ETag: "e"}, get, true)
-	if _, err := f.ReadAt(make([]byte, 10), 0); err != nil { // the connection, made idle
+	idle := make(chan error, 1)
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		PutIdleConn: func(err error) { idle <- err },
+	})
+	if _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 0); err != nil {
 		t.Fatal(err)
+	}
+	// Body EOF alone does not guarantee the transport has made the connection reusable.
+	if err := <-idle; err != nil {
+		t.Fatalf("returning the first connection to the idle pool: %v", err)
 	}
 	obs := &objfiletest.Observer{}
 	if _, err := f.WithContext(observed(obs)).ReadAt(make([]byte, 10), 0); err != nil {

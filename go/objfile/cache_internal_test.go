@@ -17,6 +17,44 @@ func (c *ByteCache) state() (used int64, entries int) {
 	return c.used, c.entries
 }
 
+// TestByteCacheAdmissionPanicRelease: an unwound admission returns both
+// its reserved bytes and its entry slot, leaving the cache usable.
+func TestByteCacheAdmissionPanicRelease(t *testing.T) {
+	c, _ := NewByteCache(8)
+	obj := cacheObject{scope: "s", name: "a", identity: "1"}
+	data := []byte("12345678")
+	c.admitReserved = func() {
+		if used, n := c.state(); used != int64(len(data)) || n != 1 {
+			t.Errorf("before panic: %d bytes, %d entries; want 8, 1", used, n)
+		}
+		panic("admission panic")
+	}
+	func() {
+		defer func() {
+			if p := recover(); p != "admission panic" {
+				t.Errorf("panic = %v, want admission panic", p)
+			}
+		}()
+		c.admit(obj, 0, data)
+		t.Error("admission did not panic")
+	}()
+	if used, n := c.state(); used != 0 || n != 0 {
+		t.Fatalf("after panic: %d bytes, %d entries; want 0, 0", used, n)
+	}
+	if c.lru.Len() != 0 || len(c.objects) != 0 {
+		t.Fatal("the failed admission published an entry")
+	}
+	c.admitReserved = nil
+	c.admit(obj, 0, data)
+	p := make([]byte, len(data))
+	if !c.copyOut(obj, 0, p) || !bytes.Equal(p, data) {
+		t.Fatal("the cache could not admit and serve data after the panic")
+	}
+	if used, n := c.state(); used != int64(len(data)) || n != 1 {
+		t.Fatalf("after admission: %d bytes, %d entries; want 8, 1", used, n)
+	}
+}
+
 // TestByteCacheBound: the bytes the cache owns, reservations and dropped
 // entries still being copied from included, never pass its limit; an
 // extent larger than the limit is not kept; LRU order decides eviction.

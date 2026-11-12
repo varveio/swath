@@ -260,7 +260,7 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 // cacheBatchKey marks scalar requests whose cache work belongs to the batch.
 type cacheBatchKey struct{}
 
-// batchWaitKey carries a test handshake before the scheduler waits.
+// batchWaitKey carries a test-only handshake before the scheduler waits.
 type batchWaitKey struct{}
 type batchCache struct {
 	f   *cachedObject
