@@ -4,7 +4,7 @@ With `--log-format json`, swath writes stderr as one JSON object per line and no
 progress line, no color and no statistics block (the `outcome` event and `--report` stand for it).
 
 ```bash
-swath list s3://bucket/logs/ -o logs.parquet --log-format json -v 2> swath.log
+swath list s3://bucket/logs/ -o logs-inventory --log-format json -v 2> swath.log
 ```
 
 `--log-format` is taken by every command, anywhere on the line before `--`, and again by `swath resume`. A

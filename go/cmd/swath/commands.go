@@ -71,6 +71,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	stop := func(err error) error {
 		return refuse(stdout, dir, seen, err, att, o.report, commandLine("resume", p, p.operands...), o.term.verbose > 0)
 	}
+	if err := checkDatasetName(dir); err != nil {
+		return stop(usageError{fmt.Errorf("resume %w", err)})
+	}
 	if textRun(dir) {
 		// A text run keeps no journal: there is nothing to continue.
 		return stop(usageError{errText})

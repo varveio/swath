@@ -289,7 +289,7 @@ func helpOf(cmd command) commandHelp {
 	return commandHelp{usage: []string{"list SOURCE [OPTIONS]", "ls SOURCE [OPTIONS]"},
 		about:    "Recursively list every entry below SOURCE: text rows on stdout, or an inventory with -o.",
 		detail:   "-o DIR writes a sorted Parquet dataset, -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) text rows into that file. " + src,
-		examples: []string{"swath list " + a + " -o logs.parquet", "swath list " + a + " | head", "swath list " + b + " -o rows.jsonl.zst"}}
+		examples: []string{"swath list " + a + " -o logs-inventory", "swath list " + a + " | head", "swath list " + b + " -o rows.jsonl.zst"}}
 }
 
 // shortGroups are the groups a list command's short help (-h) shows; the
@@ -321,7 +321,7 @@ func usage(w io.Writer, f *pflag.FlagSet, cmd command, s helpStyle) {
 // resumeHelp is swath resume's help text before its flags.
 var resumeHelp = commandHelp{usage: []string{"resume DIR [OPTIONS]"},
 	about:    "Continue the interrupted run in DIR with the command its journal recorded. Only the options below may be given again (the last value wins); anything else is fixed for the run. A switch the run was started with is undone by its other spelling: --no-anonymous undoes --anonymous, --adaptive-limit undoes --no-adaptive-limit.",
-	examples: []string{"swath resume logs.parquet", "swath resume logs.parquet --workers 32 --max-duration 1h"}}
+	examples: []string{"swath resume logs-inventory", "swath resume logs-inventory --workers 32 --max-duration 1h"}}
 
 // resumeUsage prints swath resume's help: the flags it takes again, the
 // other spellings that undo a recorded switch among them.
@@ -335,7 +335,7 @@ func resumeUsage(w io.Writer, f *pflag.FlagSet, s helpStyle) {
 // showHelp is swath show's help text before its flags.
 var showHelp = commandHelp{usage: []string{"show DIR [OPTIONS]"},
 	about:    "Print a committed dataset's manifest summary, or an interrupted run's recorded command, identity and committed parts.",
-	examples: []string{"swath show logs.parquet", "swath show logs.parquet --journal"}}
+	examples: []string{"swath show logs-inventory", "swath show logs-inventory --journal"}}
 
 // diagHelp is swath diag's own help.
 var diagHelp = commandHelp{usage: []string{"diag list SOURCE [OPTIONS]", "diag count SOURCE [OPTIONS]"},
@@ -384,7 +384,7 @@ func rootHelp(w io.Writer, s helpStyle) {
 	s.para(&b, 0, "SOURCE is "+sourceForms()+". The options above may also come before COMMAND.")
 	s.heading(&b, "Examples")
 	stores, local := examples()
-	for _, e := range []string{"swath list " + stores[0] + " -o logs.parquet", "swath list " + stores[0] + " | head", "swath du -d 1 " + local} {
+	for _, e := range []string{"swath list " + stores[0] + " -o logs-inventory", "swath list " + stores[0] + " | head", "swath du -d 1 " + local} {
 		b.WriteString("  " + e + "\n")
 	}
 	b.WriteString("\nSee 'swath COMMAND --help'.\n")

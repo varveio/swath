@@ -246,8 +246,8 @@ func TestSourceForms(t *testing.T) {
 
 // TestOutputDestination: -o names a dataset directory, a text file, or
 // stdout; a name ending in a data-file extension swath does not write, and
-// an object-store URL, are refused; a trailing slash is a directory; a
-// --format that agrees with the file's name is accepted.
+// a bucket URL without --work-dir, are refused; a trailing slash is a
+// directory; a --format that agrees with the file's name is accepted.
 func TestOutputDestination(t *testing.T) {
 	dir := t.TempDir()
 	for _, c := range []struct {
@@ -255,7 +255,10 @@ func TestOutputDestination(t *testing.T) {
 		text   string // the text format, "" for a dataset
 		refuse string
 	}{
-		{[]string{"-o", "out.parquet"}, "", ""},
+		{[]string{"-o", "out.parquet"}, "", "a dataset is a directory of parts"},
+		{[]string{"-o", "out.parquet/"}, "", ""},
+		{[]string{"-o", "inventory/"}, "", ""},
+		{[]string{"-o", "inventory"}, "", ""},
 		{[]string{"-o", "out.tsv/"}, "", ""},
 		{[]string{"-o", "rows.tsv"}, "tsv", ""},
 		{[]string{"-o", "rows.jsonl.zst"}, "jsonl", ""},
@@ -295,6 +298,80 @@ func TestOutputDestination(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "s3:")); err == nil {
 		t.Error("-o s3://... made a local directory")
+	}
+}
+
+// TestParquetOutputNameRefusal pins the one-line usage refusal before a
+// source is opened or an output/work directory is created.
+func TestParquetOutputNameRefusal(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, dest := range []string{
+		"inventory.parquet", "inventory.PaRqUeT", "nested/inventory.parquet",
+		"s3://out/inventory.parquet", "gs://out/nested/inventory.PARQUET", "az://acct/out/inventory.parquet",
+	} {
+		t.Run(dest, func(t *testing.T) {
+			for _, work := range []bool{false, true} {
+				if work && !hasScheme(dest) {
+					continue
+				}
+				args := []string{"list", "missing-source", "-o", dest}
+				if work {
+					args = append(args, "--work-dir", "work")
+				}
+				err := dispatch(context.Background(), args, io.Discard)
+				want := "-o " + dest + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
+				if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+					t.Fatalf("%q: %v, want usage error %q", args, err, want)
+				}
+			}
+			if !hasScheme(dest) {
+				err := dispatch(context.Background(), []string{"resume", dest}, io.Discard)
+				want := "resume " + dest + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
+				if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+					t.Fatalf("resume %s: %v, want usage error %q", dest, err, want)
+				}
+			}
+		})
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("refusal created output or work files: %v, %v", entries, err)
+	}
+}
+
+// TestDatasetDirectoryNames exercises directory names through publication and
+// resume. A trailing separator explicitly selects a directory, even with a
+// .parquet suffix; the bare name is refused even for a complete dataset.
+func TestDatasetDirectoryNames(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	src := localSource(t)
+	for _, name := range []string{"inventory.parquet/", "inventory.PaRqUeT/", "inventory/", "other-name"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), strings.TrimSuffix(name, "/"))
+			if strings.HasSuffix(name, "/") {
+				dir += "/"
+			}
+			if err := dispatch(ctx, []string{"list", src, "-o", dir, "--no-stats"}, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			if err := dispatch(ctx, []string{"resume", dir}, io.Discard); err != nil {
+				t.Fatalf("resume of explicit directory: %v", err)
+			}
+			bare := strings.TrimSuffix(dir, "/")
+			refused := bare + ".parquet"
+			if err := os.Rename(bare, refused); err != nil {
+				t.Fatal(err)
+			}
+			err := dispatch(ctx, []string{"resume", refused}, io.Discard)
+			want := "resume " + refused + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
+			if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+				t.Fatalf("resume %s: %v, want usage error %q", refused, err, want)
+			}
+			if err := dispatch(ctx, []string{"resume", refused + "/"}, io.Discard); err != nil {
+				t.Fatalf("resume of renamed explicit directory: %v", err)
+			}
+		})
 	}
 }
 
@@ -429,8 +506,8 @@ func TestReportStdout(t *testing.T) {
 	}
 }
 
-// TestResumeDecidesByDisk: swath resume reads what DIR holds, never its
-// name: a dataset in a directory named rows.tsv (-o rows.tsv/) is found,
+// TestResumeDecidesByDisk: after the dataset-name check, swath resume
+// reads what DIR holds: a dataset named rows.tsv (-o rows.tsv/) is found
 // with or without the slash; a text file's name that is no directory is a
 // text run, which keeps no journal.
 func TestResumeDecidesByDisk(t *testing.T) {

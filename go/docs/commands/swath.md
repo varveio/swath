@@ -170,7 +170,7 @@ swath list s3://bucket/logs/ | head
 Write a sorted Parquet dataset:
 
 ```bash
-swath list s3://bucket/logs/ -o logs.parquet
+swath list s3://bucket/logs/ -o logs-inventory
 ```
 
 Total a local tree one level down:

@@ -24,7 +24,7 @@ func TestSubcommandHelp(t *testing.T) {
 		{[]string{"diag", "--help"}, []string{"swath diag list SOURCE", "swath diag count SOURCE"}},
 		{[]string{"show", "--help"}, []string{"swath show DIR", "--journal"}},
 		{[]string{"resume", "--help"}, []string{"swath resume DIR", "-workers", "--s3-bearer-token-command", "-progress"}},
-		{[]string{"list", "--help"}, []string{"SOURCE"}},
+		{[]string{"list", "--help"}, []string{"SOURCE", "A name ending in .parquet is refused unless it ends in / (an explicit directory). A file's name says its format; a --format that agrees with it is accepted.", "-o logs-inventory"}},
 	} {
 		var out bytes.Buffer
 		err := dispatch(context.Background(), c.args, &out)
@@ -36,7 +36,7 @@ func TestSubcommandHelp(t *testing.T) {
 			t.Errorf("%v: a usage error", c.args)
 		}
 		for _, w := range c.want {
-			if !strings.Contains(out.String(), w) {
+			if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), w) {
 				t.Errorf("%v: help lacks %q:\n%s", c.args, w, out.String())
 			}
 		}

@@ -44,7 +44,7 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl`, stdout only (auto: the table on a terminal, TSV otherwise); with `-o` refused, the name decides | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features); stdout only 2026-11-06 (owner: text output in the shapes people already know): a file's name already says its format |
-| `--format parquet` | none: any `-o` without a text extension is the dataset | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the `-o` name already decides) |
+| `--format parquet` | none: the `-o` name selects the output ([output](../output.md#choosing-an-output)) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the `-o` name already decides) |
 | Text row fields `key size last_modified etag storage_class row_type` (+ JSONL `owner_id owner_display_name checksum_algorithm checksum_type`) | the source schema's columns: `key`, then every column in the dataset's order under its name, values as stored | renamed | 2026-11-06 the S3 API's object; 2026-11-10 (owner: text output works for every source through one interface, the schema) |
 | `row_type` (always `OBJECT`) | none | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (every row is an object) |
 | `last_modified` `...Z` with 0, 3 or 6 fraction digits | every time column UTC with 6 fraction digits, `...Z` | renamed | 2026-11-10 (owner: text output works for every source through one interface, the schema) |
@@ -53,7 +53,7 @@ decision to add it later).
 | `--format discard` | `swath diag count SOURCE` (rows counted as they arrive, never ordered, buffered or spilled; the Go port's `swath list --count-only` until 0.4, `swath count` 2026-11-07 to 2026-11-09) | renamed | command 2026-11-07 (owner: the cleanest CLI surface); `swath diag count` 2026-11-09 (owner: `swath du` totals a source per prefix with readable output, the measurement's one line moves to `diag`) |
 | `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
-| `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
+| `-o NAME.parquet` one-writer directory layout | none (dataset naming: [output](../output.md#choosing-an-output)) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
 | `--compression none\|gzip\|zstd` (text only) | the `-o` name's `.gz`/`.zst`; stdout through a pipe (`\| zstd`) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the name says it for a file; a pipe does it for stdout) |
 | `--text-part-size` (256 MB) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
 | `--text-writers N` (3) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |

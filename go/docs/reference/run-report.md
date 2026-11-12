@@ -6,7 +6,7 @@ the file named by `--report FILE` (written when the attempt ends, on failure too
 counts.
 
 ```bash
-swath list s3://bucket/logs/ -o logs.parquet --report attempt-1.json
+swath list s3://bucket/logs/ -o logs-inventory --report attempt-1.json
 jq '.outcome.class, .output.rows_committed, .requests.http_attempts' attempt-1.json
 ```
 
