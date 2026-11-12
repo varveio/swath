@@ -255,28 +255,6 @@ func distinct[T ~string | ~[]byte](in []T) (unique []T, of []int) {
 	return unique, of
 }
 
-// count returns the number of rows of span, nil when the plan's count
-// relies on a part no read has checked. Planning's reads are added to st,
-// a failed plan's too. Every key, once CheckSchema has checked every part,
-// is the manifest's row count, which Verify checked against each footer:
-// it reads nothing.
-func (d *Dataset) count(ctx context.Context, span keySpan, st *ReadStats) (*int64, error) {
-	if len(span.lo) == 0 && span.hi == nil && d.checked.Load() {
-		return ptrTo(d.rows()), nil
-	}
-	var planned ReadStats
-	plan, err := d.sp.Plan(ctx, []seekparquet.Selection{span.selection()}, nil, &planned)
-	addStats(st, planned)
-	if err != nil {
-		return nil, err
-	}
-	n, exact := plan.Count()
-	if !exact {
-		return nil, nil
-	}
-	return &n, nil
-}
-
 // spanSums is what sumSpans found: each span's sum, and the objects whose
 // key equals a span's lower bound, by key.
 type spanSums struct {
