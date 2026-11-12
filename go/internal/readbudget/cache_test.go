@@ -222,10 +222,20 @@ func TestBrowseCacheRevisit(t *testing.T) {
 		page, err := d.SeekParquet().Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{Prefix: []byte("t-000/"), Delimiter: '/', Limit: 30,
 			Columns: []string{"size", "last_modified", "etag", "storage_class"}},
 			Reductions: []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}},
-			Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: 4 << 20}}, nil)
+			Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: -1}}, nil)
 		mustDo(t, err)
 		if len(page.Entries) != 20 {
 			t.Fatalf("browse returned %d prefixes, want 20", len(page.Entries))
+		}
+		for _, e := range page.Entries {
+			if e.CommonPrefix == nil || len(e.Aggregates) != 2 {
+				t.Fatalf("expected a common prefix with count and sum reductions, got %+v", e)
+			}
+			for i, result := range e.Aggregates {
+				if result.Status != seekparquet.AggregateExact {
+					t.Fatalf("prefix %q reduction %d: status %v, want AggregateExact", e.CommonPrefix, i, result.Status)
+				}
+			}
 		}
 		reads := src.reads.Swap(0)
 		if warm && (reads != 0 || obs.hits.Load() == 0) {

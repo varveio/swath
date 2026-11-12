@@ -1008,21 +1008,23 @@ has a four-request metadata phase. Neither counts nor concurrency assertions use
 elapsed time or timestamp overlap; a deadline fails a stalled barrier. Browse uses the size/time
 projection and identical budgets with counts on and off, using SeekParquet `Page`
 with a 4 MiB value budget (and the large fixture's 64 KiB case).
-Point lookup uses `Rows`; the one-part scan uses `Plan` and `Scan`; prefix and whole
+Point lookup uses `Rows`; the one-part scan uses `Dataset.Scan`; prefix and whole
 counts and prefix sums use `Aggregate`. `CheckSchema` remains in the thin reader.
 SeekParquet owns the generic scan, aggregation and page behavior tests.
 `TestCallerBulkCacheBypass` in `internal/readbudget` marks bulk reader calls with
 objfile's bypass context and checks that they neither use nor fill the byte
 cache, while a point lookup through the same stack fills it and a second lookup
-reuses it. `TestBrowseCacheRevisit` checks cache reuse for browse counts and sums.
+reuses it. `TestBrowseCacheRevisit` checks cache reuse for browse counts and sums
+with an unlimited value budget and requires every prefix reduction to be exact.
 The reader chooses no cache policy; the caller marks bulk reads.
 
 The thin reader's tests cover metadata parsing, schema checks, concrete decoders,
 examples and the absence of cloud SDK dependencies (`TestNoCloudSDK`). Main-module
 `listing` tests check rows from production writers against the registered schemas
 and concrete decoders. Generic execution tests and benchmarks live in
-[SeekParquet](https://github.com/varveio/seekparquet/tree/6947fb04a0a4/go), including
-parallel scan scheduling, aggregation, page composition and allocation guards.
+[SeekParquet](https://github.com/varveio/seekparquet/tree/7264a9f88420/go), including
+parallel scan scheduling, aggregation and page composition. Its allocation guard
+is `TestAggregateHotLoopAllocations`, which covers the aggregation hot loop.
 The former reader wrapper benchmarks were removed with those unreleased APIs;
 their dated results remain in
 [measurements.md](measurements.md#reader-scan-and-stream-baseline-2026-11-10).

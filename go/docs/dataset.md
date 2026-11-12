@@ -4,7 +4,7 @@
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
 operation checks, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
-The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/6947fb04a0a4/spec/format-1.md),
+The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/7264a9f88420/spec/format-1.md),
 at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
 [internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
@@ -342,7 +342,7 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the
   manifest, then the row number). A row's offset is its zero-based position in its group of equal keys. A row
   cursor `(key, offset)` continues after that row, at offset + 1 of the same key, then at the next key
-  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6947fb04a0a4/spec/format-1.md)). A cursor is
+  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/7264a9f88420/spec/format-1.md)). A cursor is
   always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key `k`". To skip every row
   of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k` and `StartExclusive`), which skips the group's
   remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
