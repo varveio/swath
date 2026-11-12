@@ -119,17 +119,19 @@ func (p *Pinned) lazy(name string, f Object) (Object, error) {
 	return &pinnedObject{Object: f, p: p, name: name}, nil
 }
 
-// OpenSized opens name, a path CheckPath accepts, of size bytes, without a
-// request (Opener.OpenSized), and checks it against its pin at its first
-// read: a recorded pin of another size fails at once with ErrObjectChanged;
+// OpenSized opens name, a path CheckPath accepts, of size bytes (for a
+// positive size without a request, as Opener.OpenSized), and checks it
+// against its pin at its first read: a recorded pin of another size fails at once with ErrObjectChanged;
 // otherwise the first read that pins the Object records its size and
 // Identity, or must find the recorded ones, else it fails with
 // ErrObjectChanged and returns none of the bytes it read. Until then the
 // Object's reads go to the store, so the current object is re-proved as
 // Open re-proves it. A size other than the object's, found before any pin
 // is recorded, is a *SizeMismatchError; after, ErrObjectChanged. Size 0,
-// which no read reaches the store for, is Open, and checks that the object
-// is empty; a negative size is invalid.
+// which no read reaches the store for, is proved at once, as OpenEmpty
+// says: the store's metadata request (passed inwards as OpenSized(..., 0)),
+// its size compared with 0, judged by the pin recorded when it ends, before
+// a pin is recorded; a negative size is invalid.
 func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object, error) {
 	if err := CheckPath(name); err != nil {
 		return nil, err

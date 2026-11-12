@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -819,16 +818,22 @@ func TestLimitZeroSizedOpen(t *testing.T) {
 	s.gate, s.entered = make(chan struct{}), make(chan struct{}, 2)
 	o := objfile.Limit(objfile.Pin(s, scope), 1)
 	done := make(chan error, 2)
-	for _, name := range []string{"a", "b"} {
-		go func() { _, err := o.OpenSized(ctx, name, 0); done <- err }()
-	}
-	select {
+	go func() { _, err := o.OpenSized(ctx, "a", 0); done <- err }()
+	select { // a's metadata request is in flight, holding the slot
 	case <-s.entered:
 	case <-time.After(20 * time.Second):
 		t.Fatal("no metadata request was made")
 	}
-	for range 10000 {
-		runtime.Gosched()
+	// Handshake: b waits, its context's Done asked by the wait for a slot
+	// (the only place b's OpenSized asks for it before its request).
+	bctx := &askedDone{Context: ctx, asked: make(chan struct{})}
+	go func() { _, err := o.OpenSized(bctx, "b", 0); done <- err }()
+	select {
+	case <-bctx.asked:
+	case <-s.entered:
+		t.Fatal("a second metadata request was sent under a limit of 1")
+	case <-time.After(20 * time.Second):
+		t.Fatal("b never waited")
 	}
 	if n := s.opens.Load(); n != 1 {
 		t.Fatalf("%d metadata requests in flight under a limit of 1", n)
@@ -884,4 +889,17 @@ func TestSnapshotLazyOpens(t *testing.T) {
 	if snap, _ := q.Snapshot(); !strings.Contains(string(snap), `"obj"`) {
 		t.Fatalf("an Open is not in the snapshot before any read: %s", snap)
 	}
+}
+
+// askedDone is a context that signals asked when its Done is first asked
+// for, which a wait on it does.
+type askedDone struct {
+	context.Context
+	asked chan struct{}
+	once  sync.Once
+}
+
+func (c *askedDone) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.asked) })
+	return c.Context.Done()
 }

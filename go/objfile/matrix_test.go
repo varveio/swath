@@ -406,8 +406,11 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 				case <-rctx.Done():
 					t.Fatal("the first request of a sized Object was not sent")
 				}
-				for range 2000 {
-					runtime.Gosched()
+				// Handshake: the batch's scheduler is parked, waiting for
+				// a request to end; a request it had launched would have
+				// been launched before it parked.
+				if fetches := waitSchedulerParked(t); fetches != 1 {
+					t.Fatalf("%d requests launched while the first of a sized Object was unchecked", fetches)
 				}
 				st.mu.Lock()
 				sent := len(st.reads)
@@ -461,8 +464,10 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		return
 	}
 	if err != nil {
-		if len(st.reads) > 1 {
-			t.Fatalf("a failing batch sent %d requests: %v", len(st.reads), st.reads)
+		// A batch fails only after it has opened its Object: at its first
+		// request, which alone is sent.
+		if len(st.reads) != 1 {
+			t.Fatalf("a failing batch sent %d requests, want exactly 1: %v", len(st.reads), st.reads)
 		}
 		return
 	}
@@ -481,4 +486,34 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	if n >= 20 && st.maxIn != limit {
 		t.Fatalf("%d requests at most in flight, want the limit %d", st.maxIn, limit)
 	}
+}
+
+// waitSchedulerParked waits until a batch's scheduler (batch.run) is parked
+// in its select, waiting for a request to end, and returns how many of its
+// request goroutines exist then. It reads the goroutines' stacks: the
+// scheduler launches a request's goroutine before it parks, so the count
+// at that point is every request it decided to send.
+func waitSchedulerParked(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second) // guards a hang only
+	buf := make([]byte, 1<<20)
+	for time.Now().Before(deadline) {
+		n := runtime.Stack(buf, true)
+		parked, fetches := false, 0
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			header, _, _ := strings.Cut(g, "\n")
+			switch {
+			case strings.Contains(g, "objfile.(*batch).run.func"):
+				fetches++
+			case strings.Contains(header, "[select") && strings.Contains(g, "objfile.(*batch).run("):
+				parked = true
+			}
+		}
+		if parked {
+			return fetches
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("the batch's scheduler never parked")
+	return 0
 }

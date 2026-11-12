@@ -4,7 +4,8 @@
 // Package azblob reads and creates blobs in an Azure Blob Storage container with
 // the azblob SDK. New supplies an objfile.Opener; NewWriter supplies an
 // objfile.Writer. Open learns the blob's size and ETag from its
-// properties; OpenSized takes the ETag from its first ranged download, and
+// properties; OpenSized takes the ETag from its first ranged download (of
+// size 0, from the properties: objfile.OpenEmpty), and
 // ReadObject from its one download of the whole blob, with no range. Every
 // request after that is a download of one byte range with If-Match on that
 // ETag: one for each ReadAt, and one for each merged span of a ReadRanges

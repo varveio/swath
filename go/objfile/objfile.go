@@ -72,7 +72,8 @@ type Opener interface {
 	// request) and pins that version; the Object's reads come after.
 	Open(ctx context.Context, name string) (Object, error)
 	// OpenSized opens an object whose size the caller already knows, such
-	// as a part a manifest lists, without a request: the Object pins the
+	// as a part a manifest lists, without a request (except for size 0,
+	// below): the Object pins the
 	// version its first request is served, once that response has stated
 	// the object's total size and it is size (a response that states none
 	// is let go, a metadata request proves the size and version, and the
@@ -80,8 +81,10 @@ type Opener interface {
 	// returned before. A read that finds another size fails with a
 	// *SizeMismatchError (a range the store cannot serve, 416, is followed
 	// by a metadata request to tell a shorter object from a failure), and a
-	// missing object fails with an error wrapping fs.ErrNotExist. An Object of size 0, or one never read, makes no
-	// request and so proves nothing.
+	// missing object fails with an error wrapping fs.ErrNotExist. An
+	// Object never read makes no request and so proves nothing. Size 0 is
+	// the exception: no read of an empty object reaches the store, so
+	// OpenSized(..., 0) proves it at once by a metadata request (OpenEmpty).
 	OpenSized(ctx context.Context, name string, size int64) (Object, error)
 }
 
@@ -247,8 +250,9 @@ func (r root) ReadObject(ctx context.Context, name string, limit int64) ([]byte,
 }
 
 // Limit bounds the requests in flight through o to n: each Open, each
-// ReadObject, each ReadAt of an Object it opened and each request of such an
-// Object's ReadRanges holds one of n slots for its duration, and waits for a
+// OpenSized(..., 0) (a metadata request, OpenEmpty), each ReadObject, each
+// ReadAt of an Object it opened and each request of such an Object's
+// ReadRanges holds one of n slots for its duration, and waits for a
 // slot only as long as its context allows. n below 1 is 1. A batch's
 // requests are sent as ReadRangesWith sends them, under the BatchPolicy of
 // the Object Limit wraps (Batch sets one), each through ReadAt.
@@ -307,7 +311,8 @@ func (l limited) OpenSized(ctx context.Context, name string, size int64) (Object
 }
 
 // KnownSizes opens the names sizes lists with the size it gives: Open of
-// such a name is OpenSized, which makes no request. Other names, OpenSized
+// such a name is OpenSized, which makes no request for a positive size (one
+// of 0 makes the metadata request OpenEmpty requires). Other names, OpenSized
 // and ReadObject go to o unchanged. It is for a reader that knows its
 // files' sizes, from a manifest it has read, but opens them through an
 // interface that does not carry one (SeekParquet's Source.Open). sizes is

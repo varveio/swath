@@ -5,7 +5,7 @@
 // cloud.google.com/go/storage. New supplies an objfile.Opener; NewWriter supplies
 // an objfile.Writer. Open learns the object's size and
 // generation from its attributes; OpenSized takes the generation from its
-// first range reader, and ReadObject from its one reader of the whole
+// first range reader (of size 0, from the attributes: objfile.OpenEmpty), and ReadObject from its one reader of the whole
 // object, with no Range. Every request after that is a range reader of one
 // byte range of that generation, of the stored bytes (no decompressive
 // transcoding): one for each ReadAt, and one for each merged span of a

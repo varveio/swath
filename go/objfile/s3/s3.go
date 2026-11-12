@@ -5,7 +5,7 @@
 // New supplies an objfile.Opener; NewWriter supplies an objfile.Writer.
 // Open learns the object's size, ETag and, in a versioned bucket,
 // its version id with HeadObject; OpenSized takes them from its first ranged
-// GetObject, and ReadObject from its one GetObject of the whole object, with
+// GetObject (of size 0, from HeadObject: objfile.OpenEmpty), and ReadObject from its one GetObject of the whole object, with
 // no Range. Every request after that is a GetObject of one byte range, with
 // If-Match on that ETag and, when there is one, that version id: one for each
 // ReadAt, and one for each merged span of a ReadRanges batch, sent

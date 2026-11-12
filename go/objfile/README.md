@@ -127,14 +127,16 @@ For more control:
 
 - Build an SDK client and pass it to `s3.New`, `gcs.New`, or `azblob.New`; wrap the
   opener with `Root` for path confinement and `Limit` for bounded requests. `Limit`
-  holds a slot per request: each `Open`, `ReadObject` and `ReadAt`, and each request
-  of a batch, so a batch never has more requests in flight than the limit.
+  holds a slot per request: each `Open`, `OpenSized(…, 0)`, `ReadObject` and `ReadAt`,
+  and each request of a batch, so a batch never has more requests in flight than
+  the limit.
 - An expected size of 0 follows one rule (`OpenEmpty`): no range read proves an
   empty object, so the store's metadata request does, through every wrapper (a
   `Limit` slot held, `Pin` judging it), and its size is compared with 0 before an
   Object is returned or a pin recorded; a wrapper's size hint is never evidence.
-- Use `OpenSized` when a manifest already gives the size. It makes no request; the
-  first read pins the version, once its response states a total size equal to the
+- Use `OpenSized` when a manifest already gives the size. For a positive size it
+  makes no request (size 0 is the exception above, `OpenEmpty`); the first read
+  pins the version, once its response states a total size equal to the
   one given (a response that states none is let go, one metadata request proves the
   size and version, and the range is requested again), and returns no byte before.
   Another size is a `*SizeMismatchError` with the size given and the size observed
@@ -143,14 +145,16 @@ For more control:
   object wraps `fs.ErrNotExist`. `Size()` is only the size given until then, and
   `Identity()` is empty.
 - `KnownSizes` turns `Open` of names whose sizes a reader already holds into
-  `OpenSized` (empty ones excepted: only a metadata request proves those), for a
-  reader whose open carries no size (SeekParquet's `Source.Open`). It composes
+  `OpenSized` (a name mapped to 0 then makes the metadata request `OpenEmpty`
+  requires), for a reader whose open carries no size (SeekParquet's
+  `Source.Open`); an explicit `OpenSized` keeps the size it is given. It composes
   inside or outside `Pin`, which checks an Object its inner `Open` returns unpinned
   at the first read, as it checks `OpenSized`'s.
 - Use `Pin` across opens and `Snapshot`/`Restore` across restarts, for example
   `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`; the wrappers
   compose in any order.
-  `Pinned.OpenSized` checks the identity at the first read instead of at open, and
+  `Pinned.OpenSized` checks the identity at the first read instead of at open (at
+  the open for size 0, by `OpenEmpty`'s metadata request), and
   `Pinned.ReadObject` with the read; both re-prove the current object. Against a
   recorded pin, another size is `ErrObjectChanged`. A restored snapshot
   permits only recorded names and rechecks the current objects, rather than
