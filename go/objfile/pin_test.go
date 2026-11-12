@@ -431,3 +431,58 @@ func TestPinReadObject(t *testing.T) {
 		t.Fatalf("ReadObject of a replaced object = %v", err)
 	}
 }
+
+// TestPinOpenSizedZero: a size of 0 is checked against the object found.
+func TestPinOpenSizedZero(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("full", []byte("data"))
+	s.put("empty", nil)
+	p := objfile.Pin(s, scope)
+	if _, err := p.OpenSized(ctx, "full", 0); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("OpenSized(0) of a non-empty object = %v, want ErrObjectChanged", err)
+	}
+	if f, err := p.OpenSized(ctx, "empty", 0); err != nil || f.Size() != 0 {
+		t.Fatalf("OpenSized(0) of an empty object = %v", err)
+	}
+	if _, err := p.OpenSized(ctx, "full", -1); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("OpenSized(-1) = %v, want fs.ErrInvalid", err)
+	}
+}
+
+// failingStore opens objects whose reads fail with an error that is not
+// comparable.
+type failingStore struct{ *memStore }
+
+func (s failingStore) OpenSized(context.Context, string, int64) (objfile.Object, error) {
+	return failingFile{}, nil
+}
+
+type failingFile struct{}
+
+func (failingFile) ReadAt([]byte, int64) (int, error)         { return 0, uncomparable{"x"} }
+func (failingFile) Size() int64                               { return 4 }
+func (failingFile) Identity() string                          { return "" }
+func (failingFile) Close() error                              { return nil }
+func (f failingFile) WithContext(context.Context) io.ReaderAt { return f }
+
+type uncomparable []string
+
+func (uncomparable) Error() string { return "uncomparable" }
+
+// TestPinUncomparableError: a read error that cannot be compared passes
+// through a Pinned object as it is.
+func TestPinUncomparableError(t *testing.T) {
+	p := objfile.Pin(failingStore{newMemStore()}, scope)
+	f, err := p.OpenSized(context.Background(), "obj", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var u uncomparable
+	if _, err := f.ReadAt(make([]byte, 4), 0); !errors.As(err, &u) {
+		t.Fatalf("ReadAt = %v", err)
+	}
+	if err := objfile.ReadRanges(context.Background(), f, []objfile.Range{{Off: 0, Buf: make([]byte, 4)}}); !errors.As(err, &u) {
+		t.Fatalf("ReadRanges = %v", err)
+	}
+}

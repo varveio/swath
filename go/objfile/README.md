@@ -91,20 +91,24 @@ if err := objfile.ReadRanges(ctx, object, ranges); err != nil {
 }
 ```
 
-The batch's bytes are merged into as few requests as `BatchPolicy` allows (touching
-and overlapping ranges, and gaps of up to 64 KiB while at most a quarter of a
-request is discarded), runs longer than 4 MiB are split, and the requests run
-concurrently, 16 and 64 MiB a batch at most, each pinned and resumed after a cut
+The batch's bytes are planned greedily, in object order, under `BatchPolicy`:
+touching and overlapping ranges are merged, runs longer than 4 MiB are split into
+near-equal requests, and a request joins the one before it across a gap of up to
+64 KiB while at most a quarter of it is discarded (a plan that need not be the
+fewest requests). The requests run concurrently, 16 and 64 MiB a batch at most, each pinned and resumed after a cut
 body as a `ReadAt` is. A ranged GET costs about one round trip whether it returns
 4 KiB or 4 MiB, so the policy saves round trips at a bounded over-read; `Batch`
-sets another. Cancelling the context cancels the requests in flight, and
+sets another; a bound it leaves at 0 takes the default, except that gap and
+over-read bounds of 0 bridge no gap. Cancelling the context cancels the requests in flight, and
 `ReadRanges` returns once they have stopped. A failed request fails only the
 ranges it covers (`BatchError`); a range outside the object fails the batch
 before any request.
 
 `ReadObject` reads a small object, such as a manifest, whole in one request with
 no metadata request first, refusing one larger than its limit (`ErrTooLarge`,
-without reading the body), and returns the identity it was served.
+without reading the body when the response states its length; one that does not
+is read up to a byte past the limit), and returns the identity it was served. A
+body cut short is read on as a pinned ranged read, never resumed by the SDK.
 
 For more control:
 
@@ -114,8 +118,8 @@ For more control:
   of a batch, so a batch never has more requests in flight than the limit.
 - Use `OpenSized` when a manifest already gives the size. It makes no request; the
   first read pins the version, once its response states a total size equal to the
-  one given (a response that states none is followed by one metadata request), and
-  returns no byte before. Another size is `ErrObjectChanged`. `Size()` is only the
+  one given (a response that states none is let go, one metadata request proves the
+  size and version, and the range is requested again), and returns no byte before. Another size is `ErrObjectChanged`. `Size()` is only the
   size given until then, and `Identity()` is empty.
 - `KnownSizes` turns `Open` of names whose sizes a reader already holds into
   `OpenSized`, for a reader whose open carries no size (SeekParquet's

@@ -75,7 +75,8 @@ type Opener interface {
 	// as a part a manifest lists, without a request: the Object pins the
 	// version its first request is served, once that response has stated
 	// the object's total size and it is size (a response that states none
-	// is followed by one metadata request for it); no byte of the object is
+	// is let go, a metadata request proves the size and version, and the
+	// range is requested again of that version); no byte of the object is
 	// returned before. A read that finds another size fails with
 	// ErrObjectChanged, and a missing object fails with an error wrapping
 	// fs.ErrNotExist. An Object of size 0, or one never read, makes no
@@ -89,8 +90,9 @@ type ObjectReader interface {
 	// ReadObject returns the bytes of the object name and the Identity of
 	// the version served. An object of more than limit bytes fails with an
 	// error wrapping ErrTooLarge, still returning its Identity, without
-	// reading its body; a missing one fails with an error wrapping
-	// fs.ErrNotExist.
+	// reading its body when the response states its length (one that does
+	// not is read up to one byte past limit); a missing one fails with an
+	// error wrapping fs.ErrNotExist.
 	ReadObject(ctx context.Context, name string, limit int64) (data []byte, identity string, err error)
 }
 
@@ -108,11 +110,21 @@ func ReadObject(ctx context.Context, o Opener, name string, limit int64) ([]byte
 		return nil, "", err
 	}
 	defer f.Close()
+	if f.Size() < 0 {
+		return nil, "", &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("the object states a negative size %d", f.Size())}
+	}
 	if f.Size() > limit {
 		return nil, f.Identity(), &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, f.Size(), limit)}
 	}
 	b := make([]byte, f.Size())
-	if _, err := f.WithContext(ctx).ReadAt(b, 0); err != nil && err != io.EOF {
+	n, err := f.WithContext(ctx).ReadAt(b, 0)
+	if n < len(b) {
+		if err == nil || err == io.EOF {
+			err = &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("%w: %d of %d bytes", io.ErrUnexpectedEOF, n, len(b))}
+		}
+		return nil, "", err
+	}
+	if err != nil && err != io.EOF {
 		return nil, "", err
 	}
 	return b, f.Identity(), nil

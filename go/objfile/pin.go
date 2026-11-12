@@ -99,13 +99,23 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 // Identity, or must find the recorded ones, else it fails with
 // ErrObjectChanged and returns none of the bytes it read. Until then the
 // Object's reads go to the store, so the current object is re-proved as
-// Open re-proves it. Size 0, which no read reaches the store for, is Open.
+// Open re-proves it. Size 0, which no read reaches the store for, is Open,
+// and fails with ErrObjectChanged when the object is not empty; a negative
+// size is invalid.
 func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object, error) {
-	if size == 0 {
-		return p.Open(ctx, name)
-	}
 	if err := CheckPath(name); err != nil {
 		return nil, err
+	}
+	if size < 0 {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: negative size %d", fs.ErrInvalid, size)}
+	}
+	if size == 0 {
+		f, err := p.Open(ctx, name)
+		if err == nil && f.Size() != 0 {
+			f.Close()
+			return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes, opened as 0", ErrObjectChanged, f.Size())}
+		}
+		return f, err
 	}
 	p.mu.Lock()
 	want, recorded := p.pins[name]
@@ -192,24 +202,26 @@ type pinnedObject struct {
 	checked  atomic.Bool
 }
 
-// confirm checks the Object against its pin once a read has pinned it. A
-// read that failed before pinning (Identity still "") is not checked: it
-// returned no bytes. A missing object of a recorded pin is ErrObjectChanged.
-func (f *pinnedObject) confirm(err error) error {
+// confirm checks the Object against its pin once a read, which failed with
+// err (or nil), has pinned it: it returns the error the read is to fail
+// with instead, after whether there is one. A read that failed before pinning
+// (Identity still "") is not checked: it returned no bytes. A missing object
+// of a recorded pin is ErrObjectChanged.
+func (f *pinnedObject) confirm(err error) (bool, error) {
 	if f.checked.Load() {
-		return err
+		return false, nil
 	}
 	if err != nil && f.recorded && errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%w: %w", ErrObjectChanged, err)
+		return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
 	}
 	if f.Identity() == "" {
-		return err
+		return false, nil
 	}
 	if cerr := f.p.check(f.name, "read", pin{Size: f.Size(), Identity: f.Identity()}); cerr != nil {
-		return cerr
+		return true, cerr
 	}
 	f.checked.Store(true)
-	return err
+	return false, nil
 }
 
 func (f *pinnedObject) ReadAt(p []byte, off int64) (int, error) {
@@ -222,17 +234,18 @@ func (f *pinnedObject) WithContext(ctx context.Context) io.ReaderAt {
 
 func (f *pinnedObject) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 	n, err := f.Object.WithContext(ctx).ReadAt(p, off)
-	if f.checked.Load() {
-		return n, err
-	}
-	if cerr := f.confirm(err); cerr != err {
+	if replaced, cerr := f.confirm(err); replaced {
 		return 0, cerr
 	}
 	return n, err
 }
 
 func (f *pinnedObject) ReadRanges(ctx context.Context, ranges []Range) error {
-	return f.confirm(ReadRanges(ctx, f.Object, ranges))
+	err := ReadRanges(ctx, f.Object, ranges)
+	if replaced, cerr := f.confirm(err); replaced {
+		return cerr
+	}
+	return err
 }
 
 func (f *pinnedObject) batchPolicy() BatchPolicy { return policyOf(f.Object) }
