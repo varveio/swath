@@ -1,0 +1,43 @@
+{
+  "format": "seekparquet",
+  "format_version": 0,
+  "draft_revision": 1,
+  "schema_id": "swath/local-entries/v1",
+  "parts": [
+    {
+      "path": "data/part-00000.parquet",
+      "rows": 7,
+      "bytes": 3722,
+      "min_key_base64": "MjAyNS8=",
+      "max_key_base64": "bm90ZXMudHh0",
+      "sha256": "9b79e99390b1d5521dfeac0d614ea311cc3385cfb4581c742a6b44e97b8d4519"
+    }
+  ],
+  "extensions": {
+    "swath": {
+      "version": 1,
+      "published_at": "2026-11-12T09:00:02Z",
+      "source": {
+        "kind": "local-fs",
+        "uri": "/data/photos"
+      },
+      "scope": {
+        "kind": "whole"
+      },
+      "coverage": {
+        "complete": true,
+        "stop_reason": "completed",
+        "skipped_entries": 0,
+        "exclusions": [],
+        "filters": [],
+        "snapshot": false,
+        "listing_started_at": "2026-11-12T09:00:00Z",
+        "listing_finished_at": "2026-11-12T09:00:01Z"
+      }
+    }
+  },
+  "key": {
+    "column": "key",
+    "unique": true
+  }
+}

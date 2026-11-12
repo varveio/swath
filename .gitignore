@@ -24,6 +24,8 @@ out/
 
 # Tool artifacts (never commit listing output or checkpoints)
 *.parquet
+# The reader's example dataset: seven rows, 3.7 KB, read by go/reader/example_test.go.
+!/go/reader/testdata/photos/data/part-00000.parquet
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

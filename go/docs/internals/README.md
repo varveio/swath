@@ -1,6 +1,6 @@
 # Internals
 
-How the Go implementation works, what it promises and how that is tested and measured. The user's pages are
+How swath works, what it promises and how that is tested and measured. The user's pages are
 [../README.md](../README.md). In reading order:
 
 1. [architecture.md](architecture.md): the pipeline, packages, goroutines and ownership.
@@ -19,18 +19,18 @@ How the Go implementation works, what it promises and how that is tested and mea
 10. [dependencies.md](dependencies.md): the modules swath depends on and why.
 11. [testing.md](testing.md): test tiers, CI jobs, stress repeats, fixtures.
 12. [measurements.md](measurements.md): the evidence, by run and date.
-13. [cli-inventory.md](cli-inventory.md): every Java CLI option, output mode, exit code and report field
-    against this tool, with the decision behind it.
 
 The replay server (`cmd/swath-replay`: a recorded listing served through the S3, GCS and Azure APIs for tests
-and benchmarks): [swath-replay.md](swath-replay.md) (using it), [replay.md](replay.md) (how it is built) and
-[replay-java.md](replay-java.md) (its differences from the Java server).
+and benchmarks): [swath-replay.md](swath-replay.md) (using it) and [replay.md](replay.md) (how it is built).
 
-The nested Go modules: [`go/reader`](../../reader/README.md) reads a dataset in Go (schema descriptors, the
+The nested Go modules: [`reader`](../../reader/README.md) reads a dataset in Go (schema descriptors, the
 manifest's `extensions.swath`, typed rows and current-object streaming);
-[`go/objfile`](../../objfile/README.md) provides pinned ranged reads and conditional uploads in S3, GCS and Azure.
+[`objfile`](../../objfile/README.md) provides pinned ranged reads and conditional uploads in S3, GCS and Azure.
 
-The language-neutral contracts in [docs/internals/contracts.md](../../../docs/internals/contracts.md) bind both
-implementations. The root [Java algorithm](../../../docs/internals/algorithms.md),
-[Java architecture](../../../docs/internals/architecture.md) and the historical
-[Java v0.3.2 field guide](https://swath.varve.io/field-guide/) describe the Java engine.
+[contracts.md](contracts.md#the-invariants-i1i12) owns the load-bearing invariants I1–I12.
+
+## History
+
+[cli-inventory.md](cli-inventory.md) maps every option, output mode, exit code and report field of the
+0.3 command line to this one, with the decision behind it; [replay-java.md](replay-java.md) records the replay
+server's differences from its 0.3 predecessor. They are kept for readers migrating from 0.3.

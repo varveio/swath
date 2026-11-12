@@ -4,9 +4,11 @@ swath du totals SOURCE's objects (a local tree's files), bytes and newest time, 
 
 ## Synopsis
 
+<!-- synopsis:begin -->
 ```text
-swath du SOURCE [-d N] [OPTIONS]
+swath du SOURCE [OPTIONS]
 ```
+<!-- synopsis:end -->
 
 ## Description
 

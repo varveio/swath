@@ -4,12 +4,12 @@ swath list lists every object (or entry) below SOURCE, as text rows or into a so
 
 ## Synopsis
 
+<!-- synopsis:begin -->
 ```text
 swath list SOURCE [OPTIONS]
-swath list SOURCE -o DIR [OPTIONS]
-swath list SOURCE -o NAME.tsv|NAME.jsonl[.gz|.zst] [OPTIONS]
-swath ls ...
+swath ls SOURCE [OPTIONS]
 ```
+<!-- synopsis:end -->
 
 ## Description
 
