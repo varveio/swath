@@ -25,7 +25,8 @@ import (
 // committedReport checks a report of an invocation that found the dataset
 // m committed: the dataset's rows, part bytes and object bytes (want; nil:
 // absent) from the manifest, nothing of its own listed or emitted, and the
-// outcome completed.
+// outcome completed, or incomplete with exit 1 when the manifest's coverage
+// is partial.
 func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, want *int64) {
 	t.Helper()
 	var rep listing.Report
@@ -46,7 +47,11 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 	if has := strings.Contains(string(raw), `"committed_object_bytes"`); has != (want != nil) {
 		t.Fatalf("%s: committed_object_bytes present %v", name, has)
 	}
-	if oc := rep.Outcome; oc.Status != listing.StatusCommitted || oc.Class != listing.ClassCompleted || oc.ExitCode != exitCompleted || !oc.Complete {
+	class, code := listing.ClassCompleted, exitCompleted
+	if !m.Coverage.Complete {
+		class, code = listing.ClassIncomplete, exitFatal
+	}
+	if oc := rep.Outcome; oc.Status != listing.StatusCommitted || oc.Class != class || oc.ExitCode != code || oc.Complete != m.Coverage.Complete {
 		t.Fatalf("%s: outcome %+v", name, oc)
 	}
 }
@@ -106,70 +111,92 @@ func TestResumeCompleteAccount(t *testing.T) {
 
 // TestRemoteResumeFindsCommit: a run writing to a bucket is killed once its
 // manifest is created, its answer lost (no marker of the outcome, no
-// run.json); swath resume WORK_DIR --report FILE finds the commit made,
-// finishes its aftermath and exits 0, and both its report and the run.json
-// it puts beside the manifest account for the committed dataset from the
-// manifest.
+// run.json); swath resume WORK_DIR --report FILE finds the commit made and
+// finishes its aftermath, and both its report and the run.json it puts
+// beside the manifest account for the committed dataset from the manifest:
+// completed with exit 0 when it covers its scope, incomplete with exit 1
+// when a key limit left it partial, as --report says.
 func TestRemoteResumeFindsCommit(t *testing.T) {
 	datasettest.RequireJournal(t)
 	captureStderr(t)
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
 	s3test.NoCredentials(t)
 	keys := s3test.Keys(5252, 7)
-	var want int64
+	var all int64
 	for _, k := range keys {
-		want += int64(len(k)) // each object's body is its key
+		all += int64(len(k)) // each object's body is its key
 	}
 	src := s3test.Bucket(t, keys)
-	f := gcsfake.New("dst")
-	dst := httptest.NewServer(f)
-	t.Cleanup(dst.Close)
-	ctx := context.Background()
-	work := filepath.Join(t.TempDir(), "work")
-	args := []string{"s3://bkt", "--endpoint-url", src, "--s3-path-style", "--anonymous", "--workers", "2", "--part-size", "4KiB",
-		"-o", "gs://dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL + "/storage/v1/", "--output-gcs-credentials-file", serviceAccount(t, "tok")}
-	restore := faults.Set(func(p string) error {
-		if p == "manifest-created" {
-			return faults.ErrCrash
-		}
-		return nil
-	})
-	err := run(ctx, args, io.Discard, false)
-	restore()
-	if !errors.Is(err, faults.ErrCrash) {
-		t.Fatalf("first attempt: %v", err)
+	for _, c := range []struct {
+		name  string
+		extra []string
+		diag  bool
+	}{
+		{"complete", nil, false},
+		// A partial commit (a key limit) is a diag run's, never resumable;
+		// listing.TestCommittedOutcome covers its run.json outcome.
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := gcsfake.New("dst")
+			dst := httptest.NewServer(f)
+			t.Cleanup(dst.Close)
+			ctx := context.Background()
+			work := filepath.Join(t.TempDir(), "work")
+			args := append([]string{"s3://bkt", "--endpoint-url", src, "--s3-path-style", "--anonymous", "--workers", "2", "--part-size", "4KiB",
+				"-o", "gs://dst/ds", "--work-dir", work, "--output-endpoint-url", dst.URL + "/storage/v1/", "--output-gcs-credentials-file", serviceAccount(t, "tok")}, c.extra...)
+			restore := faults.Set(func(p string) error {
+				if p == "manifest-created" {
+					return faults.ErrCrash
+				}
+				return nil
+			})
+			err := run(ctx, args, io.Discard, c.diag)
+			restore()
+			if !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("first attempt: %v", err)
+			}
+			o, ok := f.Get("ds/" + dataset.ManifestName)
+			if !ok {
+				t.Fatal("no manifest")
+			}
+			if _, ok := f.Get("ds/" + dataset.ReportName); ok {
+				t.Fatal("run.json before the resume")
+			}
+			var m dataset.Manifest
+			if err := json.Unmarshal(o.Data, &m); err != nil || len(m.Parts) < 1 {
+				t.Fatalf("manifest: %v, %d parts", err, len(m.Parts))
+			}
+			if m.Coverage.Complete != (c.name == "complete") {
+				t.Fatalf("manifest coverage %+v", m.Coverage)
+			}
+			want := m.CommittedObjectBytes
+			if c.name == "complete" && (want == nil || *want != all) {
+				t.Fatalf("manifest committed_object_bytes %v, want %d", want, all)
+			}
+			report := filepath.Join(t.TempDir(), "report.json")
+			err = resume(ctx, []string{work, "--report", report, "--output-gcs-credentials-file", serviceAccount(t, "tok2")}, io.Discard)
+			code := exitCompleted
+			if err != nil {
+				code = exitCode(t, err)
+			}
+			if wantCode := map[bool]int{true: exitCompleted, false: exitFatal}[m.Coverage.Complete]; code != wantCode {
+				t.Fatalf("resume: exit %d, want %d (%v)", code, wantCode, err)
+			}
+			b, err := os.ReadFile(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			committedReport(t, "--report", b, m, want)
+			var rep listing.Report
+			_ = json.Unmarshal(b, &rep)
+			if r := rep.Output.Remote; r == nil || r.Commit != "resumed" {
+				t.Fatalf("--report remote %+v", r)
+			}
+			rj, ok := f.Get("ds/" + dataset.ReportName)
+			if !ok {
+				t.Fatal("no run.json after the resume")
+			}
+			committedReport(t, "run.json", rj.Data, m, want)
+		})
 	}
-	o, ok := f.Get("ds/" + dataset.ManifestName)
-	if !ok {
-		t.Fatal("no manifest")
-	}
-	if _, ok := f.Get("ds/" + dataset.ReportName); ok {
-		t.Fatal("run.json before the resume")
-	}
-	var m dataset.Manifest
-	if err := json.Unmarshal(o.Data, &m); err != nil || len(m.Parts) < 2 {
-		t.Fatalf("manifest: %v, %d parts", err, len(m.Parts))
-	}
-	if m.CommittedObjectBytes == nil || *m.CommittedObjectBytes != want {
-		t.Fatalf("manifest committed_object_bytes %v, want %d", m.CommittedObjectBytes, want)
-	}
-	report := filepath.Join(t.TempDir(), "report.json")
-	if err := resume(ctx, []string{work, "--report", report, "--output-gcs-credentials-file", serviceAccount(t, "tok2")}, io.Discard); err != nil {
-		t.Fatalf("resume: %v", err)
-	}
-	b, err := os.ReadFile(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	committedReport(t, "--report", b, m, &want)
-	var rep listing.Report
-	_ = json.Unmarshal(b, &rep)
-	if r := rep.Output.Remote; r == nil || r.Commit != "resumed" {
-		t.Fatalf("--report remote %+v", r)
-	}
-	rj, ok := f.Get("ds/" + dataset.ReportName)
-	if !ok {
-		t.Fatal("no run.json after the resume")
-	}
-	committedReport(t, "run.json", rj.Data, m, &want)
 }

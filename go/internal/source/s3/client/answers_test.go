@@ -91,7 +91,7 @@ func TestAnswers(t *testing.T) {
 		{"404 NoSuchKey", xmlError(404, "NoSuchKey"), objhttp.ClassOther, once, &Error{Status: 404, Code: "NoSuchKey", RequestID: "RID"}},
 		{"403 header request ID", xmlError(403, "AccessDenied", "X-Amz-Request-Id", "HID"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "HID"}},
 		{"404 no body", body(404, ""), objhttp.ClassOther, once, &Error{Status: 404, Code: "NotFound"}},
-		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassOther, once,
+		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassRegionRedirect, once,
 			&Error{Status: 301, Code: "PermanentRedirect", Region: "eu-west-2", RequestID: "RID"}},
 		{"307", redirect(307), objhttp.ClassOther, once, &Error{Status: 307, Code: "TemporaryRedirect"}},
 		{"308", redirect(308), objhttp.ClassOther, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text

@@ -70,7 +70,8 @@ func TestMissingBucketCause(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
-			err := run(context.Background(), append(c.args, "--workers", "1", "--report", report, "-o", dir), io.Discard, false)
+			args := append(append(c.args, "--workers", "1", "--report", report, "-o", dir), unjournaled...)
+			err := run(context.Background(), args, io.Discard, diagList)
 			if code := exitCode(t, err); code != exitFatal {
 				t.Fatalf("exit %d (%v)", code, err)
 			}
@@ -95,5 +96,36 @@ func TestMissingBucketCause(t *testing.T) {
 				t.Fatalf("error.json names not_found: %s", b)
 			}
 		})
+	}
+}
+
+// TestRegionRedirectCause: S3 answering that the bucket is in another
+// region, and naming it, ends the run fatal, exit 1, not resumable, with
+// cause region_redirect and the region in the message.
+func TestRegionRedirectCause(t *testing.T) {
+	captureStderr(t)
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("X-Amz-Bucket-Region", "eu-west-2")
+		w.WriteHeader(http.StatusMovedPermanently)
+		io.WriteString(w, `<Error><Code>PermanentRedirect</Code><Message>The bucket you are attempting to access must be addressed using the specified endpoint.</Message></Error>`)
+	}))
+	t.Cleanup(srv.Close)
+	dir := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	args := append([]string{"s3://bkt/p/", "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous",
+		"--workers", "1", "--report", report, "-o", dir}, unjournaled...)
+	err := run(context.Background(), args, io.Discard, diagList)
+	if code := exitCode(t, err); code != exitFatal {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	o := rep.Outcome
+	if o.Class != listing.ClassFatal || o.Cause != "region_redirect" || o.Resumable || !strings.Contains(o.Error, "eu-west-2") {
+		t.Fatalf("report outcome %+v", o)
 	}
 }

@@ -140,6 +140,7 @@ and raw overfetch are excluded. `distinct_keys` excludes pending batches that ne
 Object-store failure diagnostics retain `auth` (unusable credentials), `access_denied` (a listing
 permission refusal), `not_found` (the bucket or Azure container does not exist: S3 `NoSuchBucket`, GCS's 404
 `notFound` to a listing, Azure `ContainerNotFound`; never a missing object or prefix, which lists empty),
+`region_redirect` (S3 answered that the bucket is in another region and named it; the message says which),
 `throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
 retry and engine requeue use its stored transient signal. Other service errors retain their HTTP status
 and provider code or reason in the message without a separate report label. Invalid pages remain protocol

@@ -101,7 +101,7 @@ cause that has passed the provider's redaction boundary. The shared vocabulary l
 `objhttp.Label` supplies the factory's report label (`ClassOther` becomes an empty label). Admission, counters, the limiter, retry, reporting and the
 engine's requeue consume that value; exhaustion wraps it, and `errors.Is` still reaches the cancellation and
 invalid-page sentinels. The report's diagnostic labels are `auth`, `access_denied`, `not_found` (the bucket or container
-only: S3 `NoSuchBucket`, GCS's 404 `notFound` to objects.list, Azure `ContainerNotFound`), `throttle`, `timeout`,
+only: S3 `NoSuchBucket`, GCS's 404 `notFound` to objects.list, Azure `ContainerNotFound`), `region_redirect` (S3 named the bucket's region in a redirect), `throttle`, `timeout`,
 `parse` and `unsupported`, the ones [the run report](../reference/run-report.md) documents; other errors keep their status and code
 without a label. Each provider's `Failure` method in its `classify.go` produces the signals from status and code,
 held by the shared contract `objhttptest.Contract` that every client passes (`TestRetryContract`).

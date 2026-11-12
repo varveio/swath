@@ -525,7 +525,8 @@ A resume that finds the dataset committed by an earlier attempt (local, or a buc
 was answered too late) now reports the committed dataset from its manifest: `rows_committed`, `rows_durable`,
 `output_bytes` and `committed_object_bytes`, where it reported 0, in `--report` and in the `run.json` it writes
 beside the manifest, whose `outcome.complete` and `stop_reason` are the manifest's coverage. `outcome.cause`
-gains `not_found`: the bucket (S3, GCS) or Azure container does not exist, where the report had no cause. A
+gains `not_found`: the bucket (S3, GCS) or Azure container does not exist, and `region_redirect`: S3 named the
+bucket's region in a redirect (the message says which), where the report had no cause. A
 version 5 reader reads version 6 by ignoring the new member.
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`

@@ -23,6 +23,12 @@ func (e *Error) Failure() objhttp.Failure {
 			// The bucket only: NoSuchKey and a 404 without a code are not.
 			f.Class = objhttp.ClassNotFound
 		default:
+			if e.Region != "" {
+				// A redirect (301 PermanentRedirect, or AuthorizationHeaderMalformed)
+				// naming the bucket's region: the caller can retry there.
+				f.Class = objhttp.ClassRegionRedirect
+				break
+			}
 			if e.Status == 403 || e.Code == "AccessDenied" || e.Code == "AllAccessDisabled" {
 				f.Class = objhttp.ClassAccessDenied
 			}
