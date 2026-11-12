@@ -53,10 +53,18 @@ Exit 1, cause `access_denied`. The credentials loaded but may not list: S3 needs
 (`s3:ListBucketVersions` with `--all-versions`), GCS `storage.objects.list`, Azure Blob the permission to list
 the container. swath reads no object, so it needs no read permission on objects.
 
+## The bucket or container does not exist
+
+Exit 1, cause `not_found`, not resumable. The bucket (S3 `NoSuchBucket`, GCS `notFound`) or the Azure container
+(`ContainerNotFound`) named in SOURCE does not exist; the message keeps the service's status and code. Check the
+name, and for S3 the endpoint. A prefix with no object under it is not this failure: it lists nothing and
+commits an empty dataset.
+
 ## The bucket is in another region
 
-The error names the bucket's region and the option to give, such as `give --s3-region eu-west-1`. swath does not
-follow S3's redirects or discover a bucket's region; pass `--s3-region` (or set `AWS_REGION`).
+Exit 1, cause `region_redirect`, not resumable. S3 answered that the bucket is in another region and named it
+(`X-Amz-Bucket-Region`); the error says which and the option to give, such as `give --s3-region eu-west-1`.
+swath does not follow S3's redirects or discover a bucket's region; pass `--s3-region` (or set `AWS_REGION`).
 
 ## Unknown flag
 

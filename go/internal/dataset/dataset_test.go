@@ -410,3 +410,79 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 		t.Fatalf("%d bytes under a limit of %d: %v", b.Len(), b.Len()-1, err)
 	}
 }
+
+// TestManifestObjectBytes: extensions.swath.committed_object_bytes is
+// written when known, 0 included, and left out when unknown; it reads back
+// as written, and a manifest read and written again keeps it byte for byte.
+// A part's own count stays out of the manifest's parts (SeekParquet's
+// members only).
+func TestManifestObjectBytes(t *testing.T) {
+	n := func(v int64) *int64 { return &v }
+	for _, want := range []*int64{nil, n(0), n(12345)} {
+		m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: id,
+			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Source: Source{Kind: "s3", URI: "s3://b/"}, Scope: Scope{Kind: "whole"},
+			Coverage: Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}, CommittedObjectBytes: want,
+			Parts: []ManifestPart{{Path: "data/part-00000.parquet", PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b", SHA256: strings.Repeat("0123456789abcdef", 4)}}}}
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw struct {
+			Extensions map[string]map[string]json.RawMessage `json:"extensions"`
+			Parts      []map[string]json.RawMessage          `json:"parts"`
+		}
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, has := raw.Extensions["swath"]["committed_object_bytes"]
+		if has != (want != nil) || has && string(got) != fmt.Sprint(*want) {
+			t.Fatalf("%v: committed_object_bytes %s (present %v)", want, got, has)
+		}
+		if _, has := raw.Parts[0]["object_bytes"]; has {
+			t.Fatalf("a part carries object_bytes: %s", b)
+		}
+		var back Manifest
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		if (back.CommittedObjectBytes == nil) != (want == nil) || want != nil && *back.CommittedObjectBytes != *want {
+			t.Fatalf("%v: read back %v", want, back.CommittedObjectBytes)
+		}
+		if tot := back.Totals(); tot.Rows != 2 || tot.Bytes != 9 || (tot.CommittedObjectBytes == nil) != (want == nil) {
+			t.Fatalf("totals %+v", tot)
+		}
+		again, err := json.Marshal(back)
+		if err != nil || !bytes.Equal(again, b) {
+			t.Fatalf("rewritten: %v\n%s\n%s", err, again, b)
+		}
+	}
+}
+
+// TestObjectBytes: a dataset's object bytes are its parts' counts summed,
+// unknown when one part has none; a dataset of no part holds 0 when its
+// schema has a size column.
+func TestObjectBytes(t *testing.T) {
+	n := func(v int64) *int64 { return &v }
+	str := func(v *int64) string {
+		if v == nil {
+			return "nil"
+		}
+		return fmt.Sprint(*v)
+	}
+	for _, c := range []struct {
+		parts []Part
+		sized bool
+		want  string
+	}{
+		{nil, true, "0"},
+		{nil, false, "nil"},
+		{[]Part{{ObjectBytes: n(0)}}, true, "0"},
+		{[]Part{{ObjectBytes: n(3)}, {ObjectBytes: n(4)}}, true, "7"},
+		{[]Part{{ObjectBytes: n(3)}, {}}, true, "nil"}, // a retained part of an earlier build's
+		{[]Part{{}, {}}, false, "nil"},
+	} {
+		if got := str(ObjectBytes(c.parts, c.sized)); got != c.want {
+			t.Errorf("%+v sized %v: %s, want %s", c.parts, c.sized, got, c.want)
+		}
+	}
+}

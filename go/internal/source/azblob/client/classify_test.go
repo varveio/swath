@@ -120,7 +120,10 @@ func TestClassify(t *testing.T) {
 		{403, codeAuthorization, objhttp.ClassAccessDenied, false, false, false},
 		{403, codePermissionMismatch, objhttp.ClassAccessDenied, false, false, false},
 		{403, "AuthorizationSourceIPMismatch", objhttp.ClassAccessDenied, false, false, false},
-		{404, codeContainerNotFound, objhttp.ClassOther, false, false, false},
+		{404, codeContainerNotFound, objhttp.ClassNotFound, false, false, false},
+		{404, "BlobNotFound", objhttp.ClassOther, false, false, false}, // only the container is not_found
+		{404, "ResourceNotFound", objhttp.ClassOther, false, false, false},
+		{404, "", objhttp.ClassOther, false, false, false},
 		{503, codeServerBusy, objhttp.ClassThrottle, true, true, false},
 		{429, "", objhttp.ClassThrottle, true, true, false},
 		{500, codeOperationTimedOut, objhttp.ClassTimeout, true, false, true},

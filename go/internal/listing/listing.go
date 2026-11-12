@@ -1396,6 +1396,11 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	}
 	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed)
 	meta.Coverage.Filters = append(meta.Coverage.Filters, cfg.Filter.Descriptions()...)
+	// The dataset's object bytes are the writers' counts, part by part
+	// (retained parts' from their records): each row once, however it
+	// reached its part (listed, replayed from spill, after a retry). A
+	// dataset of no part is sized when this invocation measured sizes.
+	meta.CommittedObjectBytes = dataset.ObjectBytes(parts, sum.Output.ObjectBytes != nil)
 	// Committed once the manifest is installed: the terminal account is
 	// frozen then, in the same step, before anything that can block or
 	// fail; the report follows and can no longer revoke the dataset.
@@ -1413,6 +1418,7 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
 		sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsEmitted
 		sum.Output.RowsDurable = sum.Output.RowsCommitted
+		sum.Output.CommittedObjectBytes = meta.CommittedObjectBytes
 		a.committed.Store(sum.Output.RowsCommitted) // before finish takes the last sample
 		sum.finish()
 		cfg.finalize(sum, nil)

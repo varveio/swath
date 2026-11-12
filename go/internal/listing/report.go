@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/totals"
@@ -30,8 +31,9 @@ import (
 // SWATH_MEMPROFILE), resources.spill.read_handles (the spill read handles'
 // hits, misses and evictions) and frame_bytes and frame_rows (the row
 // frames by size), and output.remote (a dataset written to a bucket: its
-// destination, uploads, retries, commit and orphan cleanup).
-const ReportVersion = 5
+// destination, uploads, retries, commit and orphan cleanup). 6:
+// output.committed_object_bytes (the committed dataset's object bytes).
+const ReportVersion = 6
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -355,6 +357,13 @@ type Output struct {
 	// OutputBytes is the dataset's part bytes (a text run's: output.text.bytes).
 	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 	OutputBytes int64  `json:"output_bytes"`
+	// CommittedObjectBytes is the committed dataset's object bytes, beside
+	// rows_committed: every row's size summed as the writers wrote them
+	// (retained parts and rows replayed from spill included, each row
+	// once), the manifest's extensions.swath.committed_object_bytes. Absent unless
+	// committed, and when unknown: a schema without a size column, or a
+	// part journaled by a build before the count. 0 is a real total.
+	CommittedObjectBytes *int64 `json:"committed_object_bytes,omitempty"`
 	// Text is a text run's output (nil for a dataset or a dry run).
 	Text *TextOutput `json:"text,omitempty"`
 	// Totals is swath du's per-prefix totals: the depth, the prefixes and
@@ -363,6 +372,15 @@ type Output struct {
 	// Remote is a remote dataset's account: its destination, uploads,
 	// commit and orphan cleanup (nil for a local dataset).
 	Remote *Remote `json:"remote,omitempty"`
+}
+
+// Committed accounts the dataset m, committed, as the output's dataset
+// side: its rows (rows_committed, rows_durable), part bytes and object
+// bytes. It is the account of an invocation that found the commit made
+// (an earlier attempt's), which retained and emitted nothing itself.
+func (o *Output) Committed(m *dataset.Manifest) {
+	t := m.Totals()
+	o.RowsCommitted, o.RowsDurable, o.OutputBytes, o.CommittedObjectBytes = t.Rows, t.Rows, t.Bytes, t.CommittedObjectBytes
 }
 
 // TextOutput is a text run's destination and what reached it. A run that
