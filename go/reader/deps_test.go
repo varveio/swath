@@ -27,3 +27,18 @@ func TestNoCloudSDK(t *testing.T) {
 		}
 	}
 }
+
+// TestNoParquetGoImport: the package's own code (its tests aside) does not
+// import parquet-go: it reads values and schemas through SeekParquet's own
+// types, so parquet-go is no part of this module's API.
+func TestNoParquetGoImport(t *testing.T) {
+	out, err := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, ".").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	for line := range strings.Lines(string(out)) {
+		if strings.HasPrefix(line, "github.com/parquet-go/") {
+			t.Errorf("imports %s", strings.TrimSpace(line))
+		}
+	}
+}

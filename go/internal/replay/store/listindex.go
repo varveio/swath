@@ -135,6 +135,12 @@ func countIndex(idx *ListIndexReads, st *seekparquet.ReadStats) {
 // which it fills with its page counts only.
 type legacyReader struct{ *legacy.Reader }
 
+// Scan is the legacy core's Scan, handing sink the legacy core's page
+// values (legacy.ColumnSink).
+func (r legacyReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink columnSink) error {
+	return r.Reader.Scan(ctx, rng, stats, sink)
+}
+
 func (r legacyReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *RollupStats) ([]legacy.Entry, error) {
 	return r.Reader.RollupRead(ctx, rl, &stats.Stats)
 }

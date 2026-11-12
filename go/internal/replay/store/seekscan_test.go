@@ -24,7 +24,7 @@ import (
 // ownedScan is seekReader.Scan as it was before borrowed batches: Read's
 // owning rows (a column a part lacks is a null value), handed to sink as
 // one run. The window-cache fill must pack exactly what it packs.
-func ownedScan(ctx context.Context, r *seekReader, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error {
+func ownedScan(ctx context.Context, r *seekReader, rng legacy.Range, stats *legacy.Stats, sink columnSink) error {
 	got, err := r.Read(ctx, rng, stats)
 	if err != nil || len(got) == 0 {
 		return err
@@ -125,7 +125,7 @@ func writeScanFixture(t testing.TB, repeat bool) (string, []string) {
 // (whose Scan uses only the dataset).
 func openScanReader(t testing.TB, dir string) (*seekReader, *faultSource) {
 	src := &faultSource{dir: dir}
-	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.Options{})
+	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,16 +180,28 @@ func (s *slotSink) Values(c int, values []parquet.Value) {
 	}
 }
 
+// View records a view's values as Values records page values, from the
+// module's own kinds and text, which the legacy core's must match.
+func (s *slotSink) View(c int, values seekparquet.ColumnView) {
+	for i := range values.Len() {
+		text := "<null>"
+		if v := values.Value(i); !v.IsNull() {
+			text = v.Kind().String() + ":" + v.String()
+		}
+		s.slots[c] = append(s.slots[c], text)
+	}
+}
+
 func (s *slotSink) Missing(c int) {
 	for range s.run {
 		s.slots[c] = append(s.slots[c], "<null>")
 	}
 }
 
-type scanFunc func(context.Context, *seekReader, legacy.Range, *legacy.Stats, legacy.ColumnSink) error
+type scanFunc func(context.Context, *seekReader, legacy.Range, *legacy.Stats, columnSink) error
 
 // batchScan is the borrowed-batch seekReader.Scan, as a scanFunc.
-func batchScan(ctx context.Context, r *seekReader, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error {
+func batchScan(ctx context.Context, r *seekReader, rng legacy.Range, stats *legacy.Stats, sink columnSink) error {
 	return r.Scan(ctx, rng, stats, sink)
 }
 
