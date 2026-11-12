@@ -89,8 +89,12 @@ decides which bytes to read and objfile how: a part opens with its manifest size
 (`ReadObject`), and the reader's batches of ranges are `ReadRanges`. objfile's
 errors keep their meaning for SeekParquet: `ErrObjectChanged`, a
 `*SizeMismatchError` and `ErrTooLarge` also match SeekParquet's own. The adapter
-translates SeekParquet's operation cache mode to objfile's: `CacheBypass`
-disables byte-cache lookup and admission for scalar and batched reads.
+passes the caller's context through unchanged: `objfile.WithCacheMode(ctx,
+objfile.CacheBypass)` disables byte-cache lookup and admission for scalar and
+batched reads, and `objfile.WithObserver` observes physical requests. SeekParquet
+does not choose cache policy. Callers running sequential bulk scans or building a
+list index set objfile's bypass; point lookups, browse pages, counts and sums can
+reuse cached bytes.
 
 ## Read several ranges, or a small object whole
 

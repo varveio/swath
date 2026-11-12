@@ -20,6 +20,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/objfile"
 )
 
 // ErrRepeatedKeys refuses a SeekParquet dataset whose keys repeat (a
@@ -314,7 +315,7 @@ func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.S
 	var st seekparquet.ReadStats
 	defer count(stats, &st)
 	var keys [][]byte
-	return r.d.Scan(ctx, seekQuery(rng), &st, func(b *seekparquet.Batch) error {
+	return r.d.Scan(objfile.WithCacheMode(ctx, objfile.CacheBypass), seekQuery(rng), &st, func(b *seekparquet.Batch) error {
 		keys = keys[:0]
 		for i := range b.Len() {
 			keys = append(keys, b.Key(i))
