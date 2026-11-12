@@ -547,8 +547,7 @@ func ManifestParts(b []byte) map[string]bool {
 // progress, if set, is told the bytes read. The object is opened at the
 // recorded size, with no metadata request (objfile.Opener.OpenSized): its
 // first read checks that size and pins the version, which must be the
-// recorded one before any more is read; another size fails that read with
-// objfile.ErrObjectChanged.
+// recorded one before any more is read; another size is ErrRemoteAltered.
 func VerifyObject(ctx context.Context, r *Remote, name, identity string, want PartInfo, progress func(int64)) error {
 	open := r.Opener.Open
 	if want.Bytes > 0 {
@@ -582,6 +581,9 @@ func VerifyObject(ctx context.Context, r *Remote, name, identity string, want Pa
 		rctx, cancel := context.WithTimeout(ctx, VerifyReadTimeout)
 		n, err := obj.WithContext(rctx).ReadAt(buf, off)
 		cancel()
+		if sm := (*objfile.SizeMismatchError)(nil); errors.As(err, &sm) {
+			return fmt.Errorf("%w: %s is %d bytes; the journal says %d", ErrRemoteAltered, name, sm.Actual, want.Bytes)
+		}
 		if !checked && obj.Identity() != "" {
 			if err := checkIdentity(); err != nil {
 				return err
