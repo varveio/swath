@@ -6,25 +6,16 @@ package reader
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // Dataset is a swath dataset opened through the SeekParquet module: its
-// metadata, its schema id's spec, and the reads and checks swath's readers
-// apply on top of the module's. It is safe for concurrent use.
+// metadata and its schema id's spec. It is safe for concurrent use.
 type Dataset struct {
 	sp   *seekparquet.Dataset
 	meta Metadata
 	spec SchemaSpec
-	// checked is set once CheckSchema has succeeded: every part's footer
-	// is then checked against its manifest entry, row count included.
-	checked atomic.Bool
-
-	statsMu sync.Mutex
-	stats   StreamStats
 }
 
 // Open opens the dataset at src through the SeekParquet module, which
@@ -33,7 +24,7 @@ type Dataset struct {
 // schema id. A schema id swath does not write is a SemanticError of
 // KindSchema; the module's refusals and errors are returned unchanged. The
 // Source must stay usable until Close.
-func Open(ctx context.Context, src Source, opt Options) (*Dataset, error) {
+func Open(ctx context.Context, src seekparquet.Source, opt seekparquet.OpenOptions) (*Dataset, error) {
 	sp, err := seekparquet.OpenDataset(ctx, src, opt)
 	if err != nil {
 		return nil, err
@@ -43,7 +34,7 @@ func Open(ctx context.Context, src Source, opt Options) (*Dataset, error) {
 
 // OpenDir opens the dataset in the local directory at path, as Open does,
 // through seekparquet.OpenDir. The directory stays open until Close.
-func OpenDir(ctx context.Context, path string, opt Options) (*Dataset, error) {
+func OpenDir(ctx context.Context, path string, opt seekparquet.OpenOptions) (*Dataset, error) {
 	sp, err := seekparquet.OpenDir(ctx, path, opt)
 	if err != nil {
 		return nil, err
@@ -74,8 +65,8 @@ func (d *Dataset) Metadata() Metadata {
 	return m
 }
 
-// SeekParquet returns the module's dataset, for the queries this package
-// does not make (List, Rows over other columns, Verify). It is borrowed:
+// SeekParquet returns the underlying dataset for reads, plans, listings,
+// aggregations and validation. It is borrowed:
 // the Dataset owns it and closes it.
 func (d *Dataset) SeekParquet() *seekparquet.Dataset { return d.sp }
 

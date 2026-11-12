@@ -5,7 +5,6 @@ package listing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -45,30 +44,26 @@ func openDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []s
 	return d
 }
 
-func streamAll(d *reader.Dataset) ([]reader.Object, error) {
-	var out []reader.Object
-	err := d.Stream(context.Background(), func(o reader.Object) error {
-		out = append(out, o)
+func scanDecoded[T any](d *reader.Dataset, decode func(seekparquet.Row) (T, error)) ([]T, seekparquet.ReadStats, error) {
+	var out []T
+	var st seekparquet.ReadStats
+	spec, _ := reader.Schema(d.Metadata().SchemaID)
+	err := d.SeekParquet().Scan(context.Background(), seekparquet.Query{Columns: spec.ColumnNames()}, &st, func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			v, err := decode(b.Row(i))
+			if err != nil {
+				return err
+			}
+			out = append(out, v)
+		}
 		return nil
 	})
-	return out, err
+	return out, st, err
 }
 
-func sameObjects(t *testing.T, got, want []reader.Object) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("streamed %d objects, want %d", len(got), len(want))
-	}
-	for i := range got {
-		if !reflect.DeepEqual(got[i], want[i]) {
-			t.Fatalf("object %d: %+v, want %+v", i, got[i], want[i])
-		}
-	}
-}
-
-// TestReaderStreamsS3Objects: the current objects of a dataset over
+// TestReaderScansS3Objects: the current objects of a dataset over
 // several parts, in key order, with their nulls.
-func TestReaderStreamsS3Objects(t *testing.T) {
+func TestReaderScansS3Objects(t *testing.T) {
 	var rows []s3.Row
 	for i := range 3000 {
 		o := s3.Object{Size: int64(i), Mtime: int64(i) * 1_000_003}
@@ -81,47 +76,49 @@ func TestReaderStreamsS3Objects(t *testing.T) {
 	if n := len(d.Metadata().Manifest.Parts); n != 3 {
 		t.Fatalf("%d parts, want 3", n)
 	}
-	got, err := streamAll(d)
+	got, st, err := scanDecoded(d, reader.DecodeS3Object)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want []reader.Object
+	var want []reader.S3Object
 	for _, r := range rows {
-		w := s3Want(r.Key, 0, r.Data)
-		want = append(want, reader.Object{Position: w.Position, Size: w.Size, LastModified: w.LastModified, ETag: w.ETag, StorageClass: w.StorageClass})
+		want = append(want, s3Want(r.Key, 0, r.Data))
 	}
-	sameObjects(t, got, want)
-	if st := d.StreamStats(); st.Objects != 3000 || st.PartsOpened != 0 {
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded %+v, want %+v", got, want)
+	}
+	if len(got) != 3000 || st.PartsOpened != 0 {
 		t.Fatalf("stats %+v: every part was opened by CheckSchema", st)
 	}
 }
 
-// TestReaderStreamsGCSObjects: the parts written before time_created was
-// added pass the schema check; their objects stream alike.
-func TestReaderStreamsGCSObjects(t *testing.T) {
+// TestReaderScansGCSObjects: the parts written before time_created was
+// added pass the schema check; absent values decode as nil.
+func TestReaderScansGCSObjects(t *testing.T) {
 	rows := []gcs.Row{
 		{Key: "a", Data: gcs.Object{Size: 5, Mtime: 1_700_000_000_000_001, TimeCreated: 1, ETag: "CJ/r", Generation: 3, StorageClass: "NEARLINE"}},
 		{Key: "b", Data: gcs.Object{Size: 0}},
 	}
-	want := []reader.Object{
-		{Position: reader.Position{Key: []byte("a")}, Size: ptr(int64(5)), LastModified: micros(1_700_000_000_000_001), ETag: ptr("CJ/r"), StorageClass: ptr("NEARLINE")},
-		{Position: reader.Position{Key: []byte("b")}, Size: ptr(int64(0))},
-	}
+	want := []reader.GCSObject{gcsWant("a", 0, rows[0].Data), gcsWant("b", 0, rows[1].Data)}
 	older := gcs.Schema
 	older.Columns = slices.DeleteFunc(slices.Clone(older.Columns), func(c schema.Column[gcs.Object]) bool { return c.Name == "time_created" })
 	for _, s := range []*schema.Schema[gcs.Object]{&gcs.Schema, &older} {
-		got, err := streamAll(openDataset(t, s, "gcs", rows, 0))
+		got, _, err := scanDecoded(openDataset(t, s, "gcs", rows, 0), reader.DecodeGCSObject)
 		if err != nil {
 			t.Fatal(err)
 		}
-		sameObjects(t, got, want)
+		if s == &older {
+			want[0].TimeCreated = nil
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("decoded %+v, want %+v", got, want)
+		}
 	}
 }
 
-// TestReaderStreamsLocalEntries: a filesystem's entries stream through
-// StreamLocal with their kind, link target and nulls: one listed without
-// a size keeps it nil. Stream refuses them: they are entries, not objects.
-func TestReaderStreamsLocalEntries(t *testing.T) {
+// TestReaderScansLocalEntries: concrete decoding keeps kind, binary keys,
+// link targets and nulls from the production writer.
+func TestReaderScansLocalEntries(t *testing.T) {
 	rows := []localfs.Row{
 		{Key: "d/", Data: localfs.Entry{Kind: localfs.KindDir, Size: 4096, Mtime: 7, Present: localfs.HasSize | localfs.HasMtime}},
 		{Key: "d/l", Data: localfs.Entry{Kind: localfs.KindSymlink, LinkTarget: "../x", Present: localfs.HasLink}},
@@ -129,11 +126,8 @@ func TestReaderStreamsLocalEntries(t *testing.T) {
 		{Key: "e", Data: localfs.Entry{Kind: localfs.KindUnknown}},
 	}
 	d := openDataset(t, &localfs.Schema, "local-fs", rows, 0)
-	var got []reader.LocalEntry
-	if err := d.StreamLocal(context.Background(), func(e reader.LocalEntry) error {
-		got = append(got, e)
-		return nil
-	}); err != nil {
+	got, _, err := scanDecoded(d, reader.DecodeLocalEntry)
+	if err != nil {
 		t.Fatal(err)
 	}
 	want := []reader.LocalEntry{
@@ -145,14 +139,10 @@ func TestReaderStreamsLocalEntries(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("entries %+v, want %+v", got, want)
 	}
-	if _, err := streamAll(d); !errors.Is(err, reader.ErrSchema) {
-		t.Fatalf("stream entries as objects: %v", err)
-	}
 }
 
-// TestReaderRefusesVersionsStream: the versions schemas pass admission,
-// and Stream refuses them: their rows are history, not current objects.
-func TestReaderRefusesVersionsStream(t *testing.T) {
+// TestReaderChecksVersionSchemas: version datasets pass the swath schema check.
+func TestReaderChecksVersionSchemas(t *testing.T) {
 	s3d := openDataset(t, &s3.VersionsSchema, "s3", []s3.VersionRow{
 		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1}, VersionID: "v2", IsLatest: true}},
 		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 2}, VersionID: "v1"}},
@@ -160,9 +150,7 @@ func TestReaderRefusesVersionsStream(t *testing.T) {
 	gcsd := openDataset(t, &gcs.GenerationSchema, "gcs", []gcs.GenerationRow{
 		{Key: "n", Data: gcs.Generation{Object: gcs.Object{Size: 1, Generation: 1}, TimeDeleted: 2}},
 	}, 0)
-	for _, d := range []*reader.Dataset{s3d, gcsd} {
-		if _, err := streamAll(d); !errors.Is(err, reader.ErrSchema) {
-			t.Fatalf("%s: stream: %v, want a schema error", d.Metadata().SchemaID, err)
-		}
+	if s3d.Metadata().SchemaID != reader.S3VersionsV1 || gcsd.Metadata().SchemaID != reader.GCSGenerationsV1 {
+		t.Fatal("wrong version schema")
 	}
 }

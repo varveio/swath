@@ -4,7 +4,7 @@
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
 operation checks, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
-The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md),
+The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/6947fb04a0a4/spec/format-1.md),
 at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
 [internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
@@ -36,30 +36,28 @@ readers make the same distinctions):
 | Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format version 0, draft revision 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
 | Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
 
-`reader.ScanBatches` reads current object columns selected by its request: key and size always, optional
-fields only when requested. It checks selected column types and values; an omitted optional field is neither
-read nor checked against swath's schema. SeekParquet's structural and key checks still apply. This is not a
-whole-schema validation; use `CheckSchema` for that. `Scan` and `Stream` continue to return complete Objects.
-`ScanBatches` is stricter than `Scan`'s existing row decoder: it refuses an all-null INT64 `etag`, an INT64
-`last_modified` without its timestamp annotation, a BYTE_ARRAY key without STRING, and a current-object
-manifest declaring `key_unique: false`, all of which `Scan` accepts (optional columns are checked only when
-selected). Part schema errors name the part and have `Row == nil`; value errors name the bad row.
-The borrowed batch lifetime, null semantics and errors are defined by the [reader API](../reader/README.md).
+The thin [reader API](../reader/README.md) supplies metadata, the schema registry,
+`CheckSchema` and concrete typed decoders. Read through `Dataset.SeekParquet()`:
+SeekParquet owns `Rows`, `List`, `Plan.Scan`, `Plan.ScanParallel`, `Aggregate`,
+`AggregateRows` and `Page`. Callers choose named projections and reductions, filters,
+value budgets and selected-key validation; no common object projection erases
+source-specific fields.
 
-`reader.Page` keeps the listing's row positions for common-prefix counts: turning counts on adds no
-storage reads. A count is nil when a boundary is unknown, the cursor starts inside the prefix, or a
-contributing part's row count has not been checked. Budgeted byte sums discover size pages in listing
-order, stop discovering later parts of an unaffordable prefix (within one part, the size-column page indexes of every row group
-the prefix covers may still be loaded before it is rejected; no later part is opened), and read only the accepted rows' sizes;
-shared pages and dictionaries are charged once. An uncomputed sum is nil. These value-only sums check
-sizes, but do not certify unread keys; row errors name the dataset ordinal. See the
-[reader API](../reader/README.md) for projections, budgets and exactness.
+SeekParquet `Page` reuses established listing row positions for complete-prefix
+reductions. Free unfiltered counts add no value reads; unknown boundaries, clipped
+prefixes or unchecked contributing row counts remain unknown. Budgeted sums charge
+unique compressed measure/filter pages and dictionaries, with explicit result
+statuses. These value-only reads do not certify unread keys; request
+`AggregateOptions.CheckKeys` when selected-key validation is needed. `Sum` skips
+null and absent values; callers requiring complete sizes also request `CountNulls`
+and `CountAbsent`. A browse caller can select a 4 MiB value budget without imposing
+that policy on other readers. SeekParquet defines execution and exactness in its
+[Go API](https://pkg.go.dev/github.com/varveio/seekparquet/go).
 
-`reader.Stream` (and `StreamLocal`) reads the whole dataset in one ordered pass of SeekParquet's
-batch reads (`Dataset.Scan`, no plan, no limit) and hands on complete owning Objects, decoded and checked by the
-schema's row decoder. It opens and checks each part when the pass reaches it, not before the first object, so a
-part or page that fails ends the stream after the objects of the pages before it. Its errors, cancellation,
-`Close` rule and `StreamStats` are defined by the [reader API](../reader/README.md).
+Concrete decoders preserve nullable values and source-specific fields. They check
+projection, physical value types and required nulls; the application owns additional
+acceptance rules such as nonnegative sizes, timestamp ranges, local kind selection
+and Azure class mapping. `CheckSchema` supplies the full registered column check.
 
 Whether a dataset suits a purpose is the application's decision. The manifest records how the listing ran (its
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
@@ -70,7 +68,7 @@ after it is copied or moved, not for ordinary reads. `swath verify` is planned
 [SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
 section of its `go/README.md`). From the root of a SeekParquet checkout that includes `go/cmd/seekparquet`
 and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
-`github.com/varveio/seekparquet/go v0.1.1-0.20261112162412-e98bb775f6c7` in `go/go.mod`; use that
+`github.com/varveio/seekparquet/go v0.1.1-0.20261112184929-7264a9f88420` in `go/go.mod`; use that
 revision or one with a matching format, rather than assuming a published tag includes the command.
 
 ```bash
@@ -294,13 +292,16 @@ records `no_dirs` in `coverage.filters`):
 
 Under `--metadata names` (no stat) the stat columns are null.
 
-**Local totals.** `go/reader` totals a local dataset's rows as selected (`Totals`, `Aggregates`, `Page`): the
-entry count counts entries of every kind, and a directory's path `d/` counts its own row `d/` once with the
-entries below it; the root has no row, so the root's count is the entries below it. The byte total sums `size`,
-`st_size`, directories' own sizes included: these are **entry bytes**, neither the files' content bytes nor disk
-usage (`allocated_bytes`). A directory's `size` and `last_modified` are its own, never its subtree's. Any selected
-entry without a size (`--metadata names`) makes the byte total unknown (nil), never 0. The reader owns these
-definitions.
+**Local reductions.** SeekParquet counts selected rows of every kind, including a
+directory's own row and version rows where present. A prefix `d/` includes its own
+row `d/` once; the root has no row. Summing `size` without a kind filter gives
+**entry bytes**, directories' own `st_size` included, rather than files' content
+bytes or disk usage (`allocated_bytes`). A directory's `size` and `last_modified`
+are its own, never its subtree's. For files-only totals the application selects
+`kind` through SeekParquet's `BatchFilter`. Under `--metadata names`, sizes are
+null: generic sums skip them, so a caller requiring known sizes also checks
+null/absent counters. These interpretation and completeness policies belong to
+the application.
 
 ## Keys and order
 
@@ -341,13 +342,14 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the
   manifest, then the row number). A row's offset is its zero-based position in its group of equal keys. A row
   cursor `(key, offset)` continues after that row, at offset + 1 of the same key, then at the next key
-  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md)). A cursor is
+  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6947fb04a0a4/spec/format-1.md)). A cursor is
   always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key `k`". To skip every row
   of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k` and `StartExclusive`), which skips the group's
   remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
 - **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
   so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.
-  `go/reader`'s totals report nil, never 0, for a value they cannot state exactly.
+  SeekParquet reductions also skip nulls and absent values; request their counters to enforce an
+  application's completeness policy, and check each result's status before using its value.
 
 ## Footer stamps
 

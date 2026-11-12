@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // Kind is what a SemanticError found wrong. Its values are stable.
@@ -15,15 +17,14 @@ type Kind string
 const (
 	// KindSchema: a part's columns are not those its schema id defines (a
 	// column absent, or of another type), the manifest's key is not the
-	// schema id's, the schema id is not one swath writes, it is not one
-	// the operation reads (a versions schema has no current objects), or
+	// schema id's, the schema id is not one swath writes, or
 	// extensions.swath's version is not one this module reads.
 	KindSchema Kind = "schema"
 	// KindMetadata: the manifest's extensions.swath is malformed (a
 	// member of another type than swath writes).
 	KindMetadata Kind = "metadata"
 	// KindRow: a row holds a value its schema forbids (a null in a required
-	// column), or an object a current-object reader refuses (Stream).
+	// column).
 	KindRow Kind = "row"
 )
 
@@ -75,21 +76,13 @@ func semantic(kind Kind, column string, row *Position, format string, args ...an
 	return &SemanticError{Kind: kind, Column: column, Row: row, Err: fmt.Errorf(format, args...)}
 }
 
-// notCurrent refuses a versions schema where current objects are read.
-func notCurrent(id SchemaID) error {
-	return semantic(KindSchema, "", nil, "%s holds versions, not current objects", id)
-}
-
-// IsRefusal reports whether err, or an error it wraps, refuses what was
-// read as data: a *SemanticError or a *RefusalError. Every other error is
-// false: an *UnsupportedError
-// (a valid dataset using a feature the module does not read, inspectable
-// with errors.As), ErrClosed, ErrInvalidRequest, ErrLimitExceeded, the
-// context's, and the filesystem's and storage's. False does not mean
-// retryable. This package does not import objfile: its ErrObjectChanged
-// and ErrInvalidSnapshot are the caller's to classify.
+// IsRefusal reports whether err, or an error it wraps, refuses the data:
+// a *SemanticError or *seekparquet.RefusalError. Unsupported features,
+// invalid requests, limits, cancellation and storage errors return false;
+// false does not mean retryable. This package does not import objfile:
+// its ErrObjectChanged and ErrInvalidSnapshot are the caller's to classify.
 func IsRefusal(err error) bool {
 	var se *SemanticError
-	var re *RefusalError
+	var re *seekparquet.RefusalError
 	return errors.As(err, &se) || errors.As(err, &re)
 }
