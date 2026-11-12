@@ -164,7 +164,9 @@ func (d *Dataset) fillExact(ctx context.Context, totals []PathTotals, columns []
 		return err
 	}
 	values := make([]seekparquet.Value, len(columns))
-	return scanPlan(ctx, plan, nil, func(b *seekparquet.Batch) error {
+	// The callbacks of Totals' scans return swath's own errors, never
+	// seekparquet.Stop, so the module's scan error is theirs.
+	return plan.Scan(ctx, nil, func(b *seekparquet.Batch) error {
 		defer clear(values) // no borrowed value outlives its batch
 		for i := range b.Len() {
 			// A borrowed row: the decoder copies the strings it keeps.
@@ -308,7 +310,7 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 	var mu sync.Mutex
 	scan := func(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys) error {
 		s := d.newSpanScan(spans, order, columns)
-		if err := scanPlan(ctx, shard, st, func(b *seekparquet.Batch) error {
+		if err := shard.Scan(ctx, st, func(b *seekparquet.Batch) error {
 			keys.noteBatch(b)
 			return s.batch(b)
 		}); err != nil {

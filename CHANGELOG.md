@@ -16,7 +16,9 @@ Notable changes per release. The full human summary for the current release is i
   gains `Add` and the read-ahead counters; `ListRequest` (and so `PageRequest`) gains `ReadAhead`, the
   listing's key-page read-ahead (default 0, none); a `Scan`/`ScanBatches` callback's `seekparquet.Stop` is
   returned like any other error; `CheckSchema` prints an unannotated column's logical type as `NONE`. `Scan`
-  decodes each object from the borrowed batch, about 20% faster with a third fewer bytes allocated.
+  decodes each object from the borrowed batch instead of an owning copy of each row: 19–28% faster, a third
+  fewer bytes and a quarter fewer allocations in the reader benchmarks; the other reads are within noise
+  ([measurements](go/docs/internals/measurements.md#reader-on-the-redesigned-seekparquet-api-2026-11-12)).
 
 - Go port, Azure Blob: `--all-versions` lists every entry of each name: blob versions, snapshots and
   soft-deleted blobs beside the current blob (`include=versions,snapshots,deleted`), under the new schema

@@ -147,7 +147,8 @@ func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func
 func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
 	b := ObjectBatch{fields: fields}
 	part := -1
-	return scanPlan(ctx, shard, st, func(raw *seekparquet.Batch) error {
+	var failed error // fn's (scanErr)
+	err := shard.Scan(ctx, st, func(raw *seekparquet.Batch) error {
 		b.raw = raw
 		// Release all borrowed references before returning to the decoder,
 		// including on errors. The wrapper itself is reused within this shard.
@@ -178,8 +179,10 @@ func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.Plan, s
 			return err
 		}
 		keys.noteBatch(raw)
-		return fn(&b)
+		failed = fn(&b)
+		return failed
 	})
+	return scanErr(err, failed)
 }
 
 // checkBatchColumns checks only selected fields, once per part per shard.

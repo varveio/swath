@@ -212,19 +212,12 @@ func shardOrder(keys []shardKeys) error {
 	return nil
 }
 
-// scanPlan is plan.Scan, returning fn's error unchanged. The module ends a
-// scan whose callback returns seekparquet.Stop with no error; swath's
-// callbacks have no such convention, so an error of fn, Stop included,
-// is returned as fn returned it (and so stops the other shards).
-func scanPlan(ctx context.Context, plan *seekparquet.Plan, st *ReadStats, fn func(*seekparquet.Batch) error) error {
-	var failed error
-	err := plan.Scan(ctx, st, func(b *seekparquet.Batch) error {
-		if err := fn(b); err != nil {
-			failed = err
-			return err
-		}
-		return nil
-	})
+// scanErr is the error of a module scan, err, whose batch callback kept
+// the error of swath's caller's fn in failed. The module ends a scan whose
+// callback returns seekparquet.Stop with no error; swath's callbacks have
+// no such convention, so fn's error, Stop included, is returned as fn
+// returned it (and so stops the other shards).
+func scanErr(err, failed error) error {
 	if failed != nil {
 		return failed
 	}
@@ -238,16 +231,17 @@ const scanBatchObjects = 1024
 // batch, an empty slice reused from shard to shard; values is the scratch
 // of each row's decoding (batchObject).
 func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys, columns []string, values []seekparquet.Value, batch []Object, fn func([]Object) error) error {
+	var failed error // fn's (scanErr)
 	flush := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		keys.note(batch[0].Key, batch[len(batch)-1].Key)
-		err := fn(batch)
+		failed = fn(batch)
 		batch = batch[:0]
-		return err
+		return failed
 	}
-	err := scanPlan(ctx, shard, st, func(b *seekparquet.Batch) error {
+	err := shard.Scan(ctx, st, func(b *seekparquet.Batch) error {
 		for i := range b.Len() {
 			o, err := d.batchObject(b, i, columns, values)
 			if err != nil {
@@ -261,7 +255,7 @@ func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.Plan, st *Re
 		}
 		return nil
 	})
-	if err == nil && len(batch) > 0 {
+	if err = scanErr(err, failed); err == nil && len(batch) > 0 {
 		err = flush()
 	}
 	return err
