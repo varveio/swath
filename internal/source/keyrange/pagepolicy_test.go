@@ -88,7 +88,10 @@ func TestSeedTiles(t *testing.T) {
 			for _, budget := range []int{0, 1, 2, 3, 17} {
 				opt := Options{Seed: true, SeedTiles: budget, Workers: 2}
 				if prior {
+					// Uncounted: a counted prior tiles by whole pages
+					// (tilePages), not by the budget alone.
 					opt.Prior = priorOf(c.keys, 1)
+					opt.Prior.Counted = false
 				}
 				p, err := New(opt, Description[Object]{Target: "test", Listing: Listing}, fetchFrom(newSorted(c.keys, false, 1)))
 				if err != nil {
