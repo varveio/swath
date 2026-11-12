@@ -81,9 +81,11 @@ func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 // its scratch. It decodes a borrowed view of the row: the decoder copies
 // every value it keeps but the key, cloned here. An error's Position would
 // borrow the key too, so a failing row is decoded again from an owning
-// copy, giving the same error with its own key.
+// copy, giving the same error with its own key. values holds no borrowed
+// value once it returns.
 func (d *Dataset) batchObject(b *seekparquet.Batch, i int, columns []string, values []seekparquet.Value) (Object, error) {
 	o, err := decodeObject(d.spec.ID, batchRow(b, i, columns, values))
+	clear(values)
 	if err != nil {
 		_, err = decodeObject(d.spec.ID, b.Row(i))
 		return Object{}, err

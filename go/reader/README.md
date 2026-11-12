@@ -256,7 +256,8 @@ Azure versions schema.
   handed to `fn` once, in batches of at most 1,024: a shard's batches in ascending key order, one at a time,
   shards' batches concurrently and in no set order, so `fn` must be safe for concurrent use. A batch's slice is
   reused once `fn` returns: `fn` must not keep it (an `Object` copied out of it owns its memory). The first
-  error cancels the other shards and is returned: `fn`'s and the module's unchanged, a row's `KindRow`, the
+  error cancels the other shards and is returned: `fn`'s (`seekparquet.Stop` included: no error of `fn` ends
+  a scan successfully) and the module's unchanged, a row's `KindRow`, the
   context's (checked before each batch). Each shard's scan checks its own keys' order; when every shard has
   succeeded, each shard's first key must be above the last key of the shard before it (`shardOrder`), or the
   scan fails with SeekParquet's `key_order` refusal naming that key (at no part or row group), after every

@@ -551,3 +551,35 @@ func TestShardOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestScanCallbackStopIsAnError: a Scan or ScanBatches callback returning
+// seekparquet.Stop, which ends a module scan successfully, is an error
+// like any other to swath: returned unchanged after the callback's first
+// batch of each worker at most, stopping the rest of its shard and every
+// other shard, with one worker (one shard) and with several shards.
+func TestScanCallbackStopIsAnError(t *testing.T) {
+	dir := scanDir(t, 5000, 300)
+	ctx := context.Background()
+	for _, workers := range []int{1, 4} {
+		var calls atomic.Int64
+		err := openDir(t, dir).Scan(ctx, ScanRequest{Workers: workers}, func([]Object) error {
+			calls.Add(1)
+			return seekparquet.Stop
+		})
+		if err != seekparquet.Stop || calls.Load() < 1 || calls.Load() > int64(workers) {
+			t.Errorf("Scan, %d workers: %v after %d calls, want seekparquet.Stop after at most %d", workers, err, calls.Load(), workers)
+		}
+		calls.Store(0)
+		err = openDir(t, dir).ScanBatches(ctx, BatchScanRequest{Workers: workers}, func(*ObjectBatch) error {
+			calls.Add(1)
+			return seekparquet.Stop
+		})
+		if err != seekparquet.Stop || calls.Load() < 1 || calls.Load() > int64(workers) {
+			t.Errorf("ScanBatches, %d workers: %v after %d calls, want seekparquet.Stop after at most %d", workers, err, calls.Load(), workers)
+		}
+	}
+	// Stream already kept its callback's error apart from the module's.
+	if err := openDir(t, dir).Stream(ctx, func(Object) error { return seekparquet.Stop }); err != seekparquet.Stop {
+		t.Errorf("Stream: %v, want seekparquet.Stop", err)
+	}
+}

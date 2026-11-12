@@ -108,7 +108,8 @@ func (b *ObjectBatch) require(field ObjectFields) {
 //
 // Callbacks may run concurrently, in ascending key order within each shard;
 // order across shards is unspecified. The first error cancels the other shards.
-// Callback and storage errors are returned unchanged. Context cancellation,
+// Callback and storage errors are returned unchanged (a callback's
+// seekparquet.Stop included, as in Scan). Context cancellation,
 // statistics (including failure), the key order across shards (a key_order
 // refusal returned after every batch was handed on) and StreamStats are as
 // in Scan. fn must not
@@ -146,7 +147,7 @@ func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func
 func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
 	b := ObjectBatch{fields: fields}
 	part := -1
-	return shard.Scan(ctx, st, func(raw *seekparquet.Batch) error {
+	return scanPlan(ctx, shard, st, func(raw *seekparquet.Batch) error {
 		b.raw = raw
 		// Release all borrowed references before returning to the decoder,
 		// including on errors. The wrapper itself is reused within this shard.

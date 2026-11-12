@@ -64,7 +64,8 @@ func scanShards(workers int) int {
 //
 // Versions schemas and filesystem entries are refused as Stream refuses
 // them, before any read. The first error stops every shard and is
-// returned: fn's, unchanged; a row that breaks Stream's checks (a
+// returned: fn's, unchanged (seekparquet.Stop included: no error of fn
+// ends a scan successfully); a row that breaks Stream's checks (a
 // SemanticError of KindRow); the module's and the Source's errors,
 // unchanged; or the context's, checked before planning, before each batch
 // and after the shards end, so a scan whose context ends is never a
@@ -211,6 +212,25 @@ func shardOrder(keys []shardKeys) error {
 	return nil
 }
 
+// scanPlan is plan.Scan, returning fn's error unchanged. The module ends a
+// scan whose callback returns seekparquet.Stop with no error; swath's
+// callbacks have no such convention, so an error of fn, Stop included,
+// is returned as fn returned it (and so stops the other shards).
+func scanPlan(ctx context.Context, plan *seekparquet.Plan, st *ReadStats, fn func(*seekparquet.Batch) error) error {
+	var failed error
+	err := plan.Scan(ctx, st, func(b *seekparquet.Batch) error {
+		if err := fn(b); err != nil {
+			failed = err
+			return err
+		}
+		return nil
+	})
+	if failed != nil {
+		return failed
+	}
+	return err
+}
+
 // scanBatchObjects is the most objects one Scan batch holds.
 const scanBatchObjects = 1024
 
@@ -227,7 +247,7 @@ func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.Plan, st *Re
 		batch = batch[:0]
 		return err
 	}
-	err := shard.Scan(ctx, st, func(b *seekparquet.Batch) error {
+	err := scanPlan(ctx, shard, st, func(b *seekparquet.Batch) error {
 		for i := range b.Len() {
 			o, err := d.batchObject(b, i, columns, values)
 			if err != nil {
