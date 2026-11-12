@@ -87,7 +87,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 
 	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
-		Long:  "A trailing / names a directory whatever its name. A file's name says its format; a --format that agrees with it is accepted."})
+		Long:  "A name ending in .parquet is refused unless it ends in / (an explicit directory). A file's name says its format; a --format that agrees with it is accepted."})
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
 		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "on stdout: auto is the table on a terminal, TSV otherwise"})
 	def(source.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: source.GroupOutput, Commands: writing,

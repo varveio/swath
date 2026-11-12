@@ -18,18 +18,18 @@ journal under `DIR/.swath/` and publishes parts as it goes. When it stops before
 checks each against the journal (size and SHA-256), and lists from after the last published key:
 
 ```text
-$ swath list s3://bkt/logs/ -o logs.parquet ...
-^C  INCOMPLETE (interrupted) — resume: swath resume logs.parquet
+$ swath list s3://bkt/logs/ -o logs-inventory ...
+^C  INCOMPLETE (interrupted) — resume: swath resume logs-inventory
   1,000 objects in 6.0s · 167 keys/s
   60 API calls · in flight avg 0.07 · peak 1
   1 part · 3.19 KiB written · peak RSS 44.9 MiB
 swath: stopped by interrupt
-$ swath resume logs.parquet
+$ swath resume logs-inventory
   59,000 objects in 19.6s · 3,006 keys/s
   153 API calls · in flight avg 0.11 · peak 1
   4 parts · 111 KiB written · peak RSS 69.3 MiB
-$ swath resume logs.parquet
-logs.parquet is already complete: nothing to resume
+$ swath resume logs-inventory
+logs-inventory is already complete: nothing to resume
 ```
 
 [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
@@ -55,7 +55,7 @@ undone by its other spelling: `--no-anonymous` undoes `--anonymous`, `--adaptive
 `--no-adaptive-limit`. Any other option is a usage error:
 
 ```text
-$ swath resume logs.parquet --part-size 1MiB
+$ swath resume logs-inventory --part-size 1MiB
 swath: --part-size is fixed for the run and cannot change on resume (see 'swath resume --help')
 See 'swath resume --help'.
 ```
@@ -226,19 +226,19 @@ Reporting:
 Continue an interrupted run:
 
 ```bash
-swath resume logs.parquet
+swath resume logs-inventory
 ```
 
 Continue it with more workers, a deadline and a fresh report path:
 
 ```bash
-swath resume logs.parquet --workers 128 --max-duration 1h --report /var/log/swath/attempt-2.json
+swath resume logs-inventory --workers 128 --max-duration 1h --report /var/log/swath/attempt-2.json
 ```
 
 Continue a run whose SAS token is not recorded:
 
 ```bash
-swath resume container.parquet --azure-sas-token "$SAS"
+swath resume container-inventory --azure-sas-token "$SAS"
 ```
 
 ## Exit status

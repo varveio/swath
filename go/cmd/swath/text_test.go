@@ -252,6 +252,8 @@ func TestResolveOutput(t *testing.T) {
 		{o: options{}, tty: true, format: "table"},
 		{o: options{out: "-", format: "jsonl"}, format: "jsonl"},
 		{o: options{format: "table"}, format: "table"},
+		{o: options{out: "x.parquet.tsv"}, format: "tsv", path: "x.parquet.tsv"},
+		{o: options{out: "x.parquet.jsonl.zst"}, format: "jsonl", path: "x.parquet.jsonl.zst", comp: "zstd"},
 		{o: options{out: "x.TSV.zst"}, format: "tsv", path: "x.TSV.zst", comp: "zstd"},
 		{o: options{out: "x.jsonl.gz"}, format: "jsonl", path: "x.jsonl.gz", comp: "gzip"},
 		{o: options{out: "x.jsonl"}, format: "jsonl", path: "x.jsonl"},

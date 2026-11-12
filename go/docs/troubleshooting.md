@@ -100,12 +100,6 @@ A directory that holds an interrupted run is continued with `swath resume DIR`, 
 swath: inventory: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
 ```
 
-## A `.parquet` output became a directory
-
-`-o NAME.parquet` writes a dataset: a directory of parts and a manifest, whatever its name. Only a name
-ending in `.tsv` or `.jsonl` (optionally `.gz` or `.zst`) is a single file. Read the dataset through its
-manifest ([getting-started.md](getting-started.md#6-query-it-with-duckdb)).
-
 ## `-o` names a format swath does not write
 
 ```text

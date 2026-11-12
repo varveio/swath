@@ -40,6 +40,15 @@ var unwritten = []string{".csv", ".json", ".ndjson", ".txt", ".bz2", ".xz", ".gz
 // outputForms names what -o takes, for its refusals.
 const outputForms = "-o takes a dataset directory (any other name, or one ending in /), a GCS, S3 or Azure Blob prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout"
 
+// checkDatasetName refuses a file-looking dataset name unless a trailing
+// separator explicitly selects a directory.
+func checkDatasetName(name string) error {
+	if strings.HasSuffix(strings.ToLower(name), ".parquet") {
+		return fmt.Errorf("%s: a dataset is a directory of parts; use a name without .parquet, or add / to select a directory", registry.Redact(name))
+	}
+	return nil
+}
+
 // hasScheme reports whether path starts with a URL scheme (s3://).
 func hasScheme(path string) bool {
 	i := strings.Index(path, "://")
@@ -57,8 +66,8 @@ func hasScheme(path string) bool {
 //     its local work directory (resolveRemote); a store the listing does
 //     not write to is refused;
 //   - -o NAME/, or another name: the Parquet dataset directory; a name
-//     ending in a data-file extension swath does not write (unwritten) is
-//     refused.
+//     ending in .parquet or a data-file extension swath does not write
+//     (unwritten) is refused unless it ends in a directory separator.
 //
 // With -o FILE a --format that agrees with the file's name is accepted,
 // one that does not is refused, as is --format with a dataset directory.
@@ -91,6 +100,9 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	case remote:
 		return nil, resolveRemote(o)
 	case !toStdout:
+		if err := checkDatasetName(o.out); err != nil {
+			return nil, fmt.Errorf("-o %w", err)
+		}
 		format, comp := textDest(o.out)
 		dir := strings.HasSuffix(o.out, "/") || strings.HasSuffix(o.out, string(filepath.Separator))
 		if dir {
@@ -134,6 +146,11 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 func resolveRemote(o *options) error {
 	shown := registry.Redact(o.out)
 	l, err := listing.ParseDestination(o.out)
+	if err == nil && l.Prefix != "" {
+		if err := checkDatasetName(o.out); err != nil {
+			return fmt.Errorf("-o %w", err)
+		}
+	}
 	switch {
 	case err != nil:
 		return fmt.Errorf("-o %s: %w; %s", shown, err, outputForms)

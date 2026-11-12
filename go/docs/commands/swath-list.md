@@ -51,8 +51,9 @@ so in its manifest.
 ```text
 Output:
   -o, --output PATH           a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
-                                A trailing / names a directory whatever its name. A file's name says
-                                its format; a --format that agrees with it is accepted.
+                                A name ending in .parquet is refused unless it ends in / (an
+                                explicit directory). A file's name says its format; a --format that
+                                agrees with it is accepted.
       --format auto|table|tsv|jsonl
                               on stdout: auto is the table on a terminal, TSV otherwise
       --columns NAME[,NAME...]

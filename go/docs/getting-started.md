@@ -70,14 +70,14 @@ lines, and `-o rows.tsv.zst` a compressed file ([output.md](output.md)).
 ## 4. Write a dataset
 
 ```bash
-swath list photos -o photos.parquet
-swath show photos.parquet
+swath list photos -o photos-inventory
+swath show photos-inventory
 ```
 
 ```text
   7 entries in 0.0s · 438 entries/s
   1 part · 3.74 KiB written · peak RSS 31.3 MiB
-dataset photos.parquet: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
+dataset photos-inventory: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
 key key unique=true, published 2026-11-10T12:50:07Z
 source /tmp/swath-docs-check/photos, scope whole ""
 coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
@@ -100,7 +100,7 @@ A program that needs the whole source reads the manifest's coverage first:
 ```bash
 duckdb -c "SELECT c.complete, c.stop_reason, c.skipped_entries AS skipped,
                   len(c.filters) AS filters, len(c.exclusions) AS exclusions
-           FROM (SELECT extensions.swath.coverage AS c FROM read_json('photos.parquet/manifest.json'))"
+           FROM (SELECT extensions.swath.coverage AS c FROM read_json('photos-inventory/manifest.json'))"
 ```
 
 ```text
@@ -127,8 +127,8 @@ not committed.
 
 ```bash
 duckdb -c "
-  SET VARIABLE parts = (SELECT list('photos.parquet/' || p.path)
-                        FROM (SELECT unnest(parts) AS p FROM read_json('photos.parquet/manifest.json')));
+  SET VARIABLE parts = (SELECT list('photos-inventory/' || p.path)
+                        FROM (SELECT unnest(parts) AS p FROM read_json('photos-inventory/manifest.json')));
   SELECT kind, count(*) AS entries, sum(size) AS bytes
   FROM read_parquet(getvariable('parts'), union_by_name = true)
   GROUP BY kind ORDER BY kind;"
@@ -155,14 +155,14 @@ can be continued after a stop. Start one, and press Ctrl-C after a few seconds (
 so that there is time to):
 
 ```bash
-swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous -o stofs.parquet --request-rate 5
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous -o stofs-inventory --request-rate 5
 ```
 
 swath stops gracefully, keeps what it published and the journal, exits with code 130, and says how to
 continue. From a run on a test bucket:
 
 ```text
-^C  INCOMPLETE (interrupted) — resume: swath resume stofs.parquet
+^C  INCOMPLETE (interrupted) — resume: swath resume stofs-inventory
   0 objects in 8.0s · 0 keys/s
   40 API calls · in flight avg 0.01 · peak 1
   peak RSS 38.2 MiB
@@ -173,8 +173,8 @@ swath: stopped by interrupt
 recorded command. A resume may change the resource and request options, here dropping the rate cap:
 
 ```bash
-swath show stofs.parquet
-swath resume stofs.parquet --request-rate 0
+swath show stofs-inventory
+swath resume stofs-inventory --request-rate 0
 ```
 
 ```text

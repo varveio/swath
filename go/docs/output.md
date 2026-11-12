@@ -4,7 +4,7 @@
 swath list s3://bucket/logs/ | head          # TSV in a pipe, a table on a terminal
 swath list s3://bucket/logs/ --format jsonl  # JSONL on stdout
 swath list s3://bucket/logs/ -o rows.tsv.zst # a compressed TSV file
-swath list s3://bucket/logs/ -o logs.parquet # a sorted Parquet dataset
+swath list s3://bucket/logs/ -o logs-inventory # a sorted Parquet dataset
 swath list s3://bucket/logs/ -o gs://out/logs/2026-11-11 --work-dir work  # the dataset in a GCS bucket
 swath list s3://bucket/logs/ -o s3://out/logs/2026-11-11 --work-dir work  # the dataset in an S3 bucket
 swath list s3://bucket/logs/ -o az://acct/out/logs/2026-11-11 --work-dir work  # in an Azure Blob container
@@ -22,6 +22,10 @@ swath du s3://bucket -d 1                    # totals per prefix
 | `swath du` | you want sizes and counts, not rows |
 
 A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `manifest.json` that commits them.
+A bare local destination or bucket prefix whose final path element ends in `.parquet` (case-insensitive) is
+refused. Use a name without that suffix, or add a trailing separator to explicitly select a directory,
+such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-style directory).
+The same name rule applies to `swath resume DIR`.
 Querying one is shown in [getting-started.md](getting-started.md#6-query-it-with-duckdb).
 
 A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,

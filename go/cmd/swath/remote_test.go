@@ -83,6 +83,99 @@ func TestRemoteOutputRefusals(t *testing.T) {
 	}
 }
 
+// TestRemoteDatasetDirectoryNames exercises explicit directories, parent prefixes
+// and bucket names through publication and resume of the recorded destination.
+func TestRemoteDatasetDirectoryNames(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	s3test.NoCredentials(t)
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
+	awsProfiles(t, "output")
+	credentials := serviceAccount(t, "output")
+	src := httptest.NewServer(s3test.Handler(s3test.Backend(t, s3test.Keys(3, 7))))
+	t.Cleanup(src.Close)
+	for _, dest := range []string{
+		"s3://out/inventory.parquet/", "gs://out/inventory.parquet/", "az://acct/out/inventory.parquet/",
+		"s3://out/inventory.PaRqUeT/", "gs://out/inventory.PaRqUeT/", "az://acct/out/inventory.PaRqUeT/",
+		"s3://out/parent.parquet/inventory", "gs://out/parent.parquet/inventory", "az://acct/out/parent.parquet/inventory",
+		"s3://out.parquet", "gs://out.parquet", "az://acct/out.parquet",
+	} {
+		t.Run(dest, func(t *testing.T) {
+			work := filepath.Join(t.TempDir(), "inventory.parquet") + "/"
+			o, _, err := parseList([]string{"s3://bkt", "-o", dest, "--work-dir", work}, io.Discard, command{})
+			if err != nil || o.remote == nil || o.remote.String() != strings.TrimSuffix(dest, "/")+"/" {
+				t.Fatalf("remote %+v, %v", o.remote, err)
+			}
+			var handler http.Handler
+			var manifest func() ([]byte, bool)
+			var auth []string
+			key := o.remote.Prefix + dataset.ManifestName
+			switch o.remote.Scheme {
+			case "s3":
+				f := s3fake.New(o.remote.Container)
+				handler = f
+				manifest = func() ([]byte, bool) { obj, ok := f.Get(key); return obj.Data, ok }
+				auth = []string{"--output-s3-profile", "output"}
+			case "gs":
+				f := gcsfake.New(o.remote.Container)
+				handler = f
+				manifest = func() ([]byte, bool) { obj, ok := f.Get(key); return obj.Data, ok }
+				auth = []string{"--output-gcs-credentials-file", credentials}
+			case "az":
+				f := azfake.New(o.remote.Account, o.remote.Container)
+				handler = f
+				manifest = func() ([]byte, bool) { obj, ok := f.Get(key); return obj.Data, ok }
+				auth = []string{"--output-azure-sas-token", "sv=1&sig=OUTPUT"}
+			}
+			dst := httptest.NewServer(handler)
+			t.Cleanup(dst.Close)
+			endpoint := dst.URL
+			if o.remote.Scheme == "gs" {
+				endpoint += "/storage/v1/"
+			}
+			args := []string{"list", "s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous", "--workers", "2",
+				"-o", dest, "--work-dir", work, "--output-endpoint-url", endpoint, "--no-stats"}
+			args = append(args, auth...)
+			if o.remote.Scheme == "s3" {
+				args = append(args, "--output-s3-region", "us-east-1")
+			}
+			// Stop after a durable part so resume must re-parse the recorded -o.
+			restore := faults.Set(func(point string) error {
+				if point == "recorded" {
+					return faults.ErrCrash
+				}
+				return nil
+			})
+			err = dispatch(context.Background(), args, io.Discard)
+			restore()
+			if !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("first attempt: %v", err)
+			}
+			if _, ok := manifest(); ok {
+				t.Fatal("committed before resume")
+			}
+			if err := dispatch(context.Background(), append([]string{"resume", work}, auth...), io.Discard); err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			data, ok := manifest()
+			if !ok || !dataset.Committed(work) {
+				t.Fatal("resume did not publish the dataset")
+			}
+			var m dataset.Manifest
+			if err := json.Unmarshal(data, &m); err != nil {
+				t.Fatal(err)
+			}
+			var rows int64
+			for _, part := range m.Parts {
+				rows += part.Rows
+			}
+			if rows != 3 {
+				t.Fatalf("%d rows committed, want 3", rows)
+			}
+		})
+	}
+}
+
 // serviceAccount writes a service account key whose token endpoint is a
 // test server handing out token; it returns the key file.
 func serviceAccount(t *testing.T, token string) string {
