@@ -1,7 +1,7 @@
 # Install
 
-swath is one static binary with no runtime to install. The Go implementation is not released yet (the latest
-published release is the Java v0.3.2, with another command line and dataset format), so build it from source.
+swath is one static binary with no runtime to install. It is not released yet (the latest published release,
+v0.3.2, has another command line and dataset format: [upgrade.md](upgrade.md)), so build it from source.
 
 ## Build from source
 
@@ -40,53 +40,30 @@ Then run a listing that needs no cloud account:
 swath du -d 1 .
 ```
 
-## Release downloads and images
+## Planned for the next release
 
-From 0.4, each [GitHub release](https://github.com/varveio/swath/releases) carries one archive per platform:
-`swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-amd64.tar.gz`, `-darwin-arm64.tar.gz` and
-`-windows-amd64.zip`. Each
-holds `swath`, `swath-replay`, `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` (the licenses of every module linked
-into the binaries) in a `swath-X.Y.Z-OS-ARCH/` directory. The release also carries an SPDX SBOM and a signed
-`SHA256SUMS`. Verify before running ([RELEASING.md](../../RELEASING.md#verifying-a-release) has the signature and
-attestation commands):
+No release of this command line exists yet. The release workflow is set up to publish, per release:
 
-```bash
-tar -xzf swath-X.Y.Z-linux-amd64.tar.gz
-sha256sum --check --ignore-missing SHA256SUMS
-./swath-X.Y.Z-linux-amd64/swath --version    # swath X.Y.Z (REVISION)
-```
+- one archive per platform (`swath-X.Y.Z-OS-ARCH.tar.gz` for linux and darwin, amd64 and arm64;
+  `swath-X.Y.Z-windows-amd64.zip`), each holding `swath`, `swath-replay`, `LICENSE`, `NOTICE` and
+  `THIRD_PARTY_NOTICES`, with an SPDX SBOM and a signed `SHA256SUMS`
+  ([RELEASING.md](../../RELEASING.md#verifying-a-release) has the verification commands);
+- multi-arch images (linux/amd64, linux/arm64): `ghcr.io/varveio/swath` (distroless static, entrypoint
+  `/opt/swath/swath`) and `ghcr.io/varveio/swath-replay` (`scratch`,
+  [swath-replay](internals/swath-replay.md#container-image)), both running as `65532:65532`.
 
-The macOS binaries are not yet notarized, so macOS refuses to run them when the archive was downloaded through a
-browser ("Apple could not verify…"). Clear the quarantine attribute after extracting; archives fetched with
-`curl` or `gh release download` do not carry it:
-
-```bash
-xattr -d com.apple.quarantine swath-X.Y.Z-darwin-arm64/swath swath-X.Y.Z-darwin-arm64/swath-replay
-```
-
-The same release publishes multi-arch images (linux/amd64, linux/arm64) with the archives' Linux binaries and
-the three legal files in `/licenses/`:
-
-| Image | Entrypoint | Base |
-|---|---|---|
-| `ghcr.io/varveio/swath` | `/opt/swath/swath` | distroless static (CA certificates, zone data); no shell |
-| `ghcr.io/varveio/swath-replay` | `/opt/swath-replay/swath-replay` ([swath-replay](internals/swath-replay.md#container-image)) | `scratch` |
-
-Tags are `X.Y.Z`, `X.Y` and `latest` (and `X` from 1.0); a release candidate publishes only `X.Y.Z-rc.N`. Pin
-the digest for anything that must not move. Both images run as `65532:65532` (distroless's `nonroot`): mount a
-directory that user can write for `-o`. The lister's home directory is `/home/nonroot`: pass credentials
-through the environment, or mount the provider's credential directory there
-(`-v ~/.aws:/home/nonroot/.aws:ro`), its files readable by that user:
+This section will describe downloading and verifying them once a release exists. Until then, the image can be
+built from a checkout: `docker build -f Dockerfile.go -t swath:dev .` (`--target swath-replay` for the replay
+server; `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the build context carries no
+`.git`). The build needs the network: it downloads the modules and generates `THIRD_PARTY_NOTICES`, failing on
+a module whose license is not allowed ([license gate](internals/testing.md#license-gate)). The image runs as
+`65532:65532` with its home directory at `/home/nonroot`: mount a directory that user can write for `-o`, and
+pass credentials through the environment or a mounted credential directory:
 
 ```bash
-docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:X.Y.Z \
+docker run --rm -v "$PWD/out:/out" swath:dev \
   list s3://bucket/prefix/ --anonymous --s3-region us-east-1 -o /out/inventory
 ```
-
-`docker build -f Dockerfile.go -t swath:dev .` builds the image from a checkout (`--target swath-replay` for the
-replay server); `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the build context
-carries no `.git`. The build needs the network: it downloads the modules and generates `THIRD_PARTY_NOTICES`,
-failing on a module whose license is not allowed ([license gate](internals/testing.md#license-gate)).
 
 ## Platforms
 

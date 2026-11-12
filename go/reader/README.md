@@ -10,7 +10,7 @@ The reader opens and reads; it does not judge a dataset. `Metadata()` hands on w
 the listing (source, scope, coverage with its filters such as `one_filesystem`, publication time), and the
 application decides what to do with it: whether a partial or filtered listing will do, whether it is of the
 source expected, and whether a dataset opened again is the one seen before. Part digests are for checking a
-dataset after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
+dataset after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
 
 The swath dataset profile this module implements (what a swath dataset is, the schema ids and their row
 contracts, `extensions.swath`, key order, evolution) is defined in

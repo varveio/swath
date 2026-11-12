@@ -1,9 +1,8 @@
 # Architecture
 
 swath lists a source (a local directory tree, an S3 or GCS bucket, or an Azure Blob container) and writes a
-globally key-sorted Parquet dataset in swath's sorted-dataset layout. It is one pure-Go (`CGO_ENABLED=0`) static binary.
-The language-neutral contracts in [`../../../docs/internals/`](../../../docs/internals/) bind it; the Go statement of
-them is [contracts.md](contracts.md).
+globally key-sorted Parquet dataset ([../dataset.md](../dataset.md)). It is one pure-Go (`CGO_ENABLED=0`) static binary.
+What it promises, and the invariants I1–I12 that keep it true, are in [contracts.md](contracts.md).
 
 ## Pipeline
 

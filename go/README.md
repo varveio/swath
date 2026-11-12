@@ -1,32 +1,47 @@
-# swath (Go implementation)
+# swath
 
 Parallel listing and inventory for large object stores and filesystems.
 
-> **Unreleased on main.** The latest published release is the S3-focused
-> [Java v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2). Build this
-> implementation from source. Go will replace Java at release; Java has not been removed.
+swath lists a local directory tree, an S3 bucket, a GCS bucket or an Azure Blob container (flat namespace) in
+parallel. It prints the rows as text, totals them per prefix (`swath du`), or writes a globally key-sorted
+Parquet dataset: sorted parts and a `manifest.json` that commits them ([docs/dataset.md](docs/dataset.md)). It is
+one static binary built with `CGO_ENABLED=0`.
 
-This directory is the Go port of swath: module `github.com/varveio/swath/go`, command `go/cmd/swath`, CLI name
-`swath`. It lists a local directory tree, an S3 bucket, a GCS bucket or an Azure Blob container (flat namespace) in parallel and writes a globally key-sorted Parquet
-dataset in swath's sorted-dataset layout (`data/part-NNNNN.parquet` and `manifest.json`, the commit; a swath dataset, which is a [SeekParquet](https://github.com/varveio/seekparquet) dataset: [docs/dataset.md](docs/dataset.md)), as a
-pure-Go (`CGO_ENABLED=0`) static binary. It also provides direct `du` summaries and object-store text listings. The Java release
-currently has a different launcher and output contract; it is being replaced, not maintained
-as a second edition. Start with [docs/getting-started.md](docs/getting-started.md). Documentation: [docs/README.md](docs/README.md) says which page to read first, for
-an operator ([docs/production.md](docs/production.md)), someone coming from the Java CLI
-([docs/from-java.md](docs/from-java.md)), a contributor ([docs/internals/architecture.md](docs/internals/architecture.md)) or a
-reviewer ([docs/internals/measurements.md](docs/internals/measurements.md)). The replay server `cmd/swath-replay`, which serves a recorded
-listing through the S3, GCS and Azure APIs for tests and benchmarks: [docs/internals/swath-replay.md](docs/internals/swath-replay.md).
+> **Not released yet.** Build from source ([docs/install.md](docs/install.md)). The latest published release,
+> [v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2), is the earlier S3-only command line;
+> [docs/upgrade.md](docs/upgrade.md) lists what changed.
 
 ```bash
 ./build.sh -o swath                         # CGO_ENABLED=0, the revision stamped (docs/install.md)
-./swath list /some/root -o /tmp/ds          # list, order, encode, publish
 ./swath du /some/root -d 2                  # totals per directory two levels down, as du
-./swath du s3://bucket/logs/ -d 1           # totals per prefix under logs/
-./swath list s3://bucket -o /tmp/ds         # an S3 bucket or prefix
+./swath list s3://bucket/logs/ | head       # text rows, in key order
+./swath list /some/root -o /tmp/ds          # a sorted Parquet dataset
 ./swath list gs://bucket -o /tmp/ds         # a GCS bucket or prefix
 ./swath list az://acct/ctr -o /tmp/ds       # an Azure Blob container or prefix
-./swath resume /tmp/ds                      # continue an interrupted S3, GCS or Azure run
+./swath resume /tmp/ds                      # continue an interrupted object-store run
 ./swath show /tmp/ds                        # what a dataset or an interrupted run holds
-python3 verify.py /tmp/ds                   # independent DuckDB check
-go vet ./... && go test -race ./...
 ```
+
+## Documentation
+
+- Using swath: [docs/README.md](docs/README.md), starting with [getting-started](docs/getting-started.md) and
+  [concepts](docs/concepts.md).
+- Reading a dataset from Go: the [`reader`](reader/README.md) module. Pinned ranged reads and create-only
+  uploads in S3, GCS and Azure Blob: the [`objfile`](objfile/README.md) module.
+- Contributing: [docs/internals/README.md](docs/internals/README.md) (architecture, contracts, testing,
+  [measurements](docs/internals/measurements.md)).
+- The replay server, `cmd/swath-replay`, serves a recorded listing through the S3, GCS and Azure APIs for tests
+  and benchmarks: [docs/internals/swath-replay.md](docs/internals/swath-replay.md).
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `cmd/swath` | the command |
+| `cmd/swath-replay` | the replay server |
+| `internal/` | the lister's packages ([architecture](docs/internals/architecture.md#packages)) |
+| `reader/`, `objfile/` | nested modules, importable on their own |
+| `docs/` | the documentation; `go test ./docs` checks its links |
+| `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
+
+The gate is `go vet ./... && go test -race ./...` ([testing](docs/internals/testing.md)).

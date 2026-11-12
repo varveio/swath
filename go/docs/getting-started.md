@@ -3,9 +3,9 @@
 This walk-through goes from a source checkout to a queried inventory: a local directory first, which needs no
 cloud account, then a public S3 prefix, then a run that is interrupted and resumed.
 
-swath reads listing metadata only. It never downloads or changes object contents. The Go implementation is
-not released yet; the latest published release is the Java v0.3.2, whose command line and output differ
-([from-java.md](from-java.md)).
+swath reads listing metadata only. It never downloads or changes object contents. It is not released yet, so
+you build it from source; the latest published release, v0.3.2, has another command line and output
+([migrating from 0.3](upgrade.md)). The words used below are defined in [concepts.md](concepts.md).
 
 ## 1. Build and check the binary
 
@@ -221,6 +221,7 @@ bucket that changes during the run: an object added or removed while swath lists
 
 ## Next
 
+- [concepts.md](concepts.md): what a run, a part, the manifest, coverage and resume promise.
 - [running.md](running.md): size, watch, schedule and resume large runs.
 - [output.md](output.md) and [filters.md](filters.md): text formats, totals, and selecting rows.
 - [commands/swath.md](commands/swath.md): every command and option.

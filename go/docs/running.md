@@ -339,7 +339,7 @@ DIR/
 ```
 
 By default, object-store datasets list current objects only; `--all-versions` selects S3 versions, GCS
-generations or every Azure Blob entry (below). Java swath's reader does not open these datasets ([upgrade.md](upgrade.md)).
+generations or every Azure Blob entry (below). The 0.3 release's reader does not open these datasets ([upgrade.md](upgrade.md)).
 
 ### Verify a dataset
 
