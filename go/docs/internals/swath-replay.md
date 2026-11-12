@@ -1093,7 +1093,7 @@ The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an 
 and its legal files (`LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` in `/licenses/`) and nothing else:
 `/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `65532:65532`, and the runtime stage is
 `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
-as `ghcr.io/varveio/swath-replay` ([install.md](../install.md#release-downloads-and-images)). Fixtures are never baked in:
+as `ghcr.io/varveio/swath-replay` ([install.md](../install.md#planned-for-the-next-release)). Fixtures are never baked in:
 mount one read-only and pass its container path to `--fixture`.
 
 ```bash

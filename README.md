@@ -8,10 +8,10 @@ swath is an open-source command-line tool that lists files and objects in local 
 filesystems, S3, GCS, and Azure Blob Storage (flat namespace). It can summarize sizes by
 directory or prefix (`du`) and write sorted Parquet inventories.
 
-> **Go on main, unreleased:** this page describes the Go implementation. The latest
-> published release is [Java v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2),
-> the S3-focused CLI. Build Go from source to use the commands and backends below.
-> Go will replace Java at release; Java has not been removed yet.
+> **Not released yet.** Build from source (below). The latest published release,
+> [v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2), is the earlier S3-only
+> command line, with another dataset format; its downloads and container do not provide the
+> commands and sources below ([migrating from 0.3](go/docs/upgrade.md)).
 
 ## Measured scale
 
@@ -26,8 +26,6 @@ The [measurements and setup](go/docs/internals/measurements.md) keep the operati
 other runs separate.
 
 ## Supported sources
-
-This table describes **Go on main**, not the Java release.
 
 | Source | Listing and summaries | Limits |
 | --- | --- | --- |
@@ -45,9 +43,8 @@ directory sync is unavailable; local scans work without resume. See
 
 ## Quick start
 
-**Build the unreleased Go implementation** with Go 1.26 (the toolchain version is in
-[`go/go.mod`](go/go.mod)). The published Java downloads and container do not provide
-these commands and backends.
+**Build from source** with Go 1.26 or later (the `go` line of [`go/go.mod`](go/go.mod)) and git
+([install](go/docs/install.md)).
 
 ```bash
 git clone https://github.com/varveio/swath.git
@@ -105,7 +102,7 @@ or another Parquet tool, after checking coverage and schema.
 swath reads listing metadata and does not change source contents. A live walk or
 multi-request listing is not an atomic storage snapshot. Check coverage, filters,
 entry errors and freshness before treating the result as a whole-source inventory.
-The [Go guide](go/docs/getting-started.md) explains these choices; the
+[Concepts](go/docs/concepts.md) defines what each of these promises; the
 [running guide](go/docs/running.md) owns recovery and resource limits.
 
 ## When to use it
@@ -123,28 +120,27 @@ supported schemas rather than assuming every swath dataset is accepted.
 
 ## Documentation
 
-- **Start:** [getting started](go/docs/getting-started.md), [install](go/docs/install.md).
+- **Start:** [getting started](go/docs/getting-started.md), [concepts](go/docs/concepts.md),
+  [install](go/docs/install.md).
 - **Use:** [command reference](go/docs/commands/swath.md), [sources](go/docs/sources.md),
   [output](go/docs/output.md), [running guide](go/docs/running.md),
-  [production checklist](go/docs/production.md).
-- **Read the output:** [swath dataset profile](go/docs/dataset.md).
-- **Understand:** [architecture](go/docs/internals/architecture.md), [providers](go/docs/internals/providers.md),
-  [measurements](go/docs/internals/measurements.md).
-- **Move from Java:** [migration guide](go/docs/from-java.md) and [dataset changes](go/docs/upgrade.md).
-- **Java v0.3.2:** [release documentation](https://github.com/varveio/swath/tree/v0.3.2/docs)
-  and [historical visual field guide](https://swath.varve.io/field-guide/).
-- **Contribute:** [contribution guide](CONTRIBUTING.md), [Go tests](go/docs/internals/testing.md),
+  [production checklist](go/docs/production.md), [troubleshooting](go/docs/troubleshooting.md).
+- **Read the output:** [swath dataset profile](go/docs/dataset.md); from Go, the
+  [`reader`](go/reader/README.md) module.
+- **Understand:** [architecture](go/docs/internals/architecture.md), [contracts](go/docs/internals/contracts.md),
+  [providers](go/docs/internals/providers.md), [measurements](go/docs/internals/measurements.md).
+- **Migrate from 0.3:** [migration guide](go/docs/upgrade.md); the
+  [v0.3.2 documentation](https://github.com/varveio/swath/tree/v0.3.2/docs).
+- **Contribute:** [contribution guide](CONTRIBUTING.md), [tests](go/docs/internals/testing.md),
   [roadmap](ROADMAP.md).
 
 swath is pre-1.0. Flags and schemas can change; keep the build revision with inventories
-and run reports. Go is being prepared to replace Java, not become a second maintained
-edition.
+and run reports.
 
-## See it at full scale
+## History: the Java releases (0.2 and 0.3)
 
-The recordings below are **historical Java evidence**, not demonstrations of the Go
-commands or its recovery model.
-
+The recordings below were captured with the earlier Java releases. They do not show the
+current commands, dataset format or recovery model.
 
 [![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](docs/full-scale-demo.md)
 
@@ -175,7 +171,6 @@ For the story behind swath and the study that grew alongside it, read
 [How I built swath: listing a billion S3 objects in 4 minutes](https://sagi.org/posts/how-i-built-swath/).
 The evidence behind the published large-scale runs is in the
 [study findings](https://github.com/varveio/s3-listing-study/blob/main/RESULTS.md).
-
 
 ## License
 

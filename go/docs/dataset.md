@@ -8,7 +8,7 @@ The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/s
 at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
 [internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
-[upgrade.md](upgrade.md) maps the Java tool's format 1 onto it.
+[upgrade.md](upgrade.md) maps the 0.3 release's format 1 onto it.
 
 Nothing here is released. Until the first release, any of this profile may change outright, with no
 compatibility window for datasets written by earlier builds.
@@ -56,7 +56,7 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
+after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present

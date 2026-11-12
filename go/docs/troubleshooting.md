@@ -3,6 +3,19 @@
 Start from the exit code and the last line on stderr. With `--report FILE`, the report's `outcome.class` and
 `outcome.cause` say the same in a form a program reads ([reference/exit-codes.md](reference/exit-codes.md)).
 
+| Exit | Start with |
+|---|---|
+| 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
+| 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
+| 74 | [the disk filled](#the-disk-filled-exit-74) |
+| 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
+| 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
+| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
+
+The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
+and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their
+exit code 2, by `TestTroubleshootingMessages` in `go test ./cmd/swath`; the others are not.
+
 ## Credentials could not be loaded
 
 ```text
@@ -63,20 +76,20 @@ swath: --s3-profile applies to S3 sources, not to GCS sources
 ## The output directory is refused
 
 ```text
-swath: nonempty: output directory is not empty (use --overwrite to replace a previous dataset)
+swath: inventory: output directory is not empty (use --overwrite to replace a previous dataset)
 ```
 
-Exit 2, and nothing was changed. `-o DIR` takes a new or empty directory. `--overwrite` replaces a previous
+Exit 2, and nothing was changed (the messages here are for `-o inventory`). `-o DIR` takes a new or empty directory. `--overwrite` replaces a previous
 swath dataset there and nothing else; a directory holding other files stays refused:
 
 ```text
-swath: -o: nonempty: output directory does not hold a previous swath dataset
+swath: -o: inventory: output directory does not hold a previous swath dataset
 ```
 
 A directory that holds an interrupted run is continued with `swath resume DIR`, or replaced with `--overwrite`:
 
 ```text
-swath: l2: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
+swath: inventory: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
 ```
 
 ## A `.parquet` output became a directory
@@ -88,7 +101,7 @@ manifest ([getting-started.md](getting-started.md#6-query-it-with-duckdb)).
 ## `-o` names a format swath does not write
 
 ```text
-swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS bucket prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
+swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS, S3 or Azure Blob prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
 ```
 
 Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#reading-text-rows-in-duckdb)).
@@ -195,9 +208,11 @@ shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
 
 ## Entries could not be read
 
-A local walk that cannot read some entries (permissions, entries removed during the walk) names up to five on
-stderr with their cause, counts the rest, leaves them out of the rows and totals, and still exits 0. The
-report's `outcome.unreadable` is then true, and a dataset's coverage counts them in `skipped_entries`.
+A local walk that cannot read some entries (permissions, entries removed during the walk, a link target it
+cannot read) names up to five on stderr with their cause, counts the rest, and still exits 0. Local entry errors
+can leave rows out or metadata unavailable: a symbolic link whose target cannot be read keeps its row.
+`outcome.unreadable` in the report reflects entry errors; `coverage.skipped_entries` excludes entries found missing
+during stat and failed link-target reads, but includes failed directory opens.
 
 ## Reporting a problem
 

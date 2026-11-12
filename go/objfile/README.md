@@ -17,6 +17,10 @@ them, or decide which bytes a reader needs; dataset publication and recovery bel
 to the application. Given a batch of ranges a reader needs, it plans the requests
 that fetch them: merging, splitting and running them concurrently.
 
+Runnable examples, checked by `go test`: [example_test.go](example_test.go) (locations and
+names) and [s3/example_test.go](s3/example_test.go) (pinned ranged reads and create-only
+writes against an in-process fake bucket).
+
 ## Read a remote file
 
 `remote.Open` builds a read-only store with default credentials. Locations are
