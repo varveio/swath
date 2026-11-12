@@ -109,7 +109,7 @@ func TestDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer got.Close()
-	if err := got.Verify(ctx); err != nil {
+	if err := got.Verify(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 

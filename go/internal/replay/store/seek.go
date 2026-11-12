@@ -133,7 +133,7 @@ func openSeek(ctx context.Context, dir string, expect []legacy.Column, files *le
 	src := &cachedSource{root: root, dir: dir, files: files, opened: map[string]*legacy.CachedFile{}}
 	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.OpenOptions{})
 	if err == nil {
-		if err = d.Verify(ctx); err != nil {
+		if err = d.Verify(ctx, nil); err != nil {
 			_ = d.Close()
 		}
 	}

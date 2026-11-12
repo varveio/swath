@@ -175,6 +175,8 @@ github.com/twpayne/go-geom v1.6.1 h1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4
 github.com/twpayne/go-geom v1.6.1/go.mod h1:Kr+Nly6BswFsKM5sd31YaoWS5PeDDH2NftJTK7Gd028=
 github.com/varveio/seekparquet/go v0.1.1-0.20261112020621-b26862f2b4c8 h1:ahKloiljW3vPqGvXwCvHVi7CoVMHu82zcZaXygDtYko=
 github.com/varveio/seekparquet/go v0.1.1-0.20261112020621-b26862f2b4c8/go.mod h1:g5nssi9SiT83LbIA2P225aJbJUS97rarnQKQ8WzysXc=
+github.com/varveio/seekparquet/go v0.1.1-0.20261112073354-6b1b92b88ba5 h1:j0xciMZitqSwiqBClNbNLWOjhN0MDaXgUnX/SBTZxCQ=
+github.com/varveio/seekparquet/go v0.1.1-0.20261112073354-6b1b92b88ba5/go.mod h1:g5nssi9SiT83LbIA2P225aJbJUS97rarnQKQ8WzysXc=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=

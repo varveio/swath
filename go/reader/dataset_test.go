@@ -239,7 +239,7 @@ func TestCheckSchema(t *testing.T) {
 		other := writeDataset(t, s3Spec(), []s3RowNoETag{{Key: "z1"}, {Key: "z2"}})
 		appendPart(t, dir, other)
 		d := openDir(t, dir)
-		if err := d.SeekParquet().Verify(ctx); err != nil {
+		if err := d.SeekParquet().Verify(ctx, nil); err != nil {
 			t.Fatalf("the module accepts the parts: %v", err)
 		}
 		se := semanticAt(t, d.CheckSchema(ctx), KindSchema, "etag")
@@ -445,7 +445,7 @@ func TestCheckSchemaReadsTheVerifiedPart(t *testing.T) {
 	good := writeDataset(t, s3Spec(), []s3Row{{Key: "a", Size: ptr(int64(1))}})
 	d := openDir(t, dir)
 	ctx := context.Background()
-	if err := d.SeekParquet().Verify(ctx); err != nil {
+	if err := d.SeekParquet().Verify(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	part := filepath.Join("data", "part-00000.parquet")
