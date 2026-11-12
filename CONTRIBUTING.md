@@ -16,15 +16,18 @@ request workflow.
 
 ## Build and test
 
-The unreleased Go implementation lives in `go/` and uses the toolchain declared in
-`go/go.mod`. Build it with `cd go && ./build.sh -o swath`. The Go gate is
+swath lives in `go/` and uses the toolchain declared in `go/go.mod`. Build it with `cd go && ./build.sh -o swath`. The Go gate is
 `go vet ./... && go test -race ./...`; run focused tests locally and use the sharded CI
-for the full suite, as described in [Go testing](go/docs/internals/testing.md). For a provider, follow the
+for the full suite, as described in [testing](go/docs/internals/testing.md). For a provider, follow the
 [provider checklist](go/docs/internals/providers.md#adding-a-provider), including reader, verifier
 and conformance integration outside its directory. Regenerate CLI documentation with
 `cd go && UPDATE=1 go test ./cmd/swath -run '^TestCLIDoc'`; do not edit the generated synopsis and option blocks.
 
-The current Java distribution is a multi-module Gradle build and requires **JDK 25**.
+Documentation is checked like code: `cd go && go test ./docs` checks every Markdown link and
+anchor under `go/`, and the library modules' examples (`go/objfile`, `go/reader`) are `Example`
+tests. Prefer an `Example` test to a Markdown code block for library code, so that it compiles and runs.
+
+The 0.3 release's Java distribution, still in this repository, is a multi-module Gradle build and requires **JDK 25**.
 The wrapper supplies Gradle, but JDK 25 must be available to it.
 
 ```bash
@@ -73,7 +76,9 @@ By contributing, you agree that your contribution is licensed under the
 1. Fork the repository or create a topic branch.
 2. Keep the change focused and add tests for behavior that could regress.
 3. Update the canonical documentation owner rather than adding a second detailed copy.
-4. Run `./gradlew build -PnoIntegration`; run the full integration gate when the change
-   touches S3 behavior, packaging, or an integration boundary.
+4. For `go/`, run the tests of the packages you changed (`go vet ./... && go test -race` on
+   them); CI runs the rest. For the Java build, run `./gradlew build -PnoIntegration`, and the
+   full integration gate when the change touches S3 behavior, packaging, or an integration
+   boundary.
 5. Open a pull request explaining the user-visible change, technical rationale, and the
    checks you ran.
