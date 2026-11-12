@@ -4,6 +4,10 @@
 package azblob_test
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
+	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/azblob/azfake"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
@@ -75,4 +80,60 @@ func TestBudget(t *testing.T) {
 		},
 		UnknownTotalOK: true,
 	})
+}
+
+// TestPreconditionFailed: a 412 is ErrObjectChanged only for a request that
+// sent the pin's If-Match; a first sized read or a whole-object read sent
+// none, and its 412 is the store's error.
+func TestPreconditionFailed(t *testing.T) {
+	ctx := context.Background()
+	f, client := fakeClient(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	})
+	f.Put("obj", objfiletest.Data(100, 1))
+	o := azblob.New(client, containerName)
+	sized, err := o.OpenSized(ctx, "obj", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sized.ReadAt(make([]byte, 10), 0); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a first sized read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	if _, _, err := o.(objfile.ObjectReader).ReadObject(ctx, "obj", 1000); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a whole-object read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	opened, err := o.Open(ctx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a pinned read = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestReadObjectStoredGzip: a blob stored with Content-Encoding: gzip is read
+// whole as stored, not decompressed by Go's transport.
+func TestReadObjectStoredGzip(t *testing.T) {
+	var z bytes.Buffer
+	gw := gzip.NewWriter(&z)
+	_, _ = gw.Write(bytes.Repeat([]byte("manifest "), 100))
+	_ = gw.Close()
+	stored := z.Bytes()
+	f, client := fakeClient(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Encoding", "gzip") // the blob's stored property
+			h.ServeHTTP(w, r)
+		})
+	})
+	f.Put("obj", stored)
+	b, _, err := azblob.New(client, containerName).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
+	if err != nil || !bytes.Equal(b, stored) {
+		t.Fatalf("ReadObject of a gzip-labelled blob = %d bytes, %v; want the %d stored", len(b), err, len(stored))
+	}
 }

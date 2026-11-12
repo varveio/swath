@@ -25,6 +25,7 @@ import (
 	"net/http"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
@@ -53,6 +54,9 @@ func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 }
 
 func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	if err := ranged.CheckSize(name, size); err != nil {
+		return nil, err
+	}
 	b := o.container.NewBlobClient(name)
 	return ranged.NewSized(name, size, getter(b), func(ctx context.Context) (int64, ranged.Pin, error) {
 		return stat(ctx, b)
@@ -85,6 +89,11 @@ func getter(b *blob.Client) ranged.Getter {
 		opt := &blob.DownloadStreamOptions{}
 		if n >= 0 {
 			opt.Range = blob.HTTPRange{Offset: off, Count: n}
+		} else {
+			// The stored bytes: without this Go's transport asks for gzip on
+			// a request with no Range and decompresses a blob stored with
+			// Content-Encoding: gzip, which the SDK does not see.
+			ctx = policy.WithHTTPHeader(ctx, http.Header{"Accept-Encoding": {"identity"}})
 		}
 		if pin.ETag != "" {
 			etag := azcore.ETag(pin.ETag)
@@ -97,7 +106,10 @@ func getter(b *blob.Client) ranged.Getter {
 			switch s := status(err); {
 			case s == http.StatusNotFound && pin.IsZero():
 				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
-			case s == http.StatusNotFound || s == http.StatusPreconditionFailed:
+			case !pin.IsZero() && (s == http.StatusNotFound || s == http.StatusPreconditionFailed):
+				// The pinned version is gone, or If-Match failed on it. A
+				// 412 of a request with no pin, which sent no condition,
+				// is the store's error.
 				err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
 			case s == http.StatusRequestedRangeNotSatisfiable:
 				err = fmt.Errorf("%w: %w", ranged.ErrUnsatisfiable, err)

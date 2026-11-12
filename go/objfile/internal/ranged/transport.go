@@ -19,9 +19,11 @@ import (
 // did not decompress, the request fails. A request for the rest of an object,
 // "bytes=first-" (which the GCS SDK sends for the rest of a whole-object read
 // that is not marked as below), is checked alike, its range being first to the object's last
-// byte. The response to a request for a whole object that the Object marks
-// (WholeRead) is passed with its body ending where it fails, so that the
-// SDK does not request the rest itself. A Getter checks the response it is
+// byte. A response cut at a shorter object's end is refused with a
+// *StatedTotal, which the Object classifies. The response to a request for
+// a whole object that the Object marks is passed with its body ending where
+// it fails, so that the SDK does not request the rest itself, and the
+// failure kept for the Object. A Getter checks the response it is
 // given; Transport also checks the requests an SDK sends on its own.
 //
 // A body that fails part way ends there instead (io.EOF), so that the SDK
@@ -40,14 +42,15 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return res, err
 	}
 	rng := req.Header.Get("Range")
-	if rng == "" && isWholeRead(req.Context()) {
+	if failure := wholeReadOf(req.Context()); rng == "" && failure != nil {
 		// A whole-object read: its body ends where it fails, so that the
-		// SDK does not request the rest itself; ReadObject does, checked.
+		// SDK does not request the rest itself, and the failure is kept
+		// for ReadObject, which reads the rest (or fails) itself.
 		if res.Uncompressed {
 			res.Body.Close()
 			return nil, fmt.Errorf("objfile: %s %s://%s%s: the response was decompressed in transit", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath())
 		}
-		res.Body = endOnFailure{res.Body}
+		res.Body = recordFailure{ReadCloser: res.Body, failure: failure}
 		return res, nil
 	}
 	first, last, ok := requested(rng)
@@ -56,7 +59,13 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if err := served(res, first, last); err != nil {
 		res.Body.Close()
-		return nil, fmt.Errorf("objfile: %s %s://%s%s: %w", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath(), err)
+		err = fmt.Errorf("objfile: %s %s://%s%s: %w", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath(), err)
+		if total, ok := clipped(res, first, last); ok {
+			// A range cut at a shorter object's end: refused, as the SDK
+			// would read on past it, with the total the Object classifies.
+			err = &StatedTotal{Total: total, Err: err}
+		}
+		return nil, err
 	}
 	res.Body = endOnFailure{res.Body}
 	return res, nil
@@ -68,6 +77,30 @@ func (t transport) CloseIdleConnections() {
 	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
 		c.CloseIdleConnections()
 	}
+}
+
+// recordFailure is a body whose read failure is its end, the failure kept
+// in failure.
+type recordFailure struct {
+	io.ReadCloser
+	failure *bodyFailure
+}
+
+func (b recordFailure) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		b.failure.set(err)
+		err = io.EOF
+	}
+	return n, err
+}
+
+// clipped reports whether res is a 206 of the range first..last cut at the
+// object's end (it states that end and total), and the total it states.
+func clipped(res *http.Response, first, last int64) (int64, bool) {
+	a, b, total, ok := ContentRange(res.Header.Get("Content-Range"))
+	return total, ok && res.StatusCode == http.StatusPartialContent && last >= 0 && a == first &&
+		b < last && b == total-1 && res.ContentLength == b-a+1
 }
 
 // endOnFailure is a body whose read failure is its end.

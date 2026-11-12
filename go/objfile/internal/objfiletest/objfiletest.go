@@ -253,6 +253,12 @@ func runSized(t *testing.T, newStore NewStore) {
 			t.Fatalf("Identity = %q after the first read, Open pinned %q", f.Identity(), opened.Identity())
 		}
 	})
+	t.Run("SizedNegative", func(t *testing.T) {
+		s := plain(t, newStore)
+		if _, err := s.Opener.OpenSized(ctx, "obj", -1); !errors.Is(err, fs.ErrInvalid) {
+			t.Fatalf("OpenSized of a negative size: %v, want fs.ErrInvalid", err)
+		}
+	})
 	t.Run("SizedMissing", func(t *testing.T) {
 		s := plain(t, newStore)
 		f, err := s.Opener.OpenSized(ctx, "nope", 10)

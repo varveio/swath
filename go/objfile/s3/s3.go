@@ -51,6 +51,9 @@ func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 }
 
 func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+	if err := ranged.CheckSize(name, size); err != nil {
+		return nil, err
+	}
 	return ranged.NewSized(name, size, o.getter(name), func(ctx context.Context) (int64, ranged.Pin, error) {
 		return o.stat(ctx, name)
 	}), nil
@@ -94,7 +97,10 @@ func (o opener) getter(name string) ranged.Getter {
 			switch s := status(err); {
 			case s == http.StatusNotFound && pin.IsZero():
 				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
-			case s == http.StatusNotFound || s == http.StatusPreconditionFailed:
+			case !pin.IsZero() && (s == http.StatusNotFound || s == http.StatusPreconditionFailed):
+				// The pinned version is gone, or If-Match failed on it. A
+				// 412 of a request with no pin, which sent no condition,
+				// is the store's error.
 				err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
 			case s == http.StatusRequestedRangeNotSatisfiable:
 				err = fmt.Errorf("%w: %w", ranged.ErrUnsatisfiable, err)

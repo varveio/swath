@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -324,10 +325,68 @@ func TestUnknownTotalOneConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a deadlock fails, not hangs
 	defer cancel()
 	p := make([]byte, 100)
 	if _, err := f.WithContext(ctx).ReadAt(p, 1000); err != nil || !bytes.Equal(p, data[1000:1100]) {
 		t.Fatalf("read on one connection: %v", err)
+	}
+
+	// Concurrent first reads of a fresh Object: none may hold the only
+	// connection while another proves the size.
+	for range 5 {
+		g, err := s3.New(client, bucket).OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Go(func() {
+				p := make([]byte, 100)
+				off := i * 10000
+				if _, err := g.WithContext(ctx).ReadAt(p, int64(off)); err != nil || !bytes.Equal(p, data[off:off+100]) {
+					t.Errorf("concurrent first read %d on one connection: %v", i, err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+}
+
+// preconditionFailed answers every GET with 412.
+func preconditionFailed(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// TestPreconditionFailed: a 412 is ErrObjectChanged only for a request that
+// sent the pin's If-Match; a first sized read or a whole-object read sent
+// none, and its 412 is the store's error.
+func TestPreconditionFailed(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, preconditionFailed)
+	f.put(t, "obj", objfiletest.Data(100, 1))
+	o := s3.New(f.client, bucket)
+	sized, err := o.OpenSized(ctx, "obj", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sized.ReadAt(make([]byte, 10), 0); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a first sized read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	if _, _, err := o.(objfile.ObjectReader).ReadObject(ctx, "obj", 1000); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a whole-object read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	opened, err := o.Open(ctx, "obj") // HEAD: pinned
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a pinned read = %v; want ErrObjectChanged", err)
 	}
 }

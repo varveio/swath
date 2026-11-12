@@ -78,7 +78,19 @@ func newFile(name string, size int64, pin Pin, get Getter, stat Stat) *file {
 // to size, or stat, called when it states none, gives size and the same
 // version.
 func NewSized(name string, size int64, get Getter, stat Stat) objfile.Object {
+	if size < 0 {
+		panic("ranged: NewSized of a negative size; CheckSize first")
+	}
 	return newFile(name, size, Pin{}, get, stat)
+}
+
+// CheckSize is OpenSized's check of the size it is given: a negative size
+// is invalid.
+func CheckSize(name string, size int64) error {
+	if size < 0 {
+		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: negative size %d", fs.ErrInvalid, size)}
+	}
+	return nil
 }
 
 type file struct {
@@ -183,74 +195,58 @@ func (f *file) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// open requests a range and checks the response against the pin, taking the
-// pin from it when the file has none yet, and against the size: the total
-// first, so that a range clipped by a shorter object is ErrObjectChanged.
+// open requests a range and checks the response against the pin. An
+// unpinned file is pinned first (establish): its requests go one at a time,
+// under the establish lock, until one has pinned it.
 func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	f.mu.Lock()
 	pin := f.pin
 	f.mu.Unlock()
+	if pin.IsZero() {
+		body, pinned, err := f.establish1(ctx, off, n)
+		if !pinned {
+			return body, err
+		}
+		f.mu.Lock()
+		pin = f.pin
+		f.mu.Unlock()
+	}
 	res, err := f.get(ctx, off, n, pin)
 	if err != nil {
-		return nil, f.unserved(ctx, err, pin)
-	}
-	if err := f.check(ctx, res, off, n); err != nil {
-		res.Body.Close()
-		if err == errUnproven {
-			return f.reopen(ctx, res.Pin, off, n)
+		if st := (*StatedTotal)(nil); errors.As(err, &st) && st.Total != f.size {
+			return nil, fmt.Errorf("%w: size %d, opened at %d: %w", objfile.ErrObjectChanged, st.Total, f.size, err)
 		}
+		return nil, err
+	}
+	if err := f.check(res, off, n, pin); err != nil {
+		res.Body.Close()
 		return nil, err
 	}
 	return res.Body, nil
 }
 
-// unserved is the error of a request the store refused with err. A range
-// it cannot serve (416), before anything has shown the object's size, may
-// mean the size given is wrong (the object is shorter), which a metadata
-// request tells.
-func (f *file) unserved(ctx context.Context, err error, pin Pin) error {
-	if errors.Is(err, ErrUnsatisfiable) && pin.IsZero() && f.stat != nil {
-		if serr := f.sizeOf(ctx); serr != nil {
-			return serr
-		}
-	}
-	return err
-}
-
-// reopen proves the version served of an unpinned file whose response
-// stated no total size, and requests the range again of that version.
-// Asking the store while that response held its connection could wait for
-// that connection forever, so the response is let go first.
-func (f *file) reopen(ctx context.Context, served Pin, off, n int64) (io.ReadCloser, error) {
-	if err := f.prove(ctx, served); err != nil {
-		return nil, err
-	}
-	return f.open(ctx, off, n)
-}
-
-// errUnproven is check's answer to a first response that states no total
-// size: the file is not pinned until a metadata request proves it.
-var errUnproven = errors.New("the response states no total size")
-
-func (f *file) check(ctx context.Context, res Response, off, n int64) error {
+// check checks a response to a request of the pinned file: a stated total
+// of another size, or another version, is ErrObjectChanged.
+func (f *file) check(res Response, off, n int64, pin Pin) error {
 	if res.Total >= 0 && res.Total != f.size {
-		// The first evidence of the object's size when the file is not
-		// pinned (pinTo tells), else a change.
-		return f.pinTo(ctx, res)
+		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
 	}
+	if err := rangeServed(res, off, n); err != nil {
+		return err
+	}
+	return matches(res.Pin, pin)
+}
+
+// rangeServed checks that a response is the range [off, off+n), as far as
+// it states its start and length.
+func rangeServed(res Response, off, n int64) error {
 	if start := max(res.Start, 0); start != off {
 		return fmt.Errorf("the store served bytes from %d for a range from %d", start, off)
 	}
 	if res.Length >= 0 && res.Length != n {
 		return fmt.Errorf("the store returned %d bytes for a range of %d", res.Length, n)
 	}
-	f.mu.Lock()
-	pin := f.pin
-	f.mu.Unlock()
-	if pin.IsZero() {
-		return f.pinTo(ctx, res)
-	}
-	return matches(res.Pin, pin)
+	return nil
 }
 
 // mismatch is the error of a first piece of evidence that the object is
@@ -271,96 +267,97 @@ func (f *file) lock(ctx context.Context) error {
 
 func (f *file) unlock() { <-f.establish }
 
-// pinTo pins the file to the version res was served, once res has shown
-// that version is the file's size; when another response pinned the file
-// first, res is checked against it. A response that states another total
-// is a *SizeMismatchError, and one that states none is errUnproven.
-func (f *file) pinTo(ctx context.Context, res Response) error {
+// establish1 makes the request for [off, off+n) of an unpinned file while
+// holding the establish lock, so that no other unpinned request, nor a
+// response waiting for the lock, holds a connection meanwhile: the
+// metadata request it may need can always be sent. It returns the checked
+// body of a response that pinned the file, or the error that left it
+// unpinned; pinned without a body says that the file is pinned now (by
+// another read, or by a metadata request after a response that stated no
+// total) and the range is to be requested of that pin.
+func (f *file) establish1(ctx context.Context, off, n int64) (body io.ReadCloser, pinned bool, err error) {
 	if err := f.lock(ctx); err != nil {
-		return err
+		return nil, false, err
 	}
 	defer f.unlock()
 	f.mu.Lock()
-	pin := f.pin
+	already := !f.pin.IsZero()
 	f.mu.Unlock()
-	if !pin.IsZero() {
-		if res.Total >= 0 && res.Total != f.size {
-			return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
+	if already {
+		return nil, true, nil
+	}
+	res, err := f.get(ctx, off, n, Pin{})
+	if err != nil {
+		var st *StatedTotal
+		switch {
+		case errors.As(err, &st) && st.Total != f.size:
+			// The transport refused a range clipped by a shorter object;
+			// its stated total is the evidence.
+			return nil, false, f.mismatch(st.Total)
+		case errors.Is(err, ErrUnsatisfiable) && f.stat != nil:
+			// A range the store cannot serve: the size given may be
+			// wrong (the object is shorter), which a metadata request
+			// tells.
+			if size, _, serr := f.stat(ctx); serr != nil {
+				return nil, false, serr
+			} else if size != f.size {
+				return nil, false, f.mismatch(size)
+			}
 		}
-		return matches(res.Pin, pin)
+		return nil, false, err
 	}
 	if res.Total >= 0 && res.Total != f.size {
-		return f.mismatch(res.Total)
+		res.Body.Close()
+		return nil, false, f.mismatch(res.Total)
+	}
+	if err := rangeServed(res, off, n); err != nil {
+		res.Body.Close()
+		return nil, false, err
 	}
 	if res.Pin.IsZero() {
-		return fmt.Errorf("the response names no version to pin")
+		res.Body.Close()
+		return nil, false, errors.New("the response names no version to pin")
 	}
-	if res.Total < 0 {
-		// The size was given, not learnt: a response that does not state
-		// the total cannot prove it.
-		if f.stat == nil {
-			return fmt.Errorf("the response states no total size to check the size %d against", f.size)
-		}
-		return errUnproven
+	if res.Total >= 0 {
+		f.mu.Lock()
+		f.pin = res.Pin
+		f.mu.Unlock()
+		return res.Body, false, nil
 	}
-	f.mu.Lock()
-	f.pin = res.Pin
-	f.mu.Unlock()
-	return nil
-}
-
-// prove pins the file by a metadata request, which must give the file's
-// size and the version served, when no response has pinned it meanwhile.
-func (f *file) prove(ctx context.Context, served Pin) error {
-	if err := f.lock(ctx); err != nil {
-		return err
-	}
-	defer f.unlock()
-	f.mu.Lock()
-	pin := f.pin
-	f.mu.Unlock()
-	if !pin.IsZero() {
-		return matches(served, pin)
+	// The size was given, not learnt: a response that does not state the
+	// total cannot prove it. It is let go (it holds a connection the
+	// metadata request may need), the store is asked, and the range is
+	// requested again of the version proved.
+	res.Body.Close()
+	if f.stat == nil {
+		return nil, false, fmt.Errorf("the response states no total size to check the size %d against", f.size)
 	}
 	size, live, err := f.stat(ctx)
-	if err != nil {
-		return err
+	switch {
+	case err != nil:
+		return nil, false, err
+	case size != f.size:
+		return nil, false, f.mismatch(size)
 	}
-	if size != f.size {
-		return f.mismatch(size)
-	}
-	if err := matches(served, live); err != nil {
-		return err
+	if err := matches(res.Pin, live); err != nil {
+		return nil, false, err
 	}
 	f.mu.Lock()
 	f.pin = live
 	f.mu.Unlock()
-	return nil
+	return nil, true, nil
 }
 
-// sizeOf asks the store for the object's size, while the file is not
-// pinned: another size is a *SizeMismatchError; the same, or a pinned file,
-// is nil.
-func (f *file) sizeOf(ctx context.Context) error {
-	if err := f.lock(ctx); err != nil {
-		return err
-	}
-	defer f.unlock()
-	f.mu.Lock()
-	pinned := !f.pin.IsZero()
-	f.mu.Unlock()
-	if pinned {
-		return nil
-	}
-	size, _, err := f.stat(ctx)
-	if err != nil {
-		return err
-	}
-	if size != f.size {
-		return f.mismatch(size)
-	}
-	return nil
+// StatedTotal is a transport's error for a response it refused that states
+// the object's total size: a range clipped by a shorter object. The shared
+// reader classifies it (a *SizeMismatchError before a pin).
+type StatedTotal struct {
+	Total int64
+	Err   error
 }
+
+func (e *StatedTotal) Error() string { return e.Err.Error() }
+func (e *StatedTotal) Unwrap() error { return e.Err }
 
 // ErrUnsatisfiable is a Getter's error (wrapped) for a range the store
 // answered 416 Range Not Satisfiable.
@@ -375,17 +372,43 @@ func matches(served, pinned Pin) error {
 	return nil
 }
 
-// wholeRead marks the context of a whole-object request, for Transport.
+// wholeRead is the context key of a whole-object request's bodyFailure.
 type wholeRead struct{}
 
-// WholeRead marks ctx as the context of a request for a whole object, so
-// that Transport ends its body where it fails instead of letting the SDK
-// request the rest: the rest is requested, and checked, as a ranged read.
-func WholeRead(ctx context.Context) context.Context {
-	return context.WithValue(ctx, wholeRead{}, true)
+// bodyFailure is where Transport keeps the failure of a whole-object
+// response's body, which it ends instead (so that the SDK does not request
+// the rest itself): ReadObject sees it, and does not take the body's end
+// for the object's.
+type bodyFailure struct {
+	mu  sync.Mutex
+	err error
 }
 
-func isWholeRead(ctx context.Context) bool { return ctx.Value(wholeRead{}) != nil }
+func (b *bodyFailure) set(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err == nil {
+		b.err = err
+	}
+}
+
+func (b *bodyFailure) get() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err
+}
+
+// wholeReadContext marks ctx as the context of a request for a whole
+// object, with the bodyFailure Transport records into.
+func wholeReadContext(ctx context.Context) (context.Context, *bodyFailure) {
+	b := &bodyFailure{}
+	return context.WithValue(ctx, wholeRead{}, b), b
+}
+
+func wholeReadOf(ctx context.Context) *bodyFailure {
+	b, _ := ctx.Value(wholeRead{}).(*bodyFailure)
+	return b
+}
 
 // ReadObject reads the object name whole with one request through get,
 // unless its body fails part way, when the rest is read as a ranged read of
@@ -396,7 +419,8 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 	if err := ctx.Err(); err != nil {
 		return nil, "", fail(err)
 	}
-	res, err := get(WholeRead(ctx), 0, -1, Pin{})
+	wctx, failure := wholeReadContext(ctx)
+	res, err := get(wctx, 0, -1, Pin{})
 	if err != nil {
 		return nil, "", fail(err)
 	}
@@ -432,6 +456,12 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 			probe++ // one byte past the limit shows an object over it
 		}
 		b, err := io.ReadAll(io.LimitReader(res.Body, probe))
+		if err == nil {
+			err = failure.get() // a body Transport ended where it failed
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
 		if err != nil {
 			return nil, "", fail(err)
 		}

@@ -158,7 +158,7 @@ func cut(w http.ResponseWriter, data []byte, start, end, part int) {
 // wholeServer serves one object, "obj" at generation 7, gzip-labelled: a
 // read of the whole object is answered by whole (with the attempt number);
 // a ranged read, closed or to the end, by a 206 of that range.
-func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, attempt int32)) string {
+func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, r *http.Request, attempt int32)) string {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/storage/v1/") {
@@ -170,7 +170,7 @@ func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, at
 		w.Header().Set("Content-Encoding", "gzip")
 		rng := r.Header.Get("Range")
 		if rng == "" {
-			whole(w, attempts.Add(1))
+			whole(w, r, attempts.Add(1))
 			return
 		}
 		start, end := 0, len(data)-1
@@ -206,7 +206,7 @@ func wholeClient(t *testing.T, url string, guard bool) *storage.Client {
 func TestReadObjectCut(t *testing.T) {
 	data := objfiletest.Data(10000, 4) // a quarter is not a multiple of Data's period
 	for _, guard := range []bool{false, true} {
-		url := wholeServer(t, data, func(w http.ResponseWriter, attempt int32) {
+		url := wholeServer(t, data, func(w http.ResponseWriter, _ *http.Request, attempt int32) {
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 			if attempt == 1 {
 				_, _ = w.Write(data[:len(data)/4])
@@ -230,7 +230,7 @@ func TestReadObjectCut(t *testing.T) {
 // read to its end, within the limit.
 func TestReadObjectChunked(t *testing.T) {
 	data := objfiletest.Data(5000, 5)
-	url := wholeServer(t, data, func(w http.ResponseWriter, _ int32) {
+	url := wholeServer(t, data, func(w http.ResponseWriter, r *http.Request, _ int32) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush() // headers sent with no length: the body is chunked
 		_, _ = w.Write(data)
@@ -241,5 +241,34 @@ func TestReadObjectChunked(t *testing.T) {
 	}
 	if _, _, err := o.ReadObject(context.Background(), "obj", 4999); !errors.Is(err, objfile.ErrTooLarge) {
 		t.Fatalf("ReadObject of a chunked answer over the limit = %v", err)
+	}
+
+	// A chunked body broken part way, or cancelled part way, is a failure,
+	// not the object: its end is not the object's end. (Without the
+	// transport the SDK requests the rest itself, as the package says.)
+	for _, c := range []struct {
+		name   string
+		cancel bool
+	}{{"aborted", false}, {"cancelled", true}} {
+		ctx, cancel := context.WithCancel(context.Background())
+		url := wholeServer(t, data, func(w http.ResponseWriter, r *http.Request, _ int32) {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			_, _ = w.Write(data[:1000])
+			w.(http.Flusher).Flush()
+			if c.cancel {
+				cancel()
+				<-r.Context().Done() // until the client has gone
+			}
+			panic(http.ErrAbortHandler)
+		})
+		b, _, err := gcs.New(wholeClient(t, url, true), bucket).(objfile.ObjectReader).ReadObject(ctx, "obj", 1<<20)
+		if err == nil {
+			t.Fatalf("%s chunked answer: ReadObject = %d bytes, nil; want an error", c.name, len(b))
+		}
+		if c.cancel && !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled chunked answer: %v, want context.Canceled", err)
+		}
+		cancel()
 	}
 }

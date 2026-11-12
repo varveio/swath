@@ -38,7 +38,7 @@ import (
 // validate each response's range offset, and its total size and length when
 // the response states them; an Object from OpenSized is not pinned until a
 // response, or a metadata request after one that states none, has shown its
-// total size. A wrong range fails with an error; a changed identity or size
+// total size, and until then its requests are made one at a time. A wrong range fails with an error; a changed identity or size
 // fails with ErrObjectChanged. A short response body is requested again from
 // where it stopped, at most twice for each request, in addition to the SDK's
 // request retries. The GCS package documents the transport required for this

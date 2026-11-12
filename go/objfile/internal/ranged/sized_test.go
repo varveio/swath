@@ -328,16 +328,46 @@ func TestNoBodyHeldAcrossRequests(t *testing.T) {
 	if _, err := NewSized("obj", 100, get, stat).ReadAt(p, 5); err != nil || string(p) != "fghijabcde" {
 		t.Fatalf("sized read without a total: %v, %q", err, p)
 	}
-	s.noTotal = false
+	s.mu.Lock()
+	s.noTotal, s.gets, s.wholes = false, nil, 0
+	s.mu.Unlock()
+	var cut atomic.Bool
 	s.cut = func(req int) int {
-		if req == 1 {
+		if req == 1 { // the whole-object response
+			cut.Store(true)
 			return 30
 		}
 		return -1
 	}
-	if b, _, err := ReadObject(context.Background(), "obj", 100, get); err != nil || !bytes.Equal(b, s.data) {
-		t.Fatalf("ReadObject with a cut body: %v", err)
+	if b, _, err := ReadObject(context.Background(), "obj", 100, get); err != nil || !bytes.Equal(b, s.data) || !cut.Load() || len(s.gets) != 1 {
+		t.Fatalf("ReadObject with a cut body: %v (cut %v, %d ranged requests after it)", err, cut.Load(), len(s.gets))
 	}
+}
+
+// within waits for ch, failing the test instead of hanging when it does not
+// come.
+func within[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(20 * time.Second):
+		t.Fatalf("%s did not happen", what)
+		panic("unreachable")
+	}
+}
+
+// doneWatch is a context whose Done, once asked for, signals asked: a read
+// asks for it only when it waits (for the pinning lock).
+type doneWatch struct {
+	context.Context
+	asked chan struct{}
+	once  sync.Once
+}
+
+func (c *doneWatch) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.asked) })
+	return c.Context.Done()
 }
 
 // TestSizedWaiterCancelled: a read waiting for another to pin the Object
@@ -345,14 +375,13 @@ func TestNoBodyHeldAcrossRequests(t *testing.T) {
 // is still in flight.
 func TestSizedWaiterCancelled(t *testing.T) {
 	s := newStore(1000)
-	entered, release, served := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	var gets atomic.Int32
 	f := NewSized("obj", 1000, func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+		gets.Add(1)
 		res, err := s.get(ctx, off, n, pin)
-		if off == 0 && pin.IsZero() {
+		if pin.IsZero() {
 			res.Total = -1 // the owner's response: proved by a metadata request
-		}
-		if off == 500 {
-			close(served) // the waiter's response, about to wait for the pin
 		}
 		return res, err
 	}, func(ctx context.Context) (int64, Pin, error) {
@@ -362,22 +391,21 @@ func TestSizedWaiterCancelled(t *testing.T) {
 	})
 	owner := make(chan error, 1)
 	go func() { _, err := f.ReadAt(make([]byte, 10), 0); owner <- err }()
-	<-entered // the owner holds the pinning lock, in its metadata request
-	ctx, cancel := context.WithCancel(context.Background())
+	within(t, entered, "the owner's metadata request") // it holds the pinning lock
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &doneWatch{Context: base, asked: make(chan struct{})}
 	waiter := make(chan error, 1)
 	go func() { _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 500); waiter <- err }()
-	<-served
+	within(t, ctx.asked, "the waiter's wait for the lock")
 	cancel()
-	select {
-	case err := <-waiter:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancelled waiter: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("a cancelled read kept waiting for another's metadata request")
+	if err := within(t, waiter, "the cancelled waiter's return"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter: %v", err)
+	}
+	if n := gets.Load(); n != 1 {
+		t.Fatalf("%d requests; the waiter sent one while unpinned", n)
 	}
 	close(release)
-	if err := <-owner; err != nil || f.Identity() != "a" {
+	if err := within(t, owner, "the owner's return"); err != nil || f.Identity() != "a" {
 		t.Fatalf("owner: %v, Identity %q", err, f.Identity())
 	}
 }
