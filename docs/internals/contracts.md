@@ -8,6 +8,10 @@ this document wins. Algorithm details are in [`algorithms.md`](algorithms.md).
 
 ## 0. Load-bearing invariants
 
+The language-neutral statement of I1–I12 is owned by
+[go/docs/internals/contracts.md](../../go/docs/internals/contracts.md#the-invariants-i1i12);
+this section is the Java implementation's reading of them.
+
 Each row is a named invariant the whole system upholds. They are stated here on
 their own terms — every downstream contract in this document exists to keep one
 of them true.

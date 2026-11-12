@@ -3,7 +3,7 @@
 What the Go tool promises, by responsibility: what a dataset guarantees to its readers, what each producer
 means by its rows, and how a run executes and recovers. Each rule names its mechanism and the test that holds
 it ([testing.md](testing.md)). Provider-specific rules (S3's `(lo, hi]` ranges, safe pivots, the key
-limit) live with the provider ([providers.md](providers.md)); the correspondence with the language-neutral I1–I12 is at the end.
+limit) live with the provider ([providers.md](providers.md)); the invariants I1–I12 they keep true are [at the end](#the-invariants-i1i12).
 
 ## Dataset guarantees (readers rely on these)
 
@@ -42,11 +42,23 @@ limit) live with the provider ([providers.md](providers.md)); the correspondence
 | **A frozen identity.** A resume refuses changed schema, writer recipe, part size, key cap or source identity (`*journal.MismatchError`) and a journal of a version it does not read (`*journal.VersionError`: it reads version 9 only, whose records carry SHA-256, and refuses 7, 8 and later versions before recovery changes anything). The metadata readers (`swath show`, `--seed-from`) read a manifest whose `extensions.swath.version` is 1, within `dataset.ManifestLimits`, and refuse any other version or none; `Managed` recognizes any manifest of swath's. | `journal.Check`, a pure function; `journal.MinVersion`..`journal.Version`. | `TestCheck`, `TestResumeChecksIdentity`, `TestDurableVersions`, `TestInteriorCorruptionFailsClosed`, `TestManifestShape` |
 | **Shutdown order.** On cancellation the drainer stops, wakes all waiters, waits for the workers, then the router closes and waits for its encoders; then the durable spill's K callback is detached and its flusher drained and joined, its ledger closed (its directory removed only after a commit's manifest); an interrupted run (a signal, `--max-duration`, `--stall-timeout`) gets 15 s, then the process exits with its code, at most 5 s later whatever blocks (diagnostics to stderr are bounded and dropped). | `order.Run`, `listing` (`closeCache`), `cmd/swath`. | cancellation tests, `TestDurableShutdownOrder` |
 
-## Correspondence with I1–I12
+## The invariants I1–I12
 
-The [root contracts](../../../docs/internals/contracts.md) define the language-neutral invariants:
-I1 commit before emit; I2 one row per entry (no gap, no overlap); I3 the boundary belongs to the left
-(`(a, b]`, [range-engine.md](range-engine.md)); I4 a split is atomic with one owner (owner-side splits,
-never journaled); I5 and I6 durable-prefix recovery; I7 no wait on child work; I8 shutdown order; I9 no
-infinite loop; I10 unsigned byte order; I11 bounded memory; I12 safe pivots. Go's dataset commit is
-`manifest.json`. Java dataset migration rules belong in [upgrade.md](../upgrade.md).
+This table owns the load-bearing invariants. Every rule above exists to keep one of them true; a change that
+weakens one needs an adversarial test ([testing.md](testing.md)). The numbering is stable, so tests and
+comments cite it.
+
+| # | Invariant | Where it holds |
+|---|---|---|
+| I1 | **Commit before emit.** Nothing is visible downstream before the record that makes it recoverable is durable: a part is renamed into `data/` only after its journal record is fsynced, and the manifest only after every part. | [Commit before emit](#execution-and-recovery), [durability.md](durability.md) |
+| I2 | **Keyspace partition.** The ranges of a run are pairwise disjoint and cover the scope: every key is listed by exactly one range, none outside it. | [One row per listed entry](#producer-semantics-what-a-row-means), [range-engine.md](range-engine.md) |
+| I3 | **The boundary belongs to the left.** A range is `(a, b]`: it emits keys `k <= b`, and its right neighbour starts after `b`. | [range-engine.md](range-engine.md) |
+| I4 | **A split is atomic, with one owner.** A range is split only by the worker that owns it, at a page boundary, against the cursor it has; splits are never journaled. | [range-engine.md](range-engine.md) |
+| I5 | **Durable-prefix recovery.** A resume lists after the last recorded part's max key, never emitting a published key again and never skipping one. | [Durable-prefix recovery](#execution-and-recovery) |
+| I6 | **Durability is publication.** A part's rows are durable exactly when the part is published (fsynced, renamed and journaled); a dataset is committed exactly when its manifest exists. | [The manifest is the commit](#dataset-guarantees-readers-rely-on-these) |
+| I7 | **No wait on child work.** A worker never holds its slot while waiting for work it handed on, so the scheduler cannot deadlock on itself. | [ordering.md](ordering.md), [clients.md](clients.md) |
+| I8 | **Shutdown order.** Consumers stop and wake their waiters before producers are joined; the process exit is bounded. | [Shutdown order](#execution-and-recovery) |
+| I9 | **No infinite loop.** A page that does not advance the listing (out of order, truncated without a continuation, the same markers again) is a protocol error (`source.ErrProtocol`, cause `protocol`), never a retry loop. | [clients.md](clients.md), the provider pages |
+| I10 | **Byte-exact keys.** Keys are bytes in unsigned order end to end: compare, split, journal and Parquet. | [Keys are bytes](#dataset-guarantees-readers-rely-on-these) |
+| I11 | **Bounded memory.** Active row, page and writer buffers are functions of the configured budgets, not of the object count; per-part metadata grows with the number of parts. | [ordering.md](ordering.md) |
+| I12 | **Safe split pivots.** A synthesized pivot lies strictly between its bounds and introduces no code point a store may refuse in a start bound (controls, noncharacters, `%`); which real keys may be sent as a bound is the provider's policy. | [range-engine.md](range-engine.md), [providers.md](providers.md) |
