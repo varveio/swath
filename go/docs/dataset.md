@@ -49,7 +49,8 @@ The borrowed batch lifetime, null semantics and errors are defined by the [reade
 `reader.Page` keeps the listing's row positions for common-prefix counts: turning counts on adds no
 storage reads. A count is nil when a boundary is unknown, the cursor starts inside the prefix, or a
 contributing part's row count has not been checked. Budgeted byte sums discover size pages in listing
-order, stop discovering later parts of an unaffordable prefix, and read only the accepted rows' sizes;
+order, stop discovering later parts of an unaffordable prefix (within one part, the size-column page indexes of every row group
+the prefix covers may still be loaded before it is rejected; no later part is opened), and read only the accepted rows' sizes;
 shared pages and dictionaries are charged once. An uncomputed sum is nil. These value-only sums check
 sizes, but do not certify unread keys; row errors name the dataset ordinal. See the
 [reader API](../reader/README.md) for projections, budgets and exactness.

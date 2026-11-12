@@ -109,7 +109,7 @@ func (o AggregateOptions) budget() int64 {
 //
 // One plan of every prefix's keys (seekparquet.Dataset.Plan without
 // columns) locates the rows of each, decoding the key pages at their ends
-// in one request; the count of a prefix is the count of its rows
+// in one plan (one Plan call); the count of a prefix is the count of its rows
 // (seekparquet.Dataset.PlanRows, which reads nothing): exact when every
 // part holding them has been checked by an earlier read, else nil, so a
 // count never relies on a manifest row count alone and never opens a part
@@ -124,10 +124,12 @@ func (o AggregateOptions) budget() int64 {
 // a row several prefixes share read once. Under SumsWithinBudget the
 // prefixes are taken in ascending key order, each summed when the
 // compressed size pages and dictionaries of it and those already selected
-// (seekparquet.Plan.SelectRows, ProjectedBytes), each shared extent
-// counted once, fit the budget: a prefix inside one already selected adds
+// (seekparquet.Plan.ProjectedBytes of the plan of their rows), each shared
+// extent counted once, fit the budget: a prefix inside one already selected adds
 // nothing, and one whose bytes cannot be proven (a size chunk without an
-// OffsetIndex) is not summed. Every summed size is checked as Stream checks
+// OffsetIndex) is not summed. Within one part, the size-column page indexes
+// of every row group a candidate covers may be loaded before it is
+// rejected; no later part is opened. Every summed size is checked as Stream checks
 // it (a filesystem entry may lack one, which leaves its prefixes' sums nil),
 // failing with a SemanticError of KindRow that names the column and the
 // row's dataset ordinal, not its key, which a sum does not read.
@@ -365,21 +367,21 @@ func (d *Dataset) budgetSums(ctx context.Context, targets []target, candidates [
 				to = p.RowSpans()[0].End
 			}
 			trial = append(trial, seekparquet.RowSpan{Start: from, End: to})
+			// PlanRows may load the size-column page indexes of every row
+			// group the candidate covers in this part before it is rejected;
+			// a later part is not opened once it is.
 			var planned ReadStats
 			p, err := d.sp.PlanRows(ctx, trial, []string{"size"}, &planned)
 			addStats(st, planned)
 			if err != nil {
 				return nil, nil, err
 			}
-			// Keep this candidate universe immutable. Selecting a subset
-			// must not remove rows available to a subsequent candidate.
+			// Price the plan itself: a SelectRows plan prices inexactly
+			// once page locations outgrow Limits.OffsetIndexMemory, which
+			// would turn every budgeted sum nil on a long-lived Dataset.
 			universe = p
-			priced, err := universe.SelectRows(trial)
-			if err != nil {
-				return nil, nil, err
-			}
 			var exact bool
-			cost, exact = priced.ProjectedBytes()
+			cost, exact = p.ProjectedBytes()
 			if !exact || cost > budget {
 				fits = false
 				break

@@ -344,7 +344,9 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
   read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
   smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
   cannot be proven, is not summed under a budget. Candidates are planned lazily, in listing order and
-  part by part; once a candidate's cost cannot fit, its later parts' size pages are not discovered.
+  part by part; once a candidate's cost cannot fit, its later parts' size pages are not discovered. Within one
+  part, the size-column page indexes of every row group the candidate covers may be loaded before the
+  candidate is rejected; no later part is opened.
   `Bytes` is nil for a prefix not summed, for a sum over a filesystem entry without a size, and for a sum that
   overflows an int64; a filesystem's counts and sums are the local totals of `Totals`. `Count` is reported only
   with `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
@@ -354,8 +356,9 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
   entry's `Cursor()` only when that extra entry existed, so the last page has `Next` nil and is never followed by
   an empty one. The listing's row spans supply counts through metadata-only `PlanRows`, with identical
   opens and reads whether counts are on or off. Unknown boundaries and a cursor made up inside a prefix
-  leave that prefix's totals nil; Page never seeks keys to complete a count. Budgeted sums use `SelectRows`
-  to charge each shared size page and dictionary once, then `ScanValues` to read the accepted union.
+  leave that prefix's totals nil; Page never seeks keys to complete a count. Budgeted sums price each candidate
+  with `ProjectedBytes` of the plan of the candidate and the prefixes already selected, charging each shared size page and
+  dictionary once, then use `SelectRows` and `ScanValues` to read only the accepted union.
   Only returned prefixes are aggregated (a prefix carrying its exact-key object included; an entry beyond
   the limit is never aggregated): each prefix entry's
   `Aggregate` is its `PrefixAggregate`, whose fields are nil as `Aggregates` leaves them (not requested, not

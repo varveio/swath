@@ -122,12 +122,10 @@ func writeScanFixture(t testing.TB, repeat bool) (string, []string) {
 }
 
 // openScanReader opens dir through a faultSource, as the store's reader
-// (whose Scan uses only the dataset).
-func openScanReader(t testing.TB, dir string) (*seekReader, *faultSource) {
+// (whose Scan uses only the dataset), under read policy rp.
+func openScanReader(t testing.TB, dir string, rp seekparquet.ReadPolicy) (*seekReader, *faultSource) {
 	src := &faultSource{dir: dir}
-	// A small tail window and no speculation keep the fixture's pages out of
-	// Verify's reads, so a scan reads storage and an armed failure reaches it.
-	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.OpenOptions{Read: seekparquet.ReadPolicy{MetadataPrefetchBytes: 4 << 10, DisableSpeculation: true}})
+	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.OpenOptions{Read: rp})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +135,11 @@ func openScanReader(t testing.TB, dir string) (*seekReader, *faultSource) {
 	}
 	return &seekReader{d: d}, src
 }
+
+// failureReadPolicy keeps the fixture's pages out of Verify's reads (a small
+// tail window, no speculation), so a scan reads storage and an armed
+// failure reaches it.
+var failureReadPolicy = seekparquet.ReadPolicy{MetadataPrefetchBytes: 4 << 10, DisableSpeculation: true}
 
 // runSink counts a scan's runs and Missing calls, and runs hook at the
 // start of each run.
@@ -233,7 +236,7 @@ func TestSeekScanPacksAsOwnedRows(t *testing.T) {
 	for _, repeat := range []bool{false, true} {
 		t.Run(fmt.Sprintf("repeat=%v", repeat), func(t *testing.T) {
 			dir, keys := writeScanFixture(t, repeat)
-			r, _ := openScanReader(t, dir)
+			r, _ := openScanReader(t, dir, seekparquet.ReadPolicy{})
 			rnd := rand.New(rand.NewPCG(7, 11))
 			pick := func() []byte {
 				switch n := rnd.IntN(10); {
@@ -305,7 +308,7 @@ func TestSeekScanPacksAsOwnedRows(t *testing.T) {
 // discarded by packedRows).
 func TestSeekScanFailureAndCancellation(t *testing.T) {
 	dir, _ := writeScanFixture(t, false)
-	r, src := openScanReader(t, dir)
+	r, src := openScanReader(t, dir, failureReadPolicy)
 	rng := legacy.Range{Limit: 800, Columns: s3Objects.columns(Projection{Owner: true})}
 	for _, scan := range []scanFunc{ownedScan, batchScan} {
 		src.fail.Store(true)

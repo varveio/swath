@@ -25,6 +25,7 @@ import (
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/parquet-go/parquet-go"
 	"google.golang.org/api/option"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -43,28 +44,76 @@ import (
 	"github.com/varveio/swath/go/reader"
 )
 
-// The fixture: 199,500 objects in 4 parts of up to 50,000 (one row group
-// each),
-// written by swath's own part writer and published as the lister does.
-// Tenant browseTenant has 100 folders of 300 objects interleaved with 1,500
+// geometry is one fixture: tenants of 20 folders of 50 objects, except
+// tenant browse, which has 100 folders of folderObjs objects interleaved with 1,500
 // objects of its own, so a 1,000-entry page of it lists folders and
-// objects; every other tenant has 20 folders of 50 objects.
-const (
-	tenants      = 169
-	browseTenant = 50
-	partRows     = 50_000
-)
+// objects. Parts are written by swath's own part writer, cut at partRows,
+// and published as the lister does.
+type geometry struct {
+	name         string
+	tenants      int
+	browse       int // the browsed tenant
+	folderObjs   int // objects in each of the browsed tenant's 100 folders
+	partRows     int64
+	tenantFormat string
+	mid          int // a tenant inside part 1
+	parts        int
+	// groups is the row groups per part (checked by TestGeometry);
+	// smallBudget is the sum budget of the small-budget browse, which
+	// sums exactly smallSummed of the page's prefixes. Zero without it.
+	groups, smallBudget, smallSummed int
+	expect                           map[string][2]count // exact before/after counts by operation
+	once                             sync.Once
+	dir                              string
+	err                              error
+}
 
-func tenant(t int) string { return fmt.Sprintf("t-%03d/", t) }
+// smallGeo: 199,500 objects in 4 parts of up to 50,000 (one row group each,
+// about 1.4 MB each).
+var smallGeo = &geometry{name: "small", tenants: 169, browse: 50, folderObjs: 300, partRows: 50_000, tenantFormat: "t-%03d/", mid: 60, parts: 4,
+	expect: map[string][2]count{
+		"open":                    {{2, 1}, {1, 0}},
+		"point lookup":            {{5, 1}, {4, 0}},
+		"one-part scan":           {{3, 1}, {2, 0}},
+		"CheckSchema":             {{16, 4}, {12, 0}},
+		"browse page, counts on":  {{8, 1}, {5, 0}},
+		"browse page, counts off": {{8, 1}, {5, 0}},
+		"count of a prefix":       {{3, 1}, {2, 0}},
+		"count of every key":      {{0, 0}, {0, 0}},
+		"sum of a prefix":         {{4, 1}, {3, 0}},
+	}}
 
-func fixtureKeys() []string {
+// largeGeo: 1,599,500 objects in 4 parts of up to 400,000 (about 11 MB, two
+// row groups each, so the footer is past SeekParquet's 2 MiB tail read).
+// The browsed tenant straddles a part boundary and a row-group boundary
+// (TestGeometry).
+var largeGeo = &geometry{name: "large", tenants: 1399, browse: 300, folderObjs: 2000, partRows: 400_000, tenantFormat: "t-%04d/", mid: 450, parts: 4,
+	groups: 2, smallBudget: 64 << 10, smallSummed: 9,
+	expect: map[string][2]count{
+		"open":                      {{2, 1}, {1, 0}},
+		"point lookup":              {{7, 1}, {6, 0}},
+		"one-part scan":             {{5, 1}, {4, 0}},
+		"CheckSchema":               {{20, 4}, {16, 0}},
+		"browse page, counts on":    {{19, 2}, {15, 0}},
+		"browse page, counts off":   {{19, 2}, {15, 0}},
+		"count of a prefix":         {{10, 2}, {8, 0}},
+		"count of every key":        {{0, 0}, {0, 0}},
+		"sum of a prefix":           {{13, 2}, {11, 0}},
+		"browse page, small budget": {{18, 2}, {14, 0}},
+	}}
+
+func (g *geometry) browseRows() int { return 1600 - 100 + 100*g.folderObjs }
+
+func (g *geometry) tenant(t int) string { return fmt.Sprintf(g.tenantFormat, t) }
+
+func (g *geometry) keys() []string {
 	var keys []string
-	for t := range tenants {
-		p := tenant(t)
-		if t == browseTenant {
+	for t := range g.tenants {
+		p := g.tenant(t)
+		if t == g.browse {
 			for i := range 1600 {
 				if i%16 == 0 {
-					for j := range 300 {
+					for j := range g.folderObjs {
 						keys = append(keys, fmt.Sprintf("%sdir-%04d/obj-%05d", p, i, j))
 					}
 				} else {
@@ -83,48 +132,46 @@ func fixtureKeys() []string {
 	return keys
 }
 
-var (
-	fixtureOnce sync.Once
-	fixtureDir  string
-	fixtureErr  error
-)
+var geometries = []*geometry{smallGeo, largeGeo}
 
 // fixture writes the dataset once per test binary.
-func fixture(t *testing.T) string {
+func fixture(t *testing.T, g *geometry) string {
 	t.Helper()
-	fixtureOnce.Do(func() {
+	g.once.Do(func() {
 		dir, err := os.MkdirTemp("", "readbudget")
 		if err != nil {
-			fixtureErr = err
+			g.err = err
 			return
 		}
-		fixtureDir, fixtureErr = dir, write(dir)
+		g.dir, g.err = dir, write(dir, g)
 	})
-	if fixtureErr != nil {
-		t.Fatal(fixtureErr)
+	if g.err != nil {
+		t.Fatal(g.err)
 	}
-	return fixtureDir
+	return g.dir
 }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if fixtureDir != "" {
-		os.RemoveAll(fixtureDir)
+	for _, g := range geometries {
+		if g.dir != "" {
+			os.RemoveAll(g.dir)
+		}
 	}
 	os.Exit(code)
 }
 
-func write(dir string) error {
+func write(dir string, g *geometry) error {
 	ctx := context.Background()
 	if err := os.MkdirAll(filepath.Join(dir, dataset.DataDir), 0o755); err != nil {
 		return err
 	}
-	router, err := parquetout.NewRouter(parquetout.Options{Out: dir, PartSize: 1 << 30, Encoders: 2, MaxRows: partRows}, &srcs3.Schema)
+	router, err := parquetout.NewRouter(parquetout.Options{Out: dir, PartSize: 1 << 30, Encoders: 2, MaxRows: g.partRows}, &srcs3.Schema)
 	if err != nil {
 		return err
 	}
 	rng := rand.New(rand.NewPCG(42, 1))
-	keys := fixtureKeys()
+	keys := g.keys()
 	for len(keys) > 0 {
 		n := min(len(keys), 1000)
 		rows := make([]srcs3.Row, n)
@@ -350,14 +397,13 @@ func stack(o objfile.Opener, after bool) reader.Source {
 }
 
 // operation is one measured reader operation on a dataset just opened
-// (cold): run makes the requests counted.
+// (cold): run makes the requests counted. Exact request and metadata-request
+// counts, before spsource (openOnly) and after it, both on the pinned
+// SeekParquet dependency, are the geometry's expect for its name. Admission
+// concurrency is checked separately by TestAdmissionRounds.
 type operation struct {
 	name string
 	run  func(ctx context.Context, t *testing.T, d *reader.Dataset)
-	// Exact request and metadata-request counts before spsource (openOnly)
-	// and after it, both on the pinned SeekParquet dependency. Admission
-	// concurrency is checked separately by TestAdmissionRounds.
-	before, after count
 }
 
 func mustDo(t *testing.T, err error) {
@@ -367,44 +413,77 @@ func mustDo(t *testing.T, err error) {
 	}
 }
 
-func operations(t *testing.T, dir string) []operation {
+func operations(t *testing.T, dir string, g *geometry) []operation {
 	ctx := context.Background()
 	local, err := reader.OpenDir(ctx, dir, reader.Options{})
 	mustDo(t, err)
 	parts := local.Metadata().Manifest.Parts
 	mustDo(t, local.Close())
-	if len(parts) != 4 {
-		t.Fatalf("the fixture has %d parts, want 4", len(parts))
+	if len(parts) != g.parts {
+		t.Fatalf("the fixture has %d parts, want %d", len(parts), g.parts)
 	}
 	part := parts[1]
-	mid := []byte(fmt.Sprintf("%sd-10/f-0025", tenant(60))) // inside part 1
+	mid := []byte(fmt.Sprintf("%sd-10/f-0025", g.tenant(g.mid))) // inside part 1
 	if bytes.Compare(mid, part.MinKey) <= 0 || bytes.Compare(mid, part.MaxKey) >= 0 {
 		t.Fatalf("%q is not inside part 1 [%q, %q]", mid, part.MinKey, part.MaxKey)
 	}
-	browse := []byte(tenant(browseTenant))
-	browsePage := func(counts bool) func(context.Context, *testing.T, *reader.Dataset) {
+	browse := []byte(g.tenant(g.browse))
+	// browsePage lists the first 1,000 entries of the browsed tenant and
+	// returns how many of its prefixes were counted and summed. Every
+	// prefix is counted exactly when counts are on.
+	browsePage := func(ctx context.Context, t *testing.T, d *reader.Dataset, counts bool, budget int64) (prefixes, counted, summed int) {
+		page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{
+			Prefix: browse, Delimiter: '/', Limit: 1000, OmitFields: reader.FieldETag | reader.FieldStorageClass},
+			Aggregates: reader.AggregateOptions{Counts: counts, Sums: reader.SumsWithinBudget, SumBudgetBytes: budget}})
+		mustDo(t, err)
+		if len(page.Entries) != 1000 || page.Next == nil {
+			t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
+		}
+		for _, e := range page.Entries {
+			if e.CommonPrefix == nil {
+				continue
+			}
+			prefixes++
+			if e.Aggregate == nil {
+				t.Fatalf("prefix %q has no aggregate", e.CommonPrefix)
+			}
+			if e.Aggregate.Count != nil {
+				counted++
+				if *e.Aggregate.Count != int64(g.folderObjs) {
+					t.Fatalf("prefix %q counted %d, want %d", e.CommonPrefix, *e.Aggregate.Count, g.folderObjs)
+				}
+			}
+			if e.Aggregate.Bytes != nil {
+				summed++
+			}
+		}
+		if !counts && counted != 0 {
+			t.Fatalf("counts off, yet %d prefixes counted", counted)
+		}
+		if counts && counted != prefixes {
+			t.Fatalf("counts on: %d of %d prefixes counted", counted, prefixes)
+		}
+		return prefixes, counted, summed
+	}
+	browseOp := func(counts bool) func(context.Context, *testing.T, *reader.Dataset) {
 		return func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{
-				Prefix: browse, Delimiter: '/', Limit: 1000, OmitFields: reader.FieldETag | reader.FieldStorageClass},
-				Aggregates: reader.AggregateOptions{Counts: counts, Sums: reader.SumsWithinBudget}})
-			mustDo(t, err)
-			if len(page.Entries) != 1000 || page.Next == nil {
-				t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
+			prefixes, _, summed := browsePage(ctx, t, d, counts, 0)
+			if prefixes == 0 || summed != prefixes {
+				t.Fatalf("%d of %d listed prefixes summed under the default budget", summed, prefixes)
 			}
 		}
 	}
-	return []operation{
-		{name: "open", run: nil,
-			before: count{2, 1}, after: count{1, 0}},
-		{name: "cold point lookup, 2 columns", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+	ops := []operation{
+		{name: "open"},
+		{name: "point lookup", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			rows, err := d.SeekParquet().Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.KeySpan(mid)},
 				Limit: 1, Columns: []string{"size", "last_modified"}}, nil)
 			mustDo(t, err)
 			if len(rows) != 1 {
 				t.Fatalf("%d rows", len(rows))
 			}
-		}, before: count{5, 1}, after: count{4, 0}},
-		{name: "one-part scan, 1 column", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+		}},
+		{name: "one-part scan", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			n := 0
 			mustDo(t, d.SeekParquet().Scan(ctx, seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{
 				Start: part.MinKey, End: append(bytes.Clone(part.MaxKey), 0)}}, Columns: []string{"size"}}, nil,
@@ -412,36 +491,43 @@ func operations(t *testing.T, dir string) []operation {
 			if int64(n) != part.Rows {
 				t.Fatalf("scanned %d rows of %d", n, part.Rows)
 			}
-		}, before: count{3, 1}, after: count{2, 0}},
-		{name: "admission (CheckSchema), 4 parts", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+		}},
+		{name: "CheckSchema", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			mustDo(t, d.CheckSchema(ctx))
-		}, before: count{16, 4}, after: count{12, 0}},
-		{name: "browse page: 1,000 entries, counts and budgeted sums", run: browsePage(true),
-			before: count{8, 1}, after: count{5, 0}},
-		{name: "browse page: 1,000 entries, budgeted sums, counts off", run: browsePage(false),
-			before: count{8, 1}, after: count{5, 0}},
+		}},
+		{name: "browse page, counts on", run: browseOp(true)},
+		{name: "browse page, counts off", run: browseOp(false)},
 		{name: "count of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true})
 			mustDo(t, err)
-			if got[0].Count == nil || *got[0].Count != 1600-100+100*300 {
+			if got[0].Count == nil || *got[0].Count != int64(g.browseRows()) {
 				t.Fatalf("count %v", got[0].Count)
 			}
-		}, before: count{3, 1}, after: count{2, 0}},
-		{name: "count of every key, after CheckSchema", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+		}},
+		{name: "count of every key", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{nil}, reader.AggregateOptions{Counts: true})
 			mustDo(t, err)
-			if got[0].Count == nil || *got[0].Count != int64(len(fixtureKeys())) {
+			if got[0].Count == nil || *got[0].Count != int64(len(g.keys())) {
 				t.Fatalf("count %v", got[0].Count)
 			}
-		}, before: count{0, 0}, after: count{0, 0}},
+		}},
 		{name: "sum of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true, Sums: reader.SumsAlways})
 			mustDo(t, err)
 			if got[0].Bytes == nil {
 				t.Fatal("no sum")
 			}
-		}, before: count{4, 1}, after: count{3, 0}},
+		}},
 	}
+	if g.smallBudget > 0 {
+		ops = append(ops, operation{name: "browse page, small budget", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			prefixes, _, summed := browsePage(ctx, t, d, true, int64(g.smallBudget))
+			if summed != g.smallSummed || summed == prefixes || summed == 0 {
+				t.Fatalf("%d of %d listed prefixes summed under a %d-byte budget, want exactly %d and not all", summed, prefixes, g.smallBudget, g.smallSummed)
+			}
+		}})
+	}
+	return ops
 }
 
 // TestRequestBudgets measures each operation cold, on each store, with the
@@ -451,8 +537,23 @@ func TestRequestBudgets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes a 200,000-object fixture")
 	}
-	dir := fixture(t)
-	ops := operations(t, dir)
+	measure(t, smallGeo)
+}
+
+// TestRequestBudgetsLarge is TestRequestBudgets on a geometry that does not
+// flatter the numbers: 1.6 million objects, parts of 11 MB with two row
+// groups (beyond SeekParquet's tail read), and a browsed tenant across a
+// part boundary and a row-group boundary.
+func TestRequestBudgetsLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes a 1.6-million-object fixture")
+	}
+	measure(t, largeGeo)
+}
+
+func measure(t *testing.T, g *geometry) {
+	dir := fixture(t, g)
+	ops := operations(t, dir, g)
 	var table strings.Builder
 	fmt.Fprintf(&table, "| operation | store | before: requests | after: requests |\n|---|---|---|---|\n")
 	for _, s := range stores(t, dir) {
@@ -464,7 +565,7 @@ func TestRequestBudgets(t *testing.T) {
 				d, err := reader.Open(ctx, stack(s.opener, after), reader.Options{})
 				mustDo(t, err)
 				if op.run != nil {
-					if strings.Contains(op.name, "after CheckSchema") {
+					if op.name == "count of every key" {
 						mustDo(t, d.CheckSchema(ctx))
 					}
 					s.rec.take()
@@ -474,10 +575,14 @@ func TestRequestBudgets(t *testing.T) {
 				mustDo(t, d.Close())
 			}
 			fmt.Fprintf(&table, "| %s | %s | %s | %s |\n", op.name, s.name, got[0], got[1])
-			for i, want := range []count{op.before, op.after} {
-				g := got[i]
-				if g != want {
-					t.Errorf("%s, %s, %s: %s, want exactly %s", s.name, op.name, []string{"before", "after"}[i], g, want)
+			want, ok := g.expect[op.name]
+			if !ok {
+				t.Errorf("%s geometry: no expected counts for %q", g.name, op.name)
+				continue
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("%s geometry, %s, %s: %s, want exactly %s", g.name, s.name, op.name+[]string{" before", " after"}[i], got[i], want[i])
 				}
 			}
 		}
@@ -493,7 +598,7 @@ func TestAdmissionRounds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes a 200,000-object fixture")
 	}
-	for _, s := range stores(t, fixture(t)) {
+	for _, s := range stores(t, fixture(t, smallGeo)) {
 		for _, after := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/after=%t", s.name, after), func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -575,5 +680,77 @@ func TestAdmissionRounds(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestGeometry checks what each fixture is meant to be: the parts and row
+// groups it has, and that the browsed tenant straddles a part boundary and
+// a row-group boundary (the large one, where each part holds several groups).
+func TestGeometry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes the fixtures")
+	}
+	for _, g := range geometries {
+		t.Run(g.name, func(t *testing.T) {
+			dir := fixture(t, g)
+			local, err := reader.OpenDir(context.Background(), dir, reader.Options{})
+			mustDo(t, err)
+			parts := local.Metadata().Manifest.Parts
+			mustDo(t, local.Close())
+			keys := g.keys()
+			first := slices.IndexFunc(keys, func(k string) bool { return strings.HasPrefix(k, g.tenant(g.browse)) })
+			last := first + g.browseRows() - 1
+			if !strings.HasPrefix(keys[last], g.tenant(g.browse)) || strings.HasPrefix(keys[last+1], g.tenant(g.browse)) {
+				t.Fatalf("the browsed tenant is not rows %d..%d", first, last)
+			}
+			var starts []int64 // row-group starts inside a part
+			var ordinal int64
+			for i, part := range parts {
+				f, err := os.Open(filepath.Join(dir, part.Path))
+				mustDo(t, err)
+				info, err := f.Stat()
+				mustDo(t, err)
+				pf, err := parquet.OpenFile(f, info.Size())
+				mustDo(t, err)
+				groups := pf.RowGroups()
+				t.Logf("part %d: %d rows, %d bytes, %d row groups", i, part.Rows, info.Size(), len(groups))
+				if g.groups > 0 && len(groups) != g.groups && i < len(parts)-1 {
+					t.Errorf("part %d has %d row groups, want %d", i, len(groups), g.groups)
+				}
+				if g.groups > 0 && info.Size() < 2<<20+1 {
+					t.Errorf("part %d is %d bytes, not beyond a 2 MiB tail read", i, info.Size())
+				}
+				for gi, rg := range groups {
+					if gi > 0 { // inside a part: a part start is no row-group boundary
+						starts = append(starts, ordinal)
+					}
+					ordinal += rg.NumRows()
+				}
+				f.Close()
+			}
+			if ordinal != int64(len(keys)) {
+				t.Fatalf("parts hold %d rows, the fixture has %d", ordinal, len(keys))
+			}
+			if g.groups == 0 {
+				return
+			}
+			var partBoundary, groupBoundary bool
+			var ordinalOfPart int64
+			for _, part := range parts {
+				if ordinalOfPart > int64(first) && ordinalOfPart <= int64(last) {
+					partBoundary = true
+				}
+				ordinalOfPart += part.Rows
+			}
+			for _, start := range starts {
+				if start > int64(first) && start <= int64(last) {
+					groupBoundary = true
+				}
+			}
+			t.Logf("browsed tenant: rows %d..%d; part boundaries at multiples of %d; row-group starts inside parts: %v", first, last, g.partRows, starts)
+			if !partBoundary || !groupBoundary {
+				t.Errorf("the browsed tenant (rows %d..%d) straddles a part boundary %t, a row-group boundary %t", first, last, partBoundary, groupBoundary)
+			}
+		})
 	}
 }
