@@ -58,7 +58,9 @@ the container. swath reads no object, so it needs no read permission on objects.
 Exit 1, cause `not_found`, not resumable. The bucket (S3 `NoSuchBucket`, GCS `notFound`) or the Azure container
 (`ContainerNotFound`) named in SOURCE does not exist; the message keeps the service's status and code. Check the
 name, and for S3 the endpoint. A prefix with no object under it is not this failure: it lists nothing and
-commits an empty dataset.
+commits an empty dataset. Only Azure's `ContainerNotFound` is `not_found`: an anonymous caller (`--anonymous`)
+may get a generic `ResourceNotFound` instead, which carries no cause. A missing output bucket
+(`-o s3://…`) carries no cause either.
 
 ## The bucket is in another region
 
