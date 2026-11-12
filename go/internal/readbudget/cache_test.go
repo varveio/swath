@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source/localfs"
@@ -106,31 +108,37 @@ func TestCallerBulkCacheBypass(t *testing.T) {
 		name, dir string
 		bulk      func(context.Context, *reader.Dataset) error
 	}
+	scan := func(ctx context.Context, d *reader.Dataset) error {
+		spec, _ := reader.Schema(d.Metadata().SchemaID)
+		return d.SeekParquet().Scan(ctx, seekparquet.Query{Columns: spec.ColumnNames()}, nil, func(*seekparquet.Batch) error { return nil })
+	}
+	reductions := []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}, {Op: seekparquet.Max, Column: "last_modified"}}
 	cases := []scanCase{
-		{"StreamLocal", localCacheFixture(t), func(ctx context.Context, d *reader.Dataset) error {
-			return d.StreamLocal(ctx, func(reader.LocalEntry) error { return nil })
-		}},
-		{"Stream", dir, func(ctx context.Context, d *reader.Dataset) error {
-			return d.Stream(ctx, func(reader.Object) error { return nil })
-		}},
-		{"Totals", dir, func(ctx context.Context, d *reader.Dataset) error {
-			_, err := d.Totals(ctx, []string{""})
+		{"ScanLocal", localCacheFixture(t), scan},
+		{"Scan", dir, scan},
+		{"Aggregate", dir, func(ctx context.Context, d *reader.Dataset) error {
+			_, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}}, reductions,
+				seekparquet.AggregateOptions{ValueBudgetBytes: -1, CheckKeys: true}, nil)
 			return err
 		}},
-		{"TotalsExact", dir, func(ctx context.Context, d *reader.Dataset) error {
-			_, err := d.Totals(ctx, []string{"", "t-000/d-00/f-0000"})
+		{"AggregateExact", dir, func(ctx context.Context, d *reader.Dataset) error {
+			_, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}, {Span: seekparquet.KeySpan([]byte("t-000/d-00/f-0000"))}}, reductions,
+				seekparquet.AggregateOptions{ValueBudgetBytes: -1, CheckKeys: true}, nil)
+			if err != nil {
+				return err
+			}
+			_, err = d.SeekParquet().Get(ctx, []byte("t-000/d-00/f-0000"), nil, "size", "last_modified")
 			return err
 		}},
 	}
 	for _, workers := range []int{1, 4} {
-		cases = append(cases,
-			scanCase{fmt.Sprintf("Scan/%d", workers), dir, func(ctx context.Context, d *reader.Dataset) error {
-				return d.Scan(ctx, reader.ScanRequest{Workers: workers}, func([]reader.Object) error { return nil })
-			}},
-			scanCase{fmt.Sprintf("ScanBatches/%d", workers), dir, func(ctx context.Context, d *reader.Dataset) error {
-				return d.ScanBatches(ctx, reader.BatchScanRequest{Workers: workers}, func(*reader.ObjectBatch) error { return nil })
-			}},
-		)
+		cases = append(cases, scanCase{fmt.Sprintf("ScanParallel/%d", workers), dir, func(ctx context.Context, d *reader.Dataset) error {
+			plan, err := d.SeekParquet().Plan(ctx, []seekparquet.Selection{{}}, []string{"size", "last_modified", "etag", "storage_class"}, nil)
+			if err != nil {
+				return err
+			}
+			return plan.ScanParallel(ctx, workers, nil, func(*seekparquet.Batch) error { return nil })
+		}})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +153,7 @@ func TestCallerBulkCacheBypass(t *testing.T) {
 			ctx := objfile.WithObserver(t.Context(), obs)
 			open := func() *reader.Dataset {
 				t.Helper()
-				d, err := reader.Open(ctx, spsource.New(o), reader.Options{})
+				d, err := reader.Open(ctx, spsource.New(o), seekparquet.OpenOptions{})
 				mustDo(t, err)
 				t.Cleanup(func() { _ = d.Close() })
 				src.reads.Store(0) // exclude the manifest read
@@ -206,13 +214,15 @@ func TestBrowseCacheRevisit(t *testing.T) {
 	obs := &cacheObserver{}
 	ctx := objfile.WithObserver(t.Context(), obs)
 	for _, warm := range []bool{false, true} {
-		d, err := reader.Open(ctx, spsource.New(o), reader.Options{})
+		d, err := reader.Open(ctx, spsource.New(o), seekparquet.OpenOptions{})
 		mustDo(t, err)
 		t.Cleanup(func() { _ = d.Close() })
 		src.reads.Store(0)
 		obs.hits.Store(0)
-		page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{Prefix: []byte("t-000/"), Delimiter: '/', Limit: 30},
-			Aggregates: reader.AggregateOptions{Counts: true, Sums: reader.SumsAlways}})
+		page, err := d.SeekParquet().Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{Prefix: []byte("t-000/"), Delimiter: '/', Limit: 30,
+			Columns: []string{"size", "last_modified", "etag", "storage_class"}},
+			Reductions: []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}},
+			Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: 4 << 20}}, nil)
 		mustDo(t, err)
 		if len(page.Entries) != 20 {
 			t.Fatalf("browse returned %d prefixes, want 20", len(page.Entries))

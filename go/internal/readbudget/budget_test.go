@@ -388,7 +388,7 @@ func (s openOnly) Open(ctx context.Context, name string) (seekparquet.SourceFile
 
 // stack is the Source stack of a consumer: Pin over Limit(64), as varve
 // builds it, with spsource or without.
-func stack(o objfile.Opener, after bool) reader.Source {
+func stack(o objfile.Opener, after bool) seekparquet.Source {
 	p := objfile.Pin(objfile.Limit(o, 64), "budget")
 	if after {
 		return spsource.New(p)
@@ -415,7 +415,7 @@ func mustDo(t *testing.T, err error) {
 
 func operations(t *testing.T, dir string, g *geometry) []operation {
 	ctx := context.Background()
-	local, err := reader.OpenDir(ctx, dir, reader.Options{})
+	local, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
 	mustDo(t, err)
 	parts := local.Metadata().Manifest.Parts
 	mustDo(t, local.Close())
@@ -432,9 +432,13 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 	// returns how many of its prefixes were counted and summed. Every
 	// prefix is counted exactly when counts are on.
 	browsePage := func(ctx context.Context, t *testing.T, d *reader.Dataset, counts bool, budget int64) (prefixes, counted, summed int) {
-		page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{
-			Prefix: browse, Delimiter: '/', Limit: 1000, OmitFields: reader.FieldETag | reader.FieldStorageClass},
-			Aggregates: reader.AggregateOptions{Counts: counts, Sums: reader.SumsWithinBudget, SumBudgetBytes: budget}})
+		reductions := []seekparquet.Reduction{{Op: seekparquet.Sum, Column: "size"}}
+		if counts {
+			reductions = append(reductions, seekparquet.Reduction{Op: seekparquet.CountRows})
+		}
+		page, err := d.SeekParquet().Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
+			Prefix: browse, Delimiter: '/', Limit: 1000, Columns: []string{"size", "last_modified"}},
+			Reductions: reductions, Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: budget}}, nil)
 		mustDo(t, err)
 		if len(page.Entries) != 1000 || page.Next == nil {
 			t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
@@ -444,16 +448,16 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 				continue
 			}
 			prefixes++
-			if e.Aggregate == nil {
-				t.Fatalf("prefix %q has no aggregate", e.CommonPrefix)
+			if len(e.Aggregates) != len(reductions) {
+				t.Fatalf("prefix %q has no aggregates", e.CommonPrefix)
 			}
-			if e.Aggregate.Count != nil {
+			if counts && e.Aggregates[1].Status == seekparquet.AggregateExact {
 				counted++
-				if *e.Aggregate.Count != int64(g.folderObjs) {
-					t.Fatalf("prefix %q counted %d, want %d", e.CommonPrefix, *e.Aggregate.Count, g.folderObjs)
+				if n := e.Aggregates[1].Value.Int64(); n != int64(g.folderObjs) {
+					t.Fatalf("prefix %q counted %d, want %d", e.CommonPrefix, n, g.folderObjs)
 				}
 			}
-			if e.Aggregate.Bytes != nil {
+			if e.Aggregates[0].Status == seekparquet.AggregateExact {
 				summed++
 			}
 		}
@@ -467,7 +471,7 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 	}
 	browseOp := func(counts bool) func(context.Context, *testing.T, *reader.Dataset) {
 		return func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			prefixes, _, summed := browsePage(ctx, t, d, counts, 0)
+			prefixes, _, summed := browsePage(ctx, t, d, counts, 4<<20)
 			if prefixes == 0 || summed != prefixes {
 				t.Fatalf("%d of %d listed prefixes summed under the default budget", summed, prefixes)
 			}
@@ -485,9 +489,11 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 		}},
 		{name: "one-part scan", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			n := 0
-			mustDo(t, d.SeekParquet().Scan(objfile.WithCacheMode(ctx, objfile.CacheBypass), seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{
-				Start: part.MinKey, End: append(bytes.Clone(part.MaxKey), 0)}}, Columns: []string{"size"}}, nil,
-				func(b *seekparquet.Batch) error { n += b.Len(); return nil }))
+			bulk := objfile.WithCacheMode(ctx, objfile.CacheBypass)
+			plan, err := d.SeekParquet().Plan(bulk, []seekparquet.Selection{{Span: seekparquet.Span{
+				Start: part.MinKey, End: append(bytes.Clone(part.MaxKey), 0)}}}, []string{"size"}, nil)
+			mustDo(t, err)
+			mustDo(t, plan.Scan(bulk, nil, func(b *seekparquet.Batch) error { n += b.Len(); return nil }))
 			if int64(n) != part.Rows {
 				t.Fatalf("scanned %d rows of %d", n, part.Rows)
 			}
@@ -498,23 +504,23 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 		{name: "browse page, counts on", run: browseOp(true)},
 		{name: "browse page, counts off", run: browseOp(false)},
 		{name: "count of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true})
+			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan(browse)}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}}, seekparquet.AggregateOptions{}, nil)
 			mustDo(t, err)
-			if got[0].Count == nil || *got[0].Count != int64(g.browseRows()) {
-				t.Fatalf("count %v", got[0].Count)
+			if got[0][0].Status != seekparquet.AggregateExact || got[0][0].Value.Int64() != int64(g.browseRows()) {
+				t.Fatalf("count %+v", got[0][0])
 			}
 		}},
 		{name: "count of every key", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.Aggregates(ctx, [][]byte{nil}, reader.AggregateOptions{Counts: true})
+			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}}, seekparquet.AggregateOptions{}, nil)
 			mustDo(t, err)
-			if got[0].Count == nil || *got[0].Count != int64(len(g.keys())) {
-				t.Fatalf("count %v", got[0].Count)
+			if got[0][0].Status != seekparquet.AggregateExact || got[0][0].Value.Int64() != int64(len(g.keys())) {
+				t.Fatalf("count %+v", got[0][0])
 			}
 		}},
 		{name: "sum of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true, Sums: reader.SumsAlways})
+			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan(browse)}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}}, seekparquet.AggregateOptions{ValueBudgetBytes: -1}, nil)
 			mustDo(t, err)
-			if got[0].Bytes == nil {
+			if got[0][1].Status != seekparquet.AggregateExact {
 				t.Fatal("no sum")
 			}
 		}},
@@ -565,7 +571,7 @@ func measure(t *testing.T, g *geometry) {
 			for i, after := range []bool{false, true} {
 				ctx := context.Background()
 				s.rec.take()
-				d, err := reader.Open(ctx, stack(s.opener, after), reader.Options{})
+				d, err := reader.Open(ctx, stack(s.opener, after), seekparquet.OpenOptions{})
 				mustDo(t, err)
 				if op.run != nil {
 					if op.name == "count of every key" {
@@ -643,7 +649,7 @@ func TestAdmissionRounds(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/after=%t", s.name, after), func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 				defer cancel()
-				d, err := reader.Open(ctx, stack(s.opener, after), reader.Options{})
+				d, err := reader.Open(ctx, stack(s.opener, after), seekparquet.OpenOptions{})
 				mustDo(t, err)
 				defer d.Close()
 				s.rec.take()
@@ -733,7 +739,7 @@ func TestGeometry(t *testing.T) {
 	for _, g := range geometries {
 		t.Run(g.name, func(t *testing.T) {
 			dir := fixture(t, g)
-			local, err := reader.OpenDir(context.Background(), dir, reader.Options{})
+			local, err := reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 			mustDo(t, err)
 			parts := local.Metadata().Manifest.Parts
 			mustDo(t, local.Close())
