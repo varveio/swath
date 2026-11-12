@@ -108,7 +108,19 @@ swath list s3://bucket --endpoint-url http://127.0.0.1:9000 --s3-region us-east-
 
 The store must answer `ListObjectsV2` as S3 does: in ascending byte order of the key, with continuation
 tokens. swath checks every page's order and refuses a service that breaks it (exit 1, cause `protocol`).
-Check each store with a small listing before a large one.
+It trusts the store's listing answers, including an empty page (no keys, no continuation) inside a range
+as the end of that range. A store that wrongly returns such a "lying empty page" makes swath silently
+miss keys: in [#265](https://github.com/varveio/swath/issues/265), a pinned MinIO image returned one with
+later keys still to come, and a listing missed 57% of the keys.
+
+Until the defense in #265 lands, compare the object count of a first run against a new S3-compatible
+store with an independent count over the same bucket or prefix: the store's own metrics or a plain
+sequential listing. [`swath diag list --sequential`](internals/diagnostics.md) lists through one
+continuation-token chain, for example:
+
+```bash
+swath diag list s3://bucket --endpoint-url http://127.0.0.1:9000 --s3-region us-east-1 --sequential
+```
 
 ## Google Cloud Storage
 

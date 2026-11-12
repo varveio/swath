@@ -115,6 +115,16 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 - Not listed: Azure hierarchical namespaces; S3 directory buckets; GCS soft-deleted objects. Mounted shares are read through the operating system, not a native
   NFS or SMB client.
 - Archives are built for the five targets above only; images are linux only.
+- **macOS Gatekeeper.** The binaries are not signed with an Apple Developer ID or notarized
+  ([#420](https://github.com/varveio/swath/issues/420)). Only browser downloads carry the quarantine
+  attribute that makes Gatekeeper refuse them. After verifying and extracting the archive, clear it
+  with the command below (replace `X.Y.Z` with the release version; use `darwin-amd64` for Intel). See
+  [install.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/install.md) for details.
+
+  ```bash
+  xattr -d com.apple.quarantine swath-X.Y.Z-darwin-arm64/swath swath-X.Y.Z-darwin-arm64/swath-replay
+  ```
+
 - The dataset format is SeekParquet draft revision 1.
 - `swath-replay` reads Java-era fixtures through a transitional reader that will be removed; re-list a
   Java-era fixture you still need.
