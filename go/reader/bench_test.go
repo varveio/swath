@@ -222,7 +222,7 @@ func BenchmarkReaderScanSkewed(b *testing.B) {
 }
 
 // BenchmarkReaderStream: Stream of the whole dataset, ordered and owning,
-// in one pass (Stream) and as it read before, in Range requests of 1,024
+// in one pass (Stream) and as it read before, in Rows requests of 1,024
 // rows each after the last (Range-pages, oldStream in stream_test.go).
 // Workers do not apply: a stream is one ordered pass.
 func BenchmarkReaderStream(b *testing.B) {

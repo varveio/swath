@@ -135,7 +135,7 @@ func TestStreamMatchesPages(t *testing.T) {
 }
 
 // TestStreamReadStats: a whole Stream is one request whose ReadStats are
-// those of one Range of every row on a fresh Dataset, projecting the same
+// those of one Rows of every row on a fresh Dataset, projecting the same
 // columns; StreamStats adds each Stream's.
 func TestStreamReadStats(t *testing.T) {
 	dir := batchFixture(t, S3ObjectsV1)

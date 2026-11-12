@@ -311,7 +311,7 @@ Azure versions schema.
   after `Close`, `ErrInvalidRequest` (a `Limit` that is not positive, a malformed cursor), the Source's and the
   context's. `Stats`, when set, is reset when the request starts (a refusal before any read leaves it zero) and receives
   the request's `ReadStats`, whether it succeeds or fails; `List` does
-  not add to `StreamStats`. `ReadAhead` (default 0, none; at most 64; negative is `ErrInvalidRequest`) lets the
+  not add to `StreamStats`. `ReadAhead` (default 0, none; a value above 64 reads as 64; negative is `ErrInvalidRequest`) lets the
   module read up to that many key pages ahead concurrently (`seekparquet.ListQuery.ReadAhead`): it pays where a
   read waits on a round trip (an object store), not on a local file, and the entries are the same either way;
   `Page` passes it on.
@@ -459,7 +459,9 @@ with its own row and entry bytes nil, never 0, without sizes; a kind the schema 
 statistics against a plan, split and shard scans made by hand (1, 8 and 16 shards a worker), a failing row,
 `fn`'s error stopping each shard at its first batch, cancellation (by `fn` on the last batch, and before a scan
 of an empty dataset: never a success), a Source failure while planning (returned unchanged, the failed plan's
-reads, the part it opened and the read that failed, in `Stats`) and a versions refusal before any read. `TestScanShardsPerWorker` runs `Scan` and
+reads, the part it opened and the read that failed, in `Stats`), a versions refusal before any read, and
+(`TestScanCallbackStopIsAnError`) `fn` returning `seekparquet.Stop`, which `Scan`, `ScanBatches` and `Stream`
+return unchanged after at most one call a worker, with one shard and with several. `TestScanShardsPerWorker` runs `Scan` and
 `ScanBatches` at 1, 2, 4, 8 and 16 shards a worker and 1, 2 and 7 workers: Stream's objects, each batch
 ascending, no more calls of `fn` at once than workers, a bad row's position, and `fn`'s error after at most one
 call a worker. `TestScanSlowShardDoesNotHoldTheRest` holds the first key's batch until the other worker has
@@ -473,8 +475,9 @@ several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects a
 values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
 after a prefix's keys, a NUL delimiter, the refusal of a versions schema before any read (statistics reset), a row check failing the listing with its statistics kept, a missing part's
 refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset`; `TestListReadAhead` lists 40
-prefixes of five keys in pages of two rows with `ReadAhead` 0, 1, 4 and 64 (through `List` and `Page`): the same
-entries, pages read ahead exactly when it is positive, and a negative one refused before any read. The lister's
+prefixes of five keys in pages of two rows with `ReadAhead` 0, 1, 4, 64 and 1,000, in one request and in pages
+of three continued by their cursors, and through `Page` (its entries and totals equal to those without): the
+same entries, pages read ahead exactly when it is positive, and a negative one refused before any read. The lister's
 `TestReaderStreams*` tests open, check and stream datasets its own writer wrote, with the metadata it recorded: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 through `StreamLocal` (kinds, a link target, one without a size kept nil; `Stream` refuses them), and both
 versions schemas opened and refused by `Stream`.

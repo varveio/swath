@@ -30,10 +30,11 @@ type ListRequest struct {
 	// when the request starts, and set whether it succeeds or fails.
 	Stats *ReadStats
 	// ReadAhead, when positive, is the number of key pages the listing may
-	// read ahead concurrently, at most 64 (seekparquet.ListQuery.ReadAhead):
-	// it pays where a read waits on a round trip, an object store, not on
-	// a local file. The entries are the same either way. Zero, the
-	// default, reads no page ahead; a negative value is ErrInvalidRequest.
+	// read ahead concurrently (seekparquet.ListQuery.ReadAhead; a value
+	// above 64 reads as 64): it pays where a read waits on a round trip, an
+	// object store, not on a local file. The entries are the same either
+	// way. Zero, the default, reads no page ahead; a negative value is
+	// ErrInvalidRequest.
 	ReadAhead int
 }
 

@@ -5,6 +5,19 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/reader` reads through SeekParquet's redesigned Go API (seekparquet `b26862f2b4c8`); its own
+  package no longer imports parquet-go. Observable changes: a negative `Options.Limits` field fails `Open` and
+  `OpenDir` with `ErrInvalidRequest` (it used to select the default), and `Limits` gains `GetRows`; a limit
+  failure is a `*seekparquet.LimitError` (`errors.As`), still wrapping `ErrLimitExceeded`; `RefusalError.Code`
+  is a `seekparquet.RefusalCode` and `UnsupportedError.Code` an `UnsupportedCode`; a part's cached refusal or
+  unsupported error is a copy per read, so its pointer can differ between reads; the statistics of `Scan`,
+  `ScanBatches`, `Page` and the aggregates include a failed plan's or split's reads, and `Page`'s (and
+  `StreamStats`') sums now include the list-index and read-ahead counters the old sum omitted; `ReadStats`
+  gains `Add` and the read-ahead counters; `ListRequest` (and so `PageRequest`) gains `ReadAhead`, the
+  listing's key-page read-ahead (default 0, none); a `Scan`/`ScanBatches` callback's `seekparquet.Stop` is
+  returned like any other error; `CheckSchema` prints an unannotated column's logical type as `NONE`. `Scan`
+  decodes each object from the borrowed batch, about 20% faster with a third fewer bytes allocated.
+
 - Go port, Azure Blob: `--all-versions` lists every entry of each name: blob versions, snapshots and
   soft-deleted blobs beside the current blob (`include=versions,snapshots,deleted`), under the new schema
   `swath/azblob-versions/v1`: the `swath/azblob-objects/v1` columns, then `version_id`, `is_latest` (the row a
@@ -77,10 +90,10 @@ Notable changes per release. The full human summary for the current release is i
   and Buildx v0.38.1 with BuildKit v0.34.2 pinned by digest in `release.yml` (#444); the next release
   candidate is the first `release.yml` run with these pins.
 
-- Go port: `go/reader`'s `Dataset.Stream` and `StreamLocal` read the dataset in one ordered pass
-  (SeekParquet `Dataset.RangeBatches`) instead of ⌈N/1,024⌉+1 `Range` requests that each re-seeked after the
-  last. Objects, order, values and row errors are unchanged. `StreamStats.Requests` counts `RangeBatches`
-  calls, one per stream (more only past `math.MaxInt` rows on 32-bit platforms); a failing part or page now
+- Go port: `go/reader`'s `Dataset.Stream` and `StreamLocal` read the dataset in one ordered pass, one
+  unlimited SeekParquet `Dataset.Scan` request, instead of ⌈N/1,024⌉+1 paged requests that each re-seeked after
+  the last. Objects, order, values and row errors are unchanged. `StreamStats.Requests` counts those requests,
+  one per stream on every platform; a failing part or page now
   ends the stream after the objects of the pages before it (a paged request read 1,024 keys before handing
   any on); `fn` runs inside the read, so `Close` waits for it and `fn` must not call `Close`; each stream's
   `StreamStats` are added once, when it returns.

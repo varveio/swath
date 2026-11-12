@@ -71,7 +71,7 @@ func (d *Dataset) Metadata() Metadata {
 }
 
 // SeekParquet returns the module's dataset, for the queries this package
-// does not make (List, Range over other columns, Verify). It is borrowed:
+// does not make (List, Rows over other columns, Verify). It is borrowed:
 // the Dataset owns it and closes it.
 func (d *Dataset) SeekParquet() *seekparquet.Dataset { return d.sp }
 
