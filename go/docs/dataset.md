@@ -8,7 +8,7 @@ The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/s
 at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
 [internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
-[upgrade.md](upgrade.md) maps the Java tool's format 1 onto it.
+[upgrade.md](upgrade.md) maps the 0.3 release's format 1 onto it.
 
 Nothing here is released. Until the first release, any of this profile may change outright, with no
 compatibility window for datasets written by earlier builds.
@@ -46,6 +46,14 @@ manifest declaring `key_unique: false`, all of which `Scan` accepts (optional co
 selected). Part schema errors name the part and have `Row == nil`; value errors name the bad row.
 The borrowed batch lifetime, null semantics and errors are defined by the [reader API](../reader/README.md).
 
+`reader.Page` keeps the listing's row positions for common-prefix counts: turning counts on adds no
+storage reads. A count is nil when a boundary is unknown, the cursor starts inside the prefix, or a
+contributing part's row count has not been checked. Budgeted byte sums discover size pages in listing
+order, stop discovering later parts of an unaffordable prefix, and read only the accepted rows' sizes;
+shared pages and dictionaries are charged once. An uncomputed sum is nil. These value-only sums check
+sizes, but do not certify unread keys; row errors name the dataset ordinal. See the
+[reader API](../reader/README.md) for projections, budgets and exactness.
+
 `reader.Stream` (and `StreamLocal`) reads the whole dataset in one ordered pass of SeekParquet's
 batch reads (`Dataset.Scan`, no plan, no limit) and hands on complete owning Objects, decoded and checked by the
 schema's row decoder. It opens and checks each part when the pass reaches it, not before the first object, so a
@@ -56,7 +64,7 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
+after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present

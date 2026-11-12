@@ -64,6 +64,9 @@ func Restore(o Opener, scope string, snapshot []byte) (*Pinned, error) {
 	return &Pinned{o: o, scope: scope, sealed: true, pins: pins}, nil
 }
 
+// ReportsIO is what the Opener it pins reports (IOReporter).
+func (p *Pinned) ReportsIO() bool { return reportsIO(p.o) }
+
 // Open opens name, a path CheckPath accepts, and checks it against its pin:
 // the first successful Open records the object's size and Identity; a later
 // one, or one that loses a race to record, must find the same, or it closes
@@ -327,6 +330,8 @@ func (f *pinnedObject) readAt(ctx context.Context, p []byte, off int64) (int, er
 func (f *pinnedObject) ReadRanges(ctx context.Context, ranges []Range) error {
 	return ReadRangesWith(ctx, f, ranges, policyOf(f.Object))
 }
+
+func (f *pinnedObject) ReportsIO() bool { return reportsIO(f.Object) }
 
 func (f *pinnedObject) batchPolicy() BatchPolicy { return policyOf(f.Object) }
 

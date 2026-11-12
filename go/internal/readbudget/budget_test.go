@@ -5,7 +5,6 @@ package readbudget_test
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"fmt"
 	"io/fs"
@@ -43,11 +42,6 @@ import (
 	"github.com/varveio/swath/go/objfile/spsource"
 	"github.com/varveio/swath/go/reader"
 )
-
-// latency is the time each fake store waits before it serves a request, so
-// that requests made one after another do not overlap and requests made
-// together do: rounds are counted from the overlaps.
-const latency = 10 * time.Millisecond
 
 // The fixture: 199,500 objects in 4 parts of up to 50,000 (one row group
 // each),
@@ -162,31 +156,27 @@ const (
 	whole                // a whole object
 )
 
-type request struct {
-	kind       kind
-	start, end time.Time
-}
+type request struct{ kind kind }
 
-// recorder counts the requests a store serves, after waiting latency
-// before each.
+// recorder counts requests on arrival, before the handler can send any
+// response bytes. beforeServe optionally holds requests at a test barrier.
 type recorder struct {
-	classify func(*http.Request) kind
-	mu       sync.Mutex
-	reqs     []request
-	latency  time.Duration // latency when 0
+	classify    func(*http.Request) kind
+	mu          sync.Mutex
+	reqs        []request
+	beforeServe func(*http.Request)
 }
 
 func (rec *recorder) wrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
 		rec.mu.Lock()
-		lat := cmp.Or(rec.latency, latency)
+		rec.reqs = append(rec.reqs, request{kind: rec.classify(r)})
+		beforeServe := rec.beforeServe
 		rec.mu.Unlock()
-		time.Sleep(lat)
+		if beforeServe != nil {
+			beforeServe(r)
+		}
 		h.ServeHTTP(w, r)
-		rec.mu.Lock()
-		rec.reqs = append(rec.reqs, request{kind: rec.classify(r), start: start, end: time.Now()})
-		rec.mu.Unlock()
 	})
 }
 
@@ -198,30 +188,43 @@ func (rec *recorder) take() []request {
 	return r
 }
 
-// count is what an operation requested: requests, of which metadata
-// requests, and rounds, the longest chain of requests each made after the
-// one before had been answered.
-type count struct{ requests, metadata, rounds int }
+func TestRecorderRecordsArrival(t *testing.T) {
+	rec := &recorder{classify: func(*http.Request) kind { return ranged }}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	h := rec.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusPartialContent)
+	}))
+	go func() {
+		defer close(done)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/part", nil))
+	}()
+	<-entered
+	got := tally(rec.take())
+	close(release)
+	<-done
+	if got.requests != 1 || got.metadata != 0 {
+		t.Errorf("while serving: %s, want 1 request and 0 metadata", got)
+	}
+	if got := tally(rec.take()); got.requests != 0 {
+		t.Errorf("completion leaked into the next operation: %s", got)
+	}
+}
+
+// count is what an operation requested, independent of request timing.
+type count struct{ requests, metadata int }
 
 func (c count) String() string {
-	return fmt.Sprintf("%d / %d (%d metadata)", c.requests, c.rounds, c.metadata)
+	return fmt.Sprintf("%d (%d metadata)", c.requests, c.metadata)
 }
 
 func tally(reqs []request) count {
-	slices.SortFunc(reqs, func(a, b request) int { return a.start.Compare(b.start) })
 	c := count{requests: len(reqs)}
-	depth := make([]int, len(reqs))
-	for i, r := range reqs {
+	for _, r := range reqs {
 		if r.kind == metadata {
 			c.metadata++
 		}
-		depth[i] = 1
-		for j := range i {
-			if !reqs[j].end.After(r.start) {
-				depth[i] = max(depth[i], depth[j]+1)
-			}
-		}
-		c.rounds = max(c.rounds, depth[i])
 	}
 	return c
 }
@@ -351,17 +354,9 @@ func stack(o objfile.Opener, after bool) reader.Source {
 type operation struct {
 	name string
 	run  func(ctx context.Context, t *testing.T, d *reader.Dataset)
-	// latency, when set, replaces the stores' latency: long enough that
-	// requests made together overlap under the race detector too.
-	latency time.Duration
-	// before and after are the counts the operation must stay within,
-	// requests, metadata requests and rounds, before spsource (openOnly)
-	// and after it, both on the pinned SeekParquet. They are the counts
-	// measured; before's admission is allowed 4 rounds, as a part's first
-	// and last key pages, read by concurrent ReadAt calls without a
-	// RangeReader, are sometimes measured overlapping and sometimes not.
-	// The after budgets may only be
-	// tightened.
+	// Exact request and metadata-request counts before spsource (openOnly)
+	// and after it, both on the pinned SeekParquet dependency. Admission
+	// concurrency is checked separately by TestAdmissionRounds.
 	before, after count
 }
 
@@ -387,9 +382,20 @@ func operations(t *testing.T, dir string) []operation {
 		t.Fatalf("%q is not inside part 1 [%q, %q]", mid, part.MinKey, part.MaxKey)
 	}
 	browse := []byte(tenant(browseTenant))
+	browsePage := func(counts bool) func(context.Context, *testing.T, *reader.Dataset) {
+		return func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{
+				Prefix: browse, Delimiter: '/', Limit: 1000, OmitFields: reader.FieldETag | reader.FieldStorageClass},
+				Aggregates: reader.AggregateOptions{Counts: counts, Sums: reader.SumsWithinBudget}})
+			mustDo(t, err)
+			if len(page.Entries) != 1000 || page.Next == nil {
+				t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
+			}
+		}
+	}
 	return []operation{
 		{name: "open", run: nil,
-			before: count{2, 1, 2}, after: count{1, 0, 1}},
+			before: count{2, 1}, after: count{1, 0}},
 		{name: "cold point lookup, 2 columns", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			rows, err := d.SeekParquet().Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.KeySpan(mid)},
 				Limit: 1, Columns: []string{"size", "last_modified"}}, nil)
@@ -397,7 +403,7 @@ func operations(t *testing.T, dir string) []operation {
 			if len(rows) != 1 {
 				t.Fatalf("%d rows", len(rows))
 			}
-		}, before: count{5, 1, 5}, after: count{4, 0, 4}},
+		}, before: count{5, 1}, after: count{4, 0}},
 		{name: "one-part scan, 1 column", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			n := 0
 			mustDo(t, d.SeekParquet().Scan(ctx, seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{
@@ -406,53 +412,49 @@ func operations(t *testing.T, dir string) []operation {
 			if int64(n) != part.Rows {
 				t.Fatalf("scanned %d rows of %d", n, part.Rows)
 			}
-		}, before: count{100, 1, 100}, after: count{99, 0, 99}},
-		{name: "admission (CheckSchema), 4 parts", latency: 60 * time.Millisecond, run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+		}, before: count{3, 1}, after: count{2, 0}},
+		{name: "admission (CheckSchema), 4 parts", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			mustDo(t, d.CheckSchema(ctx))
-		}, before: count{16, 4, 4}, after: count{12, 0, 2}},
-		{name: "browse page: 1,000 entries, counts and budgeted sums", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{Prefix: browse, Delimiter: '/', Limit: 1000},
-				Aggregates: reader.AggregateOptions{Counts: true, Sums: reader.SumsWithinBudget}})
-			mustDo(t, err)
-			if len(page.Entries) != 1000 || page.Next == nil {
-				t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
-			}
-		}, before: count{547, 1, 547}, after: count{546, 0, 546}},
+		}, before: count{16, 4}, after: count{12, 0}},
+		{name: "browse page: 1,000 entries, counts and budgeted sums", run: browsePage(true),
+			before: count{8, 1}, after: count{5, 0}},
+		{name: "browse page: 1,000 entries, budgeted sums, counts off", run: browsePage(false),
+			before: count{8, 1}, after: count{5, 0}},
 		{name: "count of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true})
 			mustDo(t, err)
 			if got[0].Count == nil || *got[0].Count != 1600-100+100*300 {
 				t.Fatalf("count %v", got[0].Count)
 			}
-		}, before: count{4, 1, 4}, after: count{3, 0, 3}},
+		}, before: count{3, 1}, after: count{2, 0}},
 		{name: "count of every key, after CheckSchema", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{nil}, reader.AggregateOptions{Counts: true})
 			mustDo(t, err)
 			if got[0].Count == nil || *got[0].Count != int64(len(fixtureKeys())) {
 				t.Fatalf("count %v", got[0].Count)
 			}
-		}, before: count{0, 0, 0}, after: count{0, 0, 0}},
+		}, before: count{0, 0}, after: count{0, 0}},
 		{name: "sum of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			got, err := d.Aggregates(ctx, [][]byte{browse}, reader.AggregateOptions{Counts: true, Sums: reader.SumsAlways})
 			mustDo(t, err)
 			if got[0].Bytes == nil {
 				t.Fatal("no sum")
 			}
-		}, before: count{68, 1, 68}, after: count{67, 0, 67}},
+		}, before: count{4, 1}, after: count{3, 0}},
 	}
 }
 
 // TestRequestBudgets measures each operation cold, on each store, with the
 // Source a consumer wrote before (open only) and with spsource, and fails
-// when a count exceeds its budget. The table of counts is logged (-v).
+// when a count differs from its expected value. The table of counts is logged (-v).
 func TestRequestBudgets(t *testing.T) {
 	if testing.Short() {
-		t.Skip("writes a 200,000-object fixture and waits on fake round trips")
+		t.Skip("writes a 200,000-object fixture")
 	}
 	dir := fixture(t)
 	ops := operations(t, dir)
 	var table strings.Builder
-	fmt.Fprintf(&table, "| operation | store | before: requests / rounds | after: requests / rounds |\n|---|---|---|---|\n")
+	fmt.Fprintf(&table, "| operation | store | before: requests | after: requests |\n|---|---|---|---|\n")
 	for _, s := range stores(t, dir) {
 		for _, op := range ops {
 			var got [2]count
@@ -466,13 +468,7 @@ func TestRequestBudgets(t *testing.T) {
 						mustDo(t, d.CheckSchema(ctx))
 					}
 					s.rec.take()
-					s.rec.mu.Lock()
-					s.rec.latency = op.latency
-					s.rec.mu.Unlock()
 					op.run(ctx, t, d)
-					s.rec.mu.Lock()
-					s.rec.latency = 0
-					s.rec.mu.Unlock()
 				}
 				got[i] = tally(s.rec.take())
 				mustDo(t, d.Close())
@@ -480,11 +476,104 @@ func TestRequestBudgets(t *testing.T) {
 			fmt.Fprintf(&table, "| %s | %s | %s | %s |\n", op.name, s.name, got[0], got[1])
 			for i, want := range []count{op.before, op.after} {
 				g := got[i]
-				if g.requests > want.requests || g.rounds > want.rounds || g.metadata > want.metadata {
-					t.Errorf("%s, %s, %s: %s, budget %s", s.name, op.name, []string{"before", "after"}[i], g, want)
+				if g != want {
+					t.Errorf("%s, %s, %s: %s, want exactly %s", s.name, op.name, []string{"before", "after"}[i], g, want)
 				}
 			}
 		}
 	}
 	t.Log("\n" + table.String())
+}
+
+// TestAdmissionRounds holds every request in a phase until all expected
+// requests have arrived. No response in that phase can enable another
+// request counted in the same phase. A serialized probe or part open
+// therefore fails at the barrier rather than depending on timestamp overlap.
+func TestAdmissionRounds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes a 200,000-object fixture")
+	}
+	for _, s := range stores(t, fixture(t)) {
+		for _, after := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/after=%t", s.name, after), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
+				d, err := reader.Open(ctx, stack(s.opener, after), reader.Options{})
+				mustDo(t, err)
+				defer d.Close()
+				s.rec.take()
+
+				type arrival struct {
+					kind    kind
+					release chan struct{}
+				}
+				arrivals := make(chan arrival)
+				s.rec.mu.Lock()
+				s.rec.beforeServe = func(r *http.Request) {
+					a := arrival{kind: s.rec.classify(r), release: make(chan struct{})}
+					select {
+					case arrivals <- a:
+					case <-ctx.Done():
+						return
+					}
+					select {
+					case <-a.release:
+					case <-ctx.Done():
+					}
+				}
+				s.rec.mu.Unlock()
+				defer func() {
+					s.rec.mu.Lock()
+					s.rec.beforeServe = nil
+					s.rec.mu.Unlock()
+				}()
+
+				done, finished := make(chan error, 1), make(chan struct{})
+				go func() {
+					defer close(finished)
+					done <- d.CheckSchema(ctx)
+				}()
+				defer func() { cancel(); <-finished }()
+
+				// Four independent parts: before the adapter each needs a
+				// metadata request, then a footer read. Both stacks then
+				// fetch first and last key pages together (eight GETs).
+				type phase struct {
+					kind kind
+					n    int
+				}
+				phases := []phase{{ranged, 4}, {ranged, 8}}
+				if !after {
+					phases = append([]phase{{metadata, 4}}, phases...)
+				}
+				for phase, want := range phases {
+					var releases []chan struct{}
+					for i := range want.n {
+						select {
+						case a := <-arrivals:
+							if a.kind != want.kind {
+								t.Fatalf("phase %d, request %d: kind %d, want %d", phase, i, a.kind, want.kind)
+							}
+							releases = append(releases, a.release)
+						case err := <-done:
+							t.Fatalf("phase %d: completed after %d of %d arrivals: %v", phase, i, want.n, err)
+						case <-ctx.Done():
+							t.Fatalf("phase %d: only %d of %d concurrent requests arrived: %v", phase, i, want.n, ctx.Err())
+						}
+					}
+					for _, release := range releases {
+						close(release)
+					}
+				}
+				select {
+				case err := <-done:
+					mustDo(t, err)
+				case <-arrivals:
+					t.Fatal("unexpected request after the final admission phase")
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			})
+		}
+	}
 }

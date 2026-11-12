@@ -1,20 +1,20 @@
-# swath 0.4.0-rc.1
+# swath 0.4.0-rc.2
 
 <!-- Links are absolute and pinned to the tag: the release body does not resolve repository-relative links. -->
 
 ## User-facing changes
 
-This is the first release candidate of 0.4.0, the first release of the Go implementation. Go replaces
+This is the second release candidate of 0.4.0, the first release of the Go implementation. Go replaces
 the Java tool: v0.3.2 was the last Java release, and no later release ships Java.
 
 - **Sources.** Local and mounted filesystems, Amazon S3 general-purpose buckets, Google Cloud Storage
   (native `gs://` through the JSON API) and Azure Blob Storage flat namespaces (`az://`). Each source's
-  limits are in the [README](https://github.com/varveio/swath/blob/v0.4.0-rc.1/README.md#supported-sources).
+  limits are in the [README](https://github.com/varveio/swath/blob/v0.4.0-rc.2/README.md#supported-sources).
 - **Commands.** `swath list` writes text rows or a sorted Parquet dataset, `swath du` totals a source per
   directory or prefix, and `swath resume` continues an eligible object-store dataset run. `swath-replay`,
   a contributor tool for testing listers, serves a recorded listing back through the S3, GCS and Azure
   listing APIs. The
-  [Go guide](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/getting-started.md) is the starting point.
+  [Go guide](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/getting-started.md) is the starting point.
 - **Sorted output while listing.** Every dataset is globally key-sorted, with no merge pass at the end:
   rows listed ahead of the output wait in memory and then in spill files under the output directory.
 - **Downloads.** One archive per target (`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
@@ -22,18 +22,39 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   each holding static `swath` and `swath-replay` binaries with `LICENSE`, `NOTICE` and
   `THIRD_PARTY_NOTICES` (the licenses of every module linked into the binaries); an SPDX SBOM;
   `SHA256SUMS`; a keyless cosign signature for each; and build provenance attestations.
-- **Images.** `ghcr.io/varveio/swath:0.4.0-rc.1` and `ghcr.io/varveio/swath-replay:0.4.0-rc.1` for
+- **Images.** `ghcr.io/varveio/swath:0.4.0-rc.2` and `ghcr.io/varveio/swath-replay:0.4.0-rc.2` for
   linux/amd64 and linux/arm64, carrying the archived linux binaries, signed and attested. A release
   candidate publishes only its own tag: no `latest` and no `0.4`.
 - **Verifying.** The checksum, signature and attestation commands are in
-  [RELEASING.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/RELEASING.md#verifying-a-release); the
+  [RELEASING.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/RELEASING.md#verifying-a-release); the
   archive and image contents are in
-  [install.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/install.md#release-downloads-and-images).
+  [install.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/install.md).
+
+### New since 0.4.0-rc.1
+
+- **Datasets written straight to a bucket.** `-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or
+  `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`, uploads the parts as they close and creates the
+  manifest only if the prefix holds none; the work directory keeps the lock, the journal and spill, and
+  `swath resume DIR` continues the run. The destination takes its own credentials, region and endpoint
+  (`--output-*`). See
+  [A dataset in a bucket](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/dataset.md#a-dataset-in-a-bucket).
+- **Memory follows the host.** `--row-budget` is renamed `--sort-buffer`. Its default is 1/16 of the least of
+  physical memory, the cgroup limit and `GOMEMLIMIT`, at most 1 GiB (it was a fixed 128 MiB), and the Parquet
+  encoders are admitted against an allowance of their own.
+- **Azure Blob `--all-versions`:** versions, snapshots and soft-deleted blobs, and the blob properties every
+  listing returns.
+- **The run report is version 5:** `invocation.sort_buffer_bytes` (was `row_budget_bytes`), how the sort buffer
+  was chosen, `output.remote` for a dataset in a bucket, and the outcome class `unresolved` (exit 75). An
+  interrupted run of rc.1 cannot be resumed by rc.2 (the writer recipe is `swath/parquet-r4`): finish it with
+  rc.1 or start over.
+- **Less CPU:** a cheaper S3 list scanner and density step, Parquet pages compressed at zstd `SpeedFastest`
+  (parts about 0.3 to 1.1 % larger), and spill read handles reused.
+- **Docs:** the user guide is reorganized by task, with one generated reference page per command.
 
 ### Breaking changes from 0.3.2
 
 - **Launcher.** The Java jar (`java -jar swath.jar`) and its `.zip` and `.tar.gz` distributions are
-  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.1`
+  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.2`
   and the commit.
 - **Command line.** Flags are renamed or removed, without aliases (an unknown flag exits 2). The most
   common: `--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--region` and `--profile`
@@ -45,15 +66,15 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   provider has carries its prefix (`--s3-`, `--gcs-`, `--azure-`). Text rows use the dataset's column names
   (`key`, `size`, `last_modified`) for every source.
   Exit codes keep their meaning. Every option, with its counterpart and the reason, is in
-  [from-java.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/from-java.md) and
-  [cli-inventory.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/internals/cli-inventory.md).
+  [upgrade.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md) and
+  [cli-inventory.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/cli-inventory.md).
 - **Dataset layout.** A dataset is a swath dataset in the SeekParquet format (`format_version` 0,
   `draft_revision` 1) instead of the Java format 1: `manifest.json`, installed last, is the commit
   (`_SUCCESS` and `symlink.txt` are gone), `run.json` replaces `_swath_summary.json`, `swath/canonical`
   becomes `swath/s3-objects/v1` without the `version_id`, `is_latest`, `is_delete_marker` and `row_type`
   columns, and the local schema's columns are renamed. A Java reader does not read the new format and
   `swath resume` does not read a Java run: finish a Java run with Java or start over. The field-by-field
-  mapping is in [upgrade.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/upgrade.md).
+  mapping is in [upgrade.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md).
 - **Endpoints.** An `--endpoint-url` with a query, a fragment or user information is refused (exit 2);
   pass credentials through the provider's credential settings.
 - **Images.** The lister image is distroless static instead of a Temurin JRE on Ubuntu: the entrypoint is
@@ -64,7 +85,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   must be writable by the new user, and the lister has a home directory, `/home/nonroot`, so mounted
   credential directories such as `~/.aws` are found there.
 - **Builds from `main` before 0.4.** The Go port's own pre-release flag renames are listed under
-  [Changes from 0.3 to 0.4](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/upgrade.md#changes-from-03-to-04).
+  [Unreleased builds of `main`](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md#unreleased-builds-of-main).
 
 ## Evidence
 
@@ -72,8 +93,8 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   shards on amd64 and arm64, the default tier on macOS (on `main`) and Windows, the nested modules,
   SeekParquet conformance, the replay fixture tier, and both images built for two architectures and smoked
   offline
-  ([go/docs/internals/testing.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/internals/testing.md#continuous-integration)).
-- The release workflow then reran `go vet` and the whole race suite unsharded on the tag, built the four
+  ([go/docs/internals/testing.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/testing.md#continuous-integration)).
+- The release workflow then reran `go vet` and the whole race suite unsharded on the tag, built the five
   targets once with the tag's version and commit checked in each linux/amd64 `--version`, and smoked the
   pushed image digests before tagging them: an anonymous listing of a public S3 prefix into a dataset,
   read back with DuckDB from the manifest's part list, resumed as a no-op, and served by the replay image.
@@ -81,18 +102,17 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 - Every module linked into the binaries passed the license gate that generated `THIRD_PARTY_NOTICES`
   (permissive licenses plus EPL and CDDL; no GPL, LGPL or AGPL).
 - Dated measurements of the Go tool, each with its configuration and harness, are in
-  [measurements.md](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/internals/measurements.md). None was
+  [measurements.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/measurements.md). None was
   taken on this tag.
 
 ## Limits and known issues
 
-- This is a release candidate: it rehearses the publish path, and it is not promoted. Its binaries report
-  `0.4.0-rc.1`; 0.4.0 will be a separate build.
+- This is a release candidate, and it is not promoted. Its binaries report
+  `0.4.0-rc.2`; 0.4.0 will be a separate build.
 - Windows refuses journaled object-store runs and `swath resume` (directory sync is unavailable there).
   Local scans and text output do not resume on any platform
-  ([known limits](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/running.md#known-limits)).
-- Not listed: Azure hierarchical namespaces, blob versions, snapshots and deleted blobs; S3 directory
-  buckets; GCS soft-deleted objects. Mounted shares are read through the operating system, not a native
+  ([known limits](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/running.md#known-limits)).
+- Not listed: Azure hierarchical namespaces; S3 directory buckets; GCS soft-deleted objects. Mounted shares are read through the operating system, not a native
   NFS or SMB client.
 - Archives are built for the five targets above only; images are linux only.
 - The dataset format is SeekParquet draft revision 1.

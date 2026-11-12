@@ -240,7 +240,8 @@ and reporting options that `swath resume --help` lists may be given again, the l
 first attempt unless given again. Pass a fresh `--report` path each time.
 
 The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
-retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
+retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm on a 4-vCPU VM
+([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take
 roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
 a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
@@ -324,7 +325,8 @@ it. The report's `invocation.prior` names what was used.
 
 A reader starts only once `manifest.json` exists and reads the parts it lists (never a glob of `data/`). An
 application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
-`completed`, `coverage.skipped_entries` 0, `coverage.filters` empty and `scope.kind` `whole`
+`completed`, `coverage.skipped_entries` 0, `coverage.filters` empty, `scope.kind` `whole`, the `source` it
+expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
 ([dataset.md](dataset.md#the-swath-extension)). [getting-started.md](getting-started.md#6-query-it-with-duckdb)
 shows a DuckDB query over the manifest's part list. Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.
@@ -339,7 +341,7 @@ DIR/
 ```
 
 By default, object-store datasets list current objects only; `--all-versions` selects S3 versions, GCS
-generations or every Azure Blob entry (below). Java swath's reader does not open these datasets ([upgrade.md](upgrade.md)).
+generations or every Azure Blob entry (below). The 0.3 release's reader does not open these datasets ([upgrade.md](upgrade.md)).
 
 ### Verify a dataset
 

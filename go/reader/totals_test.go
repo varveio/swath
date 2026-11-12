@@ -515,8 +515,8 @@ func TestTotalsAfterCloseFails(t *testing.T) {
 
 // TestTotalsReadNestedRowsOnce (varve TestTotalsReadNestedRowsOnce) totals
 // root, every child and grandchild of r/, and repeats of each in one call:
-// each matches the Stream oracle, and the call reads exactly the size and
-// last_modified bytes that root alone reads.
+// each matches the Stream oracle, and the call requests exactly the same
+// byte ranges, with the same multiplicities, as root alone.
 func TestTotalsReadNestedRowsOnce(t *testing.T) {
 	var keys []string
 	for c := range 4 {
@@ -541,18 +541,24 @@ func TestTotalsReadNestedRowsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkTotals(t, d, objects, paths)
-	read := func(paths []string) [2]int64 {
+	read := func(paths []string) map[sourceRead]int {
 		src.reset()
 		if _, err := d.Totals(context.Background(), paths); err != nil {
 			t.Fatal(err)
 		}
 		_, reads := src.taken()
-		n, total := columnBytes(t, dir, reads, "size", "last_modified")
-		return [2]int64{int64(n), total}
+		// Fetch windows can start in the key chunk and cover both value
+		// chunks. Comparing every requested range (including repetitions)
+		// is stronger than classifying by the request's starting column.
+		trace := make(map[sourceRead]int)
+		for _, r := range reads {
+			trace[r]++
+		}
+		return trace
 	}
 	root, nested := read([]string{""}), read(paths)
-	if root[1] == 0 || nested != root {
-		t.Fatalf("nested paths read %v (reads, bytes) of size and last_modified pages, root alone %v", nested, root)
+	if len(root) == 0 || !reflect.DeepEqual(nested, root) {
+		t.Fatalf("nested paths read %v, root alone %v", nested, root)
 	}
 }
 

@@ -10,7 +10,7 @@ The reader opens and reads; it does not judge a dataset. `Metadata()` hands on w
 the listing (source, scope, coverage with its filters such as `one_filesystem`, publication time), and the
 application decides what to do with it: whether a partial or filtered listing will do, whether it is of the
 source expected, and whether a dataset opened again is the one seen before. Part digests are for checking a
-dataset after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
+dataset after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
 
 The swath dataset profile this module implements (what a swath dataset is, the schema ids and their row
 contracts, `extensions.swath`, key order, evolution) is defined in
@@ -24,7 +24,7 @@ what a reader decodes are described once.
 ## API
 
 ```go
-type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1
+type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1
 type ColumnType uint8 // TypeString, TypeInt32, TypeInt64, TypeTimestampMicros, TypeBool, TypeUint32, TypeUint64, TypeBinary
 type ColumnSpec struct { Name string; Type ColumnType; Required, MayBeAbsent bool }
 type SchemaSpec struct { ID SchemaID; Key ColumnSpec; UniqueKeys bool; MaxKeyBytes int; Columns []ColumnSpec; Versions VersionSpec }
@@ -104,19 +104,9 @@ type PrefixAggregate struct { Count, Bytes *int64 } // nil: not requested or not
 
 ```
 
-A reader of current objects opens the dataset, decides from its metadata whether it will do, and streams it:
-
-```go
-d, err := reader.OpenDir(ctx, dir, reader.Options{}) // or reader.Open over a reader.Source (objfile)
-defer d.Close()
-m := d.Metadata()                        // m.Source, m.Scope, m.Coverage: the application's to judge
-err = d.CheckSchema(ctx)                 // once, before reading, to check every part
-err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
-entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000})
-// the next page: ListRequest{..., Cursor: entries[len(entries)-1].Cursor()}
-err = d.Scan(ctx, reader.ScanRequest{Prefix: []byte("logs/"), Workers: runtime.GOMAXPROCS(0)},
-	func(batch []reader.Object) error { /* called concurrently; do not keep batch */ return nil })
-```
+A reader opens the dataset, decides from its metadata whether it will do, checks it and reads it.
+[example_test.go](example_test.go) does that over a small committed dataset (`testdata/photos`), and lists it
+by delimiter a page at a time; `go test` runs both.
 
 For a whole-run tally without constructing Objects, select only the optional fields it needs:
 
@@ -155,7 +145,8 @@ A browsing reader pages with each prefix's totals:
 
 ```go
 page, err := d.Page(ctx, reader.PageRequest{
-	ListRequest: reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000},
+	ListRequest: reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000,
+		OmitFields: reader.FieldETag | reader.FieldStorageClass},
 	Aggregates:  reader.AggregateOptions{Counts: true, Sums: reader.SumsWithinBudget},
 })
 // the next page: PageRequest{..., Cursor: page.Next}, while page.Next != nil
@@ -197,8 +188,9 @@ versions (every current-object schema). Otherwise the schema's keys repeat (`Uni
 
 `swath/s3-versions/v1` declares `{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}` and
 `swath/gcs-generations/v1` `{ID: "generation", DeletedAt: "time_deleted"}`. A row is current when it is latest and
-not a delete marker, noncurrent when neither. Azure Blob supports current objects only; there is no registered
-Azure versions schema.
+not a delete marker, noncurrent when neither. `swath/azblob-versions/v1` declares `{ID: "version_id", Latest:
+"is_latest"}` and includes versions, snapshots and soft-deleted blobs; interpret its additional fields with the
+Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registry).
 
 ## What is checked, and when
 
@@ -217,7 +209,8 @@ Azure versions schema.
   every spec column top-level and non-repeated, of the spec's physical and
   logical type (strings STRING, binary unannotated, times TIMESTAMP(MICROS, UTC), unsigned integers INT(n,
   false), signed ones INT(n, true) or unannotated), REQUIRED where the spec requires a value, present unless the
-  spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
+  spec lets a part lack it (`ColumnSpec.MayBeAbsent`: GCS `time_created` and the later Azure current-object
+  properties). Other columns are ignored. A disagreement is `KindSchema` naming the
   column and the part. It reads nothing beyond Verify's reads.
 - **`Stream`.** Current objects only: a versions schema, and a filesystem's entries (`StreamLocal`'s), are
   refused (`KindSchema`) before any read. Every object in dataset order in one ordered pass of borrowed
@@ -279,8 +272,8 @@ Azure versions schema.
   existing row decoder remains unchanged: `Scan` accepts an all-null INT64 `etag`, an INT64 `last_modified`
   without its timestamp annotation, a BYTE_ARRAY key without STRING, and a current-object manifest declaring
   `key_unique: false`; `ScanBatches` refuses these with `KindSchema` (for optional fields, when selected).
-  A selected column absent from its part is `KindSchema`: none of Object's selectable columns is absence-tolerant. GCS's absence-tolerant `time_created`
-  is outside this projection. Part schema errors name the part path and have `Row == nil`, independent of
+  A selected column absent from its part is `KindSchema`: none of Object's selectable columns is absence-tolerant. The absence-tolerant columns (GCS's `time_created`, the later Azure
+  properties) are outside this projection. Part schema errors name the part path and have `Row == nil`, independent of
   which shard encounters the part first; row errors identify the bad key and offset, owning their key bytes.
   Checks run by column before the callback, so with several invalid rows the error and earlier delivered rows may differ from `Scan`.
   Each borrowed batch stays within one row group, key page, page of every projected column and selected span;
@@ -342,14 +335,16 @@ Azure versions schema.
   ends and no value page, and opening no part between them: it is nil when a part holding the rows has not
   been checked by an earlier read (`CheckSchema`, `Stream`, a sum), since its row count is then the manifest's
   alone. Only a prefix with a known count is summed (a count of 0 sums to 0 without a read); a sum plans the
-  rows projecting `size` and scans them once. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
+  rows projecting `size` and scans their values once (`Plan.ScanValues`), without reading keys to route
+  the sizes. A sum's row error names the dataset ordinal rather than a key, which it does not read. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
   them in ascending key order and sums one when the compressed size-page bytes it adds to those already
   selected (`Plan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
   shared with a prefix already selected counted once) fit what remains of `SumBudgetBytes` (0:
   `DefaultSumBudget`); a prefix inside one already selected adds nothing. Footers, key pages and page indexes
   read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
   smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
-  cannot be proven, is not summed under a budget.
+  cannot be proven, is not summed under a budget. Candidates are planned lazily, in listing order and
+  part by part; once a candidate's cost cannot fit, its later parts' size pages are not discovered.
   `Bytes` is nil for a prefix not summed, for a sum over a filesystem entry without a size, and for a sum that
   overflows an int64; a filesystem's counts and sums are the local totals of `Totals`. `Count` is reported only
   with `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
@@ -357,8 +352,12 @@ Azure versions schema.
   context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
 - **`Page(req)`.** `List` with one entry beyond `req.Limit`, trimmed to `Limit`; `Next` is the last returned
   entry's `Cursor()` only when that extra entry existed, so the last page has `Next` nil and is never followed by
-  an empty one. Then one `Aggregates` call with `req.Aggregates` for exactly the common prefixes returned (a prefix
-  carrying its exact-key object included; an entry beyond the limit is never aggregated): each prefix entry's
+  an empty one. The listing's row spans supply counts through metadata-only `PlanRows`, with identical
+  opens and reads whether counts are on or off. Unknown boundaries and a cursor made up inside a prefix
+  leave that prefix's totals nil; Page never seeks keys to complete a count. Budgeted sums use `SelectRows`
+  to charge each shared size page and dictionary once, then `ScanValues` to read the accepted union.
+  Only returned prefixes are aggregated (a prefix carrying its exact-key object included; an entry beyond
+  the limit is never aggregated): each prefix entry's
   `Aggregate` is its `PrefixAggregate`, whose fields are nil as `Aggregates` leaves them (not requested, not
   known exactly, not within the sum budget), and an ordinary object's `Aggregate` is nil. The budget is
   `AggregateOptions`', not a bound on the page's reads. A `Limit` that is not positive or is `math.MaxInt`, and
@@ -395,8 +394,8 @@ written with `/` separators by the portable engine on Windows (`filepath.ToSlash
 
 A decoder fails with a `SemanticError` naming the column and the row: `KindSchema` when the row lacks a column
 the schema id defines (its part lacks it, or the read did not project it) or holds a value of another type,
-`KindRow` for a null in a required column. `time_created` is the one column a part may lack (it was added to
-`swath/gcs-objects/v1` later); it reads as nil there. Columns a schema id does not define are ignored.
+`KindRow` for a null in a required column. A part may omit columns whose `ColumnSpec.MayBeAbsent` is true; those columns decode as nil. This includes GCS
+`time_created` and the later Azure current-object properties. Columns a schema id does not define are ignored.
 
 `ParseMetadata` first requires `extensions.swath.version` to be 1 (`KindSchema` otherwise): the version covers
 the extension's own contract, while a change to a schema's rows takes a new schema id. It reads every other

@@ -125,7 +125,9 @@ func writeScanFixture(t testing.TB, repeat bool) (string, []string) {
 // (whose Scan uses only the dataset).
 func openScanReader(t testing.TB, dir string) (*seekReader, *faultSource) {
 	src := &faultSource{dir: dir}
-	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.OpenOptions{})
+	// A small tail window and no speculation keep the fixture's pages out of
+	// Verify's reads, so a scan reads storage and an armed failure reaches it.
+	d, err := seekparquet.OpenDataset(context.Background(), src, seekparquet.OpenOptions{Read: seekparquet.ReadPolicy{MetadataPrefetchBytes: 4 << 10, DisableSpeculation: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

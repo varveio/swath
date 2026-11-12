@@ -12,10 +12,15 @@ core package uses only the standard library. Provider packages use their officia
 SDKs; all three SDKs appear in the module graph, but a program links only the
 providers it imports. Importing `objfile/remote` links all three.
 
-objfile handles individual objects. It does not list, cache, rename, or overwrite
-them, or decide which bytes a reader needs; dataset publication and recovery belong
-to the application. Given a batch of ranges a reader needs, it plans the requests
-that fetch them: merging, splitting and running them concurrently.
+objfile handles individual objects. It does not list, rename, or overwrite them, or
+decide which bytes a reader needs; dataset publication and recovery belong to the
+application. Given a batch of ranges a reader needs, it plans the requests that
+fetch them: merging, splitting and running them concurrently. An optional byte
+cache keeps fetched ranges of pinned versions.
+
+Runnable examples, checked by `go test`: [example_test.go](example_test.go) (locations and
+names) and [s3/example_test.go](s3/example_test.go) (pinned ranged reads and create-only
+writes against an in-process fake bucket).
 
 ## Read a remote file
 
@@ -83,7 +88,9 @@ decides which bytes to read and objfile how: a part opens with its manifest size
 (`OpenSized`, no metadata request), the manifest is one whole-object read
 (`ReadObject`), and the reader's batches of ranges are `ReadRanges`. objfile's
 errors keep their meaning for SeekParquet: `ErrObjectChanged`, a
-`*SizeMismatchError` and `ErrTooLarge` also match SeekParquet's own.
+`*SizeMismatchError` and `ErrTooLarge` also match SeekParquet's own. The adapter
+translates SeekParquet's operation cache mode to objfile's: `CacheBypass`
+disables byte-cache lookup and admission for scalar and batched reads.
 
 ## Read several ranges, or a small object whole
 
@@ -135,6 +142,13 @@ by the SDK; a body of unknown length that fails, or is cancelled, fails the read
 
 For more control:
 
+- A `remote.Store`'s connection pool keeps up to 64 idle connections to its host,
+  for four concurrent default batches (16 requests each) or a `Limit` of up to 64, so
+  a burst after the first finds its connections open; active connections are not
+  bounded. For a client of your own, keep idle connections per host for the requests
+  it may have in flight: the `Limit` you wrap it in, or else
+  `BatchPolicy.MaxConcurrent` times the batches you run at once (Go's default
+  transport keeps 2).
 - Build an SDK client and pass it to `s3.New`, `gcs.New`, or `azblob.New`; wrap the
   opener with `Root` for path confinement and `Limit` for bounded requests. `Limit`
   holds a slot per request: each `Open`, `OpenSized(…, 0)`, `ReadObject` and `ReadAt`,
@@ -174,6 +188,55 @@ For more control:
   lacks the name and its `Restore` refuses it. The application must establish
   that every required object is covered. Use the
   store's `Scope()` to bind snapshots to its namespace.
+
+## Observe the requests
+
+An operation that needs to know what it cost puts an `Observer` on its context
+(`WithObserver`). Every physical request a read makes under that context, through
+every wrapper, is reported as it begins (after any `Limit` slot is granted) and
+after its body is consumed or closed and SDK and objfile validation finishes: its kind (metadata, range or whole object),
+the store's object name (a `Root` prefix included), the range, whether it retries
+earlier work, the bytes consumed and the error. Each batch reports its plan
+(ranges in, requests out, gap bytes read and discarded) and a byte cache the bytes
+it served. Without an Observer this costs a context lookup and nothing else.
+
+`IOReporter` says whether the observation is complete. A `remote.Store` reports
+true: its clients send through a transport that reports every HTTP attempt, the
+SDKs' own retries, the GCS reader's reopening of a cut body, and resends inside
+Go's HTTP transport included. A store
+package over a caller's client reports false: it reports each request it makes,
+but not the retries the SDK makes inside one. Every wrapper reports what it wraps.
+
+## Cache fetched bytes
+
+`Cache(opener, scope, cache)` keeps the bytes reads fetch in a `ByteCache`, which
+several stores may share, and serves later reads of the same version from it with no
+request. Nothing is cached without the wrapper; `NewByteCache(n)` bounds the bytes
+the cache owns, copies a reader is making included, dropping the least recently used
+ranges. Entry bookkeeping has a separate count bound, including pending admissions.
+
+```go
+cache, err := objfile.NewByteCache(64 << 20)
+...
+o := objfile.Pin(objfile.Cache(store, store.Scope(), cache), store.Scope())
+```
+
+Bytes are keyed by the scope, the name given to the wrapper, the object's
+`Identity` and the range, and a read uses the cache only when its Object already had
+an Identity as the read began. So a cached byte never proves anything: the first read
+of an `OpenSized` Object, and every read of one `Pin` has not checked yet, goes to
+the store, and a reopened replaced object has another identity. Only complete
+successful reads are kept. A batch serves the ranges the cache holds and sends the
+rest as one batch. Cache eligibility is frozen for the entire original batch,
+through every order of `Cache`, `Batch`, `Limit` and `Pin`. Cached inputs are
+excluded from the reported plan; each miss request still takes its own `Limit`
+slot. `ReadObject` is never cached. Concurrent reads of the same
+uncached range each make their request.
+
+`WithCacheMode(ctx, CacheBypass)` makes an operation neither use nor fill the cache,
+for a scan that would only evict what interactive reads need; pin checks still run.
+`ReadAt` without a context uses the cache.
+An already cancelled context fails scalar and batch reads before cache lookup.
 
 ## Upload an object
 

@@ -4,6 +4,7 @@
 package objfile
 
 import (
+	"context"
 	"math"
 	"testing"
 )
@@ -23,4 +24,14 @@ func TestAddBatchBytes(t *testing.T) {
 			t.Errorf("addBatchBytes(%d, %d) = %d, %v; want ok=%v", c.total, c.n, got, ok, c.ok)
 		}
 	}
+}
+
+// WithBatchWait installs a scheduler handshake for external composition tests.
+func WithBatchWait(ctx context.Context, wait func(int)) context.Context {
+	return context.WithValue(ctx, batchWaitKey{}, wait)
+}
+
+// WithAdmissionWait installs a handshake at Limit admission for external tests.
+func WithAdmissionWait(ctx context.Context, wait func()) context.Context {
+	return context.WithValue(ctx, admissionWaitKey{}, wait)
 }

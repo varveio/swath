@@ -191,6 +191,85 @@ func ReadRanges(ctx context.Context, f Object, ranges []Range) error {
 // error wrapping ErrObjectChanged, fs.ErrNotExist or a *SizeMismatchError
 // before that, the ranges not yet read fail with that error, unsent.
 func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy) error {
+	// Snapshot cache eligibility once, before validation or admission can wait.
+	var filters []batchCache
+	frozen, hasCache := ctx.Value(cacheBatchKey{}) != nil, false
+	if !frozen {
+		id := f.Identity()
+		for inner := f; inner != nil; {
+			switch v := inner.(type) {
+			case *cachedObject:
+				hasCache = true
+				mode, err := cacheMode(ctx)
+				if err != nil {
+					return err
+				}
+				// Supported wrappers preserve a non-empty identity. An unchecked Pin
+				// above this cache hides it, keeping every cache ineligible for this batch.
+				if id != "" && mode == CacheDefault && !v.closed.Load() {
+					filters = append(filters, batchCache{v, cacheObject{scope: v.scope, name: v.name, identity: id}})
+				}
+				inner = v.Object
+			case limitedObject:
+				inner = v.Object
+			case batchedObject:
+				inner = v.Object
+			case *pinnedObject:
+				inner = v.Object
+			default:
+				inner = nil
+			}
+		}
+	}
+	if err := checkBatch(f.Size(), ranges, p); err != nil {
+		return err
+	}
+	p = p.normal()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Filter original inputs before planning. Scalar misses retain the complete
+	// Limit and Pin chain, with cache lookup and admission owned by this batch.
+	if hasCache {
+		ctx = context.WithValue(ctx, cacheBatchKey{}, true)
+		var run func(int, []Range) error
+		run = func(i int, rs []Range) error {
+			if i == len(filters) {
+				return ReadRangesWith(ctx, f, rs, p)
+			}
+			c := filters[i]
+			return c.f.readRanges(ctx, rs, c.key, func(misses []Range) error { return run(i+1, misses) })
+		}
+		return run(0, ranges)
+	}
+	b := plan(ranges, p)
+	if len(b.spans) == 0 {
+		return nil
+	}
+	if obs := ObserverFromContext(ctx); obs != nil {
+		obs.BatchPlanned(int64(b.nonEmpty), int64(len(b.spans)), b.overRead())
+	}
+	b.run(ctx, f, p)
+	errs := b.rangeErrors(len(ranges))
+	if errs == nil {
+		return nil
+	}
+	return &BatchError{Errs: errs}
+}
+
+// cacheBatchKey marks scalar requests whose cache work belongs to the batch.
+type cacheBatchKey struct{}
+
+// batchWaitKey carries a test-only handshake before the scheduler waits.
+type batchWaitKey struct{}
+type batchCache struct {
+	f   *cachedObject
+	key cacheObject
+}
+
+// checkBatch checks a batch of ranges of an object of size bytes under p
+// before any request, as ReadRangesWith says.
+func checkBatch(size int64, ranges []Range, p BatchPolicy) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -198,7 +277,6 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 		return fmt.Errorf("objfile: a batch of %d ranges, at most %d: %w", len(ranges), MaxBatchRanges, fs.ErrInvalid)
 	}
 	p = p.normal()
-	size := f.Size()
 	var total, pieces int64
 	for i, r := range ranges {
 		n := int64(len(r.Buf))
@@ -214,19 +292,7 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 			return fmt.Errorf("objfile: a batch of more than %d pieces of at most %d bytes: %w", maxBatchPieces, p.MaxRequest, fs.ErrInvalid)
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	b := plan(ranges, p)
-	if len(b.spans) == 0 {
-		return nil
-	}
-	b.run(ctx, f, p)
-	errs := b.rangeErrors(len(ranges))
-	if errs == nil {
-		return nil
-	}
-	return &BatchError{Errs: errs}
+	return nil
 }
 
 // addBatchBytes adds n to a batch's total, or reports that the sum is over
@@ -242,8 +308,10 @@ func addBatchBytes(total, n int64) (int64, bool) {
 // bytes, in object order and disjoint, and the pieces of the ranges each
 // fills.
 type batch struct {
-	ranges []Range
-	spans  []span
+	ranges   []Range
+	spans    []span
+	nonEmpty int   // ranges with bytes
+	bytes    int64 // distinct bytes the ranges ask for
 }
 
 // span is one request: the bytes [off, end), read into the Buf of ranges
@@ -265,6 +333,7 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 			order = append(order, i)
 		}
 	}
+	b.nonEmpty = len(order)
 	if len(order) == 0 {
 		return b
 	}
@@ -280,6 +349,9 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 			continue
 		}
 		runs = append(runs, run{off, end})
+	}
+	for _, r := range runs {
+		b.bytes += r.end - r.off
 	}
 
 	// Each run cut into near-equal pieces of at most MaxRequest bytes, and
@@ -337,6 +409,15 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 	return b
 }
 
+// overRead is the gap bytes the batch's requests read and discard.
+func (b *batch) overRead() int64 {
+	var read int64
+	for _, s := range b.spans {
+		read += s.end - s.off
+	}
+	return read - b.bytes
+}
+
 // run sends the spans' requests under p, as ReadRangesWith says, and
 // returns once every request it sent has ended. A span not sent fails with
 // the error that stopped the batch: the context's, or the first request's
@@ -372,6 +453,9 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy) {
 		}
 		if inFlight == 0 {
 			break
+		}
+		if hook, _ := ctx.Value(batchWaitKey{}).(func(int)); hook != nil {
+			hook(inFlight)
 		}
 		select {
 		case res := <-done:
@@ -478,6 +562,8 @@ type batched struct {
 	p BatchPolicy
 }
 
+func (b batched) ReportsIO() bool { return reportsIO(b.o) }
+
 func (b batched) Open(ctx context.Context, name string) (Object, error) {
 	f, err := b.o.Open(ctx, name)
 	if err != nil {
@@ -506,6 +592,8 @@ type batchedObject struct {
 func (f batchedObject) ReadRanges(ctx context.Context, ranges []Range) error {
 	return ReadRangesWith(ctx, f.Object, ranges, f.p)
 }
+
+func (f batchedObject) ReportsIO() bool { return reportsIO(f.Object) }
 
 func (f batchedObject) batchPolicy() BatchPolicy { return f.p }
 

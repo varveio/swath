@@ -40,7 +40,8 @@ const minPageBytes = 16
 type AggregateOptions struct {
 	// Counts requests each prefix's object count. It plans each prefix's
 	// range without columns, which decodes the key pages at its two ends
-	// and no value page.
+	// and no value page. Page uses the listing's row positions and adds
+	// no storage reads for counts.
 	Counts bool
 	// Sums selects the prefixes whose object sizes are summed. A sum
 	// decodes the size pages of the prefix's rows, so its cost grows with
@@ -53,7 +54,9 @@ type AggregateOptions struct {
 	// prefixes share counted once; zero means DefaultSumBudget. It must be
 	// zero for any other mode. Opening a part and reading its footer, key
 	// pages and page indexes to plan the sums are not charged. A budget
-	// that cannot hold one page plans nothing.
+	// that cannot hold one page plans nothing. Candidates are discovered in
+	// listing order, part by part; one that cannot fit is abandoned before
+	// discovering another part's size pages.
 	SumBudgetBytes int64
 }
 
@@ -66,7 +69,8 @@ type AggregateOptions struct {
 type PrefixAggregate struct {
 	// Count is the number of objects under the prefix. It is nil when its
 	// rows span a part no read has checked, whose row count is the
-	// manifest's alone (seekparquet.Plan.Count).
+	// manifest's alone (seekparquet.Plan.Count), or a Page listing did not
+	// establish both boundaries or resumed inside the prefix.
 	Count *int64
 	// Bytes is the sum of their sizes. It is nil when the count is
 	// unknown, the prefix was not summed or did not fit the budget, the
@@ -148,6 +152,15 @@ func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt Aggrega
 	for i, p := range unique {
 		targets[i].span = prefixSpan(p)
 	}
+	var locate []int
+	for i, t := range targets {
+		if !(t.span.whole() && d.checked.Load() && opt.Sums == SumsOff) {
+			locate = append(locate, i)
+		}
+	}
+	if err := d.locate(ctx, targets, locate, nil); err != nil {
+		return nil, err
+	}
 	aggs, err := d.aggregate(ctx, targets, opt, nil)
 	if err != nil {
 		return nil, err
@@ -181,24 +194,22 @@ type target struct {
 	known bool
 }
 
-// aggregate returns the totals opt requests of each target, adding the
-// statistics of its plans and scans to st when it is not nil. A target's
-// rows not known are located by one plan of their keys.
+// aggregate totals established positions. Unknown listing boundaries stay
+// unknown: counts must add no reads.
 func (d *Dataset) aggregate(ctx context.Context, targets []target, opt AggregateOptions, st *ReadStats) ([]PrefixAggregate, error) {
-	out := make([]PrefixAggregate, len(targets))
-	counts := make([]*int64, len(targets))
-	var locate []int
-	for i, t := range targets {
-		if !t.known && !(t.span.whole() && d.checked.Load() && opt.Sums == SumsOff) {
-			locate = append(locate, i)
-		}
-	}
-	if err := d.locate(ctx, targets, locate, st); err != nil {
+	if err := d.checkAggregates(ctx, opt); err != nil {
 		return nil, err
 	}
+	out := make([]PrefixAggregate, len(targets))
+	if !opt.Counts && opt.Sums == SumsOff {
+		return out, nil
+	}
+	counts := make([]*int64, len(targets))
 	for i, t := range targets {
-		if !t.known { // every key, after CheckSchema
-			counts[i] = ptrTo(d.rows())
+		if !t.known {
+			if t.span.whole() && d.checked.Load() {
+				counts[i] = ptrTo(d.rows())
+			}
 			continue
 		}
 		plan, err := d.sp.PlanRows(ctx, []seekparquet.RowSpan{t.rows}, nil, nil)
@@ -267,33 +278,27 @@ func (d *Dataset) sum(ctx context.Context, targets []target, counts []*int64, op
 		return nil
 	}
 	slices.SortStableFunc(candidates, func(a, b int) int { return bytes.Compare(targets[a].span.lo, targets[b].span.lo) })
-	rows := make([]seekparquet.RowSpan, len(candidates))
-	for k, i := range candidates {
-		rows[k] = targets[i].rows
+	var plan *seekparquet.Plan
+	var err error
+	selected := candidates
+	if opt.Sums == SumsWithinBudget {
+		plan, selected, err = d.budgetSums(ctx, targets, candidates, opt.budget(), st)
+	} else {
+		rows := make([]seekparquet.RowSpan, len(candidates))
+		for k, i := range candidates {
+			rows[k] = targets[i].rows
+		}
+		var planned ReadStats
+		plan, err = d.sp.PlanRows(ctx, rows, []string{"size"}, &planned)
+		addStats(st, planned)
 	}
-	var planned ReadStats
-	plan, err := d.sp.PlanRows(ctx, rows, []string{"size"}, &planned)
-	addStats(st, planned)
 	if err != nil {
 		return err
 	}
-	selected := candidates
-	if opt.Sums == SumsWithinBudget {
-		selected, rows = nil, rows[:0:0]
-		for _, i := range candidates {
-			p, err := plan.SelectRows(append(rows, targets[i].rows))
-			if err != nil {
-				return err
-			}
-			if n, exact := p.ProjectedBytes(); exact && n <= opt.budget() {
-				selected, rows = append(selected, i), append(rows, targets[i].rows)
-				plan = p
-			}
-		}
-		if len(selected) == 0 {
-			return nil
-		}
+	if len(selected) == 0 {
+		return nil
 	}
+
 	sums, err := d.sumRows(ctx, plan, st)
 	if err != nil {
 		return err
@@ -302,6 +307,103 @@ func (d *Dataset) sum(ctx context.Context, targets []target, counts []*int64, op
 		out[i].Bytes = sums[k].total()
 	}
 	return nil
+}
+
+// budgetSums ports varve's selectPrefix: discover candidates in listing
+// order, part by part, and abandon one as soon as its known cost plus the
+// minimum cost of its remaining parts cannot fit. Metadata is uncharged.
+// A new part needs at least one page; a part already selected may share
+// pages and dictionaries, so its lower bound is zero.
+func (d *Dataset) budgetSums(ctx context.Context, targets []target, candidates []int, budget int64, st *ReadStats) (*seekparquet.Plan, []int, error) {
+	parts := d.meta.Manifest.Parts
+	ends := make([]int64, len(parts))
+	for i, p := range parts {
+		ends[i] = p.Rows
+		if i > 0 {
+			ends[i] += ends[i-1]
+		}
+	}
+	charged := make([]bool, len(parts))
+	var selected []int
+	var rows []seekparquet.RowSpan
+	var accepted *seekparquet.Plan
+	var used int64
+	for _, i := range candidates {
+		t := targets[i]
+		start, _ := t.rows.Start.Ordinal()
+		end, _ := t.rows.End.Ordinal()
+		first := sort.Search(len(ends), func(j int) bool { return ends[j] > start })
+		last := sort.Search(len(ends), func(j int) bool { return ends[j] >= end })
+		floor := int64(0)
+		for j := first; j <= last; j++ {
+			if !charged[j] {
+				floor += minPageBytes
+			}
+		}
+		trial := slices.Clone(rows)
+		from := t.rows.Start
+		cost := used
+		var universe *seekparquet.Plan
+		fits := true
+		for j := first; j <= last; j++ {
+			if floor > budget-cost {
+				fits = false
+				break
+			}
+			to := t.rows.End
+			if j < last {
+				// Ask SeekParquet for this whole-part cut; do not manufacture
+				// a position from an ordinal. Manifest bounds prove both ends,
+				// and Count already required this part's footer to be checked.
+				var planned ReadStats
+				p, err := d.sp.Plan(ctx, []seekparquet.Selection{{Span: seekparquet.Span{
+					Start: parts[j].MinKey, End: parts[j+1].MinKey}}}, nil, &planned)
+				addStats(st, planned)
+				if err != nil {
+					return nil, nil, err
+				}
+				to = p.RowSpans()[0].End
+			}
+			trial = append(trial, seekparquet.RowSpan{Start: from, End: to})
+			var planned ReadStats
+			p, err := d.sp.PlanRows(ctx, trial, []string{"size"}, &planned)
+			addStats(st, planned)
+			if err != nil {
+				return nil, nil, err
+			}
+			// Keep this candidate universe immutable. Selecting a subset
+			// must not remove rows available to a subsequent candidate.
+			universe = p
+			priced, err := universe.SelectRows(trial)
+			if err != nil {
+				return nil, nil, err
+			}
+			var exact bool
+			cost, exact = priced.ProjectedBytes()
+			if !exact || cost > budget {
+				fits = false
+				break
+			}
+			if !charged[j] {
+				floor -= minPageBytes
+			}
+			from = to
+		}
+		if fits {
+			selected, rows = append(selected, i), append(rows, t.rows)
+			accepted, used = universe, cost
+			for j := first; j <= last; j++ {
+				charged[j] = true
+			}
+		}
+	}
+	if accepted == nil {
+		return nil, nil, nil
+	}
+	// One input per selected prefix gives independent totals; their union
+	// still reads shared pages and overlapping rows only once.
+	plan, err := accepted.SelectRows(rows)
+	return plan, selected, err
 }
 
 // sumRows reads the size values of plan's rows (ScanValues) and returns

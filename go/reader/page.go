@@ -4,9 +4,12 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // PageRequest is one page of a delimited listing (ListRequest) with the
@@ -38,7 +41,10 @@ type Page struct {
 // Page lists at most req.Limit entries as List does, and the totals of
 // the common prefixes among them as Aggregates computes them, in one call
 // for those prefixes alone (a prefix carrying the object at its exact key
-// included). It lists one entry beyond the limit to learn whether more
+// included). Counts use the listing's row positions and add no storage
+// reads. An unknown boundary or a cursor made up inside a prefix leaves
+// that prefix's totals nil; it is never completed by seeking its keys.
+// It lists one entry beyond the limit to learn whether more
 // follow: Next is the last returned entry's Cursor when one does, nil
 // otherwise, so the last page is never followed by an empty one.
 //
@@ -65,7 +71,8 @@ func (d *Dataset) Page(ctx context.Context, req PageRequest) (Page, error) {
 	list.Limit++
 	var listed ReadStats
 	list.Stats = &listed
-	entries, err := d.List(ctx, list)
+	var rows []seekparquet.RowSpan
+	entries, err := d.list(ctx, list, &rows)
 	addStats(st, listed)
 	if err != nil {
 		return Page{}, err
@@ -75,13 +82,23 @@ func (d *Dataset) Page(ctx context.Context, req PageRequest) (Page, error) {
 		entries = entries[:req.Limit]
 		page.Next = entries[len(entries)-1].Cursor()
 	}
-	var prefixes [][]byte
-	for _, e := range entries {
-		if e.CommonPrefix != nil {
-			prefixes = append(prefixes, e.CommonPrefix)
+	var targets []target
+	for i, e := range entries {
+		if e.CommonPrefix == nil {
+			continue
 		}
+		_, start := rows[i].Start.Ordinal()
+		_, end := rows[i].End.Ordinal()
+		known := start && end
+		if c := req.Cursor; c != nil {
+			// Made-up cursors inside this prefix clip its first rows.
+			// Returned page cursors resume beyond a complete entry.
+			known = known && !bytes.HasPrefix(c.Key, e.CommonPrefix) &&
+				!(len(c.Prefix) > len(e.CommonPrefix) && bytes.HasPrefix(c.Prefix, e.CommonPrefix))
+		}
+		targets = append(targets, target{span: prefixSpan(e.CommonPrefix), rows: rows[i], known: known})
 	}
-	aggs, err := d.aggregates(ctx, prefixes, req.Aggregates, st)
+	aggs, err := d.aggregate(ctx, targets, req.Aggregates, st)
 	if err != nil {
 		return Page{}, err
 	}

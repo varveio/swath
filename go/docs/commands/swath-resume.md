@@ -4,9 +4,11 @@ swath resume continues an interrupted dataset run with the command its journal r
 
 ## Synopsis
 
+<!-- synopsis:begin -->
 ```text
 swath resume DIR [OPTIONS]
 ```
+<!-- synopsis:end -->
 
 ## Description
 

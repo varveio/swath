@@ -100,6 +100,11 @@ func (e Entry) Cursor() *Cursor {
 // ErrClosed after Close, an error wrapping ErrInvalidRequest (a Limit that
 // is not positive, a malformed Cursor), the Source's, and the context's.
 func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
+	return d.list(ctx, req, nil)
+}
+
+// list preserves row spans for Page without completing unknown boundaries.
+func (d *Dataset) list(ctx context.Context, req ListRequest, rows *[]seekparquet.RowSpan) ([]Entry, error) {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}
 	}
@@ -123,6 +128,12 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 		Limit: req.Limit, Columns: columns, ReadAhead: req.ReadAhead}, req.Stats)
 	if err != nil {
 		return nil, err
+	}
+	if rows != nil {
+		*rows = make([]seekparquet.RowSpan, len(got))
+		for i, e := range got {
+			(*rows)[i] = e.Rows
+		}
 	}
 	out := make([]Entry, len(got))
 	for i, e := range got {

@@ -135,7 +135,23 @@ func TestDataset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(wantEntries) != 17 || !reflect.DeepEqual(gotEntries, wantEntries) {
+	// Row positions are scoped to their dataset, so compare ordinals.
+	sameEntries := len(gotEntries) == len(wantEntries)
+	for i := 0; sameEntries && i < len(gotEntries); i++ {
+		g, w := gotEntries[i], wantEntries[i]
+		gs, gsk := g.Rows.Start.Ordinal()
+		ge, gek := g.Rows.End.Ordinal()
+		ws, wsk := w.Rows.Start.Ordinal()
+		we, wek := w.Rows.End.Ordinal()
+		if gs != ws || ge != we || gsk != wsk || gek != wek {
+			sameEntries = false
+		}
+		g.Rows, w.Rows = seekparquet.RowSpan{}, seekparquet.RowSpan{}
+		if !reflect.DeepEqual(g, w) {
+			sameEntries = false
+		}
+	}
+	if len(wantEntries) != 17 || !sameEntries {
 		t.Fatalf("List: %d entries remote, %d local, or they differ", len(gotEntries), len(wantEntries))
 	}
 }

@@ -102,8 +102,8 @@ func TestAggregatesMatchOracle(t *testing.T) {
 // TestAggregatesCountsAddNoReads (varve TestListCountsAddNoReads): counts
 // decode no value page, and open no part between a prefix's ends; the
 // count of every key reads nothing once CheckSchema has checked the parts.
-// The old test's identical-reads assertion, counts on and off in a
-// listing, needs the listing's row positions from SeekParquet.
+// TestPageCountsAddNoReads separately holds counts on and off to identical
+// listing traces using SeekParquet's captured row positions.
 func TestAggregatesCountsAddNoReads(t *testing.T) {
 	keys := randomKeys(rand.New(rand.NewPCG(5, 6)), 420)
 	dir := writeParts(t, s3Spec(), 7, 40, cut(keyRows(keys), 0, 97, 210, 211, 330, len(keys))...)

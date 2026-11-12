@@ -1,9 +1,8 @@
 # Architecture
 
 swath lists a source (a local directory tree, an S3 or GCS bucket, or an Azure Blob container) and writes a
-globally key-sorted Parquet dataset in swath's sorted-dataset layout. It is one pure-Go (`CGO_ENABLED=0`) static binary.
-The language-neutral contracts in [`../../../docs/internals/`](../../../docs/internals/) bind it; the Go statement of
-them is [contracts.md](contracts.md).
+globally key-sorted Parquet dataset ([../dataset.md](../dataset.md)). It is one pure-Go (`CGO_ENABLED=0`) static binary.
+What it promises, and the invariants I1–I12 that keep it true, are in [contracts.md](contracts.md).
 
 ## Pipeline
 
@@ -88,6 +87,8 @@ specs (`schema.Bind`), so what swath writes and what a reader decodes are descri
 conditional creation and the read-back of retained parts go through `objfile/gcs`, `objfile/s3` or `objfile/azblob` and `objfile/remote.OpenDestination`,
 which links `cloud.google.com/go/storage` into the swath binary
 ([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister.
+The optional objfile byte cache rejects an already cancelled read context before
+lookup, for both scalar and batched reads ([cache contract](../../objfile/cache.go)).
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`localfs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`
