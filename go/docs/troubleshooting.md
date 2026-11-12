@@ -63,20 +63,20 @@ swath: --s3-profile applies to S3 sources, not to GCS sources
 ## The output directory is refused
 
 ```text
-swath: nonempty: output directory is not empty (use --overwrite to replace a previous dataset)
+swath: inventory: output directory is not empty (use --overwrite to replace a previous dataset)
 ```
 
-Exit 2, and nothing was changed. `-o DIR` takes a new or empty directory. `--overwrite` replaces a previous
+Exit 2, and nothing was changed (the messages here are for `-o inventory`). `-o DIR` takes a new or empty directory. `--overwrite` replaces a previous
 swath dataset there and nothing else; a directory holding other files stays refused:
 
 ```text
-swath: -o: nonempty: output directory does not hold a previous swath dataset
+swath: -o: inventory: output directory does not hold a previous swath dataset
 ```
 
 A directory that holds an interrupted run is continued with `swath resume DIR`, or replaced with `--overwrite`:
 
 ```text
-swath: l2: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
+swath: inventory: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
 ```
 
 ## A `.parquet` output became a directory
@@ -88,7 +88,7 @@ manifest ([getting-started.md](getting-started.md#6-query-it-with-duckdb)).
 ## `-o` names a format swath does not write
 
 ```text
-swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS bucket prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
+swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS, S3 or Azure Blob prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
 ```
 
 Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#reading-text-rows-in-duckdb)).

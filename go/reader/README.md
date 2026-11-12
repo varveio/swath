@@ -24,7 +24,7 @@ what a reader decodes are described once.
 ## API
 
 ```go
-type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1
+type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, AzblobVersionsV1, LocalV1
 type ColumnType uint8 // TypeString, TypeInt32, TypeInt64, TypeTimestampMicros, TypeBool, TypeUint32, TypeUint64, TypeBinary
 type ColumnSpec struct { Name string; Type ColumnType; Required, MayBeAbsent bool }
 type SchemaSpec struct { ID SchemaID; Key ColumnSpec; UniqueKeys bool; MaxKeyBytes int; Columns []ColumnSpec; Versions VersionSpec }
