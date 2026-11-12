@@ -278,7 +278,10 @@ func (l limited) OpenSized(ctx context.Context, name string, size int64) (Object
 // and ReadObject go to o unchanged. It is for a reader that knows its
 // files' sizes, from a manifest it has read, but opens them through an
 // interface that does not carry one (SeekParquet's Source.Open). sizes is
-// copied. OpenSized checks each size at the Object's first read.
+// copied. OpenSized checks each size at the Object's first read. A name of
+// size 0 (or less) opens with Open: no read of an empty object reaches the
+// store, so only a metadata request can prove it. Compose it either inside
+// or outside Pin: Pin checks the Objects it returns at their first read.
 func KnownSizes(o Opener, sizes map[string]int64) Opener {
 	return knownSizes{o: o, sizes: maps.Clone(sizes)}
 }
@@ -289,7 +292,7 @@ type knownSizes struct {
 }
 
 func (k knownSizes) Open(ctx context.Context, name string) (Object, error) {
-	if size, ok := k.sizes[name]; ok {
+	if size, ok := k.sizes[name]; ok && size > 0 {
 		return k.o.OpenSized(ctx, name, size)
 	}
 	return k.o.Open(ctx, name)

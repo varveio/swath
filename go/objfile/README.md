@@ -139,10 +139,13 @@ For more control:
   object wraps `fs.ErrNotExist`. `Size()` is only the size given until then, and
   `Identity()` is empty.
 - `KnownSizes` turns `Open` of names whose sizes a reader already holds into
-  `OpenSized`, for a reader whose open carries no size (SeekParquet's
-  `Source.Open`).
-- Use `Pin` across opens and `Snapshot`/`Restore` across restarts. Compose it
-  outermost: `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
+  `OpenSized` (empty ones excepted: only a metadata request proves those), for a
+  reader whose open carries no size (SeekParquet's `Source.Open`). It composes
+  inside or outside `Pin`, which checks an Object its inner `Open` returns unpinned
+  at the first read, as it checks `OpenSized`'s.
+- Use `Pin` across opens and `Snapshot`/`Restore` across restarts, for example
+  `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`; the wrappers
+  compose in any order.
   `Pinned.OpenSized` checks the identity at the first read instead of at open, and
   `Pinned.ReadObject` with the read; both re-prove the current object. Against a
   recorded pin, another size is `ErrObjectChanged`. A restored snapshot

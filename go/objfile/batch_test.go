@@ -553,7 +553,10 @@ func TestComposition(t *testing.T) {
 				return objfile.Pin(objfile.Root(objfile.Limit(mustBatch(t, o, small), limit), ""), scope)
 			}},
 			{"KnownSizes(Pin(Limit(Batch)))", func(t *testing.T, o objfile.Opener) objfile.Opener {
-				return objfile.KnownSizes(objfile.Pin(objfile.Limit(mustBatch(t, o, small), limit), scope), map[string]int64{"other": 1})
+				return objfile.KnownSizes(objfile.Pin(objfile.Limit(mustBatch(t, o, small), limit), scope), map[string]int64{"obj": 4096})
+			}},
+			{"Pin(KnownSizes(Limit(Batch)))", func(t *testing.T, o objfile.Opener) objfile.Opener {
+				return objfile.Pin(objfile.KnownSizes(objfile.Limit(mustBatch(t, o, small), limit), map[string]int64{"obj": 4096}), scope)
 			}},
 			{"Batch(Pin(Limit))", func(t *testing.T, o objfile.Opener) objfile.Opener {
 				return mustBatch(t, objfile.Pin(objfile.Limit(o, limit), scope), small)

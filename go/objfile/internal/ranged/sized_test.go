@@ -530,11 +530,13 @@ func TestOneConnectionInterleaving(t *testing.T) {
 	var bOnce sync.Once
 	markB := func() { bOnce.Do(func() { close(bReady) }) }
 	get := func(rctx context.Context, off, n int64, pin Pin) (Response, error) {
-		if off == 500 {
-			markB() // B sends a request: it takes the connection
-		}
-		if err := take(rctx); err != nil {
+		// The connection is taken under the test's own context, so that
+		// taking it never asks B's doneWatch (only a wait for the pin does).
+		if err := take(ctx); err != nil {
 			return Response{}, err
+		}
+		if off == 500 {
+			markB() // B owns the connection now, as its response will
 		}
 		res, err := s.get(rctx, off, n, pin)
 		if err != nil {

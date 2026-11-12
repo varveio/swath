@@ -67,7 +67,9 @@ func Restore(o Opener, scope string, snapshot []byte) (*Pinned, error) {
 // the first successful Open records the object's size and Identity; a later
 // one, or one that loses a race to record, must find the same, or it closes
 // the object and fails with ErrObjectChanged. A recorded object that is gone
-// also fails with ErrObjectChanged.
+// also fails with ErrObjectChanged. An Object the wrapped Opener's Open
+// returns unpinned (KnownSizes opens a name it knows the size of with
+// OpenSized) is checked at its first read, as OpenSized's are.
 func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 	if err := CheckPath(name); err != nil {
 		return nil, err
@@ -85,11 +87,32 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 		}
 		return nil, err
 	}
+	if f.Identity() == "" && f.Size() > 0 {
+		// Pinned by its first read, as an OpenSized Object is (KnownSizes
+		// below opens a name it knows the size of so): checked as
+		// OpenSized's are, at that read.
+		return p.lazy(name, f)
+	}
 	if err := p.check(name, "open", pin{Size: f.Size(), Identity: f.Identity()}); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return f, nil
+}
+
+// lazy wraps f, opened of name but not yet pinned, to be checked against
+// the pin at its first read: a recorded pin of another size fails at once
+// with ErrObjectChanged.
+func (p *Pinned) lazy(name string, f Object) (Object, error) {
+	p.mu.Lock()
+	want, recorded := p.pins[name]
+	p.mu.Unlock()
+	if recorded && want.Size != f.Size() {
+		f.Close()
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: opened as %d bytes, pinned %d bytes at %q",
+			ErrObjectChanged, f.Size(), want.Size, want.Identity)}
+	}
+	return &pinnedObject{Object: f, p: p, name: name, recorded: recorded}, nil
 }
 
 // OpenSized opens name, a path CheckPath accepts, of size bytes, without a
@@ -132,8 +155,14 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 		}
 		if f.Size() != 0 {
 			f.Close()
-			if recorded { // the recorded pin is of size 0
-				return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes, pinned 0 bytes at %q", ErrObjectChanged, f.Size(), want.Identity)}
+			// Judged by the pin recorded now: one another handle recorded
+			// during the request makes this a change of that object.
+			p.mu.Lock()
+			now, recordedNow := p.pins[name]
+			p.mu.Unlock()
+			if recordedNow {
+				return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes at %q, pinned %d bytes at %q",
+					ErrObjectChanged, f.Size(), f.Identity(), now.Size, now.Identity)}
 			}
 			return nil, &fs.PathError{Op: "open", Path: name, Err: &SizeMismatchError{Name: name, Expected: 0, Actual: f.Size()}}
 		}
@@ -147,7 +176,7 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 	if err != nil {
 		return nil, err
 	}
-	return &pinnedObject{Object: f, p: p, name: name, recorded: recorded}, nil
+	return p.lazy(name, f)
 }
 
 // ReadObject reads name, a path CheckPath accepts, whole (ObjectReader)

@@ -659,3 +659,25 @@ func TestPinRecordedDuringRequest(t *testing.T) {
 		})
 	}
 }
+
+// TestPinRecordedDuringZeroSizedOpen: OpenSized(..., 0) whose metadata
+// request finds a non-empty object, after another handle recorded the empty
+// one during it, reports a change of the recorded object, not a size it was
+// given wrong.
+func TestPinRecordedDuringZeroSizedOpen(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("obj", nil)
+	p := objfile.Pin(s, scope)
+	s.before = func() { // as the request is sent: recorded empty, then replaced
+		if _, err := p.Open(ctx, "obj"); err != nil {
+			t.Error(err)
+		}
+		s.put("obj", []byte("now full"))
+	}
+	_, err := p.OpenSized(ctx, "obj", 0)
+	var sm *objfile.SizeMismatchError
+	if !errors.Is(err, objfile.ErrObjectChanged) || errors.As(err, &sm) {
+		t.Fatalf("OpenSized(0) of an object recorded empty and replaced meanwhile = %v; want ErrObjectChanged, not a SizeMismatchError", err)
+	}
+}
