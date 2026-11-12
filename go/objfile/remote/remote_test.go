@@ -27,6 +27,8 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/go/objfile/internal/ranged"
 )
 
 const secret = "secret-key-never-recorded"
@@ -40,6 +42,10 @@ var data = bytes.Repeat([]byte("0123456789abcdef"), 512)
 type store struct {
 	shiftRest bool
 	reads     atomic.Int32
+	// barrier, if set, makes the first barrier ranged reads wait until
+	// all of them have arrived.
+	barrier int32
+	arrived chan struct{}
 }
 
 func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +81,16 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	read := s.reads.Add(1)
+	if read <= s.barrier {
+		if read == s.barrier {
+			close(s.arrived)
+		}
+		select {
+		case <-s.arrived:
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if s.shiftRest && read > 1 {
 		start, end = start+1, end+1
 	}
@@ -103,7 +119,8 @@ func isolate(t *testing.T) {
 // server serves st, counting the connections open to it.
 type server struct {
 	*httptest.Server
-	open atomic.Int32
+	open  atomic.Int32
+	conns atomic.Int32 // connections ever opened
 }
 
 func serve(t *testing.T, st *store) *server {
@@ -112,6 +129,7 @@ func serve(t *testing.T, st *store) *server {
 		switch state {
 		case http.StateNew:
 			srv.open.Add(1)
+			srv.conns.Add(1)
 		case http.StateClosed, http.StateHijacked:
 			srv.open.Add(-1)
 		}
@@ -142,6 +160,25 @@ func check(t *testing.T, srv *server, location string) (string, []byte) {
 	}
 	if _, err := p.Open(ctx, "missing"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Open(missing) = %v, want fs.ErrNotExist", err)
+	}
+	// Every attempt is observed, through the wrappers, with the store's
+	// name for it (the prefix included), and the Store says so.
+	if !s.ReportsIO() || !p.ReportsIO() || !f.(objfile.IOReporter).ReportsIO() {
+		t.Fatal("the Store, its pinned Opener or its Object does not report complete observation")
+	}
+	obs := &objfiletest.Observer{}
+	octx := objfile.WithObserver(ctx, obs)
+	g, err := p.Open(octx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WithContext(octx).ReadAt(got, 100); err != nil {
+		t.Fatal(err)
+	}
+	reqs, ends := obs.Events()
+	if len(reqs) != 2 || len(ends) != 2 || reqs[0].Kind != objfile.MetadataRequest || reqs[1] != (objfile.Request{Kind: objfile.RangeRequest, Name: "ds/obj", Off: 100, Len: 1000}) ||
+		ends[1] != (objfile.RequestResult{Bytes: 1000}) || reqs[0].Name != "ds/obj" {
+		t.Fatalf("observed %+v, %+v; want the metadata request and the range", reqs, ends)
 	}
 	snap, err := p.Snapshot()
 	if err != nil {
@@ -367,5 +404,108 @@ func TestOpenGCSCredentialsOutliveContext(t *testing.T) {
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Errorf("Open = %v, want context.Canceled", err)
+	}
+}
+
+func TestStoreBarrierCancelled(t *testing.T) {
+	st := &store{barrier: 2, arrived: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodGet, "/bkt/ds/obj", nil).WithContext(ctx)
+	r.Header.Set("Range", "bytes=0-9")
+	w := httptest.NewRecorder()
+	st.ServeHTTP(w, r)
+	if st.reads.Load() != 1 || w.Body.Len() != 0 {
+		t.Fatalf("cancelled barrier request: %d arrivals, %d response bytes; want 1, 0", st.reads.Load(), w.Body.Len())
+	}
+	select {
+	case <-st.arrived:
+		t.Fatal("the barrier released before all requests arrived")
+	default:
+	}
+}
+
+// TestPoolKeepsBurst: after a burst of 16 concurrent ranged requests (a
+// default batch's), a second burst finds its connections open.
+func TestPoolKeepsBurst(t *testing.T) {
+	isolate(t)
+	st := &store{barrier: 16, arrived: make(chan struct{})}
+	srv := serve(t, st)
+	t.Setenv("AWS_ENDPOINT_URL_S3", srv.URL)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDTEST")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	s, err := Open(ctx, "s3://bkt/ds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	o, err := objfile.Batch(s, objfile.BatchPolicy{DisableGapBridging: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := o.Open(ctx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	burst := func() {
+		var rs []objfile.Range
+		for i := range 16 {
+			rs = append(rs, objfile.Range{Off: int64(i) * 500, Buf: make([]byte, 10)})
+		}
+		if err := objfile.ReadRanges(ctx, f, rs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	burst() // all 16 in flight at once (the barrier)
+	before := srv.conns.Load()
+	if before < 16 {
+		t.Fatalf("%d connections for 16 requests in flight", before)
+	}
+	burst()
+	if n := srv.conns.Load() - before; n != 0 {
+		t.Fatalf("the second burst opened %d new connections, want 0", n)
+	}
+}
+
+func TestSizeTransport(t *testing.T) {
+	tr := &http.Transport{MaxIdleConns: 10, MaxIdleConnsPerHost: 2, MaxConnsPerHost: 8}
+	sizeTransport(tr, 64)
+	if tr.MaxIdleConns != 64 || tr.MaxIdleConnsPerHost != 64 || tr.MaxConnsPerHost != 8 {
+		t.Fatalf("sized %d idle, %d idle per host, %d per host; want 64, 64 and the active ceiling 8 kept",
+			tr.MaxIdleConns, tr.MaxIdleConnsPerHost, tr.MaxConnsPerHost)
+	}
+	tr = &http.Transport{MaxIdleConnsPerHost: 100}
+	sizeTransport(tr, 64)
+	if tr.MaxIdleConns != 0 || tr.MaxIdleConnsPerHost != 100 {
+		t.Fatalf("a larger pool or an unlimited one was lowered: %d, %d", tr.MaxIdleConns, tr.MaxIdleConnsPerHost)
+	}
+}
+
+// TestObservingOwnership: Close forgets exactly the owned client's
+// registration before releasing it, including when the client's close fails.
+func TestObservingOwnership(t *testing.T) {
+	for _, closeErr := range []error{nil, errors.New("close failed")} {
+		client, other := &http.Client{}, &http.Client{}
+		ranged.SetObserving(other, true)
+		t.Cleanup(func() { ranged.SetObserving(client, false); ranged.SetObserving(other, false) })
+		s := &Store{close: func() error {
+			if ranged.Observing(client) {
+				t.Error("client still registered during close")
+			}
+			return closeErr
+		}}
+		s.observing(client)
+		if !ranged.Observing(client) {
+			t.Fatal("owned client not registered")
+		}
+		if err := s.Close(); !errors.Is(err, closeErr) {
+			t.Fatalf("Close = %v, want %v", err, closeErr)
+		}
+		if ranged.Observing(client) || !ranged.Observing(other) {
+			t.Fatal("Close forgot the wrong clients")
+		}
 	}
 }

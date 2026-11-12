@@ -46,7 +46,7 @@ func TestBodyRetry(t *testing.T) {
 			}
 			return Response{Body: body, Pin: pin, Start: off, Total: int64(len(data)), Length: n}, nil
 		}
-		f := New("obj", int64(len(data)), pin, get)
+		f := New("obj", int64(len(data)), pin, get, false)
 		p := make([]byte, 50)
 		n, err := f.ReadAt(p, 10)
 		if cuts > BodyRetries {
@@ -74,7 +74,7 @@ func TestPinCheck(t *testing.T) {
 	get := func(_ context.Context, off, n int64, _ Pin) (Response, error) {
 		return Response{Body: io.NopCloser(bytes.NewReader(make([]byte, n))), Pin: served, Total: total, Length: n}, nil
 	}
-	f := New("obj", 10, Pin{}, get)
+	f := New("obj", 10, Pin{}, get, false)
 	if _, err := f.ReadAt(make([]byte, 2), 0); err != nil || f.Identity() != "a" {
 		t.Fatalf("first read: %v, Identity %q", err, f.Identity())
 	}
@@ -101,7 +101,7 @@ func TestServedStart(t *testing.T) {
 			return Response{Body: io.NopCloser(bytes.NewReader(data[from : from+n])), Pin: Pin{ETag: "e"}, Start: c.start, Total: 10, Length: n}, nil
 		}
 		p := make([]byte, 3)
-		n, err := New("obj", 10, Pin{ETag: "e"}, get).ReadAt(p, c.off)
+		n, err := New("obj", 10, Pin{ETag: "e"}, get, false).ReadAt(p, c.off)
 		if c.ok != (err == nil) || err != nil && errors.Is(err, objfile.ErrObjectChanged) {
 			t.Errorf("read at %d served from %d: %d, %v", c.off, c.start, n, err)
 		}

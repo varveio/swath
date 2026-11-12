@@ -41,20 +41,26 @@ import (
 // New returns an Opener of the blobs of containerName through client, which
 // carries the caller's credentials, endpoint, transport and retry settings.
 func New(client *azsdk.Client, containerName string) objfile.Opener {
-	return opener{container: client.ServiceClient().NewContainerClient(containerName)}
+	return opener{container: client.ServiceClient().NewContainerClient(containerName), observed: ranged.Observing(client)}
 }
 
 type opener struct {
 	container *container.Client
+	observed  bool // the client's transport reports every attempt
 }
+
+// ReportsIO reports whether every request's attempts are observed
+// (objfile.IOReporter): only for a client objfile/remote built, whose
+// transport sees the SDK's retries.
+func (o opener) ReportsIO() bool { return o.observed }
 
 func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	b := o.container.NewBlobClient(name)
-	size, pin, err := stat(ctx, b)
+	size, pin, err := ranged.Metadata(ctx, name, o.observed, func(ctx context.Context) (int64, ranged.Pin, error) { return stat(ctx, b) })
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
-	return ranged.New(name, size, pin, getter(b)), nil
+	return ranged.New(name, size, pin, getter(b), o.observed), nil
 }
 
 func (o opener) OpenSized(ctx context.Context, name string, size int64) (objfile.Object, error) {
@@ -67,12 +73,12 @@ func (o opener) OpenSized(ctx context.Context, name string, size int64) (objfile
 	b := o.container.NewBlobClient(name)
 	return ranged.NewSized(name, size, getter(b), func(ctx context.Context) (int64, ranged.Pin, error) {
 		return stat(ctx, b)
-	}), nil
+	}, o.observed), nil
 }
 
 // ReadObject reads name whole with one download, with no range.
 func (o opener) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
-	return ranged.ReadObject(ctx, name, limit, getter(o.container.NewBlobClient(name)))
+	return ranged.ReadObject(ctx, name, limit, o.observed, getter(o.container.NewBlobClient(name)))
 }
 
 // stat is the blob's properties: its size and ETag.
