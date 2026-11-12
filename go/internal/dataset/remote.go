@@ -337,29 +337,22 @@ const (
 	ManifestOther // another manifest
 )
 
-// ResolveManifest reads the destination's manifest and compares it with
-// candidate: its state, and its bytes when it is another (bounded by
-// ManifestLimits).
+// ResolveManifest reads the destination's manifest, whole in one request
+// (objfile.ReadObject), and compares it with candidate: its state, and its
+// bytes when it is another (bounded by ManifestLimits).
 func ResolveManifest(ctx context.Context, r *Remote, candidate []byte) (ManifestState, []byte, string, error) {
-	obj, err := r.Opener.Open(ctx, ManifestName)
-	if errors.Is(err, fs.ErrNotExist) {
+	b, id, err := objfile.ReadObject(ctx, r.Opener, ManifestName, ManifestLimits.ManifestBytes)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return ManifestAbsent, nil, "", nil
-	}
-	if err != nil {
+	case errors.Is(err, objfile.ErrTooLarge):
+		return ManifestOther, nil, id, nil
+	case err != nil:
 		return ManifestUnknown, nil, "", err
+	case bytes.Equal(b, candidate):
+		return ManifestOurs, nil, id, nil
 	}
-	defer obj.Close()
-	if obj.Size() > ManifestLimits.ManifestBytes {
-		return ManifestOther, nil, obj.Identity(), nil
-	}
-	b, err := io.ReadAll(io.NewSectionReader(obj.WithContext(ctx), 0, obj.Size()))
-	if err != nil {
-		return ManifestUnknown, nil, "", err
-	}
-	if bytes.Equal(b, candidate) {
-		return ManifestOurs, nil, obj.Identity(), nil
-	}
-	return ManifestOther, b, obj.Identity(), nil
+	return ManifestOther, b, id, nil
 }
 
 // PublishRemote commits parts (already gated, uploaded and, when the run
@@ -551,16 +544,34 @@ func ManifestParts(b []byte) map[string]bool {
 // object at name must still be the version recorded (identity), and its
 // bytes, read through that pinned version as a stream, must have the
 // recorded size and SHA-256. Existence or an identity alone is not enough.
-// progress, if set, is told the bytes read.
+// progress, if set, is told the bytes read. The object is opened at the
+// recorded size, with no metadata request (objfile.Opener.OpenSized): its
+// first read checks that size and pins the version, which must be the
+// recorded one before any more is read; another size is ErrRemoteAltered.
 func VerifyObject(ctx context.Context, r *Remote, name, identity string, want PartInfo, progress func(int64)) error {
-	obj, err := r.Opener.Open(ctx, name)
+	open := r.Opener.Open
+	if want.Bytes > 0 {
+		open = func(ctx context.Context, name string) (objfile.Object, error) {
+			return r.Opener.OpenSized(ctx, name, want.Bytes)
+		}
+	}
+	obj, err := open(ctx, name)
 	if err != nil {
 		return err
 	}
 	defer obj.Close()
-	if identity != "" && obj.Identity() != identity {
-		return fmt.Errorf("%w: %s is version %s; the journal recorded %s", ErrRemoteAltered, name, obj.Identity(), identity)
+	checkIdentity := func() error {
+		if identity != "" && obj.Identity() != identity {
+			return fmt.Errorf("%w: %s is version %s; the journal recorded %s", ErrRemoteAltered, name, obj.Identity(), identity)
+		}
+		return nil
 	}
+	if obj.Identity() != "" { // pinned at open
+		if err := checkIdentity(); err != nil {
+			return err
+		}
+	}
+	checked := obj.Identity() != ""
 	h := sha256.New()
 	buf := make([]byte, 4<<20)
 	var off int64
@@ -570,6 +581,15 @@ func VerifyObject(ctx context.Context, r *Remote, name, identity string, want Pa
 		rctx, cancel := context.WithTimeout(ctx, VerifyReadTimeout)
 		n, err := obj.WithContext(rctx).ReadAt(buf, off)
 		cancel()
+		if sm := (*objfile.SizeMismatchError)(nil); errors.As(err, &sm) {
+			return fmt.Errorf("%w: %s is %d bytes; the journal says %d", ErrRemoteAltered, name, sm.Actual, want.Bytes)
+		}
+		if !checked && obj.Identity() != "" {
+			if err := checkIdentity(); err != nil {
+				return err
+			}
+			checked = true
+		}
 		h.Write(buf[:n])
 		off += int64(n)
 		if progress != nil {

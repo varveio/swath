@@ -4,8 +4,12 @@
 package dataset
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -195,7 +199,8 @@ func TestPublishRemote(t *testing.T) {
 	t.Run("unresolved read", func(t *testing.T) {
 		f, r := fakeRemote(t)
 		f.SetFault(func(op, name string, after bool) int {
-			if !after && (op == gcsfake.OpCreate || op == gcsfake.OpMetadata) {
+			// The read-back is one read of the whole manifest.
+			if !after && (op == gcsfake.OpCreate || op == gcsfake.OpRead) {
 				return http.StatusForbidden // not retried
 			}
 			return 0
@@ -403,5 +408,38 @@ func TestCommitMarkerStrict(t *testing.T) {
 	}
 	if !Reserved(RemoteCommitName) {
 		t.Fatal("the marker's name is not reserved")
+	}
+}
+
+// TestVerifyObject: a retained part is checked at its recorded size,
+// version and digest; one of another size, another version or other bytes
+// is ErrRemoteAltered, and a missing one is fs.ErrNotExist.
+func TestVerifyObject(t *testing.T) {
+	ctx := context.Background()
+	f, r := fakeRemote(t)
+	data := bytes.Repeat([]byte("part"), 3000)
+	gen := f.Put("ds/data/p", data)
+	sum := sha256.Sum256(data)
+	want := PartInfo{Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
+	id := strconv.FormatInt(gen, 10)
+	if err := VerifyObject(ctx, r, "data/p", id, want, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name     string
+		identity string
+		want     PartInfo
+	}{
+		{"larger record", id, PartInfo{Bytes: want.Bytes + 1, SHA256: want.SHA256}},
+		{"smaller record", id, PartInfo{Bytes: want.Bytes - 1, SHA256: want.SHA256}},
+		{"another version", "1" + id, want},
+		{"other bytes", id, PartInfo{Bytes: want.Bytes, SHA256: strings.Repeat("0", 64)}},
+	} {
+		if err := VerifyObject(ctx, r, "data/p", c.identity, c.want, nil); !errors.Is(err, ErrRemoteAltered) {
+			t.Errorf("%s: %v, want ErrRemoteAltered", c.name, err)
+		}
+	}
+	if err := VerifyObject(ctx, r, "data/q", id, want, nil); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing part: %v, want fs.ErrNotExist", err)
 	}
 }

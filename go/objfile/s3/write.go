@@ -389,8 +389,8 @@ const maxAbortRounds = 3
 // ErrAbortUnconfirmed reports a multipart upload whose abort failed, or
 // could not be confirmed (ListParts still finds it, or cannot tell): its
 // parts may remain stored and billed until an abort succeeds or the bucket's
-// lifecycle rule for incomplete multipart uploads removes them. A failed Close
-// joins this error after the upload's original error. A later Abort retries cleanup,
+// lifecycle rule for incomplete multipart uploads removes them. A failed Write
+// or Close joins this error after the upload's original error. A later Abort retries cleanup,
 // up to three attempts in total; each attempt sends at most three aborts.
 var ErrAbortUnconfirmed = errors.New("objfile/s3: the multipart upload's abort is not confirmed")
 

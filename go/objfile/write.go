@@ -71,8 +71,10 @@ type Upload interface {
 }
 
 // Writer creates objects by name, honoring ctx, and conditionally deletes them.
-// Store packages redact request URLs in errors, preserving errors.Is and
-// errors.As. Callers can use RedactError for errors they add themselves.
+// Every error a Writer or an Upload returns is redacted as RedactError
+// redacts: no request URL's query or user information is in its text, and
+// errors.Is and errors.As still see its chain. Callers can use RedactError
+// for errors they add themselves.
 type Writer interface {
 	// NewWriter starts an upload of name under condition c. Bytes are sent
 	// as they are written, in chunks the store's package bounds; Close sends

@@ -12,7 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -272,5 +275,138 @@ func TestNullVersionIdentity(t *testing.T) {
 	version = "v3"
 	if id := open().Identity(); id != "v3" {
 		t.Fatalf("Identity of version v3 = %q", id)
+	}
+}
+
+// TestBudget: the requests a sized, batched and whole-object read make.
+func TestBudget(t *testing.T) {
+	objfiletest.RunBudget(t, objfiletest.Budget{
+		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f := newFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+			return objfiletest.Store{Opener: s3.New(f.client, bucket), Put: f.put}
+		},
+		Classify: func(r *http.Request) (objfiletest.Kind, bool) {
+			pinned := r.Header.Get("If-Match") != ""
+			switch {
+			case r.Method == http.MethodHead:
+				return objfiletest.Metadata, pinned
+			case r.Method == http.MethodGet && r.Header.Get("Range") != "":
+				return objfiletest.Ranged, pinned
+			case r.Method == http.MethodGet:
+				return objfiletest.Whole, pinned
+			}
+			return objfiletest.Other, pinned
+		},
+		UnknownTotalOK: true,
+	})
+}
+
+// TestUnknownTotalOneConnection: a sized read whose response states no
+// total proves the size with a metadata request after letting go of that
+// response, so it completes on a client of one connection.
+func TestUnknownTotalOneConnection(t *testing.T) {
+	b := s3mem.New()
+	if err := b.CreateBucket(bucket); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(objfiletest.UnknownTotal(ifMatch(gofakes3.New(b).Server())))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		Region:       "us-east-1",
+		Credentials:  aws.AnonymousCredentials{},
+		HTTPClient:   &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}},
+	})
+	data := objfiletest.Data(1<<20, 1)
+	if _, err := b.PutObject(bucket, "obj", nil, bytes.NewReader(data), int64(len(data)), nil); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s3.New(client, bucket).OpenSized(context.Background(), "obj", int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a deadlock fails, not hangs
+	defer cancel()
+	p := make([]byte, 100)
+	if _, err := f.WithContext(ctx).ReadAt(p, 1000); err != nil || !bytes.Equal(p, data[1000:1100]) {
+		t.Fatalf("read on one connection: %v", err)
+	}
+
+	// Concurrent first reads of a fresh Object, end to end through the SDK:
+	// none may hold the only connection while another proves the size. The
+	// scheduling here does not force the interleaving that deadlocked;
+	// ranged's TestOneConnectionInterleaving does.
+	for range 5 {
+		g, err := s3.New(client, bucket).OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Go(func() {
+				p := make([]byte, 100)
+				off := i * 10000
+				if _, err := g.WithContext(ctx).ReadAt(p, int64(off)); err != nil || !bytes.Equal(p, data[off:off+100]) {
+					t.Errorf("concurrent first read %d on one connection: %v", i, err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+}
+
+// preconditionFailed answers every GET with 412.
+func preconditionFailed(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// TestPreconditionFailed: a 412 is ErrObjectChanged only for a request that
+// sent the pin's If-Match; a first sized read or a whole-object read sent
+// none, and its 412 is the store's error.
+func TestPreconditionFailed(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, preconditionFailed)
+	f.put(t, "obj", objfiletest.Data(100, 1))
+	o := s3.New(f.client, bucket)
+	sized, err := o.OpenSized(ctx, "obj", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sized.ReadAt(make([]byte, 10), 0); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a first sized read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	if _, _, err := o.(objfile.ObjectReader).ReadObject(ctx, "obj", 1000); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a whole-object read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	opened, err := o.Open(ctx, "obj") // HEAD: pinned
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a pinned read = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestPinnedOpenRecordsAtOpen: varve's stack, Pin over Limit over a store
+// (no KnownSizes, no OpenSized), records an object at its Open, before any
+// read, as it did before sized opens existed.
+func TestPinnedOpenRecordsAtOpen(t *testing.T) {
+	f := newFake(t, func(h http.Handler) http.Handler { return h })
+	f.put(t, "ds/manifest.json", objfiletest.Data(100, 1))
+	p := objfile.Pin(objfile.Limit(objfile.Root(s3.New(f.client, bucket), "ds"), 4), "s3://bkt/ds/")
+	o, err := p.Open(context.Background(), "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := p.Snapshot()
+	if err != nil || !strings.Contains(string(snap), `"manifest.json":{"size":100,"identity":`) || o.Identity() == "" {
+		t.Fatalf("snapshot after Open, before any read: %s, %v", snap, err)
 	}
 }

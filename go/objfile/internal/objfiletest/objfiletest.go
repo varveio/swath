@@ -253,6 +253,29 @@ func runSized(t *testing.T, newStore NewStore) {
 			t.Fatalf("Identity = %q after the first read, Open pinned %q", f.Identity(), opened.Identity())
 		}
 	})
+	t.Run("SizedZero", func(t *testing.T) {
+		// No read proves an empty object: OpenSized(..., 0) asks for
+		// metadata, and compares.
+		s := plain(t, newStore)
+		s.Put(t, "empty", nil)
+		s.Put(t, "full", Data(10, 1))
+		if f, err := s.Opener.OpenSized(ctx, "empty", 0); err != nil || f.Identity() == "" {
+			t.Fatalf("OpenSized(0) of an empty object: %v", err)
+		}
+		var sm *objfile.SizeMismatchError
+		if _, err := s.Opener.OpenSized(ctx, "full", 0); !errors.As(err, &sm) || sm.Actual != 10 {
+			t.Fatalf("OpenSized(0) of a 10-byte object: %v, want a SizeMismatchError of 10", err)
+		}
+		if _, err := s.Opener.OpenSized(ctx, "nope", 0); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("OpenSized(0) of a missing object: %v, want fs.ErrNotExist", err)
+		}
+	})
+	t.Run("SizedNegative", func(t *testing.T) {
+		s := plain(t, newStore)
+		if _, err := s.Opener.OpenSized(ctx, "obj", -1); !errors.Is(err, fs.ErrInvalid) {
+			t.Fatalf("OpenSized of a negative size: %v, want fs.ErrInvalid", err)
+		}
+	})
 	t.Run("SizedMissing", func(t *testing.T) {
 		s := plain(t, newStore)
 		f, err := s.Opener.OpenSized(ctx, "nope", 10)
@@ -270,8 +293,9 @@ func runSized(t *testing.T, newStore NewStore) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.ReadAt(make([]byte, 4), 0); !errors.Is(err, objfile.ErrObjectChanged) {
-			t.Fatalf("read of an object of another size: %v, want ErrObjectChanged", err)
+		var sm *objfile.SizeMismatchError
+		if _, err := f.ReadAt(make([]byte, 4), 0); !errors.As(err, &sm) || errors.Is(err, objfile.ErrObjectChanged) || sm.Actual != 100 {
+			t.Fatalf("read of an object of another size: %v, want a SizeMismatchError of 100 bytes", err)
 		}
 	})
 	t.Run("SizedShort", func(t *testing.T) {
@@ -283,8 +307,9 @@ func runSized(t *testing.T, newStore NewStore) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n, err := f.ReadAt(make([]byte, 20), 80); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 {
-			t.Fatalf("read past a shorter object's end = %d, %v; want 0, ErrObjectChanged", n, err)
+		var sm *objfile.SizeMismatchError
+		if n, err := f.ReadAt(make([]byte, 20), 80); !errors.As(err, &sm) || sm.Actual != 90 || n != 0 {
+			t.Fatalf("read past a shorter object's end = %d, %v; want 0, a SizeMismatchError of 90 bytes", n, err)
 		}
 	})
 }

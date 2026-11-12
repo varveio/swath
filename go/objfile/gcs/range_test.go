@@ -6,18 +6,25 @@ package gcs_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 
+	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
@@ -151,4 +158,186 @@ func cut(w http.ResponseWriter, data []byte, start, end, part int) {
 	_, _ = w.Write(data[start : start+(end-start+1)/part])
 	w.(http.Flusher).Flush()
 	panic(http.ErrAbortHandler)
+}
+
+// wholeServer serves one object, "obj" at generation 7, gzip-labelled: a
+// read of the whole object is answered by whole (with the attempt number);
+// a ranged read, closed or to the end, by a 206 of that range.
+func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, r *http.Request, attempt int32)) string {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/storage/v1/") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"bucket": bucket, "name": "obj", "size": strconv.Itoa(len(data)), "generation": "7"})
+			return
+		}
+		w.Header().Set("X-Goog-Generation", "7")
+		w.Header().Set("Content-Encoding", "gzip")
+		rng := r.Header.Get("Range")
+		if rng == "" {
+			whole(w, r, attempts.Add(1))
+			return
+		}
+		start, end := 0, len(data)-1
+		if open, ok := strings.CutSuffix(rng, "-"); ok {
+			_, _ = fmt.Sscanf(open, "bytes=%d", &start)
+		} else {
+			_, _ = fmt.Sscanf(rng, "bytes=%d-%d", &start, &end)
+		}
+		partial(w, data, start, end)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func wholeClient(t *testing.T, url string, guard bool) *storage.Client {
+	return wholeClientOver(t, url, guard, http.DefaultTransport)
+}
+
+// wholeClientOver is wholeClient over base.
+func wholeClientOver(t *testing.T, url string, guard bool, base http.RoundTripper) *storage.Client {
+	opts := []option.ClientOption{option.WithEndpoint(url + "/storage/v1/"), option.WithoutAuthentication()}
+	if guard {
+		base = ranged.Transport(base)
+	}
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: base}))
+	client, err := storage.NewClient(context.Background(), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// TestReadObjectCut: a whole-object read of a gzip-labelled object whose
+// body is cut at a quarter. The SDK requests the rest itself and skips as
+// many bytes of that answer as it had read, joining two parts of the
+// object; with the transport the body ends where it was cut instead, and
+// ReadObject reads the rest as a checked ranged read.
+func TestReadObjectCut(t *testing.T) {
+	data := objfiletest.Data(10000, 4) // a quarter is not a multiple of Data's period
+	for _, guard := range []bool{false, true} {
+		url := wholeServer(t, data, func(w http.ResponseWriter, _ *http.Request, attempt int32) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			if attempt == 1 {
+				_, _ = w.Write(data[:len(data)/4])
+				w.(http.Flusher).Flush()
+				panic(http.ErrAbortHandler)
+			}
+			_, _ = w.Write(data)
+		})
+		b, id, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
+		exact := err == nil && bytes.Equal(b, data)
+		if guard && (!exact || id != "7") {
+			t.Fatalf("guarded ReadObject of a cut body: %d bytes, %q, %v; want the object", len(b), id, err)
+		}
+		if !guard && exact {
+			t.Fatal("unguarded ReadObject of a cut gzip body read the object: the SDK no longer joins parts, so the transport may not be needed")
+		}
+	}
+}
+
+// TestReadObjectChunked: a whole-object answer without Content-Length is
+// read to its end, within the limit.
+func TestReadObjectChunked(t *testing.T) {
+	data := objfiletest.Data(5000, 5)
+	url := wholeServer(t, data, func(w http.ResponseWriter, r *http.Request, _ int32) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush() // headers sent with no length: the body is chunked
+		_, _ = w.Write(data)
+	})
+	o := gcs.New(wholeClient(t, url, true), bucket).(objfile.ObjectReader)
+	if b, _, err := o.ReadObject(context.Background(), "obj", 1<<20); err != nil || !bytes.Equal(b, data) {
+		t.Fatalf("ReadObject of a chunked answer = %d bytes, %v; want %d", len(b), err, len(data))
+	}
+	if _, _, err := o.ReadObject(context.Background(), "obj", 4999); !errors.Is(err, objfile.ErrTooLarge) {
+		t.Fatalf("ReadObject of a chunked answer over the limit = %v", err)
+	}
+
+	// A chunked body broken part way, or cancelled part way (once the client
+	// has read some of the body), is a failure, not the object: its end is
+	// not the object's end. (Without the transport the SDK requests the rest
+	// itself, as the package says.)
+	for _, c := range []struct {
+		name   string
+		cancel bool
+	}{{"aborted", false}, {"cancelled", true}} {
+		ctx, cancel := context.WithCancel(context.Background())
+		url := wholeServer(t, data, func(w http.ResponseWriter, r *http.Request, _ int32) {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			_, _ = w.Write(data[:1000])
+			w.(http.Flusher).Flush()
+			if c.cancel {
+				<-r.Context().Done() // until the client, cancelled reading the body, has gone
+			}
+			panic(http.ErrAbortHandler)
+		})
+		base := http.RoundTripper(http.DefaultTransport)
+		if c.cancel {
+			base = onBodyRead{base: base, read: cancel} // cancelled as the body streams
+		}
+		b, _, err := gcs.New(wholeClientOver(t, url, true, base), bucket).(objfile.ObjectReader).ReadObject(ctx, "obj", 1<<20)
+		if err == nil {
+			t.Fatalf("%s chunked answer: ReadObject = %d bytes, nil; want an error", c.name, len(b))
+		}
+		if c.cancel && !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled chunked answer: %v, want context.Canceled", err)
+		}
+		cancel()
+	}
+}
+
+// onBodyRead calls read once a response body has given the client bytes.
+type onBodyRead struct {
+	base http.RoundTripper
+	read func()
+}
+
+func (o onBodyRead) RoundTrip(r *http.Request) (*http.Response, error) {
+	res, err := o.base.RoundTrip(r)
+	if err == nil {
+		res.Body = &readSignal{ReadCloser: res.Body, read: o.read}
+	}
+	return res, err
+}
+
+type readSignal struct {
+	io.ReadCloser
+	read func()
+	once sync.Once
+}
+
+func (b *readSignal) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.once.Do(b.read)
+	}
+	return n, err
+}
+
+// TestReadObjectChecksum: a whole-object answer whose bytes do not match
+// its x-goog-hash crc32c fails ReadObject. The SDK's reader checks the
+// checksum only at the body's end, which ReadObject reads to.
+func TestReadObjectChecksum(t *testing.T) {
+	data := objfiletest.Data(5000, 6)
+	for _, c := range []struct {
+		name string
+		sum  uint32
+		ok   bool
+	}{{"right", crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)), true}, {"wrong", 12345, false}} {
+		url := wholeServer(t, data, func(w http.ResponseWriter, _ *http.Request, _ int32) {
+			var b [4]byte
+			binary.BigEndian.PutUint32(b[:], c.sum)
+			w.Header().Set("X-Goog-Hash", "crc32c="+base64.StdEncoding.EncodeToString(b[:]))
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			_, _ = w.Write(data)
+		})
+		for _, guard := range []bool{false, true} {
+			b, _, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
+			if c.ok != (err == nil) || c.ok && !bytes.Equal(b, data) {
+				t.Fatalf("%s checksum, guarded=%v: ReadObject = %d bytes, %v; want ok=%v", c.name, guard, len(b), err, c.ok)
+			}
+		}
+	}
 }
