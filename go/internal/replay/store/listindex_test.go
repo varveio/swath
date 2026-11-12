@@ -240,7 +240,7 @@ func TestListIndexBuildStorageFailureAndCancellation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := d.Verify(ctx); err != nil {
+		if err := d.Verify(ctx, nil); err != nil {
 			t.Fatal(err)
 		}
 		if cancelled {

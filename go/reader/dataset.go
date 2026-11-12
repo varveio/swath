@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
@@ -18,6 +19,9 @@ type Dataset struct {
 	sp   *seekparquet.Dataset
 	meta Metadata
 	spec SchemaSpec
+	// checked is set once CheckSchema has succeeded: every part's footer
+	// is then checked against its manifest entry, row count included.
+	checked atomic.Bool
 
 	statsMu sync.Mutex
 	stats   StreamStats

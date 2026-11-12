@@ -231,7 +231,7 @@ func TestScanContextEnded(t *testing.T) {
 // TestScanPlanFailureStats: a Source failure while planning is returned
 // unchanged, and, as documented, the failed plan's own reads are in Stats
 // (the part it opened to check and the read that failed), which holds no
-// other work.
+// other work; its open and read count as unreported I/O.
 func TestScanPlanFailureStats(t *testing.T) {
 	d, src := openSource(t, scanDir(t, 3000, 200))
 	failure := errors.New("failing read")
@@ -248,7 +248,7 @@ func TestScanPlanFailureStats(t *testing.T) {
 	if len(reads) != opened+1 {
 		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
 	}
-	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len, UnreportedIOCalls: 2}); !errors.Is(err, failure) || st != want {
 		t.Fatalf("plan failure: %v, stats %+v, want %+v", err, st, want)
 	}
 }

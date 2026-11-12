@@ -72,7 +72,7 @@ func TestSortsTwoPartsIntoASeekParquetDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sorted.Close()
-	if err := sorted.Verify(context.Background()); err != nil {
+	if err := sorted.Verify(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := sorted.Rows(context.Background(), seekparquet.Query{Limit: 10, Columns: []string{"size", "etag"}}, nil)
@@ -140,7 +140,7 @@ func TestKeyLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sorted.Close()
-	if err := sorted.Verify(context.Background()); err != nil {
+	if err := sorted.Verify(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := sorted.Rows(context.Background(), seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{Start: []byte(long + "a"), StartExclusive: true}}, Limit: 5}, nil)

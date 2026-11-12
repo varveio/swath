@@ -130,7 +130,7 @@ func openScanReader(t testing.TB, dir string) (*seekReader, *faultSource) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	if err := d.Verify(context.Background()); err != nil {
+	if err := d.Verify(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	return &seekReader{d: d}, src

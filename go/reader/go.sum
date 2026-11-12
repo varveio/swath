@@ -24,8 +24,8 @@ github.com/pierrec/lz4/v4 v4.1.33 h1:GjG1TJ1V4IzKP8L96muuuDNpTwd7D+l2ccXrjAbe014
 github.com/pierrec/lz4/v4 v4.1.33/go.mod h1:7SE9MC2STkNtL4PIwGhjmyVwvILaGI9/COYQNBhKM/c=
 github.com/twpayne/go-geom v1.6.1 h1:iLE+Opv0Ihm/ABIcvQFGIiFBXd76oBIar9drAwHFhR4=
 github.com/twpayne/go-geom v1.6.1/go.mod h1:Kr+Nly6BswFsKM5sd31YaoWS5PeDDH2NftJTK7Gd028=
-github.com/varveio/seekparquet/go v0.1.1-0.20261112020621-b26862f2b4c8 h1:ahKloiljW3vPqGvXwCvHVi7CoVMHu82zcZaXygDtYko=
-github.com/varveio/seekparquet/go v0.1.1-0.20261112020621-b26862f2b4c8/go.mod h1:g5nssi9SiT83LbIA2P225aJbJUS97rarnQKQ8WzysXc=
+github.com/varveio/seekparquet/go v0.1.1-0.20261112100119-21e5b42d46f9 h1:gi87CizZ1edYVC7hs1CmKQ6odum6zpMroOdSWzmzmjA=
+github.com/varveio/seekparquet/go v0.1.1-0.20261112100119-21e5b42d46f9/go.mod h1:g5nssi9SiT83LbIA2P225aJbJUS97rarnQKQ8WzysXc=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 golang.org/x/sys v0.50.0 h1:dkKZEFTEKaLr1sjhs0WiKqoi8Jj5nHbS3Njmx1UoMJs=

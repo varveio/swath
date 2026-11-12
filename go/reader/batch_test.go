@@ -436,12 +436,13 @@ func TestScanBatchesStatsAndSourceError(t *testing.T) {
 	st := ReadStats{PartsOpened: 99}
 	err := d.ScanBatches(ctx, BatchScanRequest{Stats: &st}, func(*ObjectBatch) error { t.Error("callback"); return nil })
 	// The failed plan's reads are in the statistics: the part it opened
-	// to check and the read that failed.
+	// to check and the read that failed, its open
+	// and read counted as unreported I/O (the test source reports none).
 	_, reads := src.taken()
 	if len(reads) != opened+1 {
 		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
 	}
-	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len, UnreportedIOCalls: 2}); !errors.Is(err, failure) || st != want {
 		t.Fatalf("%v %+v, want %+v", err, st, want)
 	}
 }

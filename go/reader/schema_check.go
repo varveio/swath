@@ -35,7 +35,7 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 	if err := d.checkKey(); err != nil {
 		return err
 	}
-	if err := d.sp.Verify(ctx); err != nil {
+	if err := d.sp.Verify(ctx, nil); err != nil {
 		return err
 	}
 	for i, p := range d.meta.Manifest.Parts {
@@ -43,6 +43,7 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	d.checked.Store(true)
 	return nil
 }
 
