@@ -554,6 +554,9 @@ func TestRequestBudgetsLarge(t *testing.T) {
 func measure(t *testing.T, g *geometry) {
 	dir := fixture(t, g)
 	ops := operations(t, dir, g)
+	if err := checkOperationNames(ops, g.expect); err != nil {
+		t.Fatalf("%s geometry: %v", g.name, err)
+	}
 	var table strings.Builder
 	fmt.Fprintf(&table, "| operation | store | before: requests | after: requests |\n|---|---|---|---|\n")
 	for _, s := range stores(t, dir) {
@@ -575,11 +578,7 @@ func measure(t *testing.T, g *geometry) {
 				mustDo(t, d.Close())
 			}
 			fmt.Fprintf(&table, "| %s | %s | %s | %s |\n", op.name, s.name, got[0], got[1])
-			want, ok := g.expect[op.name]
-			if !ok {
-				t.Errorf("%s geometry: no expected counts for %q", g.name, op.name)
-				continue
-			}
+			want := g.expect[op.name]
 			for i := range want {
 				if got[i] != want[i] {
 					t.Errorf("%s geometry, %s, %s: %s, want exactly %s", g.name, s.name, op.name+[]string{" before", " after"}[i], got[i], want[i])
@@ -588,6 +587,47 @@ func measure(t *testing.T, g *geometry) {
 		}
 	}
 	t.Log("\n" + table.String())
+}
+
+// Check both directions before measuring: an unused expectation must not
+// silently survive an operation being removed or renamed.
+func checkOperationNames(ops []operation, expect map[string][2]count) error {
+	for _, op := range ops {
+		if _, ok := expect[op.name]; !ok {
+			return fmt.Errorf("no expected counts for %q", op.name)
+		}
+	}
+	for name := range expect {
+		if !slices.ContainsFunc(ops, func(op operation) bool { return op.name == name }) {
+			return fmt.Errorf("expected counts for unknown operation %q", name)
+		}
+	}
+	return nil
+}
+
+func TestCheckOperationNames(t *testing.T) {
+	ops := []operation{{name: "open"}, {name: "point lookup"}}
+	for _, tc := range []struct {
+		name   string
+		expect map[string][2]count
+		want   string
+	}{
+		{"matching", map[string][2]count{"open": {}, "point lookup": {}}, ""},
+		{"unused expectation", map[string][2]count{"open": {}, "point lookup": {}, "typo": {}}, `expected counts for unknown operation "typo"`},
+		{"missing expectation", map[string][2]count{"open": {}}, `no expected counts for "point lookup"`},
+		{"same size, different names", map[string][2]count{"open": {}, "typo": {}}, `no expected counts for "point lookup"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkOperationNames(ops, tc.expect)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
 }
 
 // TestAdmissionRounds holds every request in a phase until all expected

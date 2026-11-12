@@ -407,9 +407,11 @@ and for S3 the delete-marker state, in wire order.
 
 ## Known limits
 
-- **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no directory sync, so
-  a power loss could lose acknowledged parts. The output lock holds. Filesystem runs work but are not
-  resumable. The test suite runs there in CI; nothing is measured there.
+- **Windows:** journaled object-store dataset runs, recovery and bucket commit cleanup through resume
+  are refused for local and bucket output: directory sync is unavailable, so a power loss could lose
+  acknowledged work. The output lock holds. Filesystem runs work without resume; an already committed,
+  finalized dataset takes the CLI's no-work path. See [platforms](install.md#platforms). The test suite
+  runs there in CI; nothing is measured there.
 - **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories

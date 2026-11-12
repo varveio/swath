@@ -999,7 +999,9 @@ baseline to update.
 
 `internal/readbudget` checks exact HTTP request and metadata-request counts for
 cold reader operations over the S3, GCS and Azure fakes, before and after the
-`objfile/spsource` adapter. Requests are recorded on arrival, before serving any
+`objfile/spsource` adapter. Both geometries require the expected-count names to match the operation
+names exactly before measuring; unused expectations and missing counts fail the test
+(`TestCheckOperationNames` checks both refusals without listeners). Requests are recorded on arrival, before serving any
 response bytes. `TestAdmissionRounds` separately checks concurrent admission:
 channel barriers hold all four footer reads, then all eight first/last key-page
 reads, until the entire phase has arrived. The stack without the adapter also

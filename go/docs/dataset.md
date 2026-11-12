@@ -65,7 +65,28 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
+after it is copied or moved, not for ordinary reads. `swath verify` is planned
+([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
+[SeekParquet's validator](https://github.com/varveio/seekparquet/blob/main/go/README.md#validating) on a
+local copy, with a version compatible with this dataset's format (format version 0, draft revision 1):
+
+```bash
+seekparquet validate --level digest /path/to/dataset
+seekparquet validate --level full /path/to/dataset
+```
+
+`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
+swath declares one for every part. `full` separately checks the format, key order and decoded pages
+(including the structural and profile levels); it does not check digests or swath's extension and
+schema semantics. Neither proves that the listing covers the source you intended.
+
+For a dataset produced with local output, the repository also has
+[`go/verify.py`](../verify.py): `python3 go/verify.py /path/to/dataset` from the repository root, with
+DuckDB installed. It checks swath metadata, schema-specific rules, row counts, key order and bounds,
+footer stamps and part SHA-256 digests independently of the Go reader. It expects the producer's flat
+`data/part-NNNNN.parquet` layout and `run.json`, so it is not a general validator for a bucket dataset
+copied locally with its nested run/attempt part paths. See the [verifier guide](internals/testing.md#verifypy)
+for its checks and optional reference comparison.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present

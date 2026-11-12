@@ -112,7 +112,13 @@ A dataset run of an object store stopped by a signal (130, 143), `--max-duration
 (75) or a full disk (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
 
-On Windows a journaled run and `swath resume` are refused ([running.md](running.md#known-limits)).
+On Windows, journaled dataset runs of S3, GCS and Azure Blob sources are refused for both local and
+bucket destinations: a bucket destination still keeps its journal in a local `--work-dir`, whose
+directory entries cannot be synced. `swath resume DIR` cannot continue a run or finish a bucket commit's
+cleanup there; the CLI still handles an already committed, finalized dataset as having no work to
+continue. Use Linux or macOS for recovery. Local filesystem scans can write datasets locally or
+to a bucket without resume; text output and diagnostic `swath diag list --no-journal` runs also work
+([platform limits](install.md#platforms)).
 
 ## The resume is refused
 

@@ -8,10 +8,10 @@ swath is an open-source command-line tool that lists files and objects in local 
 filesystems, S3, GCS, and Azure Blob Storage (flat namespace). It can summarize sizes by
 directory or prefix (`du`) and write sorted Parquet inventories.
 
-> **Not released yet.** Build from source (below). The latest published release,
-> [v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2), is the earlier S3-only
-> command line, with another dataset format; its downloads and container do not provide the
-> commands and sources below ([migrating from 0.3](go/docs/upgrade.md)).
+> **Release candidates available.** Download v0.4.0-rc.2 from the
+> [releases page](https://github.com/varveio/swath/releases) ([install and verify](go/docs/install.md)),
+> or build from source below. These are candidates for the first Go release. The earlier S3-only
+> Java v0.3.2 has another command line and dataset format ([migrating from 0.3](go/docs/upgrade.md)).
 
 ## Measured scale
 
@@ -35,16 +35,16 @@ other runs separate.
 | Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces only. `--all-versions` lists versions, snapshots and soft-deleted blobs. Hierarchical namespaces are unsupported. |
 
 Eligible journaled object-store dataset scans can resume. Local scans and text output
-cannot. Windows currently refuses journaled object-store runs and `swath resume` because
-directory sync is unavailable; local scans work without resume. See
+cannot. Windows currently refuses journaled object-store dataset runs and recovery through resume
+because directory sync is unavailable; local scans work without resume. See
 [platform and recovery limits](go/docs/running.md#known-limits).
 
 <a id="quickstart"></a>
 
 ## Quick start
 
-**Build from source** with Go 1.26 or later (the `go` line of [`go/go.mod`](go/go.mod)) and git
-([install](go/docs/install.md)).
+Download a [release candidate](go/docs/install.md#download-a-release-candidate), or **build from source**
+with Go 1.26 or later (the `go` line of [`go/go.mod`](go/go.mod)) and git:
 
 ```bash
 git clone https://github.com/varveio/swath.git

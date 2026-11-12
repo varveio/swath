@@ -3,9 +3,10 @@
 This walk-through goes from a source checkout to a queried inventory: a local directory first, which needs no
 cloud account, then a public S3 prefix, then a run that is interrupted and resumed.
 
-swath reads listing metadata only. It never downloads or changes object contents. It is not released yet, so
-you build it from source; the latest published release, v0.3.2, has another command line and output
-([migrating from 0.3](upgrade.md)). The words used below are defined in [concepts.md](concepts.md).
+swath reads listing metadata only. It never downloads or changes object contents. You can
+[install a release candidate](install.md#download-a-release-candidate) or build from source below.
+The earlier Java v0.3.2 has another command line and output ([migrating from 0.3](upgrade.md)).
+The words used below are defined in [concepts.md](concepts.md).
 
 ## 1. Build and check the binary
 

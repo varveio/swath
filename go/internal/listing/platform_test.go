@@ -24,17 +24,30 @@ func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 	dataset.DirSyncEnforced = false
 	keys := []string{"a", "b", "c"}
 	out := filepath.Join(t.TempDir(), "ds")
-	for _, resume := range []bool{false, true} {
-		// Not runScripted: its config lists unjournaled where that is refused.
-		scriptMu.Lock()
-		scriptNext = &scripted{keys: keys, chunk: 1}
-		scriptMu.Unlock()
-		cfg := Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 2 << 10, Workers: 4, PartInterval: -1}}
-		if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrUnenforced) {
-			t.Fatalf("resume=%v: err = %v, want ErrUnenforced", resume, err)
-		}
-		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("resume=%v: the refused run created the output: %v", resume, err)
+	for _, destination := range []string{"", "s3://dst/prefix", "gs://dst/prefix", "az://acct/dst/prefix"} {
+		for _, resume := range []bool{false, true} {
+			// Not runScripted: its config lists unjournaled where that is refused.
+			scriptMu.Lock()
+			scriptNext = &scripted{keys: keys, chunk: 1}
+			scriptMu.Unlock()
+			cfg := Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 2 << 10, Workers: 4, PartInterval: -1}}
+			if destination != "" {
+				loc, err := ParseDestination(destination)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.Output.Remote = &RemoteOutput{Location: destination,
+					Open: func(context.Context, *dataset.UploadStats) (*dataset.Remote, func() error, error) {
+						// Opening a destination must need no I/O before the guard.
+						return &dataset.Remote{Location: loc}, nil, nil
+					}}
+			}
+			if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrUnenforced) {
+				t.Fatalf("destination=%q resume=%v: err = %v, want ErrUnenforced", destination, resume, err)
+			}
+			if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("resume=%v: the refused run created the output: %v", resume, err)
+			}
 		}
 	}
 	scriptMu.Lock()

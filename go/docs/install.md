@@ -1,7 +1,58 @@
 # Install
 
-swath is one static binary with no runtime to install. It is not released yet (the latest published release,
-v0.3.2, has another command line and dataset format: [upgrade.md](upgrade.md)), so build it from source.
+swath is one static binary with no runtime to install. The Go command line is available as release
+candidates, including v0.4.0-rc.1 and v0.4.0-rc.2, from the
+[GitHub releases page](https://github.com/varveio/swath/releases). Choose a pre-release explicitly:
+v0.3.2 is the earlier Java command line and dataset format ([upgrade.md](upgrade.md)). These candidates
+are for testing before the final 0.4.0 release.
+
+## Download a release candidate
+
+For v0.4.0-rc.2, choose the archive for your platform:
+
+| Platform | Archive |
+|---|---|
+| Linux, x86-64 | `swath-0.4.0-rc.2-linux-amd64.tar.gz` |
+| Linux, ARM64 | `swath-0.4.0-rc.2-linux-arm64.tar.gz` |
+| macOS, Intel | `swath-0.4.0-rc.2-darwin-amd64.tar.gz` |
+| macOS, Apple silicon | `swath-0.4.0-rc.2-darwin-arm64.tar.gz` |
+| Windows, x86-64 | `swath-0.4.0-rc.2-windows-amd64.zip` |
+
+Each archive holds `swath`, `swath-replay` (both with `.exe` on Windows), `LICENSE`, `NOTICE` and
+`THIRD_PARTY_NOTICES` in a `swath-0.4.0-rc.2-OS-ARCH/` directory. The release also carries
+`swath-0.4.0-rc.2.spdx.json` (the SPDX SBOM), `SHA256SUMS`, and a keyless cosign signature bundle
+(`.sigstore.json`) for each archive, the SBOM and `SHA256SUMS`.
+
+Download `SHA256SUMS` and `SHA256SUMS.sigstore.json` alongside your archive. Verify the checksum file's
+signature, then the archive, before extracting or running it. For example, on Linux:
+
+```bash
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v0.4.0-rc.2 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify swath-0.4.0-rc.2-linux-amd64.tar.gz --repo varveio/swath
+tar -xzf swath-0.4.0-rc.2-linux-amd64.tar.gz
+./swath-0.4.0-rc.2-linux-amd64/swath --version
+```
+
+On macOS, `shasum -a 256 ARCHIVE` computes the hash to compare with its line in `SHA256SUMS`; on
+Windows, use PowerShell's `Get-FileHash ARCHIVE -Algorithm SHA256`. Build provenance attestations cover
+the archives, `SHA256SUMS` and both image digests; the workflow also attests the SBOM to each archive.
+[RELEASING.md](../../RELEASING.md#verifying-a-release) has the image signature and provenance commands:
+use the candidate's tag for `TAG` (image verification needs cosign v3 or later).
+
+The macOS binaries are not yet signed with an Apple Developer ID or notarized
+([#420](https://github.com/varveio/swath/issues/420)), so Gatekeeper refuses to run a quarantined
+browser download ("Apple could not verify…"). After verifying and extracting the archive, clear the
+quarantine attribute (use `darwin-amd64` for Intel):
+
+```bash
+xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-arm64/swath swath-0.4.0-rc.2-darwin-arm64/swath-replay
+```
+
+Put the extracted binary on your `PATH`, for example with `install -m 755 swath ~/.local/bin/` from
+inside the extracted directory on Linux or macOS.
 
 ## Build from source
 
@@ -40,30 +91,33 @@ Then run a listing that needs no cloud account:
 swath du -d 1 .
 ```
 
-## Planned for the next release
+## Container images
 
-No release of this command line exists yet. The release workflow is set up to publish, per release:
+The release publishes multi-arch images for linux/amd64 and linux/arm64, containing the archived Linux
+binaries and the legal files in `/licenses/`:
 
-- one archive per platform (`swath-X.Y.Z-OS-ARCH.tar.gz` for linux and darwin, amd64 and arm64;
-  `swath-X.Y.Z-windows-amd64.zip`), each holding `swath`, `swath-replay`, `LICENSE`, `NOTICE` and
-  `THIRD_PARTY_NOTICES`, with an SPDX SBOM and a signed `SHA256SUMS`
-  ([RELEASING.md](../../RELEASING.md#verifying-a-release) has the verification commands);
-- multi-arch images (linux/amd64, linux/arm64): `ghcr.io/varveio/swath` (distroless static, entrypoint
-  `/opt/swath/swath`) and `ghcr.io/varveio/swath-replay` (`scratch`,
-  [swath-replay](internals/swath-replay.md#container-image)), both running as `65532:65532`.
+| Image | Entrypoint | Base |
+|---|---|---|
+| `ghcr.io/varveio/swath:0.4.0-rc.2` | `/opt/swath/swath` | distroless static; no shell |
+| `ghcr.io/varveio/swath-replay:0.4.0-rc.2` | `/opt/swath-replay/swath-replay` | `scratch` |
 
-This section will describe downloading and verifying them once a release exists. Until then, the image can be
-built from the repository root of a checkout: `docker build -f Dockerfile.go -t swath:dev .` (`--target swath-replay` for the replay
-server; `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the build context carries no
-`.git`). The build needs the network: it downloads the modules and generates `THIRD_PARTY_NOTICES`, failing on
-a module whose license is not allowed ([license gate](internals/testing.md#license-gate)). The image runs as
-`65532:65532` with its home directory at `/home/nonroot`: mount a directory that user can write for `-o`, and
-pass credentials through the environment or a mounted credential directory:
+A release candidate publishes only its own `X.Y.Z-rc.N` tag, without updating `latest` or `X.Y`.
+Both image digests are signed with cosign and have build provenance attestations (verification above).
+Pin a digest for runs that must use the same image. Both images run as `65532:65532`: mount a directory
+that user can write for `-o`. The lister's home directory is `/home/nonroot`: pass credentials through
+the environment or mount a credential directory there (for example `-v ~/.aws:/home/nonroot/.aws:ro`),
+with its files readable by that user:
 
 ```bash
-docker run --rm -v "$PWD/out:/out" swath:dev \
+docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0-rc.2 \
   list s3://bucket/prefix/ --anonymous --s3-region us-east-1 -o /out/inventory
 ```
+
+See [swath-replay](internals/swath-replay.md#container-image) for the replay server. To build an image
+from a checkout, run `docker build -f Dockerfile.go -t swath:dev .` from the repository root
+(`--target swath-replay` for the replay server; `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"`
+stamps the commit, as the build context carries no `.git`). The build downloads modules and generates
+`THIRD_PARTY_NOTICES`, failing on a disallowed license ([license gate](internals/testing.md#license-gate)).
 
 ## Platforms
 
@@ -76,10 +130,15 @@ GOOS=darwin GOARCH=amd64 ./build.sh -o swath-darwin-amd64
 GOOS=windows GOARCH=amd64 ./build.sh -o swath.exe
 ```
 
-The test suite runs on Linux (amd64 and arm64), macOS (arm64) and Windows (amd64). On Windows a dataset run of
-an object store, which keeps a journal, is refused, and so is `swath resume`: Windows has no directory sync, so
-a power loss could lose parts swath had recorded as written. Local trees and text output work there
-([running.md](running.md#known-limits)).
+The test suite runs on Linux (amd64 and arm64), macOS (arm64) and Windows (amd64). On Windows, journaled
+dataset runs of S3, GCS and Azure Blob sources are refused, both with local output and with a bucket
+destination (`-o s3://…`, `gs://…` or `az://…` and `--work-dir DIR`). The local output or work directory
+needs directory sync, unavailable on Windows, to retain acknowledged work after power loss.
+`swath resume DIR` cannot continue a run or finish a bucket commit's cleanup there; an already
+committed, finalized dataset takes the CLI's no-work path before this guard. Local filesystem scans
+can write datasets locally or to a bucket without a journal or resume; text output also works.
+Diagnostic `swath diag list --no-journal` can list an object store without resume. See
+[troubleshooting](troubleshooting.md#the-run-was-interrupted) and [known limits](running.md#known-limits).
 
 ## Shell completion
 
