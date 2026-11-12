@@ -29,6 +29,12 @@ type ListRequest struct {
 	// Stats, when not nil, receives the request's read statistics: reset
 	// when the request starts, and set whether it succeeds or fails.
 	Stats *ReadStats
+	// ReadAhead, when positive, is the number of key pages the listing may
+	// read ahead concurrently, at most 64 (seekparquet.ListQuery.ReadAhead):
+	// it pays where a read waits on a round trip, an object store, not on
+	// a local file. The entries are the same either way. Zero, the
+	// default, reads no page ahead; a negative value is ErrInvalidRequest.
+	ReadAhead int
 }
 
 // Entry is one listing entry: an object (Object set, CommonPrefix nil), a
@@ -97,7 +103,7 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 		columns = d.spec.ColumnNames()
 	}
 	got, err := d.sp.List(ctx, seekparquet.ListQuery{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
-		Limit: req.Limit, Columns: columns}, req.Stats)
+		Limit: req.Limit, Columns: columns, ReadAhead: req.ReadAhead}, req.Stats)
 	if err != nil {
 		return nil, err
 	}

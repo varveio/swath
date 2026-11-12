@@ -330,3 +330,49 @@ func TestListNULDelimiter(t *testing.T) {
 		t.Fatalf("listed %q, want %q", got, want)
 	}
 }
+
+// TestListReadAhead: a listing with ReadAhead reads key pages ahead
+// (ReadStats.ReadAheadReads) and lists exactly what it lists without; none
+// is read ahead by default, and a negative ReadAhead is ErrInvalidRequest
+// before any read.
+func TestListReadAhead(t *testing.T) {
+	var keys []string
+	for p := range 40 {
+		for k := range 5 {
+			keys = append(keys, fmt.Sprintf("p%03d/%d", p, k))
+		}
+	}
+	dir := writeParts(t, s3Spec(), 2, int64(len(keys)), keyRows(keys))
+	want := listOracle(keys, "", '/')
+	for _, ahead := range []int{0, 1, 4, 64} {
+		d := openDir(t, dir)
+		var st ReadStats
+		got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 1000, Stats: &st, ReadAhead: ahead})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := make([]string, len(got))
+		for i, e := range got {
+			listed[i] = describe(e)
+		}
+		if strings.Join(listed, " ") != strings.Join(want, " ") {
+			t.Fatalf("read-ahead %d: listed %q, want %q", ahead, listed, want)
+		}
+		if (st.ReadAheadReads > 0) != (ahead > 0) || st.PrefixSkips == 0 {
+			t.Fatalf("read-ahead %d: stats %+v", ahead, st)
+		}
+		// A page passes it to its listing.
+		page, err := d.Page(context.Background(), PageRequest{ListRequest: ListRequest{Delimiter: '/', Limit: 1000, Stats: &st, ReadAhead: ahead}})
+		if err != nil || len(page.Entries) != len(want) || (st.ReadAheadReads > 0) != (ahead > 0) {
+			t.Fatalf("read-ahead %d: page of %d entries, %v, stats %+v", ahead, len(page.Entries), err, st)
+		}
+	}
+	d, src := openSource(t, dir)
+	src.reset()
+	if got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10, ReadAhead: -1}); !errors.Is(err, ErrInvalidRequest) || got != nil {
+		t.Fatalf("negative read-ahead: %+v, %v", got, err)
+	}
+	if _, reads := src.taken(); len(reads) != 0 {
+		t.Fatalf("a negative read-ahead read %d times", len(reads))
+	}
+}

@@ -79,7 +79,7 @@ func (*ObjectBatch) LastModified(i int) (micros int64, ok bool)
 func (*ObjectBatch) ETag(i int) ([]byte, bool)
 func (*ObjectBatch) StorageClass(i int) ([]byte, bool) // access_tier on Azure
 func (*ObjectBatch) Cursor(i int) *Cursor // owning copy
-type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
+type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats; ReadAhead int }
 type Entry struct { Object *Object; Local *LocalEntry; CommonPrefix []byte } // an object or entry, a prefix, or a prefix with its exact-key row
 func (Entry) Cursor() *Cursor
 func (*Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error)
@@ -310,7 +310,10 @@ Azure versions schema.
   after `Close`, `ErrInvalidRequest` (a `Limit` that is not positive, a malformed cursor), the Source's and the
   context's. `Stats`, when set, is reset when the request starts (a refusal before any read leaves it zero) and receives
   the request's `ReadStats`, whether it succeeds or fails; `List` does
-  not add to `StreamStats`.
+  not add to `StreamStats`. `ReadAhead` (default 0, none; at most 64; negative is `ErrInvalidRequest`) lets the
+  module read up to that many key pages ahead concurrently (`seekparquet.ListQuery.ReadAhead`): it pays where a
+  read waits on a round trip (an object store), not on a local file, and the entries are the same either way;
+  `Page` passes it on.
 - **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
   a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
   other path only the object whose key equals it. Paths may repeat, nest and overlap; each total is independent.
@@ -468,7 +471,9 @@ storage class) and its prefixes' aggregates.
 several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects and prefixes; checks an entry's
 values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
 after a prefix's keys, a NUL delimiter, the refusal of a versions schema before any read (statistics reset), a row check failing the listing with its statistics kept, a missing part's
-refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset` The lister's
+refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset`; `TestListReadAhead` lists 40
+prefixes of five keys in pages of two rows with `ReadAhead` 0, 1, 4 and 64 (through `List` and `Page`): the same
+entries, pages read ahead exactly when it is positive, and a negative one refused before any read. The lister's
 `TestReaderStreams*` tests open, check and stream datasets its own writer wrote, with the metadata it recorded: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 through `StreamLocal` (kinds, a link target, one without a size kept nil; `Stream` refuses them), and both
 versions schemas opened and refused by `Stream`.
