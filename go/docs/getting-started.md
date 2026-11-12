@@ -111,10 +111,12 @@ duckdb -c "SELECT c.complete, c.stop_reason, c.skipped_entries AS skipped,
 └──────────┴─────────────┴─────────┴─────────┴────────────┘
 ```
 
-`complete` alone says only that the listing reached the end of its scope. Entries it could not read are left
-out and counted in `skipped`, and a filtered run is complete over what its filters kept. The dataset holds the
-whole source as listed when `complete` is true, `stop_reason` is `completed`, `skipped` is 0 and `filters` is
-empty; `exclusions` names what was left out by design, such as an output directory inside the tree
+`complete` alone says only that the listing reached the end of its scope. Errors that kept entries out are
+counted in `skipped`, and a filtered run is complete over what its filters kept. When `complete` is true,
+`stop_reason` is `completed`, `skipped` is 0 and `filters` is empty, the dataset covers the recorded scope (the
+manifest's `source` and `scope`) minus its `exclusions`, which name what was left out by design, such as an
+output directory inside the tree. A program that needs a whole-source inventory also checks that the source and
+scope are the ones it expects, accepts any exclusions explicitly, and treats a missing coverage field as unknown
 ([dataset.md](dataset.md#the-swath-extension)).
 
 ## 6. Query it with DuckDB

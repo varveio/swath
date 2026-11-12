@@ -12,8 +12,9 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 | 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
 | 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
 
-The usage and output-directory messages quoted on this page are checked against the binary by
-`go test ./cmd/swath` (TestTroubleshootingMessages).
+The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
+and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their
+exit code 2, by `TestTroubleshootingMessages` in `go test ./cmd/swath`; the others are not.
 
 ## Credentials could not be loaded
 
@@ -207,9 +208,11 @@ shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
 
 ## Entries could not be read
 
-A local walk that cannot read some entries (permissions, entries removed during the walk) names up to five on
-stderr with their cause, counts the rest, leaves them out of the rows and totals, and still exits 0. The
-report's `outcome.unreadable` is then true, and a dataset's coverage counts them in `skipped_entries`.
+A local walk that cannot read some entries (permissions, entries removed during the walk, a link target it
+cannot read) names up to five on stderr with their cause, counts the rest, and still exits 0. Local entry errors
+can leave rows out or metadata unavailable: a symbolic link whose target cannot be read keeps its row.
+`outcome.unreadable` in the report reflects entry errors; `coverage.skipped_entries` excludes vanished entries
+and failed link-target reads.
 
 ## Reporting a problem
 

@@ -25,9 +25,9 @@ coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
 ```
 
 `complete=true` says the listing reached the end of its scope, not that it holds every entry: `skipped` counts
-entries that could not be read, `filters` the rules that left rows out, `exclusions` what was left out by
-design (an output directory inside the tree). The dataset holds the whole source as listed when it shows
-`complete=true stop=completed skipped=0 filters=0`
+errors that kept entries out, `filters` the rules that left rows out, `exclusions` what was left out by design
+(an output directory inside the tree). With `complete=true stop=completed skipped=0 filters=0` the dataset covers
+the `source` and `scope` on the line above it, minus its exclusions
 ([getting-started.md](../getting-started.md#5-check-that-it-is-complete),
 [dataset.md](../dataset.md#the-swath-extension)).
 

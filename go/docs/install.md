@@ -53,7 +53,7 @@ No release of this command line exists yet. The release workflow is set up to pu
   [swath-replay](internals/swath-replay.md#container-image)), both running as `65532:65532`.
 
 This section will describe downloading and verifying them once a release exists. Until then, the image can be
-built from a checkout: `docker build -f Dockerfile.go -t swath:dev .` (`--target swath-replay` for the replay
+built from the repository root of a checkout: `docker build -f Dockerfile.go -t swath:dev .` (`--target swath-replay` for the replay
 server; `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the build context carries no
 `.git`). The build needs the network: it downloads the modules and generates `THIRD_PARTY_NOTICES`, failing on
 a module whose license is not allowed ([license gate](internals/testing.md#license-gate)). The image runs as
