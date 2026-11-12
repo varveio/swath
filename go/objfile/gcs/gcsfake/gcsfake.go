@@ -467,6 +467,9 @@ func (s *Server) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Goog-Generation", strconv.FormatInt(o.Gen, 10))
+	// The body is object bytes; never let a client take it for a page.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	rng := r.Header.Get("Range")
 	if rng == "" { // the whole object
 		w.Header().Set("Content-Length", strconv.Itoa(len(o.Data)))
