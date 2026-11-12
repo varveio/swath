@@ -99,23 +99,16 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 // Identity, or must find the recorded ones, else it fails with
 // ErrObjectChanged and returns none of the bytes it read. Until then the
 // Object's reads go to the store, so the current object is re-proved as
-// Open re-proves it. Size 0, which no read reaches the store for, is Open,
-// and fails with ErrObjectChanged when the object is not empty; a negative
-// size is invalid.
+// Open re-proves it. A size other than the object's, found before any pin
+// is recorded, is a *SizeMismatchError; after, ErrObjectChanged. Size 0,
+// which no read reaches the store for, is Open, and checks that the object
+// is empty; a negative size is invalid.
 func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object, error) {
 	if err := CheckPath(name); err != nil {
 		return nil, err
 	}
 	if size < 0 {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: negative size %d", fs.ErrInvalid, size)}
-	}
-	if size == 0 {
-		f, err := p.Open(ctx, name)
-		if err == nil && f.Size() != 0 {
-			f.Close()
-			return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes, opened as 0", ErrObjectChanged, f.Size())}
-		}
-		return f, err
 	}
 	p.mu.Lock()
 	want, recorded := p.pins[name]
@@ -126,6 +119,14 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 	if recorded && want.Size != size {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: opened as %d bytes, pinned %d bytes at %q",
 			ErrObjectChanged, size, want.Size, want.Identity)}
+	}
+	if size == 0 {
+		f, err := p.Open(ctx, name) // checked against a recorded pin
+		if err == nil && f.Size() != 0 {
+			f.Close()
+			return nil, &fs.PathError{Op: "open", Path: name, Err: &SizeMismatchError{Name: name, Expected: 0, Actual: f.Size()}}
+		}
+		return f, err
 	}
 	f, err := p.o.OpenSized(ctx, name, size)
 	if err != nil {
@@ -206,13 +207,24 @@ type pinnedObject struct {
 // err (or nil), has pinned it: it returns the error the read is to fail
 // with instead, after whether there is one. A read that failed before pinning
 // (Identity still "") is not checked: it returned no bytes. A missing object
-// of a recorded pin is ErrObjectChanged.
+// of a recorded pin is ErrObjectChanged, as is a size other than a recorded
+// pin's (a *SizeMismatchError of the read, which is not kept).
 func (f *pinnedObject) confirm(err error) (bool, error) {
 	if f.checked.Load() {
 		return false, nil
 	}
 	if err != nil && f.recorded && errors.Is(err, fs.ErrNotExist) {
 		return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
+	}
+	var sm *SizeMismatchError
+	if err != nil && errors.As(err, &sm) {
+		f.p.mu.Lock()
+		want, recorded := f.p.pins[f.name]
+		f.p.mu.Unlock()
+		if recorded {
+			return true, &fs.PathError{Op: "read", Path: f.name, Err: fmt.Errorf("%w: %d bytes, pinned %d bytes at %q",
+				ErrObjectChanged, sm.Actual, want.Size, want.Identity)}
+		}
 	}
 	if f.Identity() == "" {
 		return false, nil

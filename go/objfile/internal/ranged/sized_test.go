@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
@@ -83,7 +84,7 @@ func TestSizedPinsOnStatedTotal(t *testing.T) {
 		t.Fatalf("read: %v, Identity %q, %d metadata requests", err, f.Identity(), s.stats.Load())
 	}
 	g := NewSized("obj", 99, s.get, s.stat)
-	if _, err := g.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) || g.Identity() != "" {
+	if _, err := g.ReadAt(make([]byte, 10), 0); !isMismatch(err, 99, 100) || g.Identity() != "" {
 		t.Fatalf("read of another size: %v, Identity %q", err, g.Identity())
 	}
 }
@@ -106,7 +107,7 @@ func TestSizedNoTotalFallsBack(t *testing.T) {
 	// Wrong size: no pin, no bytes.
 	g := NewSized("obj", 90, s.get, s.stat)
 	clear(p)
-	if n, err := g.ReadAt(p, 0); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 || g.Identity() != "" || p[0] != 0 {
+	if n, err := g.ReadAt(p, 0); !isMismatch(err, 90, 100) || n != 0 || g.Identity() != "" || p[0] != 0 {
 		t.Fatalf("read of another size: %d, %v, Identity %q", n, err, g.Identity())
 	}
 
@@ -392,5 +393,87 @@ func TestReadObjectLimitMax(t *testing.T) {
 	}
 	if b, _, err := ReadObject(context.Background(), "obj", math.MaxInt64, get); err != nil || !bytes.Equal(b, s.data) {
 		t.Fatalf("ReadObject under the largest limit = %d bytes, %v", len(b), err)
+	}
+}
+
+// isMismatch reports whether err is a *SizeMismatchError of expected and
+// actual, and not ErrObjectChanged.
+func isMismatch(err error, expected, actual int64) bool {
+	var sm *objfile.SizeMismatchError
+	return errors.As(err, &sm) && sm.Expected == expected && sm.Actual == actual && !errors.Is(err, objfile.ErrObjectChanged)
+}
+
+// TestSizedClassification: a first read's evidence of another size is a
+// SizeMismatchError, an unsatisfiable range is checked by a metadata
+// request, and a size other than a pinned file's is ErrObjectChanged.
+func TestSizedClassification(t *testing.T) {
+	s := newStore(100)
+	unsatisfiable := func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+		if off+n > int64(len(s.data)) {
+			return Response{}, fmt.Errorf("%w: 416", ErrUnsatisfiable)
+		}
+		return s.get(ctx, off, n, pin)
+	}
+	f := NewSized("obj", 200, unsatisfiable, s.stat)
+	if _, err := f.ReadAt(make([]byte, 10), 150); !isMismatch(err, 200, 100) || s.stats.Load() != 1 {
+		t.Fatalf("unsatisfiable first read = %v after %d metadata requests; want a mismatch after 1", err, s.stats.Load())
+	}
+	// A 416 of an object of the size given is not a mismatch: the
+	// store's error stands.
+	g := NewSized("obj", 100, func(context.Context, int64, int64, Pin) (Response, error) {
+		return Response{}, fmt.Errorf("%w: 416", ErrUnsatisfiable)
+	}, s.stat)
+	if _, err := g.ReadAt(make([]byte, 10), 0); !errors.Is(err, ErrUnsatisfiable) || isMismatch(err, 100, 100) {
+		t.Fatalf("416 of an object of the size given = %v", err)
+	}
+	// Pinned, then replaced by an object of another size.
+	h := NewSized("obj", 100, s.get, s.stat)
+	if _, err := h.ReadAt(make([]byte, 10), 0); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.data = append(s.data, 'x')
+	s.mu.Unlock()
+	if _, err := h.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) || isMismatch(err, 100, 101) {
+		t.Fatalf("read of a pinned file, now of another size = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestConcurrentFirstIdentities: concurrent first reads served two
+// versions: one pins, and the reads of the other fail with ErrObjectChanged
+// and return no bytes.
+func TestConcurrentFirstIdentities(t *testing.T) {
+	data := bytes.Repeat([]byte("0123456789"), 100)
+	var n atomic.Int32
+	start := make(chan struct{})
+	get := func(_ context.Context, off, l int64, pin Pin) (Response, error) {
+		served := Pin{ETag: "a"}
+		if n.Add(1)%2 == 0 {
+			served = Pin{ETag: "b"}
+		}
+		<-start
+		return Response{Body: io.NopCloser(bytes.NewReader(data[off : off+l])), Pin: served, Start: off, Total: 1000, Length: l}, nil
+	}
+	f := NewSized("obj", 1000, get, nil)
+	var wg sync.WaitGroup
+	var ok, changed atomic.Int32
+	for i := range 8 {
+		wg.Go(func() {
+			p := make([]byte, 10)
+			_, err := f.ReadAt(p, int64(i*100))
+			switch {
+			case err == nil && bytes.Equal(p, data[i*100:i*100+10]):
+				ok.Add(1)
+			case errors.Is(err, objfile.ErrObjectChanged) && p[0] == 0:
+				changed.Add(1)
+			default:
+				t.Errorf("read %d: %v", i, err)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if ok.Load() != 4 || changed.Load() != 4 {
+		t.Fatalf("%d reads served, %d changed; want 4 of each", ok.Load(), changed.Load())
 	}
 }

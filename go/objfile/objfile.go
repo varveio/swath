@@ -77,9 +77,10 @@ type Opener interface {
 	// the object's total size and it is size (a response that states none
 	// is let go, a metadata request proves the size and version, and the
 	// range is requested again of that version); no byte of the object is
-	// returned before. A read that finds another size fails with
-	// ErrObjectChanged, and a missing object fails with an error wrapping
-	// fs.ErrNotExist. An Object of size 0, or one never read, makes no
+	// returned before. A read that finds another size fails with a
+	// *SizeMismatchError (a range the store cannot serve, 416, is followed
+	// by a metadata request to tell a shorter object from a failure), and a
+	// missing object fails with an error wrapping fs.ErrNotExist. An Object of size 0, or one never read, makes no
 	// request and so proves nothing.
 	OpenSized(ctx context.Context, name string, size int64) (Object, error)
 }
@@ -128,6 +129,23 @@ func ReadObject(ctx context.Context, o Opener, name string, limit int64) ([]byte
 		return nil, "", err
 	}
 	return b, f.Identity(), nil
+}
+
+// SizeMismatchError reports that an object opened at a size it was given
+// (OpenSized) is another size: its first evidence, a response's stated
+// total or a metadata request, showed Actual bytes, an observed total, where
+// Expected were given. It is not ErrObjectChanged, which reports a change
+// after the version was pinned: a reader can tell a wrong size it was given
+// (a manifest that does not describe the object) from an object replaced
+// under it.
+type SizeMismatchError struct {
+	Name     string
+	Expected int64
+	Actual   int64
+}
+
+func (e *SizeMismatchError) Error() string {
+	return fmt.Sprintf("objfile: %s is %d bytes, not the %d it was opened at", e.Name, e.Actual, e.Expected)
 }
 
 // ErrObjectChanged reports a missing or mismatched pinned identity or size.

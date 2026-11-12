@@ -270,8 +270,9 @@ func runSized(t *testing.T, newStore NewStore) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.ReadAt(make([]byte, 4), 0); !errors.Is(err, objfile.ErrObjectChanged) {
-			t.Fatalf("read of an object of another size: %v, want ErrObjectChanged", err)
+		var sm *objfile.SizeMismatchError
+		if _, err := f.ReadAt(make([]byte, 4), 0); !errors.As(err, &sm) || errors.Is(err, objfile.ErrObjectChanged) || sm.Actual != 100 {
+			t.Fatalf("read of an object of another size: %v, want a SizeMismatchError of 100 bytes", err)
 		}
 	})
 	t.Run("SizedShort", func(t *testing.T) {
@@ -283,8 +284,9 @@ func runSized(t *testing.T, newStore NewStore) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n, err := f.ReadAt(make([]byte, 20), 80); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 {
-			t.Fatalf("read past a shorter object's end = %d, %v; want 0, ErrObjectChanged", n, err)
+		var sm *objfile.SizeMismatchError
+		if n, err := f.ReadAt(make([]byte, 20), 80); !errors.As(err, &sm) || sm.Actual != 90 || n != 0 {
+			t.Fatalf("read past a shorter object's end = %d, %v; want 0, a SizeMismatchError of 90 bytes", n, err)
 		}
 	})
 }

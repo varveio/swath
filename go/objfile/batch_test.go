@@ -439,16 +439,23 @@ func TestBatchCancel(t *testing.T) {
 // sliceOpener opens countingObjects by name.
 type sliceOpener map[string]*countingObject
 
+// Open returns the object pinned (an Identity at once); OpenSized returns
+// it unpinned until its first read, as a store's OpenSized does.
 func (s sliceOpener) Open(_ context.Context, name string) (objfile.Object, error) {
 	o, ok := s[name]
 	if !ok {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
+	o.pinFirst = false
 	return o, nil
 }
 
 func (s sliceOpener) OpenSized(ctx context.Context, name string, _ int64) (objfile.Object, error) {
-	return s.Open(ctx, name)
+	f, err := s.Open(ctx, name)
+	if err == nil {
+		s[name].pinFirst = true
+	}
+	return f, err
 }
 
 // TestLimitBatch: through Limit, each request of a batch holds a slot, so a
@@ -503,36 +510,92 @@ func TestLimitBatch(t *testing.T) {
 	}
 }
 
-// TestBatchPolicyThroughWrappers: the requests of a batch follow the
-// policy Batch set, under Limit and Root.
-func TestBatchPolicyThroughWrappers(t *testing.T) {
+func mustBatch(t *testing.T, o objfile.Opener, p objfile.BatchPolicy) objfile.Opener {
+	t.Helper()
+	b, err := objfile.Batch(o, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestComposition: Batch, Limit, Pin, Root and KnownSizes in the orders
+// callers stack them (varve: Pin or Restore over Limit over a store whose
+// Root is inside it) keep batching under Batch's policy, the first read's
+// verification (alone, then pinned), one slot per request (a limit of one
+// never deadlocks against the batch's own requests) and cancellation.
+func TestComposition(t *testing.T) {
 	ctx := context.Background()
-	for i, wrap := range []func(objfile.Opener) objfile.Opener{
-		func(o objfile.Opener) objfile.Opener {
-			return objfile.Limit(objfile.Batch(o, objfile.BatchPolicy{MaxRequest: 10, MaxConcurrent: 1}), 2)
-		},
-		func(o objfile.Opener) objfile.Opener {
-			return objfile.Batch(objfile.Limit(o, 2), objfile.BatchPolicy{MaxRequest: 10, MaxConcurrent: 1})
-		},
-		func(o objfile.Opener) objfile.Opener {
-			return objfile.Root(objfile.Limit(objfile.Batch(o, objfile.BatchPolicy{MaxRequest: 10, MaxConcurrent: 1}), 2), "")
-		},
+	small := objfile.BatchPolicy{MaxRequest: 10, MaxConcurrent: 4}
+	for _, c := range []struct {
+		name  string
+		stack func(t *testing.T, o objfile.Opener) objfile.Opener
+	}{
+		{"Pin(Limit(Batch))", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return objfile.Pin(objfile.Limit(mustBatch(t, o, small), 1), scope)
+		}},
+		{"Pin(Root(Limit(Batch)))", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return objfile.Pin(objfile.Root(objfile.Limit(mustBatch(t, o, small), 1), ""), scope)
+		}},
+		{"KnownSizes(Pin(Limit(Batch)))", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return objfile.KnownSizes(objfile.Pin(objfile.Limit(mustBatch(t, o, small), 1), scope), map[string]int64{"obj": 4096})
+		}},
+		{"Batch(Pin(Limit))", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return mustBatch(t, objfile.Pin(objfile.Limit(o, 1), scope), small)
+		}},
+		{"Batch(Limit)", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return mustBatch(t, objfile.Limit(o, 1), small)
+		}},
+		{"Limit(Batch)", func(t *testing.T, o objfile.Opener) objfile.Opener {
+			return objfile.Limit(mustBatch(t, o, small), 1)
+		}},
 	} {
-		o := newCounting(4096)
-		f, err := wrap(sliceOpener{"obj": o}).Open(ctx, "obj")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := f.(objfile.RangeReader); !ok {
-			t.Fatalf("wrapping %d: the Object is not a RangeReader", i)
-		}
-		rs := ranges(0, 100)
-		if err := objfile.ReadRanges(ctx, f, rs); err != nil {
-			t.Fatal(err)
-		}
-		if n := len(o.reqs); n != 10 {
-			t.Fatalf("wrapping %d: %d requests, want 10 of at most 10 bytes", i, n)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			o := newCounting(4096)
+			f, err := c.stack(t, sliceOpener{"obj": o}).Open(ctx, "obj")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := f.(objfile.RangeReader); !ok {
+				t.Fatal("the Object is not a RangeReader")
+			}
+			var first atomic.Int32
+			o.fail = func(int64, int64) error {
+				if first.Add(1) == 1 && o.inFlightNow() != 1 {
+					return errors.New("the first request was not alone")
+				}
+				return nil
+			}
+			rctx, cancel := context.WithTimeout(ctx, 10*time.Second) // a deadlock fails, not hangs
+			defer cancel()
+			rs := ranges(0, 100)
+			if err := objfile.ReadRanges(rctx, f, rs); err != nil {
+				t.Fatal(err)
+			}
+			checkFilled(t, o, rs)
+			if len(o.reqs) != 10 || o.maxIn != 1 {
+				t.Fatalf("%d requests, %d in flight at most; want 10 under the policy and 1 under the limit", len(o.reqs), o.maxIn)
+			}
+
+			// Cancelled while its requests wait: it returns, and no slot is
+			// left held (a read of another range goes through).
+			o.block = make(chan struct{})
+			started := make(chan struct{})
+			var once sync.Once
+			o.started = func() { once.Do(func() { close(started) }) }
+			cctx, ccancel := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() { done <- objfile.ReadRanges(cctx, f, ranges(1000, 100)) }()
+			<-started
+			ccancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled batch: %v", err)
+			}
+			o.block, o.started = nil, nil
+			if err := objfile.ReadRanges(rctx, f, ranges(2000, 10)); err != nil {
+				t.Fatalf("a batch after a cancelled one: %v", err)
+			}
+		})
 	}
 }
 
@@ -564,9 +627,16 @@ func TestBatchInFlightBytesBelowRequest(t *testing.T) {
 	if o.maxIn != 2 || o.maxBytes > 250 {
 		t.Fatalf("%d in flight and %d bytes at most; want 2 and at most 250", o.maxIn, o.maxBytes)
 	}
+	// Ranges over the byte bound are split to fit it; none is let through
+	// over it.
 	o = newCounting(20000)
-	if err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 1000, 5000, 1000), p); err != nil || o.maxIn != 1 {
-		t.Fatalf("requests over the byte bound: %v, %d in flight at most; want one at a time", err, o.maxIn)
+	if err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 1000, 5000, 1000), p); err != nil || o.maxBytes > 250 {
+		t.Fatalf("ranges over the byte bound: %v, %d bytes in flight at most; want at most 250", err, o.maxBytes)
+	}
+	for _, r := range o.requests() {
+		if r.n > 250 {
+			t.Fatalf("a request of %d bytes, over the in-flight bound of 250", r.n)
+		}
 	}
 }
 
@@ -589,17 +659,32 @@ func TestBatchExtremeBounds(t *testing.T) {
 	}
 }
 
-// TestBatchZeroPolicy: the zero BatchPolicy takes the default request size
-// and concurrency, and bridges no gap.
+// TestBatchZeroPolicy: the zero BatchPolicy is DefaultBatchPolicy, and a
+// negative bound is refused before any request, by ReadRangesWith and by
+// Batch.
 func TestBatchZeroPolicy(t *testing.T) {
-	o := newCounting(9 << 20)
-	rs := ranges(0, 5<<20, 5<<20+1, 10)
-	if err := objfile.ReadRangesWith(context.Background(), o, rs, objfile.BatchPolicy{}); err != nil {
-		t.Fatal(err)
+	var got [2][]span
+	for i, p := range []objfile.BatchPolicy{{}, objfile.DefaultBatchPolicy()} {
+		o := newCounting(9 << 20)
+		rs := ranges(0, 5<<20, 5<<20+1, 10, 6<<20, 10)
+		if err := objfile.ReadRangesWith(context.Background(), o, rs, p); err != nil {
+			t.Fatal(err)
+		}
+		checkFilled(t, o, rs)
+		got[i] = o.requests()
 	}
-	checkFilled(t, o, rs)
-	if got := o.requests(); len(got) != 3 || got[0].n != 5<<19 {
-		t.Fatalf("requests %v; want 2 halves of 5 MiB and the 10 bytes past the gap", got)
+	if !slices.Equal(got[0], got[1]) || len(got[0]) != 3 {
+		t.Fatalf("zero policy requests %v, default %v", got[0], got[1])
+	}
+	for _, p := range []objfile.BatchPolicy{{MaxGap: -1}, {MaxRequest: -1}, {MaxOverRead: -0.5}, {MaxOverRead: math.NaN()},
+		{MaxConcurrent: -1}, {MaxInFlightBytes: -1}} {
+		o := newCounting(100)
+		if err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 10), p); !errors.Is(err, fs.ErrInvalid) || len(o.reqs) != 0 {
+			t.Fatalf("policy %+v: %v after %d requests; want fs.ErrInvalid before any", p, err, len(o.reqs))
+		}
+		if _, err := objfile.Batch(sliceOpener{}, p); !errors.Is(err, fs.ErrInvalid) {
+			t.Fatalf("Batch with policy %+v: %v; want fs.ErrInvalid", p, err)
+		}
 	}
 }
 
@@ -669,4 +754,104 @@ type negativeOpener struct{ shortOpener }
 
 func (negativeOpener) Open(context.Context, string) (objfile.Object, error) {
 	return &shortObject{size: -1}, nil
+}
+
+// TestBatchBounds: a batch over MaxBatchRanges ranges or MaxBatchBytes
+// bytes, or one whose pieces at the request size are too many to plan, fails
+// whole before any request; zero-length ranges, through the object's end,
+// need none.
+func TestBatchBounds(t *testing.T) {
+	ctx := context.Background()
+	o := newCounting(1 << 20)
+	many := make([]objfile.Range, objfile.MaxBatchRanges+1)
+	if err := objfile.ReadRangesWith(ctx, o, many, policy()); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("%d ranges: %v; want fs.ErrInvalid", len(many), err)
+	}
+	if err := objfile.ReadRangesWith(ctx, o, many[:objfile.MaxBatchRanges], policy()); err != nil || len(o.reqs) != 0 {
+		t.Fatalf("%d empty ranges: %v after %d requests", objfile.MaxBatchRanges, err, len(o.reqs))
+	}
+	if err := objfile.ReadRangesWith(ctx, o, ranges(1<<20, 0), policy()); err != nil || len(o.reqs) != 0 {
+		t.Fatalf("an empty range at the end: %v after %d requests", err, len(o.reqs))
+	}
+	// 129 ranges of the same MiB: 129 MiB requested, over MaxBatchBytes.
+	big := make([]byte, 1<<20)
+	var over []objfile.Range
+	for range objfile.MaxBatchBytes>>20 + 1 {
+		over = append(over, objfile.Range{Off: 0, Buf: big})
+	}
+	if err := objfile.ReadRangesWith(ctx, o, over, policy()); !errors.Is(err, fs.ErrInvalid) || len(o.reqs) != 0 {
+		t.Fatalf("%d MiB: %v after %d requests; want fs.ErrInvalid before any", len(over), err, len(o.reqs))
+	}
+	// 4096 ranges of the same 64 KiB at one byte a request: within the
+	// byte bound, but planning would be quadratic.
+	var dup []objfile.Range
+	buf := make([]byte, 64<<10)
+	for range objfile.MaxBatchRanges {
+		dup = append(dup, objfile.Range{Off: 0, Buf: buf})
+	}
+	if err := objfile.ReadRangesWith(ctx, o, dup, objfile.BatchPolicy{MaxRequest: 1}); !errors.Is(err, fs.ErrInvalid) || len(o.reqs) != 0 {
+		t.Fatalf("a batch of %d one-byte pieces: %v; want fs.ErrInvalid", len(dup)*len(buf), err)
+	}
+}
+
+// TestBatchFirstReadBarrier: while the Object is not pinned, a batch's
+// requests go one at a time; a failure that leaves it unpinned does not
+// let the rest go at once, and one that shows it is not the object
+// expected stops the batch.
+func TestBatchFirstReadBarrier(t *testing.T) {
+	ctx := context.Background()
+	scattered := func() []objfile.Range {
+		var rs []objfile.Range
+		for i := range 8 {
+			rs = append(rs, objfile.Range{Off: int64(i * 1000), Buf: make([]byte, 100)})
+		}
+		return rs
+	}
+	t.Run("TransientFirst", func(t *testing.T) {
+		o := newCounting(10000)
+		o.pinFirst = true
+		var n atomic.Int32
+		o.fail = func(int64, int64) error {
+			k := n.Add(1)
+			if k <= 2 && o.inFlightNow() != 1 {
+				return errors.New("a request went with another before the Object was pinned")
+			}
+			if k <= 2 {
+				return errors.New("transient")
+			}
+			return nil
+		}
+		o.expect(4, 8)
+		rs := scattered()
+		err := objfile.ReadRangesWith(ctx, o, rs, policy())
+		var be *objfile.BatchError
+		if !errors.As(err, &be) || be.Errs[0] == nil || be.Errs[1] == nil || be.Errs[2] != nil || o.maxIn != 4 {
+			t.Fatalf("batch whose first two requests failed: %v, %d in flight at most; want ranges 0 and 1 failed, then 4 at once", err, o.maxIn)
+		}
+		checkFilled(t, o, rs[2:])
+	})
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"SizeMismatch", &objfile.SizeMismatchError{Name: "obj", Expected: 10000, Actual: 9000}},
+		{"Changed", objfile.ErrObjectChanged},
+		{"Missing", fs.ErrNotExist},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := newCounting(10000)
+			o.pinFirst = true
+			o.fail = func(int64, int64) error { return c.err }
+			err := objfile.ReadRangesWith(ctx, o, scattered(), policy())
+			var be *objfile.BatchError
+			if !errors.As(err, &be) || len(be.Unwrap()) != 8 || len(o.reqs) != 1 {
+				t.Fatalf("batch whose first request failed with %v: %v after %d requests; want every range failed after 1", c.err, err, len(o.reqs))
+			}
+			for i, e := range be.Errs {
+				if !errors.Is(e, c.err) {
+					t.Fatalf("range %d failed with %v, want %v", i, e, c.err)
+				}
+			}
+		})
+	}
 }

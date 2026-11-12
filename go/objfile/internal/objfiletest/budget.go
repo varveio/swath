@@ -257,7 +257,10 @@ func RunBudget(t *testing.T, b Budget) {
 		s, rec := start(t)
 		data := Data(1<<20, 7)
 		s.Put(t, "obj", data)
-		o := objfile.Batch(s.Opener, objfile.BatchPolicy{MaxRequest: 64 << 10, MaxConcurrent: 4, MaxInFlightBytes: 1 << 20})
+		o, err := objfile.Batch(s.Opener, objfile.BatchPolicy{MaxRequest: 64 << 10, MaxConcurrent: 4, MaxInFlightBytes: 1 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
 		f := sized(t, o, "obj", len(data))
 		rec.Reset()
 		read(t, f, data, []objfile.Range{{Off: 1000, Buf: make([]byte, 200<<10)}})
@@ -289,12 +292,45 @@ func RunBudget(t *testing.T, b Budget) {
 	})
 
 	t.Run("SizeMismatch", func(t *testing.T) {
+		// Each way a first read finds the size given wrong: a stated total
+		// (larger or smaller object), a range the store clips, a range past
+		// the object's end (416, then a metadata request for the size).
+		for _, c := range []struct {
+			name          string
+			expected, off int64
+			n, metadata   int
+		}{{"larger object", 999, 0, 10, 0}, {"smaller object", 1001, 0, 10, 0},
+			{"clipped", 1010, 995, 10, 0}, {"past the end", 1100, 1050, 10, 1}} {
+			s, rec := start(t)
+			s.Put(t, "obj", Data(1000, 1))
+			f := sized(t, s.Opener, "obj", int(c.expected))
+			rs := []objfile.Range{{Off: c.off, Buf: make([]byte, c.n)}}
+			if c.metadata == 0 { // the first request alone shows it; the rest are never sent
+				for i := range 4 {
+					rs = append(rs, objfile.Range{Off: int64(i * 200), Buf: make([]byte, c.n)})
+				}
+			}
+			err := objfile.ReadRanges(ctx, f, rs)
+			var sm *objfile.SizeMismatchError
+			if !errors.As(err, &sm) || errors.Is(err, objfile.ErrObjectChanged) || sm.Expected != c.expected || sm.Actual != 1000 {
+				t.Fatalf("%s: batch = %v; want a SizeMismatchError of %d, actual 1000, not ErrObjectChanged", c.name, err, c.expected)
+			}
+			var be *objfile.BatchError
+			if !errors.As(err, &be) || len(be.Unwrap()) != len(rs) {
+				t.Fatalf("%s: %v; want every range failed", c.name, err)
+			}
+			if rec.Count(Metadata) != c.metadata || rec.Count(Ranged) != 1 {
+				t.Fatalf("%s: %d metadata and %d ranged requests; want %d and 1", c.name, rec.Count(Metadata), rec.Count(Ranged), c.metadata)
+			}
+		}
+	})
+
+	t.Run("MissingOnFirstRead", func(t *testing.T) {
 		s, rec := start(t)
-		s.Put(t, "obj", Data(1000, 1))
-		f := sized(t, s.Opener, "obj", 999)
-		err := objfile.ReadRanges(ctx, f, []objfile.Range{{Off: 0, Buf: make([]byte, 10)}})
-		if !errors.Is(err, objfile.ErrObjectChanged) || rec.Count(Metadata) != 0 {
-			t.Fatalf("batch of another size = %v after %d metadata requests", err, rec.Count(Metadata))
+		f := sized(t, s.Opener, "nope", 1000)
+		err := objfile.ReadRanges(ctx, f, []objfile.Range{{Off: 0, Buf: make([]byte, 10)}, {Off: 500, Buf: make([]byte, 10)}})
+		if !errors.Is(err, fs.ErrNotExist) || errors.Is(err, objfile.ErrObjectChanged) || rec.Count(Ranged) != 1 {
+			t.Fatalf("batch of a missing object = %v after %d requests; want fs.ErrNotExist after 1", err, rec.Count(Ranged))
 		}
 	})
 
@@ -314,7 +350,8 @@ func RunBudget(t *testing.T, b Budget) {
 			t.Fatalf("%d metadata and %d ranged requests; want 1 and 3", rec.Count(Metadata), rec.Count(Ranged))
 		}
 		g := sized(t, s.Opener, "obj", 1001)
-		if _, err := g.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) || g.Identity() != "" {
+		var sm *objfile.SizeMismatchError
+		if _, err := g.ReadAt(make([]byte, 10), 0); !errors.As(err, &sm) || sm.Actual != 1000 || g.Identity() != "" {
 			t.Fatalf("read of another size, total unknown = %v, Identity %q", err, g.Identity())
 		}
 	})

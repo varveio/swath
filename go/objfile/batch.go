@@ -6,6 +6,7 @@ package objfile
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -25,9 +26,14 @@ type Range struct {
 type RangeReader interface {
 	// ReadRanges fills every range's Buf with the object's bytes from its
 	// Off. The ranges may come in any order and may overlap or touch in
-	// the object; their Bufs must not share memory. Each range must lie
-	// within the object (Off >= 0, Off+len(Buf) <= Size): a range that does
-	// not, like ctx already done, fails the batch before any request.
+	// the object; their Bufs must not share memory, with each other or with
+	// another call's (this is not checked), and the caller must not use them
+	// until ReadRanges returns. Each range must lie within the object
+	// (Off >= 0, Off+len(Buf) <= Size; an empty range at Size is valid and
+	// needs no request), and a batch is at most MaxBatchRanges ranges of at
+	// most MaxBatchBytes together: a batch that is not fails whole, with
+	// an error wrapping fs.ErrInvalid, before any request, as does one whose
+	// ctx is already done, with its error. Nothing of the call goes on after it returns.
 	//
 	// It returns nil when every range was filled. Otherwise a *BatchError
 	// names the error of each range that failed, and every range it gives
@@ -83,11 +89,11 @@ func (e *BatchError) Unwrap() []error {
 // first, and each piece joins the request before it when the bounds allow,
 // which need not give the fewest requests. At most MaxConcurrent requests of
 // a batch are in flight at once, holding at most MaxInFlightBytes between
-// them (a single request is always let through, whatever its size).
+// them, strictly: no request is larger than MaxInFlightBytes either.
 //
-// MaxGap and MaxOverRead of 0 bridge no gap. MaxRequest, MaxConcurrent and
-// MaxInFlightBytes of 0 (or less) take DefaultBatchPolicy's, so a policy
-// that sets only the gap bounds, or the zero BatchPolicy, is usable.
+// A field left 0 takes DefaultBatchPolicy's value, so the zero BatchPolicy
+// is DefaultBatchPolicy(). A negative field, or a MaxOverRead that is not a
+// number, is invalid (Validate).
 type BatchPolicy struct {
 	MaxGap           int64
 	MaxRequest       int64
@@ -112,22 +118,51 @@ func DefaultBatchPolicy() BatchPolicy {
 	}
 }
 
-// normal is p with no gap or over-read below 0, and DefaultBatchPolicy's
-// bounds for the request size, concurrency and in-flight bytes it leaves
-// at 0 or below.
+// The bounds of one batch (one ReadRanges call), checked before any
+// allocation or request: at most MaxBatchRanges ranges of at most
+// MaxBatchBytes bytes together. A larger batch fails whole with an error
+// wrapping fs.ErrInvalid.
+const (
+	MaxBatchRanges       = 4096
+	MaxBatchBytes  int64 = 128 << 20
+)
+
+// maxBatchPieces bounds the bookkeeping of one batch: the pieces its ranges
+// make when cut at the request size, summed over the ranges, so that a
+// policy of small requests over many overlapping ranges cannot make it
+// quadratic. A batch over it fails with an error wrapping fs.ErrInvalid.
+const maxBatchPieces = 1 << 20
+
+// Validate reports whether p is a usable policy: no field negative and
+// MaxOverRead a number. A zero field is valid (it takes the default).
+func (p BatchPolicy) Validate() error {
+	if p.MaxGap < 0 || p.MaxRequest < 0 || p.MaxConcurrent < 0 || p.MaxInFlightBytes < 0 || !(p.MaxOverRead >= 0) {
+		return fmt.Errorf("objfile: batch policy %+v: %w: a bound is negative or not a number", p, fs.ErrInvalid)
+	}
+	return nil
+}
+
+// normal is p with DefaultBatchPolicy's value for each field left 0, and
+// MaxRequest no larger than MaxInFlightBytes, so that every request fits
+// the in-flight allowance. p is valid.
 func (p BatchPolicy) normal() BatchPolicy {
 	d := DefaultBatchPolicy()
-	p.MaxGap = max(p.MaxGap, 0)
-	p.MaxOverRead = max(p.MaxOverRead, 0)
-	if p.MaxRequest <= 0 {
+	if p.MaxGap == 0 {
+		p.MaxGap = d.MaxGap
+	}
+	if p.MaxOverRead == 0 {
+		p.MaxOverRead = d.MaxOverRead
+	}
+	if p.MaxRequest == 0 {
 		p.MaxRequest = d.MaxRequest
 	}
-	if p.MaxConcurrent <= 0 {
+	if p.MaxConcurrent == 0 {
 		p.MaxConcurrent = d.MaxConcurrent
 	}
-	if p.MaxInFlightBytes <= 0 {
+	if p.MaxInFlightBytes == 0 {
 		p.MaxInFlightBytes = d.MaxInFlightBytes
 	}
+	p.MaxRequest = min(p.MaxRequest, p.MaxInFlightBytes)
 	return p
 }
 
@@ -142,26 +177,46 @@ func ReadRanges(ctx context.Context, f Object, ranges []Range) error {
 
 // ReadRangesWith reads ranges of f as RangeReader says, under p: each
 // request is one ReadAt of f bounded by ctx, so the requests of an Object
-// of Limit each hold a slot. While f has no Identity (an OpenSized Object
-// before its first read pinned it), the batch's first request is sent
-// alone, so that the requests after it carry the pin it takes.
+// of Limit each hold a slot. An invalid p, a batch over MaxBatchRanges or
+// MaxBatchBytes, and a range outside the object fail the whole batch, with
+// an error wrapping fs.ErrInvalid, before any request.
+//
+// While f has no Identity (an OpenSized Object before a read pinned it),
+// the batch's requests are sent one at a time until one has pinned it (or
+// one succeeds, for an Object without identities); when one ends with an
+// error wrapping ErrObjectChanged, fs.ErrNotExist or a *SizeMismatchError
+// before that, the ranges not yet read fail with that error, unsent.
 func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if len(ranges) > MaxBatchRanges {
+		return fmt.Errorf("objfile: a batch of %d ranges, at most %d: %w", len(ranges), MaxBatchRanges, fs.ErrInvalid)
+	}
+	p = p.normal()
+	size := f.Size()
+	var total, pieces int64
+	for i, r := range ranges {
+		n := int64(len(r.Buf))
+		if r.Off < 0 || r.Off > size || n > size-r.Off {
+			return fmt.Errorf("objfile: range %d (%d bytes at %d) is not within the object's %d bytes: %w",
+				i, n, r.Off, size, fs.ErrInvalid)
+		}
+		if total += n; total > MaxBatchBytes { // no overflow: each step adds at most MaxBatchBytes+1
+			return fmt.Errorf("objfile: a batch of more than %d bytes: %w", MaxBatchBytes, fs.ErrInvalid)
+		}
+		if pieces += n/p.MaxRequest + 2; pieces > maxBatchPieces {
+			return fmt.Errorf("objfile: a batch of more than %d pieces of at most %d bytes: %w", maxBatchPieces, p.MaxRequest, fs.ErrInvalid)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	size := f.Size()
-	for i, r := range ranges {
-		if r.Off < 0 || r.Off > size || int64(len(r.Buf)) > size-r.Off {
-			return fmt.Errorf("objfile: range %d (%d bytes at %d) is not within the object's %d bytes: %w",
-				i, len(r.Buf), r.Off, size, fs.ErrInvalid)
-		}
-	}
-	p = p.normal()
 	b := plan(ranges, p)
 	if len(b.spans) == 0 {
 		return nil
 	}
-	b.run(ctx, f, p, f.Identity() == "")
+	b.run(ctx, f, p)
 	errs := b.rangeErrors(len(ranges))
 	if errs == nil {
 		return nil
@@ -268,10 +323,11 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 	return b
 }
 
-// run sends the spans' requests under p, at most one at a time until the
-// first has ended when first is set, and returns once every request it
-// sent has ended. A span not sent before ctx was done fails with its error.
-func (b *batch) run(ctx context.Context, f Object, p BatchPolicy, first bool) {
+// run sends the spans' requests under p, as ReadRangesWith says, and
+// returns once every request it sent has ended. A span not sent fails with
+// the error that stopped the batch: the context's, or the first request's
+// terminal error.
+func (b *batch) run(ctx context.Context, f Object, p BatchPolicy) {
 	type result struct {
 		k   int
 		err error
@@ -281,16 +337,17 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy, first bool) {
 	var (
 		next, inFlight int
 		inBytes        int64
-		stopped        bool
+		stop           error // set: send nothing more; the unsent spans fail with it
 		cancelled      = ctx.Done()
+		alone          = f.Identity() == "" // one at a time until the Object is pinned
 	)
 	for next < len(b.spans) || inFlight > 0 {
-		if !stopped && ctx.Err() != nil {
-			stopped = true // a cancellation seen with a completion: send nothing more
+		if stop == nil && ctx.Err() != nil {
+			stop = context.Cause(ctx) // seen with a completion: send nothing more
 		}
-		if next < len(b.spans) && !stopped {
+		if next < len(b.spans) && stop == nil {
 			n := b.spans[next].end - b.spans[next].off
-			if inFlight == 0 || (!first && inFlight < p.MaxConcurrent && inBytes+n <= p.MaxInFlightBytes) {
+			if (inFlight == 0 || !alone && inFlight < p.MaxConcurrent) && inBytes+n <= p.MaxInFlightBytes {
 				k := next
 				next++
 				inFlight++
@@ -307,15 +364,33 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy, first bool) {
 			b.spans[res.k].err = res.err
 			inFlight--
 			inBytes -= b.spans[res.k].end - b.spans[res.k].off
-			first = false
+			if alone {
+				switch {
+				case res.err == nil || f.Identity() != "":
+					alone = false // pinned (or never will be): the rest at once
+				case terminal(res.err):
+					stop = res.err // the object is not the one expected: no more requests
+				}
+			}
 		case <-cancelled:
 			// Send nothing more; wait for the requests in flight.
-			stopped, cancelled = true, nil
+			cancelled = nil
+			if stop == nil {
+				stop = context.Cause(ctx)
+			}
 		}
 	}
 	for ; next < len(b.spans); next++ {
-		b.spans[next].err = context.Cause(ctx)
+		b.spans[next].err = stop
 	}
+}
+
+// terminal reports whether err says the object is not the one expected
+// (changed, missing, or of another size), so that no other request of the
+// batch can succeed.
+func terminal(err error) bool {
+	var sm *SizeMismatchError
+	return errors.Is(err, ErrObjectChanged) || errors.Is(err, fs.ErrNotExist) || errors.As(err, &sm)
 }
 
 // fetch reads span k with one ReadAt and copies it out to the ranges it
@@ -370,8 +445,14 @@ func (b *batch) rangeErrors(n int) []error {
 }
 
 // Batch makes the ReadRanges of the Objects o opens follow p, whether
-// they come from o directly or through Limit, Root or Pin around it.
-func Batch(o Opener, p BatchPolicy) Opener { return batched{o: o, p: p} }
+// they come from o directly or through Limit, Root or Pin around it. An
+// invalid p (Validate) is refused.
+func Batch(o Opener, p BatchPolicy) (Opener, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	return batched{o: o, p: p}, nil
+}
 
 type batched struct {
 	o Opener

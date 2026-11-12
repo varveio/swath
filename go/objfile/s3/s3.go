@@ -10,7 +10,8 @@
 // If-Match on that ETag and, when there is one, that version id: one for each
 // ReadAt, and one for each merged span of a ReadRanges batch, sent
 // concurrently. A 412, a 404, or a response naming another
-// ETag, version or size fails the read with objfile.ErrObjectChanged.
+// ETag, version or size fails the read with objfile.ErrObjectChanged (before
+// a pin, another size is an objfile.SizeMismatchError).
 // Without a non-null version id, separate creations with the same ETag and
 // size cannot be distinguished. The service must honor If-Match on reads
 // and conditional deletes, and If-None-Match on creation.
@@ -95,6 +96,8 @@ func (o opener) getter(name string) ranged.Getter {
 				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 			case s == http.StatusNotFound || s == http.StatusPreconditionFailed:
 				err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
+			case s == http.StatusRequestedRangeNotSatisfiable:
+				err = fmt.Errorf("%w: %w", ranged.ErrUnsatisfiable, err)
 			}
 			return ranged.Response{}, err
 		}

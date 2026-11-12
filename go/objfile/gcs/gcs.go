@@ -10,8 +10,9 @@
 // byte range of that generation, of the stored bytes (no decompressive
 // transcoding): one for each ReadAt, and one for each merged span of a
 // ReadRanges batch, sent concurrently. A read of a generation that no longer
-// exists, or one finding another size, fails with objfile.ErrObjectChanged;
-// one served from another offset fails.
+// exists, or one finding another size, fails with objfile.ErrObjectChanged
+// (before a pin, another size is an objfile.SizeMismatchError); one served
+// from another offset fails.
 //
 // The SDK's reader requests the rest of a range by itself when a body fails
 // part way, checks only that answer's status, and for one labelled
@@ -33,9 +34,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"strconv"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
@@ -94,12 +97,14 @@ func (o opener) getter(name string) ranged.Getter {
 		}
 		r, err := obj.NewRangeReader(ctx, off, n)
 		if err != nil {
-			if errors.Is(err, storage.ErrObjectNotExist) {
-				if pin.IsZero() {
-					err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
-				} else {
-					err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
-				}
+			var gerr *googleapi.Error
+			switch {
+			case errors.Is(err, storage.ErrObjectNotExist) && pin.IsZero():
+				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+			case errors.Is(err, storage.ErrObjectNotExist):
+				err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
+			case errors.As(err, &gerr) && gerr.Code == http.StatusRequestedRangeNotSatisfiable:
+				err = fmt.Errorf("%w: %w", ranged.ErrUnsatisfiable, err)
 			}
 			return ranged.Response{}, err
 		}

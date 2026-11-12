@@ -10,7 +10,8 @@
 // ETag: one for each ReadAt, and one for each merged span of a ReadRanges
 // batch, sent concurrently. A 412, a 404, or a
 // response naming another ETag or size fails the read with
-// objfile.ErrObjectChanged.
+// objfile.ErrObjectChanged (before a pin, another size is an
+// objfile.SizeMismatchError).
 //
 // Reads use the current blob's ETag; Azure snapshots and version-id reads are
 // not exposed. The service must honor If-Match and If-None-Match conditions.
@@ -98,6 +99,8 @@ func getter(b *blob.Client) ranged.Getter {
 				err = fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 			case s == http.StatusNotFound || s == http.StatusPreconditionFailed:
 				err = fmt.Errorf("%w: %w", objfile.ErrObjectChanged, err)
+			case s == http.StatusRequestedRangeNotSatisfiable:
+				err = fmt.Errorf("%w: %w", ranged.ErrUnsatisfiable, err)
 			}
 			return ranged.Response{}, err
 		}

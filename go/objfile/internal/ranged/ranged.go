@@ -192,6 +192,14 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	f.mu.Unlock()
 	res, err := f.get(ctx, off, n, pin)
 	if err != nil {
+		if errors.Is(err, ErrUnsatisfiable) && pin.IsZero() && f.stat != nil {
+			// A range the store cannot serve, before anything has shown
+			// the object's size: the size given may be wrong (the object
+			// is shorter), which a metadata request tells.
+			if serr := f.sizeOf(ctx); serr != nil {
+				return nil, serr
+			}
+		}
 		return nil, err
 	}
 	err = f.check(ctx, res, off, n)
@@ -218,7 +226,15 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 var errUnproven = errors.New("the response states no total size")
 
 func (f *file) check(ctx context.Context, res Response, off, n int64) error {
+	f.mu.Lock()
+	pin := f.pin
+	f.mu.Unlock()
 	if res.Total >= 0 && res.Total != f.size {
+		if pin.IsZero() {
+			// The first evidence of the object's size, unless another
+			// response pins the file meanwhile.
+			return f.pinTo(ctx, res)
+		}
 		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
 	}
 	if start := max(res.Start, 0); start != off {
@@ -227,13 +243,16 @@ func (f *file) check(ctx context.Context, res Response, off, n int64) error {
 	if res.Length >= 0 && res.Length != n {
 		return fmt.Errorf("the store returned %d bytes for a range of %d", res.Length, n)
 	}
-	f.mu.Lock()
-	pin := f.pin
-	f.mu.Unlock()
 	if pin.IsZero() {
 		return f.pinTo(ctx, res)
 	}
 	return matches(res.Pin, pin)
+}
+
+// mismatch is the error of a first piece of evidence that the object is
+// actual bytes, not the size the file was given.
+func (f *file) mismatch(actual int64) error {
+	return &objfile.SizeMismatchError{Name: f.name, Expected: f.size, Actual: actual}
 }
 
 // lock takes the establish lock, or fails when ctx ends first.
@@ -250,8 +269,8 @@ func (f *file) unlock() { <-f.establish }
 
 // pinTo pins the file to the version res was served, once res has shown
 // that version is the file's size; when another response pinned the file
-// first, res is checked against it. A response that states no total is
-// errUnproven.
+// first, res is checked against it. A response that states another total
+// is a *SizeMismatchError, and one that states none is errUnproven.
 func (f *file) pinTo(ctx context.Context, res Response) error {
 	if err := f.lock(ctx); err != nil {
 		return err
@@ -261,7 +280,13 @@ func (f *file) pinTo(ctx context.Context, res Response) error {
 	pin := f.pin
 	f.mu.Unlock()
 	if !pin.IsZero() {
+		if res.Total >= 0 && res.Total != f.size {
+			return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
+		}
 		return matches(res.Pin, pin)
+	}
+	if res.Total >= 0 && res.Total != f.size {
+		return f.mismatch(res.Total)
 	}
 	if res.Pin.IsZero() {
 		return fmt.Errorf("the response names no version to pin")
@@ -298,7 +323,7 @@ func (f *file) prove(ctx context.Context, served Pin) error {
 		return err
 	}
 	if size != f.size {
-		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, size, f.size)
+		return f.mismatch(size)
 	}
 	if err := matches(served, live); err != nil {
 		return err
@@ -308,6 +333,34 @@ func (f *file) prove(ctx context.Context, served Pin) error {
 	f.mu.Unlock()
 	return nil
 }
+
+// sizeOf asks the store for the object's size, while the file is not
+// pinned: another size is a *SizeMismatchError; the same, or a pinned file,
+// is nil.
+func (f *file) sizeOf(ctx context.Context) error {
+	if err := f.lock(ctx); err != nil {
+		return err
+	}
+	defer f.unlock()
+	f.mu.Lock()
+	pinned := !f.pin.IsZero()
+	f.mu.Unlock()
+	if pinned {
+		return nil
+	}
+	size, _, err := f.stat(ctx)
+	if err != nil {
+		return err
+	}
+	if size != f.size {
+		return f.mismatch(size)
+	}
+	return nil
+}
+
+// ErrUnsatisfiable is a Getter's error (wrapped) for a range the store
+// answered 416 Range Not Satisfiable.
+var ErrUnsatisfiable = errors.New("the store cannot serve the range (416)")
 
 // matches fails with ErrObjectChanged when served names another version
 // than pinned.

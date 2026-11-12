@@ -95,14 +95,21 @@ The batch's bytes are planned greedily, in object order, under `BatchPolicy`:
 touching and overlapping ranges are merged, runs longer than 4 MiB are split into
 near-equal requests, and a request joins the one before it across a gap of up to
 64 KiB while at most a quarter of it is discarded (a plan that need not be the
-fewest requests). The requests run concurrently, 16 and 64 MiB a batch at most, each pinned and resumed after a cut
-body as a `ReadAt` is. A ranged GET costs about one round trip whether it returns
-4 KiB or 4 MiB, so the policy saves round trips at a bounded over-read; `Batch`
-sets another; a bound it leaves at 0 takes the default, except that gap and
-over-read bounds of 0 bridge no gap. Cancelling the context cancels the requests in flight, and
-`ReadRanges` returns once they have stopped. A failed request fails only the
-ranges it covers (`BatchError`); a range outside the object fails the batch
-before any request.
+fewest requests). The requests run concurrently, at most 16 and 64 MiB a batch
+(strictly: a request is split to fit the byte allowance), each pinned and resumed
+after a cut body as a `ReadAt` is. A ranged GET costs about one round trip whether
+it returns 4 KiB or 4 MiB, so the policy saves round trips at a bounded over-read.
+`Batch` sets another policy; a field left 0 takes the default (the zero policy is
+the default), and a negative one is refused. Cancelling the context cancels the
+requests in flight, and `ReadRanges` returns once they have stopped. A failed
+request fails only the ranges it covers (`BatchError`).
+
+A batch is at most `MaxBatchRanges` ranges (4096) and `MaxBatchBytes` (128 MiB);
+a larger one, or a range outside the object, fails whole before any request.
+Empty ranges, through the object's end, need none. The buffers of one batch must
+not share memory. While an `OpenSized` object is not yet pinned, a batch sends
+its requests one at a time until one pins it; one that shows the object missing,
+changed or of another size ends the batch, failing every range it has not read.
 
 `ReadObject` reads a small object, such as a manifest, whole in one request with
 no metadata request first, refusing one larger than its limit (`ErrTooLarge`,
@@ -119,15 +126,20 @@ For more control:
 - Use `OpenSized` when a manifest already gives the size. It makes no request; the
   first read pins the version, once its response states a total size equal to the
   one given (a response that states none is let go, one metadata request proves the
-  size and version, and the range is requested again), and returns no byte before. Another size is `ErrObjectChanged`. `Size()` is only the
-  size given until then, and `Identity()` is empty.
+  size and version, and the range is requested again), and returns no byte before.
+  Another size is a `*SizeMismatchError` with the size given and the size observed
+  (a range past a shorter object's end is checked by a metadata request), not
+  `ErrObjectChanged`, which means the object changed after it was pinned; a missing
+  object wraps `fs.ErrNotExist`. `Size()` is only the size given until then, and
+  `Identity()` is empty.
 - `KnownSizes` turns `Open` of names whose sizes a reader already holds into
   `OpenSized`, for a reader whose open carries no size (SeekParquet's
   `Source.Open`).
 - Use `Pin` across opens and `Snapshot`/`Restore` across restarts. Compose it
   outermost: `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
   `Pinned.OpenSized` checks the identity at the first read instead of at open, and
-  `Pinned.ReadObject` with the read; both re-prove the current object. A restored snapshot
+  `Pinned.ReadObject` with the read; both re-prove the current object. Against a
+  recorded pin, another size is `ErrObjectChanged`. A restored snapshot
   permits only recorded names and rechecks the current objects, rather than
   reopening historical versions. It records only objects actually opened; the
   application must establish that every required object is covered. Use the

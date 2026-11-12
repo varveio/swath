@@ -439,8 +439,13 @@ func TestPinOpenSizedZero(t *testing.T) {
 	s.put("full", []byte("data"))
 	s.put("empty", nil)
 	p := objfile.Pin(s, scope)
+	var sm *objfile.SizeMismatchError
+	if _, err := p.OpenSized(ctx, "full", 0); !errors.As(err, &sm) || sm.Actual != 4 || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("OpenSized(0) of a non-empty object = %v, want a SizeMismatchError of 4 bytes", err)
+	}
+	// That Open recorded the object's pin: now 0 is a change.
 	if _, err := p.OpenSized(ctx, "full", 0); !errors.Is(err, objfile.ErrObjectChanged) {
-		t.Fatalf("OpenSized(0) of a non-empty object = %v, want ErrObjectChanged", err)
+		t.Fatalf("OpenSized(0) of a pinned non-empty object = %v, want ErrObjectChanged", err)
 	}
 	if f, err := p.OpenSized(ctx, "empty", 0); err != nil || f.Size() != 0 {
 		t.Fatalf("OpenSized(0) of an empty object = %v", err)
