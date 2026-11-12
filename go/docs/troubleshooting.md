@@ -3,6 +3,18 @@
 Start from the exit code and the last line on stderr. With `--report FILE`, the report's `outcome.class` and
 `outcome.cause` say the same in a form a program reads ([reference/exit-codes.md](reference/exit-codes.md)).
 
+| Exit | Start with |
+|---|---|
+| 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
+| 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
+| 74 | [the disk filled](#the-disk-filled-exit-74) |
+| 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
+| 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
+| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
+
+The usage and output-directory messages quoted on this page are checked against the binary by
+`go test ./cmd/swath` (TestTroubleshootingMessages).
+
 ## Credentials could not be loaded
 
 ```text
