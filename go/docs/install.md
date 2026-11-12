@@ -39,17 +39,30 @@ tar -xzf swath-0.4.0-rc.2-linux-amd64.tar.gz
 On macOS, `shasum -a 256 ARCHIVE` computes the hash to compare with its line in `SHA256SUMS`; on
 Windows, use PowerShell's `Get-FileHash ARCHIVE -Algorithm SHA256`. Build provenance attestations cover
 the archives, `SHA256SUMS` and both image digests; the workflow also attests the SBOM to each archive.
-[RELEASING.md](../../RELEASING.md#verifying-a-release) has the image signature and provenance commands:
-use the candidate's tag for `TAG` (image verification needs cosign v3 or later).
+For image verification, obtain the candidate's image digests:
+
+```bash
+TAG=v0.4.0-rc.2
+docker buildx imagetools inspect "ghcr.io/varveio/swath:${TAG#v}"
+docker buildx imagetools inspect "ghcr.io/varveio/swath-replay:${TAG#v}"
+```
+
+Use each image's top-level `Digest` (the multi-arch index) in the image signature and provenance
+commands in [RELEASING.md](../../RELEASING.md#verifying-a-release): replace `sha256:<digest>` and
+`sha256:<replay-digest>` with those values, and set `TAG=v0.4.0-rc.2` there too. Image signature
+verification needs cosign v3 or later.
 
 The macOS binaries are not yet signed with an Apple Developer ID or notarized
 ([#420](https://github.com/varveio/swath/issues/420)), so Gatekeeper refuses to run a quarantined
-browser download ("Apple could not verify…"). After verifying and extracting the archive, clear the
-quarantine attribute (use `darwin-amd64` for Intel):
+browser download ("Apple could not verify…"). Only browser downloads need the quarantine attribute
+cleared. After verifying and extracting the archive, clear it (use `darwin-amd64` for Intel):
 
 ```bash
 xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-arm64/swath swath-0.4.0-rc.2-darwin-arm64/swath-replay
 ```
+
+If the attribute is absent, as after `curl` or `gh release download`, `xattr` reports "No such xattr";
+this is harmless.
 
 Put the extracted binary on your `PATH`, for example with `install -m 755 swath ~/.local/bin/` from
 inside the extracted directory on Linux or macOS.
