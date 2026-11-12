@@ -138,8 +138,9 @@ rows after filtering at the order stage's handoff (swath du, swath diag count: v
 and raw overfetch are excluded. `distinct_keys` excludes pending batches that never reached the sink, including on a failed run.
 
 Object-store failure diagnostics retain `auth` (unusable credentials), `access_denied` (a listing
-permission refusal), `not_found` (the bucket or Azure container does not exist: S3 `NoSuchBucket`, GCS's 404
-`notFound` to a listing, Azure `ContainerNotFound`; never a missing object or prefix, which lists empty),
+permission refusal), `not_found` (the source's bucket or Azure container does not exist: S3 `NoSuchBucket`, GCS's 404
+`notFound` to a listing, Azure `ContainerNotFound`; never a missing object or prefix, which lists empty,
+nor a missing output bucket),
 `region_redirect` (S3 answered that the bucket is in another region and named it; the message says which),
 `throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
 retry and engine requeue use its stored transient signal. Other service errors retain their HTTP status
