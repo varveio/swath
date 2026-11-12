@@ -65,7 +65,35 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
+after it is copied or moved, not for ordinary reads. `swath verify` is planned
+([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
+[SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
+section of its `go/README.md`). From the root of a SeekParquet checkout that includes `go/cmd/seekparquet`
+and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
+`github.com/varveio/seekparquet/go v0.1.1-0.20261112123151-9a0e8a2ee5ae` in `go/go.mod`; use that
+revision or one with a matching format, rather than assuming a published tag includes the command.
+
+```bash
+go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
+go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
+```
+
+`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
+swath declares one for every part. `full` separately checks the format, key order and decoded pages
+(including the structural and profile levels); it does not check digests or swath's extension and
+schema semantics. Neither proves that the listing covers the source you intended.
+
+The validator exits 0 when all requested levels complete, 1 when any level fails, and 2 when validation
+is incomplete, cannot run, or the arguments are invalid. With `go run`, a nonzero validator status is
+printed as `exit status N`; the `go` command itself exits 1.
+
+For a dataset produced with local output, the repository also has
+[`go/verify.py`](../verify.py): `python3 go/verify.py /path/to/dataset` from the repository root, with
+DuckDB installed. It checks swath metadata, schema-specific rules, row counts, key order and bounds,
+footer stamps and part SHA-256 digests independently of the Go reader. It expects the producer's flat
+`data/part-NNNNN.parquet` layout and `run.json`, so it is not a general validator for a bucket dataset
+copied locally with its nested run/attempt part paths. See the [verifier guide](internals/testing.md#verifypy)
+for its checks and optional reference comparison.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present

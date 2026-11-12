@@ -494,6 +494,29 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 	}
 }
 
+// The CLI's no-work path precedes the engine's directory-sync guard.
+func TestResumeCompleteWithoutDirSync(t *testing.T) {
+	captureStderr(t)
+	defer func(was bool) { dataset.DirSyncEnforced = was }(dataset.DirSyncEnforced)
+	dataset.DirSyncEnforced = false
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{src, "-o", dir}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	want := dirTree(t, dir)
+	var out bytes.Buffer
+	if err := dispatch(context.Background(), []string{"resume", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already complete") || !maps.Equal(want, dirTree(t, dir)) {
+		t.Fatalf("complete dataset changed or not reported complete: %q", out.String())
+	}
+}
+
 // TestResumeCompleteIsIdempotent: swath resume on a committed, complete
 // dataset exits 0 (idempotent, as Java's), its report saying committed
 // and complete with the manifest's stop reason, the dataset unchanged;

@@ -256,8 +256,13 @@ Block ids are fixed-width and the upload's own (a random nonce and the block's i
 name never replace each other's staged blocks. Nothing remote
 is deleted during recovery; the crashed attempts' orphans go at the commit.
 
-On Windows a bucket run of an object store is refused as any journaled run is (`listing.ErrUnenforced`: the work
-directory's entries cannot be synced); an unjournaled one (a local tree) runs, without resume.
+On Windows a journaled dataset run of an S3, GCS or Azure Blob source is refused with
+`listing.ErrUnenforced`, whether its destination is local or in S3, GCS or Azure Blob. `openJournal`
+checks `dataset.DirSyncEnforced` before taking the output lock: a bucket destination still needs the
+local `--work-dir` entries synced, so direct uploads do not bypass the refusal. Recovery and bucket
+finalization through resume are refused too. The CLI handles an already committed, finalized dataset
+before reaching this guard: there is no work to continue. A local filesystem source or an explicit `--no-journal`
+diagnostic run can write locally or to a bucket without resume. Text output has no journal and works.
 
 **Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
 (the flag, or for GCS the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and
@@ -565,7 +570,7 @@ tail as JSON lines.
   same identity checks as on Unix), but directories cannot be synced (`dataset.DirSyncEnforced` is false;
   `syncDir` is a no-op there). A process crash loses nothing; after a power loss NTFS replays its metadata
   log to a consistent state that need not include the latest creations and renames, so an acknowledged
-  part could lose its name. A journaled run and `swath resume` are therefore refused with
+  part could lose its name. A journaled run and a resume that reaches the engine are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
   The seekparquet module's own publication refuses the same way (`local.ErrDirSyncUnsupported` unless
   `Ops.AllowUnsynced`); swath does not publish through it (above).
