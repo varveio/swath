@@ -64,24 +64,29 @@ const BodyRetries = 2
 
 // New returns the Object of the object name of size bytes, read through get,
 // pinned to pin (from a metadata request that also gave size).
-func New(name string, size int64, pin Pin, get Getter) objfile.Object {
-	return newFile(name, size, pin, get, nil)
+//
+// observed says that the store's transport observes its requests
+// (Observing): the Object then only marks each request it makes for that
+// transport and ReportsIO; otherwise it reports each request itself, and
+// an SDK's retries inside one are not seen.
+func New(name string, size int64, pin Pin, get Getter, observed bool) objfile.Object {
+	return newFile(name, size, pin, get, nil, observed)
 }
 
-func newFile(name string, size int64, pin Pin, get Getter, stat Stat) *file {
-	return &file{name: name, size: size, pin: pin, get: get, stat: stat, establish: make(chan struct{}, 1)}
+func newFile(name string, size int64, pin Pin, get Getter, stat Stat, observed bool) *file {
+	return &file{name: name, size: size, pin: pin, get: get, stat: stat, observed: observed, establish: make(chan struct{}, 1)}
 }
 
 // NewSized returns the Object of the object name, expected to be size bytes,
 // read through get, as objfile.Opener's OpenSized says: the first response
 // that passes its checks pins the Object, once it states a total size equal
 // to size, or stat, called when it states none, gives size and the same
-// version.
-func NewSized(name string, size int64, get Getter, stat Stat) objfile.Object {
+// version. observed is as New's.
+func NewSized(name string, size int64, get Getter, stat Stat, observed bool) objfile.Object {
 	if size < 0 {
 		panic("ranged: NewSized of a negative size; CheckSize first")
 	}
-	return newFile(name, size, Pin{}, get, stat)
+	return newFile(name, size, Pin{}, get, stat, observed)
 }
 
 // CheckSize is OpenSized's check of the size it is given: a negative size
@@ -99,6 +104,8 @@ type file struct {
 	get    Getter
 	stat   Stat
 	closed atomic.Bool
+	// observed: the store's transport reports the requests (Observing).
+	observed bool
 
 	// establish is a lock (a token in a channel of one) held while an
 	// unpinned file is pinned, so that of concurrent first responses one
@@ -111,6 +118,10 @@ type file struct {
 }
 
 func (f *file) Size() int64 { return f.size }
+
+// ReportsIO is true when the store's transport observes every attempt
+// (objfile.IOReporter).
+func (f *file) ReportsIO() bool { return f.observed }
 
 // Identity is the pinned version's (see identity), "" before the file is
 // pinned.
@@ -156,6 +167,13 @@ func (f *file) ReadRanges(ctx context.Context, ranges []objfile.Range) error {
 }
 
 func (f *file) readAt(ctx context.Context, p []byte, off int64) (int, error) {
+	return f.readFrom(ctx, p, off, 0)
+}
+
+// readFrom is readAt of work already tried prior times (a whole-object
+// read cut short, continued as a ranged read): its first request is
+// then a retry.
+func (f *file) readFrom(ctx context.Context, p []byte, off int64, prior int) (int, error) {
 	if f.closed.Load() {
 		return 0, f.fail(fs.ErrClosed)
 	}
@@ -165,17 +183,19 @@ func (f *file) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if off >= f.size {
 		return 0, io.EOF
 	}
+	obs := objfile.ObserverFromContext(ctx)
 	n := int(min(int64(len(p)), f.size-off))
 	got, retries := 0, 0
 	for got < n {
 		if err := ctx.Err(); err != nil {
 			return got, f.fail(err)
 		}
-		body, err := f.open(ctx, off+int64(got), int64(n-got))
+		body, done, err := f.open(ctx, obs, off+int64(got), int64(n-got), prior+retries > 0)
 		if err != nil {
 			return got, f.fail(err)
 		}
 		m, err := io.ReadFull(body, p[got:n])
+		done.end(int64(m), err)
 		body.Close()
 		got += m
 		if err == nil {
@@ -195,34 +215,68 @@ func (f *file) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 	return n, nil
 }
 
+// request is f.get, observed when obs is not nil: the request is reported
+// as it begins and its end, at once when it fails, else by the report it
+// returns, to be ended before its body is closed.
+func (f *file) request(ctx context.Context, obs objfile.Observer, off, n int64, pin Pin, retry bool) (Response, report, error) {
+	ctx, done := begin(ctx, obs, f.observed, objfile.Request{Kind: objfile.RangeRequest, Name: f.name, Off: off, Len: n, Retry: retry})
+	res, err := f.get(ctx, off, n, pin)
+	if err != nil {
+		done.end(0, err)
+		return res, report{}, err
+	}
+	return res, done, nil
+}
+
+// statObserved is f.stat, observed as a MetadataRequest.
+func (f *file) statObserved(ctx context.Context, obs objfile.Observer) (int64, Pin, error) {
+	return observeStat(ctx, obs, f.observed, f.name, f.stat)
+}
+
+// Metadata is a store's metadata request for the object name, stat,
+// reported to the Observer ctx carries as a MetadataRequest; observed says
+// the store's transport reports it (Observing).
+func Metadata(ctx context.Context, name string, observed bool, stat Stat) (int64, Pin, error) {
+	return observeStat(ctx, objfile.ObserverFromContext(ctx), observed, name, stat)
+}
+
+func observeStat(ctx context.Context, obs objfile.Observer, observed bool, name string, stat Stat) (int64, Pin, error) {
+	ctx, done := begin(ctx, obs, observed, objfile.Request{Kind: objfile.MetadataRequest, Name: name})
+	size, pin, err := stat(ctx)
+	done.end(0, err)
+	return size, pin, err
+}
+
 // open requests a range and checks the response against the pin. An
 // unpinned file is pinned first (establish): its requests go one at a time,
-// under the establish lock, until one has pinned it.
-func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
+// under the establish lock, until one has pinned it. done, when not nil,
+// is to be given the body's outcome.
+func (f *file) open(ctx context.Context, obs objfile.Observer, off, n int64, retry bool) (io.ReadCloser, report, error) {
 	f.mu.Lock()
 	pin := f.pin
 	f.mu.Unlock()
 	if pin.IsZero() {
-		body, pinned, err := f.establish1(ctx, off, n)
+		body, done, pinned, err := f.establish1(ctx, obs, off, n, retry)
 		if !pinned {
-			return body, err
+			return body, done, err
 		}
 		f.mu.Lock()
 		pin = f.pin
 		f.mu.Unlock()
 	}
-	res, err := f.get(ctx, off, n, pin)
+	res, done, err := f.request(ctx, obs, off, n, pin, retry)
 	if err != nil {
 		if st := (*StatedTotal)(nil); errors.As(err, &st) && st.Total != f.size {
-			return nil, fmt.Errorf("%w: size %d, opened at %d: %w", objfile.ErrObjectChanged, st.Total, f.size, err)
+			return nil, report{}, fmt.Errorf("%w: size %d, opened at %d: %w", objfile.ErrObjectChanged, st.Total, f.size, err)
 		}
-		return nil, err
+		return nil, report{}, err
 	}
 	if err := f.check(res, off, n, pin); err != nil {
+		done.end(0, err)
 		res.Body.Close()
-		return nil, err
+		return nil, report{}, err
 	}
-	return res.Body, nil
+	return res.Body, done, nil
 }
 
 // check checks a response to a request of the pinned file: a stated total
@@ -275,77 +329,83 @@ func (f *file) unlock() { <-f.establish }
 // unpinned; pinned without a body says that the file is pinned now (by
 // another read, or by a metadata request after a response that stated no
 // total) and the range is to be requested of that pin.
-func (f *file) establish1(ctx context.Context, off, n int64) (body io.ReadCloser, pinned bool, err error) {
+func (f *file) establish1(ctx context.Context, obs objfile.Observer, off, n int64, retry bool) (body io.ReadCloser, done report, pinned bool, err error) {
 	if err := f.lock(ctx); err != nil {
-		return nil, false, err
+		return nil, report{}, false, err
 	}
 	defer f.unlock()
 	f.mu.Lock()
 	already := !f.pin.IsZero()
 	f.mu.Unlock()
 	if already {
-		return nil, true, nil
+		return nil, report{}, true, nil
 	}
-	res, err := f.get(ctx, off, n, Pin{})
+	res, done, err := f.request(ctx, obs, off, n, Pin{}, retry)
 	if err != nil {
 		var st *StatedTotal
 		switch {
 		case errors.As(err, &st) && st.Total != f.size:
 			// The transport refused a range clipped by a shorter object;
 			// its stated total is the evidence.
-			return nil, false, f.mismatch(st.Total)
+			return nil, report{}, false, f.mismatch(st.Total)
 		case errors.Is(err, ErrUnsatisfiable) && f.stat != nil:
 			// A range the store cannot serve: the size given may be
 			// wrong (the object is shorter), which a metadata request
 			// tells.
-			if size, _, serr := f.stat(ctx); serr != nil {
-				return nil, false, serr
+			if size, _, serr := f.statObserved(ctx, obs); serr != nil {
+				return nil, report{}, false, serr
 			} else if size != f.size {
-				return nil, false, f.mismatch(size)
+				return nil, report{}, false, f.mismatch(size)
 			}
 		}
-		return nil, false, err
+		return nil, report{}, false, err
 	}
 	if res.Total >= 0 && res.Total != f.size {
+		err := f.mismatch(res.Total)
+		done.end(0, err)
 		res.Body.Close()
-		return nil, false, f.mismatch(res.Total)
+		return nil, report{}, false, err
 	}
 	if err := rangeServed(res, off, n); err != nil {
+		done.end(0, err)
 		res.Body.Close()
-		return nil, false, err
+		return nil, report{}, false, err
 	}
 	if res.Pin.IsZero() {
+		err := errors.New("the response names no version to pin")
+		done.end(0, err)
 		res.Body.Close()
-		return nil, false, errors.New("the response names no version to pin")
+		return nil, report{}, false, err
 	}
 	if res.Total >= 0 {
 		f.mu.Lock()
 		f.pin = res.Pin
 		f.mu.Unlock()
-		return res.Body, false, nil
+		return res.Body, done, false, nil
 	}
 	// The size was given, not learnt: a response that does not state the
 	// total cannot prove it. It is let go (it holds a connection the
 	// metadata request may need), the store is asked, and the range is
 	// requested again of the version proved.
+	done.end(0, nil)
 	res.Body.Close()
 	if f.stat == nil {
-		return nil, false, fmt.Errorf("the response states no total size to check the size %d against", f.size)
+		return nil, report{}, false, fmt.Errorf("the response states no total size to check the size %d against", f.size)
 	}
-	size, live, err := f.stat(ctx)
+	size, live, err := f.statObserved(ctx, obs)
 	switch {
 	case err != nil:
-		return nil, false, err
+		return nil, report{}, false, err
 	case size != f.size:
-		return nil, false, f.mismatch(size)
+		return nil, report{}, false, f.mismatch(size)
 	}
 	if err := matches(res.Pin, live); err != nil {
-		return nil, false, err
+		return nil, report{}, false, err
 	}
 	f.mu.Lock()
 	f.pin = live
 	f.mu.Unlock()
-	return nil, true, nil
+	return nil, report{}, true, nil
 }
 
 // StatedTotal is a transport's error for a response it refused that states
@@ -414,32 +474,46 @@ func wholeReadOf(ctx context.Context) *bodyFailure {
 // unless its body fails part way, when the rest is read as a ranged read of
 // the version served; it returns the bytes and that version's Identity, as
 // objfile.ObjectReader says.
-func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]byte, string, error) {
+func ReadObject(ctx context.Context, name string, limit int64, observed bool, get Getter) ([]byte, string, error) {
 	fail := func(err error) error { return &fs.PathError{Op: "read", Path: name, Err: err} }
 	if err := ctx.Err(); err != nil {
 		return nil, "", fail(err)
 	}
 	wctx, failure := wholeReadContext(ctx)
+	wctx, done := begin(wctx, objfile.ObserverFromContext(ctx), observed, objfile.Request{Kind: objfile.WholeRequest, Name: name, Len: -1})
 	res, err := get(wctx, 0, -1, Pin{})
 	if err != nil {
+		done.end(0, err)
 		return nil, "", fail(err)
 	}
+	// read is the body bytes consumed and bodyErr how the body ended (or
+	// why it was not read), reported when it is closed.
+	var (
+		read    int64
+		bodyErr error
+	)
 	body := res.Body
-	defer func() {
+	closeBody := func() {
 		if body != nil {
+			done.end(read, bodyErr)
 			body.Close()
+			body = nil
 		}
-	}()
+	}
+	defer closeBody()
 	if res.Pin.IsZero() {
-		return nil, "", fail(errors.New("the response names no version to pin"))
+		bodyErr = errors.New("the response names no version to pin")
+		return nil, "", fail(bodyErr)
 	}
 	if res.Start > 0 {
-		return nil, "", fail(fmt.Errorf("the store served bytes from %d for the whole object", res.Start))
+		bodyErr = fmt.Errorf("the store served bytes from %d for the whole object", res.Start)
+		return nil, "", fail(bodyErr)
 	}
 	size := res.Length
 	if res.Total >= 0 {
 		if size >= 0 && size != res.Total {
-			return nil, "", fail(fmt.Errorf("the store returned %d bytes of an object of %d", size, res.Total))
+			bodyErr = fmt.Errorf("the store returned %d bytes of an object of %d", size, res.Total)
+			return nil, "", fail(bodyErr)
 		}
 		size = res.Total
 	}
@@ -456,6 +530,7 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 			probe++ // one byte past the limit shows an object over it
 		}
 		b, err := io.ReadAll(io.LimitReader(res.Body, probe))
+		read = int64(len(b))
 		if err == nil {
 			err = failure.get() // a body Transport ended where it failed
 		}
@@ -463,6 +538,7 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 			err = ctx.Err()
 		}
 		if err != nil {
+			bodyErr = err
 			return nil, "", fail(err)
 		}
 		if int64(len(b)) > limit {
@@ -472,6 +548,7 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 	}
 	b := make([]byte, size)
 	m, err := readToEnd(res.Body, b)
+	read = int64(m)
 	if err == nil && m == len(b) {
 		// Transport ends a whole read's failed body as if it ended (so
 		// the SDK does not resume it): a failure it kept, or the context's,
@@ -480,6 +557,7 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 			err = ctx.Err()
 		}
 	}
+	bodyErr = err
 	if err != nil && m == len(b) {
 		// Every byte arrived, but the body did not end cleanly: an error
 		// with its last bytes or at its end (the GCS reader's CRC32C check
@@ -494,9 +572,8 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 		}
 		// The rest is a ranged read of the version served, sent once this
 		// response has let go of its connection.
-		body.Close()
-		body = nil
-		if n, err := newFile(name, size, res.Pin, get, nil).readAt(ctx, b[m:], int64(m)); err != nil || n != len(b)-m {
+		closeBody()
+		if n, err := newFile(name, size, res.Pin, get, nil, observed).readFrom(ctx, b[m:], int64(m), 1); err != nil || n != len(b)-m {
 			if err == nil {
 				err = fail(io.ErrUnexpectedEOF)
 			}

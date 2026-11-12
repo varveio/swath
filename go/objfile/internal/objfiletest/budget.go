@@ -63,6 +63,9 @@ type Recorder struct {
 	// Cut, if set, is given each read's number: a positive result ends that
 	// response's body after so many bytes.
 	Cut func(n int) int
+	// Fail, if set, is given each read's number: a positive result is the
+	// status that read is answered with instead, with no body.
+	Fail func(n int) int
 }
 
 // NewRecorder returns a Recorder that classifies with c.
@@ -94,13 +97,22 @@ func (rec *Recorder) Wrap(h http.Handler) http.Handler {
 				}
 			}
 		}
-		before, cut := rec.Before, rec.Cut
+		before, cut, fail := rec.Before, rec.Cut, rec.Fail
 		rec.mu.Unlock()
 		if held != nil {
 			select {
 			case <-held:
 			case <-r.Context().Done():
 			case <-time.After(10 * time.Second):
+			}
+		}
+		if read && fail != nil {
+			if code := fail(n); code > 0 {
+				rec.mu.Lock()
+				rec.inFlight--
+				rec.mu.Unlock()
+				w.WriteHeader(code)
+				return
 			}
 		}
 		if read && cut != nil {
@@ -207,6 +219,9 @@ type Budget struct {
 	New            NewStore
 	Classify       Classify
 	UnknownTotalOK bool
+	// Observed, if set, starts the store with a client whose transport is
+	// ranged.Observe, recorded as observing (ranged.SetObserving).
+	Observed NewStore
 }
 
 // RunBudget checks the requests the Opener of b makes: by kind, the ranges
@@ -403,6 +418,16 @@ func RunBudget(t *testing.T, b Budget) {
 		}
 	})
 
+	t.Run("Observed", func(t *testing.T) {
+		runObserved(t, b.Classify, b.New, false)
+	})
+	t.Run("ObservedTransport", func(t *testing.T) {
+		if b.Observed == nil {
+			t.Skip("no client with an observing transport")
+		}
+		runObserved(t, b.Classify, b.Observed, true)
+	})
+
 	t.Run("ReadObject", func(t *testing.T) {
 		s, rec := start(t)
 		data := Data(5000, 4)
@@ -431,6 +456,213 @@ func RunBudget(t *testing.T, b Budget) {
 			t.Fatalf("ReadObject of a missing object = %v", err)
 		}
 	})
+}
+
+// runObserved checks that every request a store's Opener makes is
+// observed once, with its kind, extent, retry flag and the bytes it
+// delivered, every one ended before the operation returns. With complete
+// (the store's client sends through an Observe transport), ReportsIO is
+// true and the requests an SDK sends again, after a 503 or a body cut short,
+// are observed as retries; otherwise ReportsIO is false.
+func runObserved(t *testing.T, classify Classify, newStore NewStore, complete bool) {
+	ctx := context.Background()
+	rec := NewRecorder(classify)
+	s := newStore(t, rec.Wrap)
+	if r, ok := s.Opener.(objfile.IOReporter); ok != complete && (!ok || r.ReportsIO() != complete) {
+		t.Fatalf("the Opener is an IOReporter %v; want ReportsIO %v", ok, complete)
+	}
+	data := Data(1<<20, 11)
+	s.Put(t, "obj", data)
+	s.Put(t, "manifest.json", data[:3000])
+	rec.Reset()
+	obs := &Observer{}
+	octx := objfile.WithObserver(ctx, obs)
+	check := func(t *testing.T, what string) []objfile.RequestResult {
+		t.Helper()
+		reqs, ends := obs.Events()
+		if len(ends) != len(reqs) {
+			t.Fatalf("%s: %d requests began, %d ended", what, len(reqs), len(ends))
+		}
+		for k, ok := range map[Kind]objfile.RequestKind{Metadata: objfile.MetadataRequest, Ranged: objfile.RangeRequest, Whole: objfile.WholeRequest} {
+			if got, want := obs.Count(ok), rec.Count(k); got != want {
+				t.Fatalf("%s: %v requests: %d observed, %d made", what, ok, got, want)
+			}
+		}
+		return ends
+	}
+	opened, err := s.Opener.Open(octx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := opened.(objfile.IOReporter); ok != complete && (!ok || r.ReportsIO() != complete) {
+		t.Fatalf("the Object is an IOReporter %v; want ReportsIO %v", ok, complete)
+	}
+	f, err := s.Opener.OpenSized(octx, "obj", int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := []objfile.Range{{Off: 0, Buf: make([]byte, 5000)}, {Off: 300000, Buf: make([]byte, 5000)}, {Off: 600000, Buf: make([]byte, 5000)}}
+	if err := objfile.ReadRanges(octx, f, rs); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := objfile.ReadObject(octx, s.Opener, "manifest.json", 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	ends := check(t, "fault-free")
+	reqs, _ := obs.Events()
+	var bytes int64
+	for i, q := range reqs {
+		if q.Retry {
+			t.Fatalf("request %+v is a retry, with no fault", q)
+		}
+		if q.Kind == objfile.RangeRequest {
+			bytes += ends[i].Bytes
+		}
+	}
+	if bytes != 15000 {
+		t.Fatalf("%d range bytes observed, want 15000", bytes)
+	}
+	if p := obs.Plans(); len(p) != 1 || p[0] != [3]int64{3, 3, 0} {
+		t.Fatalf("plans %v, want one of 3 ranges, 3 requests, no gap", p)
+	}
+	if !complete {
+		return
+	}
+
+	// A 503 the SDK retries, and a body cut short (which the GCS SDK
+	// reopens itself, the others leave to objfile): each attempt observed.
+	rec.Reset()
+	obs.Reset()
+	rec.Fail = func(n int) int {
+		if n == 1 {
+			return http.StatusServiceUnavailable
+		}
+		return 0
+	}
+	rec.Cut = func(n int) int {
+		if n == 3 {
+			return 1000
+		}
+		return 0
+	}
+	g, err := s.Opener.Open(octx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs = []objfile.Range{{Off: 0, Buf: make([]byte, 5000)}, {Off: 300000, Buf: make([]byte, 5000)}}
+	if err := objfile.ReadRanges(octx, g, rs); err != nil {
+		t.Fatal(err)
+	}
+	rec.Fail, rec.Cut = nil, nil
+	ends = check(t, "faults")
+	reqs, _ = obs.Events()
+	retries := 0
+	bytes = 0
+	for i, q := range reqs {
+		if q.Retry {
+			retries++
+		}
+		if q.Kind == objfile.RangeRequest {
+			bytes += ends[i].Bytes
+		}
+	}
+	if retries != 2 || bytes != 10000 {
+		t.Fatalf("%d retries and %d range bytes observed in %+v; want 2 (the 503's, the cut body's) and 10000", retries, bytes, reqs)
+	}
+}
+
+// Observer is an objfile.Observer that keeps every event, each request's
+// result at the index of its beginning.
+type Observer struct {
+	mu    sync.Mutex
+	reqs  []objfile.Request
+	ends  []objfile.RequestResult
+	ended []bool
+	plans [][3]int64
+	hits  int64
+	gen   int // counts Resets
+}
+
+func (o *Observer) Begin(q objfile.Request) func(objfile.RequestResult) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	i := len(o.reqs)
+	o.reqs = append(o.reqs, q)
+	o.ends = append(o.ends, objfile.RequestResult{})
+	o.ended = append(o.ended, false)
+	gen := o.gen
+	return func(e objfile.RequestResult) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.gen != gen {
+			return // reset since
+		}
+		if o.ended[i] {
+			panic(fmt.Sprintf("the end of request %+v reported twice", o.reqs[i]))
+		}
+		o.ended[i], o.ends[i] = true, e
+	}
+}
+
+func (o *Observer) BatchPlanned(ranges, requests, overRead int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.plans = append(o.plans, [3]int64{ranges, requests, overRead})
+}
+
+func (o *Observer) CacheHit(bytes int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.hits += bytes
+}
+
+// Reset forgets the events so far.
+func (o *Observer) Reset() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.reqs, o.ends, o.ended, o.plans, o.hits = nil, nil, nil, nil, 0
+	o.gen++
+}
+
+// Count returns how many requests of kind k began.
+func (o *Observer) Count(k objfile.RequestKind) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := 0
+	for _, q := range o.reqs {
+		if q.Kind == k {
+			n++
+		}
+	}
+	return n
+}
+
+// Events returns the requests that began and the results of those that
+// ended (in the order of their requests).
+func (o *Observer) Events() ([]objfile.Request, []objfile.RequestResult) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var ends []objfile.RequestResult
+	for i, e := range o.ends {
+		if o.ended[i] {
+			ends = append(ends, e)
+		}
+	}
+	return append([]objfile.Request(nil), o.reqs...), ends
+}
+
+// Plans returns the batch plans observed: ranges, requests, over-read.
+func (o *Observer) Plans() [][3]int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([][3]int64(nil), o.plans...)
+}
+
+// Hits returns the cache-hit bytes observed.
+func (o *Observer) Hits() int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.hits
 }
 
 // UnknownTotal rewrites every Content-Range total to "*".

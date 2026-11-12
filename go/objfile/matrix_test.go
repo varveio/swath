@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 )
 
 // mstore is an in-memory store with the providers' semantics: Open pins by
@@ -63,7 +64,9 @@ func (s *mstore) remove(name string) {
 	delete(s.objs, name)
 }
 
-func (s *mstore) Open(_ context.Context, name string) (objfile.Object, error) {
+func (s *mstore) Open(ctx context.Context, name string) (_ objfile.Object, err error) {
+	end := observe(ctx, objfile.Request{Kind: objfile.MetadataRequest, Name: name})
+	defer func() { end(0, err) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.objs[name]
@@ -80,7 +83,9 @@ func (s *mstore) OpenSized(ctx context.Context, name string, size int64) (objfil
 	return &mfile{s: s, name: name, size: size}, nil
 }
 
-func (s *mstore) ReadObject(_ context.Context, name string, limit int64) ([]byte, string, error) {
+func (s *mstore) ReadObject(ctx context.Context, name string, limit int64) (b []byte, _ string, err error) {
+	end := observe(ctx, objfile.Request{Kind: objfile.WholeRequest, Name: name, Len: -1})
+	defer func() { end(len(b), err) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reads = append(s.reads, span{0, -1})
@@ -112,12 +117,43 @@ func (f *mfile) Identity() string {
 	}
 	return fmt.Sprint(f.gen)
 }
-func (f *mfile) WithContext(context.Context) io.ReaderAt { return f }
+func (f *mfile) WithContext(ctx context.Context) io.ReaderAt {
+	return mreader{f: f, ctx: ctx}
+}
 
-func (f *mfile) ReadAt(p []byte, off int64) (int, error) {
+type mreader struct {
+	f   *mfile
+	ctx context.Context
+}
+
+func (r mreader) ReadAt(p []byte, off int64) (int, error) { return r.f.read(r.ctx, p, off) }
+
+func (f *mfile) ReadAt(p []byte, off int64) (int, error) { return f.read(context.Background(), p, off) }
+
+// observe reports a request of kind to the Observer ctx carries, as a
+// store package does, and returns its end.
+func observe(ctx context.Context, r objfile.Request) func(n int, err error) {
+	obs := objfile.ObserverFromContext(ctx)
+	if obs == nil {
+		return func(int, error) {}
+	}
+	done := obs.Begin(r)
+	return func(n int, err error) {
+		if err == io.EOF {
+			err = nil
+		}
+		if done != nil {
+			done(objfile.RequestResult{Bytes: int64(n), Err: err})
+		}
+	}
+}
+
+func (f *mfile) read(ctx context.Context, p []byte, off int64) (n int, err error) {
 	if off >= f.size {
 		return 0, io.EOF // no request
 	}
+	end := observe(ctx, objfile.Request{Kind: objfile.RangeRequest, Name: f.name, Off: off, Len: int64(len(p))})
+	defer func() { end(n, err) }()
 	s := f.s
 	f.mu.Lock()
 	pinned := f.gen != 0
@@ -172,7 +208,7 @@ func (f *mfile) ReadAt(p []byte, off int64) (int, error) {
 		return 0, &fs.PathError{Op: "read", Path: f.name, Err: objfile.ErrObjectChanged}
 	}
 	f.mu.Unlock()
-	n := copy(p, o.data[off:])
+	n = copy(p, o.data[off:])
 	if n < len(p) {
 		return n, io.EOF
 	}
@@ -349,6 +385,9 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	case "delete":
 		st.remove("ds/obj")
 	}
+	st.mu.Lock()
+	st.reads = nil // the operation's own, from here
+	st.mu.Unlock()
 	want := fx.want(op)
 	expected := fx.mapped
 	if strings.HasPrefix(op, "OpenSized") {
@@ -357,6 +396,10 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	n := min(int64(100), expected)                           // the bytes read
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Second) // a deadlock fails, not hangs
 	defer cancel()
+	// Every request the operation makes reaches the store with the
+	// operation's Observer, through every order of the wrappers.
+	obs := &objfiletest.Observer{}
+	rctx = objfile.WithObserver(rctx, obs)
 
 	var err error
 	var rs []objfile.Range
@@ -385,6 +428,7 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		}
 		st.mu.Lock()
 		st.reads, st.maxIn = nil, 0
+		obs.Reset()
 		lazy := f.Identity() == "" && n > 0
 		batched = strings.HasSuffix(op, "ReadRanges")
 		if batched && want.err == nil && n >= 20 {
@@ -454,6 +498,12 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if got := obs.Count(objfile.RangeRequest) + obs.Count(objfile.WholeRequest); got != len(st.reads) {
+		t.Fatalf("%d reads observed, %d made", got, len(st.reads))
+	}
+	if reqs, ends := obs.Events(); len(reqs) != len(ends) {
+		t.Fatalf("%d observed requests never ended", len(reqs)-len(ends))
+	}
 	if st.notAlone {
 		t.Fatal("a read of an unpinned Object was made beside another")
 	}
@@ -482,6 +532,9 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	slices.SortFunc(got, func(a, b span) int { return int(a.off - b.off) })
 	if !slices.Equal(got, wantSpans) {
 		t.Fatalf("batch requests %v, want %v", got, wantSpans)
+	}
+	if plans := obs.Plans(); len(wantSpans) > 0 && (len(plans) != 1 || plans[0] != [3]int64{1, int64(len(wantSpans)), 0}) {
+		t.Fatalf("batch plans observed %+v, want one of %d requests", plans, len(wantSpans))
 	}
 	if n >= 20 && st.maxIn != limit {
 		t.Fatalf("%d requests at most in flight, want the limit %d", st.maxIn, limit)

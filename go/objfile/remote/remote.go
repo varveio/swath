@@ -6,7 +6,9 @@
 // reads and conditional writes with DestinationOptions. Both scope object
 // names to the location's prefix using objfile.Root, and are
 // objfile.ObjectReaders; neither bounds the requests in flight (wrap one in
-// objfile.Limit for that).
+// objfile.Limit for that). The clients Open builds send through a transport that
+// reports every HTTP attempt, the SDKs' retries included, to the
+// objfile.Observer of the request's context (ReportsIO).
 //
 // For anonymous access or a custom transport, construct the provider's SDK
 // client and use objfile/s3, objfile/gcs or objfile/azblob directly. See the
@@ -46,9 +48,10 @@ import (
 // concurrent use. It does not bound the requests in flight; wrap it with
 // objfile.Limit for that.
 type Store struct {
-	o     objfile.Opener
-	scope string
-	close func() error
+	o      objfile.Opener
+	scope  string
+	close  func() error
+	client any // the SDK client, recorded as observing (ranged.SetObserving)
 }
 
 // Open returns the Store of location, a URI ParseLocation accepts, with the
@@ -75,12 +78,15 @@ func Open(ctx context.Context, location string) (*Store, error) {
 		return nil, err
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
+	// Every attempt the SDKs make, their retries included, is observed
+	// (objfile.Observer), below any check that may refuse a response.
+	observed := ranged.Observe(pool)
 	s := &Store{scope: l.String(), close: func() error { pool.CloseIdleConnections(); return nil }}
 	var o objfile.Opener
 	switch l.Scheme {
 	case "s3":
 		// As the SDK's own client: a redirect is the answer.
-		hc := &http.Client{Transport: pool, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		hc := &http.Client{Transport: observed, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(hc))
 		if err != nil {
 			return nil, err
@@ -89,27 +95,37 @@ func Open(ctx context.Context, location string) (*Store, error) {
 		if err := s.at(aws.ToString(client.Options().BaseEndpoint)); err != nil {
 			return nil, err
 		}
+		s.observing(client)
 		o = s3.New(client, l.Container)
 	case "gs":
 		host := os.Getenv("STORAGE_EMULATOR_HOST")
 		if err := s.at(host); err != nil {
 			return nil, err
 		}
-		client, err := gcsClient(ctx, pool, host != "")
+		client, err := gcsClient(ctx, observed, host != "")
 		if err != nil {
 			return nil, err
 		}
+		s.observing(client)
 		o = gcs.New(client, l.Container)
 		s.close = func() error { err := client.Close(); pool.CloseIdleConnections(); return err }
 	case "az":
-		client, err := azureClient(l.Account, &http.Client{Transport: pool})
+		client, err := azureClient(l.Account, &http.Client{Transport: observed})
 		if err != nil {
 			return nil, err
 		}
+		s.observing(client)
 		o = azblob.New(client, l.Container)
 	}
 	s.o = objfile.Root(o, l.Prefix)
 	return s, nil
+}
+
+// observing records client, whose transport is the Store's observing one,
+// for the store package that wraps it (ReportsIO), until Close.
+func (s *Store) observing(client any) {
+	s.client = client
+	ranged.SetObserving(client, true)
 }
 
 // at adds a custom endpoint to the Store's scope. One that carries user
@@ -200,8 +216,22 @@ var _ interface {
 	objfile.Opener
 	objfile.ObjectReader
 	io.Closer
+	objfile.IOReporter
 } = (*Store)(nil)
 
 // Close releases the clients the Store owns and closes their idle
 // connections. Read the Objects it opened before Close.
-func (s *Store) Close() error { return s.close() }
+func (s *Store) Close() error {
+	if s.client != nil {
+		ranged.SetObserving(s.client, false)
+	}
+	return s.close()
+}
+
+// ReportsIO reports true (objfile.IOReporter): the Store's transport
+// observes every attempt its SDK client makes, retries and reopened bodies
+// included.
+func (s *Store) ReportsIO() bool {
+	r, ok := s.o.(objfile.IOReporter)
+	return ok && r.ReportsIO()
+}

@@ -165,6 +165,23 @@ For more control:
   that every required object is covered. Use the
   store's `Scope()` to bind snapshots to its namespace.
 
+## Observe the requests
+
+An operation that needs to know what it cost puts an `Observer` on its context
+(`WithObserver`). Every physical request a read makes under that context, through
+every wrapper, is reported as it begins (after any `Limit` slot is granted) and
+when its body is consumed or closed: its kind (metadata, range or whole object),
+the store's object name (a `Root` prefix included), the range, whether it retries
+earlier work, the bytes consumed and the error. Each batch reports its plan
+(ranges in, requests out, gap bytes read and discarded) and a byte cache the bytes
+it served. Without an Observer this costs a context lookup and nothing else.
+
+`IOReporter` says whether the observation is complete. A `remote.Store` reports
+true: its clients send through a transport that reports every HTTP attempt, the
+SDKs' own retries and the GCS reader's reopening of a cut body included. A store
+package over a caller's client reports false: it reports each request it makes,
+but not the retries the SDK makes inside one. Every wrapper reports what it wraps.
+
 ## Upload an object
 
 `remote.OpenDestination` builds an independently authenticated destination with a

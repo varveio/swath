@@ -27,6 +27,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 )
 
 const secret = "secret-key-never-recorded"
@@ -142,6 +143,25 @@ func check(t *testing.T, srv *server, location string) (string, []byte) {
 	}
 	if _, err := p.Open(ctx, "missing"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Open(missing) = %v, want fs.ErrNotExist", err)
+	}
+	// Every attempt is observed, through the wrappers, with the store's
+	// name for it (the prefix included), and the Store says so.
+	if !s.ReportsIO() || !p.ReportsIO() || !f.(objfile.IOReporter).ReportsIO() {
+		t.Fatal("the Store, its pinned Opener or its Object does not report complete observation")
+	}
+	obs := &objfiletest.Observer{}
+	octx := objfile.WithObserver(ctx, obs)
+	g, err := p.Open(octx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.WithContext(octx).ReadAt(got, 100); err != nil {
+		t.Fatal(err)
+	}
+	reqs, ends := obs.Events()
+	if len(reqs) != 2 || len(ends) != 2 || reqs[0].Kind != objfile.MetadataRequest || reqs[1] != (objfile.Request{Kind: objfile.RangeRequest, Name: "ds/obj", Off: 100, Len: 1000}) ||
+		ends[1] != (objfile.RequestResult{Bytes: 1000}) || reqs[0].Name != "ds/obj" {
+		t.Fatalf("observed %+v, %+v; want the metadata request and the range", reqs, ends)
 	}
 	snap, err := p.Snapshot()
 	if err != nil {

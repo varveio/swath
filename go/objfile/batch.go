@@ -221,6 +221,9 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 	if len(b.spans) == 0 {
 		return nil
 	}
+	if obs := ObserverFromContext(ctx); obs != nil {
+		obs.BatchPlanned(int64(b.nonEmpty), int64(len(b.spans)), b.overRead())
+	}
 	b.run(ctx, f, p)
 	errs := b.rangeErrors(len(ranges))
 	if errs == nil {
@@ -242,8 +245,10 @@ func addBatchBytes(total, n int64) (int64, bool) {
 // bytes, in object order and disjoint, and the pieces of the ranges each
 // fills.
 type batch struct {
-	ranges []Range
-	spans  []span
+	ranges   []Range
+	spans    []span
+	nonEmpty int   // ranges with bytes
+	bytes    int64 // distinct bytes the ranges ask for
 }
 
 // span is one request: the bytes [off, end), read into the Buf of ranges
@@ -265,6 +270,7 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 			order = append(order, i)
 		}
 	}
+	b.nonEmpty = len(order)
 	if len(order) == 0 {
 		return b
 	}
@@ -280,6 +286,9 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 			continue
 		}
 		runs = append(runs, run{off, end})
+	}
+	for _, r := range runs {
+		b.bytes += r.end - r.off
 	}
 
 	// Each run cut into near-equal pieces of at most MaxRequest bytes, and
@@ -335,6 +344,15 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 		}
 	}
 	return b
+}
+
+// overRead is the gap bytes the batch's requests read and discard.
+func (b *batch) overRead() int64 {
+	var read int64
+	for _, s := range b.spans {
+		read += s.end - s.off
+	}
+	return read - b.bytes
 }
 
 // run sends the spans' requests under p, as ReadRangesWith says, and
@@ -478,6 +496,8 @@ type batched struct {
 	p BatchPolicy
 }
 
+func (b batched) ReportsIO() bool { return reportsIO(b.o) }
+
 func (b batched) Open(ctx context.Context, name string) (Object, error) {
 	f, err := b.o.Open(ctx, name)
 	if err != nil {
@@ -506,6 +526,8 @@ type batchedObject struct {
 func (f batchedObject) ReadRanges(ctx context.Context, ranges []Range) error {
 	return ReadRangesWith(ctx, f.Object, ranges, f.p)
 }
+
+func (f batchedObject) ReportsIO() bool { return reportsIO(f.Object) }
 
 func (f batchedObject) batchPolicy() BatchPolicy { return f.p }
 

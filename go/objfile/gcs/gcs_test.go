@@ -34,6 +34,16 @@ func guardedClient(t testing.TB, wrap func(http.Handler) http.Handler) (*gcsfake
 	return clientOf(t, wrap, ranged.Transport(http.DefaultTransport))
 }
 
+// observedClient is guardedClient with the observing transport below the
+// validating one, as remote.Open builds it, recorded as observing.
+func observedClient(t testing.TB, wrap func(http.Handler) http.Handler) (*gcsfake.Server, *storage.Client) {
+	t.Helper()
+	f, c := clientOf(t, wrap, ranged.Transport(ranged.Observe(http.DefaultTransport)))
+	ranged.SetObserving(c, true)
+	t.Cleanup(func() { ranged.SetObserving(c, false) })
+	return f, c
+}
+
 func clientOf(t testing.TB, wrap func(http.Handler) http.Handler, tr http.RoundTripper) (*gcsfake.Server, *storage.Client) {
 	t.Helper()
 	f := gcsfake.New(bucket)
@@ -78,6 +88,18 @@ func TestBudget(t *testing.T) {
 			objfiletest.RunBudget(t, objfiletest.Budget{
 				New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
 					f, cl := c.newClient(t, wrap)
+					return objfiletest.Store{Opener: gcs.New(cl, bucket),
+						Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
+				},
+				Observed: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+					// Without the validating transport, the SDK's reader
+					// reopens a cut body itself: observed as a retry too.
+					f, cl := observedClient(t, wrap)
+					if c.name == "plain" {
+						f, cl = clientOf(t, wrap, ranged.Observe(http.DefaultTransport))
+						ranged.SetObserving(cl, true)
+						t.Cleanup(func() { ranged.SetObserving(cl, false) })
+					}
 					return objfiletest.Store{Opener: gcs.New(cl, bucket),
 						Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
 				},

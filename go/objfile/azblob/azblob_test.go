@@ -21,6 +21,7 @@ import (
 	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/azblob/azfake"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/go/objfile/internal/ranged"
 )
 
 const (
@@ -33,6 +34,21 @@ const (
 // not wait.
 func fakeClient(t testing.TB, wrap func(http.Handler) http.Handler) (*azfake.Server, *azsdk.Client) {
 	t.Helper()
+	return fakeClientVia(t, wrap, nil)
+}
+
+// observedClient is fakeClient with the observing transport objfile/remote
+// installs, recorded as observing.
+func observedClient(t testing.TB, wrap func(http.Handler) http.Handler) (*azfake.Server, *azsdk.Client) {
+	t.Helper()
+	f, c := fakeClientVia(t, wrap, ranged.Observe(http.DefaultTransport))
+	ranged.SetObserving(c, true)
+	t.Cleanup(func() { ranged.SetObserving(c, false) })
+	return f, c
+}
+
+func fakeClientVia(t testing.TB, wrap func(http.Handler) http.Handler, tr http.RoundTripper) (*azfake.Server, *azsdk.Client) {
+	t.Helper()
 	f := azfake.New(account, containerName)
 	var h http.Handler = f
 	if wrap != nil {
@@ -40,9 +56,13 @@ func fakeClient(t testing.TB, wrap func(http.Handler) http.Handler) (*azfake.Ser
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	client, err := azsdk.NewClientWithNoCredential(srv.URL+"/"+account+"/", &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{
+	opts := azcore.ClientOptions{
 		Retry: policy.RetryOptions{MaxRetries: 1, RetryDelay: time.Millisecond, MaxRetryDelay: time.Millisecond},
-	}})
+	}
+	if tr != nil {
+		opts.Transport = &http.Client{Transport: tr}
+	}
+	client, err := azsdk.NewClientWithNoCredential(srv.URL+"/"+account+"/", &azsdk.ClientOptions{ClientOptions: opts})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +83,11 @@ func TestBudget(t *testing.T) {
 	objfiletest.RunBudget(t, objfiletest.Budget{
 		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
 			f, client := fakeClient(t, wrap)
+			return objfiletest.Store{Opener: azblob.New(client, containerName),
+				Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
+		},
+		Observed: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f, client := observedClient(t, wrap)
 			return objfiletest.Store{Opener: azblob.New(client, containerName),
 				Put: func(_ testing.TB, name string, data []byte) { f.Put(name, data) }}
 		},

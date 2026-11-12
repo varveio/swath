@@ -24,6 +24,7 @@ import (
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/go/objfile/internal/ranged"
 	"github.com/varveio/swath/go/objfile/s3"
 )
 
@@ -37,18 +38,38 @@ type fake struct {
 
 func newFake(t *testing.T, wrap func(http.Handler) http.Handler) fake {
 	t.Helper()
+	return newFakeVia(t, wrap, nil)
+}
+
+// observedFake is newFake with the observing transport objfile/remote
+// installs, its client recorded as observing.
+func observedFake(t *testing.T, wrap func(http.Handler) http.Handler) fake {
+	t.Helper()
+	f := newFakeVia(t, wrap, ranged.Observe(http.DefaultTransport))
+	ranged.SetObserving(f.client, true)
+	t.Cleanup(func() { ranged.SetObserving(f.client, false) })
+	return f
+}
+
+// newFakeVia is newFake whose client sends through tr, when not nil.
+func newFakeVia(t *testing.T, wrap func(http.Handler) http.Handler, tr http.RoundTripper) fake {
+	t.Helper()
 	b := s3mem.New()
 	if err := b.CreateBucket(bucket); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(wrap(gofakes3.New(b).Server()))
 	t.Cleanup(srv.Close)
-	client := awss3.New(awss3.Options{
+	opts := awss3.Options{
 		BaseEndpoint: aws.String(srv.URL),
 		UsePathStyle: true,
 		Region:       "us-east-1",
 		Credentials:  aws.AnonymousCredentials{},
-	})
+	}
+	if tr != nil {
+		opts.HTTPClient = &http.Client{Transport: tr}
+	}
+	client := awss3.New(opts)
 	return fake{backend: b, client: client}
 }
 
@@ -298,6 +319,10 @@ func TestBudget(t *testing.T) {
 			return objfiletest.Other, pinned
 		},
 		UnknownTotalOK: true,
+		Observed: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f := observedFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+			return objfiletest.Store{Opener: s3.New(f.client, bucket), Put: f.put}
+		},
 	})
 }
 
