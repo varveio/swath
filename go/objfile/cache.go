@@ -20,7 +20,9 @@ import (
 //
 // It holds the bytes of complete reads, each under its key: the scope and
 // name of a Cache wrapper, the Identity of the version read, and the
-// extent. A read is served from one entry that holds all of its bytes.
+// extent. A lookup scans only the nearest maxEntryScan entries starting
+// at or before the read's offset, so it can miss an older covering entry.
+// A read is served from one entry that holds all of its bytes.
 // When an admission does not fit, the least recently used entries are
 // dropped; an entry a reader is still copying from counts until it is
 // done.
@@ -39,8 +41,8 @@ type ByteCache struct {
 // past it, the least recently used entry is dropped for a new one.
 const maxCacheEntries = 1 << 16
 
-// maxEntryScan bounds the entries of one object a lookup examines before
-// the extent's start, among those that start at or before it.
+// maxEntryScan limits a lookup to the nearest entries of one object that
+// start at or before the read's offset. An older covering entry can be missed.
 const maxEntryScan = 8
 
 // cacheObject is a version of an object as a Cache wrapper names it.
@@ -311,6 +313,9 @@ func (f *cachedObject) key(mode CacheMode) (cacheObject, bool) {
 func (f *cachedObject) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 	mode, err := cacheMode(ctx)
 	if err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	if ctx.Value(cacheBatchKey{}) != nil {

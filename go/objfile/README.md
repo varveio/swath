@@ -224,6 +224,7 @@ uncached range each make their request.
 `WithCacheMode(ctx, CacheBypass)` makes an operation neither use nor fill the cache,
 for a scan that would only evict what interactive reads need; pin checks still run.
 `ReadAt` without a context uses the cache.
+An already cancelled context fails scalar and batch reads before cache lookup.
 
 ## Upload an object
 

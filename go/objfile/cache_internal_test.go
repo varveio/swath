@@ -105,44 +105,59 @@ func TestByteCacheBound(t *testing.T) {
 	c.mu.Unlock()
 }
 
-// TestByteCacheConcurrentBound: under concurrent admissions and copies,
-// the bound holds at every moment it can be observed.
+// TestByteCacheConcurrentBound: a pending admission's bytes count against
+// concurrent admissions, before it publishes an entry that can be evicted.
 func TestByteCacheConcurrentBound(t *testing.T) {
 	c, _ := NewByteCache(4096)
-	data := bytes.Repeat([]byte("y"), 1024)
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-	var over int64
-	wg.Go(func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			if used, _ := c.state(); used > c.max {
-				over = used
-			}
+	data := bytes.Repeat([]byte("y"), 3072)
+	obj := cacheObject{scope: "s", name: "pending", identity: "1"}
+	reserved, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	c.admitReserved = func() {
+		if first.CompareAndSwap(false, true) {
+			close(reserved)
+			<-release
 		}
-	})
+	}
+	done := make(chan struct{})
+	go func() { c.admit(obj, 0, data); close(done) }()
+	<-reserved
+	defer func() { close(release); <-done }()
+	if used, n := c.state(); used != 3072 || n != 1 {
+		t.Fatalf("pending admission: %d bytes, %d entries; want 3072, 1", used, n)
+	}
+
 	var workers sync.WaitGroup
 	for g := range 8 {
 		workers.Go(func() {
-			obj := cacheObject{scope: "s", name: fmt.Sprint(g % 3), identity: "1"}
-			p := make([]byte, 100)
-			for i := range 500 {
-				off := int64(i%7) * 1024
-				if !c.copyOut(obj, off, p) {
-					c.admit(obj, off, data[:1+i%1024])
-				}
-			}
+			other := cacheObject{scope: "s", name: fmt.Sprint(g), identity: "1"}
+			c.admit(other, 0, data[:2048]) // cannot fit alongside the reservation
 		})
 	}
 	workers.Wait()
-	close(stop)
-	wg.Wait()
-	if over > 0 {
-		t.Fatalf("the cache held %d bytes, over its 4096", over)
+	if used, n := c.state(); used != 3072 || n != 1 {
+		t.Fatalf("after competing admissions: %d bytes, %d entries; want 3072, 1", used, n)
+	}
+	c.admit(obj, 4096, data[:1024]) // the unreserved bytes remain usable
+	if used, n := c.state(); used != c.max || n != 2 {
+		t.Fatalf("after filling the cache: %d bytes, %d entries; want 4096, 2", used, n)
+	}
+}
+
+func TestByteCacheLookupScanBound(t *testing.T) {
+	c, _ := NewByteCache(1000)
+	obj := cacheObject{scope: "s", name: "a", identity: "1"}
+	for off := 1; off <= maxEntryScan; off++ {
+		c.admit(obj, int64(off), []byte("x"))
+	}
+	c.admit(obj, 0, bytes.Repeat([]byte("x"), maxEntryScan+10))
+	// The covering entry at zero is the last candidate within the scan.
+	if !c.copyOut(obj, maxEntryScan-1, make([]byte, 3)) {
+		t.Fatal("the last entry within the lookup scan was missed")
+	}
+	// One more nearer entry puts it outside the scan, despite covering the read.
+	if c.copyOut(obj, maxEntryScan+1, make([]byte, 1)) {
+		t.Fatal("lookup scanned past maxEntryScan entries")
 	}
 }
 

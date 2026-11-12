@@ -107,6 +107,43 @@ func TestCacheRevisit(t *testing.T) {
 	}
 }
 
+func TestCacheAlreadyCancelled(t *testing.T) {
+	st := newMstore()
+	st.put("obj", objfiletest.Data(1000, 1))
+	f, err := objfile.Cache(st, scope, newCache(t, 1000)).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.ReadAt(make([]byte, 100), 0); err != nil {
+		t.Fatal(err)
+	}
+	st.takeReads()
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
+			obs := &objfiletest.Observer{}
+			ctx, cancel := context.WithCancel(objfile.WithObserver(context.Background(), obs))
+			cancel()
+			p := []byte("untouched!")
+			if batch {
+				err = objfile.ReadRanges(ctx, f, []objfile.Range{{Off: 0, Buf: p}})
+			} else {
+				var n int
+				n, err = f.WithContext(ctx).ReadAt(p, 0)
+				if n != 0 {
+					t.Errorf("ReadAt = %d bytes, want 0", n)
+				}
+			}
+			if !errors.Is(err, context.Canceled) || string(p) != "untouched!" {
+				t.Errorf("already cancelled read = %v, buffer %q; want context.Canceled and untouched buffer", err, p)
+			}
+			if n := st.takeReads(); n != 0 || obs.Hits() != 0 {
+				t.Errorf("already cancelled read: %d reads, %d hit bytes; want 0, 0", n, obs.Hits())
+			}
+		})
+	}
+}
+
 // TestCacheIdentity: a cache never serves bytes across versions, never
 // stands in for a first read's proof, and never hides Pin's check.
 func TestCacheIdentity(t *testing.T) {

@@ -87,7 +87,8 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		select {
 		case <-s.arrived:
-		case <-time.After(10 * time.Second):
+		case <-r.Context().Done():
+			return
 		}
 	}
 	if s.shiftRest && read > 1 {
@@ -406,6 +407,24 @@ func TestOpenGCSCredentialsOutliveContext(t *testing.T) {
 	}
 }
 
+func TestStoreBarrierCancelled(t *testing.T) {
+	st := &store{barrier: 2, arrived: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodGet, "/bkt/ds/obj", nil).WithContext(ctx)
+	r.Header.Set("Range", "bytes=0-9")
+	w := httptest.NewRecorder()
+	st.ServeHTTP(w, r)
+	if st.reads.Load() != 1 || w.Body.Len() != 0 {
+		t.Fatalf("cancelled barrier request: %d arrivals, %d response bytes; want 1, 0", st.reads.Load(), w.Body.Len())
+	}
+	select {
+	case <-st.arrived:
+		t.Fatal("the barrier released before all requests arrived")
+	default:
+	}
+}
+
 // TestPoolKeepsBurst: after a burst of 16 concurrent ranged requests (a
 // default batch's), a second burst finds its connections open.
 func TestPoolKeepsBurst(t *testing.T) {
@@ -416,7 +435,8 @@ func TestPoolKeepsBurst(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDTEST")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
 	s, err := Open(ctx, "s3://bkt/ds")
 	if err != nil {
 		t.Fatal(err)
