@@ -386,7 +386,7 @@ func (s *Server) read(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	var start, end int
-	if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil || start >= len(o.Data) || end < start {
+	if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil || start < 0 || start >= len(o.Data) || end < start {
 		s3Error(w, r, http.StatusRequestedRangeNotSatisfiable, "", rng)
 		return
 	}

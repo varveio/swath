@@ -471,7 +471,15 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 		return b, id, nil
 	}
 	b := make([]byte, size)
-	m, err := io.ReadFull(res.Body, b)
+	m, err := readToEnd(res.Body, b)
+	if err != nil && m == len(b) {
+		// Every byte arrived, but the body did not end cleanly: an error
+		// with its last bytes or at its end (the GCS reader's CRC32C check
+		// fails only then), or bytes past the length stated. The bytes
+		// are not trusted, and not read again: a ranged read checks no
+		// checksum.
+		return nil, "", fail(err)
+	}
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, "", fail(ctxErr)
@@ -488,6 +496,44 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 		}
 	}
 	return b, id, nil
+}
+
+// readToEnd reads len(b) bytes of body into b and then reads on to the
+// body's end: it returns how many bytes it read into b and the first error
+// the body gave, kept even when it came with the last bytes (io.ReadFull
+// drops one then), or io.EOF before len(b) bytes; a byte past len(b) is an
+// error, and a clean end after len(b) bytes is nil. A body that gives no
+// byte and no error a hundred times in a row fails with io.ErrNoProgress.
+func readToEnd(body io.Reader, b []byte) (int, error) {
+	m, idle := 0, 0
+	var one [1]byte
+	for {
+		p := b[m:]
+		if len(p) == 0 {
+			p = one[:] // past the length: only the end is expected
+		}
+		k, err := body.Read(p)
+		switch {
+		case len(b[m:]) == 0 && k > 0:
+			return m, fmt.Errorf("the store returned more than the %d bytes stated", len(b))
+		case k > 0:
+			m += k
+			idle = 0
+		case err == nil:
+			if idle++; idle == 100 {
+				return m, io.ErrNoProgress
+			}
+		}
+		if err == io.EOF {
+			if m < len(b) {
+				return m, io.ErrUnexpectedEOF
+			}
+			return m, nil
+		}
+		if err != nil {
+			return m, err
+		}
+	}
 }
 
 func (f *file) fail(err error) error {

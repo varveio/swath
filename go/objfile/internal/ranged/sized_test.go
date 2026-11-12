@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -592,4 +593,67 @@ type releasing struct {
 func (r *releasing) Close() error {
 	r.once.Do(func() { <-r.conn })
 	return r.ReadCloser.Close()
+}
+
+// script is a body that gives its steps' bytes and errors in turn, then
+// io.EOF.
+type script struct {
+	steps []step
+}
+
+type step struct {
+	b   []byte
+	err error
+}
+
+func (s *script) Read(p []byte) (int, error) {
+	if len(s.steps) == 0 {
+		return 0, io.EOF
+	}
+	st := s.steps[0]
+	n := copy(p, st.b)
+	if n < len(st.b) {
+		s.steps[0].b = st.b[n:]
+		return n, nil
+	}
+	s.steps = s.steps[1:]
+	return n, st.err
+}
+
+func (s *script) Close() error { return nil }
+
+// TestReadObjectEnd: a whole read of a known length reads to the body's
+// end: an error with the last bytes, or after them before the end (as the
+// GCS reader's checksum failure comes), or a byte past the length, fails the
+// read, and is not taken for a cut body to read on with ranges.
+func TestReadObjectEnd(t *testing.T) {
+	data := []byte("0123456789")
+	bad := errors.New("bad CRC")
+	for _, c := range []struct {
+		name  string
+		steps []step
+		ok    bool
+	}{
+		{"clean", []step{{data, nil}}, true},
+		{"EOF with the last bytes", []step{{data, io.EOF}}, true},
+		{"error after the last bytes", []step{{data, nil}, {nil, bad}}, false},
+		{"error with the last bytes", []step{{data[:5], nil}, {data[5:], bad}}, false},
+		{"a byte past the length", []step{{data, nil}, {[]byte("x"), nil}}, false},
+	} {
+		var ranged int
+		get := func(_ context.Context, off, n int64, pin Pin) (Response, error) {
+			if n >= 0 {
+				ranged++
+				return Response{Body: io.NopCloser(bytes.NewReader(data[off : off+n])), Pin: Pin{ETag: "a"}, Start: off, Total: 10, Length: n}, nil
+			}
+			return Response{Body: &script{steps: slices.Clone(c.steps)}, Pin: Pin{ETag: "a"}, Total: -1, Length: 10}, nil
+		}
+		b, _, err := ReadObject(context.Background(), "obj", 100, get)
+		if c.ok != (err == nil) || ranged != 0 || err == nil && !bytes.Equal(b, data) {
+			t.Errorf("%s: ReadObject = %q, %v after %d ranged reads; want ok=%v and none", c.name, b, err, ranged, c.ok)
+		}
+		if !c.ok && c.name != "a byte past the length" && !errors.Is(err, bad) {
+			t.Errorf("%s: %v, want the body's error", c.name, err)
+		}
+	}
 }

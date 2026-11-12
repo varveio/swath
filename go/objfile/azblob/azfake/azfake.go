@@ -312,7 +312,7 @@ func (s *Server) read(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	var start, end int
-	if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil || start >= len(b.Data) || end < start {
+	if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil || start < 0 || start >= len(b.Data) || end < start {
 		fail(w, r, http.StatusRequestedRangeNotSatisfiable, "", rng)
 		return
 	}

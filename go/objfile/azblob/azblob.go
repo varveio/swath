@@ -9,10 +9,11 @@
 // ReadObject from its one download of the whole blob, with no range. Every
 // request after that is a download of one byte range with If-Match on that
 // ETag: one for each ReadAt, and one for each merged span of a ReadRanges
-// batch, sent concurrently. A 412, a 404, or a
-// response naming another ETag or size fails the read with
-// objfile.ErrObjectChanged (before a pin, another size is an
-// objfile.SizeMismatchError).
+// batch, sent concurrently. Once pinned, a 412, a 404, or a response naming
+// another ETag or size fails the read with objfile.ErrObjectChanged. Before
+// a pin (a first sized read, a whole-object read), a 404 is an error wrapping
+// fs.ErrNotExist, a 412 (no condition was sent) is the store's error, and
+// another size is an objfile.SizeMismatchError.
 //
 // Reads use the current blob's ETag; Azure snapshots and version-id reads are
 // not exposed. The service must honor If-Match and If-None-Match conditions.

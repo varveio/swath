@@ -5,14 +5,17 @@
 // cloud.google.com/go/storage. New supplies an objfile.Opener; NewWriter supplies
 // an objfile.Writer. Open learns the object's size and
 // generation from its attributes; OpenSized takes the generation from its
-// first range reader (of size 0, from the attributes: objfile.OpenEmpty), and ReadObject from its one reader of the whole
-// object, with no Range. Every request after that is a range reader of one
+// first range reader (of size 0, from the attributes: objfile.OpenEmpty),
+// and ReadObject from its one reader of the whole object, with no Range. Every request after that is a range reader of one
 // byte range of that generation, of the stored bytes (no decompressive
 // transcoding): one for each ReadAt, and one for each merged span of a
 // ReadRanges batch, sent concurrently. A read of a generation that no longer
-// exists, or one finding another size, fails with objfile.ErrObjectChanged
-// (before a pin, another size is an objfile.SizeMismatchError); one served
-// from another offset fails.
+// exists, or one finding another size, fails with objfile.ErrObjectChanged.
+// Before a pin (a first sized read, a whole-object read), a missing object
+// is an error wrapping fs.ErrNotExist and another size an
+// objfile.SizeMismatchError. One served from another offset fails. A
+// whole-object read is read to the body's end, where the SDK's reader checks
+// the object's CRC32C; ranged reads carry no checksum the SDK checks.
 //
 // The SDK's reader requests the rest of a range by itself when a body fails
 // part way, checks only that answer's status, and for one labelled

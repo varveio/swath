@@ -6,9 +6,12 @@ package gcs_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -311,4 +314,30 @@ func (b *readSignal) Read(p []byte) (int, error) {
 		b.once.Do(b.read)
 	}
 	return n, err
+}
+
+// TestReadObjectChecksum: a whole-object answer whose bytes do not match
+// its x-goog-hash crc32c fails ReadObject. The SDK's reader checks the
+// checksum only at the body's end, which ReadObject reads to.
+func TestReadObjectChecksum(t *testing.T) {
+	data := objfiletest.Data(5000, 6)
+	for _, c := range []struct {
+		name string
+		sum  uint32
+		ok   bool
+	}{{"right", crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)), true}, {"wrong", 12345, false}} {
+		url := wholeServer(t, data, func(w http.ResponseWriter, _ *http.Request, _ int32) {
+			var b [4]byte
+			binary.BigEndian.PutUint32(b[:], c.sum)
+			w.Header().Set("X-Goog-Hash", "crc32c="+base64.StdEncoding.EncodeToString(b[:]))
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			_, _ = w.Write(data)
+		})
+		for _, guard := range []bool{false, true} {
+			b, _, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
+			if c.ok != (err == nil) || c.ok && !bytes.Equal(b, data) {
+				t.Fatalf("%s checksum, guarded=%v: ReadObject = %d bytes, %v; want ok=%v", c.name, guard, len(b), err, c.ok)
+			}
+		}
+	}
 }
