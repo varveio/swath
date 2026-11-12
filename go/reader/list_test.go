@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -328,5 +329,64 @@ func TestListNULDelimiter(t *testing.T) {
 	got := listAll(t, d, ListRequest{Limit: 2})
 	if want := []string{"o:a", "p:b\x00", "o:b/c", "o:c"}; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("listed %q, want %q", got, want)
+	}
+}
+
+// TestListReadAhead: a listing with ReadAhead reads key pages ahead
+// (ReadStats.ReadAheadReads) and lists exactly what it lists without, in
+// one request and paged by its cursors; a Page passes it on, its entries
+// and totals the same; none is read ahead by default; a value above
+// SeekParquet's most, 64, reads as 64; a negative ReadAhead is
+// ErrInvalidRequest before any read.
+func TestListReadAhead(t *testing.T) {
+	var keys []string
+	for p := range 40 {
+		for k := range 5 {
+			keys = append(keys, fmt.Sprintf("p%03d/%d", p, k))
+		}
+	}
+	dir := writeParts(t, s3Spec(), 2, int64(len(keys)), keyRows(keys))
+	want := listOracle(keys, "", '/')
+	plain, err := openDir(t, dir).Page(context.Background(), PageRequest{ListRequest: ListRequest{Delimiter: '/', Limit: 1000},
+		Aggregates: AggregateOptions{Counts: true, Sums: SumsAlways}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ahead := range []int{0, 1, 4, 64, 1000} {
+		d := openDir(t, dir)
+		var st ReadStats
+		got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 1000, Stats: &st, ReadAhead: ahead})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := make([]string, len(got))
+		for i, e := range got {
+			listed[i] = describe(e)
+		}
+		if strings.Join(listed, " ") != strings.Join(want, " ") {
+			t.Fatalf("read-ahead %d: listed %q, want %q", ahead, listed, want)
+		}
+		if (st.ReadAheadReads > 0) != (ahead > 0) || st.PrefixSkips == 0 {
+			t.Fatalf("read-ahead %d: stats %+v", ahead, st)
+		}
+		if paged := listAll(t, openDir(t, dir), ListRequest{Delimiter: '/', Limit: 3, ReadAhead: ahead}); strings.Join(paged, " ") != strings.Join(want, " ") {
+			t.Fatalf("read-ahead %d, pages of 3: listed %q, want %q", ahead, paged, want)
+		}
+		page, err := d.Page(context.Background(), PageRequest{ListRequest: ListRequest{Delimiter: '/', Limit: 1000, Stats: &st, ReadAhead: ahead},
+			Aggregates: AggregateOptions{Counts: true, Sums: SumsAlways}})
+		if err != nil || (st.ReadAheadReads > 0) != (ahead > 0) {
+			t.Fatalf("read-ahead %d: page %v, stats %+v", ahead, err, st)
+		}
+		if !reflect.DeepEqual(page, plain) {
+			t.Fatalf("read-ahead %d: page %+v, want %+v", ahead, page, plain)
+		}
+	}
+	d, src := openSource(t, dir)
+	src.reset()
+	if got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10, ReadAhead: -1}); !errors.Is(err, ErrInvalidRequest) || got != nil {
+		t.Fatalf("negative read-ahead: %+v, %v", got, err)
+	}
+	if _, reads := src.taken(); len(reads) != 0 {
+		t.Fatalf("a negative read-ahead read %d times", len(reads))
 	}
 }

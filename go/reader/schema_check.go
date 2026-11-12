@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/parquet-go/parquet-go/format"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -87,9 +86,9 @@ func checkColumn(col *seekparquet.Column, c ColumnSpec) error {
 		return nil
 	case col == nil:
 		return errors.New("absent from the part")
-	case col.Group || col.Repetition == format.Repeated:
+	case col.Group || col.Repetition == seekparquet.Repeated:
 		return errors.New("not a top-level, non-repeated column")
-	case c.Required && col.Repetition != format.Required:
+	case c.Required && col.Repetition != seekparquet.Required:
 		return errors.New("optional; the schema requires a value")
 	case !typeIs(col, c.Type):
 		return fmt.Errorf("a %s column (%s), not the schema's type", col.Type, col.Logical)
@@ -101,37 +100,29 @@ func checkColumn(col *seekparquet.Column, c ColumnSpec) error {
 // physical type, and the logical type that gives the values their meaning
 // (a signed integer may be unannotated).
 func typeIs(col *seekparquet.Column, want ColumnType) bool {
-	var lt format.LogicalTypeValue
-	if col.Logical != nil {
-		lt = col.Logical.Value
-	}
+	lt := col.Logical
+	none := lt.Kind == seekparquet.LogicalNone
 	integer := func(width int8, signed bool) bool {
-		i, ok := lt.(*format.IntType)
-		return ok && i.BitWidth == width && i.IsSigned == signed || lt == nil && signed
+		return lt.Kind == seekparquet.LogicalInt && lt.BitWidth == width && lt.Signed == signed || none && signed
 	}
 	switch want {
 	case TypeString:
-		_, ok := lt.(*format.StringType)
-		return col.Type == format.ByteArray && ok
+		return col.Type == seekparquet.KindByteArray && lt.Kind == seekparquet.LogicalString
 	case TypeBinary:
-		return col.Type == format.ByteArray && lt == nil
+		return col.Type == seekparquet.KindByteArray && none
 	case TypeBool:
-		return col.Type == format.Boolean && lt == nil
+		return col.Type == seekparquet.KindBoolean && none
 	case TypeInt32:
-		return col.Type == format.Int32 && integer(32, true)
+		return col.Type == seekparquet.KindInt32 && integer(32, true)
 	case TypeUint32:
-		return col.Type == format.Int32 && integer(32, false)
+		return col.Type == seekparquet.KindInt32 && integer(32, false)
 	case TypeInt64:
-		return col.Type == format.Int64 && integer(64, true)
+		return col.Type == seekparquet.KindInt64 && integer(64, true)
 	case TypeUint64:
-		return col.Type == format.Int64 && integer(64, false)
+		return col.Type == seekparquet.KindInt64 && integer(64, false)
 	case TypeTimestampMicros:
-		ts, ok := lt.(*format.TimestampType)
-		if !ok || !ts.IsAdjustedToUTC {
-			return false
-		}
-		_, micros := ts.Unit.Value.(*format.MicroSeconds)
-		return col.Type == format.Int64 && micros
+		return col.Type == seekparquet.KindInt64 && lt.Kind == seekparquet.LogicalTimestamp &&
+			lt.AdjustedToUTC && lt.Unit == seekparquet.Micros
 	}
 	return false
 }

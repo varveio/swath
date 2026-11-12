@@ -149,7 +149,7 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 // key_order, ...) for a SeekParquet dataset, or "" when err is none of
 // these.
 func Refusal(err error) string {
-	if code := seekparquet.CodeOf(err); code != "" {
+	if code := seekparquet.RefusalCodeOf(err); code != "" {
 		return string(code)
 	}
 	return legacy.ReasonOf(err)

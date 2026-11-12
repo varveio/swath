@@ -236,7 +236,7 @@ func TestListIndexBuildStorageFailureAndCancellation(t *testing.T) {
 	for _, cancelled := range []bool{false, true} {
 		ctx, stop := context.WithCancel(context.Background())
 		src := &faultSource{dir: dir, stop: stop}
-		d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+		d, err := seekparquet.OpenDataset(ctx, src, seekparquet.OpenOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -258,7 +258,7 @@ func TestListIndexBuildStorageFailureAndCancellation(t *testing.T) {
 			t.Errorf("failed build: %+v, %v", b, err)
 		default:
 			var st seekparquet.ReadStats
-			got, err := d.List(context.Background(), seekparquet.List{Delimiter: '/', Limit: 1000, Stats: &st})
+			got, err := d.List(context.Background(), seekparquet.ListQuery{Delimiter: '/', Limit: 1000}, &st)
 			if err != nil || len(got) != 40 || st.ListIndexSkips != 0 {
 				t.Errorf("read after a failed build: %d entries, %+v, %v", len(got), st, err)
 			}

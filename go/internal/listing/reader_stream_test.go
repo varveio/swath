@@ -28,7 +28,7 @@ func openDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []s
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, kind, s, rows, maxRows)
-	d, err := reader.OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/deprecated"
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
@@ -33,7 +34,7 @@ var ErrRepeatedKeys = errors.New("replay does not serve datasets with repeated k
 // dataset. Both take the legacy core's requests and return its rows.
 type reader interface {
 	Read(ctx context.Context, rng legacy.Range, stats *legacy.Stats) ([]legacy.Row, error)
-	Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error
+	Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink columnSink) error
 	RollupRead(ctx context.Context, rl legacy.Rollup, stats *RollupStats) ([]legacy.Entry, error)
 	FirstKeys() [][]byte
 	Columns() []string
@@ -44,6 +45,20 @@ type reader interface {
 }
 
 var _ reader = legacyReader{}
+
+// columnSink receives a reader's Scan: the legacy core hands it parquet-go
+// page values (legacy.ColumnSink.Values), the SeekParquet reader the
+// module's borrowed column views (View), each straight from the decoded
+// page, neither copying a value nor building a row.
+type columnSink interface {
+	legacy.ColumnSink
+	// View gives the values of column c (an index into Range.Columns) for
+	// the run's rows, in row order, in one call: a view of a column the
+	// run's part has (seekparquet.ColumnView.Present), of the column's
+	// declared type (legacy.CheckColumns). The view and its bytes are
+	// valid only until the call returns: a sink copies what it keeps.
+	View(c int, col seekparquet.ColumnView)
+}
 
 // manifestHead is the part of a manifest that tells the formats apart.
 type manifestHead struct {
@@ -116,7 +131,7 @@ func openSeek(ctx context.Context, dir string, expect []legacy.Column, files *le
 		return nil, err
 	}
 	src := &cachedSource{root: root, dir: dir, files: files, opened: map[string]*legacy.CachedFile{}}
-	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.OpenOptions{})
 	if err == nil {
 		if err = d.Verify(ctx); err != nil {
 			_ = d.Close()
@@ -218,19 +233,40 @@ func rows(in []seekparquet.Row) []legacy.Row {
 
 func row(in *seekparquet.Row) legacy.Row {
 	values := make([]parquet.Value, len(in.Values))
-	for j := range in.Values {
-		if !in.Values[j].Absent {
-			values[j] = in.Values[j].Value
-		}
+	for j, v := range in.Values {
+		values[j] = legacyValue(v)
 	}
 	return legacy.Row{Key: in.Key, Columns: in.Columns, Values: values}
 }
 
+// legacyValue returns v as the legacy core's value, referencing v's bytes:
+// a null for a null or an absent value (the legacy core returns a column a
+// part lacks as null).
+func legacyValue(v seekparquet.Value) parquet.Value {
+	switch v.Kind() {
+	case seekparquet.KindBoolean:
+		return parquet.BooleanValue(v.Boolean())
+	case seekparquet.KindInt32:
+		return parquet.Int32Value(v.Int32())
+	case seekparquet.KindInt64:
+		return parquet.Int64Value(v.Int64())
+	case seekparquet.KindInt96:
+		return parquet.Int96Value(deprecated.Int96(v.Int96()))
+	case seekparquet.KindFloat:
+		return parquet.FloatValue(v.Float())
+	case seekparquet.KindDouble:
+		return parquet.DoubleValue(v.Double())
+	case seekparquet.KindByteArray:
+		return parquet.ByteArrayValue(v.Bytes())
+	case seekparquet.KindFixedLenByteArray:
+		return parquet.FixedLenByteArrayValue(v.Bytes())
+	}
+	return parquet.NullValue()
+}
+
 // after is the row cursor past every row of key's group (an offset beyond
 // a group's last row continues at the next key, PAGE-1).
-func after(key []byte) *seekparquet.Cursor {
-	return &seekparquet.Cursor{Key: bytes.Clone(key), Offset: math.MaxInt64}
-}
+func after(key []byte) *seekparquet.Cursor { return seekparquet.RowCursor(key, math.MaxInt64) }
 
 // count adds the module's counts of one request to stats: pages (key and
 // value), keys decoded, row groups opened, page-index seeks, groups
@@ -253,40 +289,40 @@ func (r *seekReader) Read(ctx context.Context, rng legacy.Range, stats *legacy.S
 	}
 	var st seekparquet.ReadStats
 	defer count(stats, &st)
-	out, err := r.d.Range(ctx, seekRange(rng, &st))
+	out, err := r.d.Rows(ctx, seekQuery(rng), &st)
 	if err != nil {
 		return nil, err
 	}
 	return rows(out), nil
 }
 
-// seekRange is the module's request for rng, its reads counted in st.
-func seekRange(rng legacy.Range, st *seekparquet.ReadStats) seekparquet.Range {
-	return seekparquet.Range{Start: rng.From, StartExclusive: rng.From != nil && !rng.FromInclusive, End: rng.To,
-		Limit: rng.Limit, Columns: rng.Columns, Stats: st}
+// seekQuery is the module's request for rng, of a positive Limit.
+func seekQuery(rng legacy.Range) seekparquet.Query {
+	span := seekparquet.Span{Start: rng.From, StartExclusive: rng.From != nil && !rng.FromInclusive, End: rng.To}
+	return seekparquet.Query{Selection: seekparquet.Selection{Span: span}, Limit: int64(rng.Limit), Columns: rng.Columns}
 }
 
 // Scan reads the rows Read returns and hands them to sink straight from
-// the module's borrowed batches (Dataset.RangeBatches), one run per batch,
-// without cloning a value or building a row: the keys and values are
-// valid only until each sink call returns, and a column a part lacks is
-// Missing.
-func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error {
+// the module's borrowed batches (Dataset.Scan), one run per batch, without
+// cloning a value or building a row: the keys and column views are valid
+// only until each sink call returns, a column a part has is one View, and
+// one it lacks is Missing.
+func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink columnSink) error {
 	if rng.Limit <= 0 {
 		return nil
 	}
 	var st seekparquet.ReadStats
 	defer count(stats, &st)
 	var keys [][]byte
-	return r.d.RangeBatches(ctx, seekRange(rng, &st), func(b *seekparquet.Batch) error {
+	return r.d.Scan(ctx, seekQuery(rng), &st, func(b *seekparquet.Batch) error {
 		keys = keys[:0]
 		for i := range b.Len() {
 			keys = append(keys, b.Key(i))
 		}
 		sink.Keys(keys)
 		for c := range rng.Columns {
-			if values, ok := b.Column(c); ok {
-				sink.Values(c, values)
+			if col := b.Column(c); col.Present() {
+				sink.View(c, col)
 			} else {
 				sink.Missing(c)
 			}
@@ -308,7 +344,7 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *Ro
 		return nil, nil
 	}
 	from, prefix := rl.From, rl.Prefix
-	list := seekparquet.List{Prefix: prefix, Delimiter: rl.Delimiter, End: rl.To, Limit: rl.Limit, Columns: rl.Columns}
+	list := seekparquet.ListQuery{Prefix: prefix, Delimiter: rl.Delimiter, End: rl.To, Limit: rl.Limit, Columns: rl.Columns}
 	if c := bytes.Compare(from, prefix); from == nil || c < 0 || c == 0 && rl.FromInclusive {
 		// Every candidate key begins with the prefix, so is at or after
 		// the start.
@@ -325,7 +361,7 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *Ro
 	}
 	switch {
 	case rolled != nil && rl.SuppressAtOrBeforeFrom:
-		list.Cursor = &seekparquet.Cursor{Prefix: bytes.Clone(rolled)}
+		list.Cursor = seekparquet.PrefixCursor(rolled)
 		return r.list(ctx, list, nil, stats)
 	case !rl.FromInclusive:
 		list.Cursor = after(from)
@@ -337,9 +373,8 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *Ro
 		limit, columns = 1, nil
 	}
 	var st seekparquet.ReadStats
-	lookup := seekparquet.KeyRange(from, limit, columns...)
-	lookup.Stats = &st
-	group, err := r.d.Range(ctx, lookup)
+	lookup := seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.KeySpan(from)}, Limit: int64(limit), Columns: columns}
+	group, err := r.d.Rows(ctx, lookup, &st)
 	count(&stats.Stats, &st)
 	if err != nil {
 		return nil, err
@@ -366,10 +401,9 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *Ro
 // list runs req and appends its entries to lead; a common prefix lead
 // ends with is not repeated, and the result keeps at most the request's
 // limit of entries after lead's rows.
-func (r *seekReader) list(ctx context.Context, req seekparquet.List, lead []legacy.Entry, stats *RollupStats) ([]legacy.Entry, error) {
+func (r *seekReader) list(ctx context.Context, req seekparquet.ListQuery, lead []legacy.Entry, stats *RollupStats) ([]legacy.Entry, error) {
 	var st seekparquet.ReadStats
-	req.Stats = &st
-	entries, err := r.d.List(ctx, req)
+	entries, err := r.d.List(ctx, req, &st)
 	count(&stats.Stats, &st)
 	countIndex(&stats.ListIndex, &st)
 	if err != nil {

@@ -26,23 +26,22 @@
 // checking each one's size and modification time; StreamLocal hands on a
 // filesystem's entries (LocalEntry), nulls kept; Scan hands on the current
 // objects under a prefix in batches, from shards of the plan read
-// concurrently (seekparquet.RangePlan.Split); like Page's, its statistics
-// on failure omit the reads of a plan or split that failed. List lists
+// concurrently (seekparquet.Plan.Split); its statistics include those of
+// a plan or split that failed. List lists
 // objects or entries by delimiter a page at a time, through the module's
 // delimited listing, checking each as Stream does (Delimiter 0 is the NUL
 // byte); a common prefix carries the row at its exact key, an S3-style
 // folder object or a filesystem's directory row, from the same request.
 // Page lists a page with one entry of lookahead for its Next cursor and
-// the totals (Aggregates) of the prefixes it returns; its statistics, on
-// failure, omit the planning reads of a plan that failed. None of them
+// the totals (Aggregates) of the prefixes it returns. None of them
 // checks the parts' digests or the rows no request decodes: part digests
 // are checked when a dataset is copied or moved, not when it is read.
 // IsRefusal tells the errors that refuse the data from the others.
 //
 // Totals and Aggregates total the current objects, or a filesystem's
 // entries of every kind and their st_size (entry bytes), under paths and
-// prefixes over the module's selection plans (seekparquet.Dataset.
-// PlanRanges): an aggregate count is the plan's row count, exact only when
+// prefixes over the module's selection plans (seekparquet.Dataset.Plan):
+// an aggregate count is the plan's row count, exact only when
 // every part holding the rows has been checked, and a Totals count the rows
 // its scan reads; a byte sum decodes the size pages of the rows, once
 // however the selections nest or repeat. Totals scans in parallel shards,

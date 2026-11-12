@@ -98,13 +98,13 @@ func TestDataset(t *testing.T) {
 		t.Fatalf("the dataset has %d files; want a manifest and several parts", uploaded)
 	}
 
-	want, err := seekparquet.OpenDir(ctx, dir, seekparquet.Options{})
+	want, err := seekparquet.OpenDir(ctx, dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer want.Close()
 	src := source{objfile.Limit(objfile.Root(s3.New(f.client, bucket), "datasets/ds"), 4)}
-	got, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+	got, err := seekparquet.OpenDataset(ctx, src, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,25 +113,25 @@ func TestDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rng := seekparquet.Range{Prefix: []byte("logs/03/"), Start: []byte("logs/03/obj-01000"), Limit: 50, Columns: []string{"key", "size"}}
-	wantRows, err := want.Range(ctx, rng)
+	q := seekparquet.Query{Selection: seekparquet.Selection{Span: seekparquet.Span{Prefix: []byte("logs/03/"), Start: []byte("logs/03/obj-01000")}}, Limit: 50, Columns: []string{"key", "size"}}
+	wantRows, err := want.Rows(ctx, q, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotRows, err := got.Range(ctx, rng)
+	gotRows, err := got.Rows(ctx, q, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(wantRows) == 0 || !reflect.DeepEqual(gotRows, wantRows) {
-		t.Fatalf("Range: %d rows remote, %d local, or they differ", len(gotRows), len(wantRows))
+		t.Fatalf("Rows: %d rows remote, %d local, or they differ", len(gotRows), len(wantRows))
 	}
 
-	list := seekparquet.List{Prefix: []byte("logs/"), Delimiter: '/', Limit: 100}
-	wantEntries, err := want.List(ctx, list)
+	list := seekparquet.ListQuery{Prefix: []byte("logs/"), Delimiter: '/', Limit: 100}
+	wantEntries, err := want.List(ctx, list, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotEntries, err := got.List(ctx, list)
+	gotEntries, err := got.List(ctx, list, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

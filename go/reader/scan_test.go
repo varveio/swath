@@ -95,21 +95,21 @@ func TestScanStats(t *testing.T) {
 		for _, workers := range []int{1, 7} {
 			ctx := context.Background()
 			sp := openDir(t, dir).SeekParquet()
-			plan, err := sp.PlanRanges(ctx, []seekparquet.Range{{}}, objectColumns(S3ObjectsV1))
+			var want, st ReadStats
+			plan, err := sp.Plan(ctx, []seekparquet.Selection{{}}, objectColumns(S3ObjectsV1), &st)
+			addStats(&want, st)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := plan.Stats()
-			shards, err := plan.Split(ctx, scanShards(workers))
+			shards, err := plan.Split(ctx, scanShards(workers), &st)
+			addStats(&want, st)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, shard := range shards {
-				var st ReadStats
-				if err := shard.Scan(ctx, &st, func(seekparquet.Row) error { return nil }); err != nil {
+				if err := shard.Scan(ctx, &st, func(*seekparquet.Batch) error { return nil }); err != nil {
 					t.Fatal(err)
 				}
-				addStats(&want, shard.Stats())
 				addStats(&want, st)
 			}
 			got := ReadStats{PartsOpened: -1}
@@ -186,7 +186,7 @@ func BenchmarkScan(b *testing.B) {
 	for _, workers := range []int{1, runtime.GOMAXPROCS(0)} {
 		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
 			for b.Loop() {
-				d, err := OpenDir(context.Background(), dir, seekparquet.Options{})
+				d, err := OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -229,24 +229,27 @@ func TestScanContextEnded(t *testing.T) {
 }
 
 // TestScanPlanFailureStats: a Source failure while planning is returned
-// unchanged, and, as documented, the failed plan's own reads are not in
-// Stats, which holds no other work.
+// unchanged, and, as documented, the failed plan's own reads are in Stats
+// (the part it opened to check and the read that failed), which holds no
+// other work.
 func TestScanPlanFailureStats(t *testing.T) {
 	d, src := openSource(t, scanDir(t, 3000, 200))
 	failure := errors.New("failing read")
 	src.mu.Lock()
 	src.failAt, src.failErr = len(src.reads)+1, failure
+	opened := len(src.reads)
 	src.mu.Unlock()
 	st := ReadStats{PartsOpened: 7}
 	err := d.Scan(context.Background(), ScanRequest{Workers: 4, Stats: &st}, func([]Object) error {
 		t.Fatal("fn called")
 		return nil
 	})
-	if !errors.Is(err, failure) || st != (ReadStats{}) {
-		t.Fatalf("plan failure: %v, stats %+v", err, st)
+	_, reads := src.taken()
+	if len(reads) != opened+1 {
+		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
 	}
-	if _, reads := src.taken(); len(reads) == 0 {
-		t.Fatal("planning read nothing")
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
+		t.Fatalf("plan failure: %v, stats %+v, want %+v", err, st, want)
 	}
 }
 
@@ -546,5 +549,37 @@ func TestShardOrder(t *testing.T) {
 		case c.bad != "" && (!errors.As(err, &r) || r.Code != seekparquet.CodeKeyOrder || string(r.Key) != c.bad):
 			t.Errorf("%v: %v, want key_order at %q", c.keys, err, c.bad)
 		}
+	}
+}
+
+// TestScanCallbackStopIsAnError: a Scan or ScanBatches callback returning
+// seekparquet.Stop, which ends a module scan successfully, is an error
+// like any other to swath: returned unchanged after the callback's first
+// batch of each worker at most, stopping the rest of its shard and every
+// other shard, with one worker (one shard) and with several shards.
+func TestScanCallbackStopIsAnError(t *testing.T) {
+	dir := scanDir(t, 5000, 300)
+	ctx := context.Background()
+	for _, workers := range []int{1, 4} {
+		var calls atomic.Int64
+		err := openDir(t, dir).Scan(ctx, ScanRequest{Workers: workers}, func([]Object) error {
+			calls.Add(1)
+			return seekparquet.Stop
+		})
+		if err != seekparquet.Stop || calls.Load() < 1 || calls.Load() > int64(workers) {
+			t.Errorf("Scan, %d workers: %v after %d calls, want seekparquet.Stop after at most %d", workers, err, calls.Load(), workers)
+		}
+		calls.Store(0)
+		err = openDir(t, dir).ScanBatches(ctx, BatchScanRequest{Workers: workers}, func(*ObjectBatch) error {
+			calls.Add(1)
+			return seekparquet.Stop
+		})
+		if err != seekparquet.Stop || calls.Load() < 1 || calls.Load() > int64(workers) {
+			t.Errorf("ScanBatches, %d workers: %v after %d calls, want seekparquet.Stop after at most %d", workers, err, calls.Load(), workers)
+		}
+	}
+	// Stream already kept its callback's error apart from the module's.
+	if err := openDir(t, dir).Stream(ctx, func(Object) error { return seekparquet.Stop }); err != seekparquet.Stop {
+		t.Errorf("Stream: %v, want seekparquet.Stop", err)
 	}
 }

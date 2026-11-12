@@ -29,6 +29,13 @@ type ListRequest struct {
 	// Stats, when not nil, receives the request's read statistics: reset
 	// when the request starts, and set whether it succeeds or fails.
 	Stats *ReadStats
+	// ReadAhead, when positive, is the number of key pages the listing may
+	// read ahead concurrently (seekparquet.ListQuery.ReadAhead; a value
+	// above 64 reads as 64): it pays where a read waits on a round trip, an
+	// object store, not on a local file. The entries are the same either
+	// way. Zero, the default, reads no page ahead; a negative value is
+	// ErrInvalidRequest.
+	ReadAhead int
 }
 
 // Entry is one listing entry: an object (Object set, CommonPrefix nil), a
@@ -75,7 +82,7 @@ func (e Entry) Cursor() *Cursor {
 // column of LocalEntry. Repeating the request with the Cursor of each
 // page's last entry returns every entry once. A common prefix carries the
 // row at its exact key (Entry) from the module's exact row
-// (seekparquet.Entry.Exact), without another request.
+// (seekparquet.ListEntry.Exact), without another request.
 //
 // A versions schema is refused with a SemanticError of KindSchema before
 // any read, as Stream refuses it. Each row, a prefix's included, is
@@ -96,8 +103,8 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	if local {
 		columns = d.spec.ColumnNames()
 	}
-	got, err := d.sp.List(ctx, seekparquet.List{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
-		Limit: req.Limit, Columns: columns, Stats: req.Stats})
+	got, err := d.sp.List(ctx, seekparquet.ListQuery{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
+		Limit: req.Limit, Columns: columns, ReadAhead: req.ReadAhead}, req.Stats)
 	if err != nil {
 		return nil, err
 	}

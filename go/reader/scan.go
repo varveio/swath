@@ -22,8 +22,8 @@ type ScanRequest struct {
 	Workers int
 	// Stats, when not nil, receives the scan's read statistics: reset when
 	// the request starts, and set whether it succeeds or fails, with the
-	// work of every shard up to where it stopped. A plan or a split that
-	// fails returns no statistics, so its own reads are missing.
+	// work of the plan, the split and every shard up to where it stopped,
+	// a failed plan's or split's included.
 	Stats *ReadStats
 }
 
@@ -49,9 +49,9 @@ func scanShards(workers int) int {
 
 // Scan hands fn, in batches, every current object whose key begins with
 // req.Prefix, read by req.Workers goroutines at once. It plans the
-// prefix's rows (seekparquet.Dataset.PlanRanges, projecting the columns
+// prefix's rows (seekparquet.Dataset.Plan, projecting the columns
 // Object holds), which checks every part holding them, divides the plan
-// into shards of consecutive rows (seekparquet.RangePlan.Split): one for
+// into shards of consecutive rows (seekparquet.Plan.Split): one for
 // one worker, otherwise up to shardsPerWorker per worker. Each worker
 // takes the next shard not yet taken until none is left, decoding and
 // checking each object as Stream does. Every object is handed to fn once.
@@ -64,7 +64,8 @@ func scanShards(workers int) int {
 //
 // Versions schemas and filesystem entries are refused as Stream refuses
 // them, before any read. The first error stops every shard and is
-// returned: fn's, unchanged; a row that breaks Stream's checks (a
+// returned: fn's, unchanged (seekparquet.Stop included: no error of fn
+// ends a scan successfully); a row that breaks Stream's checks (a
 // SemanticError of KindRow); the module's and the Source's errors,
 // unchanged; or the context's, checked before planning, before each batch
 // and after the shards end, so a scan whose context ends is never a
@@ -86,8 +87,9 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	}
 	return d.scan(ctx, req, columns, func() shardScan {
 		batch := make([]Object, 0, scanBatchObjects)
-		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error {
-			return d.scanShard(ctx, shard, st, keys, batch, fn)
+		values := make([]seekparquet.Value, len(columns))
+		return func(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys) error {
+			return d.scanShard(ctx, shard, st, keys, columns, values, batch, fn)
 		}
 	})
 }
@@ -95,37 +97,36 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 // shardScan scans one shard into st and records in keys the first and
 // last key it hands on. A worker's shardScan is called for one shard at a
 // time, in ascending shard order.
-type shardScan func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error
+type shardScan func(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys) error
 
-// scan plans req.Prefix's rows and scans them as scanRanges does.
+// scan plans req.Prefix's rows and scans them as scanSelections does.
 func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, worker func() shardScan) error {
-	return d.scanRanges(ctx, []seekparquet.Range{prefixSpan(req.Prefix).rng()}, req.Workers, req.Stats, columns, worker)
+	return d.scanSelections(ctx, []seekparquet.Selection{prefixSpan(req.Prefix).selection()}, req.Workers, req.Stats, columns, worker)
 }
 
-// scanRanges plans the rows of ranges projecting columns and splits the
+// scanSelections plans the rows of selections projecting columns and splits the
 // plan, then runs workers goroutines (0 or less: 1) that take its shards
 // in order, each scanning them with its own shardScan from worker, so that
 // what a shardScan keeps between shards is per worker. It adds the plan's,
-// the split's and every shard's statistics to stats when it is not nil.
-// The first error cancels the other shards and is returned; without one,
-// the context's error is, and then the order of the keys across shards is
-// checked (shardOrder).
-func (d *Dataset) scanRanges(ctx context.Context, ranges []seekparquet.Range, workers int, stats *ReadStats, columns []string, worker func() shardScan) error {
+// the split's (a failed one's too) and every shard's statistics to stats
+// when it is not nil. The first error cancels the other shards and is
+// returned; without one, the context's error is, and then the order of
+// the keys across shards is checked (shardOrder).
+func (d *Dataset) scanSelections(ctx context.Context, selections []seekparquet.Selection, workers int, stats *ReadStats, columns []string, worker func() shardScan) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	plan, err := d.sp.PlanRanges(ctx, ranges, columns)
+	var st ReadStats
+	plan, err := d.sp.Plan(ctx, selections, columns, &st)
+	addStats(stats, st)
 	if err != nil {
 		return err
 	}
-	addStats(stats, plan.Stats())
 	workers = max(workers, 1)
-	shards, err := plan.Split(ctx, scanShards(workers))
+	shards, err := plan.Split(ctx, scanShards(workers), &st)
+	addStats(stats, st)
 	if err != nil {
 		return err
-	}
-	for _, shard := range shards {
-		addStats(stats, shard.Stats())
 	}
 	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
@@ -211,32 +212,50 @@ func shardOrder(keys []shardKeys) error {
 	return nil
 }
 
+// scanErr is the error of a module scan, err, whose batch callback kept
+// the error of swath's caller's fn in failed. The module ends a scan whose
+// callback returns seekparquet.Stop with no error; swath's callbacks have
+// no such convention, so fn's error, Stop included, is returned as fn
+// returned it (and so stops the other shards).
+func scanErr(err, failed error) error {
+	if failed != nil {
+		return failed
+	}
+	return err
+}
+
 // scanBatchObjects is the most objects one Scan batch holds.
 const scanBatchObjects = 1024
 
 // scanShard scans one shard, handing fn its objects in batches built in
-// batch, an empty slice reused from shard to shard.
-func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys, batch []Object, fn func([]Object) error) error {
+// batch, an empty slice reused from shard to shard; values is the scratch
+// of each row's decoding (batchObject).
+func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.Plan, st *ReadStats, keys *shardKeys, columns []string, values []seekparquet.Value, batch []Object, fn func([]Object) error) error {
+	var failed error // fn's (scanErr)
 	flush := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		keys.note(batch[0].Key, batch[len(batch)-1].Key)
-		err := fn(batch)
+		failed = fn(batch)
 		batch = batch[:0]
-		return err
+		return failed
 	}
-	err := shard.Scan(ctx, st, func(r seekparquet.Row) error {
-		o, err := decodeObject(d.spec.ID, r)
-		if err != nil {
-			return err
-		}
-		if batch = append(batch, o); len(batch) == cap(batch) {
-			return flush()
+	err := shard.Scan(ctx, st, func(b *seekparquet.Batch) error {
+		for i := range b.Len() {
+			o, err := d.batchObject(b, i, columns, values)
+			if err != nil {
+				return err
+			}
+			if batch = append(batch, o); len(batch) == cap(batch) {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
-	if err == nil && len(batch) > 0 {
+	if err = scanErr(err, failed); err == nil && len(batch) > 0 {
 		err = flush()
 	}
 	return err

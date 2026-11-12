@@ -15,8 +15,9 @@ type (
 	SourceFile = seekparquet.SourceFile
 	// ContextBinder is a SourceFile whose reads a context can bound.
 	ContextBinder = seekparquet.ContextBinder
-	// Options configures Open and OpenDir.
-	Options = seekparquet.Options
+	// Options configures Open and OpenDir (seekparquet.OpenOptions). A
+	// negative Limits field is ErrInvalidRequest when the dataset opens.
+	Options = seekparquet.OpenOptions
 	// Limits bounds what a dataset can make the reader allocate.
 	Limits = seekparquet.Limits
 	// ReadStats counts one request's reads: diagnostics, not a contract.
@@ -28,7 +29,7 @@ type (
 	// Code is the contract.
 	RefusalError = seekparquet.RefusalError
 	// UnsupportedError is a valid dataset or request using a feature the
-	// module does not support.
+	// module does not support; its Code is an UnsupportedCode.
 	UnsupportedError = seekparquet.UnsupportedError
 )
 

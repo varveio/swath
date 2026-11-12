@@ -48,7 +48,7 @@ type AggregateOptions struct {
 	Sums SumMode
 	// SumBudgetBytes bounds, for SumsWithinBudget, the compressed bytes of
 	// size pages, and of their dictionaries, the sums read
-	// (seekparquet.RangePlan.ProjectedBytes), an extent that several
+	// (seekparquet.Plan.ProjectedBytes), an extent that several
 	// prefixes share counted once; zero means DefaultSumBudget. It must be
 	// zero for any other mode. Opening a part and reading its footer, key
 	// pages and page indexes to plan the sums are not charged. A budget
@@ -65,7 +65,7 @@ type AggregateOptions struct {
 type PrefixAggregate struct {
 	// Count is the number of objects under the prefix. It is nil when its
 	// rows span a part no read has checked, whose row count is the
-	// manifest's alone (seekparquet.RangePlan.Count).
+	// manifest's alone (seekparquet.Plan.Count).
 	Count *int64
 	// Bytes is the sum of their sizes. It is nil when the count is
 	// unknown, the prefix was not summed or did not fit the budget, the
@@ -103,7 +103,7 @@ func (o AggregateOptions) budget() int64 {
 // neither Counts nor Sums it reads nothing.
 //
 // Counts come from each prefix's planned range
-// (seekparquet.Dataset.PlanRanges without columns): exact when every part
+// (seekparquet.Dataset.Plan without columns): exact when every part
 // holding its rows has been checked by an earlier read, else nil, so a
 // count never relies on a manifest row count alone and never opens a part
 // between its ends. Sums plan the summed prefixes' rows projecting size
@@ -265,11 +265,12 @@ func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates 
 // projectedSize returns the compressed bytes a scan of spans' size column
 // reads, and false when a size chunk has no OffsetIndex to prove it.
 func (d *Dataset) projectedSize(ctx context.Context, st *ReadStats, spans ...keySpan) (int64, bool, error) {
-	plan, err := d.sp.PlanRanges(ctx, ranges(spans), []string{"size"})
+	var planned ReadStats
+	plan, err := d.sp.Plan(ctx, selections(spans), []string{"size"}, &planned)
+	addStats(st, planned)
 	if err != nil {
 		return 0, false, err
 	}
-	addStats(st, plan.Stats())
 	n, exact := plan.ProjectedBytes()
 	return n, exact, nil
 }

@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 
 // benchWarm opens the dataset and reads it once through read, untimed.
 func benchWarm(b *testing.B, dir string, read func(*Dataset)) *Dataset {
-	d, err := OpenDir(context.Background(), dir, seekparquet.Options{})
+	d, err := OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func BenchmarkReaderScanSkewed(b *testing.B) {
 }
 
 // BenchmarkReaderStream: Stream of the whole dataset, ordered and owning,
-// in one pass (Stream) and as it read before, in Range requests of 1,024
+// in one pass (Stream) and as it read before, in Rows requests of 1,024
 // rows each after the last (Range-pages, oldStream in stream_test.go).
 // Workers do not apply: a stream is one ordered pass.
 func BenchmarkReaderStream(b *testing.B) {

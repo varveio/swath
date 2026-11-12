@@ -1876,6 +1876,59 @@ interleaved three times on the same fixture (load average 0.6 to 4.4 during the 
 `Scan` and `Batch-noop` at 1, 4 and 8 workers overlapped between the arms in every case (Totals at one worker
 190–259 against 191–196, `Batch-noop` 220–227 against 221–226), within this host's noise.
 
+### Reader on the redesigned SeekParquet API, 2026-11-12
+
+`go/reader` and the replay store moved to SeekParquet's redesigned read API (`Plan`/`Scan`/`Rows`,
+`ColumnView` accessors in place of `[]parquet.Value`; candidate `22318bd745a0`, merged as `b26862f2b4c8` with
+identical content) against swath main `3021bfd6` (SeekParquet `586dcb7fa54c`), each built from its own tree
+with the same uncommitted peak-memory harness added. Go 1.27.4, linux/amd64, GOMAXPROCS 4, a shared 4-vCPU
+Xeon @ 2.30 GHz loaded by other agents' runs throughout (load average 2 to 8): six interleaved rounds, each
+round main's binary then this branch's. Reader: `SWATH_READER_BENCH_ROWS=1000000` (the seed-1 generated
+fixture, [testing.md](testing.md#reader-benchmarks)), `reader.test -test.run '^$' -test.bench
+'^(BenchmarkReaderScan|BenchmarkReaderScanSkewed|BenchmarkReaderStream|BenchmarkReaderTotals|BenchmarkScan)$'
+-test.benchmem -test.benchtime 3x`; `BenchmarkScan` is its own 300,000-row fixture. Replay: `store.test
+-test.run '^$' -test.bench '^BenchmarkWindowFill$' -test.benchmem` (10,000-row fills of a 200,000-key
+dataset). `benchstat`, n=6; "~" is no significant difference (p ≥ 0.05). Indicative only.
+
+| Benchmark | sec/op | B/op | allocs/op |
+|---|---|---|---|
+| ReaderScan Scan, 1 / 4 / 8 workers | −19% / −22% / −28% | −32% | −25% |
+| ReaderScan Batch-noop, -touch, -all, -size (1, 4, 8 workers) | ~ (one −6%) | ~ | −0.03% to −0.5% |
+| ReaderScanSkewed, 4 / 8 workers | ~ | ~ | −0.2% |
+| ReaderStream Stream | ~ (1.083 → 1.016 s) | ~ | ~ |
+| ReaderTotals serial / 1, 4, 8 workers | −4.7% / ~ | −2.4% / ~ | ~ / −0.6% |
+| Scan, 1 / 4 workers | −19% / −19% | −33% | −24% |
+| WindowFill owned, from "" / "d05/" | −12% / ~ | −4% | ~ |
+| WindowFill batches, from "" / "d05/" | ~ / −10.5% | ~ | ~ |
+
+`Scan`'s gain is its decoding: each object is decoded from the borrowed batch (the row decoder over a borrowed
+row, the key cloned) instead of from an owning copy of every row, which the module's former row-callback
+`RangePlan.Scan` made. The batch paths (`ScanBatches`, `Totals`, the window fill) read the same decoded
+values through `ColumnView`'s typed accessors, which inline at swath's call sites (`-gcflags=-m=2`) with no
+bounds check left in the per-value loops (`-d=ssa/check_bce`).
+
+Keeping a callback's error apart from the module's (a callback's `seekparquet.Stop` is swath's error, not a
+stop) in `Scan`'s and `ScanBatches`' own callbacks, against `ec1e5756`'s wrapper that added an indirect call
+per batch: the same six interleaved rounds of `BenchmarkReaderScan` and `BenchmarkScan`, every sec/op, B/op and
+allocs/op ~ (geomean +0.05% time).
+
+Peak heap: the highest `/memory/classes/heap/objects:bytes` sampled every 50 µs above the level after a forced
+GC, at GOGC=10, mean MiB of six rounds (one operation each). The wide projection decodes every column of
+`swath/azblob-objects/v1` from a 400,000-row part, in pages of 16,384 rows, that lacks the 16 columns added
+later; the absent-column fill packs a 200,000-row part lacking `etag`, `owner_id` and `checksum_algorithm`
+(SeekParquet now holds a batch projecting an absent column to 4,096 rows).
+
+| Workload | main | this change |
+|---|---:|---:|
+| Scan, 4 workers | 7.46 | 7.82 (~) |
+| ScanBatches, all fields, 4 workers | 3.90 | 3.88 (~) |
+| Stream | 4.07 | 3.98 (~) |
+| Totals of "" | 2.69 | 2.77 (~) |
+| Wide projection, 16 columns absent | 16.17 | 16.41 (~) |
+| Window fill, 10,000 rows | 2.98 | 2.99 (~) |
+| Window fill, 100,000 rows | 18.77 | 18.83 (~) |
+| Window fill, 3 columns absent | 22.44 | 21.69 (−3.4%) |
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through

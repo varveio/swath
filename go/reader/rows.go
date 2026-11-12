@@ -8,7 +8,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -257,7 +256,7 @@ func DecodeAzblobVersion(row seekparquet.Row) (AzblobVersion, error) {
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error) {
 	d := decoder{spec: schemas[LocalV1], row: &row}
 	e := LocalEntry{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		Kind: string(d.required("kind").ByteArray()), Mode: d.uint32("mode"), UID: d.uint32("uid"), GID: d.uint32("gid"),
+		Kind: string(d.required("kind").Bytes()), Mode: d.uint32("mode"), UID: d.uint32("uid"), GID: d.uint32("gid"),
 		Nlink: d.uint32("nlink"), Inode: d.uint64("inode"), Dev: d.uint64("dev"), AllocatedBytes: d.int64("allocated_bytes"),
 		MetadataChangedAt: d.time("metadata_changed_at"), Atime: d.time("atime"), BirthTime: d.time("birth_time"),
 		LinkTarget: d.bytes("link_target")}
@@ -288,16 +287,18 @@ func (d *decoder) gcsObject() GCSObject {
 		ContentType: d.string("content_type"), TimeCreated: d.time("time_created")}
 }
 
-// kinds is the parquet-go kind of each column type's values.
-var kinds = [...]parquet.Kind{
-	TypeString: parquet.ByteArray, TypeInt32: parquet.Int32, TypeInt64: parquet.Int64, TypeTimestampMicros: parquet.Int64,
-	TypeBool: parquet.Boolean, TypeUint32: parquet.Int32, TypeUint64: parquet.Int64, TypeBinary: parquet.ByteArray,
+// kinds is the physical kind of each column type's values.
+var kinds = [...]seekparquet.Kind{
+	TypeString: seekparquet.KindByteArray, TypeInt32: seekparquet.KindInt32, TypeInt64: seekparquet.KindInt64,
+	TypeTimestampMicros: seekparquet.KindInt64, TypeBool: seekparquet.KindBoolean, TypeUint32: seekparquet.KindInt32,
+	TypeUint64: seekparquet.KindInt64, TypeBinary: seekparquet.KindByteArray,
 }
 
 var errNotProjected = errors.New("not projected: read the schema's columns (SchemaSpec.ColumnNames)")
 
-// value returns the named column's value, ok false for a null. The name is
-// the schema's: a name it lacks is this package's bug.
+// value returns the named column's value, ok false for a null, or for a
+// column the row's part lacks where the schema allows it. The name is the
+// schema's: a name it lacks is this package's bug.
 func (d *decoder) value(name string) (v seekparquet.Value, ok bool) {
 	if d.err != nil {
 		return v, false
@@ -310,9 +311,9 @@ func (d *decoder) value(name string) (v seekparquet.Value, ok bool) {
 	switch {
 	case !found:
 		d.err = &SemanticError{Kind: KindSchema, Column: name, Row: d.at(), Err: errNotProjected}
-	case v.Absent && !spec.MayBeAbsent:
+	case v.Absent() && !spec.MayBeAbsent:
 		d.err = semantic(KindSchema, name, d.at(), "absent from the row's part")
-	case v.IsNull():
+	case v.Absent() || v.IsNull(): // an absent value is not null, but decodes as one
 		if spec.Required {
 			d.err = semantic(KindRow, name, d.at(), "null in a required column")
 		}
@@ -386,7 +387,7 @@ func (d *decoder) string(name string) *string {
 	if !ok {
 		return nil
 	}
-	s := string(v.ByteArray())
+	s := string(v.Bytes())
 	return &s
 }
 
@@ -395,6 +396,6 @@ func (d *decoder) bytes(name string) *[]byte {
 	if !ok {
 		return nil
 	}
-	b := v.ByteArray()
+	b := v.Bytes()
 	return &b
 }

@@ -25,7 +25,7 @@ import (
 func streamPages[T any](ctx context.Context, d *Dataset, columns []string, decode func(seekparquet.Row) (T, error), fn func(T) error) error {
 	var cursor *seekparquet.Cursor
 	for {
-		rows, err := d.sp.Range(ctx, seekparquet.Range{Cursor: cursor, Limit: 1024, Columns: columns})
+		rows, err := d.sp.Rows(ctx, seekparquet.Query{Selection: seekparquet.Selection{Cursor: cursor}, Limit: 1024, Columns: columns}, nil)
 		if err != nil || len(rows) == 0 {
 			return err
 		}
@@ -88,18 +88,9 @@ func streamFixtures(t *testing.T) map[string]string {
 	}
 }
 
-// withStreamLimit runs f with Stream's request limit set to limit.
-func withStreamLimit(limit int, f func()) {
-	saved := streamLimit
-	streamLimit = limit
-	defer func() { streamLimit = saved }()
-	f()
-}
-
 // TestStreamMatchesPages: Stream hands on exactly the paged Stream's
 // objects, in the same order, with the same values, over parts, row groups
-// and pages of every current-object schema, in one request; and, when a
-// request stops at its limit, in several, each continuing after the last.
+// and pages of every current-object schema, in one unlimited request.
 func TestStreamMatchesPages(t *testing.T) {
 	for name, dir := range streamFixtures(t) {
 		t.Run(name, func(t *testing.T) {
@@ -107,66 +98,50 @@ func TestStreamMatchesPages(t *testing.T) {
 			if err != nil || len(want) == 0 {
 				t.Fatalf("oracle: %d objects, %v", len(want), err)
 			}
-			// Every request is a RangeBatches call. Tiny limits cost one call
-			// per object or so, which only the small fixtures can afford under
-			// -race; the large one continues across a few requests instead.
-			limits := []int{math.MaxInt, 1024, len(want), len(want) - 1}
-			if len(want) <= 2000 {
-				limits = append(limits, 1, 7)
-			} else {
-				limits = append(limits, len(want)/3+1)
+			d := openDir(t, dir)
+			got, err := collect(d, newStream)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, limit := range limits {
-				d := openDir(t, dir)
-				var got []Object
-				withStreamLimit(limit, func() { got, err = collect(d, newStream) })
-				if err != nil {
-					t.Fatalf("limit %d: %v", limit, err)
+			if len(got) != len(want) {
+				t.Fatalf("%d objects, want %d", len(got), len(want))
+			}
+			for i := range want {
+				if !reflect.DeepEqual(got[i], want[i]) {
+					t.Fatalf("object %d %+v, want %+v", i, got[i], want[i])
 				}
-				if len(got) != len(want) {
-					t.Fatalf("limit %d: %d objects, want %d", limit, len(got), len(want))
-				}
-				for i := range want {
-					if !reflect.DeepEqual(got[i], want[i]) {
-						t.Fatalf("limit %d: object %d %+v, want %+v", limit, i, got[i], want[i])
+			}
+			// While a stream runs, StreamStats holds nothing of it: its
+			// fields are added together when it returns.
+			n := 0
+			later := openDir(t, dir)
+			err = later.Stream(context.Background(), func(Object) error {
+				if n++; n == len(want)/2+1 {
+					if st := later.StreamStats(); st != (StreamStats{}) {
+						return fmt.Errorf("stats %+v during the stream", st)
 					}
 				}
-				// Within a later request, StreamStats holds nothing of the
-				// stream: its fields are added together when it returns.
-				if limit < len(want) {
-					n := 0
-					later := openDir(t, dir)
-					withStreamLimit(limit, func() {
-						err = later.Stream(context.Background(), func(Object) error {
-							if n++; n == limit+1 {
-								if st := later.StreamStats(); st != (StreamStats{}) {
-									return fmt.Errorf("stats %+v during the stream's second request", st)
-								}
-							}
-							return nil
-						})
-					})
-					if err != nil {
-						t.Fatalf("limit %d: %v", limit, err)
-					}
-				}
-				st := d.StreamStats()
-				if requests := int64(len(want)/limit + 1); st.Requests != requests || st.Objects != int64(len(want)) || st.KeysDecoded < int64(len(want)) {
-					t.Fatalf("limit %d: stats %+v, want %d requests", limit, st, requests)
-				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := d.StreamStats()
+			if st.Requests != 1 || st.Objects != int64(len(want)) || st.KeysDecoded < int64(len(want)) {
+				t.Fatalf("stats %+v, want 1 request", st)
 			}
 		})
 	}
 }
 
 // TestStreamReadStats: a whole Stream is one request whose ReadStats are
-// those of one Range of every row on a fresh Dataset, projecting the same
+// those of one Rows of every row on a fresh Dataset, projecting the same
 // columns; StreamStats adds each Stream's.
 func TestStreamReadStats(t *testing.T) {
 	dir := batchFixture(t, S3ObjectsV1)
 	ref := openDir(t, dir)
 	var want seekparquet.ReadStats
-	rows, err := ref.sp.Range(context.Background(), seekparquet.Range{Limit: math.MaxInt, Columns: objectColumns(S3ObjectsV1), Stats: &want})
+	rows, err := ref.sp.Rows(context.Background(), seekparquet.Query{Limit: math.MaxInt, Columns: objectColumns(S3ObjectsV1)}, &want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +299,7 @@ func TestStreamErrorOwnsKey(t *testing.T) {
 			columns := objectColumns(S3ObjectsV1)
 			values := make([]seekparquet.Value, len(columns))
 			var failed error
-			err := d.sp.RangeBatches(context.Background(), seekparquet.Range{Limit: math.MaxInt, Columns: columns}, func(b *seekparquet.Batch) error {
+			err := d.sp.Scan(context.Background(), seekparquet.Query{Columns: columns}, nil, func(b *seekparquet.Batch) error {
 				for i := range b.Len() {
 					if _, err := d.batchObject(b, i, columns, values); err != nil {
 						failed = err
@@ -363,7 +338,7 @@ func TestStreamPartRefusalOnReach(t *testing.T) {
 	old, oldErr := collect(openDir(t, dir), oldStream)
 	d := openDir(t, dir)
 	got, err := collect(d, newStream)
-	if seekparquet.CodeOf(err) != seekparquet.CodeMissingPart || seekparquet.CodeOf(oldErr) != seekparquet.CodeMissingPart {
+	if seekparquet.RefusalCodeOf(err) != seekparquet.CodeMissingPart || seekparquet.RefusalCodeOf(oldErr) != seekparquet.CodeMissingPart {
 		t.Fatalf("missing part: %v; the paged stream %v", err, oldErr)
 	}
 	if len(got) != 5 || len(old) != 0 {
@@ -411,8 +386,8 @@ func TestStreamSourceFailure(t *testing.T) {
 }
 
 // TestStreamLocalMatchesPages: StreamLocal hands on the paged StreamLocal's
-// entries in order, in one request (several when the limit stops it), its
-// work in StreamStats; Stream's refusal of the entries adds nothing.
+// entries in order, in one request, its work in StreamStats; Stream's
+// refusal of the entries adds nothing.
 func TestStreamLocalMatchesPages(t *testing.T) {
 	for _, names := range []bool{false, true} {
 		dir := localDir(t, names)
@@ -424,19 +399,15 @@ func TestStreamLocalMatchesPages(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		for _, limit := range []int{math.MaxInt, 1, 2, 4} {
-			d := openDir(t, dir)
-			var got []LocalEntry
-			withStreamLimit(limit, func() { got = streamLocal(t, d) })
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("names %t, limit %d: %+v, want %+v", names, limit, got, want)
-			}
-			if _, err := stream(t, d); !errors.Is(err, ErrSchema) {
-				t.Fatalf("stream of entries: %v", err)
-			}
-			if st := d.StreamStats(); st.Requests != int64(len(want)/limit+1) || st.Objects != int64(len(want)) || st.PartsOpened != 2 {
-				t.Fatalf("names %t, limit %d: stats %+v", names, limit, st)
-			}
+		d := openDir(t, dir)
+		if got := streamLocal(t, d); !reflect.DeepEqual(got, want) {
+			t.Fatalf("names %t: %+v, want %+v", names, got, want)
+		}
+		if _, err := stream(t, d); !errors.Is(err, ErrSchema) {
+			t.Fatalf("stream of entries: %v", err)
+		}
+		if st := d.StreamStats(); st.Requests != 1 || st.Objects != int64(len(want)) || st.PartsOpened != 2 {
+			t.Fatalf("names %t: stats %+v", names, st)
 		}
 	}
 }
