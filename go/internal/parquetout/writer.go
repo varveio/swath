@@ -152,7 +152,12 @@ type writer[P any] struct {
 	fill   func(column int, values []pq.Value) // fillPage, bound once
 	capped []int                               // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	page   []schema.Row[P]                     // the page being filled; the module borrows it during WritePage
-	closed bool
+	// size reads a row's object size (schema.ObjectSize; nil for a schema
+	// without a size column), objects sums it over the rows written: the
+	// part's dataset.Part.ObjectBytes.
+	size    func(*P) (int64, bool)
+	objects int64
+	closed  bool
 }
 
 // partFile is a local part's file as the module writes it: its writes and
@@ -199,7 +204,7 @@ func create[P any](f dataset.Artifact, s *schema.Schema[P], c *codec, columns fu
 		_ = f.Close()
 		return nil, fmt.Errorf("create part: %w", err)
 	}
-	w := &writer[P]{schema: s, file: f, by: createdBy, part: part, page: make([]schema.Row[P], 0, pageRows)}
+	w := &writer[P]{schema: s, file: f, by: createdBy, part: part, page: make([]schema.Row[P], 0, pageRows), size: schema.ObjectSize(s)}
 	w.cols = append(w.cols, dataset.KeyColumn)
 	for i := range s.Columns {
 		w.cols = append(w.cols, s.Columns[i].Name)
@@ -224,11 +229,16 @@ func fillPage[P any](s *schema.Schema[P], page []schema.Row[P], column int, valu
 }
 
 // write appends rows, after checking each against the schema's value
-// caps, writing each page as it fills.
+// caps and adding its object size, writing each page as it fills.
 func (w *writer[P]) write(rows []schema.Row[P]) error {
 	for i := range rows {
 		if err := w.check(&rows[i]); err != nil {
 			return err
+		}
+		if w.size != nil {
+			if v, ok := w.size(&rows[i].Data); ok {
+				w.objects += v
+			}
 		}
 		w.page = append(w.page, rows[i])
 		if len(w.page) == pageRows {
@@ -286,9 +296,14 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	if err != nil {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
 	}
-	return dataset.Part{Path: w.file.Name(), Identity: w.file.Identity(), Columns: w.cols, CreatedBy: w.by,
+	p := dataset.Part{Path: w.file.Name(), Identity: w.file.Identity(), Columns: w.cols, CreatedBy: w.by,
 		PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
-			MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}, nil
+			MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}
+	if w.size != nil {
+		n := w.objects
+		p.ObjectBytes = &n
+	}
+	return p, nil
 }
 
 // abort releases the writer without producing a part.

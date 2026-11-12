@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -362,6 +363,13 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: time.Now().UTC()},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
 		Outcome:    Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}}
+	// The dataset is the manifest's: its rows, bytes and coverage, which
+	// this invocation neither listed nor wrote.
+	var m dataset.Manifest
+	if json.Unmarshal(b, &m) == nil {
+		rep.Output.Committed(&m)
+		rep.Outcome.Complete, rep.Outcome.StopReason = m.Coverage.Complete, m.Coverage.StopReason
+	}
 	if err := rs.finalize(ctx, cfg, r, *rec, dataset.ManifestParts(b), &rep); err != nil {
 		return err
 	}
@@ -575,7 +583,7 @@ func (jr *runJournal) publishRemote(ordinal int, p dataset.Part, limit, rows int
 		return p, err
 	}
 	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final,
-		Object: p.Path, Identity: p.Identity}); err != nil {
+		Object: p.Path, Identity: p.Identity, ObjectBytes: p.ObjectBytes}); err != nil {
 		return p, err
 	}
 	jr.acked.parts.Add(1)

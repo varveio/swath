@@ -11,29 +11,6 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// objectSize reads a row's object size from the schema's size column, nil
-// without one. A row that is no object (schema.Schema.Container: a local
-// directory) has none: its own size is not an object's, so the run's
-// object_bytes is the files' bytes, as swath du's total and the local
-// provider's bytes are.
-func objectSize[P any](s *schema.Schema[P]) func(*P) (int64, bool) {
-	for _, c := range s.Columns {
-		if c.Name != "size" {
-			continue
-		}
-		if box := s.Container; box != nil {
-			return func(p *P) (int64, bool) {
-				if box(p) {
-					return 0, false
-				}
-				return c.Int(p)
-			}
-		}
-		return c.Int
-	}
-	return nil
-}
-
 // sized sums the object sizes of the rows the order stage accepts from a
 // provider (after the filters, which it wraps), one atomic add per page.
 // On a committed run that is exactly the rows emitted; on a run that

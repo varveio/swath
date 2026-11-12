@@ -85,10 +85,10 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; 0.3
 
 | 0.3 | Now |
 |---|---|
-| `schema_version` | `report_version` (5) |
+| `schema_version` | `report_version` (6) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
-| `bytes` | `output.object_bytes` (object sizes); the dataset's own size is `output.output_bytes` |
+| `bytes` | `output.committed_object_bytes` (the committed dataset's object sizes); this attempt's are `output.object_bytes`, the dataset's own size `output.output_bytes` |
 | `cost.api_calls` | `requests.http_attempts` |
 | `duration_ms`, `listing_duration_ms` | `timings.wall_ms`, `timings.listing_ms` |
 | `error_class` | `outcome.cause` |
@@ -164,7 +164,7 @@ re-list it into a new directory.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is the commit, written after every part: in a local directory by an atomic rename and a directory sync, in a bucket by a create that succeeds only if no manifest is there |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 5: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 6: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -185,6 +185,7 @@ by field, from format 1:
 | – (run summary `completed`, `config.filters`) | `extensions.swath.coverage` |
 | `files[].key` | `parts[].path` (relative to the dataset root) |
 | `files[].size`, `rowCount`, `MD5checksum`, `minKey`, `maxKey` | `parts[].bytes`, `rows`, `sha256`, `min_key_base64`, `max_key_base64` (exact, never truncated; canonical standard base64 of the key bytes) |
+| – | `extensions.swath.committed_object_bytes` (the dataset's object sizes summed; absent when unknown) |
 | `fileFormat`, `sorted`, `sortKey`, `fileSchema`, `totalRows` | removed (the format implies the first four; sum `rows` for the total) |
 
 `parts[].sha256` is the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which
@@ -514,6 +515,18 @@ is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes t
 are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles the listing and the drain's
 tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
 tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
+
+**Run report: version 6.** Version 6 adds `output.committed_object_bytes`, the committed dataset's object
+bytes: every row's size summed as the writers wrote them, retained parts and rows replayed from spill included,
+so a resumed run reports the dataset's total where `output.object_bytes` holds only what that attempt listed. It is
+absent when unknown (a schema without a size column, or retained parts recorded by an earlier build), never 0
+for unknown; the manifest states the same as `extensions.swath.committed_object_bytes` ([dataset.md](dataset.md#the-swath-extension)).
+A resume that finds the dataset committed by an earlier attempt (local, or a bucket's whose manifest's creation
+was answered too late) now reports the committed dataset from its manifest: `rows_committed`, `rows_durable`,
+`output_bytes` and `committed_object_bytes`, where it reported 0, in `--report` and in the `run.json` it writes
+beside the manifest, whose `outcome.complete` and `stop_reason` are the manifest's coverage. `outcome.cause`
+gains `not_found`: the bucket (S3, GCS) or Azure container does not exist, where the report had no cause. A
+version 5 reader reads version 6 by ignoring the new member.
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most

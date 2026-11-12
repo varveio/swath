@@ -265,7 +265,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		p = newFiltered(p, keep, b.s, env.Filtered)
 	}
 	if env.Sizes != nil && !env.Empty {
-		if size := objectSize(b.s); size != nil {
+		if size := schema.ObjectSize(b.s); size != nil {
 			env.Sizes.Measured = true
 			p = newSized(p, size, &env.Sizes.Bytes)
 		}

@@ -121,8 +121,9 @@ goroutine, request or acknowledgement channel.
    part being recorded is ever claimed, so recovery can tell it from parts that closed early and were waiting
    for their turn, which no record can name.
 3. One journal record is appended and fsynced: the ordinal, the part's `dataset.PartInfo` (rows, bytes,
-   SHA-256, min and max key: the same type the manifest lists) and the writer state (the router's frozen part
-   limit, the total rows so far). The journal is about committed output only: no split history, no cursor.
+   SHA-256, min and max key: the same type the manifest lists), the part's object bytes (its rows' sizes, as
+   its writer summed them) and the writer state (the router's frozen part limit, the total rows so far). The
+   journal is about committed output only: no split history, no cursor.
 4. The part is renamed to `data/part-NNNNN.parquet` and the directory is fsynced.
 
 This is commit-before-emit (I1) at part granularity: no row is published before the record that covers it.
@@ -482,7 +483,9 @@ run starts and kept across every resume, and keeps the durable spill across a re
 part's SHA-256 where earlier versions recorded its MD5, so recovery, which compares a retained part with its
 record by that digest, refuses versions 7 and 8 before it touches anything, as an earlier build refuses
 version 9; version 10 names a bucket dataset's part objects in its records and its destination in the
-identity, and this build still reads version 9, a local dataset's journal without them).
+identity, and this build still reads version 9, a local dataset's journal without them; a record's
+`object_bytes` was added within version 10, optional both ways: a build that predates it ignores it, and this
+build resumes records without it, leaving the dataset's object bytes unknown).
 An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
 `--overwrite`. The first frame is the header (tool, format, identity, creation time, and the run UUID).

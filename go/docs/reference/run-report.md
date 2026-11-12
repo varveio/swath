@@ -17,7 +17,8 @@ The fields most runs need:
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([exit-codes.md](exit-codes.md)) |
 | `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.skipped_entries` and `coverage.filters`: [whole-source check](../getting-started.md#5-check-that-it-is-complete)) |
 | `attempt.id` | this attempt; `error.json` carries the same |
-| `output.rows_committed`, `output.object_bytes` | the dataset's rows, and the bytes of the objects this attempt listed |
+| `output.rows_committed`, `output.committed_object_bytes` | the committed dataset's rows and the sizes of its objects, after a resume too |
+| `output.object_bytes` | the bytes of the objects this attempt listed |
 | `output.totals` | `swath du`'s totals (the rows themselves are only on stdout) |
 | `requests.http_attempts`, `cost.cost_usd` | requests made, and their cost at the provider's reference list rate |
 | `resources.peak_rss_bytes` | the process's peak memory |
@@ -59,7 +60,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 5) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 6) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 [upgrade.md](../upgrade.md#run-report-and-counters). It accounts for this invocation (rows it fetched
@@ -69,7 +70,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 5 |
+| `report_version` | 6 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -93,9 +94,15 @@ from certified spill files, which it did not list: on a resume that succeeded, `
 + `resources.spill.durable.resume.replayed_rows` = `rows_emitted`. A run that stopped has also fetched rows
 ahead of the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
-the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `parts_retained` count parts.
+the committed dataset (`rows_retained` + `rows_emitted`; a resume that finds the dataset already committed, by
+an earlier attempt, takes it from the manifest and retains and emits nothing itself). `parts_written` and
+`parts_retained` count parts.
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
-`output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
+`output_bytes` is the dataset's part bytes. `committed_object_bytes` is the committed dataset's object bytes,
+the same sum over every row of it, as the manifest's `extensions.swath.committed_object_bytes` states it: retained parts
+and rows replayed from spill included, each row once whatever retries listed it. It is absent unless the dataset
+was committed, and absent when unknown: a schema without a size column, or a resumed run whose retained parts
+were recorded by a build that did not count them. 0 is a real total (no rows, or only empty objects). `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `encoder_allowance`, `encoders`, `gzip`). `remote` is a
 dataset written to a bucket's (`-o gs://...`, `-o s3://...` or `-o az://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
@@ -131,7 +138,9 @@ rows after filtering at the order stage's handoff (swath du, swath diag count: v
 and raw overfetch are excluded. `distinct_keys` excludes pending batches that never reached the sink, including on a failed run.
 
 Object-store failure diagnostics retain `auth` (unusable credentials), `access_denied` (a listing
-permission refusal), `throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
+permission refusal), `not_found` (the bucket or Azure container does not exist: S3 `NoSuchBucket`, GCS's 404
+`notFound` to a listing, Azure `ContainerNotFound`; never a missing object or prefix, which lists empty),
+`throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
 retry and engine requeue use its stored transient signal. Other service errors retain their HTTP status
 and provider code or reason in the message without a separate report label. Invalid pages remain protocol
 violations; caller cancellation keeps its stop disposition.

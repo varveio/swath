@@ -19,6 +19,9 @@ func (e *Error) Failure() objhttp.Failure {
 		switch e.Code {
 		case "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "TokenRefreshRequired":
 			f.Class = objhttp.ClassAuth
+		case "NoSuchBucket":
+			// The bucket only: NoSuchKey and a 404 without a code are not.
+			f.Class = objhttp.ClassNotFound
 		default:
 			if e.Status == 403 || e.Code == "AccessDenied" || e.Code == "AllAccessDisabled" {
 				f.Class = objhttp.ClassAccessDenied

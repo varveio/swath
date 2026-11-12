@@ -40,7 +40,11 @@ const (
 	ClassTimeout      Class = "timeout"
 	ClassParse        Class = "parse"
 	ClassUnsupported  Class = "unsupported"
-	ClassOther        Class = "other" // no provider label in the run report
+	// ClassNotFound: the bucket or container the request names does not
+	// exist (S3 NoSuchBucket, GCS's 404 to a listing, Azure
+	// ContainerNotFound). A missing object or prefix is never labelled so.
+	ClassNotFound Class = "not_found"
+	ClassOther    Class = "other" // no provider label in the run report
 )
 
 // Answer supplies a provider's signals and safe diagnostic metadata.

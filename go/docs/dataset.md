@@ -133,7 +133,8 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
       "scope": {"kind": "prefix", "prefix": "logs/"},
       "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
                    "exclusions": [], "filters": [], "snapshot": false,
-                   "listing_started_at": "…", "listing_finished_at": "…"}
+                   "listing_started_at": "…", "listing_finished_at": "…"},
+      "committed_object_bytes": 12345678
     }
   },
   "parts": [
@@ -162,6 +163,7 @@ module's. JSON readers must not depend on that order.
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
+| `committed_object_bytes` | The dataset's object bytes: the `size` column summed over every row (a local tree's files only, not its directories; a null size not counted), as the parts' writers counted them, so a resumed dataset states the same total as an uninterrupted one. Absent when unknown (a schema without a size column, or a resumed run whose earlier parts were written by a build that did not count them); `0` is a real total. Added under `version` 1 | the application; `go/reader` (`Metadata.CommittedObjectBytes`); the run report's `output.committed_object_bytes` |
 
 Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
 `coverage.complete` is never read as `false`, and a missing `filters` is never read as empty), and an application
