@@ -257,7 +257,7 @@ func (d *Dataset) locate(ctx context.Context, targets []target, which []int, st 
 	if err != nil {
 		return err
 	}
-	for k, rows := range plan.RowSpans() {
+	for k, rows := range plan.InputRowSpans() {
 		targets[which[k]].rows, targets[which[k]].known = rows, true
 	}
 	return nil
@@ -364,7 +364,7 @@ func (d *Dataset) budgetSums(ctx context.Context, targets []target, candidates [
 				if err != nil {
 					return nil, nil, err
 				}
-				to = p.RowSpans()[0].End
+				to = p.InputRowSpans()[0].End
 			}
 			trial = append(trial, seekparquet.RowSpan{Start: from, End: to})
 			// PlanRows may load the size-column page indexes of every row
@@ -409,11 +409,11 @@ func (d *Dataset) budgetSums(ctx context.Context, targets []target, candidates [
 }
 
 // sumRows reads the size values of plan's rows (ScanValues) and returns
-// the sum of each of its row spans (RowSpans): the sizes of the rows
+// the sum of each of its row spans (InputRowSpans): the sizes of the rows
 // between two consecutive span boundaries are added up once, and that sum
 // added to every span holding them.
 func (d *Dataset) sumRows(ctx context.Context, plan *seekparquet.Plan, st *ReadStats) ([]objectSum, error) {
-	spans := plan.RowSpans()
+	spans := plan.InputRowSpans()
 	type bounds struct{ start, end int64 }
 	of := make([]bounds, len(spans))
 	var cuts []int64

@@ -248,7 +248,7 @@ func TestScanPlanFailureStats(t *testing.T) {
 	if len(reads) != opened+1 {
 		t.Fatalf("planning made %d reads, want the one that failed", len(reads)-opened)
 	}
-	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len, UnreportedIOCalls: 2}); !errors.Is(err, failure) || st != want {
+	if want := (ReadStats{PartsOpened: 1, SourceReads: 1, SourceBytes: reads[opened].len}); !errors.Is(err, failure) || st != want {
 		t.Fatalf("plan failure: %v, stats %+v, want %+v", err, st, want)
 	}
 }
