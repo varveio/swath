@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -186,10 +188,16 @@ func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, r 
 }
 
 func wholeClient(t *testing.T, url string, guard bool) *storage.Client {
+	return wholeClientOver(t, url, guard, http.DefaultTransport)
+}
+
+// wholeClientOver is wholeClient over base.
+func wholeClientOver(t *testing.T, url string, guard bool, base http.RoundTripper) *storage.Client {
 	opts := []option.ClientOption{option.WithEndpoint(url + "/storage/v1/"), option.WithoutAuthentication()}
 	if guard {
-		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: ranged.Transport(http.DefaultTransport)}))
+		base = ranged.Transport(base)
 	}
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: base}))
 	client, err := storage.NewClient(context.Background(), opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -243,9 +251,10 @@ func TestReadObjectChunked(t *testing.T) {
 		t.Fatalf("ReadObject of a chunked answer over the limit = %v", err)
 	}
 
-	// A chunked body broken part way, or cancelled part way, is a failure,
-	// not the object: its end is not the object's end. (Without the
-	// transport the SDK requests the rest itself, as the package says.)
+	// A chunked body broken part way, or cancelled part way (once the client
+	// has read some of the body), is a failure, not the object: its end is
+	// not the object's end. (Without the transport the SDK requests the rest
+	// itself, as the package says.)
 	for _, c := range []struct {
 		name   string
 		cancel bool
@@ -257,12 +266,15 @@ func TestReadObjectChunked(t *testing.T) {
 			_, _ = w.Write(data[:1000])
 			w.(http.Flusher).Flush()
 			if c.cancel {
-				cancel()
-				<-r.Context().Done() // until the client has gone
+				<-r.Context().Done() // until the client, cancelled reading the body, has gone
 			}
 			panic(http.ErrAbortHandler)
 		})
-		b, _, err := gcs.New(wholeClient(t, url, true), bucket).(objfile.ObjectReader).ReadObject(ctx, "obj", 1<<20)
+		base := http.RoundTripper(http.DefaultTransport)
+		if c.cancel {
+			base = onBodyRead{base: base, read: cancel} // cancelled as the body streams
+		}
+		b, _, err := gcs.New(wholeClientOver(t, url, true, base), bucket).(objfile.ObjectReader).ReadObject(ctx, "obj", 1<<20)
 		if err == nil {
 			t.Fatalf("%s chunked answer: ReadObject = %d bytes, nil; want an error", c.name, len(b))
 		}
@@ -271,4 +283,32 @@ func TestReadObjectChunked(t *testing.T) {
 		}
 		cancel()
 	}
+}
+
+// onBodyRead calls read once a response body has given the client bytes.
+type onBodyRead struct {
+	base http.RoundTripper
+	read func()
+}
+
+func (o onBodyRead) RoundTrip(r *http.Request) (*http.Response, error) {
+	res, err := o.base.RoundTrip(r)
+	if err == nil {
+		res.Body = &readSignal{ReadCloser: res.Body, read: o.read}
+	}
+	return res, err
+}
+
+type readSignal struct {
+	io.ReadCloser
+	read func()
+	once sync.Once
+}
+
+func (b *readSignal) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.once.Do(b.read)
+	}
+	return n, err
 }

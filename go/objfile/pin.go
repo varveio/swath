@@ -209,7 +209,10 @@ func (p *Pinned) check(name, op string, got pin) error {
 }
 
 // pinnedObject is an Object of Pinned.OpenSized: its reads are checked
-// against the pin until one has pinned the Object and matched it.
+// against the pin until one has pinned the Object and matched it. Its
+// Identity is "" until then: the wrapped Object's, which a read may have
+// pinned to a version the check rejects, is only checked, never shown, so
+// that a batch keeps its first request alone until the check has passed.
 type pinnedObject struct {
 	Object
 	p        *Pinned
@@ -228,27 +231,40 @@ func (f *pinnedObject) confirm(err error) (bool, error) {
 	if f.checked.Load() {
 		return false, nil
 	}
-	if err != nil && f.recorded && errors.Is(err, fs.ErrNotExist) {
-		return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
-	}
-	var sm *SizeMismatchError
-	if err != nil && errors.As(err, &sm) {
+	if err != nil {
+		// The pin recorded now, by this handle's open or by another's
+		// read since, is what a missing object or another size is judged
+		// against.
 		f.p.mu.Lock()
 		want, recorded := f.p.pins[f.name]
 		f.p.mu.Unlock()
-		if recorded {
+		recorded = recorded || f.recorded
+		if recorded && errors.Is(err, fs.ErrNotExist) {
+			return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
+		}
+		var sm *SizeMismatchError
+		if recorded && errors.As(err, &sm) {
 			return true, &fs.PathError{Op: "read", Path: f.name, Err: fmt.Errorf("%w: %d bytes, pinned %d bytes at %q",
 				ErrObjectChanged, sm.Actual, want.Size, want.Identity)}
 		}
 	}
-	if f.Identity() == "" {
+	id := f.Object.Identity()
+	if id == "" {
 		return false, nil
 	}
-	if cerr := f.p.check(f.name, "read", pin{Size: f.Size(), Identity: f.Identity()}); cerr != nil {
+	if cerr := f.p.check(f.name, "read", pin{Size: f.Size(), Identity: id}); cerr != nil {
 		return true, cerr
 	}
 	f.checked.Store(true)
 	return false, nil
+}
+
+// Identity is the pinned version once a read has passed the check, else "".
+func (f *pinnedObject) Identity() string {
+	if !f.checked.Load() {
+		return ""
+	}
+	return f.Object.Identity()
 }
 
 func (f *pinnedObject) ReadAt(p []byte, off int64) (int, error) {

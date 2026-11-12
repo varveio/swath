@@ -120,7 +120,8 @@ first request.
 no metadata request first, refusing one larger than its limit (`ErrTooLarge`,
 without reading the body when the response states its length; one that does not
 is read up to a byte past the limit), and returns the identity it was served. A
-body cut short is read on as a pinned ranged read, never resumed by the SDK.
+body of known length cut short is read on as a pinned ranged read, never resumed
+by the SDK; a body of unknown length that fails, or is cancelled, fails the read.
 
 For more control:
 

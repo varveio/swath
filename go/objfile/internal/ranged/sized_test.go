@@ -505,3 +505,89 @@ func TestConcurrentFirstIdentities(t *testing.T) {
 		t.Fatalf("%d reads served, %d changed; want 4 of each", ok.Load(), changed.Load())
 	}
 }
+
+// TestOneConnectionInterleaving forces the interleaving that deadlocked on
+// one connection per host: read A's response states no total, so A needs a
+// metadata request; read B, also first, is started and has reached the
+// point where it would send its request (or has sent it) before A's
+// metadata request asks for the connection. Each request takes the one
+// connection, a response holding it until its body is closed. B must not
+// hold the connection while A proves the size.
+func TestOneConnectionInterleaving(t *testing.T) {
+	s := newStore(1000)
+	conn := make(chan struct{}, 1)                                           // the one connection
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a deadlock fails, not hangs
+	defer cancel()
+	take := func(ctx context.Context) error {
+		select {
+		case conn <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return errors.New("no connection: deadlock")
+		}
+	}
+	bReady := make(chan struct{})
+	var bOnce sync.Once
+	markB := func() { bOnce.Do(func() { close(bReady) }) }
+	get := func(rctx context.Context, off, n int64, pin Pin) (Response, error) {
+		if off == 500 {
+			markB() // B sends a request: it takes the connection
+		}
+		if err := take(rctx); err != nil {
+			return Response{}, err
+		}
+		res, err := s.get(rctx, off, n, pin)
+		if err != nil {
+			<-conn
+			return res, err
+		}
+		if off == 0 && pin.IsZero() {
+			res.Total = -1 // A's response: a metadata request must prove it
+		}
+		res.Body = &releasing{ReadCloser: res.Body, conn: conn}
+		return res, nil
+	}
+	aInStat := make(chan struct{})
+	stat := func(sctx context.Context) (int64, Pin, error) {
+		close(aInStat) // A proves the size; only then does B start
+		select {       // B has started, waiting for the pin or holding a response
+		case <-bReady:
+		case <-sctx.Done():
+			return 0, Pin{}, sctx.Err()
+		}
+		if err := take(sctx); err != nil {
+			return 0, Pin{}, err
+		}
+		defer func() { <-conn }()
+		return s.stat(sctx)
+	}
+	f := NewSized("obj", 1000, get, stat)
+	a := make(chan error, 1)
+	go func() { _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 0); a <- err }()
+	within(t, aInStat, "read A's metadata request")
+	bctx := &doneWatch{Context: ctx, asked: make(chan struct{})}
+	go func() {
+		<-bctx.asked // B waits for the pin without a request
+		markB()
+	}()
+	b := make(chan error, 1)
+	go func() { _, err := f.WithContext(bctx).ReadAt(make([]byte, 10), 500); b <- err }()
+	if err := within(t, a, "read A"); err != nil {
+		t.Fatalf("read A: %v", err)
+	}
+	if err := within(t, b, "read B"); err != nil {
+		t.Fatalf("read B: %v", err)
+	}
+}
+
+// releasing is a body that gives back its connection when closed.
+type releasing struct {
+	io.ReadCloser
+	conn chan struct{}
+	once sync.Once
+}
+
+func (r *releasing) Close() error {
+	r.once.Do(func() { <-r.conn })
+	return r.ReadCloser.Close()
+}

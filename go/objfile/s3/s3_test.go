@@ -332,8 +332,10 @@ func TestUnknownTotalOneConnection(t *testing.T) {
 		t.Fatalf("read on one connection: %v", err)
 	}
 
-	// Concurrent first reads of a fresh Object: none may hold the only
-	// connection while another proves the size.
+	// Concurrent first reads of a fresh Object, end to end through the SDK:
+	// none may hold the only connection while another proves the size. The
+	// scheduling here does not force the interleaving that deadlocked;
+	// ranged's TestOneConnectionInterleaving does.
 	for range 5 {
 		g, err := s3.New(client, bucket).OpenSized(ctx, "obj", int64(len(data)))
 		if err != nil {

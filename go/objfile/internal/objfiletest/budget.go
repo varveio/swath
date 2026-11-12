@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -296,18 +298,20 @@ func RunBudget(t *testing.T, b Budget) {
 		// (larger or smaller object), a range the store clips, a range past
 		// the object's end (416, then a metadata request for the size).
 		for _, c := range []struct {
-			name          string
-			expected, off int64
-			n, metadata   int
-		}{{"larger object", 999, 0, 10, 0}, {"smaller object", 1001, 0, 10, 0},
-			{"clipped", 1010, 995, 10, 0}, {"past the end", 1100, 1050, 10, 1}} {
+			name               string
+			expected, off, gap int64
+			n, metadata        int
+		}{{"larger object", 999, 0, 200, 10, 0}, {"smaller object", 1001, 0, 200, 10, 0},
+			{"clipped", 1 << 20, 995, 300000, 10, 0}, {"past the end", 1100, 1050, 0, 10, 1}} {
 			s, rec := start(t)
 			s.Put(t, "obj", Data(1000, 1))
 			f := sized(t, s.Opener, "obj", int(c.expected))
 			rs := []objfile.Range{{Off: c.off, Buf: make([]byte, c.n)}}
-			if c.metadata == 0 { // the first request alone shows it; the rest are never sent
-				for i := range 4 {
-					rs = append(rs, objfile.Range{Off: int64(i * 200), Buf: make([]byte, c.n)})
+			if c.gap > 0 {
+				// After the first range in object order, so the first
+				// request is the one that shows it; the rest are never sent.
+				for i := range 3 {
+					rs = append(rs, objfile.Range{Off: c.off + int64(i+1)*c.gap, Buf: make([]byte, c.n)})
 				}
 			}
 			err := objfile.ReadRanges(ctx, f, rs)
@@ -318,6 +322,9 @@ func RunBudget(t *testing.T, b Budget) {
 			var be *objfile.BatchError
 			if !errors.As(err, &be) || len(be.Unwrap()) != len(rs) {
 				t.Fatalf("%s: %v; want every range failed", c.name, err)
+			}
+			if r := rec.Requests(); len(r) == 0 || r[0].Kind != Ranged || !strings.HasPrefix(r[0].Range, fmt.Sprintf("bytes=%d-", c.off)) {
+				t.Fatalf("%s: requests %+v; want the range at %d sent first", c.name, r, c.off)
 			}
 			if rec.Count(Metadata) != c.metadata || rec.Count(Ranged) != 1 {
 				t.Fatalf("%s: %d metadata and %d ranged requests; want %d and 1", c.name, rec.Count(Metadata), rec.Count(Ranged), c.metadata)

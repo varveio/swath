@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/objfile"
 )
@@ -292,6 +293,9 @@ func TestSnapshotDeterministic(t *testing.T) {
 type sizedStore struct {
 	*memStore
 	reads atomic.Int32
+	// afterPin, if set, runs as each lazyFile read has pinned, before it
+	// returns.
+	afterPin func()
 }
 
 func (s *sizedStore) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
@@ -328,14 +332,19 @@ func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
 	o, ok := f.s.objects[f.name]
 	f.s.mu.Unlock()
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	switch {
 	case !ok && f.id == "":
+		f.mu.Unlock()
 		return 0, &fs.PathError{Op: "read", Path: f.name, Err: fs.ErrNotExist}
 	case !ok, f.id != "" && f.id != fmt.Sprint(o.gen), int64(len(o.data)) != f.size:
+		f.mu.Unlock()
 		return 0, objfile.ErrObjectChanged
 	}
 	f.id = fmt.Sprint(o.gen)
+	f.mu.Unlock()
+	if f.s.afterPin != nil {
+		f.s.afterPin()
+	}
 	return bytes.NewReader(o.data).ReadAt(p, off)
 }
 
@@ -496,5 +505,110 @@ func TestPinUncomparableError(t *testing.T) {
 	}
 	if err := objfile.ReadRanges(context.Background(), f, []objfile.Range{{Off: 0, Buf: make([]byte, 4)}}); !errors.As(err, &u) {
 		t.Fatalf("ReadRanges = %v", err)
+	}
+}
+
+// scatteredRanges are four ranges of a 1 MiB object, too far apart to join.
+func scatteredRanges() []objfile.Range {
+	var rs []objfile.Range
+	for i := range 4 {
+		rs = append(rs, objfile.Range{Off: int64(i) * 300 << 10, Buf: make([]byte, 10)})
+	}
+	return rs
+}
+
+// TestPinRejectedIdentityKeepsBarrier: a sized handle whose read pinned a
+// version the recorded pin rejects shows no identity, so a later batch, or
+// one started while a read has pinned but not yet passed the check, sends
+// its first request alone and stops at its failure.
+func TestPinRejectedIdentityKeepsBarrier(t *testing.T) {
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("x"), 1<<20)
+	t.Run("AfterRejectedRead", func(t *testing.T) {
+		s := &sizedStore{memStore: newMemStore()}
+		s.put("obj", data)
+		p := objfile.Pin(s, scope)
+		if _, err := p.Open(ctx, "obj"); err != nil { // records generation 1
+			t.Fatal(err)
+		}
+		s.put("obj", bytes.Clone(data)) // replaced, same size
+		f, err := p.OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
+			t.Fatalf("read of a replaced object = %v, want ErrObjectChanged", err)
+		}
+		if f.Identity() != "" {
+			t.Fatalf("a rejected handle shows Identity %q", f.Identity())
+		}
+		s.reads.Store(0)
+		if err := objfile.ReadRanges(ctx, f, scatteredRanges()); !errors.Is(err, objfile.ErrObjectChanged) || s.reads.Load() != 1 {
+			t.Fatalf("batch after a rejected read = %v after %d requests; want ErrObjectChanged after 1", err, s.reads.Load())
+		}
+	})
+	t.Run("OverlappingUnconfirmedRead", func(t *testing.T) {
+		s := &sizedStore{memStore: newMemStore()}
+		s.put("obj", data)
+		p := objfile.Pin(s, scope)
+		if _, err := p.Open(ctx, "obj"); err != nil {
+			t.Fatal(err)
+		}
+		s.put("obj", bytes.Clone(data))
+		f, err := p.OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pinned, release := make(chan struct{}), make(chan struct{})
+		var first atomic.Bool
+		s.afterPin = func() {
+			if first.CompareAndSwap(false, true) { // the scalar read: pinned, held before its check
+				close(pinned)
+				<-release
+			}
+		}
+		scalar := make(chan error, 1)
+		go func() { _, err := f.ReadAt(make([]byte, 10), 0); scalar <- err }()
+		select {
+		case <-pinned:
+		case <-time.After(20 * time.Second):
+			t.Fatal("the scalar read did not pin")
+		}
+		before := s.reads.Load()
+		err = objfile.ReadRanges(ctx, f, scatteredRanges())
+		if !errors.Is(err, objfile.ErrObjectChanged) || s.reads.Load()-before != 1 {
+			t.Fatalf("batch beside an unconfirmed read = %v after %d requests; want ErrObjectChanged after 1", err, s.reads.Load()-before)
+		}
+		close(release)
+		if err := <-scalar; !errors.Is(err, objfile.ErrObjectChanged) {
+			t.Fatalf("the scalar read = %v, want ErrObjectChanged", err)
+		}
+	})
+}
+
+// TestPinDeletedAfterAnotherRecorded: a sized handle opened before any pin
+// was recorded, whose name another handle then recorded, finds the object
+// deleted: that is a change of the recorded object, not only a missing one,
+// for scalar and batch reads.
+func TestPinDeletedAfterAnotherRecorded(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("obj", bytes.Repeat([]byte("y"), 1<<20))
+	p := objfile.Pin(s, scope)
+	f, err := p.OpenSized(ctx, "obj", 1<<20) // nothing recorded yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Open(ctx, "obj"); err != nil { // another handle records it
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	delete(s.objects, "obj")
+	s.mu.Unlock()
+	if _, err := f.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("scalar read of the deleted recorded object = %v; want ErrObjectChanged and fs.ErrNotExist", err)
+	}
+	if err := objfile.ReadRanges(ctx, f, scatteredRanges()); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("batch of the deleted recorded object = %v; want ErrObjectChanged", err)
 	}
 }
