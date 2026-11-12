@@ -359,12 +359,8 @@ func item(b *container.BlobItem) (Item, error) {
 	if p.ContentLength != nil {
 		it.Size = *p.ContentLength
 	}
-	if p.LastModified != nil {
-		it.LastModified = p.LastModified.UnixMicro()
-	}
-	if p.CreationTime != nil {
-		it.CreationTime = p.CreationTime.UnixMicro()
-	}
+	it.LastModified = micros(p.LastModified)
+	it.CreationTime = micros(p.CreationTime)
 	if p.ETag != nil {
 		it.ETag = string(*p.ETag)
 	}

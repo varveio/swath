@@ -86,6 +86,51 @@ func TestDeletedEquivalence(t *testing.T) {
 	}
 }
 
+// TestZeroSDKTimesAbsent: the SDK's Arrow decoder returns a non-nil zero
+// time for timestamp[s] -62135596800. Its XML decoder drops zero times,
+// including empty elements. Both must leave the timestamp fields absent,
+// while retaining ordinary times, including those before the Unix epoch.
+func TestZeroSDKTimesAbsent(t *testing.T) {
+	str := arrow.BinaryTypes.String
+	cols := []column{
+		{"Name", str, `["absent", "before", "dated", "zero"]`},
+		{"ResourceType", str, `["blob", "blob", "blob", "blob"]`},
+	}
+	var before, dated, empty strings.Builder
+	for _, name := range []string{"Last-Modified", "Creation-Time", "DeletedTime", "AccessTierChangeTime", "LastAccessTime", "ImmutabilityPolicyUntilDate"} {
+		cols = append(cols, column{name, &arrow.TimestampType{Unit: arrow.Second}, `[null, -1, 1767225600, -62135596800]`})
+		before.WriteString("<" + name + ">Wed, 31 Dec 1969 23:59:59 GMT</" + name + ">")
+		dated.WriteString("<" + name + ">Thu, 01 Jan 2026 00:00:00 GMT</" + name + ">")
+		empty.WriteString("<" + name + "/>")
+	}
+	mem := amem.NewCheckedAllocator(amem.NewGoAllocator())
+	defer mem.AssertSize(t, 0)
+	ab := columnsPage(t, mem, cols)
+	xb := []byte(listHead + `<Blob><Name>absent</Name><Properties/></Blob>` +
+		`<Blob><Name>before</Name><Properties>` + before.String() + `</Properties></Blob>` +
+		`<Blob><Name>dated</Name><Properties>` + dated.String() + `</Properties></Blob>` +
+		`<Blob><Name>zero</Name><Properties>` + empty.String() + `</Properties></Blob>` + listTail)
+	want := []Item{{Name: "absent"}, {Name: "before", LastModified: -1000000, CreationTime: -1000000,
+		Entry: Entry{DeletedTime: -1000000}, Props: Props{AccessTierChangeTime: -1000000, LastAccessTime: -1000000, ImmutabilityUntil: -1000000}},
+		{Name: "dated", LastModified: 1767225600000000, CreationTime: 1767225600000000,
+			Entry: Entry{DeletedTime: 1767225600000000}, Props: Props{AccessTierChangeTime: 1767225600000000, LastAccessTime: 1767225600000000, ImmutabilityUntil: 1767225600000000}},
+		{Name: "zero"}}
+	for _, f := range []struct {
+		name, ct string
+		body     []byte
+	}{{"Arrow", arrowType, ab}, {"XML", "application/xml", xb}} {
+		t.Run(f.name, func(t *testing.T) {
+			got, _, err := listWith(t, f.ct, f.body, Include{Deleted: true, Immutability: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Items, want) {
+				t.Fatalf("items %+v, want %+v", got.Items, want)
+			}
+		})
+	}
+}
+
 // TestIncludeRequest: each include is sent as the SDK spells it, and none
 // without one (the request every other listing sends).
 func TestIncludeRequest(t *testing.T) {

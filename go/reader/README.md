@@ -318,9 +318,12 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
   `Scan` checks them). `Count` is the number of the path's rows the scan read: the plan's count of its range on
   a dataset its reads find in key order, and a `key_order` refusal on one they do not; `Bytes` the
   sum of the sizes (nil when a selected filesystem entry has none); `NewestModified` the latest time, nil when the path selects nothing or any selected object
-  has no time; `Exact` the object whose key is the path (never for `""`), with its ETag and storage class read by
-  a plan of those objects alone. Each object is checked as `Stream` checks it (`KindRow`; a failing row is
-  decoded again as `Stream` decodes it, for the same error), and sizes whose sum overflows an int64 fail with
+  has no time. Every non-null instant in years 1 through 9999 counts, including `0001-01-01T00:00:00Z`;
+  that instant does not mean unknown. `Exact` is the object whose key is the path (never for `""`), with its
+  ETag and storage class read by a plan of those objects alone. Totals validates selected keys, sizes
+  (at least 0, nullable for filesystem entries) and modification times (years 1 through 9999); it never reads
+  a local entry's kind. Invalid values fail with `KindRow` (a failing row is decoded again as `Stream`
+  decodes it, for the same error), and sizes whose sum overflows an int64 fail with
   `KindRow` naming `size` and no row. The first error of any shard stops the others: with several failing rows,
   which one is reported is unspecified, as with `Scan`. Totals is exact or fails: the module's
   refusals and the Source's errors unchanged, the context's error, no totals. **Local totals**

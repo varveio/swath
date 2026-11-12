@@ -262,7 +262,8 @@ the columns a run asks for, null unless it did: `metadata` and `tags` STRING (a 
 values, keys sorted; `{}` for none; `metadata` null for a blob encrypted with a customer-provided key, whose
 metadata a listing cannot read), `immutability_policy_until` timestamp, `immutability_policy_mode` STRING
 (`Unlocked`, `Locked`) and `legal_hold` bool (false for none). Each is as Azure lists it, null where it lists
-nothing. The Python comparison reader supplies typed nulls for these added columns when an entire
+nothing. A timestamp the Azure SDK decodes as `0001-01-01T00:00:00Z` (its value for a missing time) is null too.
+The Python comparison reader supplies typed nulls for these added columns when an entire
 current-object dataset lacks them, and unions parts by name when only some parts lack them.
 
 **`swath/azblob-versions/v1`**: the `swath/azblob-objects/v1` columns in the same order, then `version_id` STRING

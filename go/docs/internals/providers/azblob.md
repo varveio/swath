@@ -35,7 +35,8 @@ service's fallback, not swath's. An XML page must have an `EnumerationResults` r
 element in it, and must hold `Blobs`; an Arrow page must read without error, with `NextMarker` and
 `NumberOfRecords` in its schema metadata, that many rows, and each column behind what swath writes in a type the SDK reads; other columns, which swath
 never reads, may have any type ([clients.md](../clients.md#azure-decoding-and-requests)).
-Both convert to the same page (`TestArrowEquivalence`, recorded live). Besides the first eight columns'
+Both convert to the same page (`TestArrowEquivalence`, recorded live). A missing or zero SDK timestamp
+stays null in the dataset (`TestZeroSDKTimesAbsent`). Besides the first eight columns'
 fields an item carries the entry fields of a grouped listing (below) and the properties every listing returns
 (`client.Props`: access tier inferred and change time, archive status, rehydrate priority, last access time,
 content encoding, server encryption, encryption scope, customer-provided key hash, lease state, tag count),

@@ -168,7 +168,7 @@ func intern(s string) string {
 }
 
 func micros(t *time.Time) int64 {
-	if t == nil {
+	if t == nil || t.IsZero() {
 		return 0
 	}
 	return t.UnixMicro()

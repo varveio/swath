@@ -38,7 +38,9 @@ type PathTotals struct {
 	Bytes *int64
 	// NewestModified is the latest modification time among the selected
 	// objects. It is nil when Count is zero or any selected object has no
-	// modification time.
+	// modification time. Every non-null instant in years 1 through 9999
+	// counts, including 0001-01-01T00:00:00Z; that instant does not mean
+	// unknown.
 	NewestModified *time.Time
 	// Exact is the object whose key equals the path, when one exists. It
 	// is also counted in Count and Bytes. It is always nil for "". For a
@@ -64,9 +66,9 @@ type PathTotals struct {
 // scan read: on a dataset its reads find in key order, the plan's count
 // of its range, and the scan refuses one they find out of order. An exact
 // object's ETag and storage class are read by a plan of those objects
-// alone. Every selected object is checked as Stream checks it (a size, at
-// least 0; a modification time in the years 1 to 9999), and a filesystem
-// entry as StreamLocal does (its size may be null), failing with a
+// alone. Totals validates selected keys, sizes (at least 0, nullable for
+// filesystem entries) and modification times (years 1 through 9999). It
+// never reads a local entry's kind. Invalid values fail with a
 // SemanticError of KindRow; sizes whose sum does not fit an int64 fail
 // with one naming size and no row. A row that fails is decoded again as
 // Stream decodes it, so its error is the one Stream would give it. The
