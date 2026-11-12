@@ -390,3 +390,48 @@ func TestListReadAhead(t *testing.T) {
 		t.Fatalf("a negative read-ahead read %d times", len(reads))
 	}
 }
+
+// TestListOmitFields: a listing that omits fields returns the same
+// entries with those fields nil, the others decoded, and reads none of
+// their columns; unknown bits, and any bit over filesystem entries, are
+// invalid requests.
+func TestListOmitFields(t *testing.T) {
+	dir := listDir(t)
+	full, err := openDir(t, dir).List(context.Background(), ListRequest{Delimiter: '/', Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lean, all ReadStats
+	d := openDir(t, dir)
+	got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 100, OmitFields: FieldETag | FieldStorageClass, Stats: &lean})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(full) {
+		t.Fatalf("%d entries, want %d", len(got), len(full))
+	}
+	for i, e := range got {
+		w := full[i]
+		if describe(e) != describe(w) {
+			t.Fatalf("entry %d: %s, want %s", i, describe(e), describe(w))
+		}
+		if o := e.Object; o != nil {
+			if o.ETag != nil || o.StorageClass != nil || *o.Size != *w.Object.Size || !o.LastModified.Equal(*w.Object.LastModified) {
+				t.Fatalf("entry %d: %+v, want %+v without ETag and storage class", i, o, w.Object)
+			}
+		}
+	}
+	if _, err := openDir(t, dir).List(context.Background(), ListRequest{Delimiter: '/', Limit: 100, Stats: &all}); err != nil {
+		t.Fatal(err)
+	}
+	if lean.ValuePagesDecoded >= all.ValuePagesDecoded || lean.SourceBytes >= all.SourceBytes {
+		t.Fatalf("omitting two fields decoded %d value pages of %d bytes, every field %d of %d",
+			lean.ValuePagesDecoded, lean.SourceBytes, all.ValuePagesDecoded, all.SourceBytes)
+	}
+	if _, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 1, OmitFields: 1 << 7}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unknown field: %v", err)
+	}
+	if _, err := openDir(t, localDir(t, false)).List(context.Background(), ListRequest{Delimiter: '/', Limit: 1, OmitFields: FieldETag}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("a field omitted from filesystem entries: %v", err)
+	}
+}

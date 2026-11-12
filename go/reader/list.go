@@ -6,6 +6,7 @@ package reader
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
@@ -36,6 +37,13 @@ type ListRequest struct {
 	// way. Zero, the default, reads no page ahead; a negative value is
 	// ErrInvalidRequest.
 	ReadAhead int
+	// OmitFields names the optional fields of each Object the listing
+	// leaves out, nil in every Object it returns: their columns are neither
+	// read nor checked. Zero lists every field. A listing that shows keys,
+	// sizes and modification times omits FieldETag | FieldStorageClass.
+	// Unknown bits are ErrInvalidRequest, as is any bit for a
+	// swath/local-entries/v1 dataset, whose entries carry every column.
+	OmitFields ObjectFields
 }
 
 // Entry is one listing entry: an object (Object set, CommonPrefix nil), a
@@ -100,8 +108,16 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	if columns == nil {
 		return nil, notCurrent(d.spec.ID)
 	}
-	if local {
+	fields := AllObjectFields &^ req.OmitFields
+	switch {
+	case req.OmitFields&^AllObjectFields != 0:
+		return nil, fmt.Errorf("%w: unknown object fields %#x", ErrInvalidRequest, req.OmitFields&^AllObjectFields)
+	case local && req.OmitFields != 0:
+		return nil, fmt.Errorf("%w: a listing of %s omits no field", ErrInvalidRequest, LocalV1)
+	case local:
 		columns = d.spec.ColumnNames()
+	default:
+		columns = fieldColumns(columns, fields)
 	}
 	got, err := d.sp.List(ctx, seekparquet.ListQuery{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
 		Limit: req.Limit, Columns: columns, ReadAhead: req.ReadAhead}, req.Stats)
@@ -126,7 +142,7 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 			out[i].Local = &e
 			continue
 		}
-		o, err := decodeObject(d.spec.ID, *row)
+		o, err := decodeObjectFields(d.spec.ID, *row, fields)
 		if err != nil {
 			return nil, err
 		}
