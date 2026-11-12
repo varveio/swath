@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -187,10 +188,30 @@ func TestOneTerminalAccount(t *testing.T) {
 		}
 	})
 	t.Run("failed after parts", func(t *testing.T) {
+		// The failure must come after a part is journaled and published,
+		// and nothing else orders the two: the 12 pages come from a local
+		// server in a few milliseconds while each part's publication takes
+		// several fsyncs (part, claim directory, journal, data directory),
+		// F_FULLFSYNC on macOS, slow enough there that the 403 arrived
+		// with no part published. The 13th request waits for one.
+		published := make(chan struct{})
+		var once sync.Once
+		restore := faults.Set(func(p string) error {
+			if p == "renamed" {
+				once.Do(func() { close(published) })
+			}
+			return nil
+		})
+		defer restore()
 		h := gcstest.Handler(gcstest.Keys(20000), 0)
 		var n atomic.Int64
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if n.Add(1) > 12 {
+				select { // without a part (a regression) the check below fails, not the wait
+				case <-published:
+				case <-r.Context().Done():
+				case <-time.After(time.Minute):
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(403)
 				fmt.Fprint(w, `{"error":{"code":403,"message":"denied","errors":[{"reason":"forbidden"}]}}`)
