@@ -4,9 +4,11 @@ swath show prints a committed dataset's summary, or an interrupted run's recorde
 
 ## Synopsis
 
+<!-- synopsis:begin -->
 ```text
-swath show DIR [--journal]
+swath show DIR [OPTIONS]
 ```
+<!-- synopsis:end -->
 
 ## Description
 
@@ -47,9 +49,11 @@ The command is recorded in its canonical spelling, each option `--name=value`, t
 
 ## Options
 
+<!-- flags:begin -->
 ```text
       --journal  dump the journal's header and records as JSON lines
 ```
+<!-- flags:end -->
 
 `swath show` also takes `-v`, `-q`, `--color` and `--log-format` ([swath(1)](swath.md#options)).
 

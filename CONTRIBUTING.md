@@ -22,7 +22,7 @@ The unreleased Go implementation lives in `go/` and uses the toolchain declared 
 for the full suite, as described in [Go testing](go/docs/internals/testing.md). For a provider, follow the
 [provider checklist](go/docs/internals/providers.md#adding-a-provider), including reader, verifier
 and conformance integration outside its directory. Regenerate CLI documentation with
-`cd go && UPDATE=1 go test ./cmd/swath -run '^TestCLIDocFlags$'`; do not edit its generated flag block.
+`cd go && UPDATE=1 go test ./cmd/swath -run '^TestCLIDoc'`; do not edit the generated synopsis and option blocks.
 
 The current Java distribution is a multi-module Gradle build and requires **JDK 25**.
 The wrapper supplies Gradle, but JDK 25 must be available to it.
