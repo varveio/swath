@@ -11,7 +11,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
-	"slices"
 	"testing"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -102,8 +101,8 @@ func TestAggregatesMatchOracle(t *testing.T) {
 // TestAggregatesCountsAddNoReads (varve TestListCountsAddNoReads): counts
 // decode no value page, and open no part between a prefix's ends; the
 // count of every key reads nothing once CheckSchema has checked the parts.
-// The old test's identical-reads assertion, counts on and off in a
-// listing, needs the listing's row positions from SeekParquet.
+// TestPageCountsAddNoReads separately holds counts on and off to identical
+// listing traces using SeekParquet's captured row positions.
 func TestAggregatesCountsAddNoReads(t *testing.T) {
 	keys := randomKeys(rand.New(rand.NewPCG(5, 6)), 420)
 	dir := writeParts(t, s3Spec(), 7, 40, cut(keyRows(keys), 0, 97, 210, 211, 330, len(keys))...)
@@ -450,7 +449,7 @@ func TestAggregatesOneByteSumBudgetOpensNothingNew(t *testing.T) {
 			t.Fatalf("%s: %s, want count %d and no bytes", prefixes[i], describeAggregate(a), want)
 		}
 	}
-	if !slices.Equal(opens, countedOpens) || !slices.Equal(budgeted, counted) {
+	if !sameMultiset(opens, countedOpens) || !sameMultiset(budgeted, counted) {
 		t.Errorf("a one-byte budget opened %q and made %d reads; counts alone opened %q and made %d", opens, len(budgeted), countedOpens, len(counted))
 	}
 	if n, _ := columnBytes(t, dir, summed, "size"); n == 0 {

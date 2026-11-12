@@ -12,7 +12,8 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// ObjectFields selects optional fields for ScanBatches. Key and size are
+// ObjectFields selects optional fields for ScanBatches and, as
+// ListRequest.OmitFields, the optional fields a listing leaves out. Key and size are
 // always read and checked. Zero selects only key and size.
 type ObjectFields uint8
 

@@ -170,12 +170,36 @@ func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
 	if columns == nil {
 		return Object{}, semantic(KindSchema, "", nil, "schema id %q holds no current objects", id)
 	}
+	return decodeFields(id, row, columns, AllObjectFields)
+}
+
+// decodeFields decodes the fields of a current object of id, whose
+// columns are columns (objectColumns): its key and size, and the
+// optional fields of fields; a field left out stays nil.
+func decodeFields(id SchemaID, row seekparquet.Row, columns []string, fields ObjectFields) (Object, error) {
 	d := decoder{spec: schemas[id], row: &row}
-	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified")}
-	if len(columns) > 2 {
-		o.ETag, o.StorageClass = d.string("etag"), d.string(columns[3])
+	o := Object{Position: d.position(), Size: d.int64("size")}
+	if fields&FieldLastModified != 0 {
+		o.LastModified = d.time("last_modified")
+	}
+	if len(columns) > 2 && fields&FieldETag != 0 {
+		o.ETag = d.string("etag")
+	}
+	if len(columns) > 2 && fields&FieldStorageClass != 0 {
+		o.StorageClass = d.string(columns[3])
 	}
 	return o, d.err
+}
+
+// fieldColumns is the columns (objectColumns) of the size and of fields.
+func fieldColumns(columns []string, fields ObjectFields) []string {
+	out := columns[:1:1]
+	for i, field := range []ObjectFields{FieldLastModified, FieldETag, FieldStorageClass} {
+		if fields&field != 0 && i+1 < len(columns) {
+			out = append(out, columns[i+1])
+		}
+	}
+	return out
 }
 
 // DecodeAzblobObject decodes a swath/azblob-objects/v1 row.

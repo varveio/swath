@@ -145,7 +145,8 @@ A browsing reader pages with each prefix's totals:
 
 ```go
 page, err := d.Page(ctx, reader.PageRequest{
-	ListRequest: reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000},
+	ListRequest: reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000,
+		OmitFields: reader.FieldETag | reader.FieldStorageClass},
 	Aggregates:  reader.AggregateOptions{Counts: true, Sums: reader.SumsWithinBudget},
 })
 // the next page: PageRequest{..., Cursor: page.Next}, while page.Next != nil
@@ -334,14 +335,18 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
   ends and no value page, and opening no part between them: it is nil when a part holding the rows has not
   been checked by an earlier read (`CheckSchema`, `Stream`, a sum), since its row count is then the manifest's
   alone. Only a prefix with a known count is summed (a count of 0 sums to 0 without a read); a sum plans the
-  rows projecting `size` and scans them once. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
+  rows projecting `size` and scans their values once (`Plan.ScanValues`), without reading keys to route
+  the sizes. A sum's row error names the dataset ordinal rather than a key, which it does not read. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
   them in ascending key order and sums one when the compressed size-page bytes it adds to those already
   selected (`Plan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
   shared with a prefix already selected counted once) fit what remains of `SumBudgetBytes` (0:
   `DefaultSumBudget`); a prefix inside one already selected adds nothing. Footers, key pages and page indexes
   read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
   smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
-  cannot be proven, is not summed under a budget.
+  cannot be proven, is not summed under a budget. Candidates are planned lazily, in listing order and
+  part by part; once a candidate's cost cannot fit, its later parts' size pages are not discovered. Within one
+  part, the size-column page indexes of every row group the candidate covers may be loaded before the
+  candidate is rejected; no later part is opened.
   `Bytes` is nil for a prefix not summed, for a sum over a filesystem entry without a size, and for a sum that
   overflows an int64; a filesystem's counts and sums are the local totals of `Totals`. `Count` is reported only
   with `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
@@ -349,8 +354,13 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
   context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
 - **`Page(req)`.** `List` with one entry beyond `req.Limit`, trimmed to `Limit`; `Next` is the last returned
   entry's `Cursor()` only when that extra entry existed, so the last page has `Next` nil and is never followed by
-  an empty one. Then one `Aggregates` call with `req.Aggregates` for exactly the common prefixes returned (a prefix
-  carrying its exact-key object included; an entry beyond the limit is never aggregated): each prefix entry's
+  an empty one. The listing's row spans supply counts through metadata-only `PlanRows`, with identical
+  opens and reads whether counts are on or off. Unknown boundaries and a cursor made up inside a prefix
+  leave that prefix's totals nil; Page never seeks keys to complete a count. Budgeted sums price each candidate
+  with `ProjectedBytes` of the plan of the candidate and the prefixes already selected, charging each shared size page and
+  dictionary once, then use `SelectRows` and `ScanValues` to read only the accepted union.
+  Only returned prefixes are aggregated (a prefix carrying its exact-key object included; an entry beyond
+  the limit is never aggregated): each prefix entry's
   `Aggregate` is its `PrefixAggregate`, whose fields are nil as `Aggregates` leaves them (not requested, not
   known exactly, not within the sum budget), and an ordinary object's `Aggregate` is nil. The budget is
   `AggregateOptions`', not a bound on the page's reads. A `Limit` that is not positive or is `math.MaxInt`, and

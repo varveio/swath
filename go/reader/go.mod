@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	github.com/parquet-go/parquet-go v0.32.0
-	github.com/varveio/seekparquet/go v0.1.1-0.20261112100119-21e5b42d46f9
+	github.com/varveio/seekparquet/go v0.1.1-0.20261112123151-9a0e8a2ee5ae
 )
 
 require (

@@ -48,7 +48,9 @@
 //     exact key, an S3-style folder object or a filesystem's directory row,
 //     from the same request.
 //   - Page lists a page with one entry of lookahead for its Next cursor and
-//     the totals (Aggregates) of the prefixes it returns.
+//     the totals of the prefixes it returns. Counts reuse the listing's
+//     row positions without extra reads; unknown boundaries stay unknown.
+//     Budgeted sums discover size pages lazily and scan values alone.
 //
 // None of them checks the parts' digests or the rows no request decodes:
 // part digests are checked when a dataset is copied or moved, not when it is

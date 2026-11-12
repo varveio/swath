@@ -178,7 +178,17 @@ func (d *Dataset) currentColumns() ([]string, error) {
 
 // decodeObject decodes and checks a current object, its Key the row's.
 func decodeObject(id SchemaID, r seekparquet.Row) (Object, error) {
-	o, err := DecodeObject(id, r)
+	return decodeObjectFields(id, r, AllObjectFields)
+}
+
+// decodeObjectFields is decodeObject of the fields of fields alone, the
+// others left nil (decodeFields).
+func decodeObjectFields(id SchemaID, r seekparquet.Row, fields ObjectFields) (Object, error) {
+	columns := objectColumns(id)
+	if columns == nil {
+		return DecodeObject(id, r)
+	}
+	o, err := decodeFields(id, r, columns, fields)
 	if err == nil {
 		err = checkObject(&o, false)
 	}
