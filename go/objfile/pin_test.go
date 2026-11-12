@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -312,7 +313,10 @@ type sizedStore struct {
 	afterPin func()
 }
 
-func (s *sizedStore) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+func (s *sizedStore) OpenSized(ctx context.Context, name string, size int64) (objfile.Object, error) {
+	if size == 0 {
+		return objfile.OpenEmpty(ctx, name, s.Open) // as a store's
+	}
 	return &lazyFile{s: s, name: name, size: size}, nil
 }
 
@@ -342,6 +346,12 @@ type lazyFile struct {
 }
 
 func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
+	if off >= f.size {
+		return 0, io.EOF // no request, as a store's: nothing pinned
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
 	f.s.reads.Add(1)
 	f.s.mu.Lock()
 	o, ok := f.s.objects[f.name]
@@ -679,5 +689,199 @@ func TestPinRecordedDuringZeroSizedOpen(t *testing.T) {
 	var sm *objfile.SizeMismatchError
 	if !errors.Is(err, objfile.ErrObjectChanged) || errors.As(err, &sm) {
 		t.Fatalf("OpenSized(0) of an object recorded empty and replaced meanwhile = %v; want ErrObjectChanged, not a SizeMismatchError", err)
+	}
+}
+
+// sizeStack is a Pinned over KnownSizes (inner) or KnownSizes over a
+// Pinned (outer), over s, with sizes as the map.
+func sizeStacks(s *sizedStore, sizes map[string]int64) map[string]func() (objfile.Opener, *objfile.Pinned) {
+	return map[string]func() (objfile.Opener, *objfile.Pinned){
+		"Pin(KnownSizes)": func() (objfile.Opener, *objfile.Pinned) {
+			p := objfile.Pin(objfile.KnownSizes(s, sizes), scope)
+			return p, p
+		},
+		"KnownSizes(Pin)": func() (objfile.Opener, *objfile.Pinned) {
+			p := objfile.Pin(s, scope)
+			return objfile.KnownSizes(p, sizes), p
+		},
+	}
+}
+
+// TestKnownSizesZero: a name KnownSizes maps to 0 is proved by the store's
+// metadata request and compared with 0 before it is returned or recorded:
+// an empty object opens, a non-empty one is a SizeMismatchError and a
+// missing one fs.ErrNotExist, and neither failure records a pin.
+func TestKnownSizesZero(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		data []byte // nil: missing
+		want func(error) bool
+	}{
+		{"empty", []byte{}, func(err error) bool { return err == nil }},
+		{"non-empty", []byte("full"), func(err error) bool {
+			var sm *objfile.SizeMismatchError
+			return errors.As(err, &sm) && sm.Expected == 0 && sm.Actual == 4 && !errors.Is(err, objfile.ErrObjectChanged)
+		}},
+		{"missing", nil, func(err error) bool {
+			return errors.Is(err, fs.ErrNotExist) && !errors.Is(err, objfile.ErrObjectChanged)
+		}},
+	} {
+		for stack := range sizeStacks(nil, nil) {
+			t.Run(c.name+"/"+stack, func(t *testing.T) {
+				s := &sizedStore{memStore: newMemStore()}
+				if c.data != nil {
+					s.put("obj", c.data)
+				}
+				o, p := sizeStacks(s, map[string]int64{"obj": 0})[stack]()
+				f, err := o.Open(ctx, "obj")
+				if !c.want(err) {
+					t.Fatalf("Open of a name mapped to 0: %v", err)
+				}
+				snap, _ := p.Snapshot()
+				if recorded := strings.Contains(string(snap), `"obj"`); recorded != (err == nil) {
+					t.Fatalf("after Open (%v): snapshot %s", err, snap)
+				}
+				if err == nil && (f.Size() != 0 || f.Identity() == "") {
+					t.Fatalf("Open of an empty object: Size %d, Identity %q", f.Size(), f.Identity())
+				}
+				if s.opens.Load() != 1 {
+					t.Fatalf("%d metadata requests, want 1", s.opens.Load())
+				}
+			})
+		}
+	}
+}
+
+// TestExplicitSizeOverMap: an explicit OpenSized opens at the size it is
+// given, whatever KnownSizes maps the name to (the map is the default for
+// Open), in both stacking orders, in both directions, zero on either side,
+// and against a restored pin of an empty object.
+func TestExplicitSizeOverMap(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name          string
+		data          []byte
+		mapped, given int64
+	}{
+		{"empty, map 4, given 0", []byte{}, 4, 0},
+		{"4 bytes, map 0, given 4", []byte("four"), 0, 4},
+		{"4 bytes, map 5, given 4", []byte("four"), 5, 4},
+		{"5 bytes, map 4, given 5", []byte("fives"), 4, 5},
+	} {
+		for stack := range sizeStacks(nil, nil) {
+			t.Run(c.name+"/"+stack, func(t *testing.T) {
+				s := &sizedStore{memStore: newMemStore()}
+				s.put("obj", c.data)
+				o, _ := sizeStacks(s, map[string]int64{"obj": c.mapped})[stack]()
+				f, err := o.OpenSized(ctx, "obj", c.given)
+				if err == nil && c.given > 0 {
+					_, err = f.ReadAt(make([]byte, c.given), 0)
+				}
+				if err != nil && err != io.EOF {
+					t.Fatalf("OpenSized at the object's size %d, mapped %d: %v", c.given, c.mapped, err)
+				}
+				// Open takes the map's size: wrong here.
+				g, err := o.Open(ctx, "obj")
+				if err == nil {
+					_, err = g.ReadAt(make([]byte, max(c.mapped, 1)), 0)
+				}
+				if !errors.Is(err, objfile.ErrObjectChanged) {
+					var sm *objfile.SizeMismatchError
+					if !errors.As(err, &sm) {
+						t.Fatalf("Open at the mapped size %d of a %d-byte object: %v; want a mismatch or, with the pin recorded, a change", c.mapped, len(c.data), err)
+					}
+				}
+			})
+		}
+	}
+	// A restored pin of an empty object, mapped 4: OpenSized(0) proves it.
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("obj", []byte{})
+	snap := []byte(`{"version":1,"scope":"` + scope + `","objects":{"obj":{"size":0,"identity":"1"}}}`)
+	p, err := objfile.Restore(objfile.KnownSizes(s, map[string]int64{"obj": 4}), scope, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.OpenSized(ctx, "obj", 0); err != nil {
+		t.Fatalf("OpenSized(0) of an unchanged empty object under a restored pin, mapped 4: %v", err)
+	}
+}
+
+// TestLimitZeroSizedOpen: an OpenSized(..., 0), which makes a metadata
+// request, holds a slot of a Limit around it: with a limit of 1, a second
+// waits while the first's request is in flight.
+func TestLimitZeroSizedOpen(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("a", []byte{})
+	s.put("b", []byte{})
+	s.gate, s.entered = make(chan struct{}), make(chan struct{}, 2)
+	o := objfile.Limit(objfile.Pin(s, scope), 1)
+	done := make(chan error, 2)
+	for _, name := range []string{"a", "b"} {
+		go func() { _, err := o.OpenSized(ctx, name, 0); done <- err }()
+	}
+	select {
+	case <-s.entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no metadata request was made")
+	}
+	for range 10000 {
+		runtime.Gosched()
+	}
+	if n := s.opens.Load(); n != 1 {
+		t.Fatalf("%d metadata requests in flight under a limit of 1", n)
+	}
+	close(s.gate)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestSnapshotLazyOpens: a sized open (or a KnownSizes Open) is recorded
+// by its first read that reaches the store, not by its open: a snapshot
+// taken before it (only Size asked, an empty or past-the-end read, an empty
+// batch) lacks the name, and Restore of it refuses the name. An Open of a
+// store whose Open asks for metadata is recorded at once.
+func TestSnapshotLazyOpens(t *testing.T) {
+	ctx := context.Background()
+	s := &sizedStore{memStore: newMemStore()}
+	s.put("obj", []byte("data"))
+	p := objfile.Pin(objfile.KnownSizes(s, map[string]int64{"obj": 4}), scope)
+	f, err := p.Open(ctx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Size()
+	_, _ = f.ReadAt(nil, 0)
+	_, _ = f.ReadAt(make([]byte, 4), 4)
+	_ = objfile.ReadRanges(ctx, f, nil)
+	snap, _ := p.Snapshot()
+	if strings.Contains(string(snap), `"obj"`) {
+		t.Fatalf("a lazy open no read confirmed is in the snapshot: %s", snap)
+	}
+	r, err := objfile.Restore(s, scope, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Open(ctx, "obj"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Restore of that snapshot opens the name: %v", err)
+	}
+	if _, err := f.ReadAt(make([]byte, 4), 0); err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ := p.Snapshot(); !strings.Contains(string(snap), `"obj"`) {
+		t.Fatalf("a confirmed lazy open is not in the snapshot: %s", snap)
+	}
+	// Open over a store whose Open is a metadata request: recorded at open.
+	q := objfile.Pin(objfile.Limit(s, 2), scope)
+	if _, err := q.Open(ctx, "obj"); err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ := q.Snapshot(); !strings.Contains(string(snap), `"obj"`) {
+		t.Fatalf("an Open is not in the snapshot before any read: %s", snap)
 	}
 }

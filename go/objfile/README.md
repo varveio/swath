@@ -129,6 +129,10 @@ For more control:
   opener with `Root` for path confinement and `Limit` for bounded requests. `Limit`
   holds a slot per request: each `Open`, `ReadObject` and `ReadAt`, and each request
   of a batch, so a batch never has more requests in flight than the limit.
+- An expected size of 0 follows one rule (`OpenEmpty`): no range read proves an
+  empty object, so the store's metadata request does, through every wrapper (a
+  `Limit` slot held, `Pin` judging it), and its size is compared with 0 before an
+  Object is returned or a pin recorded; a wrapper's size hint is never evidence.
 - Use `OpenSized` when a manifest already gives the size. It makes no request; the
   first read pins the version, once its response states a total size equal to the
   one given (a response that states none is let go, one metadata request proves the
@@ -150,8 +154,11 @@ For more control:
   `Pinned.ReadObject` with the read; both re-prove the current object. Against a
   recorded pin, another size is `ErrObjectChanged`. A restored snapshot
   permits only recorded names and rechecks the current objects, rather than
-  reopening historical versions. It records only objects actually opened; the
-  application must establish that every required object is covered. Use the
+  reopening historical versions. It records an object when its pin is proved: an
+  `Open` of a store at the open, a sized open (`OpenSized`, a `KnownSizes` `Open`) at
+  its first read that reaches the store, so a snapshot taken before that read
+  lacks the name and its `Restore` refuses it. The application must establish
+  that every required object is covered. Use the
   store's `Scope()` to bind snapshots to its namespace.
 
 ## Upload an object

@@ -253,6 +253,23 @@ func runSized(t *testing.T, newStore NewStore) {
 			t.Fatalf("Identity = %q after the first read, Open pinned %q", f.Identity(), opened.Identity())
 		}
 	})
+	t.Run("SizedZero", func(t *testing.T) {
+		// No read proves an empty object: OpenSized(..., 0) asks for
+		// metadata, and compares.
+		s := plain(t, newStore)
+		s.Put(t, "empty", nil)
+		s.Put(t, "full", Data(10, 1))
+		if f, err := s.Opener.OpenSized(ctx, "empty", 0); err != nil || f.Identity() == "" {
+			t.Fatalf("OpenSized(0) of an empty object: %v", err)
+		}
+		var sm *objfile.SizeMismatchError
+		if _, err := s.Opener.OpenSized(ctx, "full", 0); !errors.As(err, &sm) || sm.Actual != 10 {
+			t.Fatalf("OpenSized(0) of a 10-byte object: %v, want a SizeMismatchError of 10", err)
+		}
+		if _, err := s.Opener.OpenSized(ctx, "nope", 0); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("OpenSized(0) of a missing object: %v, want fs.ErrNotExist", err)
+		}
+	})
 	t.Run("SizedNegative", func(t *testing.T) {
 		s := plain(t, newStore)
 		if _, err := s.Opener.OpenSized(ctx, "obj", -1); !errors.Is(err, fs.ErrInvalid) {

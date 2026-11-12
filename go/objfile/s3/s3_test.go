@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -390,5 +391,22 @@ func TestPreconditionFailed(t *testing.T) {
 	}
 	if _, err := opened.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
 		t.Fatalf("412 of a pinned read = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestPinnedOpenRecordsAtOpen: varve's stack, Pin over Limit over a store
+// (no KnownSizes, no OpenSized), records an object at its Open, before any
+// read, as it did before sized opens existed.
+func TestPinnedOpenRecordsAtOpen(t *testing.T) {
+	f := newFake(t, func(h http.Handler) http.Handler { return h })
+	f.put(t, "ds/manifest.json", objfiletest.Data(100, 1))
+	p := objfile.Pin(objfile.Limit(objfile.Root(s3.New(f.client, bucket), "ds"), 4), "s3://bkt/ds/")
+	o, err := p.Open(context.Background(), "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := p.Snapshot()
+	if err != nil || !strings.Contains(string(snap), `"manifest.json":{"size":100,"identity":`) || o.Identity() == "" {
+		t.Fatalf("snapshot after Open, before any read: %s, %v", snap, err)
 	}
 }

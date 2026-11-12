@@ -52,8 +52,9 @@ func Pin(o Opener, scope string) *Pinned {
 }
 
 // Restore returns the Pinned that snapshot records, sealed: it opens only the
-// names the snapshot holds, and any other name fails with an error wrapping
-// fs.ErrNotExist without a request. A snapshot of another scope, of another
+// names the snapshot holds (the pins recorded when it was taken, see
+// Snapshot: a sized open no read had confirmed is not among them), and any
+// other name fails with an error wrapping fs.ErrNotExist without a request. A snapshot of another scope, of another
 // version or malformed fails with ErrInvalidSnapshot.
 func Restore(o Opener, scope string, snapshot []byte) (*Pinned, error) {
 	pins, err := decodeSnapshot(snapshot, scope)
@@ -82,12 +83,15 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 	}
 	f, err := p.o.Open(ctx, name)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
-			err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
-		}
-		return nil, err
+		return nil, p.firstEvidence(name, "open", err)
 	}
-	if f.Identity() == "" && f.Size() > 0 {
+	if f.Identity() == "" {
+		if f.Size() == 0 {
+			// No read of it would reach the store: proved as OpenEmpty
+			// says instead.
+			f.Close()
+			return p.OpenSized(ctx, name, 0)
+		}
 		// Pinned by its first read, as an OpenSized Object is (KnownSizes
 		// below opens a name it knows the size of so): checked as
 		// OpenSized's are, at that read.
@@ -112,7 +116,7 @@ func (p *Pinned) lazy(name string, f Object) (Object, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: opened as %d bytes, pinned %d bytes at %q",
 			ErrObjectChanged, f.Size(), want.Size, want.Identity)}
 	}
-	return &pinnedObject{Object: f, p: p, name: name, recorded: recorded}, nil
+	return &pinnedObject{Object: f, p: p, name: name}, nil
 }
 
 // OpenSized opens name, a path CheckPath accepts, of size bytes, without a
@@ -144,27 +148,13 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 			ErrObjectChanged, size, want.Size, want.Identity)}
 	}
 	if size == 0 {
-		// No read reaches the store: the metadata request proves the
-		// object, its size compared before any pin is recorded.
-		f, err := p.o.Open(ctx, name)
+		// OpenEmpty's rule: the store's metadata request proves it (passed
+		// inwards as OpenSized(..., 0), not Open, whose size a wrapper such
+		// as KnownSizes may only hint), compared with 0 below, and judged
+		// by the pin recorded when it ends, before anything is recorded.
+		f, err := p.o.OpenSized(ctx, name, 0)
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
-				err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
-			}
-			return nil, err
-		}
-		if f.Size() != 0 {
-			f.Close()
-			// Judged by the pin recorded now: one another handle recorded
-			// during the request makes this a change of that object.
-			p.mu.Lock()
-			now, recordedNow := p.pins[name]
-			p.mu.Unlock()
-			if recordedNow {
-				return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%w: %d bytes at %q, pinned %d bytes at %q",
-					ErrObjectChanged, f.Size(), f.Identity(), now.Size, now.Identity)}
-			}
-			return nil, &fs.PathError{Op: "open", Path: name, Err: &SizeMismatchError{Name: name, Expected: 0, Actual: f.Size()}}
+			return nil, p.firstEvidence(name, "open", err)
 		}
 		if err := p.check(name, "open", pin{Size: 0, Identity: f.Identity()}); err != nil {
 			f.Close()
@@ -206,10 +196,7 @@ func (p *Pinned) ReadObject(ctx context.Context, name string, limit int64) ([]by
 		}
 		return nil, id, err
 	case err != nil:
-		if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
-			err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
-		}
-		return nil, "", err
+		return nil, "", p.firstEvidence(name, "read", err)
 	}
 	if err := p.check(name, "read", pin{Size: int64(len(b)), Identity: id}); err != nil {
 		return nil, "", err
@@ -217,13 +204,36 @@ func (p *Pinned) ReadObject(ctx context.Context, name string, limit int64) ([]by
 	return b, id, nil
 }
 
-// has reports whether a pin of name is recorded now: one recorded since an
-// open or read began judges its failure as one recorded before would.
-func (p *Pinned) has(name string) bool {
+// firstEvidence judges the failure err of an open or read of name, which
+// may be its first evidence (a metadata request, a whole read, a sized
+// open's own check), by the pin recorded now: against a recorded pin, a
+// missing object or another size is ErrObjectChanged; without one, err
+// stands.
+func (p *Pinned) firstEvidence(name, op string, err error) error {
+	if changed, cerr := p.changed(name, op, err); changed {
+		return cerr
+	}
+	return err
+}
+
+// changed reports whether err, judged as firstEvidence judges it, is a
+// change of the recorded object, and the error to report then.
+func (p *Pinned) changed(name, op string, err error) (bool, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, ok := p.pins[name]
-	return ok
+	now, recorded := p.pins[name]
+	p.mu.Unlock()
+	if !recorded || err == nil {
+		return false, nil
+	}
+	var sm *SizeMismatchError
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
+	case errors.As(err, &sm):
+		return true, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%w: %d bytes, pinned %d bytes at %q",
+			ErrObjectChanged, sm.Actual, now.Size, now.Identity)}
+	}
+	return false, nil
 }
 
 // check records got as name's pin when none is, and otherwise fails with
@@ -253,10 +263,9 @@ func (p *Pinned) check(name, op string, got pin) error {
 // that a batch keeps its first request alone until the check has passed.
 type pinnedObject struct {
 	Object
-	p        *Pinned
-	name     string
-	recorded bool // the name had a pin when opened
-	checked  atomic.Bool
+	p       *Pinned
+	name    string
+	checked atomic.Bool
 }
 
 // confirm checks the Object against its pin once a read, which failed with
@@ -269,22 +278,10 @@ func (f *pinnedObject) confirm(err error) (bool, error) {
 	if f.checked.Load() {
 		return false, nil
 	}
-	if err != nil {
-		// The pin recorded now, by this handle's open or by another's
-		// read since, is what a missing object or another size is judged
-		// against.
-		f.p.mu.Lock()
-		want, recorded := f.p.pins[f.name]
-		f.p.mu.Unlock()
-		recorded = recorded || f.recorded
-		if recorded && errors.Is(err, fs.ErrNotExist) {
-			return true, fmt.Errorf("%w: %w", ErrObjectChanged, err)
-		}
-		var sm *SizeMismatchError
-		if recorded && errors.As(err, &sm) {
-			return true, &fs.PathError{Op: "read", Path: f.name, Err: fmt.Errorf("%w: %d bytes, pinned %d bytes at %q",
-				ErrObjectChanged, sm.Actual, want.Size, want.Identity)}
-		}
+	// The pin recorded now, by this handle's open or by another's read
+	// since, is what a missing object or another size is judged against.
+	if changed, cerr := f.p.changed(f.name, "read", err); changed {
+		return true, cerr
 	}
 	id := f.Object.Identity()
 	if id == "" {
@@ -334,9 +331,15 @@ func (f *pinnedObject) batchPolicy() BatchPolicy { return policyOf(f.Object) }
 // Snapshot returns the pins recorded so far as versioned JSON,
 // {"version":1,"scope":...,"objects":{name:{"size":n,"identity":s}}}, with
 // members in a fixed order and names sorted, so that equal pins give equal
-// bytes. It records the objects opened, not which objects a dataset needs:
-// that a snapshot holds every object a reader requires is established by
-// the reader that opened them.
+// bytes. It holds the pins recorded: an Open whose store asks for metadata
+// (every store package's) records at the open; an OpenSized, a KnownSizes
+// Open of a mapped size, records at its first read that reaches the store,
+// so one only opened, sized (Size), read empty or at its end, or batched
+// with no range, is not in it yet, and Restore of it refuses the name. An
+// OpenSized(..., 0) records at the open (its metadata request proves it).
+// It records objects, not which objects a dataset needs: that a snapshot
+// holds every object a reader requires is established by the reader that
+// opened, and read, them.
 func (p *Pinned) Snapshot() ([]byte, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -97,6 +97,33 @@ type ObjectReader interface {
 	ReadObject(ctx context.Context, name string, limit int64) (data []byte, identity string, err error)
 }
 
+// OpenEmpty is OpenSized(ctx, name, 0) of a store, the one rule for an
+// expected size of zero, which every wrapper follows by passing
+// OpenSized(..., 0) inwards to the store's:
+//
+// No range read proves an empty object (no read of it reaches the store),
+// so it is proved by a metadata request to storage: metadata, the store's
+// own Open (never a wrapper's open, whose size may be a hint such as
+// KnownSizes'). That request is a physical request like any other: Limit
+// holds a slot for an OpenSized(..., 0) passing through it, and Pin judges
+// its outcome as first evidence (a missing object, or another size, is
+// ErrObjectChanged against a pin recorded when it fails). The size it finds
+// is compared with 0 before the Object is returned, and before Pin records
+// anything: another size closes it and fails with a *SizeMismatchError of
+// the size found. A size a wrapper was given is never evidence of the size
+// stored.
+func OpenEmpty(ctx context.Context, name string, metadata func(ctx context.Context, name string) (Object, error)) (Object, error) {
+	f, err := metadata(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if f.Size() != 0 {
+		f.Close()
+		return nil, &fs.PathError{Op: "open", Path: name, Err: &SizeMismatchError{Name: name, Expected: 0, Actual: f.Size()}}
+	}
+	return f, nil
+}
+
 // ErrTooLarge reports an object larger than ReadObject's limit.
 var ErrTooLarge = errors.New("objfile: object larger than the read's limit")
 
@@ -266,6 +293,12 @@ func (l limited) ReadObject(ctx context.Context, name string, limit int64) ([]by
 }
 
 func (l limited) OpenSized(ctx context.Context, name string, size int64) (Object, error) {
+	if size == 0 { // a metadata request (OpenEmpty): it holds a slot
+		if err := l.acquire(ctx); err != nil {
+			return nil, err
+		}
+		defer l.release()
+	}
 	f, err := l.o.OpenSized(ctx, name, size)
 	if err != nil {
 		return nil, err
@@ -278,10 +311,11 @@ func (l limited) OpenSized(ctx context.Context, name string, size int64) (Object
 // and ReadObject go to o unchanged. It is for a reader that knows its
 // files' sizes, from a manifest it has read, but opens them through an
 // interface that does not carry one (SeekParquet's Source.Open). sizes is
-// copied. OpenSized checks each size at the Object's first read. A name of
-// size 0 (or less) opens with Open: no read of an empty object reaches the
-// store, so only a metadata request can prove it. Compose it either inside
-// or outside Pin: Pin checks the Objects it returns at their first read.
+// copied. OpenSized checks each size at the Object's first read, or, for
+// size 0, at once (OpenEmpty). The map is only the default for Open: an
+// explicit OpenSized of a name the map lists opens at the size it is given.
+// Compose it either inside or outside Pin: Pin checks the Objects it
+// returns at their first read.
 func KnownSizes(o Opener, sizes map[string]int64) Opener {
 	return knownSizes{o: o, sizes: maps.Clone(sizes)}
 }
@@ -292,7 +326,7 @@ type knownSizes struct {
 }
 
 func (k knownSizes) Open(ctx context.Context, name string) (Object, error) {
-	if size, ok := k.sizes[name]; ok && size > 0 {
+	if size, ok := k.sizes[name]; ok {
 		return k.o.OpenSized(ctx, name, size)
 	}
 	return k.o.Open(ctx, name)

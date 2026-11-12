@@ -62,9 +62,12 @@ func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	return ranged.New(name, size, pin, o.getter(name)), nil
 }
 
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
+func (o opener) OpenSized(ctx context.Context, name string, size int64) (objfile.Object, error) {
 	if err := ranged.CheckSize(name, size); err != nil {
 		return nil, err
+	}
+	if size == 0 {
+		return objfile.OpenEmpty(ctx, name, o.Open)
 	}
 	return ranged.NewSized(name, size, o.getter(name), func(ctx context.Context) (int64, ranged.Pin, error) {
 		return o.stat(ctx, name)
