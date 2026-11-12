@@ -15,8 +15,9 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// browseSource disables speculation so exact trace assertions do not
-// depend on scheduling. It also keeps value indexes out of the footer tail.
+// browseSource disables speculation so scheduling cannot add optional reads.
+// Demanded ranges can still be batched as concurrent ReadAt calls, so trace
+// comparisons use multisets. It also keeps value indexes out of the footer tail.
 func browseSource(t *testing.T, dir string) (*Dataset, *countingSource) {
 	t.Helper()
 	src := newCountingSource(t, dir)
@@ -58,7 +59,7 @@ func TestPageCountsAddNoReads(t *testing.T) {
 					}
 					o0, r0 := src0.taken()
 					o1, r1 := src1.taken()
-					if !slices.Equal(o0, o1) || !slices.Equal(r0, r1) {
+					if !sameMultiset(o0, o1) || !sameMultiset(r0, r1) {
 						t.Fatalf("counts changed trace: opens %v / %v, reads %v / %v", o0, o1, r0, r1)
 					}
 					if !reflect.DeepEqual(p0.Next, p1.Next) || len(p0.Entries) != len(p1.Entries) {
@@ -172,7 +173,7 @@ func TestPageInsidePrefixCursorLeavesTotalsUnknown(t *testing.T) {
 			t.Fatalf("clipped prefix got totals: %+v", a)
 		}
 		opens, reads := src.taken()
-		if !slices.Equal(opens, offOpens) || !slices.Equal(reads, offReads) {
+		if !sameMultiset(opens, offOpens) || !sameMultiset(reads, offReads) {
 			t.Fatalf("clipped prefix read more: opens %v / %v, reads %v / %v", opens, offOpens, reads, offReads)
 		}
 	}

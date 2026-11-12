@@ -1006,7 +1006,8 @@ reads, until the entire phase has arrived. The stack without the adapter also
 has a four-request metadata phase. Neither counts nor concurrency assertions use
 elapsed time or timestamp overlap; a deadline fails a stalled barrier. Browse uses the size/time
 projection and identical budgets with counts on and off. `reader.TestPageCountsAddNoReads` also compares
-complete logical read traces across pagination, repeated keys and unverified intervening parts.
+complete logical read traces as multisets across pagination, repeated keys and unverified intervening
+parts: concurrent reads may arrive in either order, but paths, offsets, lengths and multiplicities must match.
 
 The reader's Scan and Stream are measured over a generated `swath/s3-objects/v1` fixture (`go/reader`
 `fixture_test.go`); nothing is committed. `writeFixture` streams rows through `local.WriteDir` one 1,024-row

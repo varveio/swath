@@ -11,7 +11,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
-	"slices"
 	"testing"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -450,7 +449,7 @@ func TestAggregatesOneByteSumBudgetOpensNothingNew(t *testing.T) {
 			t.Fatalf("%s: %s, want count %d and no bytes", prefixes[i], describeAggregate(a), want)
 		}
 	}
-	if !slices.Equal(opens, countedOpens) || !slices.Equal(budgeted, counted) {
+	if !sameMultiset(opens, countedOpens) || !sameMultiset(budgeted, counted) {
 		t.Errorf("a one-byte budget opened %q and made %d reads; counts alone opened %q and made %d", opens, len(budgeted), countedOpens, len(counted))
 	}
 	if n, _ := columnBytes(t, dir, summed, "size"); n == 0 {
