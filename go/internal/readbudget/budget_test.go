@@ -357,7 +357,10 @@ type operation struct {
 	// before and after are the counts the operation must stay within,
 	// requests, metadata requests and rounds, before spsource (openOnly)
 	// and after it, both on the pinned SeekParquet. They are the counts
-	// measured. The after budgets may only be
+	// measured; before's admission is allowed 4 rounds, as a part's first
+	// and last key pages, read by concurrent ReadAt calls without a
+	// RangeReader, are sometimes measured overlapping and sometimes not.
+	// The after budgets may only be
 	// tightened.
 	before, after count
 }
@@ -406,7 +409,7 @@ func operations(t *testing.T, dir string) []operation {
 		}, before: count{100, 1, 100}, after: count{99, 0, 99}},
 		{name: "admission (CheckSchema), 4 parts", latency: 60 * time.Millisecond, run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			mustDo(t, d.CheckSchema(ctx))
-		}, before: count{16, 4, 3}, after: count{12, 0, 2}},
+		}, before: count{16, 4, 4}, after: count{12, 0, 2}},
 		{name: "browse page: 1,000 entries, counts and budgeted sums", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
 			page, err := d.Page(ctx, reader.PageRequest{ListRequest: reader.ListRequest{Prefix: browse, Delimiter: '/', Limit: 1000},
 				Aggregates: reader.AggregateOptions{Counts: true, Sums: reader.SumsWithinBudget}})
