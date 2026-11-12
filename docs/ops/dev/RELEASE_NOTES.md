@@ -85,7 +85,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   must be writable by the new user, and the lister has a home directory, `/home/nonroot`, so mounted
   credential directories such as `~/.aws` are found there.
 - **Builds from `main` before 0.4.** The Go port's own pre-release flag renames are listed under
-  [Changes from 0.3 to 0.4](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md#changes-from-03-to-04).
+  [Unreleased builds of `main`](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md#unreleased-builds-of-main).
 
 ## Evidence
 
