@@ -7,7 +7,8 @@ opens a dataset, checks its schema, streams, scans and lists its current objects
 totals them under paths and prefixes.
 
 The reader opens and reads; it does not judge a dataset. `Metadata()` hands on what the manifest records about
-the listing (source, scope, coverage with its filters such as `one_filesystem`, publication time), and the
+the listing (source, scope, coverage with its filters such as `one_filesystem`, publication time, and the
+dataset's object bytes when the manifest states them), and the
 application decides what to do with it: whether a partial or filtered listing will do, whether it is of the
 source expected, and whether a dataset opened again is the one seen before. Part digests are for checking a
 dataset after it is copied or moved (a planned `swath verify` command, [#391](https://github.com/varveio/swath/issues/391), not yet implemented), not for reading it.
@@ -36,7 +37,7 @@ func (SchemaSpec) ColumnNames() []string          // the projection the decoders
 const Extension = "swath"
 const MetadataVersion = 1                          // extensions.swath.version this module reads
 type Metadata struct { Manifest seekparquet.Metadata; SchemaID SchemaID; Swath bool
-	PublishedAt *time.Time; Source *SourceInfo; Scope *Scope; Coverage *Coverage }
+	PublishedAt *time.Time; Source *SourceInfo; Scope *Scope; Coverage *Coverage; CommittedObjectBytes *int64 }
 func ParseMetadata(m seekparquet.Metadata) (Metadata, error)
 
 // The module's types and errors, as aliases (the module's own types: errors.Is and errors.As match either name).

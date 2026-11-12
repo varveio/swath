@@ -172,7 +172,7 @@ func classify(err, cause error, dir string) outcome {
 		// idempotent, exit 0, as Java's, when the dataset covers its
 		// scope; one committed with partial coverage stays incomplete.
 		o.Resumable = false
-		if c, ok := committedCoverage(dir); ok && c.Complete {
+		if m, ok := committedManifest(dir); ok && m.Coverage.Complete {
 			o.Class, o.ExitCode = listing.ClassCompleted, exitCompleted
 		} else {
 			o.Class, o.ExitCode = listing.ClassIncomplete, exitFatal
@@ -230,19 +230,19 @@ func refusal(err error) bool {
 	return errors.As(err, &mm)
 }
 
-// committedCoverage is the coverage in dir's manifest, or for the work
-// directory of a dataset in a bucket its committed candidate's (ok false
-// without a readable one).
-func committedCoverage(dir string) (dataset.Coverage, bool) {
+// committedManifest is dir's manifest, or for the work directory of a
+// dataset in a bucket its committed candidate (ok false without a readable
+// one).
+func committedManifest(dir string) (*dataset.Manifest, bool) {
 	var m dataset.Manifest
 	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
 	if errors.Is(err, os.ErrNotExist) {
 		b, err = dataset.CommittedCandidate(dir) // a bucket dataset's work directory
 	}
 	if err != nil || json.Unmarshal(b, &m) != nil {
-		return dataset.Coverage{}, false
+		return nil, false
 	}
-	return m.Coverage, true
+	return &m, true
 }
 
 // account applies the frozen classification o to a report's outcome (its
@@ -263,12 +263,14 @@ func account(r *listing.Outcome, o outcome) {
 }
 
 // committedAccount gives the report of an invocation that found its output
-// committed (listing.ErrComplete) the dataset's status and the manifest's
-// coverage.
+// committed (listing.ErrComplete) the dataset's status, the manifest's
+// coverage and its dataset account (rows, part bytes, object bytes); this
+// invocation's own counts stay 0.
 func committedAccount(dir string, r *listing.Report) {
 	r.Outcome.Status = listing.StatusCommitted
-	if c, ok := committedCoverage(dir); ok {
-		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
+	if m, ok := committedManifest(dir); ok {
+		r.Outcome.Complete, r.Outcome.StopReason = m.Coverage.Complete, m.Coverage.StopReason
+		r.Output.Committed(m)
 	}
 }
 

@@ -26,8 +26,8 @@ The `cause` of exit 75 says what rose while nothing progressed:
 | `stuck_empty_chain` | the service kept answering empty pages with a new continuation token |
 | `stuck_no_rows` | none of these: requests failing or hanging, or a stopped pipeline |
 
-The other causes are the provider's failure class (`auth`, `access_denied`, `throttle`, `timeout`, `parse`,
-`unsupported`), `protocol`, `no_space`, the limits named above, and a dataset in a bucket's `commit_unresolved`,
+The other causes are the provider's failure class (`auth`, `access_denied`, `not_found`, `region_redirect`, `throttle`, `timeout`,
+`parse`, `unsupported`), `protocol`, `no_space`, the limits named above, and a dataset in a bucket's `commit_unresolved`,
 `lost_race`, `remote_altered` and `candidate_mismatch`. A destination that keeps failing an upload past its
 retries ends the run `fatal`; its journal is intact, and `swath resume DIR` continues it once the destination
 answers.

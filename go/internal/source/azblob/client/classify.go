@@ -95,7 +95,10 @@ func (e *Error) Failure() objhttp.Failure {
 		f.Throttle = true
 	case bloberror.OperationTimedOut:
 		f.Timeout = true
-	case bloberror.InternalError, bloberror.ContainerNotFound:
+	case bloberror.ContainerNotFound:
+		// The container only: BlobNotFound and other 404 codes are not.
+		f.Class = objhttp.ClassNotFound
+	case bloberror.InternalError:
 	default:
 		switch e.Status {
 		case 429:

@@ -1,4 +1,4 @@
-report_version 5
+report_version 6
 args_hash string
 attempt.id string
 attempt.started time
@@ -54,6 +54,7 @@ outcome.stop_reason string
 outcome.stop_source string
 outcome.unreadable bool
 outcome.unrecorded string
+output.committed_object_bytes int64
 output.delete_markers int64
 output.distinct_keys int64
 output.live_objects int64

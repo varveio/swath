@@ -75,7 +75,12 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 	}
 	strip := func(m dataset.Manifest) string {
 		m.Parts, m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = nil, time.Time{}, time.Time{}, time.Time{}
-		return fmt.Sprintf("%+v", m)
+		objects := "unknown"
+		if m.CommittedObjectBytes != nil {
+			objects = fmt.Sprint(*m.CommittedObjectBytes)
+		}
+		m.CommittedObjectBytes = nil
+		return fmt.Sprintf("%+v committed_object_bytes %s", m, objects)
 	}
 	if strip(m) != strip(lm) {
 		t.Fatalf("%s: manifests differ:\n%s\n%s", name, strip(m), strip(lm))

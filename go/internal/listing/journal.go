@@ -907,7 +907,7 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 	if last := jr.last(); last != nil {
 		parts := make([]dataset.Part, len(jr.state.Records))
 		for i, rec := range jr.state.Records {
-			parts[i] = dataset.Part{Path: filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i)), PartInfo: rec.Part}
+			parts[i] = dataset.Part{Path: filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i)), PartInfo: rec.Part, ObjectBytes: rec.ObjectBytes}
 			if jr.remote != nil {
 				parts[i].Path, parts[i].Identity = rec.Object, rec.Identity
 			}
@@ -968,7 +968,7 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if err := dataset.SyncDir(filepath.Dir(claim)); err != nil {
 		return p, fmt.Errorf("claim part %d: %w", ordinal, err)
 	}
-	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
+	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final, ObjectBytes: p.ObjectBytes}); err != nil {
 		return p, err
 	}
 	jr.acked.parts.Add(1)

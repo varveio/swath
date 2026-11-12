@@ -127,6 +127,30 @@ type Schema[P any] struct {
 	Container func(p *P) bool
 }
 
+// ObjectSize reads a row's object size from s's size column, nil without
+// one: what the run report's object_bytes and a dataset's committed_object_bytes
+// sum. A row that is no object (Container: a local directory) has none:
+// its own size is not an object's, so a local tree's object bytes are its
+// files', as swath du's total and the local provider's bytes are. A null
+// size is not counted.
+func ObjectSize[P any](s *Schema[P]) func(*P) (int64, bool) {
+	for _, c := range s.Columns {
+		if c.Name != "size" {
+			continue
+		}
+		if box := s.Container; box != nil {
+			return func(p *P) (int64, bool) {
+				if box(p) {
+					return 0, false
+				}
+				return c.Int(p)
+			}
+		}
+		return c.Int
+	}
+	return nil
+}
+
 // Codec encodes a payload for a spill frame and decodes it again. Decode
 // may return strings that view src, which the caller keeps unmodified.
 type Codec[P any] interface {

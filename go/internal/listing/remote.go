@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -362,10 +363,29 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: time.Now().UTC()},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
 		Outcome:    Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}}
+	// The dataset is the manifest's: its rows, bytes and coverage, which
+	// this invocation neither listed nor wrote.
+	var m dataset.Manifest
+	if json.Unmarshal(b, &m) == nil {
+		rep.Output.Committed(&m)
+		committedOutcome(&rep.Outcome, m.Coverage)
+	}
 	if err := rs.finalize(ctx, cfg, r, *rec, dataset.ManifestParts(b), &rep); err != nil {
 		return err
 	}
 	return ErrComplete
+}
+
+// committedOutcome is the outcome of finding a dataset committed with the
+// coverage c, as the command classifies the same manifest: completed with
+// exit 0 when it covers its scope, else incomplete with exit 1, never
+// completed with 0.
+func committedOutcome(o *Outcome, c dataset.Coverage) {
+	o.Complete, o.StopReason = c.Complete, c.StopReason
+	o.Class, o.ExitCode = ClassCompleted, 0
+	if !c.Complete {
+		o.Class, o.ExitCode = ClassIncomplete, 1
+	}
 }
 
 // finalize is a commit's aftermath, idempotent: the objects this run
@@ -575,7 +595,7 @@ func (jr *runJournal) publishRemote(ordinal int, p dataset.Part, limit, rows int
 		return p, err
 	}
 	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final,
-		Object: p.Path, Identity: p.Identity}); err != nil {
+		Object: p.Path, Identity: p.Identity, ObjectBytes: p.ObjectBytes}); err != nil {
 		return p, err
 	}
 	jr.acked.parts.Add(1)

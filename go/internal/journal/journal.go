@@ -100,6 +100,11 @@ type Record struct {
 	Limit     int64            `json:"limit"`           // the router's frozen logical bytes per part (0 until the calibrating part closes)
 	RowsTotal int64            `json:"rows_total"`      // rows in parts 0..Ordinal
 	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
+	// ObjectBytes is the object sizes of the part's rows summed
+	// (dataset.Part.ObjectBytes): absent for a schema without a size
+	// column and in records of builds before it, which leave the dataset's
+	// total unknown (never 0).
+	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 
 	// Object and Identity name a remote dataset's part: its object name,
 	// relative to the dataset root, and the version created (the GCS
@@ -458,6 +463,10 @@ func (j *Journal) Close() error {
 // (Record.Object, Identity) and its destination in the identity
 // (Identity.Destination). A version 9 journal is a local dataset's, read
 // as version 10 without those fields; an earlier build refuses version 10.
+// A record's object bytes (Record.ObjectBytes) were added within version
+// 10: optional, so an earlier build of version 10 resumes a journal that
+// has them (ignoring them) and this build one that lacks them (the
+// dataset's object bytes are then unknown).
 const Version = 10
 
 // MinVersion is the oldest version this build reads.

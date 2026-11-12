@@ -113,7 +113,13 @@ func TestAnswers(t *testing.T) {
 		{"408", jsonError(408, 408, ""), objhttp.ClassTimeout, retried, nil, &answer{408, "", "m"}},
 		{"403 forbidden", jsonError(403, 403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "forbidden", "m"}},
 		{"403 rateLimitExceeded", jsonError(403, 403, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{403, "rateLimitExceeded", "m"}},
-		{"404", jsonError(404, 404, "notFound"), objhttp.ClassOther, final, nil, &answer{404, "notFound", "m"}},
+		// A listing's 404 notFound is a missing bucket (a missing prefix
+		// lists empty); a 404 without that reason (a wrong endpoint path, a
+		// proxy) is not labelled.
+		{"404", jsonError(404, 404, "notFound"), objhttp.ClassNotFound, final, nil, &answer{404, "notFound", "m"}},
+		{"404 no reason", body(404, `{"error":{"code":404,"message":"no route"}}`), objhttp.ClassOther, final, nil, &answer{404, "", "no route"}},
+		{"404 not JSON", body(404, `Not Found`), objhttp.ClassOther, final, nil, &answer{404, "", ""}},
+		{"404 another reason", jsonError(404, 404, "noSuchUpload"), objhttp.ClassOther, final, nil, &answer{404, "noSuchUpload", "m"}},
 		// The Guard keeps a cut error answer's status and the bytes read:
 		// the status decides, as for the complete answer (a body cut before
 		// its reason gives none).
@@ -123,7 +129,7 @@ func TestAnswers(t *testing.T) {
 		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", ""}},
 		// the HTTP status, not the body's code (googleapi.Error.Code)
 		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassOther, retried, nil, &answer{503, "invalid", "m"}},
-		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassOther, final, nil, &answer{404, "notFound", "m"}},
+		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassNotFound, final, nil, &answer{404, "notFound", "m"}},
 		{"301", redirect(301), objhttp.ClassOther, final, nil, &answer{301, "", moved}},
 		{"302", redirect(302), objhttp.ClassOther, final, nil, &answer{302, "", moved}},
 		{"307", redirect(307), objhttp.ClassOther, final, nil, &answer{307, "", moved}},

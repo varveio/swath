@@ -37,6 +37,13 @@ type Metadata struct {
 	Source      *SourceInfo
 	Scope       *Scope
 	Coverage    *Coverage
+	// CommittedObjectBytes is extensions.swath.committed_object_bytes: the
+	// dataset's object sizes summed (every row's size column, a local
+	// tree's files only), as its writers counted them. Nil when the
+	// manifest does not state it (a schema without a size column, a dataset
+	// written before the member existed or resumed from parts that predate
+	// it): never read as 0, which is a real total.
+	CommittedObjectBytes *int64
 }
 
 // SourceInfo is what was listed.
@@ -95,14 +102,15 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 		return Metadata{}, semantic(KindSchema, "", nil, "unsupported swath metadata version: extensions.swath.version %s, this reader reads %d", got, MetadataVersion)
 	}
 	var x struct {
-		PublishedAt *time.Time  `json:"published_at"`
-		Source      *SourceInfo `json:"source"`
-		Scope       *Scope      `json:"scope"`
-		Coverage    *Coverage   `json:"coverage"`
+		PublishedAt          *time.Time  `json:"published_at"`
+		Source               *SourceInfo `json:"source"`
+		Scope                *Scope      `json:"scope"`
+		Coverage             *Coverage   `json:"coverage"`
+		CommittedObjectBytes *int64      `json:"committed_object_bytes"`
 	}
 	if err := json.Unmarshal(raw, &x); err != nil {
 		return Metadata{}, &SemanticError{Kind: KindMetadata, Err: err}
 	}
-	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage = true, x.PublishedAt, x.Source, x.Scope, x.Coverage
+	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage, out.CommittedObjectBytes = true, x.PublishedAt, x.Source, x.Scope, x.Coverage, x.CommittedObjectBytes
 	return out, nil
 }

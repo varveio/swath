@@ -85,10 +85,13 @@ func TestAnswers(t *testing.T) {
 		{"408", body(408, ""), objhttp.ClassTimeout, timedOut, &Error{Status: 408, Code: "RequestTimeout"}}, // the code from the status text
 		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "RID"}},
 		{"403 InvalidAccessKeyId", xmlError(403, "InvalidAccessKeyId"), objhttp.ClassAuth, once, &Error{Status: 403, Code: "InvalidAccessKeyId", RequestID: "RID"}},
-		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassOther, once, &Error{Status: 404, Code: "NoSuchBucket", RequestID: "RID"}},
+		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassNotFound, once, &Error{Status: 404, Code: "NoSuchBucket", RequestID: "RID"}},
+		// Only the bucket is not_found: a missing key, or a 404 that names
+		// nothing, is no bucket's.
+		{"404 NoSuchKey", xmlError(404, "NoSuchKey"), objhttp.ClassOther, once, &Error{Status: 404, Code: "NoSuchKey", RequestID: "RID"}},
 		{"403 header request ID", xmlError(403, "AccessDenied", "X-Amz-Request-Id", "HID"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "HID"}},
 		{"404 no body", body(404, ""), objhttp.ClassOther, once, &Error{Status: 404, Code: "NotFound"}},
-		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassOther, once,
+		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassRegionRedirect, once,
 			&Error{Status: 301, Code: "PermanentRedirect", Region: "eu-west-2", RequestID: "RID"}},
 		{"307", redirect(307), objhttp.ClassOther, once, &Error{Status: 307, Code: "TemporaryRedirect"}},
 		{"308", redirect(308), objhttp.ClassOther, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text

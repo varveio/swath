@@ -72,7 +72,9 @@ the production fields selector too, with the generated client's own full respons
 HTTP status, the first reason, and a safe cause. A 403 with `rateLimitExceeded` or
 `userRateLimitExceeded` is a throttle; another 403 is a terminal permission refusal. A token endpoint
 outage or timeout remains transient, independently of report labels. Diagnostics retain `auth`,
-`access_denied`, `throttle`, `timeout`, `parse` and `unsupported`
+`access_denied`, `not_found` (a 404 with reason `notFound`: the client only lists, and objects.list answers it only
+for a missing bucket, a missing prefix listing empty; a 404 without that reason is unlabelled), `throttle`,
+`timeout`, `parse` and `unsupported`
 ([Run report](../../reference/run-report.md)); other errors keep status/reason without a separate label.
 A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
 (`listing` `TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `objhttp.ErrInvalidPage`;

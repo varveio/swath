@@ -68,6 +68,13 @@ type Part struct {
 	// (a remote part's claim receipt holds them).
 	Columns   []string
 	CreatedBy string
+	// ObjectBytes sums the object sizes of the part's rows
+	// (schema.ObjectSize), as the writer counted them; nil for a schema
+	// without a size column, or a retained part whose journal record
+	// predates the count. Neither the manifest nor the footer holds it:
+	// the journal record does, and the manifest the dataset's total
+	// (Manifest.CommittedObjectBytes).
+	ObjectBytes *int64
 	PartInfo
 }
 
@@ -156,21 +163,64 @@ type Manifest struct {
 	Source          Source
 	Scope           Scope
 	Coverage        Coverage
-	Parts           []ManifestPart // in key order; part i is data/part-%05d.parquet
+	// CommittedObjectBytes is extensions.swath.committed_object_bytes: the
+	// object sizes of every row of the dataset summed (schema.ObjectSize),
+	// nil when unknown (a schema without a size column, a part whose count
+	// predates it, a manifest written before the member existed) and never
+	// 0 for unknown.
+	CommittedObjectBytes *int64
+	Parts                []ManifestPart // in key order; part i is data/part-%05d.parquet
+}
+
+// Totals is a committed dataset's account, from its manifest: its rows and
+// part bytes (the parts' sums), and its object bytes (nil: unknown).
+type Totals struct {
+	Rows, Bytes          int64
+	CommittedObjectBytes *int64
+}
+
+// Totals sums m's parts.
+func (m *Manifest) Totals() Totals {
+	t := Totals{CommittedObjectBytes: m.CommittedObjectBytes}
+	for _, p := range m.Parts {
+		t.Rows += p.Rows
+		t.Bytes += p.Bytes
+	}
+	return t
+}
+
+// ObjectBytes is the object bytes of the dataset parts make: the parts'
+// sum when every one has its count, nil when one lacks it. A dataset of no
+// part holds 0 bytes of objects when its schema has a size column (sized),
+// and nil otherwise.
+func ObjectBytes(parts []Part, sized bool) *int64 {
+	if len(parts) == 0 && !sized {
+		return nil
+	}
+	var n int64
+	for _, p := range parts {
+		if p.ObjectBytes == nil {
+			return nil
+		}
+		n += *p.ObjectBytes
+	}
+	return &n
 }
 
 // swathExtension is extensions.swath.
 type swathExtension struct {
-	Version     int       `json:"version"`
-	PublishedAt time.Time `json:"published_at"`
-	Source      Source    `json:"source"`
-	Scope       Scope     `json:"scope"`
-	Coverage    Coverage  `json:"coverage"`
+	Version              int       `json:"version"`
+	PublishedAt          time.Time `json:"published_at"`
+	Source               Source    `json:"source"`
+	Scope                Scope     `json:"scope"`
+	Coverage             Coverage  `json:"coverage"`
+	CommittedObjectBytes *int64    `json:"committed_object_bytes,omitempty"`
 }
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage}
+	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
+		CommittedObjectBytes: m.CommittedObjectBytes}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
@@ -204,7 +254,8 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		}
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
-		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(sm.Parts))}
+		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, CommittedObjectBytes: x.CommittedObjectBytes,
+		Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}
@@ -261,6 +312,9 @@ type Meta struct {
 	Source   Source
 	Scope    Scope
 	Coverage Coverage
+	// CommittedObjectBytes is the dataset's object bytes (ObjectBytes;
+	// nil: unknown, and the manifest leaves the member out).
+	CommittedObjectBytes *int64
 }
 
 // ReportError is a run report that could not be written after the dataset
