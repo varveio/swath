@@ -106,7 +106,9 @@ func (o AggregateOptions) budget() int64 {
 // (seekparquet.Dataset.Plan without columns): exact when every part
 // holding its rows has been checked by an earlier read, else nil, so a
 // count never relies on a manifest row count alone and never opens a part
-// between its ends. Sums plan the summed prefixes' rows projecting size
+// between its ends. The count of every key (the prefix "") after
+// CheckSchema has succeeded is the manifest's row count, which it checked
+// against every part's footer, and reads nothing. Sums plan the summed prefixes' rows projecting size
 // alone and scan them once, a row several prefixes share decoded once;
 // planning checks every part holding those rows. Under SumsWithinBudget a
 // prefix is summed when the projected bytes it adds to those already

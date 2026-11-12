@@ -257,8 +257,13 @@ func distinct[T ~string | ~[]byte](in []T) (unique []T, of []int) {
 
 // count returns the number of rows of span, nil when the plan's count
 // relies on a part no read has checked. Planning's reads are added to st,
-// a failed plan's too.
+// a failed plan's too. Every key, once CheckSchema has checked every part,
+// is the manifest's row count, which Verify checked against each footer:
+// it reads nothing.
 func (d *Dataset) count(ctx context.Context, span keySpan, st *ReadStats) (*int64, error) {
+	if len(span.lo) == 0 && span.hi == nil && d.checked.Load() {
+		return ptrTo(d.rows()), nil
+	}
 	var planned ReadStats
 	plan, err := d.sp.Plan(ctx, []seekparquet.Selection{span.selection()}, nil, &planned)
 	addStats(st, planned)
@@ -565,4 +570,14 @@ func (s *objectSum) newestTime() *time.Time {
 		return nil
 	}
 	return ptrTo(time.UnixMicro(s.newest).UTC())
+}
+
+// rows is the manifest's row count: the sum of its parts', each below
+// 2^63 with their sum (seekparquet.OpenDataset checks it).
+func (d *Dataset) rows() int64 {
+	var n int64
+	for _, p := range d.meta.Manifest.Parts {
+		n += p.Rows
+	}
+	return n
 }

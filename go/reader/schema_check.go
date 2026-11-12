@@ -43,6 +43,7 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	d.checked.Store(true)
 	return nil
 }
 

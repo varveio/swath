@@ -100,7 +100,10 @@ func TestAggregatesMatchOracle(t *testing.T) {
 }
 
 // TestAggregatesCountsAddNoReads (varve TestListCountsAddNoReads): counts
-// decode no value page, and open no part between a prefix's ends.
+// decode no value page, and open no part between a prefix's ends; the
+// count of every key reads nothing once CheckSchema has checked the parts.
+// The old test's identical-reads assertion, counts on and off in a
+// listing, needs the listing's row positions from SeekParquet.
 func TestAggregatesCountsAddNoReads(t *testing.T) {
 	keys := randomKeys(rand.New(rand.NewPCG(5, 6)), 420)
 	dir := writeParts(t, s3Spec(), 7, 40, cut(keyRows(keys), 0, 97, 210, 211, 330, len(keys))...)
@@ -128,6 +131,21 @@ func TestAggregatesCountsAddNoReads(t *testing.T) {
 	}
 	if opens, _ = src.taken(); len(opens) > 1 || got[0].Count != nil {
 		t.Fatalf("the count of every key opened %q: %s", opens, describeAggregate(got[0]))
+	}
+	// Once CheckSchema has checked every part, it is the manifest's row
+	// count, and reads nothing.
+	if err := d.CheckSchema(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	src.reset()
+	if got, err = d.Aggregates(context.Background(), [][]byte{nil, nil}, AggregateOptions{Counts: true}); err != nil {
+		t.Fatal(err)
+	}
+	opens, reads = src.taken()
+	for _, a := range got {
+		if a.Count == nil || *a.Count != int64(len(keys)) || len(opens)+len(reads) != 0 {
+			t.Fatalf("the count of every key after CheckSchema: %s, %d opens and %d reads, want %d and none", describeAggregate(a), len(opens), len(reads), len(keys))
+		}
 	}
 }
 
