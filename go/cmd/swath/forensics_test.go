@@ -207,10 +207,15 @@ func TestOneTerminalAccount(t *testing.T) {
 		var n atomic.Int64
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if n.Add(1) > 12 {
-				select { // without a part (a regression) the check below fails, not the wait
+				// Without a part (a regression) the wait ends and the parts
+				// check below fails. The bound stays well under the 30 s
+				// request timeout, which would otherwise cancel and retry
+				// the request until the stall watchdog stops the run, and
+				// far above any part's save time.
+				select {
 				case <-published:
 				case <-r.Context().Done():
-				case <-time.After(time.Minute):
+				case <-time.After(10 * time.Second):
 				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(403)
