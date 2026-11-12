@@ -17,9 +17,11 @@ import (
 // Content-Range states exactly that range of an object larger than last,
 // whose Content-Length is the range's length, and whose body Go's transport
 // did not decompress, the request fails. A request for the rest of an object,
-// "bytes=first-" (the SDK's request for the rest of a whole-object read whose
-// body failed), is checked alike, its range being first to the object's last
-// byte. A Getter checks the response it is
+// "bytes=first-" (which the GCS SDK sends for the rest of a whole-object read
+// that is not marked as below), is checked alike, its range being first to the object's last
+// byte. The response to a request for a whole object that the Object marks
+// (WholeRead) is passed with its body ending where it fails, so that the
+// SDK does not request the rest itself. A Getter checks the response it is
 // given; Transport also checks the requests an SDK sends on its own.
 //
 // A body that fails part way ends there instead (io.EOF), so that the SDK
@@ -37,7 +39,18 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil || res.StatusCode < 200 || res.StatusCode > 299 {
 		return res, err
 	}
-	first, last, ok := requested(req.Header.Get("Range"))
+	rng := req.Header.Get("Range")
+	if rng == "" && isWholeRead(req.Context()) {
+		// A whole-object read: its body ends where it fails, so that the
+		// SDK does not request the rest itself; ReadObject does, checked.
+		if res.Uncompressed {
+			res.Body.Close()
+			return nil, fmt.Errorf("objfile: %s %s://%s%s: the response was decompressed in transit", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath())
+		}
+		res.Body = endOnFailure{res.Body}
+		return res, nil
+	}
+	first, last, ok := requested(rng)
 	if !ok {
 		return res, nil
 	}

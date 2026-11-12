@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,7 +65,11 @@ const BodyRetries = 2
 // New returns the Object of the object name of size bytes, read through get,
 // pinned to pin (from a metadata request that also gave size).
 func New(name string, size int64, pin Pin, get Getter) objfile.Object {
-	return &file{name: name, size: size, pin: pin, get: get}
+	return newFile(name, size, pin, get, nil)
+}
+
+func newFile(name string, size int64, pin Pin, get Getter, stat Stat) *file {
+	return &file{name: name, size: size, pin: pin, get: get, stat: stat, establish: make(chan struct{}, 1)}
 }
 
 // NewSized returns the Object of the object name, expected to be size bytes,
@@ -73,7 +78,7 @@ func New(name string, size int64, pin Pin, get Getter) objfile.Object {
 // to size, or stat, called when it states none, gives size and the same
 // version.
 func NewSized(name string, size int64, get Getter, stat Stat) objfile.Object {
-	return &file{name: name, size: size, get: get, stat: stat}
+	return newFile(name, size, Pin{}, get, stat)
 }
 
 type file struct {
@@ -83,10 +88,11 @@ type file struct {
 	stat   Stat
 	closed atomic.Bool
 
-	// establish is held by the response that pins an unpinned file, so
-	// that of concurrent first responses one pins and the rest are
-	// checked against it.
-	establish sync.Mutex
+	// establish is a lock (a token in a channel of one) held while an
+	// unpinned file is pinned, so that of concurrent first responses one
+	// pins and the rest are checked against it; a waiter for it gives up
+	// when its own context ends.
+	establish chan struct{}
 
 	mu  sync.Mutex
 	pin Pin
@@ -188,12 +194,28 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := f.check(ctx, res, off, n); err != nil {
+	err = f.check(ctx, res, off, n)
+	if err == errUnproven {
+		// Asking the store while this response holds its connection could
+		// wait for that connection forever: the response is let go, the
+		// size and version are proved by a metadata request, and the range
+		// is requested again of that version.
+		res.Body.Close()
+		if err := f.prove(ctx, res.Pin); err != nil {
+			return nil, err
+		}
+		return f.open(ctx, off, n)
+	}
+	if err != nil {
 		res.Body.Close()
 		return nil, err
 	}
 	return res.Body, nil
 }
+
+// errUnproven is check's answer to a first response that states no total
+// size: the file is not pinned until a metadata request proves it.
+var errUnproven = errors.New("the response states no total size")
 
 func (f *file) check(ctx context.Context, res Response, off, n int64) error {
 	if res.Total >= 0 && res.Total != f.size {
@@ -214,12 +236,27 @@ func (f *file) check(ctx context.Context, res Response, off, n int64) error {
 	return matches(res.Pin, pin)
 }
 
-// pinTo pins the file to the version res was served, once res or a
-// metadata request has shown that version is the file's size; when another
-// response pinned the file first, res is checked against it.
+// lock takes the establish lock, or fails when ctx ends first.
+func (f *file) lock(ctx context.Context) error {
+	select {
+	case f.establish <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *file) unlock() { <-f.establish }
+
+// pinTo pins the file to the version res was served, once res has shown
+// that version is the file's size; when another response pinned the file
+// first, res is checked against it. A response that states no total is
+// errUnproven.
 func (f *file) pinTo(ctx context.Context, res Response) error {
-	f.establish.Lock()
-	defer f.establish.Unlock()
+	if err := f.lock(ctx); err != nil {
+		return err
+	}
+	defer f.unlock()
 	f.mu.Lock()
 	pin := f.pin
 	f.mu.Unlock()
@@ -231,23 +268,43 @@ func (f *file) pinTo(ctx context.Context, res Response) error {
 	}
 	if res.Total < 0 {
 		// The size was given, not learnt: a response that does not state
-		// the total cannot prove it, so the store is asked.
+		// the total cannot prove it.
 		if f.stat == nil {
 			return fmt.Errorf("the response states no total size to check the size %d against", f.size)
 		}
-		size, live, err := f.stat(ctx)
-		if err != nil {
-			return err
-		}
-		if size != f.size {
-			return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, size, f.size)
-		}
-		if err := matches(res.Pin, live); err != nil {
-			return err
-		}
+		return errUnproven
 	}
 	f.mu.Lock()
 	f.pin = res.Pin
+	f.mu.Unlock()
+	return nil
+}
+
+// prove pins the file by a metadata request, which must give the file's
+// size and the version served, when no response has pinned it meanwhile.
+func (f *file) prove(ctx context.Context, served Pin) error {
+	if err := f.lock(ctx); err != nil {
+		return err
+	}
+	defer f.unlock()
+	f.mu.Lock()
+	pin := f.pin
+	f.mu.Unlock()
+	if !pin.IsZero() {
+		return matches(served, pin)
+	}
+	size, live, err := f.stat(ctx)
+	if err != nil {
+		return err
+	}
+	if size != f.size {
+		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, size, f.size)
+	}
+	if err := matches(served, live); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.pin = live
 	f.mu.Unlock()
 	return nil
 }
@@ -261,6 +318,18 @@ func matches(served, pinned Pin) error {
 	return nil
 }
 
+// wholeRead marks the context of a whole-object request, for Transport.
+type wholeRead struct{}
+
+// WholeRead marks ctx as the context of a request for a whole object, so
+// that Transport ends its body where it fails instead of letting the SDK
+// request the rest: the rest is requested, and checked, as a ranged read.
+func WholeRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wholeRead{}, true)
+}
+
+func isWholeRead(ctx context.Context) bool { return ctx.Value(wholeRead{}) != nil }
+
 // ReadObject reads the object name whole with one request through get,
 // unless its body fails part way, when the rest is read as a ranged read of
 // the version served; it returns the bytes and that version's Identity, as
@@ -270,11 +339,16 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 	if err := ctx.Err(); err != nil {
 		return nil, "", fail(err)
 	}
-	res, err := get(ctx, 0, -1, Pin{})
+	res, err := get(WholeRead(ctx), 0, -1, Pin{})
 	if err != nil {
 		return nil, "", fail(err)
 	}
-	defer res.Body.Close()
+	body := res.Body
+	defer func() {
+		if body != nil {
+			body.Close()
+		}
+	}()
 	if res.Pin.IsZero() {
 		return nil, "", fail(errors.New("the response names no version to pin"))
 	}
@@ -296,7 +370,11 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 	if size < 0 {
 		// No length stated: the body, up to one byte past the limit, is
 		// the object, and a failure part way cannot be resumed.
-		b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+		probe := limit
+		if probe < math.MaxInt64 {
+			probe++ // one byte past the limit shows an object over it
+		}
+		b, err := io.ReadAll(io.LimitReader(res.Body, probe))
 		if err != nil {
 			return nil, "", fail(err)
 		}
@@ -311,8 +389,14 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, "", fail(ctxErr)
 		}
-		f := &file{name: name, size: size, pin: res.Pin, get: get}
-		if _, err := f.readAt(ctx, b[m:], int64(m)); err != nil {
+		// The rest is a ranged read of the version served, sent once this
+		// response has let go of its connection.
+		body.Close()
+		body = nil
+		if n, err := newFile(name, size, res.Pin, get, nil).readAt(ctx, b[m:], int64(m)); err != nil || n != len(b)-m {
+			if err == nil {
+				err = fail(io.ErrUnexpectedEOF)
+			}
 			return nil, "", err
 		}
 	}

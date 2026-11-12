@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -296,4 +297,37 @@ func TestBudget(t *testing.T) {
 		},
 		UnknownTotalOK: true,
 	})
+}
+
+// TestUnknownTotalOneConnection: a sized read whose response states no
+// total proves the size with a metadata request after letting go of that
+// response, so it completes on a client of one connection.
+func TestUnknownTotalOneConnection(t *testing.T) {
+	b := s3mem.New()
+	if err := b.CreateBucket(bucket); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(objfiletest.UnknownTotal(ifMatch(gofakes3.New(b).Server())))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		Region:       "us-east-1",
+		Credentials:  aws.AnonymousCredentials{},
+		HTTPClient:   &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}},
+	})
+	data := objfiletest.Data(1<<20, 1)
+	if _, err := b.PutObject(bucket, "obj", nil, bytes.NewReader(data), int64(len(data)), nil); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s3.New(client, bucket).OpenSized(context.Background(), "obj", int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	p := make([]byte, 100)
+	if _, err := f.WithContext(ctx).ReadAt(p, 1000); err != nil || !bytes.Equal(p, data[1000:1100]) {
+		t.Fatalf("read on one connection: %v", err)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 
+	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/gcs"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 	"github.com/varveio/swath/go/objfile/internal/ranged"
@@ -151,4 +153,93 @@ func cut(w http.ResponseWriter, data []byte, start, end, part int) {
 	_, _ = w.Write(data[start : start+(end-start+1)/part])
 	w.(http.Flusher).Flush()
 	panic(http.ErrAbortHandler)
+}
+
+// wholeServer serves one object, "obj" at generation 7, gzip-labelled: a
+// read of the whole object is answered by whole (with the attempt number);
+// a ranged read, closed or to the end, by a 206 of that range.
+func wholeServer(t *testing.T, data []byte, whole func(w http.ResponseWriter, attempt int32)) string {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/storage/v1/") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"bucket": bucket, "name": "obj", "size": strconv.Itoa(len(data)), "generation": "7"})
+			return
+		}
+		w.Header().Set("X-Goog-Generation", "7")
+		w.Header().Set("Content-Encoding", "gzip")
+		rng := r.Header.Get("Range")
+		if rng == "" {
+			whole(w, attempts.Add(1))
+			return
+		}
+		start, end := 0, len(data)-1
+		if open, ok := strings.CutSuffix(rng, "-"); ok {
+			_, _ = fmt.Sscanf(open, "bytes=%d", &start)
+		} else {
+			_, _ = fmt.Sscanf(rng, "bytes=%d-%d", &start, &end)
+		}
+		partial(w, data, start, end)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func wholeClient(t *testing.T, url string, guard bool) *storage.Client {
+	opts := []option.ClientOption{option.WithEndpoint(url + "/storage/v1/"), option.WithoutAuthentication()}
+	if guard {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: ranged.Transport(http.DefaultTransport)}))
+	}
+	client, err := storage.NewClient(context.Background(), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// TestReadObjectCut: a whole-object read of a gzip-labelled object whose
+// body is cut at a quarter. The SDK requests the rest itself and skips as
+// many bytes of that answer as it had read, joining two parts of the
+// object; with the transport the body ends where it was cut instead, and
+// ReadObject reads the rest as a checked ranged read.
+func TestReadObjectCut(t *testing.T) {
+	data := objfiletest.Data(10000, 4) // a quarter is not a multiple of Data's period
+	for _, guard := range []bool{false, true} {
+		url := wholeServer(t, data, func(w http.ResponseWriter, attempt int32) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			if attempt == 1 {
+				_, _ = w.Write(data[:len(data)/4])
+				w.(http.Flusher).Flush()
+				panic(http.ErrAbortHandler)
+			}
+			_, _ = w.Write(data)
+		})
+		b, id, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
+		exact := err == nil && bytes.Equal(b, data)
+		if guard && (!exact || id != "7") {
+			t.Fatalf("guarded ReadObject of a cut body: %d bytes, %q, %v; want the object", len(b), id, err)
+		}
+		if !guard && exact {
+			t.Fatal("unguarded ReadObject of a cut gzip body read the object: the SDK no longer joins parts, so the transport may not be needed")
+		}
+	}
+}
+
+// TestReadObjectChunked: a whole-object answer without Content-Length is
+// read to its end, within the limit.
+func TestReadObjectChunked(t *testing.T) {
+	data := objfiletest.Data(5000, 5)
+	url := wholeServer(t, data, func(w http.ResponseWriter, _ int32) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush() // headers sent with no length: the body is chunked
+		_, _ = w.Write(data)
+	})
+	o := gcs.New(wholeClient(t, url, true), bucket).(objfile.ObjectReader)
+	if b, _, err := o.ReadObject(context.Background(), "obj", 1<<20); err != nil || !bytes.Equal(b, data) {
+		t.Fatalf("ReadObject of a chunked answer = %d bytes, %v; want %d", len(b), err, len(data))
+	}
+	if _, _, err := o.ReadObject(context.Background(), "obj", 4999); !errors.Is(err, objfile.ErrTooLarge) {
+		t.Fatalf("ReadObject of a chunked answer over the limit = %v", err)
+	}
 }

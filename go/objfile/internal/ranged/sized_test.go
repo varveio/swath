@@ -9,9 +9,11 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/objfile"
 )
@@ -279,5 +281,116 @@ func TestStated(t *testing.T) {
 		if start, total := Stated(c.v); start != c.start || total != c.total {
 			t.Errorf("Stated(%q) = %d, %d; want %d, %d", c.v, start, total, c.start, c.total)
 		}
+	}
+}
+
+// tracked is a body that counts itself open in *open until closed.
+type tracked struct {
+	io.Reader
+	open *atomic.Int32
+	once sync.Once
+}
+
+func (b *tracked) Close() error { b.once.Do(func() { b.open.Add(-1) }); return nil }
+
+// TestNoBodyHeldAcrossRequests: no response body is open while another
+// request is made: not the metadata request after a response without a
+// total, nor the ranged request for the rest of a whole-object read.
+func TestNoBodyHeldAcrossRequests(t *testing.T) {
+	s := newStore(100)
+	s.noTotal = true
+	var open atomic.Int32
+	held := func() error {
+		if n := open.Load(); n != 0 {
+			return errors.New("a request was made while a response body was open")
+		}
+		return nil
+	}
+	get := func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+		if err := held(); err != nil {
+			return Response{}, err
+		}
+		res, err := s.get(ctx, off, n, pin)
+		if err == nil {
+			open.Add(1)
+			res.Body = &tracked{Reader: res.Body, open: &open}
+		}
+		return res, err
+	}
+	stat := func(ctx context.Context) (int64, Pin, error) {
+		if err := held(); err != nil {
+			return 0, Pin{}, err
+		}
+		return s.stat(ctx)
+	}
+	p := make([]byte, 10)
+	if _, err := NewSized("obj", 100, get, stat).ReadAt(p, 5); err != nil || string(p) != "fghijabcde" {
+		t.Fatalf("sized read without a total: %v, %q", err, p)
+	}
+	s.noTotal = false
+	s.cut = func(req int) int {
+		if req == 1 {
+			return 30
+		}
+		return -1
+	}
+	if b, _, err := ReadObject(context.Background(), "obj", 100, get); err != nil || !bytes.Equal(b, s.data) {
+		t.Fatalf("ReadObject with a cut body: %v", err)
+	}
+}
+
+// TestSizedWaiterCancelled: a read waiting for another to pin the Object
+// gives up when its own context ends, while the other's metadata request
+// is still in flight.
+func TestSizedWaiterCancelled(t *testing.T) {
+	s := newStore(1000)
+	entered, release, served := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	f := NewSized("obj", 1000, func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+		res, err := s.get(ctx, off, n, pin)
+		if off == 0 && pin.IsZero() {
+			res.Total = -1 // the owner's response: proved by a metadata request
+		}
+		if off == 500 {
+			close(served) // the waiter's response, about to wait for the pin
+		}
+		return res, err
+	}, func(ctx context.Context) (int64, Pin, error) {
+		close(entered)
+		<-release
+		return s.stat(ctx)
+	})
+	owner := make(chan error, 1)
+	go func() { _, err := f.ReadAt(make([]byte, 10), 0); owner <- err }()
+	<-entered // the owner holds the pinning lock, in its metadata request
+	ctx, cancel := context.WithCancel(context.Background())
+	waiter := make(chan error, 1)
+	go func() { _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 500); waiter <- err }()
+	<-served
+	cancel()
+	select {
+	case err := <-waiter:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled waiter: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a cancelled read kept waiting for another's metadata request")
+	}
+	close(release)
+	if err := <-owner; err != nil || f.Identity() != "a" {
+		t.Fatalf("owner: %v, Identity %q", err, f.Identity())
+	}
+}
+
+// TestReadObjectLimitMax: an unknown-length object read under the largest
+// limit is read, not cut to nothing.
+func TestReadObjectLimitMax(t *testing.T) {
+	s := newStore(100)
+	get := func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+		res, err := s.get(ctx, off, n, pin)
+		res.Length, res.Total = -1, -1
+		return res, err
+	}
+	if b, _, err := ReadObject(context.Background(), "obj", math.MaxInt64, get); err != nil || !bytes.Equal(b, s.data) {
+		t.Fatalf("ReadObject under the largest limit = %d bytes, %v", len(b), err)
 	}
 }

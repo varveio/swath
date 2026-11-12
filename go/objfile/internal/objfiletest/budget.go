@@ -303,13 +303,15 @@ func RunBudget(t *testing.T, b Budget) {
 			t.Skip("the SDK refuses a Content-Range with an unknown total")
 		}
 		rec := NewRecorder(b.Classify)
-		s := b.New(t, func(h http.Handler) http.Handler { return rec.Wrap(unknownTotal(h)) })
+		s := b.New(t, func(h http.Handler) http.Handler { return rec.Wrap(UnknownTotal(h)) })
 		data := Data(1000, 2)
 		s.Put(t, "obj", data)
 		f := sized(t, s.Opener, "obj", len(data))
 		read(t, f, data, []objfile.Range{{Off: 0, Buf: make([]byte, 10)}, {Off: 500, Buf: make([]byte, 10)}})
-		if rec.Count(Metadata) != 1 || rec.Count(Ranged) != 2 {
-			t.Fatalf("%d metadata and %d ranged requests; want 1 and 2", rec.Count(Metadata), rec.Count(Ranged))
+		// The first response is let go before the metadata request (so it
+		// holds no connection meanwhile) and its range asked again, pinned.
+		if rec.Count(Metadata) != 1 || rec.Count(Ranged) != 3 {
+			t.Fatalf("%d metadata and %d ranged requests; want 1 and 3", rec.Count(Metadata), rec.Count(Ranged))
 		}
 		g := sized(t, s.Opener, "obj", 1001)
 		if _, err := g.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) || g.Identity() != "" {
@@ -365,8 +367,8 @@ func RunBudget(t *testing.T, b Budget) {
 	})
 }
 
-// unknownTotal rewrites every Content-Range total to "*".
-func unknownTotal(h http.Handler) http.Handler {
+// UnknownTotal rewrites every Content-Range total to "*".
+func UnknownTotal(h http.Handler) http.Handler {
 	total := regexp.MustCompile(`/[0-9]+$`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

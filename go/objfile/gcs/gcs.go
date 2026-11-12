@@ -19,9 +19,11 @@
 // objfile/remote builds validates every response to a request for one byte
 // range (a batch never asks for more than one range a request): its status,
 // Content-Range, length and lack of transport decompression, then ends a
-// failed body with EOF so objfile requests and checks the rest. The SDK's
-// request for the rest of a whole-object read, "bytes=N-", is validated
-// alike, as the range to the object's end. A caller-supplied client needs
+// failed body with EOF so objfile requests and checks the rest. A
+// whole-object read (ReadObject) is marked so that the transport ends its
+// failed body the same way, and the rest is a checked ranged read; a
+// request for the rest of an object, "bytes=N-", is validated alike, as the
+// range to the object's end. A caller-supplied client needs
 // the same transport behavior; otherwise a failed-body retry may return
 // wrong bytes without an error.
 package gcs
@@ -102,6 +104,11 @@ func (o opener) getter(name string) ranged.Getter {
 			return ranged.Response{}, err
 		}
 		res := ranged.Response{Body: r, Start: r.Attrs.StartOffset, Total: r.Attrs.Size, Length: r.Remain()}
+		if r.Attrs.Size < 0 {
+			// No length stated (a 200 without Content-Length): the
+			// reader's Remain is then 0, not unknown.
+			res.Total, res.Length = -1, -1
+		}
 		if r.Attrs.Generation > 0 {
 			res.Pin.Version = strconv.FormatInt(r.Attrs.Generation, 10)
 		}
