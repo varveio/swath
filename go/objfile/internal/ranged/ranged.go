@@ -192,33 +192,40 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	f.mu.Unlock()
 	res, err := f.get(ctx, off, n, pin)
 	if err != nil {
-		if errors.Is(err, ErrUnsatisfiable) && pin.IsZero() && f.stat != nil {
-			// A range the store cannot serve, before anything has shown
-			// the object's size: the size given may be wrong (the object
-			// is shorter), which a metadata request tells.
-			if serr := f.sizeOf(ctx); serr != nil {
-				return nil, serr
-			}
-		}
-		return nil, err
+		return nil, f.unserved(ctx, err, pin)
 	}
-	err = f.check(ctx, res, off, n)
-	if err == errUnproven {
-		// Asking the store while this response holds its connection could
-		// wait for that connection forever: the response is let go, the
-		// size and version are proved by a metadata request, and the range
-		// is requested again of that version.
+	if err := f.check(ctx, res, off, n); err != nil {
 		res.Body.Close()
-		if err := f.prove(ctx, res.Pin); err != nil {
-			return nil, err
+		if err == errUnproven {
+			return f.reopen(ctx, res.Pin, off, n)
 		}
-		return f.open(ctx, off, n)
-	}
-	if err != nil {
-		res.Body.Close()
 		return nil, err
 	}
 	return res.Body, nil
+}
+
+// unserved is the error of a request the store refused with err. A range
+// it cannot serve (416), before anything has shown the object's size, may
+// mean the size given is wrong (the object is shorter), which a metadata
+// request tells.
+func (f *file) unserved(ctx context.Context, err error, pin Pin) error {
+	if errors.Is(err, ErrUnsatisfiable) && pin.IsZero() && f.stat != nil {
+		if serr := f.sizeOf(ctx); serr != nil {
+			return serr
+		}
+	}
+	return err
+}
+
+// reopen proves the version served of an unpinned file whose response
+// stated no total size, and requests the range again of that version.
+// Asking the store while that response held its connection could wait for
+// that connection forever, so the response is let go first.
+func (f *file) reopen(ctx context.Context, served Pin, off, n int64) (io.ReadCloser, error) {
+	if err := f.prove(ctx, served); err != nil {
+		return nil, err
+	}
+	return f.open(ctx, off, n)
 }
 
 // errUnproven is check's answer to a first response that states no total
@@ -226,16 +233,10 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 var errUnproven = errors.New("the response states no total size")
 
 func (f *file) check(ctx context.Context, res Response, off, n int64) error {
-	f.mu.Lock()
-	pin := f.pin
-	f.mu.Unlock()
 	if res.Total >= 0 && res.Total != f.size {
-		if pin.IsZero() {
-			// The first evidence of the object's size, unless another
-			// response pins the file meanwhile.
-			return f.pinTo(ctx, res)
-		}
-		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
+		// The first evidence of the object's size when the file is not
+		// pinned (pinTo tells), else a change.
+		return f.pinTo(ctx, res)
 	}
 	if start := max(res.Start, 0); start != off {
 		return fmt.Errorf("the store served bytes from %d for a range from %d", start, off)
@@ -243,6 +244,9 @@ func (f *file) check(ctx context.Context, res Response, off, n int64) error {
 	if res.Length >= 0 && res.Length != n {
 		return fmt.Errorf("the store returned %d bytes for a range of %d", res.Length, n)
 	}
+	f.mu.Lock()
+	pin := f.pin
+	f.mu.Unlock()
 	if pin.IsZero() {
 		return f.pinTo(ctx, res)
 	}
