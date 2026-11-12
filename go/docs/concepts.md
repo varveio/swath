@@ -27,9 +27,9 @@ permission; a few options need more, such as reading Azure blob tags ([sources.m
 Choose a dataset when a program will read the result, when the listing is long enough that an interruption
 would hurt, or when you need a record of how complete the result is ([output.md](output.md#choosing-an-output)).
 
-A local tree's dataset and text rows hold a row per directory as well as per file, with the directory's own
-`st_size` (often 4,096 bytes); `swath du` totals the files' sizes and counts directories separately. The two
-byte totals of one tree therefore differ.
+With the default metadata and directory-row options, local text rows and datasets include each directory's own
+size (`st_size` on Unix). `swath du` excludes directory sizes from its byte totals and counts directories
+separately, so its total can differ from the sum of the listing's `size` column.
 
 ## Keys and order
 
@@ -68,8 +68,9 @@ The manifest's **coverage** says how much of the recorded scope the dataset hold
 
 - `complete`: the listing reached the end of its scope;
 - `stop_reason`: why it stopped (`completed` for a finished run);
-- `skipped_entries`: errors that kept entries or subtrees out of the result. Entries that vanished during a
-  local walk are not counted, and a symbolic link whose target could not be read keeps its row;
+- `skipped_entries`: errors that kept entries or subtrees out of the result. Entries found missing during stat and
+  failed symbolic-link target reads are excluded; a failed target read retains the symlink row. A directory that
+  disappears before it can be opened still contributes an open error;
 - `filters`: the filters that left rows out ([filters.md](filters.md));
 - `exclusions`: what was left out by design, such as an output directory inside the listed tree.
 
@@ -123,7 +124,7 @@ crash or a kill), the published parts and the journal stay. `swath resume DIR` t
 What a resume promises: no recorded key is listed into the dataset again and none in scope is skipped. On a
 source that did not change, the resumed dataset holds the same rows as an uninterrupted run. Its parts are
 byte-identical to that run's only with the same build and encoder path and without time-based cuts
-(`--part-interval`), and the manifest's timestamps differ. Rows listed but not yet in a recorded part are listed
+(`--part-interval`), and the manifest's timestamps can differ. Rows listed but not yet in a recorded part are listed
 again, except where certified spill files let the resume replay them ([running.md](running.md#stopping-and-resuming)).
 
 What it does not: a resume does not see changes the source made, since the first attempt, to keys before the
@@ -151,8 +152,9 @@ also holds each directory's entries while it reads them, so one very large direc
 When swath settles a run, its **outcome** records an exit code ([reference/exit-codes.md](reference/exit-codes.md)),
 a class (`completed`, `fatal`, `interrupted`, `deadline`, ...) and, when there is one, a cause. `--report FILE`
 asks for the outcome with the run's counters, request counts and resources; a crash or a forced kill can leave no
-report. For AWS S3 and GCS at their own endpoints the report also estimates the listing requests' cost at the
-provider's list price ([reference/run-report.md](reference/run-report.md)). Keep the report and `swath --version`
+report. The report can also estimate listing-request cost for AWS S3 and GCS at the provider's reference rate. S3
+estimates require no endpoint override; GCS estimates require its default service endpoint
+([reference/run-report.md](reference/run-report.md)). Keep the report and `swath --version`
 with any dataset you may need to investigate.
 
 ## Next

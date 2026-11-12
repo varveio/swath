@@ -211,8 +211,8 @@ shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
 A local walk that cannot read some entries (permissions, entries removed during the walk, a link target it
 cannot read) names up to five on stderr with their cause, counts the rest, and still exits 0. Local entry errors
 can leave rows out or metadata unavailable: a symbolic link whose target cannot be read keeps its row.
-`outcome.unreadable` in the report reflects entry errors; `coverage.skipped_entries` excludes vanished entries
-and failed link-target reads.
+`outcome.unreadable` in the report reflects entry errors; `coverage.skipped_entries` excludes entries found missing
+during stat and failed link-target reads, but includes failed directory opens.
 
 ## Reporting a problem
 
