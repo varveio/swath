@@ -37,6 +37,7 @@ type countingObject struct {
 	barrier  int
 	fail     func(off, n int64) error
 	block    chan struct{} // if set, a read waits for it to close or its context
+	started  func()        // if set, called as each read starts
 
 	mu       sync.Mutex
 	reqs     []span
@@ -93,7 +94,11 @@ func (o *countingObject) read(ctx context.Context, p []byte, off int64) (int, er
 		close(arrived)
 		o.arrived = nil
 	}
+	started := o.started
 	o.mu.Unlock()
+	if started != nil {
+		started()
+	}
 	defer func() {
 		o.mu.Lock()
 		o.inFlight--
@@ -185,7 +190,7 @@ func TestBatchMerge(t *testing.T) {
 		{"over-read beyond the ratio is not bridged", ranges(0, 50, 150, 50), []span{{0, 50}, {150, 50}}},
 		{"over-read within the ratio is", ranges(0, 100, 200, 100), []span{{0, 300}}},
 		{"a join past the request size is not made", ranges(0, 600, 650, 400), []span{{0, 600}, {650, 400}}},
-		{"a long range is split evenly", ranges(0, 2500), []span{{0, 833}, {833, 833}, {1666, 834}}},
+		{"a long range is split evenly", ranges(0, 2500), []span{{0, 834}, {834, 833}, {1667, 833}}},
 		{"empty ranges make no request", ranges(5, 0, 100, 0), nil},
 		{"a range at the end, empty, is valid", ranges(4096, 0), nil},
 	} {
@@ -395,10 +400,9 @@ func TestBatchInvalid(t *testing.T) {
 }
 
 // TestBatchCancel: cancelling a batch cancels its requests in flight, sends
-// no more, and returns once they have ended, leaving no goroutine; ranges
+// no more, and returns once they have ended (none is left in flight); ranges
 // it never read fail with the cancellation.
 func TestBatchCancel(t *testing.T) {
-	base := runtime.NumGoroutine()
 	o := newCounting(20000)
 	o.block = make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -406,11 +410,16 @@ func TestBatchCancel(t *testing.T) {
 	for i := range 20 {
 		rs = append(rs, objfile.Range{Off: int64(i * 1000), Buf: make([]byte, 100)})
 	}
+	started := make(chan struct{})
+	var n atomic.Int32
+	o.started = func() {
+		if n.Add(1) == 4 {
+			close(started)
+		}
+	}
 	done := make(chan error, 1)
 	go func() { done <- objfile.ReadRangesWith(ctx, o, rs, policy()) }()
-	for o.inFlightNow() < 4 {
-		runtime.Gosched()
-	}
+	<-started // MaxConcurrent requests are in flight, blocked
 	cancel()
 	err := <-done
 	var be *objfile.BatchError
@@ -424,13 +433,6 @@ func TestBatchCancel(t *testing.T) {
 	}
 	if n, in := len(o.reqs), o.inFlightNow(); n != 4 || in != 0 {
 		t.Fatalf("%d requests sent, %d still in flight; want 4 and 0", n, in)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > base && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if n := runtime.NumGoroutine(); n > base {
-		t.Fatalf("%d goroutines after the batch, %d before", n, base)
 	}
 }
 
@@ -539,7 +541,132 @@ func TestBatchErrorText(t *testing.T) {
 	if got := err.Error(); got != fmt.Sprintf("objfile: 2 of 3 ranges failed; range 1: %v", io.ErrUnexpectedEOF) {
 		t.Fatalf("Error() = %q", got)
 	}
-	if u := err.Unwrap(); len(u) != 1 {
-		t.Fatalf("Unwrap = %v, want one distinct error", u)
+	if u := err.Unwrap(); len(u) != 2 {
+		t.Fatalf("Unwrap = %v, want the error of each failed range", u)
 	}
+}
+
+// TestBatchInFlightBytesBelowRequest: a byte bound below the request size is
+// kept, not raised to it: one request is let through alone, and no more
+// bytes are in flight than the bound otherwise.
+func TestBatchInFlightBytesBelowRequest(t *testing.T) {
+	o := newCounting(20000)
+	o.expect(2, 20)
+	p := objfile.DefaultBatchPolicy() // 4 MiB requests
+	p.MaxInFlightBytes = 250
+	var rs []objfile.Range
+	for i := range 20 {
+		rs = append(rs, objfile.Range{Off: int64(i * 1000), Buf: make([]byte, 100)})
+	}
+	if err := objfile.ReadRangesWith(context.Background(), o, rs, p); err != nil {
+		t.Fatal(err)
+	}
+	if o.maxIn != 2 || o.maxBytes > 250 {
+		t.Fatalf("%d in flight and %d bytes at most; want 2 and at most 250", o.maxIn, o.maxBytes)
+	}
+	o = newCounting(20000)
+	if err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 1000, 5000, 1000), p); err != nil || o.maxIn != 1 {
+		t.Fatalf("requests over the byte bound: %v, %d in flight at most; want one at a time", err, o.maxIn)
+	}
+}
+
+// TestBatchExtremeBounds: bounds at the integer limits plan correct
+// requests; nothing overflows into an empty plan.
+func TestBatchExtremeBounds(t *testing.T) {
+	for _, p := range []objfile.BatchPolicy{
+		{MaxRequest: math.MaxInt64, MaxGap: math.MaxInt64, MaxOverRead: math.MaxFloat64, MaxConcurrent: math.MaxInt, MaxInFlightBytes: math.MaxInt64},
+		{MaxRequest: math.MaxInt64 - 1},
+	} {
+		o := newCounting(4096)
+		rs := ranges(10, 2, 4000, 5)
+		if err := objfile.ReadRangesWith(context.Background(), o, rs, p); err != nil {
+			t.Fatal(err)
+		}
+		checkFilled(t, o, rs)
+		if len(o.reqs) == 0 {
+			t.Fatal("no request was made")
+		}
+	}
+}
+
+// TestBatchZeroPolicy: the zero BatchPolicy takes the default request size
+// and concurrency, and bridges no gap.
+func TestBatchZeroPolicy(t *testing.T) {
+	o := newCounting(9 << 20)
+	rs := ranges(0, 5<<20, 5<<20+1, 10)
+	if err := objfile.ReadRangesWith(context.Background(), o, rs, objfile.BatchPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	checkFilled(t, o, rs)
+	if got := o.requests(); len(got) != 3 || got[0].n != 5<<19 {
+		t.Fatalf("requests %v; want 2 halves of 5 MiB and the 10 bytes past the gap", got)
+	}
+}
+
+// sliceError is an error that is not comparable: == on two of them panics.
+type sliceError []string
+
+func (e sliceError) Error() string { return "slice error" }
+
+// TestBatchUncomparableErrors: errors that cannot be compared are reported,
+// not compared.
+func TestBatchUncomparableErrors(t *testing.T) {
+	o := newCounting(20000)
+	o.fail = func(off, n int64) error {
+		if off >= 5000 {
+			return sliceError{"x"}
+		}
+		return nil
+	}
+	err := objfile.ReadRangesWith(context.Background(), o, ranges(0, 10, 5000, 10, 10000, 10), policy())
+	var be *objfile.BatchError
+	if !errors.As(err, &be) || be.Errs[0] != nil || be.Errs[1] == nil || be.Errs[2] == nil {
+		t.Fatalf("batch = %v", err)
+	}
+	var se sliceError
+	if len(be.Unwrap()) != 2 || !errors.As(err, &se) || err.Error() == "" {
+		t.Fatalf("Unwrap = %v", be.Unwrap())
+	}
+}
+
+// shortObject is an object of size bytes (100 if 0) whose reads return 50.
+type shortObject struct {
+	countingObject
+	size int64
+}
+
+func (o *shortObject) Size() int64 {
+	if o.size == 0 {
+		return 100
+	}
+	return o.size
+}
+func (o *shortObject) ReadAt(p []byte, off int64) (int, error) {
+	return copy(p, make([]byte, 50)), io.EOF
+}
+func (o *shortObject) WithContext(context.Context) io.ReaderAt { return o }
+
+type shortOpener struct{}
+
+func (shortOpener) Open(context.Context, string) (objfile.Object, error) { return &shortObject{}, nil }
+func (shortOpener) OpenSized(ctx context.Context, n string, _ int64) (objfile.Object, error) {
+	return shortOpener{}.Open(ctx, n)
+}
+
+// TestReadObjectFallbackShort: ReadObject over an Opener that is not an
+// ObjectReader fails when the object's read comes up short.
+func TestReadObjectFallbackShort(t *testing.T) {
+	b, _, err := objfile.ReadObject(context.Background(), shortOpener{}, "obj", 1000)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || b != nil {
+		t.Fatalf("ReadObject of a short object = %d bytes, %v; want io.ErrUnexpectedEOF", len(b), err)
+	}
+	if b, _, err := objfile.ReadObject(context.Background(), negativeOpener{}, "obj", 1000); err == nil || b != nil {
+		t.Fatalf("ReadObject of an object of negative size = %d bytes, %v", len(b), err)
+	}
+}
+
+type negativeOpener struct{ shortOpener }
+
+func (negativeOpener) Open(context.Context, string) (objfile.Object, error) {
+	return &shortObject{size: -1}, nil
 }

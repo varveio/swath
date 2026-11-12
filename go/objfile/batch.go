@@ -40,7 +40,7 @@ type RangeReader interface {
 
 // BatchError is the error of a batch in which some ranges failed: Errs[i]
 // is the error of the batch's ranges[i], nil for a range that was filled.
-// errors.Is and errors.As see each distinct error.
+// errors.Is and errors.As see each range's error.
 type BatchError struct {
 	Errs []error
 }
@@ -61,11 +61,12 @@ func (e *BatchError) Error() string {
 	return fmt.Sprintf("objfile: %d of %d ranges failed; range %d: %v", failed, len(e.Errs), first, e.Errs[first])
 }
 
-// Unwrap returns the distinct errors of the failed ranges.
+// Unwrap returns the errors of the failed ranges, one for each (an error a
+// request gave appears once for each range it failed).
 func (e *BatchError) Unwrap() []error {
 	var out []error
 	for _, err := range e.Errs {
-		if err != nil && !slices.Contains(out, err) {
+		if err != nil {
 			out = append(out, err)
 		}
 	}
@@ -78,9 +79,15 @@ func (e *BatchError) Unwrap() []error {
 // bytes, the joined request is at most MaxRequest bytes, and the request's
 // discarded bytes stay at most MaxOverRead times its requested bytes. A
 // run of requested bytes longer than MaxRequest is split into requests of
-// near-equal length. At most MaxConcurrent requests of a batch are in
-// flight at once, holding at most MaxInFlightBytes between them (a single
-// request is always let through).
+// near-equal length. The plan is greedy, in object order: runs are split
+// first, and each piece joins the request before it when the bounds allow,
+// which need not give the fewest requests. At most MaxConcurrent requests of
+// a batch are in flight at once, holding at most MaxInFlightBytes between
+// them (a single request is always let through, whatever its size).
+//
+// MaxGap and MaxOverRead of 0 bridge no gap. MaxRequest, MaxConcurrent and
+// MaxInFlightBytes of 0 (or less) take DefaultBatchPolicy's, so a policy
+// that sets only the gap bounds, or the zero BatchPolicy, is usable.
 type BatchPolicy struct {
 	MaxGap           int64
 	MaxRequest       int64
@@ -105,15 +112,22 @@ func DefaultBatchPolicy() BatchPolicy {
 	}
 }
 
-// normal is p with each bound at its least meaningful value: no gap or
-// over-read below 0, requests and concurrency of at least 1, and in-flight
-// bytes of at least one request.
+// normal is p with no gap or over-read below 0, and DefaultBatchPolicy's
+// bounds for the request size, concurrency and in-flight bytes it leaves
+// at 0 or below.
 func (p BatchPolicy) normal() BatchPolicy {
+	d := DefaultBatchPolicy()
 	p.MaxGap = max(p.MaxGap, 0)
 	p.MaxOverRead = max(p.MaxOverRead, 0)
-	p.MaxRequest = max(p.MaxRequest, 1)
-	p.MaxConcurrent = max(p.MaxConcurrent, 1)
-	p.MaxInFlightBytes = max(p.MaxInFlightBytes, p.MaxRequest)
+	if p.MaxRequest <= 0 {
+		p.MaxRequest = d.MaxRequest
+	}
+	if p.MaxConcurrent <= 0 {
+		p.MaxConcurrent = d.MaxConcurrent
+	}
+	if p.MaxInFlightBytes <= 0 {
+		p.MaxInFlightBytes = d.MaxInFlightBytes
+	}
 	return p
 }
 
@@ -203,10 +217,21 @@ func plan(ranges []Range, p BatchPolicy) *batch {
 	// a piece joined to the span before it across a gap the policy allows.
 	var useful int64 // requested bytes of the last span
 	for _, r := range runs {
+		// parts pieces of n/parts bytes, the first n%parts one byte more,
+		// computed without overflow whatever MaxRequest is.
 		n := r.end - r.off
-		parts := (n + p.MaxRequest - 1) / p.MaxRequest
+		parts := n / p.MaxRequest
+		if n%p.MaxRequest != 0 {
+			parts++
+		}
+		piece, longer := n/parts, n%parts
+		end := r.off
 		for k := range parts {
-			off, end := r.off+n*k/parts, r.off+n*(k+1)/parts
+			off := end
+			end = off + piece
+			if k < longer {
+				end++
+			}
 			if last := len(b.spans) - 1; last >= 0 {
 				s := &b.spans[last]
 				gap := off - s.end
@@ -251,7 +276,7 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy, first bool) {
 		k   int
 		err error
 	}
-	done := make(chan result, p.MaxConcurrent)
+	done := make(chan result, min(p.MaxConcurrent, len(b.spans)))
 	r := f.WithContext(ctx)
 	var (
 		next, inFlight int
@@ -260,6 +285,9 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy, first bool) {
 		cancelled      = ctx.Done()
 	)
 	for next < len(b.spans) || inFlight > 0 {
+		if !stopped && ctx.Err() != nil {
+			stopped = true // a cancellation seen with a completion: send nothing more
+		}
 		if next < len(b.spans) && !stopped {
 			n := b.spans[next].end - b.spans[next].off
 			if inFlight == 0 || (!first && inFlight < p.MaxConcurrent && inBytes+n <= p.MaxInFlightBytes) {
