@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -120,13 +121,26 @@ func (rec *Recorder) Wrap(h http.Handler) http.Handler {
 }
 
 // cutWriter writes at most left bytes of a body, then nothing: the client
-// sees the body end short of its Content-Length.
+// sees the body end short of its Content-Length. Its headers are typed as
+// a fake's passed-through body is (typeBody).
 type cutWriter struct {
 	http.ResponseWriter
-	left int
+	left        int
+	wroteHeader bool
+}
+
+func (c *cutWriter) WriteHeader(code int) {
+	if !c.wroteHeader {
+		c.wroteHeader = true
+		typeBody(c.ResponseWriter.Header())
+	}
+	c.ResponseWriter.WriteHeader(code)
 }
 
 func (c *cutWriter) Write(p []byte) (int, error) {
+	if !c.wroteHeader {
+		c.WriteHeader(http.StatusOK)
+	}
 	if c.left <= 0 {
 		return 0, errors.New("cut")
 	}
@@ -428,7 +442,31 @@ func UnknownTotal(h http.Handler) http.Handler {
 			w.Header().Set("Content-Range", total.ReplaceAllString(cr, "/*"))
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(rec.Body.Len()))
+		typeBody(w.Header())
 		w.WriteHeader(rec.Code)
 		_, _ = w.Write(rec.Body.Bytes())
 	})
+}
+
+// typeBody sets the Content-Type of a response whose body a wrapper passes
+// through from a fake, before the body is written, and forbids sniffing:
+// the clients are SDKs, never browsers, but the bytes are a request's
+// (an object's), so the response is never one a browser could take for a
+// page. As go/bench/faultproxy types the bodies it passes through: the
+// fake's own type when it is one of the non-HTML types the fakes send
+// (kept, as the SDKs read it), else application/octet-stream (net/http
+// would otherwise sniff one from the bytes, text/html included). Each type
+// is set as a constant.
+func typeBody(h http.Header) {
+	switch mt, _, _ := mime.ParseMediaType(h.Get("Content-Type")); mt {
+	case "application/json":
+		h.Set("Content-Type", "application/json")
+	case "application/xml":
+		h.Set("Content-Type", "application/xml")
+	case "text/xml":
+		h.Set("Content-Type", "text/xml")
+	default:
+		h.Set("Content-Type", "application/octet-stream")
+	}
+	h.Set("X-Content-Type-Options", "nosniff")
 }
