@@ -69,7 +69,7 @@ func crashConfig(url, out string, resume bool) Config {
 // meets a time-cut part.
 func TestCrashMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
-	s3url, gcsep := crashBucket(t), gcsBucket(t, 8000)
+	s3url, gcsep, azep := crashBucket(t), gcsBucket(t, 8000), azblobBucket(t, 8000)
 	var trickle []string
 	for i := range 400 {
 		trickle = append(trickle, fmt.Sprintf("k%04d", i))
@@ -80,7 +80,7 @@ func TestCrashMatrix(t *testing.T) {
 		config    func(out string, resume bool) Config
 		spill     []bool
 		intervals []time.Duration
-		nth       []int64 // occurrences to crash at, within each run (the GCS run has fewer parts and requests)
+		nth       []int64 // occurrences to crash at, within each run (the GCS and Azure runs have fewer parts and requests)
 		// absent: the points not on this provider's path (the scripted
 		// source sends no requests and has no range engine). Every other
 		// point's first occurrence must be reached; later ones are
@@ -93,6 +93,7 @@ func TestCrashMatrix(t *testing.T) {
 	}{
 		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}, nil, calibrating},
 		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating},
+		{"azblob", func(out string, resume bool) Config { return azblobConfig(azep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating},
 		{"trickle", func(out string, resume bool) Config {
 			scriptMu.Lock()
 			scriptNext = &scripted{keys: trickle, chunk: 1, slow: time.Millisecond}
