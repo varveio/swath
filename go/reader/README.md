@@ -104,19 +104,9 @@ type PrefixAggregate struct { Count, Bytes *int64 } // nil: not requested or not
 
 ```
 
-A reader of current objects opens the dataset, decides from its metadata whether it will do, and streams it:
-
-```go
-d, err := reader.OpenDir(ctx, dir, reader.Options{}) // or reader.Open over a reader.Source (objfile)
-defer d.Close()
-m := d.Metadata()                        // m.Source, m.Scope, m.Coverage: the application's to judge
-err = d.CheckSchema(ctx)                 // once, before reading, to check every part
-err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
-entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000})
-// the next page: ListRequest{..., Cursor: entries[len(entries)-1].Cursor()}
-err = d.Scan(ctx, reader.ScanRequest{Prefix: []byte("logs/"), Workers: runtime.GOMAXPROCS(0)},
-	func(batch []reader.Object) error { /* called concurrently; do not keep batch */ return nil })
-```
+A reader opens the dataset, decides from its metadata whether it will do, checks it and reads it.
+[example_test.go](example_test.go) does that over a small committed dataset (`testdata/photos`), and lists it
+by delimiter a page at a time; `go test` runs both, and `go doc -all` shows them.
 
 For a whole-run tally without constructing Objects, select only the optional fields it needs:
 
