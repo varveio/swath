@@ -12,9 +12,10 @@
 // a ReadRanges batch, sent concurrently. Once pinned, a 412, a 404, or a
 // response naming another ETag, version or size fails the read with
 // objfile.ErrObjectChanged. Before a pin (a first sized read, a whole-object
-// read), a 404 is an error wrapping fs.ErrNotExist, a 412 (no condition was
-// sent) is the store's error, and another size is an
-// objfile.SizeMismatchError.
+// read), a 404 is an error wrapping fs.ErrNotExist and a 412 (no condition
+// was sent) is the store's error; a first sized read (OpenSized) that finds
+// another size is an objfile.SizeMismatchError. A whole-object read has no
+// size to expect: one over its limit is objfile.ErrTooLarge.
 // Without a non-null version id, separate creations with the same ETag and
 // size cannot be distinguished. The service must honor If-Match on reads
 // and conditional deletes, and If-None-Match on creation.

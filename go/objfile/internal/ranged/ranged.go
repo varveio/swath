@@ -472,6 +472,14 @@ func ReadObject(ctx context.Context, name string, limit int64, get Getter) ([]by
 	}
 	b := make([]byte, size)
 	m, err := readToEnd(res.Body, b)
+	if err == nil && m == len(b) {
+		// Transport ends a whole read's failed body as if it ended (so
+		// the SDK does not resume it): a failure it kept, or the context's,
+		// is not a clean end.
+		if err = failure.get(); err == nil {
+			err = ctx.Err()
+		}
+	}
 	if err != nil && m == len(b) {
 		// Every byte arrived, but the body did not end cleanly: an error
 		// with its last bytes or at its end (the GCS reader's CRC32C check

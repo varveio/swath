@@ -4,6 +4,8 @@
 package ranged
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -110,5 +112,56 @@ func TestTransportEndsFailedBody(t *testing.T) {
 	}
 	if n, err := res.Body.Read(make([]byte, 4)); n != 2 || err != io.EOF {
 		t.Fatalf("Read = %d, %v; want 2, io.EOF", n, err)
+	}
+}
+
+// TestReadObjectThroughTransport: a whole read through Transport, which
+// ends a failed body as if it ended and keeps the failure: a failure with
+// the last bytes, or after them, or a cancellation as the body ends, fails
+// ReadObject, with no ranged read after it.
+func TestReadObjectThroughTransport(t *testing.T) {
+	data := []byte("0123456789")
+	broken := errors.New("connection reset")
+	for _, c := range []struct {
+		name   string
+		steps  func(cancel context.CancelFunc) []step
+		cancel bool
+	}{
+		{"error with the last bytes", func(context.CancelFunc) []step { return []step{{b: data[:4]}, {b: data[4:], err: broken}} }, false},
+		{"error after the last bytes", func(context.CancelFunc) []step { return []step{{b: data}, {err: broken}} }, false},
+		{"cancelled as the body ends", func(cancel context.CancelFunc) []step {
+			return []step{{b: data}, {err: context.Canceled, before: cancel}}
+		}, true},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		base := roundTripper(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: http.Header{"Etag": {`"e"`}}, ContentLength: int64(len(data)),
+				Body: &script{steps: c.steps(cancel)}}, nil
+		})
+		client := &http.Client{Transport: Transport(base)}
+		ranged := 0
+		get := func(ctx context.Context, off, n int64, pin Pin) (Response, error) {
+			if n >= 0 {
+				ranged++
+				return Response{}, errors.New("no ranged read expected")
+			}
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://store/bkt/obj", nil)
+			res, err := client.Do(req)
+			if err != nil {
+				return Response{}, err
+			}
+			return Response{Body: res.Body, Pin: Pin{ETag: res.Header.Get("ETag")}, Start: -1, Total: -1, Length: res.ContentLength}, nil
+		}
+		b, _, err := ReadObject(ctx, "obj", 100, get)
+		if err == nil || ranged != 0 {
+			t.Errorf("%s: ReadObject = %q, %v after %d ranged reads; want an error and none", c.name, b, err, ranged)
+		}
+		if !c.cancel && !errors.Is(err, broken) {
+			t.Errorf("%s: %v, want the body's failure", c.name, err)
+		}
+		if c.cancel && !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: %v, want context.Canceled", c.name, err)
+		}
+		cancel()
 	}
 }

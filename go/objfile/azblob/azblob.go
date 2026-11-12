@@ -12,8 +12,10 @@
 // batch, sent concurrently. Once pinned, a 412, a 404, or a response naming
 // another ETag or size fails the read with objfile.ErrObjectChanged. Before
 // a pin (a first sized read, a whole-object read), a 404 is an error wrapping
-// fs.ErrNotExist, a 412 (no condition was sent) is the store's error, and
-// another size is an objfile.SizeMismatchError.
+// fs.ErrNotExist and a 412 (no condition was sent) is the store's error; a
+// first sized read (OpenSized) that finds another size is an
+// objfile.SizeMismatchError. A whole-object read has no size to expect: one
+// over its limit is objfile.ErrTooLarge.
 //
 // Reads use the current blob's ETag; Azure snapshots and version-id reads are
 // not exposed. The service must honor If-Match and If-None-Match conditions.

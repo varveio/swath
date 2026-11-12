@@ -602,8 +602,9 @@ type script struct {
 }
 
 type step struct {
-	b   []byte
-	err error
+	b      []byte
+	err    error
+	before func() // if set, runs when the step is reached
 }
 
 func (s *script) Read(p []byte) (int, error) {
@@ -611,6 +612,10 @@ func (s *script) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	st := s.steps[0]
+	if st.before != nil {
+		st.before()
+		s.steps[0].before = nil
+	}
 	n := copy(p, st.b)
 	if n < len(st.b) {
 		s.steps[0].b = st.b[n:]
@@ -634,11 +639,11 @@ func TestReadObjectEnd(t *testing.T) {
 		steps []step
 		ok    bool
 	}{
-		{"clean", []step{{data, nil}}, true},
-		{"EOF with the last bytes", []step{{data, io.EOF}}, true},
-		{"error after the last bytes", []step{{data, nil}, {nil, bad}}, false},
-		{"error with the last bytes", []step{{data[:5], nil}, {data[5:], bad}}, false},
-		{"a byte past the length", []step{{data, nil}, {[]byte("x"), nil}}, false},
+		{"clean", []step{{b: data}}, true},
+		{"EOF with the last bytes", []step{{b: data, err: io.EOF}}, true},
+		{"error after the last bytes", []step{{b: data}, {err: bad}}, false},
+		{"error with the last bytes", []step{{b: data[:5]}, {b: data[5:], err: bad}}, false},
+		{"a byte past the length", []step{{b: data}, {b: []byte("x")}}, false},
 	} {
 		var ranged int
 		get := func(_ context.Context, off, n int64, pin Pin) (Response, error) {

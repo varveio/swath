@@ -12,8 +12,9 @@
 // ReadRanges batch, sent concurrently. A read of a generation that no longer
 // exists, or one finding another size, fails with objfile.ErrObjectChanged.
 // Before a pin (a first sized read, a whole-object read), a missing object
-// is an error wrapping fs.ErrNotExist and another size an
-// objfile.SizeMismatchError. One served from another offset fails. A
+// is an error wrapping fs.ErrNotExist; a first sized read (OpenSized) that
+// finds another size is an objfile.SizeMismatchError. A whole-object read
+// has no size to expect: one over its limit is objfile.ErrTooLarge. One served from another offset fails. A
 // whole-object read is read to the body's end, where the SDK's reader checks
 // the object's CRC32C; ranged reads carry no checksum the SDK checks.
 //
