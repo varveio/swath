@@ -12,10 +12,11 @@ core package uses only the standard library. Provider packages use their officia
 SDKs; all three SDKs appear in the module graph, but a program links only the
 providers it imports. Importing `objfile/remote` links all three.
 
-objfile handles individual objects. It does not list, cache, rename, or overwrite
-them, or decide which bytes a reader needs; dataset publication and recovery belong
-to the application. Given a batch of ranges a reader needs, it plans the requests
-that fetch them: merging, splitting and running them concurrently.
+objfile handles individual objects. It does not list, rename, or overwrite them, or
+decide which bytes a reader needs; dataset publication and recovery belong to the
+application. Given a batch of ranges a reader needs, it plans the requests that
+fetch them: merging, splitting and running them concurrently. An optional byte
+cache keeps fetched ranges of pinned versions.
 
 ## Read a remote file
 
@@ -181,6 +182,33 @@ true: its clients send through a transport that reports every HTTP attempt, the
 SDKs' own retries and the GCS reader's reopening of a cut body included. A store
 package over a caller's client reports false: it reports each request it makes,
 but not the retries the SDK makes inside one. Every wrapper reports what it wraps.
+
+## Cache fetched bytes
+
+`Cache(opener, scope, cache)` keeps the bytes reads fetch in a `ByteCache`, which
+several stores may share, and serves later reads of the same version from it with no
+request. Nothing is cached without the wrapper; `NewByteCache(n)` bounds the bytes
+the cache owns, copies a reader is making included, dropping the least recently used
+ranges.
+
+```go
+cache, err := objfile.NewByteCache(64 << 20)
+...
+o := objfile.Pin(objfile.Cache(store, store.Scope(), cache), store.Scope())
+```
+
+Bytes are keyed by the scope, the name given to the wrapper, the object's
+`Identity` and the range, and a read uses the cache only when its Object already had
+an Identity as the read began. So a cached byte never proves anything: the first read
+of an `OpenSized` Object, and every read of one `Pin` has not checked yet, goes to
+the store, and a reopened replaced object has another identity. Only complete
+successful reads are kept. A batch serves the ranges the cache holds and sends the
+rest as one batch. `ReadObject` is never cached. Concurrent reads of the same
+uncached range each make their request.
+
+`WithCacheMode(ctx, CacheBypass)` makes an operation neither use nor fill the cache,
+for a scan that would only evict what interactive reads need; pin checks still run.
+`ReadAt` without a context uses the cache.
 
 ## Upload an object
 

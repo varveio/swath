@@ -300,7 +300,7 @@ func TestCompositionMatrix(t *testing.T) {
 		{name: "pinned empty, replaced full", data: []byte{}, mapped: 0, given: 0, record: true, change: "replace", with: data},
 	}
 	ops := []string{"Open+ReadAt", "OpenSized+ReadAt", "Open+ReadRanges", "OpenSized+ReadRanges", "OpenSized+ReuseReadRanges", "ReadObject"}
-	layers := []string{"Root", "Limit", "Batch", "KnownSizes", "Pin"}
+	layers := []string{"Root", "Limit", "Batch", "KnownSizes", "Pin", "Cache"}
 	var perms [][]string
 	var permute func(prefix, rest []string)
 	permute = func(prefix, rest []string) {
@@ -339,6 +339,12 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	// Built innermost first; layers above Root see root-relative names.
 	rootBelow := false
 	var o objfile.Opener = st
+	cache, cerr := objfile.NewByteCache(1 << 20)
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	var warm func() // fills the cache through a Cache wrapper of its own
+
 	local := func() string {
 		if rootBelow {
 			return "obj"
@@ -355,6 +361,23 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 			o = mustBatch(t, o, objfile.BatchPolicy{MaxRequest: 10, MaxConcurrent: 4})
 		case "KnownSizes":
 			o = objfile.KnownSizes(o, map[string]int64{local(): fx.mapped})
+		case "Cache":
+			o = objfile.Cache(o, scope, cache)
+			var w objfile.Opener = objfile.Cache(st, scope, cache)
+			if rootBelow {
+				w = objfile.Cache(objfile.Root(st, "ds"), scope, cache)
+			}
+			name := local()
+			warm = func() {
+				f, err := w.Open(ctx, name)
+				if err != nil || f.Size() == 0 {
+					return
+				}
+				p := make([]byte, f.Size())
+				if _, err := f.ReadAt(p, 0); err != nil {
+					t.Fatalf("warming the cache: %v", err)
+				}
+			}
 		case "Pin":
 			if restored {
 				snap := fmt.Sprintf(`{"version":1,"scope":%q,"objects":{%q:{"size":%d,"identity":"1"}}}`, scope, local(), len(fx.data))
@@ -370,6 +393,12 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	}
 	const name = "obj" // Root is in every order
 
+	// A cache warmed with the object as it is before the change: no read
+	// after it may be served bytes another version, or an unchecked size,
+	// would not give.
+	if warm != nil {
+		warm()
+	}
 	if fx.record && !restored {
 		if _, _, err := objfile.ReadObject(ctx, o, name, 1<<20); err != nil {
 			t.Fatalf("recording the pin: %v", err)
@@ -511,6 +540,19 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		t.Fatalf("%d requests in flight, over the limit of %d", st.maxIn, limit)
 	}
 	if !batched {
+		return
+	}
+	if warm != nil && err == nil && n > 0 {
+		// Ranges the cache held are served without a request; an Object
+		// not yet pinned at the batch (a sized one, KnownSizes' Open
+		// included, or one Pin has not checked) is read from the store.
+		plans := obs.Plans()
+		if len(plans) > 1 || len(st.reads) > (int(n)+9)/10 {
+			t.Fatalf("a batch over a warm cache: %d plans, %d requests", len(plans), len(st.reads))
+		}
+		if !bytes.Equal(rs[0].Buf, fx.data[:n]) {
+			t.Fatal("the batch read the wrong bytes")
+		}
 		return
 	}
 	if err != nil {

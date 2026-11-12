@@ -3,8 +3,8 @@
 
 // Package objfile provides pinned byte-range reads, create-only uploads and
 // conditional deletes for objects in S3, Google Cloud Storage and Azure Blob
-// Storage. It does not list objects or cache bytes, and does not decide which
-// bytes a reader needs; given a batch of ranges (ReadRanges), it plans the
+// Storage. It does not list objects, and does not decide which bytes a
+// reader needs; given a batch of ranges (ReadRanges), it plans the
 // requests that fetch them, merged, split and run concurrently under a
 // BatchPolicy. Every read of an Object returns bytes of the version it
 // pinned, or fails with ErrObjectChanged and returns none of another
@@ -19,7 +19,9 @@
 //
 // An Observer on a context (WithObserver) is told of every physical request
 // made under it, through every wrapper; IOReporter says whether that
-// observation includes the requests an SDK retries itself.
+// observation includes the requests an SDK retries itself. Cache keeps
+// fetched bytes of pinned versions in a ByteCache, off unless used, and
+// CacheMode lets an operation bypass it.
 package objfile
 
 import (

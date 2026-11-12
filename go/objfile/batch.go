@@ -191,29 +191,10 @@ func ReadRanges(ctx context.Context, f Object, ranges []Range) error {
 // error wrapping ErrObjectChanged, fs.ErrNotExist or a *SizeMismatchError
 // before that, the ranges not yet read fail with that error, unsent.
 func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy) error {
-	if err := p.Validate(); err != nil {
+	if err := checkBatch(f.Size(), ranges, p); err != nil {
 		return err
 	}
-	if len(ranges) > MaxBatchRanges {
-		return fmt.Errorf("objfile: a batch of %d ranges, at most %d: %w", len(ranges), MaxBatchRanges, fs.ErrInvalid)
-	}
 	p = p.normal()
-	size := f.Size()
-	var total, pieces int64
-	for i, r := range ranges {
-		n := int64(len(r.Buf))
-		if r.Off < 0 || r.Off > size || n > size-r.Off {
-			return fmt.Errorf("objfile: range %d (%d bytes at %d) is not within the object's %d bytes: %w",
-				i, n, r.Off, size, fs.ErrInvalid)
-		}
-		var ok bool
-		if total, ok = addBatchBytes(total, n); !ok {
-			return fmt.Errorf("objfile: a batch of more than %d bytes: %w", MaxBatchBytes, fs.ErrInvalid)
-		}
-		if pieces += n/p.MaxRequest + 2; pieces > maxBatchPieces {
-			return fmt.Errorf("objfile: a batch of more than %d pieces of at most %d bytes: %w", maxBatchPieces, p.MaxRequest, fs.ErrInvalid)
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -230,6 +211,34 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 		return nil
 	}
 	return &BatchError{Errs: errs}
+}
+
+// checkBatch checks a batch of ranges of an object of size bytes under p
+// before any request, as ReadRangesWith says.
+func checkBatch(size int64, ranges []Range, p BatchPolicy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if len(ranges) > MaxBatchRanges {
+		return fmt.Errorf("objfile: a batch of %d ranges, at most %d: %w", len(ranges), MaxBatchRanges, fs.ErrInvalid)
+	}
+	p = p.normal()
+	var total, pieces int64
+	for i, r := range ranges {
+		n := int64(len(r.Buf))
+		if r.Off < 0 || r.Off > size || n > size-r.Off {
+			return fmt.Errorf("objfile: range %d (%d bytes at %d) is not within the object's %d bytes: %w",
+				i, n, r.Off, size, fs.ErrInvalid)
+		}
+		var ok bool
+		if total, ok = addBatchBytes(total, n); !ok {
+			return fmt.Errorf("objfile: a batch of more than %d bytes: %w", MaxBatchBytes, fs.ErrInvalid)
+		}
+		if pieces += n/p.MaxRequest + 2; pieces > maxBatchPieces {
+			return fmt.Errorf("objfile: a batch of more than %d pieces of at most %d bytes: %w", maxBatchPieces, p.MaxRequest, fs.ErrInvalid)
+		}
+	}
+	return nil
 }
 
 // addBatchBytes adds n to a batch's total, or reports that the sum is over

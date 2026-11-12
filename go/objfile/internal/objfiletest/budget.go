@@ -428,6 +428,48 @@ func RunBudget(t *testing.T, b Budget) {
 		runObserved(t, b.Classify, b.Observed, true)
 	})
 
+	t.Run("CacheRevisit", func(t *testing.T) {
+		// A pinned Object's revisit is served by the cache with no request;
+		// a sized open's first read, and a bypassed read, go to the store.
+		s, rec := start(t)
+		data := Data(1<<20, 12)
+		s.Put(t, "obj", data)
+		c, err := objfile.NewByteCache(4 << 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := objfile.Cache(s.Opener, "budget", c)
+		f, err := o.Open(ctx, "obj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rs := func() []objfile.Range {
+			return []objfile.Range{{Off: 1000, Buf: make([]byte, 5000)}, {Off: 400000, Buf: make([]byte, 5000)}, {Off: 900000, Buf: make([]byte, 5000)}}
+		}
+		read(t, f, data, rs())
+		rec.Reset()
+		read(t, f, data, rs())
+		if n := len(rec.Requests()); n != 0 {
+			t.Fatalf("a warm revisit made %d requests, want 0", n)
+		}
+		g, err := o.OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read(t, g, data, rs())
+		if n := rec.Count(Ranged); n != 3 {
+			t.Fatalf("a sized open's first batch made %d ranged requests over a warm cache, want 3", n)
+		}
+		rec.Reset()
+		bypass := objfile.WithCacheMode(ctx, objfile.CacheBypass)
+		if err := objfile.ReadRanges(bypass, f, rs()); err != nil {
+			t.Fatal(err)
+		}
+		if n := rec.Count(Ranged); n != 3 {
+			t.Fatalf("a bypassed batch made %d ranged requests, want 3", n)
+		}
+	})
+
 	t.Run("ReadObject", func(t *testing.T) {
 		s, rec := start(t)
 		data := Data(5000, 4)
