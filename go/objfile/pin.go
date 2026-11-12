@@ -80,7 +80,7 @@ func (p *Pinned) Open(ctx context.Context, name string) (Object, error) {
 	}
 	f, err := p.o.Open(ctx, name)
 	if err != nil {
-		if recorded && errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
 			err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
 		}
 		return nil, err
@@ -125,7 +125,7 @@ func (p *Pinned) OpenSized(ctx context.Context, name string, size int64) (Object
 		// object, its size compared before any pin is recorded.
 		f, err := p.o.Open(ctx, name)
 		if err != nil {
-			if recorded && errors.Is(err, fs.ErrNotExist) {
+			if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
 				err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
 			}
 			return nil, err
@@ -177,7 +177,7 @@ func (p *Pinned) ReadObject(ctx context.Context, name string, limit int64) ([]by
 		}
 		return nil, id, err
 	case err != nil:
-		if recorded && errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) && (recorded || p.has(name)) {
 			err = fmt.Errorf("%w: %w", ErrObjectChanged, err)
 		}
 		return nil, "", err
@@ -186,6 +186,15 @@ func (p *Pinned) ReadObject(ctx context.Context, name string, limit int64) ([]by
 		return nil, "", err
 	}
 	return b, id, nil
+}
+
+// has reports whether a pin of name is recorded now: one recorded since an
+// open or read began judges its failure as one recorded before would.
+func (p *Pinned) has(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.pins[name]
+	return ok
 }
 
 // check records got as name's pin when none is, and otherwise fails with

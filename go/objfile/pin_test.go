@@ -32,6 +32,19 @@ type memStore struct {
 	entered chan struct{}
 	opens   atomic.Int32
 	closes  atomic.Int32
+	// before, if set, runs once at the start of the next Open or
+	// ReadObject, then is cleared.
+	before func()
+}
+
+func (s *memStore) runBefore() {
+	s.mu.Lock()
+	f := s.before
+	s.before = nil
+	s.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 type memObject struct {
@@ -49,6 +62,7 @@ func (s *memStore) put(name string, data []byte) {
 }
 
 func (s *memStore) Open(_ context.Context, name string) (objfile.Object, error) {
+	s.runBefore()
 	s.opens.Add(1)
 	if s.gate != nil {
 		s.entered <- struct{}{}
@@ -303,6 +317,7 @@ func (s *sizedStore) OpenSized(_ context.Context, name string, size int64) (objf
 }
 
 func (s *sizedStore) ReadObject(_ context.Context, name string, limit int64) ([]byte, string, error) {
+	s.runBefore()
 	s.reads.Add(1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -610,5 +625,37 @@ func TestPinDeletedAfterAnotherRecorded(t *testing.T) {
 	}
 	if err := objfile.ReadRanges(ctx, f, scatteredRanges()); !errors.Is(err, objfile.ErrObjectChanged) {
 		t.Fatalf("batch of the deleted recorded object = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestPinRecordedDuringRequest: a pin another handle records while an open
+// or a whole read is under way, before it finds the object deleted, makes
+// that ErrObjectChanged, as a pin recorded before would.
+func TestPinRecordedDuringRequest(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		op   func(p *objfile.Pinned) error
+	}{
+		{"Open", func(p *objfile.Pinned) error { _, err := p.Open(ctx, "obj"); return err }},
+		{"OpenSized0", func(p *objfile.Pinned) error { _, err := p.OpenSized(ctx, "obj", 0); return err }},
+		{"ReadObject", func(p *objfile.Pinned) error { _, _, err := p.ReadObject(ctx, "obj", 100); return err }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &sizedStore{memStore: newMemStore()}
+			s.put("obj", nil)
+			p := objfile.Pin(s, scope)
+			s.before = func() { // as the request is sent: another handle records, then the object goes
+				if _, err := p.Open(ctx, "obj"); err != nil {
+					t.Error(err)
+				}
+				s.mu.Lock()
+				delete(s.objects, "obj")
+				s.mu.Unlock()
+			}
+			if err := c.op(p); !errors.Is(err, objfile.ErrObjectChanged) || !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("%s of an object recorded and deleted meanwhile = %v; want ErrObjectChanged and fs.ErrNotExist", c.name, err)
+			}
+		})
 	}
 }
