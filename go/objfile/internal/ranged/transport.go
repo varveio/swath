@@ -47,8 +47,10 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// SDK does not request the rest itself, and the failure is kept
 		// for ReadObject, which reads the rest (or fails) itself.
 		if res.Uncompressed {
+			err := fmt.Errorf("objfile: %s %s://%s%s: the response was decompressed in transit", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath())
+			rejectResponse(req, err)
 			res.Body.Close()
-			return nil, fmt.Errorf("objfile: %s %s://%s%s: the response was decompressed in transit", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath())
+			return nil, err
 		}
 		res.Body = recordFailure{ReadCloser: res.Body, failure: failure}
 		return res, nil
@@ -58,6 +60,7 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return res, nil
 	}
 	if err := served(res, first, last); err != nil {
+		rejectResponse(req, err)
 		res.Body.Close()
 		err = fmt.Errorf("objfile: %s %s://%s%s: %w", req.Method, req.URL.Scheme, req.URL.Host, req.URL.EscapedPath(), err)
 		if total, ok := clipped(res, first, last); ok {

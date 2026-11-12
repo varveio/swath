@@ -38,20 +38,26 @@ import (
 // New returns an Opener of the objects of bucket through client, which
 // carries the caller's credentials, endpoint, transport and retry settings.
 func New(client *s3.Client, bucket string) objfile.Opener {
-	return opener{client: client, bucket: bucket}
+	return opener{client: client, bucket: bucket, observed: ranged.Observing(client)}
 }
 
 type opener struct {
-	client *s3.Client
-	bucket string
+	client   *s3.Client
+	bucket   string
+	observed bool // the client's transport reports every attempt
 }
 
+// ReportsIO reports whether every request's attempts are observed
+// (objfile.IOReporter): only for a client objfile/remote built, whose
+// transport sees the SDK's retries.
+func (o opener) ReportsIO() bool { return o.observed }
+
 func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
-	size, pin, err := o.stat(ctx, name)
+	size, pin, err := ranged.Metadata(ctx, name, o.observed, func(ctx context.Context) (int64, ranged.Pin, error) { return o.stat(ctx, name) })
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
-	return ranged.New(name, size, pin, o.getter(name)), nil
+	return ranged.New(name, size, pin, o.getter(name), o.observed), nil
 }
 
 func (o opener) OpenSized(ctx context.Context, name string, size int64) (objfile.Object, error) {
@@ -63,12 +69,12 @@ func (o opener) OpenSized(ctx context.Context, name string, size int64) (objfile
 	}
 	return ranged.NewSized(name, size, o.getter(name), func(ctx context.Context) (int64, ranged.Pin, error) {
 		return o.stat(ctx, name)
-	}), nil
+	}, o.observed), nil
 }
 
 // ReadObject reads name whole with one GetObject, with no Range.
 func (o opener) ReadObject(ctx context.Context, name string, limit int64) ([]byte, string, error) {
-	return ranged.ReadObject(ctx, name, limit, o.getter(name))
+	return ranged.ReadObject(ctx, name, limit, o.observed, o.getter(name))
 }
 
 // stat is HeadObject: the object's size and pin.

@@ -87,6 +87,8 @@ specs (`schema.Bind`), so what swath writes and what a reader decodes are descri
 conditional creation and the read-back of retained parts go through `objfile/gcs`, `objfile/s3` or `objfile/azblob` and `objfile/remote.OpenDestination`,
 which links `cloud.google.com/go/storage` into the swath binary
 ([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister.
+The optional objfile byte cache rejects an already cancelled read context before
+lookup, for both scalar and batched reads ([cache contract](../../objfile/cache.go)).
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`localfs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`

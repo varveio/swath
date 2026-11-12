@@ -3,8 +3,8 @@
 
 // Package objfile provides pinned byte-range reads, create-only uploads and
 // conditional deletes for objects in S3, Google Cloud Storage and Azure Blob
-// Storage. It does not list objects or cache bytes, and does not decide which
-// bytes a reader needs; given a batch of ranges (ReadRanges), it plans the
+// Storage. It does not list objects, and does not decide which bytes a
+// reader needs; given a batch of ranges (ReadRanges), it plans the
 // requests that fetch them, merged, split and run concurrently under a
 // BatchPolicy. Every read of an Object returns bytes of the version it
 // pinned, or fails with ErrObjectChanged and returns none of another
@@ -16,6 +16,12 @@
 // An S3 ETag alone cannot distinguish separate creations with the same ETag.
 // An Object supplies io.ReaderAt and a known size, as used by SeekParquet and
 // parquet-go. Provider package comments describe their request and retry limits.
+//
+// An Observer on a context (WithObserver) is told of every physical request
+// made under it, through every wrapper; IOReporter says whether that
+// observation includes the requests an SDK retries itself. Cache keeps
+// fetched bytes of pinned versions in a ByteCache, off unless used, and
+// CacheMode lets an operation bypass it.
 package objfile
 
 import (
@@ -228,6 +234,8 @@ type root struct {
 	prefix string
 }
 
+func (r root) ReportsIO() bool { return reportsIO(r.o) }
+
 func (r root) Open(ctx context.Context, name string) (Object, error) {
 	if err := CheckPath(name); err != nil {
 		return nil, err
@@ -265,7 +273,12 @@ type limited struct {
 	slots chan struct{}
 }
 
+type admissionWaitKey struct{} // test-only handshake at request admission
+
 func (l limited) acquire(ctx context.Context) error {
+	if wait, _ := ctx.Value(admissionWaitKey{}).(func()); wait != nil {
+		wait()
+	}
 	select {
 	case l.slots <- struct{}{}:
 		return nil
@@ -275,6 +288,8 @@ func (l limited) acquire(ctx context.Context) error {
 }
 
 func (l limited) release() { <-l.slots }
+
+func (l limited) ReportsIO() bool { return reportsIO(l.o) }
 
 func (l limited) Open(ctx context.Context, name string) (Object, error) {
 	if err := l.acquire(ctx); err != nil {
@@ -330,6 +345,8 @@ type knownSizes struct {
 	sizes map[string]int64
 }
 
+func (k knownSizes) ReportsIO() bool { return reportsIO(k.o) }
+
 func (k knownSizes) Open(ctx context.Context, name string) (Object, error) {
 	if size, ok := k.sizes[name]; ok {
 		return k.o.OpenSized(ctx, name, size)
@@ -349,6 +366,8 @@ type limitedObject struct {
 	Object
 	l limited
 }
+
+func (f limitedObject) ReportsIO() bool { return reportsIO(f.Object) }
 
 func (f limitedObject) ReadAt(p []byte, off int64) (int, error) {
 	return f.readAt(context.Background(), p, off)

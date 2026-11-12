@@ -80,11 +80,11 @@ func newStore(n int) *store {
 // with ErrObjectChanged and pins nothing.
 func TestSizedPinsOnStatedTotal(t *testing.T) {
 	s := newStore(100)
-	f := NewSized("obj", 100, s.get, s.stat)
+	f := NewSized("obj", 100, s.get, s.stat, false)
 	if _, err := f.ReadAt(make([]byte, 10), 0); err != nil || f.Identity() != "a" || s.stats.Load() != 0 {
 		t.Fatalf("read: %v, Identity %q, %d metadata requests", err, f.Identity(), s.stats.Load())
 	}
-	g := NewSized("obj", 99, s.get, s.stat)
+	g := NewSized("obj", 99, s.get, s.stat, false)
 	if _, err := g.ReadAt(make([]byte, 10), 0); !isMismatch(err, 99, 100) || g.Identity() != "" {
 		t.Fatalf("read of another size: %v, Identity %q", err, g.Identity())
 	}
@@ -96,7 +96,7 @@ func TestSizedPinsOnStatedTotal(t *testing.T) {
 func TestSizedNoTotalFallsBack(t *testing.T) {
 	s := newStore(100)
 	s.noTotal = true
-	f := NewSized("obj", 100, s.get, s.stat)
+	f := NewSized("obj", 100, s.get, s.stat, false)
 	p := make([]byte, 10)
 	if _, err := f.ReadAt(p, 5); err != nil || string(p) != "fghijabcde" || s.stats.Load() != 1 {
 		t.Fatalf("read: %v, %q, %d metadata requests", err, p, s.stats.Load())
@@ -106,7 +106,7 @@ func TestSizedNoTotalFallsBack(t *testing.T) {
 	}
 
 	// Wrong size: no pin, no bytes.
-	g := NewSized("obj", 90, s.get, s.stat)
+	g := NewSized("obj", 90, s.get, s.stat, false)
 	clear(p)
 	if n, err := g.ReadAt(p, 0); !isMismatch(err, 90, 100) || n != 0 || g.Identity() != "" || p[0] != 0 {
 		t.Fatalf("read of another size: %d, %v, Identity %q", n, err, g.Identity())
@@ -119,14 +119,15 @@ func TestSizedNoTotalFallsBack(t *testing.T) {
 		s.pin = Pin{ETag: "b"}
 		s.mu.Unlock()
 		return res, err
-	}, s.stat)
+	}, s.stat, false)
+
 	if _, err := h.ReadAt(p, 0); !errors.Is(err, objfile.ErrObjectChanged) || h.Identity() != "" {
 		t.Fatalf("read across a replacement: %v, Identity %q", err, h.Identity())
 	}
 
 	// No metadata request to fall back on: the read fails.
 	s.pin = Pin{ETag: "a"}
-	if _, err := New("obj", 100, Pin{}, s.get).ReadAt(p, 0); err == nil {
+	if _, err := New("obj", 100, Pin{}, s.get, false).ReadAt(p, 0); err == nil {
 		t.Fatal("an unpinned Object without Stat trusted a response with no total")
 	}
 }
@@ -136,7 +137,7 @@ func TestSizedNoTotalFallsBack(t *testing.T) {
 func TestSizedConcurrentFirstReads(t *testing.T) {
 	s := newStore(1000)
 	s.noTotal = true
-	f := NewSized("obj", 1000, s.get, s.stat)
+	f := NewSized("obj", 1000, s.get, s.stat, false)
 	var wg sync.WaitGroup
 	for i := range 16 {
 		wg.Go(func() {
@@ -161,7 +162,8 @@ func TestSizedStatCancelled(t *testing.T) {
 	f := NewSized("obj", 100, s.get, func(ctx context.Context) (int64, Pin, error) {
 		cancel()
 		return 0, Pin{}, ctx.Err()
-	})
+	}, false)
+
 	if _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 0); !errors.Is(err, context.Canceled) || f.Identity() != "" {
 		t.Fatalf("cancelled read: %v, Identity %q", err, f.Identity())
 	}
@@ -182,7 +184,7 @@ func TestBatchRequestsCarryPin(t *testing.T) {
 		}
 		return -1
 	}
-	f := NewSized("obj", 100000, s.get, s.stat)
+	f := NewSized("obj", 100000, s.get, s.stat, false)
 	var rs []objfile.Range
 	for i := range 10 {
 		rs = append(rs, objfile.Range{Off: int64(i * 10000), Buf: make([]byte, 100)})
@@ -215,7 +217,8 @@ func TestBatchIdentityChange(t *testing.T) {
 		res, err := s.get(ctx, off, n, pin)
 		once.Do(func() { s.mu.Lock(); s.pin = Pin{ETag: "b"}; s.mu.Unlock() })
 		return res, err
-	}, s.stat)
+	}, s.stat, false)
+
 	rs := []objfile.Range{{Off: 0, Buf: make([]byte, 100)}, {Off: 50000, Buf: make([]byte, 100)}}
 	err := f.(objfile.RangeReader).ReadRanges(context.Background(), rs)
 	var be *objfile.BatchError
@@ -232,12 +235,12 @@ func TestBatchIdentityChange(t *testing.T) {
 // body cut short is resumed as a pinned ranged read.
 func TestReadObject(t *testing.T) {
 	s := newStore(100)
-	b, id, err := ReadObject(context.Background(), "obj", 100, s.get)
+	b, id, err := ReadObject(context.Background(), "obj", 100, false, s.get)
 	if err != nil || id != "a" || !bytes.Equal(b, s.data) || s.wholes != 1 || len(s.gets) != 0 || s.stats.Load() != 0 {
 		t.Fatalf("ReadObject = %d bytes, %q, %v after %d whole, %d ranged, %d metadata requests",
 			len(b), id, err, s.wholes, len(s.gets), s.stats.Load())
 	}
-	b, id, err = ReadObject(context.Background(), "obj", 99, s.get)
+	b, id, err = ReadObject(context.Background(), "obj", 99, false, s.get)
 	if !errors.Is(err, objfile.ErrTooLarge) || id != "a" || b != nil {
 		t.Fatalf("ReadObject over the limit = %d bytes, %q, %v", len(b), id, err)
 	}
@@ -249,7 +252,7 @@ func TestReadObject(t *testing.T) {
 		return -1
 	}
 	s.wholes = 0
-	b, _, err = ReadObject(context.Background(), "obj", 100, s.get)
+	b, _, err = ReadObject(context.Background(), "obj", 100, false, s.get)
 	if err != nil || !bytes.Equal(b, s.data) || s.wholes != 1 || len(s.gets) != 1 || s.gets[0] != s.pin {
 		t.Fatalf("ReadObject with a cut body = %v; %d whole, ranged %v", err, s.wholes, s.gets)
 	}
@@ -261,15 +264,15 @@ func TestReadObject(t *testing.T) {
 		return res, err
 	}
 	s.cut = nil
-	if b, _, err := ReadObject(context.Background(), "obj", 100, get); err != nil || !bytes.Equal(b, s.data) {
+	if b, _, err := ReadObject(context.Background(), "obj", 100, false, get); err != nil || !bytes.Equal(b, s.data) {
 		t.Fatalf("ReadObject of no stated length = %v", err)
 	}
-	if _, _, err := ReadObject(context.Background(), "obj", 50, get); !errors.Is(err, objfile.ErrTooLarge) {
+	if _, _, err := ReadObject(context.Background(), "obj", 50, false, get); !errors.Is(err, objfile.ErrTooLarge) {
 		t.Fatalf("ReadObject of no stated length over the limit = %v", err)
 	}
 
 	missing := func(context.Context, int64, int64, Pin) (Response, error) { return Response{}, fs.ErrNotExist }
-	if _, _, err := ReadObject(context.Background(), "obj", 100, missing); !errors.Is(err, fs.ErrNotExist) {
+	if _, _, err := ReadObject(context.Background(), "obj", 100, false, missing); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("ReadObject of a missing object = %v", err)
 	}
 }
@@ -326,7 +329,7 @@ func TestNoBodyHeldAcrossRequests(t *testing.T) {
 		return s.stat(ctx)
 	}
 	p := make([]byte, 10)
-	if _, err := NewSized("obj", 100, get, stat).ReadAt(p, 5); err != nil || string(p) != "fghijabcde" {
+	if _, err := NewSized("obj", 100, get, stat, false).ReadAt(p, 5); err != nil || string(p) != "fghijabcde" {
 		t.Fatalf("sized read without a total: %v, %q", err, p)
 	}
 	s.mu.Lock()
@@ -340,7 +343,7 @@ func TestNoBodyHeldAcrossRequests(t *testing.T) {
 		}
 		return -1
 	}
-	if b, _, err := ReadObject(context.Background(), "obj", 100, get); err != nil || !bytes.Equal(b, s.data) || !cut.Load() || len(s.gets) != 1 {
+	if b, _, err := ReadObject(context.Background(), "obj", 100, false, get); err != nil || !bytes.Equal(b, s.data) || !cut.Load() || len(s.gets) != 1 {
 		t.Fatalf("ReadObject with a cut body: %v (cut %v, %d ranged requests after it)", err, cut.Load(), len(s.gets))
 	}
 }
@@ -382,14 +385,15 @@ func TestSizedWaiterCancelled(t *testing.T) {
 		gets.Add(1)
 		res, err := s.get(ctx, off, n, pin)
 		if pin.IsZero() {
-			res.Total = -1 // the owner's response: proved by a metadata request
+			res.Total = -1
 		}
 		return res, err
 	}, func(ctx context.Context) (int64, Pin, error) {
 		close(entered)
 		<-release
 		return s.stat(ctx)
-	})
+	}, false)
+
 	owner := make(chan error, 1)
 	go func() { _, err := f.ReadAt(make([]byte, 10), 0); owner <- err }()
 	within(t, entered, "the owner's metadata request") // it holds the pinning lock
@@ -420,7 +424,7 @@ func TestReadObjectLimitMax(t *testing.T) {
 		res.Length, res.Total = -1, -1
 		return res, err
 	}
-	if b, _, err := ReadObject(context.Background(), "obj", math.MaxInt64, get); err != nil || !bytes.Equal(b, s.data) {
+	if b, _, err := ReadObject(context.Background(), "obj", math.MaxInt64, false, get); err != nil || !bytes.Equal(b, s.data) {
 		t.Fatalf("ReadObject under the largest limit = %d bytes, %v", len(b), err)
 	}
 }
@@ -443,7 +447,7 @@ func TestSizedClassification(t *testing.T) {
 		}
 		return s.get(ctx, off, n, pin)
 	}
-	f := NewSized("obj", 200, unsatisfiable, s.stat)
+	f := NewSized("obj", 200, unsatisfiable, s.stat, false)
 	if _, err := f.ReadAt(make([]byte, 10), 150); !isMismatch(err, 200, 100) || s.stats.Load() != 1 {
 		t.Fatalf("unsatisfiable first read = %v after %d metadata requests; want a mismatch after 1", err, s.stats.Load())
 	}
@@ -451,12 +455,13 @@ func TestSizedClassification(t *testing.T) {
 	// store's error stands.
 	g := NewSized("obj", 100, func(context.Context, int64, int64, Pin) (Response, error) {
 		return Response{}, fmt.Errorf("%w: 416", ErrUnsatisfiable)
-	}, s.stat)
+	}, s.stat, false)
+
 	if _, err := g.ReadAt(make([]byte, 10), 0); !errors.Is(err, ErrUnsatisfiable) || isMismatch(err, 100, 100) {
 		t.Fatalf("416 of an object of the size given = %v", err)
 	}
 	// Pinned, then replaced by an object of another size.
-	h := NewSized("obj", 100, s.get, s.stat)
+	h := NewSized("obj", 100, s.get, s.stat, false)
 	if _, err := h.ReadAt(make([]byte, 10), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +488,7 @@ func TestConcurrentFirstIdentities(t *testing.T) {
 		<-start
 		return Response{Body: io.NopCloser(bytes.NewReader(data[off : off+l])), Pin: served, Start: off, Total: 1000, Length: l}, nil
 	}
-	f := NewSized("obj", 1000, get, nil)
+	f := NewSized("obj", 1000, get, nil, false)
 	var wg sync.WaitGroup
 	var ok, changed atomic.Int32
 	for i := range 8 {
@@ -564,7 +569,7 @@ func TestOneConnectionInterleaving(t *testing.T) {
 		defer func() { <-conn }()
 		return s.stat(sctx)
 	}
-	f := NewSized("obj", 1000, get, stat)
+	f := NewSized("obj", 1000, get, stat, false)
 	a := make(chan error, 1)
 	go func() { _, err := f.WithContext(ctx).ReadAt(make([]byte, 10), 0); a <- err }()
 	within(t, aInStat, "read A's metadata request")
@@ -653,7 +658,7 @@ func TestReadObjectEnd(t *testing.T) {
 			}
 			return Response{Body: &script{steps: slices.Clone(c.steps)}, Pin: Pin{ETag: "a"}, Total: -1, Length: 10}, nil
 		}
-		b, _, err := ReadObject(context.Background(), "obj", 100, get)
+		b, _, err := ReadObject(context.Background(), "obj", 100, false, get)
 		if c.ok != (err == nil) || ranged != 0 || err == nil && !bytes.Equal(b, data) {
 			t.Errorf("%s: ReadObject = %q, %v after %d ranged reads; want ok=%v and none", c.name, b, err, ranged, c.ok)
 		}

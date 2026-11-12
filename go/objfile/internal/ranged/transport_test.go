@@ -157,7 +157,7 @@ func TestReadObjectThroughTransport(t *testing.T) {
 			}
 			return Response{Body: res.Body, Pin: Pin{ETag: res.Header.Get("ETag")}, Start: -1, Total: -1, Length: res.ContentLength}, nil
 		}
-		b, _, err := ReadObject(ctx, "obj", 100, get)
+		b, _, err := ReadObject(ctx, "obj", 100, false, get)
 		if err == nil || ranged != 0 {
 			t.Errorf("%s: ReadObject = %q, %v after %d ranged reads; want an error and none", c.name, b, err, ranged)
 		}
