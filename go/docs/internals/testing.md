@@ -997,6 +997,15 @@ baseline to update.
 
 ## Reader benchmarks
 
+`internal/readbudget` checks exact HTTP request and metadata-request counts for
+cold reader operations over the S3, GCS and Azure fakes, before and after the
+`objfile/spsource` adapter. Requests are recorded on arrival, before serving any
+response bytes. `TestAdmissionRounds` separately checks concurrent admission:
+channel barriers hold all four footer reads, then all eight first/last key-page
+reads, until the entire phase has arrived. The stack without the adapter also
+has a four-request metadata phase. Neither counts nor concurrency assertions use
+elapsed time or timestamp overlap; a deadline fails a stalled barrier.
+
 The reader's Scan and Stream are measured over a generated `swath/s3-objects/v1` fixture (`go/reader`
 `fixture_test.go`); nothing is committed. `writeFixture` streams rows through `local.WriteDir` one 1,024-row
 batch at a time, so it holds that batch, the part being written and one manifest entry a part, never the

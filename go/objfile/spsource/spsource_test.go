@@ -274,9 +274,55 @@ func TestContextReachesObjfile(t *testing.T) {
 		t.Fatalf("%d calls took a context, want 4", len(o.ctxs))
 	}
 	for i, c := range o.ctxs {
-		if c.Value(key{}) != "op" || seekparquet.CacheModeFromContext(c) != seekparquet.CacheBypass {
+		if c.Value(key{}) != "op" || seekparquet.CacheModeFromContext(c) != seekparquet.CacheBypass ||
+			objfile.CacheModeFromContext(c) != objfile.CacheBypass {
 			t.Fatalf("call %d lost the operation's context", i)
 		}
+	}
+}
+
+func TestCacheMode(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%t", batch), func(t *testing.T) {
+			o := &fake{data: []byte("abcdefgh")}
+			cache, err := objfile.NewByteCache(1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			f, err := New(objfile.Cache(o, "test", cache)).Open(ctx, "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { f.Close() })
+			bypass := seekparquet.WithCacheMode(ctx, seekparquet.CacheBypass)
+			read := func(ctx context.Context, wantReads int) {
+				t.Helper()
+				o.ctxs = nil
+				buf := make([]byte, 4)
+				if batch {
+					err = f.(seekparquet.RangeReader).ReadRanges(ctx, []seekparquet.ReadRange{{Off: 2, Buf: buf}})
+				} else {
+					var n int
+					n, err = f.(seekparquet.ContextBinder).WithContext(ctx).ReadAt(buf, 2)
+					if n != len(buf) {
+						t.Fatalf("read %d bytes, want %d", n, len(buf))
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(buf) != "cdef" || len(o.ctxs) != wantReads {
+					t.Fatalf("read %q with %d underlying reads, want cdef with %d", buf, len(o.ctxs), wantReads)
+				}
+			}
+			read(bypass, 1)
+			read(bypass, 1)
+			read(ctx, 1)    // bypass did not admit; default now admits
+			read(ctx, 0)    // default looks up the admitted bytes
+			read(bypass, 1) // bypass does not look up the warm entry
+			read(ctx, 0)
+		})
 	}
 }
 

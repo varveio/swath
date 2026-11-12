@@ -22,8 +22,8 @@
 // the chain, so errors.Is and errors.As find objfile's errors and
 // fs.ErrNotExist too.
 //
-// An operation's context reaches objfile unchanged, its values (the cache
-// mode, the IO observer) included. objfile reports no physical requests to
+// An operation's context values reach objfile, with the cache mode
+// translated to objfile's own. objfile reports no physical requests to
 // a seekparquet.IOObserver, so the Source and its files do not implement
 // seekparquet.IOReporter, and the reader counts their calls as unreported.
 package spsource
@@ -141,14 +141,15 @@ func (r reader) ReadAt(p []byte, off int64) (int, error) {
 	return n, mapError(err)
 }
 
-// objfileContext is the context of the objfile call that serves an
-// operation of SeekParquet carrying ctx. It is the seam where SeekParquet's
-// operation values become objfile's own, once objfile has them: the cache
-// mode (seekparquet.CacheModeFromContext to objfile's) and the physical
-// observer (seekparquet.IOObserverFromContext, adapted to objfile's
-// observer), with IOReporter on Source and file reporting what objfile
-// reports. Until then ctx goes unchanged, its values included.
-func objfileContext(ctx context.Context) context.Context { return ctx }
+// objfileContext translates SeekParquet's cache mode to objfile's context
+// key while preserving the operation's cancellation and other values.
+func objfileContext(ctx context.Context) context.Context {
+	mode := objfile.CacheDefault
+	if seekparquet.CacheModeFromContext(ctx) == seekparquet.CacheBypass {
+		mode = objfile.CacheBypass
+	}
+	return objfile.WithCacheMode(ctx, mode)
+}
 
 // mapError gives err the SeekParquet error objfile's says the same of,
 // keeping err in the chain. io.EOF, which ReadAt returns with a read cut
