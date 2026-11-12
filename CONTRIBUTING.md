@@ -23,8 +23,9 @@ for the full suite, as described in [testing](go/docs/internals/testing.md). For
 and conformance integration outside its directory. Regenerate CLI documentation with
 `cd go && UPDATE=1 go test ./cmd/swath -run '^TestCLIDoc'`; do not edit the generated synopsis and option blocks.
 
-Documentation is checked like code: `cd go && go test ./docs` checks every Markdown link and
-anchor under `go/`, and the library modules' examples (`go/objfile`, `go/reader`) are `Example`
+Documentation is checked like code: `cd go && go test ./docs` checks the relative links (inline,
+reference definitions, HTML `href`) and their anchors in the Markdown under `go/`; it does not fetch
+external URLs, and the library modules' examples (`go/objfile`, `go/reader`) are `Example`
 tests. Prefer an `Example` test to a Markdown code block for library code, so that it compiles and runs.
 
 The 0.3 release's Java distribution, still in this repository, is a multi-module Gradle build and requires **JDK 25**.

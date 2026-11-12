@@ -41,7 +41,7 @@ one static binary built with `CGO_ENABLED=0`.
 | `cmd/swath-replay` | the replay server |
 | `internal/` | the lister's packages ([architecture](docs/internals/architecture.md#packages)) |
 | `reader/`, `objfile/` | nested modules, importable on their own |
-| `docs/` | the documentation; `go test ./docs` checks its links |
+| `docs/` | the documentation; `go test ./docs` checks its relative links |
 | `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
 
 The gate is `go vet ./... && go test -race ./...` ([testing](docs/internals/testing.md)).

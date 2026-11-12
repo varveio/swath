@@ -11,13 +11,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/journal"
 )
 
 // TestTroubleshootingMessages keeps the refusals docs/troubleshooting.md
 // quotes equal to what swath prints for them: each case runs the command
-// line the page describes and requires the page to hold its first stderr
-// line ("swath: " and the error's first line) verbatim.
+// line the page describes, requires exit 2, and requires the page to hold
+// the first line swath prints on stderr verbatim.
 func TestTroubleshootingMessages(t *testing.T) {
+	// Profiling side paths would be checked, and written, by the runs here.
+	t.Setenv("SWATH_CPUPROFILE", "")
+	t.Setenv("SWATH_MEMPROFILE", "")
+	t.Setenv("SWATH_MEMPROFILERATE", "")
 	doc, err := os.ReadFile("../../docs/troubleshooting.md")
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +44,12 @@ func TestTroubleshootingMessages(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("other", "f"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// "stopped" holds an interrupted run: a journal and no manifest.
+	j, err := journal.Create("stopped", journal.Identity{Tool: "swath"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
 	for _, c := range []struct {
 		name string
 		args []string
@@ -49,13 +61,18 @@ func TestTroubleshootingMessages(t *testing.T) {
 		{"output not empty", []string{"list", src, "-o", "inventory"}, [2]string{}},
 		{"overwrite a stranger", []string{"list", src, "-o", "other", "--overwrite"}, [2]string{"other", "inventory"}},
 		{"csv output", []string{"list", src, "-o", "x.csv"}, [2]string{}},
+		{"interrupted run", []string{"list", src, "-o", "stopped"}, [2]string{"stopped", "inventory"}},
 	} {
-		err := dispatch(context.Background(), c.args, io.Discard)
-		if err == nil {
-			t.Errorf("%s: %v succeeded", c.name, c.args)
+		stderr := captureSyncStderr(t)
+		code := conclude(dispatch(context.Background(), c.args, io.Discard))
+		if code != exitUsage {
+			t.Errorf("%s: %v exits %d, want %d", c.name, c.args, code, exitUsage)
+		}
+		line, _, _ := strings.Cut(stderr.String(), "\n")
+		if !strings.HasPrefix(line, "swath: ") {
+			t.Errorf("%s: stderr begins %q, not a refusal", c.name, line)
 			continue
 		}
-		line := "swath: " + strings.SplitN(err.Error(), "\n", 2)[0]
 		if c.rename[0] != "" {
 			line = strings.Replace(line, c.rename[0], c.rename[1], 1)
 		}

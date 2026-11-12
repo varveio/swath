@@ -19,6 +19,8 @@ var (
 	fence    = regexp.MustCompile("(?ms)^\\s*```.*?^\\s*```[^\\n]*$")
 	codeSpan = regexp.MustCompile("`[^`\\n]*`")
 	link     = regexp.MustCompile(`\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+	refDef   = regexp.MustCompile(`(?m)^ {0,3}\[[^\]]+\]:\s+<?([^\s>]+)>?`)
+	href     = regexp.MustCompile(`\bhref="([^"]+)"`)
 	heading  = regexp.MustCompile(`(?m)^#{1,6}\s+(.+?)\s*#*\s*$`)
 	htmlID   = regexp.MustCompile(`<a\s+(?:id|name)="([^"]+)"`)
 	mdLink   = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
@@ -69,9 +71,12 @@ func itoa(n int) string {
 	return itoa(n/10) + itoa(n%10)
 }
 
-// TestMarkdownLinks: every relative link in the module's Markdown names a
-// file or directory that exists, and a fragment into a Markdown file names
-// one of its headings or anchors. External URLs are not fetched.
+// TestMarkdownLinks: every relative link in the module's Markdown (inline
+// links, reference definitions and HTML href attributes, outside code)
+// names a file or directory that exists, and a fragment into a Markdown
+// file names one of its headings (GitHub's anchor rules, approximated by
+// slug) or HTML anchors. External URLs, autolinks among them, are not
+// fetched.
 func TestMarkdownLinks(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -106,7 +111,11 @@ func TestMarkdownLinks(t *testing.T) {
 		}
 		text := codeSpan.ReplaceAllString(fence.ReplaceAllString(string(b), ""), "")
 		rel, _ := filepath.Rel(root, path)
-		for _, m := range link.FindAllStringSubmatch(text, -1) {
+		var targets [][]string
+		for _, re := range []*regexp.Regexp{link, refDef, href} {
+			targets = append(targets, re.FindAllStringSubmatch(text, -1)...)
+		}
+		for _, m := range targets {
 			target := m[1]
 			if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
 				continue
