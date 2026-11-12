@@ -75,6 +75,16 @@ validating transport, which checks each response against the one byte range its
 request names; every objfile request, a batched one included, names one range.
 See the [GCS package contract](gcs/gcs.go) before supplying your own client.
 
+## Open a SeekParquet dataset
+
+`spsource.New(opener)` is a SeekParquet `Source` over an `Opener`, for example
+`spsource.New(objfile.Pin(objfile.Limit(store, 64), store.Scope()))`. SeekParquet
+decides which bytes to read and objfile how: a part opens with its manifest size
+(`OpenSized`, no metadata request), the manifest is one whole-object read
+(`ReadObject`), and the reader's batches of ranges are `ReadRanges`. objfile's
+errors keep their meaning for SeekParquet: `ErrObjectChanged`, a
+`*SizeMismatchError` and `ErrTooLarge` also match SeekParquet's own.
+
 ## Read several ranges, or a small object whole
 
 A reader that knows several ranges it needs reads them as one batch. The ranges
