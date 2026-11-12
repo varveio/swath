@@ -84,7 +84,7 @@ type PathTotals struct {
 // seekparquet.ErrClosed, whatever the paths. No totals are returned with
 // an error.
 //
-// This is a bulk read. With a Source that caches bytes, callers that want
+// A prefix path is a bulk read. With a Source that caches bytes, callers that want
 // to avoid filling the cache mark ctx with their storage's bypass policy
 // (for example, objfile.WithCacheMode(ctx, objfile.CacheBypass) for swath's
 // objfile). The reader passes that policy through to SeekParquet.

@@ -10,7 +10,6 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/objfile"
 )
 
 // DefaultListIndexMaxBytes is the list index's retained-storage budget when
@@ -109,7 +108,7 @@ func (r *seekReader) buildListIndex(ctx context.Context, opt ListIndex) (ListInd
 	if b.Workers == 0 {
 		b.Workers = DefaultListIndexWorkers()
 	}
-	b.Stats, b.Err = r.d.BuildListIndex(objfile.WithCacheMode(ctx, objfile.CacheBypass), seekparquet.ListIndexOptions{MaxBytes: b.MaxBytes, Workers: b.Workers})
+	b.Stats, b.Err = r.d.BuildListIndex(ctx, seekparquet.ListIndexOptions{MaxBytes: b.MaxBytes, Workers: b.Workers})
 	switch {
 	case b.Err == nil:
 		b.State = ListIndexBuilt

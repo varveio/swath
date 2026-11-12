@@ -94,8 +94,7 @@ context. Callers of bulk operations (`Stream`, `StreamLocal`, `Scan`,
 `ScanBatches` and `Totals`) choose whether their Source should cache those reads;
 with objfile they can mark `objfile.CacheBypass` to avoid byte-cache lookup and
 admission. The policy also covers planning, splitting and `Totals`' exact-key
-projections. swath marks bypass in replay's range scans and list-index builds,
-and the readbudget one-part scan. Point lookups, browse pages, counts and
+projections. Point lookups, browse pages, counts and
 aggregate sums use the policy their caller supplies. SeekParquet reports logical
 and format work; objfile's observer reports physical requests and byte-cache hits,
 and `objfile.Limit` bounds request concurrency. See the

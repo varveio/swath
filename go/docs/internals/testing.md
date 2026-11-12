@@ -1014,9 +1014,7 @@ parts: concurrent reads may arrive in either order, but paths, offsets, lengths 
 objfile's bypass context and checks that they neither use nor fill the byte
 cache, while a point lookup through the same stack fills it and a second lookup
 reuses it. `TestBrowseCacheRevisit` checks cache reuse for browse counts and sums.
-The reader chooses no cache policy; the caller marks bulk reads. Replay's
-`store.TestBulkCachePolicy` separately checks that its scan and list-index
-callers mark bypass before storage opens and reads.
+The reader chooses no cache policy; the caller marks bulk reads.
 
 The reader's Scan and Stream are measured over a generated `swath/s3-objects/v1` fixture (`go/reader`
 `fixture_test.go`); nothing is committed. `writeFixture` streams rows through `local.WriteDir` one 1,024-row
