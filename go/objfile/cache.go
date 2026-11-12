@@ -27,11 +27,12 @@ import (
 type ByteCache struct {
 	max int64
 
-	mu      sync.Mutex
-	used    int64 // payload owned: entries, dropped ones still read, reservations
-	entries int
-	lru     list.List // of *cacheEntry, most recently used at the front
-	objects map[cacheObject][]*cacheEntry
+	mu            sync.Mutex
+	used          int64     // payload owned: entries, dropped ones still read, reservations
+	entries       int       // entries published and admissions reserved, at most maxCacheEntries
+	lru           list.List // of *cacheEntry, most recently used at the front
+	objects       map[cacheObject][]*cacheEntry
+	admitReserved func() // test handshake between reservation and publication
 }
 
 // maxCacheEntries bounds a ByteCache's bookkeeping apart from its bytes:
@@ -131,11 +132,15 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 		}
 	}
 	if c.used+n > c.max || c.entries >= maxCacheEntries {
-		c.mu.Unlock() // what remains is being read: not kept
+		c.mu.Unlock() // what remains is being read or admitted: not kept
 		return
 	}
-	c.used += n // reserved
+	c.used += n // reserved, with an entry's slot
+	c.entries++
 	c.mu.Unlock()
+	if c.admitReserved != nil {
+		c.admitReserved()
+	}
 
 	data := make([]byte, n)
 	copy(data, p)
@@ -144,6 +149,7 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 	defer c.mu.Unlock()
 	if c.find(obj, off, n) != nil { // admitted meanwhile
 		c.used -= n
+		c.entries--
 		return
 	}
 	e := &cacheEntry{obj: obj, off: off, data: data}
@@ -156,7 +162,6 @@ func (c *ByteCache) admit(obj cacheObject, off int64, p []byte) {
 		return 1
 	})
 	c.objects[obj] = slices.Insert(es, i, e)
-	c.entries++
 }
 
 // dropOldest drops the least recently used entry, reporting whether there
@@ -300,6 +305,9 @@ func (f *cachedObject) readAt(ctx context.Context, p []byte, off int64) (int, er
 	if err != nil {
 		return 0, err
 	}
+	if ctx.Value(cacheBatchKey{}) != nil {
+		return f.Object.WithContext(ctx).ReadAt(p, off)
+	}
 	key, ok := f.key(mode)
 	if !ok || off < 0 || off >= f.Size() || len(p) == 0 {
 		return f.Object.WithContext(ctx).ReadAt(p, off)
@@ -325,21 +333,13 @@ func (f *cachedObject) readAt(ctx context.Context, p []byte, off int64) (int, er
 // ReadRanges serves the ranges the cache holds and reads the rest as one
 // batch of the wrapped Object, as Cache says.
 func (f *cachedObject) ReadRanges(ctx context.Context, ranges []Range) error {
-	mode, err := cacheMode(ctx)
-	if err != nil {
-		return err
-	}
-	key, ok := f.key(mode)
-	if !ok {
-		return ReadRanges(ctx, f.Object, ranges)
-	}
-	// The whole batch is checked before any byte is copied into it.
-	if err := checkBatch(f.Size(), ranges, policyOf(f.Object)); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	return ReadRangesWith(ctx, f, ranges, policyOf(f.Object))
+}
+
+// readRanges filters original inputs before planning and admits only validated
+// misses. key was frozen at the public batch boundary.
+func (f *cachedObject) readRanges(ctx context.Context, ranges []Range, key cacheObject, next func([]Range) error) error {
+	// ReadRangesWith has validated the whole original batch before any copy.
 	var (
 		misses []Range
 		at     []int // the position in ranges of each miss
@@ -364,7 +364,7 @@ func (f *cachedObject) ReadRanges(ctx context.Context, ranges []Range) error {
 	if len(misses) == 0 {
 		return nil
 	}
-	err = ReadRanges(ctx, f.Object, misses)
+	err := next(misses)
 	var be *BatchError
 	if err != nil && !errors.As(err, &be) && hit == 0 {
 		return err // as the batch would fail uncached

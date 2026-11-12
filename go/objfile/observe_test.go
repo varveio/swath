@@ -6,8 +6,9 @@ package objfile_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
@@ -89,38 +90,50 @@ func TestReportsIOPreserved(t *testing.T) {
 // TestObservedAfterAdmission: a request waiting for a Limit slot is not
 // observed, and one cancelled while it waits never is.
 func TestObservedAfterAdmission(t *testing.T) {
-	st := newMstore()
-	st.put("obj", []byte("0123456789"))
-	o := objfile.Limit(st, 1)
-	f, err := o.Open(context.Background(), "obj")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gate := make(chan struct{})
-	st.mu.Lock()
-	st.gate, st.first = gate, make(chan struct{})
-	first := st.first
-	st.mu.Unlock()
-	held := make(chan error, 1)
-	go func() { _, err := f.ReadAt(make([]byte, 4), 0); held <- err }() // holds the one slot
-	<-first
-	obs := &objfiletest.Observer{}
-	ctx, cancel := context.WithCancel(objfile.WithObserver(context.Background(), obs))
-	waiting := make(chan error, 1)
-	go func() {
-		err := objfile.ReadRanges(ctx, f, []objfile.Range{{Off: 0, Buf: make([]byte, 2)}, {Off: 6, Buf: make([]byte, 2)}})
-		waiting <- err
-	}()
-	time.Sleep(20 * time.Millisecond) // let it reach the slot's wait (a miss only weakens the test)
-	cancel()
-	if err := <-waiting; !errors.Is(err, context.Canceled) {
-		t.Fatalf("a batch cancelled waiting for a slot = %v", err)
-	}
-	close(gate)
-	if err := <-held; err != nil {
-		t.Fatal(err)
-	}
-	if reqs, _ := obs.Events(); len(reqs) != 0 {
-		t.Fatalf("requests observed before admission: %+v", reqs)
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprint(batch), func(t *testing.T) {
+			st := newMstore()
+			st.put("obj", []byte("0123456789"))
+			o := objfile.Limit(st, 1)
+			f, err := o.Open(context.Background(), "obj")
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate := make(chan struct{})
+			st.mu.Lock()
+			st.gate, st.first = gate, make(chan struct{})
+			first := st.first
+			st.mu.Unlock()
+			held := make(chan error, 1)
+			go func() { _, err := f.ReadAt(make([]byte, 4), 0); held <- err }() // holds the one slot
+			<-first
+			obs := &objfiletest.Observer{}
+			ctx, cancel := context.WithCancel(objfile.WithObserver(context.Background(), obs))
+			entered := make(chan struct{})
+			var once sync.Once
+			wctx := objfile.WithAdmissionWait(ctx, func() { once.Do(func() { close(entered) }) })
+			waiting := make(chan error, 1)
+			go func() {
+				var err error
+				if batch {
+					err = objfile.ReadRanges(wctx, f, []objfile.Range{{Off: 0, Buf: make([]byte, 2)}, {Off: 6, Buf: make([]byte, 2)}})
+				} else {
+					_, err = f.WithContext(wctx).ReadAt(make([]byte, 2), 0)
+				}
+				waiting <- err
+			}()
+			<-entered // Limit has reached admission while the slot is held
+			cancel()
+			if err := <-waiting; !errors.Is(err, context.Canceled) {
+				t.Fatalf("a read cancelled waiting for a slot = %v", err)
+			}
+			close(gate)
+			if err := <-held; err != nil {
+				t.Fatal(err)
+			}
+			if reqs, _ := obs.Events(); len(reqs) != 0 {
+				t.Fatalf("requests observed before admission: %+v", reqs)
+			}
+		})
 	}
 }

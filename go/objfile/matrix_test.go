@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -322,7 +321,12 @@ func TestCompositionMatrix(t *testing.T) {
 				}
 				for _, op := range ops {
 					t.Run(fmt.Sprintf("%s/restored=%v/%s/%s", strings.Join(perm, "<"), restored, fx.name, op), func(t *testing.T) {
-						runMatrixCase(t, perm, restored, fx, op, limit)
+						for _, warmth := range []string{"cold", "warm", "mixed"} {
+							if warmth != "warm" && fx.name != "unchanged" {
+								continue
+							}
+							t.Run(warmth, func(t *testing.T) { runMatrixCase(t, perm, restored, fx, op, limit, warmth) })
+						}
 					})
 				}
 			}
@@ -330,7 +334,7 @@ func TestCompositionMatrix(t *testing.T) {
 	}
 }
 
-func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op string, limit int) {
+func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op string, limit int, warmth string) {
 	ctx := context.Background()
 	st := newMstore()
 	if fx.data != nil {
@@ -373,7 +377,11 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 				if err != nil || f.Size() == 0 {
 					return
 				}
-				p := make([]byte, f.Size())
+				size := f.Size()
+				if warmth == "mixed" {
+					size = min(size, 50)
+				}
+				p := make([]byte, size)
 				if _, err := f.ReadAt(p, 0); err != nil {
 					t.Fatalf("warming the cache: %v", err)
 				}
@@ -396,7 +404,7 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	// A cache warmed with the object as it is before the change: no read
 	// after it may be served bytes another version, or an unchecked size,
 	// would not give.
-	if warm != nil {
+	if warm != nil && warmth != "cold" {
 		warm()
 	}
 	if fx.record && !restored {
@@ -433,6 +441,7 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	var err error
 	var rs []objfile.Range
 	var batched bool
+	var cacheEligible bool
 	switch op {
 	case "ReadObject":
 		var b []byte
@@ -458,7 +467,8 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		st.mu.Lock()
 		st.reads, st.maxIn = nil, 0
 		obs.Reset()
-		lazy := f.Identity() == "" && n > 0
+		cacheEligible = f.Identity() != ""
+		lazy := !cacheEligible && n > 0
 		batched = strings.HasSuffix(op, "ReadRanges")
 		if batched && want.err == nil && n >= 20 {
 			st.hold, st.held = limit, make(chan struct{})
@@ -470,6 +480,16 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		st.mu.Unlock()
 		if batched {
 			rs = []objfile.Range{{Off: 0, Buf: make([]byte, n)}}
+			if n >= 20 {
+				rs = []objfile.Range{{Off: 0, Buf: make([]byte, n/2)}, {Off: n / 2, Buf: make([]byte, n-n/2)}}
+			}
+			parked := make(chan int, 1)
+			rctx = objfile.WithBatchWait(rctx, func(inFlight int) {
+				select {
+				case parked <- inFlight:
+				default:
+				}
+			})
 			done := make(chan error, 1)
 			go func() { done <- objfile.ReadRanges(rctx, f, rs) }()
 			if gate != nil {
@@ -482,7 +502,7 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 				// Handshake: the batch's scheduler is parked, waiting for
 				// a request to end; a request it had launched would have
 				// been launched before it parked.
-				if fetches := waitSchedulerParked(t); fetches != 1 {
+				if fetches := <-parked; fetches != 1 {
 					t.Fatalf("%d requests launched while the first of a sized Object was unchecked", fetches)
 				}
 				st.mu.Lock()
@@ -542,19 +562,6 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	if !batched {
 		return
 	}
-	if warm != nil && err == nil && n > 0 {
-		// Ranges the cache held are served without a request; an Object
-		// not yet pinned at the batch (a sized one, KnownSizes' Open
-		// included, or one Pin has not checked) is read from the store.
-		plans := obs.Plans()
-		if len(plans) > 1 || len(st.reads) > (int(n)+9)/10 {
-			t.Fatalf("a batch over a warm cache: %d plans, %d requests", len(plans), len(st.reads))
-		}
-		if !bytes.Equal(rs[0].Buf, fx.data[:n]) {
-			t.Fatal("the batch read the wrong bytes")
-		}
-		return
-	}
 	if err != nil {
 		// A batch fails only after it has opened its Object: at its first
 		// request, which alone is sent.
@@ -563,11 +570,24 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 		}
 		return
 	}
-	if !bytes.Equal(rs[0].Buf, fx.data[:n]) {
-		t.Fatal("the batch read the wrong bytes")
+	for _, r := range rs {
+		if !bytes.Equal(r.Buf, fx.data[r.Off:r.Off+int64(len(r.Buf))]) {
+			t.Fatal("the batch read the wrong bytes")
+		}
+	}
+	var cachedBytes int64
+	cachedRanges := 0
+	if cacheEligible && warmth != "cold" && fx.change == "" {
+		cachedBytes, cachedRanges = n, len(rs)
+		if warmth == "mixed" {
+			cachedBytes, cachedRanges = n/2, 1
+		}
+	}
+	if obs.Hits() != cachedBytes {
+		t.Fatalf("%s: %d cached bytes, want %d", warmth, obs.Hits(), cachedBytes)
 	}
 	var wantSpans []span
-	for off := int64(0); off < n; off += 10 {
+	for off := cachedBytes; off < n; off += 10 {
 		wantSpans = append(wantSpans, span{off, min(10, n-off)})
 	}
 	got := slices.Clone(st.reads)
@@ -575,40 +595,16 @@ func runMatrixCase(t *testing.T, perm []string, restored bool, fx fixture, op st
 	if !slices.Equal(got, wantSpans) {
 		t.Fatalf("batch requests %v, want %v", got, wantSpans)
 	}
-	if plans := obs.Plans(); len(wantSpans) > 0 && (len(plans) != 1 || plans[0] != [3]int64{1, int64(len(wantSpans)), 0}) {
+	plans := obs.Plans()
+	if len(wantSpans) == 0 {
+		if len(plans) != 0 {
+			t.Fatalf("fully cached batch planned %+v", plans)
+		}
+	} else if len(plans) != 1 || plans[0] != [3]int64{int64(len(rs) - cachedRanges), int64(len(wantSpans)), 0} {
 		t.Fatalf("batch plans observed %+v, want one of %d requests", plans, len(wantSpans))
 	}
-	if n >= 20 && st.maxIn != limit {
+
+	if len(wantSpans) >= limit && st.maxIn != limit {
 		t.Fatalf("%d requests at most in flight, want the limit %d", st.maxIn, limit)
 	}
-}
-
-// waitSchedulerParked waits until a batch's scheduler (batch.run) is parked
-// in its select, waiting for a request to end, and returns how many of its
-// request goroutines exist then. It reads the goroutines' stacks: the
-// scheduler launches a request's goroutine before it parks, so the count
-// at that point is every request it decided to send.
-func waitSchedulerParked(t *testing.T) int {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second) // guards a hang only
-	buf := make([]byte, 1<<20)
-	for time.Now().Before(deadline) {
-		n := runtime.Stack(buf, true)
-		parked, fetches := false, 0
-		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
-			header, _, _ := strings.Cut(g, "\n")
-			switch {
-			case strings.Contains(g, "objfile.(*batch).run.func"):
-				fetches++
-			case strings.Contains(header, "[select") && strings.Contains(g, "objfile.(*batch).run("):
-				parked = true
-			}
-		}
-		if parked {
-			return fetches
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("the batch's scheduler never parked")
-	return 0
 }

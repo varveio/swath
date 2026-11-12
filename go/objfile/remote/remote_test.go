@@ -28,6 +28,7 @@ import (
 
 	"github.com/varveio/swath/go/objfile"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/go/objfile/internal/ranged"
 )
 
 const secret = "secret-key-never-recorded"
@@ -460,5 +461,31 @@ func TestSizeTransport(t *testing.T) {
 	sizeTransport(tr, 64)
 	if tr.MaxIdleConns != 0 || tr.MaxIdleConnsPerHost != 100 {
 		t.Fatalf("a larger pool or an unlimited one was lowered: %d, %d", tr.MaxIdleConns, tr.MaxIdleConnsPerHost)
+	}
+}
+
+// TestObservingOwnership: Close forgets exactly the owned client's
+// registration before releasing it, including when the client's close fails.
+func TestObservingOwnership(t *testing.T) {
+	for _, closeErr := range []error{nil, errors.New("close failed")} {
+		client, other := &http.Client{}, &http.Client{}
+		ranged.SetObserving(other, true)
+		t.Cleanup(func() { ranged.SetObserving(client, false); ranged.SetObserving(other, false) })
+		s := &Store{close: func() error {
+			if ranged.Observing(client) {
+				t.Error("client still registered during close")
+			}
+			return closeErr
+		}}
+		s.observing(client)
+		if !ranged.Observing(client) {
+			t.Fatal("owned client not registered")
+		}
+		if err := s.Close(); !errors.Is(err, closeErr) {
+			t.Fatalf("Close = %v, want %v", err, closeErr)
+		}
+		if ranged.Observing(client) || !ranged.Observing(other) {
+			t.Fatal("Close forgot the wrong clients")
+		}
 	}
 }

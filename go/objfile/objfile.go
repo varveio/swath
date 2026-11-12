@@ -273,7 +273,12 @@ type limited struct {
 	slots chan struct{}
 }
 
+type admissionWaitKey struct{} // test handshake at request admission
+
 func (l limited) acquire(ctx context.Context) error {
+	if wait, _ := ctx.Value(admissionWaitKey{}).(func()); wait != nil {
+		wait()
+	}
 	select {
 	case l.slots <- struct{}{}:
 		return nil

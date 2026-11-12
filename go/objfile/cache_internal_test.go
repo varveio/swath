@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -116,5 +117,39 @@ func TestByteCacheEntryBound(t *testing.T) {
 	}
 	if _, n := c.state(); n != maxCacheEntries {
 		t.Fatalf("%d entries, want at most %d", n, maxCacheEntries)
+	}
+}
+
+// TestByteCacheEntryBoundConcurrent: an admission reserves its entry's
+// slot with its bytes, so admissions in progress together cannot pass the
+// entry bound when they publish.
+func TestByteCacheEntryBoundConcurrent(t *testing.T) {
+	c, _ := NewByteCache(1 << 30)
+	obj := cacheObject{scope: "s", name: "a", identity: "1"}
+	for i := range maxCacheEntries - 1 {
+		c.admit(obj, int64(i)*2, []byte{1})
+	}
+	reserved, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	c.admitReserved = func() {
+		if first.CompareAndSwap(false, true) { // the first admission waits between reservation and publication
+			close(reserved)
+			<-release
+		}
+	}
+	done := make(chan struct{})
+	go func() { c.admit(obj, 1<<40, []byte{1}); close(done) }()
+	<-reserved
+	c.admit(obj, 1<<41, []byte{1}) // takes the last slot, or drops one for it
+	close(release)
+	<-done
+	if _, n := c.state(); n > maxCacheEntries {
+		t.Fatalf("%d entries, over the bound of %d", n, maxCacheEntries)
+	}
+	c.mu.Lock()
+	published := c.lru.Len()
+	c.mu.Unlock()
+	if published > maxCacheEntries {
+		t.Fatalf("%d entries published, over the bound of %d", published, maxCacheEntries)
 	}
 }

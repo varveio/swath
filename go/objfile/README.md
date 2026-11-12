@@ -178,7 +178,7 @@ For more control:
 An operation that needs to know what it cost puts an `Observer` on its context
 (`WithObserver`). Every physical request a read makes under that context, through
 every wrapper, is reported as it begins (after any `Limit` slot is granted) and
-when its body is consumed or closed: its kind (metadata, range or whole object),
+after its body is consumed or closed and SDK and objfile validation finishes: its kind (metadata, range or whole object),
 the store's object name (a `Root` prefix included), the range, whether it retries
 earlier work, the bytes consumed and the error. Each batch reports its plan
 (ranges in, requests out, gap bytes read and discarded) and a byte cache the bytes
@@ -186,7 +186,8 @@ it served. Without an Observer this costs a context lookup and nothing else.
 
 `IOReporter` says whether the observation is complete. A `remote.Store` reports
 true: its clients send through a transport that reports every HTTP attempt, the
-SDKs' own retries and the GCS reader's reopening of a cut body included. A store
+SDKs' own retries, the GCS reader's reopening of a cut body, and resends inside
+Go's HTTP transport included. A store
 package over a caller's client reports false: it reports each request it makes,
 but not the retries the SDK makes inside one. Every wrapper reports what it wraps.
 
@@ -196,7 +197,7 @@ but not the retries the SDK makes inside one. Every wrapper reports what it wrap
 several stores may share, and serves later reads of the same version from it with no
 request. Nothing is cached without the wrapper; `NewByteCache(n)` bounds the bytes
 the cache owns, copies a reader is making included, dropping the least recently used
-ranges.
+ranges. Entry bookkeeping has a separate count bound, including pending admissions.
 
 ```go
 cache, err := objfile.NewByteCache(64 << 20)
@@ -210,7 +211,10 @@ an Identity as the read began. So a cached byte never proves anything: the first
 of an `OpenSized` Object, and every read of one `Pin` has not checked yet, goes to
 the store, and a reopened replaced object has another identity. Only complete
 successful reads are kept. A batch serves the ranges the cache holds and sends the
-rest as one batch. `ReadObject` is never cached. Concurrent reads of the same
+rest as one batch. Cache eligibility is frozen for the entire original batch,
+through every order of `Cache`, `Batch`, `Limit` and `Pin`. Cached inputs are
+excluded from the reported plan; each miss request still takes its own `Limit`
+slot. `ReadObject` is never cached. Concurrent reads of the same
 uncached range each make their request.
 
 `WithCacheMode(ctx, CacheBypass)` makes an operation neither use nor fill the cache,

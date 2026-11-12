@@ -510,7 +510,7 @@ func runObserved(t *testing.T, classify Classify, newStore NewStore, complete bo
 	ctx := context.Background()
 	rec := NewRecorder(classify)
 	s := newStore(t, rec.Wrap)
-	if r, ok := s.Opener.(objfile.IOReporter); ok != complete && (!ok || r.ReportsIO() != complete) {
+	if r, ok := s.Opener.(objfile.IOReporter); (complete && !ok) || (ok && r.ReportsIO() != complete) {
 		t.Fatalf("the Opener is an IOReporter %v; want ReportsIO %v", ok, complete)
 	}
 	data := Data(1<<20, 11)
@@ -536,7 +536,7 @@ func runObserved(t *testing.T, classify Classify, newStore NewStore, complete bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, ok := opened.(objfile.IOReporter); ok != complete && (!ok || r.ReportsIO() != complete) {
+	if r, ok := opened.(objfile.IOReporter); (complete && !ok) || (ok && r.ReportsIO() != complete) {
 		t.Fatalf("the Object is an IOReporter %v; want ReportsIO %v", ok, complete)
 	}
 	f, err := s.Opener.OpenSized(octx, "obj", int64(len(data)))

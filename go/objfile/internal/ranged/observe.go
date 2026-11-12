@@ -5,9 +5,11 @@ package ranged
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,73 +17,174 @@ import (
 	"github.com/varveio/swath/go/objfile"
 )
 
-// report is how one request's end is reported: by the Observer's done
-// when the request is observed here, or, for a request an Observe
-// transport observes, by marking a failure the transport did not see (a
-// response check) on its attempt. The zero report reports nothing.
+// errUnwound is the result of a request whose reader unwound (a panic)
+// before it ended.
+var errUnwound = errors.New("objfile: the read unwound before the request ended")
+
+// report is how one request's end is reported, exactly once: by the
+// Observer's done for a request reported here, or, for one an Observe
+// transport observes, by completing its last HTTP attempt (the earlier
+// ones are completed by the transport as each next one starts). The nil
+// report reports nothing.
 type report struct {
-	done func(objfile.RequestResult)
-	a    *attempt
+	mu   sync.Mutex
+	done func(objfile.RequestResult) // reported here
+	a    *attempt                    // observed by the transport
+	over bool
 }
 
-// end reports the request's end, before its body is closed: bytes of
-// body consumed and err, a clean end of the body (nil or io.EOF) being a
-// success.
-func (r report) end(bytes int64, err error) {
+// end reports the request's end once every check of it is done and its
+// body is closed: the body bytes consumed (for a transport-observed
+// request, the transport's own count) and err, a clean end of the body
+// (nil or io.EOF) being a success. Only the first end counts.
+func (r *report) end(bytes int64, err error) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	over := r.over
+	r.over = true
+	r.mu.Unlock()
+	if over {
+		return
+	}
 	if err == io.EOF {
 		err = nil
+	}
+	if r.a != nil {
+		r.a.finish(err)
+		return
 	}
 	if r.done != nil {
 		r.done(objfile.RequestResult{Bytes: bytes, Err: err})
 	}
-	if r.a != nil && err != nil {
-		r.a.reject(err)
-	}
 }
+
+// unwound ends the request as failed when nothing ended it, as a reader
+// unwinds from a panic; it is deferred right after begin.
+func (r *report) unwound() { r.end(0, errUnwound) }
 
 // begin starts the observation of a request q under ctx: nothing without
 // obs; with observed, the request's context is marked for the Observe
 // transport, which reports each HTTP attempt; otherwise q is reported here.
-func begin(ctx context.Context, obs objfile.Observer, observed bool, q objfile.Request) (context.Context, report) {
+// The caller defers the report's unwound at once.
+func begin(ctx context.Context, obs objfile.Observer, observed bool, q objfile.Request) (context.Context, *report) {
 	switch {
 	case obs == nil:
-		return ctx, report{}
+		return ctx, nil
 	case observed:
 		a := &attempt{obs: obs, q: q}
-		return context.WithValue(ctx, attemptKey{}, a), report{a: a}
+		return context.WithValue(ctx, attemptKey{}, a), &report{a: a}
 	}
-	return ctx, report{done: obs.Begin(q)}
+	return ctx, &report{done: obs.Begin(q)}
 }
 
 type attemptKey struct{}
 
 // attempt is the work of one request of an Object, as the Observe
-// transport reports its HTTP attempts: q describes the first, and each
-// one after it (an SDK's retry, a reader's reopen) is a Retry.
+// transport reports its physical attempts: one for each connection a
+// send of it gets, the SDK's retries, a reader's reopens and the Go
+// transport's own resends included. q describes the first; each later one
+// is a Retry. An attempt is completed when the next one starts, or, the
+// last, when the Object's request ends (finish), after every check.
 type attempt struct {
-	obs  objfile.Observer
-	q    objfile.Request
-	sent atomic.Bool
+	obs objfile.Observer
+	q   objfile.Request
 
-	mu       sync.Mutex
-	rejected error // a check's failure of the current attempt's response
+	mu      sync.Mutex
+	sent    int
+	pending *sent // the current attempt, not yet completed
+	over    bool  // finished: later attempts complete at once
 }
 
-func (a *attempt) reject(err error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.rejected == nil {
-		a.rejected = err
+// sent is one physical attempt: its completion, the body bytes read and
+// the failure seen of it so far.
+type sent struct {
+	done   func(objfile.RequestResult)
+	bytes  atomic.Int64
+	mu     sync.Mutex
+	failed error
+	body   io.Closer // available to close if an SDK/getter unwinds
+	once   sync.Once
+}
+
+func (s *sent) fail(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failed == nil {
+		s.failed = err
 	}
 }
 
-// take returns and clears the current attempt's rejection.
-func (a *attempt) take() error {
+// complete reports the attempt's end, with err when it has seen no
+// failure of its own.
+func (s *sent) complete(err error) {
+	s.once.Do(func() {
+		s.mu.Lock()
+		if s.failed != nil {
+			err = s.failed
+		}
+		body := s.body
+		s.mu.Unlock()
+		closed := false
+		defer func() {
+			if !closed && err == nil {
+				err = errUnwound
+			}
+			if s.done != nil {
+				s.done(objfile.RequestResult{Bytes: s.bytes.Load(), Err: err})
+			}
+		}()
+		if body != nil {
+			if closeErr := body.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		closed = true
+	})
+}
+
+// errResent is the result of an attempt that ended, with no failure of its
+// own seen, because another was sent in its place.
+var errResent = errors.New("objfile: the request was sent again")
+
+// start begins a physical attempt q (its range as sent), completing the
+// one before it.
+func (a *attempt) start(q objfile.Request) *sent {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	err := a.rejected
-	a.rejected = nil
-	return err
+	q.Retry = q.Retry || a.sent > 0
+	a.sent++
+	if a.pending != nil {
+		a.pending.complete(errResent)
+	}
+	// Publish only after Begin returns, so finish never sees an attempt whose
+	// completion has not been installed. Observer callbacks cannot reenter.
+	s := &sent{done: a.obs.Begin(q)}
+	if a.over {
+		s.complete(errUnwound)
+	} else {
+		a.pending = s
+	}
+	return s
+}
+
+// current returns the attempt in flight, or nil.
+func (a *attempt) current() *sent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pending
+}
+
+// finish completes the last attempt with err (unless it failed itself).
+func (a *attempt) finish(err error) {
+	a.mu.Lock()
+	last := a.pending
+	a.pending, a.over = nil, true
+	a.mu.Unlock()
+	if last != nil {
+		last.complete(err)
+	}
 }
 
 func attemptOf(ctx context.Context) *attempt {
@@ -89,23 +192,27 @@ func attemptOf(ctx context.Context) *attempt {
 	return a
 }
 
-// rejectResponse records why a transport refused the response to req, for
-// the Observe transport below it to report.
+// rejectResponse records why a transport refused the response to req on
+// its current attempt.
 func rejectResponse(req *http.Request, err error) {
 	if a := attemptOf(req.Context()); a != nil {
-		a.reject(err)
+		if s := a.current(); s != nil {
+			s.fail(err)
+		}
 	}
 }
 
-// Observe reports every HTTP attempt of an Object's request (marked by the
-// Object, whose store's client Observing names) to the request's Observer,
-// SDK retries and a reader's reopens of a failed body included, each with
+// Observe reports every physical attempt of an Object's request (marked by
+// the Object, whose store's client Observing names) to the request's
+// Observer: each connection a send gets (httptrace's GotConn), so that the
+// SDK's retries, a reader's reopens of a failed body and the Go
+// transport's own resends on a closed connection are each an attempt, with
 // the range its Range header asks for. A request whose path does not end
 // in the object's name, such as a credential exchange made with the same
-// context, is not one of them. Its responses' bodies are counted as they
-// are read; an attempt ends when its body fails, ends or is closed. It
-// belongs below every transport that may refuse a response (Transport),
-// which records the refusal for it.
+// context, is not one of them. Bodies are counted as they are read; the
+// last attempt is completed by the Object once its checks are done, the
+// others as the next one starts. It belongs below every transport that may
+// refuse a response (Transport), which records the refusal for it.
 func Observe(base http.RoundTripper) http.RoundTripper { return observe{base: base} }
 
 type observe struct{ base http.RoundTripper }
@@ -116,7 +223,6 @@ func (t observe) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.base.RoundTrip(req)
 	}
 	q := a.q
-	q.Retry = q.Retry || a.sent.Swap(true)
 	rng := req.Header.Get("x-ms-range")
 	if rng == "" {
 		rng = req.Header.Get("Range")
@@ -127,20 +233,32 @@ func (t observe) RoundTrip(req *http.Request) (*http.Response, error) {
 			q.Len = last - first + 1
 		}
 	}
-	a.take() // a refusal of an earlier attempt is not this one's
-	done := a.obs.Begin(q)
+	var cur atomic.Pointer[sent]
+	cur.Store(a.start(q))
+	var connected bool // GotConn calls are sequential within one RoundTrip.
+	trace := &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) {
+			if connected {
+				cur.Store(a.start(q))
+			}
+			connected = true
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	res, err := t.base.RoundTrip(req)
+	s := cur.Load()
 	if err != nil {
-		if done != nil {
-			done(objfile.RequestResult{Err: err})
-		}
+		s.fail(err)
 		return res, err
 	}
-	var failed error
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		failed = fmt.Errorf("the store answered %s", res.Status)
+		s.fail(fmt.Errorf("the store answered %s", res.Status))
 	}
-	res.Body = &counted{ReadCloser: res.Body, a: a, done: done, failed: failed}
+	body := &counted{ReadCloser: res.Body, s: s}
+	s.mu.Lock()
+	s.body = body
+	s.mu.Unlock()
+	res.Body = body
 	return res, nil
 }
 
@@ -152,56 +270,28 @@ func (t observe) CloseIdleConnections() {
 }
 
 // counted is an observed attempt's body: it counts the bytes read and
-// reports the attempt's end once, when the body fails, ends or is closed.
+// keeps the body's failure for the attempt.
 type counted struct {
 	io.ReadCloser
-	a      *attempt
-	done   func(objfile.RequestResult)
-	failed error // an error status
-
-	mu    sync.Mutex
-	bytes int64
-	ended bool
+	s         *sent
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (b *counted) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	b.mu.Lock()
-	b.bytes += int64(n)
-	b.mu.Unlock()
-	if err == io.EOF {
-		b.finish(nil)
-	} else if err != nil {
-		b.finish(err)
+	b.s.bytes.Add(int64(n))
+	if err != nil && err != io.EOF {
+		b.s.fail(err)
 	}
 	return n, err
 }
 
+// Close releases the HTTP body once, whether the SDK closes it normally or
+// the operation's deferred completion closes it during panic unwinding.
 func (b *counted) Close() error {
-	err := b.ReadCloser.Close()
-	b.finish(nil)
-	return err
-}
-
-func (b *counted) finish(err error) {
-	b.mu.Lock()
-	if b.ended {
-		b.mu.Unlock()
-		return
-	}
-	b.ended = true
-	bytes := b.bytes
-	b.mu.Unlock()
-	// A check's refusal recorded so far explains the end best; then an
-	// error status; then the body's own failure.
-	if rejected := b.a.take(); rejected != nil {
-		err = rejected
-	} else if b.failed != nil {
-		err = b.failed
-	}
-	if b.done != nil {
-		b.done(objfile.RequestResult{Bytes: bytes, Err: err})
-	}
+	b.closeOnce.Do(func() { b.closeErr = b.ReadCloser.Close() })
+	return b.closeErr
 }
 
 // observing holds the clients whose transport is an Observe transport, by

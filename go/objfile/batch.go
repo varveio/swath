@@ -191,12 +191,56 @@ func ReadRanges(ctx context.Context, f Object, ranges []Range) error {
 // error wrapping ErrObjectChanged, fs.ErrNotExist or a *SizeMismatchError
 // before that, the ranges not yet read fail with that error, unsent.
 func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy) error {
+	// Snapshot cache eligibility once, before validation or admission can wait.
+	var filters []batchCache
+	frozen, hasCache := ctx.Value(cacheBatchKey{}) != nil, false
+	if !frozen {
+		id := f.Identity()
+		for inner := f; inner != nil; {
+			switch v := inner.(type) {
+			case *cachedObject:
+				hasCache = true
+				mode, err := cacheMode(ctx)
+				if err != nil {
+					return err
+				}
+				// Supported wrappers preserve a non-empty identity. An unchecked Pin
+				// above this cache hides it, keeping every cache ineligible for this batch.
+				if id != "" && mode == CacheDefault && !v.closed.Load() {
+					filters = append(filters, batchCache{v, cacheObject{scope: v.scope, name: v.name, identity: id}})
+				}
+				inner = v.Object
+			case limitedObject:
+				inner = v.Object
+			case batchedObject:
+				inner = v.Object
+			case *pinnedObject:
+				inner = v.Object
+			default:
+				inner = nil
+			}
+		}
+	}
 	if err := checkBatch(f.Size(), ranges, p); err != nil {
 		return err
 	}
 	p = p.normal()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Filter original inputs before planning. Scalar misses retain the complete
+	// Limit and Pin chain, with cache lookup and admission owned by this batch.
+	if hasCache {
+		ctx = context.WithValue(ctx, cacheBatchKey{}, true)
+		var run func(int, []Range) error
+		run = func(i int, rs []Range) error {
+			if i == len(filters) {
+				return ReadRangesWith(ctx, f, rs, p)
+			}
+			c := filters[i]
+			return c.f.readRanges(ctx, rs, c.key, func(misses []Range) error { return run(i+1, misses) })
+		}
+		return run(0, ranges)
 	}
 	b := plan(ranges, p)
 	if len(b.spans) == 0 {
@@ -211,6 +255,16 @@ func ReadRangesWith(ctx context.Context, f Object, ranges []Range, p BatchPolicy
 		return nil
 	}
 	return &BatchError{Errs: errs}
+}
+
+// cacheBatchKey marks scalar requests whose cache work belongs to the batch.
+type cacheBatchKey struct{}
+
+// batchWaitKey carries a test handshake before the scheduler waits.
+type batchWaitKey struct{}
+type batchCache struct {
+	f   *cachedObject
+	key cacheObject
 }
 
 // checkBatch checks a batch of ranges of an object of size bytes under p
@@ -399,6 +453,9 @@ func (b *batch) run(ctx context.Context, f Object, p BatchPolicy) {
 		}
 		if inFlight == 0 {
 			break
+		}
+		if hook, _ := ctx.Value(batchWaitKey{}).(func(int)); hook != nil {
+			hook(inFlight)
 		}
 		select {
 		case res := <-done:

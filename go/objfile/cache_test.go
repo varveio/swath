@@ -424,3 +424,67 @@ func TestCacheIOReporter(t *testing.T) {
 		}
 	}
 }
+
+// TestCacheOuterBatch keeps cache decisions at the caller's batch boundary.
+func TestCacheOuterBatch(t *testing.T) {
+	for _, order := range []string{"Batch", "Limit", "Pin", "BatchLimitPin", "CacheLimitBatch"} {
+		t.Run(order, func(t *testing.T) {
+			st := newMstore()
+			st.put("obj", objfiletest.Data(1000, 1))
+			c := newCache(t, 1<<20)
+			var o objfile.Opener = objfile.Cache(st, scope, c)
+			switch order {
+			case "Batch":
+				o = mustBatch(t, o, objfile.BatchPolicy{})
+			case "Limit":
+				o = objfile.Limit(o, 1)
+			case "Pin":
+				o = objfile.Pin(o, scope)
+			case "BatchLimitPin":
+				o = mustBatch(t, objfile.Limit(objfile.Pin(o, scope), 1), objfile.BatchPolicy{})
+			case "CacheLimitBatch":
+				o = objfile.Cache(objfile.Limit(mustBatch(t, o, objfile.BatchPolicy{}), 1), "outer", newCache(t, 1<<20))
+			}
+			ctx := context.Background()
+			warm, _ := objfile.Cache(st, scope, c).Open(ctx, "obj")
+			if _, err := warm.ReadAt(make([]byte, 100), 0); err != nil {
+				t.Fatal(err)
+			}
+			// A fresh sized handle must not use or populate cache, even after its first request pins it.
+			f, err := o.OpenSized(ctx, "obj", 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			obs := &objfiletest.Observer{}
+			ctx = objfile.WithObserver(ctx, obs)
+			rs := []objfile.Range{{Off: 0, Buf: make([]byte, 100)}, {Off: 800, Buf: make([]byte, 100)}}
+			if err := objfile.ReadRanges(ctx, f, rs); err != nil {
+				t.Fatal(err)
+			}
+			if obs.Hits() != 0 {
+				t.Fatalf("unconfirmed batch hit %d bytes", obs.Hits())
+			}
+			// The second span of that batch must not have been admitted.
+			obs.Reset()
+			st.takeReads()
+			if _, err := f.WithContext(ctx).ReadAt(make([]byte, 100), 800); err != nil {
+				t.Fatal(err)
+			}
+			if obs.Hits() != 0 || st.takeReads() != 1 {
+				t.Fatal("unconfirmed batch admitted its later span")
+			}
+			// A cached range next to a failing miss survives; only the miss is planned.
+			obs.Reset()
+			st.put("obj", objfiletest.Data(1000, 2))
+			rs = []objfile.Range{{Off: 0, Buf: make([]byte, 100)}, {Off: 101, Buf: make([]byte, 100)}}
+			err = objfile.ReadRanges(ctx, f, rs)
+			var be *objfile.BatchError
+			if !errors.As(err, &be) || be.Errs[0] != nil || be.Errs[1] == nil {
+				t.Fatalf("mixed results: %v", err)
+			}
+			if obs.Hits() != 100 || len(obs.Plans()) != 1 || obs.Plans()[0] != [3]int64{1, 1, 0} {
+				t.Fatalf("hits %d, plans %v", obs.Hits(), obs.Plans())
+			}
+		})
+	}
+}

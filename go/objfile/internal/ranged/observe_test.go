@@ -6,6 +6,7 @@ package ranged
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/varveio/swath/go/objfile"
@@ -123,3 +124,24 @@ type counter struct{ n int }
 func (c *counter) Begin(objfile.Request) func(objfile.RequestResult) { c.n++; return nil }
 func (*counter) BatchPlanned(_, _, _ int64)                          {}
 func (*counter) CacheHit(int64)                                      {}
+
+// TestObservingClientRegistry: registration belongs to a client pointer;
+// another client sharing its transport stays unregistered.
+func TestObservingClientRegistry(t *testing.T) {
+	transport := Observe(http.DefaultTransport)
+	a, b := &http.Client{Transport: transport}, &http.Client{Transport: transport}
+	if Observing(a) || Observing(b) {
+		t.Fatal("new clients registered")
+	}
+	SetObserving(a, true)
+	t.Cleanup(func() { SetObserving(a, false); SetObserving(b, false) })
+	if !Observing(a) || Observing(b) {
+		t.Fatal("registration followed transport instead of client")
+	}
+	SetObserving(b, true)
+	SetObserving(a, false)
+	SetObserving(a, false) // forgetting is idempotent
+	if Observing(a) || !Observing(b) {
+		t.Fatal("forgetting one client affected another")
+	}
+}
