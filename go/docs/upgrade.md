@@ -8,8 +8,9 @@ migration, for two audiences:
 
 - **Someone who ran 0.3**: what stays the same and what changed on the
   [command line](#the-command-line-what-stays-the-same), in the [run report](#run-report-and-counters), and
-  what a format 1 dataset becomes ([Files](#files) through [Versions](#versions)); the pre-release changes are
-  under [Changes from 0.3 to 0.4](#changes-from-03-to-04).
+  what a format 1 dataset becomes ([Files](#files) through [Versions](#versions)); [Changes from 0.3 to
+  0.4](#changes-from-03-to-04) sums them up, and [Unreleased builds of `main`](#unreleased-builds-of-main) lists
+  what changed for anyone who ran a pre-release build.
 - **A reader of the 0.3 layout** (the downstream reader, `bench/diffds.py`, `bench/summaries.py`): what it must
   change, in [What a reader of the Java layout changes](#what-a-reader-of-the-java-layout-changes).
 
@@ -30,8 +31,9 @@ downstream reader are the acceptance gates ([Gates](#gates)).
 - **Output.** Object-store text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file
   (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Every source, a local
   tree included, lists as text rows or into a dataset; `swath du` prints totals on stdout. 0.3's filters are kept: its regular expressions are
-  `--include-regex` and `--exclude-regex` (RE2 syntax, not Java's), `--include` and `--exclude` take globs, every
-  filter is repeatable, and a size's `MB` is decimal (`M` and `MiB` binary).
+  `--include-regex` and `--exclude-regex` (RE2 syntax, not Java's), `--include` and `--exclude` take globs, include
+  and exclude patterns and storage classes accumulate when repeated, and for each size or time bound the last value
+  wins. A size's `MB` is decimal (`M` and `MiB` binary).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
   Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
   and resume ([platform limits](running.md#known-limits)). The exit codes keep their meaning:
@@ -44,7 +46,8 @@ downstream reader are the acceptance gates ([Gates](#gates)).
   runs with a merge at the end. Here every dataset is globally key-sorted, and the order comes from the listing
   itself: rows wait in a memory budget (`--sort-buffer`: 1/16 of memory, at most 1 GiB, as 0.3 sized its sort
   segments from the heap), and rows listed ahead of the output go to
-  disposable spill files under the output (`--spill-budget`, by default up to half the free space). There is
+  disposable spill files: a dataset's in its workspace, a text file's beside it, a stdout stream's under `TMPDIR`
+  (`--spill-budget`, by default half the spill filesystem's free space after a reserve; at the cap, listing waits). There is
   no merge pass at the end. A large sorted run spills almost every row once, so plan disk for it
   ([production.md](production.md#disk-sizing)).
 - **The durable prefix.** A resume keeps published parts and continues after the last published key.
@@ -158,7 +161,7 @@ re-list it into a new directory.
 
 | Format 1 | SeekParquet |
 |---|---|
-| `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
+| `_SUCCESS` (written last; the commit) | removed: `manifest.json` is the commit, written after every part: in a local directory by an atomic rename and a directory sync, in a bucket by a create that succeeds only if no manifest is there |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
 | `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 5: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
@@ -260,9 +263,10 @@ Format 1 had one version string. Five identifiers now move independently:
 - the writer recipe;
 - the private journal version.
 
-The policy for each is in [dataset.md](dataset.md#evolution). This build reads journal
-version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
-before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
+The policy for each is in [dataset.md](dataset.md#evolution). This build writes journal
+version 10 and reads versions 9 and 10 (9 records each part's SHA-256 where versions 7 and 8 recorded its MD5;
+10 adds a bucket dataset's object names). Versions below 9 or above 10 are refused before recovery touches
+anything, and earlier builds refuse version 10. Finish an interrupted run of an older build with
 that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath/parquet-r4`
 since Parquet pages are compressed at zstd `SpeedFastest`) and the dataset format are in the resume identity: a build of another recipe or format
 refuses the journal. `created_by` names the real build, so parts are byte-identical within a build only. A part
@@ -314,7 +318,7 @@ value differs from Java's listing-scope hash), and `stop_source` (under `outcome
 A policy that was off reads `false` under `features` and its counters are absent; a present zero means the
 policy was on and never fired ([internals/counters.md](internals/counters.md)).
 
-The report's changes from version 1 to version 2 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04).
+The report's changes from version 1 to version 2 are in [Unreleased builds of `main`](#unreleased-builds-of-main).
 
 ## Command line
 
@@ -346,7 +350,7 @@ The Java CLI's options, exit codes and report fields against this tool: [interna
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
 earlier one: `swath resume` replays the recorded command with this build's flags, and a flag this build no
 longer has is refused (exit 2, naming the flag); finish such a run with the build that
-started it, or start over. The last renames before 0.4 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04);
+started it, or start over. The last renames before 0.4 are in [Unreleased builds of `main`](#unreleased-builds-of-main);
 the list below is the earlier history of the unreleased builds.
 - Anonymity is explicit: requests go unauthenticated only with `--anonymous`, one flag for S3, GCS and Azure
   Blob (`--gcs-anonymous` and `--azblob-anonymous` are gone; a resume that recorded either is refused as an
@@ -378,8 +382,9 @@ the list below is the earlier history of the unreleased builds.
 - A custom `--endpoint-url` is path-style by default: an interrupted run started with `--endpoint-url` on a host name
   and no `--s3-path-style` resolves the path-style route on resume, so the identity check refuses it; start it
   over with `--overwrite`.
-- Sizes are binary in every unit (`64MB` is 64 MiB); `KB`, `MB` and `GB` were decimal for the resource sizes,
-  so a run started that way sees a different part size on resume and is refused.
+- All size flags use one syntax: `KB`, `MB`, `GB` and `TB` are decimal; `K`, `M`, `G`, `T` and `KiB`, `MiB`, `GiB`,
+  `TiB` are binary. Earlier unreleased builds used different resource-size rules; preserve the intended byte count
+  when migrating their commands.
 - Split counters: `split.pivot_extrapolated` is `split.pivot.density.bounded` + `split.pivot.density.frontier`,
   and `split.pivot_structure` is `split.pivot.structure`. Every split path now counts its engagement: the pivot
   sources (`split.pivot.*`), empty and small children by source (`child_empty.*`, `child_small.*`), the density
@@ -433,6 +438,67 @@ The binary reports its version (`swath --version`, the report's `build.version`)
 reads the release's `X.Y.Z`, a binary built from a source checkout reads `devel`, and the revision it was built
 from is `build.revision`.
 
+Builds of `main` before 0.4 also renamed flags, report fields and formats between themselves: see
+[Unreleased builds of `main`](#unreleased-builds-of-main) at the end of this page.
+
+## What a reader of the Java layout changes
+
+A reader of format 1 (the downstream reader is the reference) changes as follows. The contract it moves to is
+[dataset.md](dataset.md).
+
+- **Open.** Read `manifest.json` first ([Dispatch](#dispatch)). A SeekParquet manifest (`format` `seekparquet`,
+  `format_version` 0, `draft_revision` 1) is the swath dataset path: require `extensions.swath.version` 1 and take
+  swath's fields from `extensions.swath`. Never read `_SUCCESS` or a run summary. A format 1 manifest takes the
+  legacy path; any other manifest is refused.
+- **Coverage and source** come from `extensions.swath`, not from the run summary: the members are in
+  [dataset.md](dataset.md#the-swath-extension). The application decides which listings it takes, and checks
+  `source.kind` and the container against what it was asked to open.
+- **Dispatch on the schema id.** Use the exact registered id (`swath/s3-objects/v1`, `swath/gcs-objects/v1`,
+  `swath/azblob-objects/v1`, `swath/local-entries/v1` and the versions ids), with the columns
+  [dataset.md](dataset.md#schema-registry) gives it. Its column set is not closed: ignore columns the id does not
+  define, and read an optional column that a part lacks as null (`time_created` on GCS, the later Azure Blob properties). A run resumed by a build
+  that writes a newly added optional column mixes parts with and without it under one id.
+- **Columns Java wrote and the current-object schemas do not.** `version_id`, `is_latest`, `is_delete_marker` and
+  `row_type` are gone from `swath/s3-objects/v1` ([S3 schema](#s3-schema)). Every version and delete marker is in
+  the versions schemas (`--all-versions`) instead, one row per version, consecutive per key. A reader that assumes
+  one row per key refuses those ids. A reader that wants current objects from them filters as
+  [dataset.md](dataset.md#keys-and-order) says.
+- **Keys** are bytes in unsigned order, and the manifest's part bounds are base64 ([dataset.md](dataset.md#keys-and-order)).
+  Local keys may be non-UTF-8.
+- **Part footers** carry the `seekparquet.*` stamps equal to the manifest's, and `key` ascending as the first
+  sorting column ([Footer](#footer)).
+- **Rows.** The downstream reader reads `key`, `size` and `last_modified`. It rejects a null or negative `size`
+  (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
+  to 9999. A local dataset's directory rows are entries whose keys end in `/`.
+- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
+  `Open` (the manifest, the schema id and the metadata, with the coverage and the source), `CheckSchema` (key and
+  columns), and `Stream` and `List` (current objects, with the row checks above). Judging the coverage and the
+  source is the caller's.
+- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
+  and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
+  sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
+  schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
+  test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
+  serves as the reader's fixture; the commands that produce them are in [internals/testing.md](internals/testing.md).
+
+## Gates
+
+- **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
+  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, each part's SHA-256 against `parts[].sha256`).
+- **SeekParquet conformance:** the suite's reader and validator targets against the seekparquet module this
+  tool pins, and this tool's datasets validated by the suite's reference adapter and the module's validator
+  (full and digest levels, every part declaring `sha256`) and read alike by both
+  ([internals/testing.md](internals/testing.md#seekparquet-conformance)).
+- **Downstream reader:** opens and streams this tool's datasets of every schema (section above); the recorded
+  probe ([internals/measurements.md](internals/measurements.md#downstream-reader-compatibility)) predates SeekParquet and is
+  historical.
+- **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
+  a reader.
+
+## Unreleased builds of `main`
+
+For anyone who ran a build of `main` before 0.4: what changed between those builds and 0.4.
+
 **If you built from `main` before 0.4.** The Go port was on `main` (from `a2efe16e`) before it was released,
 without a version and without a compatibility promise. Against those builds, 0.4 renames or moves these flags
 (a removed name is an unknown flag, exit 2; there are no aliases, and a run interrupted under such a build is
@@ -444,7 +510,7 @@ list` and `swath du` refuse every diagnostic flag with a message naming `swath d
 of the flags every object store has are gone, one shared flag serving S3, GCS and Azure Blob alike:
 `--gcs-endpoint` and `--azblob-endpoint` are `--endpoint-url`, `--gcs-request-timeout` and
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
-is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, include and exclude patterns and storage classes accumulate when repeated, and for each size or time bound the last value wins (`coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles the listing and the drain's
 tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
 tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
@@ -468,8 +534,9 @@ the version 9 journals of earlier builds, which an earlier build cannot do the o
 `encoders_at_start_bound_by` and `encoders_after_listing_bound_by`; encoders are now admitted against an
 allowance of their own, 1/16 of memory (at most 1 GiB) whatever `--sort-buffer` says, where earlier builds
 divided the sort buffer, and a text output's `compressor.jobs_reason` `row_budget` is `encoder_allowance`.
-Parquet pages are compressed at zstd `SpeedFastest` where earlier builds used `SpeedDefault`: parts are about 0.3
-to 1.1 % larger for less CPU a page, and read the same. The writer recipe is therefore `swath/parquet-r4`, and
+Parquet pages are compressed at zstd `SpeedFastest` where earlier builds used `SpeedDefault`: in the
+[2026-11-11 measurements](internals/measurements.md#parquet-pages-at-zstd-speedfastest-2026-11-11), the tested
+listings' parts were about 0.3 to 1.1 % larger for less CPU a page, and read the same. The writer recipe is therefore `swath/parquet-r4`, and
 an interrupted run of an earlier build (`swath/parquet-r3`) cannot be resumed by this build: finish it with that
 build, or start it over with `--overwrite`.
 A version 4 reader ignores
@@ -531,60 +598,5 @@ is the full schema and [reference/run-report.md](reference/run-report.md) its de
 
 **The dataset** changed against those builds: it is SeekParquet ([SeekParquet](#seekparquet)). Builds before
 2026-11-05 wrote format 1, as the Java tool does; those of 2026-11-05 to 2026-11-08 wrote format 2, whose Parquet
-schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the journal's format,
-the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
+schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
 zstd), but they are private to one run and never read across builds.
-
-## What a reader of the Java layout changes
-
-A reader of format 1 (the downstream reader is the reference) changes as follows. The contract it moves to is
-[dataset.md](dataset.md).
-
-- **Open.** Read `manifest.json` first ([Dispatch](#dispatch)). A SeekParquet manifest (`format` `seekparquet`,
-  `format_version` 0, `draft_revision` 1) is the swath dataset path: require `extensions.swath.version` 1 and take
-  swath's fields from `extensions.swath`. Never read `_SUCCESS` or a run summary. A format 1 manifest takes the
-  legacy path; any other manifest is refused.
-- **Coverage and source** come from `extensions.swath`, not from the run summary: the members are in
-  [dataset.md](dataset.md#the-swath-extension). The application decides which listings it takes, and checks
-  `source.kind` and the container against what it was asked to open.
-- **Dispatch on the schema id.** Use the exact registered id (`swath/s3-objects/v1`, `swath/gcs-objects/v1`,
-  `swath/azblob-objects/v1`, `swath/local-entries/v1` and the versions ids), with the columns
-  [dataset.md](dataset.md#schema-registry) gives it. Its column set is not closed: ignore columns the id does not
-  define, and read an optional column that a part lacks as null (`time_created` on GCS, the later Azure Blob properties). A run resumed by a build
-  that writes a newly added optional column mixes parts with and without it under one id.
-- **Columns Java wrote and the current-object schemas do not.** `version_id`, `is_latest`, `is_delete_marker` and
-  `row_type` are gone from `swath/s3-objects/v1` ([S3 schema](#s3-schema)). Every version and delete marker is in
-  the versions schemas (`--all-versions`) instead, one row per version, consecutive per key. A reader that assumes
-  one row per key refuses those ids. A reader that wants current objects from them filters as
-  [dataset.md](dataset.md#keys-and-order) says.
-- **Keys** are bytes in unsigned order, and the manifest's part bounds are base64 ([dataset.md](dataset.md#keys-and-order)).
-  Local keys may be non-UTF-8.
-- **Part footers** carry the `seekparquet.*` stamps equal to the manifest's, and `key` ascending as the first
-  sorting column ([Footer](#footer)).
-- **Rows.** The downstream reader reads `key`, `size` and `last_modified`. It rejects a null or negative `size`
-  (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
-  to 9999. A local dataset's directory rows are entries whose keys end in `/`.
-- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
-  `Open` (the manifest, the schema id and the metadata, with the coverage and the source), `CheckSchema` (key and
-  columns), and `Stream` and `List` (current objects, with the row checks above). Judging the coverage and the
-  source is the caller's.
-- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
-  and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
-  sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
-  schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
-  test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
-  serves as the reader's fixture; the commands that produce them are in [internals/testing.md](internals/testing.md).
-
-## Gates
-
-- **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
-  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, each part's SHA-256 against `parts[].sha256`).
-- **SeekParquet conformance:** the suite's reader and validator targets against the seekparquet module this
-  tool pins, and this tool's datasets validated by the suite's reference adapter and the module's validator
-  (full and digest levels, every part declaring `sha256`) and read alike by both
-  ([internals/testing.md](internals/testing.md#seekparquet-conformance)).
-- **Downstream reader:** opens and streams this tool's datasets of every schema (section above); the recorded
-  probe ([internals/measurements.md](internals/measurements.md#downstream-reader-compatibility)) predates SeekParquet and is
-  historical.
-- **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
-  a reader.
