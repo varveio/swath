@@ -106,7 +106,7 @@ type PrefixAggregate struct { Count, Bytes *int64 } // nil: not requested or not
 
 A reader opens the dataset, decides from its metadata whether it will do, checks it and reads it.
 [example_test.go](example_test.go) does that over a small committed dataset (`testdata/photos`), and lists it
-by delimiter a page at a time; `go test` runs both, and `go doc -all` shows them.
+by delimiter a page at a time; `go test` runs both.
 
 For a whole-run tally without constructing Objects, select only the optional fields it needs:
 
@@ -187,8 +187,9 @@ versions (every current-object schema). Otherwise the schema's keys repeat (`Uni
 
 `swath/s3-versions/v1` declares `{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}` and
 `swath/gcs-generations/v1` `{ID: "generation", DeletedAt: "time_deleted"}`. A row is current when it is latest and
-not a delete marker, noncurrent when neither. Azure Blob supports current objects only; there is no registered
-Azure versions schema.
+not a delete marker, noncurrent when neither. `swath/azblob-versions/v1` declares `{ID: "version_id", Latest:
+"is_latest"}` and includes versions, snapshots and soft-deleted blobs; interpret its additional fields with the
+Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registry).
 
 ## What is checked, and when
 
@@ -207,7 +208,8 @@ Azure versions schema.
   every spec column top-level and non-repeated, of the spec's physical and
   logical type (strings STRING, binary unannotated, times TIMESTAMP(MICROS, UTC), unsigned integers INT(n,
   false), signed ones INT(n, true) or unannotated), REQUIRED where the spec requires a value, present unless the
-  spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
+  spec lets a part lack it (`ColumnSpec.MayBeAbsent`: GCS `time_created` and the later Azure current-object
+  properties). Other columns are ignored. A disagreement is `KindSchema` naming the
   column and the part. It reads nothing beyond Verify's reads.
 - **`Stream`.** Current objects only: a versions schema, and a filesystem's entries (`StreamLocal`'s), are
   refused (`KindSchema`) before any read. Every object in dataset order in one ordered pass of borrowed
@@ -269,8 +271,8 @@ Azure versions schema.
   existing row decoder remains unchanged: `Scan` accepts an all-null INT64 `etag`, an INT64 `last_modified`
   without its timestamp annotation, a BYTE_ARRAY key without STRING, and a current-object manifest declaring
   `key_unique: false`; `ScanBatches` refuses these with `KindSchema` (for optional fields, when selected).
-  A selected column absent from its part is `KindSchema`: none of Object's selectable columns is absence-tolerant. GCS's absence-tolerant `time_created`
-  is outside this projection. Part schema errors name the part path and have `Row == nil`, independent of
+  A selected column absent from its part is `KindSchema`: none of Object's selectable columns is absence-tolerant. The absence-tolerant columns (GCS's `time_created`, the later Azure
+  properties) are outside this projection. Part schema errors name the part path and have `Row == nil`, independent of
   which shard encounters the part first; row errors identify the bad key and offset, owning their key bytes.
   Checks run by column before the callback, so with several invalid rows the error and earlier delivered rows may differ from `Scan`.
   Each borrowed batch stays within one row group, key page, page of every projected column and selected span;
@@ -385,8 +387,8 @@ written with `/` separators by the portable engine on Windows (`filepath.ToSlash
 
 A decoder fails with a `SemanticError` naming the column and the row: `KindSchema` when the row lacks a column
 the schema id defines (its part lacks it, or the read did not project it) or holds a value of another type,
-`KindRow` for a null in a required column. `time_created` is the one column a part may lack (it was added to
-`swath/gcs-objects/v1` later); it reads as nil there. Columns a schema id does not define are ignored.
+`KindRow` for a null in a required column. A part may omit columns whose `ColumnSpec.MayBeAbsent` is true; those columns decode as nil. This includes GCS
+`time_created` and the later Azure current-object properties. Columns a schema id does not define are ignored.
 
 `ParseMetadata` first requires `extensions.swath.version` to be 1 (`KindSchema` otherwise): the version covers
 the extension's own contract, while a change to a schema's rows takes a new schema id. It reads every other

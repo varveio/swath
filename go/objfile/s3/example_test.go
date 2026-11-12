@@ -31,8 +31,11 @@ func fakeClient(srv *s3fake.Server) (*awss3.Client, func()) {
 }
 
 // Open an object, read two byte ranges of it in one batch, and see a
-// replacement refused: every read returns bytes of the version Open
-// pinned, or fails with objfile.ErrObjectChanged.
+// replacement refused. Reads are conditional on the identity pinned by
+// Open. This replacement changes the ETag, so the next read returns
+// objfile.ErrObjectChanged. Without a non-null version id, same-ETag,
+// same-size replacements cannot be distinguished; other read errors remain
+// possible.
 func Example() {
 	srv := s3fake.New("bkt")
 	srv.Put("data/part-00000.parquet", []byte("PAR1 header ... footer PAR1"))

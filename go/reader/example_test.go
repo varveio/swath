@@ -16,9 +16,24 @@ import (
 // and times were then set to fixed values.
 const photos = "testdata/photos"
 
-// Open a dataset, decide from its coverage whether it holds the whole
-// source, check its parts against the schema, and read every entry. The
-// coverage is the application's to judge: the reader hands it on.
+// wholeSource reports whether m records a complete, unfiltered listing of
+// all of want, with nothing skipped or excluded. A member the manifest
+// lacks is nil, never zero or empty, and counts as unknown: not whole.
+func wholeSource(m reader.Metadata, want string) bool {
+	src, sc, c := m.Source, m.Scope, m.Coverage
+	return src != nil && src.URI != nil && *src.URI == want &&
+		sc != nil && sc.Kind != nil && *sc.Kind == "whole" &&
+		c != nil && c.Complete != nil && *c.Complete &&
+		c.StopReason != nil && *c.StopReason == "completed" &&
+		c.SkippedEntries != nil && *c.SkippedEntries == 0 &&
+		c.Filters != nil && len(c.Filters) == 0 &&
+		c.Exclusions != nil && len(c.Exclusions) == 0
+}
+
+// Open a dataset, decide from its metadata whether it holds the whole
+// source the application expects, check its parts against the schema, and
+// read every entry. The judgement is the application's: the reader hands
+// the metadata on.
 func Example() {
 	ctx := context.Background()
 	d, err := reader.OpenDir(ctx, photos, reader.Options{})
@@ -28,9 +43,7 @@ func Example() {
 	defer d.Close()
 
 	m := d.Metadata()
-	c := m.Coverage
-	whole := *c.Complete && *c.StopReason == "completed" && *c.SkippedEntries == 0 && len(c.Filters) == 0
-	fmt.Println(m.SchemaID, *m.Source.URI, "whole source:", whole)
+	fmt.Println(m.SchemaID, "whole source:", wholeSource(m, "/data/photos"))
 
 	if err := d.CheckSchema(ctx); err != nil {
 		log.Fatal(err)
@@ -43,7 +56,7 @@ func Example() {
 		log.Fatal(err)
 	}
 	// Output:
-	// swath/local-entries/v1 /data/photos whole source: true
+	// swath/local-entries/v1 whole source: true
 	// DIR   4096 2025/
 	// DIR   4096 2025/summer/
 	// FILE  1200 2025/summer/beach.jpg
