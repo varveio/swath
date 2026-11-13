@@ -38,19 +38,5 @@ These pages are also published at [swath.varve.io](https://swath.varve.io/docs/)
 - [Exit codes](reference/exit-codes.md), [run report and progress file](reference/run-report.md),
   [log events](reference/log-events.md).
 
-**Contributing**: [internals/README.md](internals/README.md): architecture, the invariants, providers, testing
-and dated measurements. `swath diag` and its options are in [internals/diagnostics.md](internals/diagnostics.md).
-
-**Repository layout**
-
-| Path | What it is |
-|---|---|
-| `cmd/swath` | the command |
-| `cmd/swath-replay` | the replay server ([internals/swath-replay.md](internals/swath-replay.md)) |
-| `internal/` | the lister's packages ([architecture](internals/architecture.md#packages)) |
-| `reader/`, `objfile/` | nested modules, importable on their own ([`reader`](../reader/README.md), [`objfile`](../objfile/README.md)) |
-| `docs/` | this documentation; `go test ./docs` checks the relative links of the repository's Markdown |
-| `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
-
-The gate is `go vet ./... && go test -race ./...` at the root, and the same in `objfile/` and `reader/`
-([testing](internals/testing.md)).
+**Contributing**: [internals/README.md](internals/README.md): the repository layout, architecture, the invariants,
+providers, testing and dated measurements.

@@ -29,6 +29,21 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 
 [contracts.md](contracts.md#the-invariants-i1i12) owns the load-bearing invariants I1–I12.
 
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `cmd/swath` | the command |
+| `cmd/swath-replay` | the replay server ([swath-replay.md](swath-replay.md)) |
+| `internal/` | the lister's packages ([architecture](architecture.md#packages)) |
+| `reader/`, `objfile/` | nested modules, importable on their own ([`reader`](../../reader/README.md), [`objfile`](../../objfile/README.md)) |
+| `docs/` | the documentation; `go test ./docs` checks the relative links of the repository's Markdown |
+| `site/` | the website: a VitePress build of the user pages in `docs/` ([site/README.md](../../site/README.md)) |
+| `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
+
+The gate is `go vet ./... && go test -race ./...` at the root, and the same in `objfile/` and `reader/`
+([testing](testing.md)).
+
 ## History
 
 [cli-inventory.md](cli-inventory.md) maps every option, output mode, exit code and report field of the
