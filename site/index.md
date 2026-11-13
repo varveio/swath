@@ -28,7 +28,7 @@ features:
     link: /docs/output
     linkText: Text formats
   - title: Save an inventory you can query
-    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader.
+    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it again with <code>swath du --from-dataset DIR</code> without listing again.
     link: /docs/dataset
     linkText: The swath dataset
 ---
@@ -46,10 +46,11 @@ workers on one 32-vCPU VM. These are individual runs, not a promise for every so
 
 ## Install
 
-The newest published build is swath 0.4.0-rc.2, a release candidate. Download the archive for your platform
-from the [releases page](https://github.com/varveio/swath/releases), verify it and put `swath` on your
-`PATH`, or run the container image `ghcr.io/varveio/swath:0.4.0-rc.2`. [Install](../docs/install.md) has the
-steps.
+These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, a release candidate,
+which does not yet have everything described here, such as `swath du --from-dataset`. Download the archive for
+your platform from the [releases page](https://github.com/varveio/swath/releases), verify it and put `swath` on
+your `PATH`, or run the container image `ghcr.io/varveio/swath:0.4.0-rc.2`. [Install](../docs/install.md) has
+the steps.
 
 ## Try it on a local directory
 

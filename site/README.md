@@ -68,7 +68,9 @@ site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP s
 
 `static/data/channel.json` names the version the site offers: `{"channel": "main", "version": "X.Y.Z-rc.N"}`
 while the documentation describes `main` ahead of a release, `{"channel": "release", "version": "X.Y.Z"}`
-once it describes a release. Update it together with the home page's "The newest published build is swath
-X, ..." sentence and the image tags in `docs/install.md`. The channel check fails while they disagree, and
+once it describes a release. Update it together with the "The newest published build is swath X, ..."
+sentence on the home page and in `docs/install.md` (with its note that the pages describe the upcoming
+release, which goes once the release is out) and the image tags in `docs/install.md`. The channel check
+requires that sentence on both pages and fails while any of them disagree, and
 on the release channel it also fails unless the version is the newest released version in
 [`CHANGELOG.md`](../CHANGELOG.md).

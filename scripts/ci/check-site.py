@@ -158,15 +158,16 @@ A11Y_CLIENT_RENDERED = {"404.html"}
 # --------------------------------------------------------------------------------------
 # Release-channel rules
 # --------------------------------------------------------------------------------------
-# Sentences in which a page declares which swath it offers. Every one of them, on every
-# page, must name the version in data/channel.json (source: site/static/data/channel.json),
+# Sentences in which a page declares which swath it offers: "The newest published build is
+# swath X, ...", beside the note that the pages describe the upcoming release. Every one of them,
+# on every page, must name the version in data/channel.json (source: site/static/data/channel.json),
 # as must every container image tag, so the home page and the install page cannot drift apart.
 VERSION_DECLARATIONS = [
     re.compile(r"The newest published build is swath ([\w.+-]+?),(?=\s)"),
 ]
 
-# The page that must always carry one, so the declaration cannot simply be deleted.
-VERSION_DECLARATION_REQUIRED_ON = "index.html"
+# The pages that must always carry one, so the declaration cannot simply be deleted.
+VERSION_DECLARATION_REQUIRED_ON = ("index.html", "docs/install.html")
 
 # Contributor pages are published on GitHub only (site/.vitepress/config.mts excludes them).
 UNPUBLISHED_PREFIXES = ("docs/internals/", "docs/ops/")
@@ -463,14 +464,15 @@ def check_channel(site: Path, pages: list[Page], repo: Path) -> list[str]:
     if not isinstance(version, str) or not version:
         return failures + ["data/channel.json: version must be a non-empty string"]
 
-    required = next((p for p in pages if p.rel == VERSION_DECLARATION_REQUIRED_ON), None)
-    if required is None:
-        return failures + [f"{VERSION_DECLARATION_REQUIRED_ON} is missing from the site tree"]
+    present = {p.rel for p in pages}
+    missing = [rel for rel in VERSION_DECLARATION_REQUIRED_ON if rel not in present]
+    if missing:
+        return failures + [f"{rel} is missing from the site tree" for rel in missing]
 
     for page in pages:
         declared = [m for pattern in VERSION_DECLARATIONS
                     for m in pattern.findall(page.visible)]
-        if page is required and not declared:
+        if page.rel in VERSION_DECLARATION_REQUIRED_ON and not declared:
             failures.append(
                 f"{page.rel}: no line declaring which swath version the site documents")
         for shown in declared:

@@ -5,7 +5,9 @@ your `PATH`.
 
 The current builds are release candidates for 0.4.0, published on the
 [releases page](https://github.com/varveio/swath/releases). A candidate is for trying swath before the final
-release; GitHub marks it as a pre-release, so choose it explicitly. Versions 0.3.x and earlier were a
+release; GitHub marks it as a pre-release, so choose it explicitly. These pages describe the upcoming 0.4.0.
+The newest published build is swath 0.4.0-rc.2, which does not yet have everything described here, such as
+`swath du --from-dataset`. Versions 0.3.x and earlier were a
 different tool, written in Java, with another command line ([changelog](../CHANGELOG.md)).
 
 ## Download a release candidate
