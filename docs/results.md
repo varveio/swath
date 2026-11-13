@@ -45,6 +45,10 @@ and `notes-latest.tar` are one file of 800,000 bytes, counted once; `-l` (`--cou
 both names, and the total becomes 101 MiB. In a listing, the `inode`, `dev` and `nlink` columns identify
 names of the same file.
 
+> [!NOTE]
+> 0.4.0-rc.2 counts a hard-linked file under each of its names unless you pass `--count-links-once`, and has
+> no `-l`: on the example it reports 101 MiB, and 37.2 MiB with `--allocated`.
+
 ## Coverage and unreadable entries
 
 An entry swath cannot read, such as a directory without read permission, is missing from the output with
@@ -60,6 +64,13 @@ swath: 1 entry could not be read and is missing from the output
 A symbolic link whose target cannot be read keeps its row and is not counted, and an entry removed while
 swath walks the tree is no longer part of it. A source directory that cannot be opened at all stops the run
 with exit code 1 ([troubleshooting](troubleshooting.md#entries-could-not-be-read)).
+
+> [!WARNING]
+> On 0.4.0-rc.2 the same run exits with code 0: it warns
+> `1 entry could not be read: the output leaves them out`, says nothing with `-q`, and an unreadable source
+> directory gives empty totals instead of an error. Its `swath show` prints `skipped=1`, and its manifest names
+> the count `coverage.skipped_entries`. On rc.2, exit code 0 does not prove a complete scan: check that count
+> ([differences in 0.4.0-rc.2](release-candidate.md)).
 
 A dataset keeps the count. `swath show` prints it on the coverage line:
 
