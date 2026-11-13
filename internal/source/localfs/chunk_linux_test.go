@@ -44,10 +44,10 @@ func TestCancelledChunkReleasesItsFD(t *testing.T) {
 	if err := p.Expand(context.Background(), p.Root(), k); err != nil {
 		t.Fatal(err)
 	}
-	if len(k.r) < 2 || k.r[0].chunk == nil {
+	if len(k.r) < 2 || k.r[0].Seg == nil {
 		t.Fatalf("%d children: want the directory's chunks", len(k.r))
 	}
-	d := k.r[0].chunk.dir
+	d := k.r[0].Seg.dir
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, r := range k.r {
@@ -197,14 +197,14 @@ func TestCountSlabReleasesFD(t *testing.T) {
 		var d *sharedFD
 		cont := 0
 		for _, r := range k.r {
-			if r.chunk != nil {
-				d = r.chunk.dir
-				if r.chunk.next {
+			if r.Seg != nil {
+				d = r.Seg.dir
+				if r.Seg.next {
 					cont++
 				}
 			}
 		}
-		if d == nil || cont != 1 || !k.r[len(k.r)-1].chunk.next {
+		if d == nil || cont != 1 || !k.r[len(k.r)-1].Seg.next {
 			t.Fatalf("%d children, %d continuations: want the slab's chunks, then one continuation", len(k.r), cont)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -212,7 +212,7 @@ func TestCountSlabReleasesFD(t *testing.T) {
 		for _, r := range k.r {
 			if dispose {
 				p.Dispose(r)
-			} else if err := p.Expand(ctx, r, &kids{}); r.chunk != nil && !errors.Is(err, context.Canceled) {
+			} else if err := p.Expand(ctx, r, &kids{}); r.Seg != nil && !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancelled range: %v", err)
 			}
 		}

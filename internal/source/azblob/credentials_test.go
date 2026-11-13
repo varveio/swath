@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -17,6 +18,7 @@ import (
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/internal/source/objhttp"
 )
 
@@ -121,5 +123,32 @@ func TestAdmissionKeepsServiceRefusal(t *testing.T) {
 		if err == nil || errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != c.class || strings.Contains(err.Error(), "cannot establish") {
 			t.Errorf("%d %s: %v (class %q), want %s", c.status, c.code, err, objhttp.Label(err), c.class)
 		}
+	}
+}
+
+// probeRefused: Get Account Information refused, the namespace listing
+// probe's credentials not to be had.
+type probeRefused struct{ lists atomic.Int64 }
+
+func (*probeRefused) AccountInfo(context.Context, string) (bool, error) {
+	return false, &client.Error{Status: 403, Code: "AuthorizationPermissionMismatch"}
+}
+
+func (p *probeRefused) List(context.Context, *client.ListInput) (*client.ListOutput, error) {
+	p.lists.Add(1)
+	return nil, &objhttp.CredentialError{Source: "Entra ID (DefaultAzureCredential)", Err: errors.New("token refresh failed")}
+}
+
+// TestAdmissionProbeKeepsCredentialFailure: the listing probe's credential
+// failure is that failure, not the namespace refusal it was probing past.
+func TestAdmissionProbeKeepsCredentialFailure(t *testing.T) {
+	c := &probeRefused{}
+	_, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c, Workers: 1})
+	var ce *objhttp.CredentialError
+	if !errors.As(err, &ce) || errors.Is(err, source.ErrUnsupported) || !strings.HasPrefix(err.Error(), "Azure Blob client: credentials (") {
+		t.Fatalf("%v (class %q)", err, objhttp.Label(err))
+	}
+	if c.lists.Load() != 1 {
+		t.Fatalf("%d probe requests, want 1", c.lists.Load())
 	}
 }

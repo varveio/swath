@@ -2,10 +2,13 @@
 
 ## Support and differences
 
-`az://account/container[/prefix]` lists current blobs in flat namespaces, and with `--all-versions` every
-entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Hierarchical namespaces are unsupported. Namespace admission is
-required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
-an account reported as hierarchical.
+`az://account/container[/prefix]` lists current blobs: a flat namespace on the range engine, a
+hierarchical namespace (HNS) on the tree core ([tree mode](#hierarchical-namespaces-the-tree-mode)).
+With `--all-versions` a flat namespace lists every entry (versions, snapshots, soft-deleted blobs;
+`NewVersions`, below); a hierarchical one is refused. The `--azure-fetch-*` flags fill a file's row in both
+modes and leave a tree-mode directory's row null ([rows](#hierarchical-namespaces-the-tree-mode)). Namespace admission is required even for a public
+container; `--azure-assume-flat` only overrides an unknown result, never an account reported as
+hierarchical.
 [Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
@@ -99,34 +102,111 @@ report's `invocation.source` see it, so an admission refusal records no SAS eith
 and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed
 through the adapter like any other.
 
-**Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
-the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
+**Admission.** Before any listing request the namespace must be known: flat lists on the range engine,
+hierarchical on the tree core (`open`; `New`, the flat provider's constructor, still refuses it). (1) Get
+Account Information on the container path: `x-ms-is-hns-enabled` `false` is flat, `true` hierarchical. (2)
+When that call is refused (401,
 which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
 account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
 with the configured account, no port and no path; with any other `--endpoint-url` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
-passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
-`EndpointUnsupportedAccountFeatures` there ("This endpoint does not support BlobStorageEvents or SoftDelete") also
-passes (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
+is flat, `true` hierarchical. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
+`EndpointUnsupportedAccountFeatures` there ("This endpoint does not support BlobStorageEvents or SoftDelete") is
+flat too (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
 without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
 ([soft delete overview](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)). Most
 public open-data accounts answer it: 60 of the 64 Planetary Computer containers, and NOAA's GOES, HRRR, GFS and NWM and
-NAIP (checked live on 2026-11-11). The host gives that 409 before it checks credentials, so a signed caller whose
-credential Get Account Information rejected (class auth) keeps that failure; a container SAS that Get Account
-Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by the 409. One report attributes the
-same message to an account reached through a private endpoint for `blob` without one for `dfs`; whether a
-hierarchical account can answer it that way is unverified. A 403 `AuthorizationPermissionMismatch` there proves
-nothing: a container SAS met it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
-there too, another failure, no Data Lake host) is unknown and refuses,
-unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
+NAIP (checked live on 2026-11-11). The host gives that 409 before it checks
+credentials, so a signed caller whose credential Get Account Information rejected (class auth) keeps that failure;
+a container SAS that Get Account Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by
+the 409. One report attributes the same message to an account reached through a private endpoint for `blob`
+without one for `dfs`; whether a hierarchical account can answer it that way is unverified.
+(3) A 403 `AuthorizationPermissionMismatch` there proves nothing: a container SAS met it on a flat account and on
+a hierarchical one alike (`bingmlbuildings`, 2026-11-11, where Get Account Information answered 403 too). When both
+calls were refused and no flat namespace is asserted, one delimiter listing of the scope's directory (`maxresults=1`,
+`ListInput.Tree`, `listedHNS`): an entry whose `ResourceType` is `file` or `directory` is a hierarchical
+namespace's (a flat account's XML entries carry none; Arrow's `blob` and `blobprefix` do not count). (4)
+Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
+unless `--azure-assume-flat` asserts a flat namespace (an asserted run sends no step-3 request); a reported
+hierarchical namespace is listed as one whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
-`filesystem properties`, `filesystem endpoint blocked` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`filesystem properties`, `filesystem endpoint blocked`, `listing` or `asserted`, with a warning), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
 still ascends. `--all-versions` is admitted as any listing. Admission runs before the range engine is constructed, so exhausted admission
 calls do not reach engine requeue.
+
+## Hierarchical namespaces: the tree mode
+
+Spike (issue #263; design in [tree-sources.md](../tree-sources.md)). On an HNS account List Blobs lists in
+directory-tree order (`/` lowest: all of `Guinea/…` before `Guinea-Bissau`), so no byte-order seek covers the
+container. A flat run forced on one may fail its order check (it did with `--azure-assume-flat` on
+`bingmlbuildings`, 2026-11-11) but need not: a seek can skip keys while every page still ascends (see
+Admission), so the check is no guard against a wrong assertion. Within one directory, names hold no `/` and the service's order is UTF-16 by name, and
+`startFrom` seeks by name (live, `overturemapswestus2`). `Tree` (`tree.go`) is the tree core's ordered mode
+(`tree.Ordered`) over that:
+
+- **Listing.** A directory is one delimiter listing (`prefix=DIR/`, `delimiter=/`) with `ListInput.Tree`:
+  the client merges blobs and `BlobPrefix` items by name and makes each prefix a directory entry
+  (`Item.Dir`) with the properties HNS returns on it at version 2026-06-06 (`ResourceType` directory, Etag,
+  Last-Modified, Creation-Time, BlockBlob, the tier). `include=metadata` (`hdi_isfolder`) is not needed to
+  tell a directory. The byte-order adapter serves the names in byte order, one per `Expand` as for flat
+  accounts, with the run's `include` (`provider.include`) on every page: first pages, segment and resolve
+  pages all hold rows (the seed and structure probes are off). `Lookup` (a candidate directory) is one
+  `maxresults=1` listing of `DIR/NAME` without `include`: its row is a directory's.
+- **Why Blob, not Data Lake `Path - List`.** List Blobs seeks by name (`startFrom`), so a large directory
+  splits on the range engine; `Path - List` continues by token only. Both answer anonymously and with a
+  container SAS (the spike's oracle walks with `Path - List`), but List Blobs returns the flat schema's
+  columns (content type, MD5, tier) and reuses the client, its retries, classification, SAS scrubbing and
+  the adapter. `Path - List` returns POSIX owner, group and permissions, which the schema
+  has no columns for (open).
+- **Rows.** A directory is a row keyed with its name plus `/` in `swath/azblob-objects/v1` (size 0, its Etag,
+  times, BlockBlob and tier as listed), followed by its subtree; a file is its blob name. A file's row is
+  the flat provider's (`provider.object`): the fetch flags fill it, `{}` and false for none, and a refusal
+  of `include=tags` gains the permission hint (`tagsRefused`). A directory entry is the SDK's `BlobPrefix`,
+  name and properties only, so its `metadata`, `tags` and immutability columns stay null whatever is
+  asked: not read, as for a customer-provided-key blob's metadata, rather than `{}`, which would claim
+  none (a directory's metadata holds `hdi_isfolder`). No schema change:
+  in a tree-mode dataset a key ending in `/` is a directory (an HNS path cannot end in `/`); in a flat
+  account's dataset it may be a blob (a folder marker), so the report's `listing: tree` tells them apart.
+  Directory rows count as objects in `du`. Flat-account output is unchanged.
+- **Large directories** go to one shared range engine as segments (`keyrange.Engine.Within`), seed and
+  structure probes off; the engine's `AcceptBound`, requeue and counters are the flat provider's.
+- **Recursive excludes.** The registered `treeOpened.Run` installs the filter package's descendant
+  proof in `Walker.SetPruneDirectories` before workers start. Both whole directories and range-engine
+  segments keep the directory row for ordinary row filtering but submit no child for a matching
+  recursive exclude. This avoids requests below that directory; its parent is still listed and returns
+  its metadata. `source.stats.pruning` records the rule classification (as for
+  [local trees](local.md)); `source.stats.pruned_dirs` counts prevented child traversals, absent when
+  zero. Includes, metadata filters and directory-row rejection alone never prevent descent.
+- **Scope and options.** The prefix must name a directory (end in `/`); `--sequential` is refused; no
+  resume yet. `--seed-from` is refused (exit 2) by the listing: `treeOpened` is not `source.Seeded`, as a
+  prior tiles a flat scope. `diag list --trace` is refused (exit 2) the same way: `treeOpened` is not
+  `source.Traced`, since a trace of the segment engine would leave out first pages and lookups
+  ([trace.md](../trace.md)). A scope directory the caller may not list fails the run with the service's
+  refusal (403, class access denied), never an empty complete dataset, as an unreadable local root is an
+  error; a refused directory below it fails the run too: List Blobs has no per-entry unreadable account,
+  so `coverage.unreadable` stays 0 (`TestTreeUnreadableRoot`). `du --from-dataset` reads a tree-mode dataset as a flat one's: the schema id
+  is the same (`Factory.Schemas`), declares no containers, so directory rows count as objects there as
+  in a live `du`. Identity: the flat fields plus `listing` `tree` (absent for flat accounts, so
+  neither journal resumes as the other). Report: `listing` `tree`; the brief is the whole walk's: `files`,
+  `dirs`, `bytes` (the walker's), `requests` (`list_requests`: every listing request, first pages, segment
+  and resolve pages and lookups), `first_pages`, the segments' `splits`, the client's `retries`, `truncated`.
+  The counters are the engine's (whose `objects`, `bytes`, `pages` and `requests` count segment pages only),
+  the client's, the adapter's, `list_requests` and the tree core's (`tree.*`).
+- **Cost.** At least one request per directory: a Hive layout with one file per partition directory costs
+  about one request per file, where a flat container costs one per 1,000.
+- **Tests.** `TestTreeListsHNS` (`azblobtest.TreeStore`: tree order, directory entries, UTF-16 siblings,
+  non-ASCII Hive names, a 3,000-file directory with a directory candidate; 1/4/16 workers, pages 1 to
+  1,000), `TestTreeScopedToDirectory`, `TestTreeCancelMidDirectory`, `TestTreeIdentityAndReport`,
+  `TestTreeFetchFlags` (the include on every row request, none on lookups; files filled as flat, directories
+  null), `TestTreeFetchTagsRefused`, `TestTreeReportBrief` (the brief's `requests` equals the store's request
+  log, one `bytes`), `TestTreeDatasetTotals` (`du --from-dataset` of a tree-mode dataset equals a live `du`),
+  `TestTreeTraceRefused`, `TestTreeUnreadableRoot`, `TestTreeRecursiveExcludes`, `TestTreeResolutionRetry`, `TestTreeResolutionStops`,
+  `TestTreeListedNamespace`, `TestTreeNotNewFlat`, `client` `TestTreeListing`; admission's HNS rows in
+  `TestAdmissionFallback`. The replay server's `--azure-hns` still changes only Get Account Information.
 
 ## Order: the byte-order adapter
 
@@ -233,8 +313,8 @@ optional booleans (`TestDeltaHistoricalBytes` pins the first group's bytes, `Tes
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
-are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`), and `fetch_metadata`, `fetch_tags`, `fetch_immutability` only when
-given (a default run's identity is as before they existed). Credentials may change, a SAS among them. A run with
+are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`), `fetch_metadata`, `fetch_tags`, `fetch_immutability` only when
+given (a default run's identity is as before they existed), and for a hierarchical namespace `listing` `tree` (absent for a flat account). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles`,
 `timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`

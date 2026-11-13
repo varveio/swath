@@ -34,6 +34,12 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 
+A caller that tiles a scope itself hands the engine `Engine.Within(scope, after)`: `(after,
+prefixCeil(scope)]` (open when `scope` has no ceiling), listed with `scope` as the request prefix, its
+children keeping it; it counts as queued work. The tree core's ordered mode gives one engine the rest of each
+large directory this way ([tree-sources.md](tree-sources.md)); the seed, priors and structure probes are the
+engine's own scope's and do not apply (`TestWithin`).
+
 The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
 `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size: the engine fallback
 is 1,000 (S3/GCS); Azure's default is also 1,000 (the service allows 5,000; at 5,000 most of a small span's page was discarded, [measurements](measurements.md#azure-page-size-2026-11-10)). Data and seed requests ask for it,

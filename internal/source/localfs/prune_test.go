@@ -22,6 +22,7 @@ import (
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source/tree"
 	"github.com/varveio/swath/internal/textout"
 )
 
@@ -299,16 +300,18 @@ func TestPruneDoesNotSubmitChild(t *testing.T) {
 			t.Fatal(err)
 		}
 		spec := filter.Spec{Exclude: []string{"drop/**"}}
-		p.prune, _, err = spec.PruneDirectories()
+		prune, _, err := spec.PruneDirectories()
 		if err != nil {
 			t.Fatal(err)
 		}
 		rows := []Row{{Key: "drop/", Data: Entry{Kind: KindDir}}, {Key: "drop0/", Data: Entry{Kind: KindDir}}, {Key: "tail", Data: Entry{Kind: KindFile}}}
 		em := &pruneEmitter{}
-		var stats Stats
-		if err := p.emit(p.Root(), rows, em, &stats); err != nil {
+		p.Walker = tree.NewWalker(p.Root(), pruneReader{p, rows}, tree.Options[Entry]{NoDirs: noDirs, Size: entrySize})
+		p.SetPruneDirectories(prune)
+		if err := p.Expand(context.Background(), p.Root(), em); err != nil {
 			t.Fatal(err)
 		}
+		stats := p.Stats()
 		if !slices.Equal(em.children, []string{"drop0/"}) {
 			t.Fatalf("nodirs=%v: submitted children %q", noDirs, em.children)
 		}
@@ -322,6 +325,16 @@ func TestPruneDoesNotSubmitChild(t *testing.T) {
 	}
 }
 
+// Supply rows through the same Reader/Walker seam used by directory reads.
+type pruneReader struct {
+	p    *Provider
+	rows []Row
+}
+
+func (r pruneReader) Read(_ context.Context, dir Range, out *Out) error {
+	return r.p.emit(dir, r.rows, out)
+}
+
 type pruneEmitter struct{ keys, children []string }
 
 func (e *pruneEmitter) Rows(rows []Row) error {
@@ -330,7 +343,7 @@ func (e *pruneEmitter) Rows(rows []Row) error {
 	}
 	return nil
 }
-func (e *pruneEmitter) Child(r Range) error { e.children = append(e.children, r.prefix); return nil }
+func (e *pruneEmitter) Child(r Range) error { e.children = append(e.children, r.Prefix); return nil }
 
 func TestPruneWideDirectory(t *testing.T) {
 	root := t.TempDir()
@@ -535,7 +548,7 @@ func TestPruneOtherDevicePrecedence(t *testing.T) {
 		// stat implementation is needed to exercise the shared emitter.
 		p.opt.OneFilesystem, p.dev = true, 17
 		spec := filter.Spec{Exclude: []string{"mount/**"}}
-		p.prune, _, err = spec.PruneDirectories()
+		prune, _, err := spec.PruneDirectories()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -544,10 +557,12 @@ func TestPruneOtherDevicePrecedence(t *testing.T) {
 			{Key: "tail", Data: Entry{Kind: KindFile}},
 		}
 		em := &pruneEmitter{}
-		var stats Stats
-		if err := p.emit(p.Root(), rows, em, &stats); err != nil {
+		p.Walker = tree.NewWalker(p.Root(), pruneReader{p, rows}, tree.Options[Entry]{NoDirs: noDirs, Size: entrySize})
+		p.SetPruneDirectories(prune)
+		if err := p.Expand(context.Background(), p.Root(), em); err != nil {
 			t.Fatal(err)
 		}
+		stats := p.Stats()
 		want := []string{"mount/", "tail"}
 		if noDirs {
 			want = []string{"tail"}

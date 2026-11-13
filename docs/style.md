@@ -96,7 +96,8 @@ Use these labels consistently:
 
 Name the implementation and release when the support differs. The Java v0.3.2 release
 supports S3 general-purpose buckets; its GCS XML access is experimental. Unreleased Go
-also has native GCS, local/mounted filesystem and Azure Blob flat-namespace providers.
+also has native GCS, local/mounted filesystem and Azure Blob providers (flat namespaces supported,
+hierarchical listings experimental).
 Use the Go CLI and provider docs for their exact limits.
 
 ## Evidence and performance claims

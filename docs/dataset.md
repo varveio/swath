@@ -226,7 +226,7 @@ binding, accessor order and null handling.
 | `swath/s3-versions/v1` | an S3 version or delete marker (`--all-versions`) | UTF-8 | no: one row per version | 1,024 bytes |
 | `swath/gcs-objects/v1` | a Cloud Storage live object | UTF-8 | yes | 1,024 bytes |
 | `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
-| `swath/azblob-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
+| `swath/azblob-objects/v1` | an Azure Blob current blob, or an HNS directory | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
 | `swath/azblob-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
 | `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
 
@@ -254,6 +254,13 @@ objects and neither hash for objects encrypted with customer-managed or customer
 
 **`swath/gcs-generations/v1`**: the `swath/gcs-objects/v1` columns, then `time_deleted` timestamp: null for the
 live generation. There is no `is_latest`.
+
+Azure HNS tree listings use `swath/azblob-objects/v1` for files and directories. A directory row's
+key is its name plus `/`, with size 0 and the properties returned by the listing; its `metadata`, `tags`
+and immutability columns are null even when the run asks for them (the listing returns none for a
+directory). Its descendants follow in byte order. A trailing `/` identifies a directory only for tree-mode output, not flat namespaces.
+The source identity records `listing=tree`; [Azure tree mode](internals/providers/azblob.md#hierarchical-namespaces-the-tree-mode)
+owns the listing constraints.
 
 **`swath/azblob-objects/v1`**: `key` (the blob name), `size` int64 (`Content-Length`), `last_modified` timestamp
 (`Last-Modified`, at the wire's 1 s resolution), `etag` STRING (opaque, as listed), `content_md5` STRING (base64

@@ -182,7 +182,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), Include: in.Include.sdk(),
 			ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
 		if err == nil {
-			out, err = merge(r.Segment, r.NextMarker)
+			out, err = merge(r.Segment, r.NextMarker, in.Tree)
 		}
 	}
 	done()
@@ -312,8 +312,11 @@ func flat(seg *container.BlobFlatListSegment, next *string) (*ListOutput, error)
 
 // merge converts a hierarchy page: its blobs and prefixes, each in wire
 // order, merged into one sequence in UTF-16 code-unit order, which is the
-// wire's on a valid page (the comment at the top of this file).
-func merge(seg *container.BlobHierarchyListSegment, next *string) (*ListOutput, error) {
+// wire's on a valid page (the comment at the top of this file). With tree
+// (ListInput.Tree) each prefix is a directory, named and ordered without
+// its trailing '/', with its properties: a hierarchical namespace lists a
+// directory's entries by name.
+func merge(seg *container.BlobHierarchyListSegment, next *string, tree bool) (*ListOutput, error) {
 	if seg == nil {
 		return nil, errNoBlobs
 	}
@@ -326,6 +329,12 @@ func merge(seg *container.BlobHierarchyListSegment, next *string) (*ListOutput, 
 				return nil, fmt.Errorf("%w: a <BlobPrefix> without a name", objhttp.ErrSyntax)
 			}
 			p = *prefixes[0].Name
+			if tree {
+				var ok bool
+				if p, ok = strings.CutSuffix(p, "/"); !ok || p == "" {
+					return nil, fmt.Errorf("%w: directory %q does not end in '/'", objhttp.ErrInvalidPage, *prefixes[0].Name)
+				}
+			}
 		}
 		if len(blobs) > 0 && (len(prefixes) == 0 || blobs[0] == nil || blobs[0].Name == nil || utf16order.Compare(*blobs[0].Name, p) <= 0) {
 			it, err := item(blobs[0])
@@ -338,6 +347,12 @@ func merge(seg *container.BlobHierarchyListSegment, next *string) (*ListOutput, 
 		if !utf8.ValidString(p) {
 			return nil, fmt.Errorf("%w: prefix %q is not UTF-8", objhttp.ErrInvalidPage, p)
 		}
+		if tree {
+			it := itemProps(p, prefixes[0].Properties)
+			it.Dir = true
+			out.Items, prefixes = append(out.Items, it), prefixes[1:]
+			continue
+		}
 		out.Items, prefixes = append(out.Items, Item{Name: p, Prefix: true}), prefixes[1:]
 	}
 	return out, nil
@@ -348,14 +363,23 @@ func item(b *container.BlobItem) (Item, error) {
 	if b == nil || b.Name == nil {
 		return Item{}, fmt.Errorf("%w: a <Blob> without a name", objhttp.ErrSyntax)
 	}
-	it := Item{Name: *b.Name, Entry: entry(b), Props: props(b)}
+	it := itemProps(*b.Name, b.Properties)
+	it.Entry, it.Props = entry(b), props(b)
 	if !utf8.ValidString(it.Name) {
 		return Item{}, fmt.Errorf("%w: name %q is not UTF-8", objhttp.ErrInvalidPage, it.Name)
 	}
-	p := b.Properties
+	return it, nil
+}
+
+// itemProps is the item named name with the properties a row keeps; a
+// ResourceType of directory (a hierarchical namespace's) sets Dir.
+func itemProps(name string, p *container.BlobProperties) Item {
+	it := Item{Name: name}
 	if p == nil {
-		return it, nil
+		return it
 	}
+	rt := deref(p.ResourceType)
+	it.Dir, it.Hierarchical = rt == "directory", rt == "directory" || rt == "file"
 	if p.ContentLength != nil {
 		it.Size = *p.ContentLength
 	}
@@ -374,7 +398,7 @@ func item(b *container.BlobItem) (Item, error) {
 	if p.AccessTier != nil {
 		it.AccessTier = string(*p.AccessTier)
 	}
-	return it, nil
+	return it
 }
 
 func deref(s *string) string {

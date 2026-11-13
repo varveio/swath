@@ -19,8 +19,6 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/varveio/swath/internal/source"
 )
 
 const nativeEngine = true
@@ -111,7 +109,7 @@ func (d *sharedFD) release() {
 // disposeChunk releases a chunk range's share of its directory descriptor:
 // after its Expand, or for a range that will never be expanded.
 func disposeChunk(r Range) {
-	if c := r.chunk; c != nil {
+	if c := r.Seg; c != nil {
 		c.dir.release()
 	}
 }
@@ -120,20 +118,20 @@ func disposeChunk(r Range) {
 // Per directory it allocates one key arena, one row slab sized from the
 // entry count and one range per subdirectory; entries are sorted by key
 // before stat, so each stat lands in its final slot.
-func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	if c := r.chunk; c != nil { // Expand releases its descriptor share
+func (p *Provider) expandNative(ctx context.Context, r Range, out *Out, st *Stats) error {
+	if c := r.Seg; c != nil { // Expand releases its descriptor share
 		if c.next {
-			return p.countSlab(ctx, c.dir, r, e, st)
+			return p.countSlab(ctx, c.dir, r, out, st)
 		}
-		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.keys, c.ents, st)
+		rows, err := p.statInto(ctx, c.dir.fd, r.Dir, c.names, c.keys, c.ents, st)
 		if err != nil {
 			return err
 		}
-		return p.emit(r, rows, e, st)
+		return p.emit(r, rows, out)
 	}
-	fd, err := openDir(r.path, r.prefix != "")
+	fd, err := openDir(r.Dir, r.Prefix != "")
 	if err != nil {
-		st.note(&st.OpenErrors, r.path, err)
+		st.note(&st.OpenErrors, r.Dir, err)
 		return nil
 	}
 	st.DirsRead++
@@ -142,36 +140,36 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		d := &sharedFD{fd: fd}
 		d.refs.Store(1)
 		defer d.release()
-		return p.countSlab(ctx, d, r, e, st)
+		return p.countSlab(ctx, d, r, out, st)
 	}
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	if err := readNames(ctx, fd, r.path, sc, p.opt.Fields != Names, st); err != nil {
+	if err := readNames(ctx, fd, r.Dir, sc, p.opt.Fields != Names, st); err != nil {
 		unix.Close(fd)
 		return err
 	}
-	if !fitsOffsets(len(r.prefix), sc) {
+	if !fitsOffsets(len(r.Prefix), sc) {
 		unix.Close(fd)
-		st.note(&st.ReadErrors, r.path, errTooLarge)
-		p.warnf("%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.path, errTooLarge)
+		st.note(&st.ReadErrors, r.Dir, errTooLarge)
+		p.warnf("%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.Dir, errTooLarge)
 		return nil
 	}
 	p.resolveUnknown(fd, sc)
-	buildKeys(r.prefix, sc)
-	if err := sortChecked(ctx, len(r.prefix), sc, st); err != nil {
+	buildKeys(r.Prefix, sc)
+	if err := sortChecked(ctx, len(r.Prefix), sc, st); err != nil {
 		unix.Close(fd)
 		return err
 	}
 
 	if len(sc.ents) > chunkThreshold && p.opt.Fields != Names {
-		return p.emitChunks(fd, r, sc, e, st)
+		return p.emitChunks(fd, sc, out, st)
 	}
 	defer unix.Close(fd)
-	rows, err := p.statInto(ctx, fd, r.path, sc.names, sc.keys, sc.ents, st)
+	rows, err := p.statInto(ctx, fd, r.Dir, sc.names, sc.keys, sc.ents, st)
 	if err != nil {
 		return err
 	}
-	return p.emit(r, rows, e, st)
+	return p.emit(r, rows, out)
 }
 
 // countSlab reads a count's directory one slab at a time: at most
@@ -188,25 +186,25 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 // beyond the chunks being statted. Reading the whole directory in one
 // worker instead, as find does, lost the chunks' parallel stats: 1.6x slower
 // cold and 2x warm on 1M files in one directory (4-CPU runner).
-func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, e source.Emitter[Range, Entry], st *Stats) error {
+func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, out *Out, st *Stats) error {
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	more, err := readSlab(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st)
+	more, err := readSlab(ctx, d.fd, r.Dir, sc, p.opt.Fields != Names, st)
 	if err != nil {
 		return err
 	}
-	if len(sc.ents) == 0 && r.chunk != nil { // a continuation at the end: the last slab filled exactly
+	if len(sc.ents) == 0 && r.Seg != nil { // a continuation at the end: the last slab filled exactly
 		return nil
 	}
 	st.Slabs++
 	p.resolveUnknown(d.fd, sc)
-	buildKeys(r.prefix, sc)
+	buildKeys(r.Prefix, sc)
 	if p.opt.Fields == Names || (!more && len(sc.ents) <= chunkThreshold) {
-		rows, err := p.statInto(ctx, d.fd, r.path, sc.names, sc.keys, sc.ents, st)
+		rows, err := p.statInto(ctx, d.fd, r.Dir, sc.names, sc.keys, sc.ents, st)
 		if err != nil {
 			return err
 		}
-		if err := p.emit(r, rows, e, st); err != nil {
+		if err := p.emit(r, rows, out); err != nil {
 			return err
 		}
 	} else {
@@ -215,7 +213,7 @@ func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, e source
 		for i := 0; i < len(ents); i += chunkEntries {
 			d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
 			st.Chunks++
-			if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
+			if err := out.Seg(&chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}); err != nil {
 				return err
 			}
 		}
@@ -224,7 +222,7 @@ func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, e source
 		return nil
 	}
 	d.refs.Add(1)
-	return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
+	return out.Seg(&chunk{dir: d, next: true})
 }
 
 // readSlab reads fd's next entries into sc, whole getdents batches until
@@ -494,7 +492,7 @@ func keyOf(keys []byte, e *entry) string {
 // take the scratch's name and entry buffers rather than copies of them; the
 // scratch goes back to the pool without them, so a huge directory's buffers
 // are not kept for the next directory.
-func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
+func (p *Provider) emitChunks(fd int, sc *scratch, out *Out, st *Stats) error {
 	names, keys, ents := sc.names, sc.keys, sc.ents
 	sc.names, sc.keys, sc.ents = nil, nil, nil
 	n := (len(ents) + chunkEntries - 1) / chunkEntries
@@ -503,7 +501,7 @@ func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Ran
 	st.Chunks += int64(n)
 	for i := 0; i < len(ents); i += chunkEntries {
 		c := &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}
-		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c}); err != nil {
+		if err := out.Seg(c); err != nil {
 			// The emitter owns chunk i now (the order stage disposes it);
 			// release the references of the chunks never emitted.
 			for j := i + chunkEntries; j < len(ents); j += chunkEntries {

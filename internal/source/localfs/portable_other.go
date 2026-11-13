@@ -8,8 +8,6 @@ package localfs
 import (
 	"context"
 	"os"
-
-	"github.com/varveio/swath/internal/source"
 )
 
 // No native engine yet: getattrlistbulk(2) on macOS and directory
@@ -19,8 +17,8 @@ const nativeEngine = false
 
 type chunk struct{}
 
-func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	return p.expandPortable(ctx, r, e, st)
+func (p *Provider) expandNative(ctx context.Context, r Range, out *Out, st *Stats) error {
+	return p.expandPortable(ctx, r, out, st)
 }
 
 func disposeChunk(Range) {}

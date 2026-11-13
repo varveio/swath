@@ -171,7 +171,7 @@ func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parque
 	if err != nil {
 		return order.Stats{}, nil, err
 	}
-	o.p.prune = prune
+	o.p.SetPruneDirectories(prune)
 	if o.p.keyOut, err = env.Filter.KeyExcluded(); err != nil {
 		return order.Stats{}, nil, err
 	}
@@ -202,12 +202,11 @@ func (o *opened) Locator() source.Locator {
 }
 
 func (o *opened) Listed() int64 {
-	o.p.mu.Lock()
-	defer o.p.mu.Unlock()
+	w := o.p.Walker.Stats()
 	if o.p.opt.NoDirs {
-		return o.p.stats.Files
+		return w.Files
 	}
-	return o.p.stats.Files + o.p.stats.Dirs
+	return w.Files + w.Dirs
 }
 
 // Exclude leaves out path, an output the run writes, when it lies inside

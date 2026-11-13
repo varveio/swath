@@ -37,10 +37,10 @@ below its root. The rows still show the full key.
 | `{a,b}` | either (not nested) |
 | `\c` | the character `c` |
 
-A local directory's row has a key ending in `/` and is matched as its name: `--exclude raw` drops the row of
+A local or Azure HNS directory's row has a key ending in `/` and is matched as its name: `--exclude raw` drops the row of
 the directory `raw/` but lists what is below it; `--exclude '2025/**'` drops everything below `2025/` but keeps
 its row, and `--exclude 2025/ --exclude '2025/**'` drops both; `--exclude '**/node_modules/**'` drops the
-contents of every `node_modules` directory. On local and mounted filesystems, an exclude glob ending in
+contents of every `node_modules` directory. On local and mounted filesystems and Azure hierarchical namespaces, an exclude glob ending in
 a recursive `/**` also prevents descent into matching directories. The directory's own row still passes
 through the ordinary filters. Other globs and regexes filter rows without stopping traversal; include,
 size and time filters never decide whether to enter a directory. A supported recursive exclude still
@@ -87,12 +87,12 @@ swath: --storage-class: a local tree has no storage classes
 On S3 and GCS, when every include has a literal prefix (an anchored glob's text up to its first wildcard, a regex's `^literal`), swath lists only
 the longest prefix common to them. `--include 'logs/2026/0*/**'` on `s3://bucket` lists `logs/2026/0` and
 nothing else: the same rows, fewer requests. A glob without a `/`, or a regex without `^literal`, turns it
-off; excludes never change it. Azure Blob lists the whole source and filters the rows. Object-store
+off; excludes never change it. Azure Blob does not narrow include prefixes. Flat-namespace
 exclusions do not change listing requests.
 
-Local and mounted trees also avoid traversing subtrees covered by recursive exclude globs, as described
+Local and mounted trees and Azure HNS also avoid traversing subtrees covered by recursive exclude globs, as described
 above. Their run report records the rule classification in `source.stats.pruning` and the directories
-not entered in `source.stats.pruned_dirs`. Reading the parent and the excluded directory's metadata can
+not entered in `source.stats.pruned_dirs` (absent when zero on Azure HNS). Reading the parent and the excluded directory's metadata can
 still occur; errors below it are no longer encountered. No count or byte total is inferred for unvisited
 descendants.
 

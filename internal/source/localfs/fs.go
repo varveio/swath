@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/tree"
 )
 
 // Fields selects how much metadata is read per entry.
@@ -132,8 +133,6 @@ func (s *Stats) add(o *Stats) {
 	s.Slabs += o.Slabs
 	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
-	s.OtherDevice += o.OtherDevice
-	s.PrunedDirs += o.PrunedDirs
 	s.FilteredStatErrors += o.FilteredStatErrors
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
@@ -142,20 +141,21 @@ func (s *Stats) add(o *Stats) {
 	}
 }
 
-// Range is a directory, or a chunk of a large directory's sorted entries.
-type Range struct {
-	path   string // on-disk path
-	prefix string // key prefix: "" for the root, "a/b/" below it
-	chunk  *chunk
-}
+// Range is a directory (Dir its on-disk path), or a chunk of a large
+// directory's sorted entries (Seg).
+type Range = tree.Range[string, *chunk]
 
-// Provider lists one root. It implements source.Provider[Range, Entry].
+// Out receives a range's rows and chunks.
+type Out = tree.Out[string, *chunk, Entry]
+
+// Provider lists one root on the tree walker (tree.Walker): it is the
+// walker's Reader, and the walker is the source.Provider[Range, Entry].
 type Provider struct {
+	*tree.Walker[string, *chunk, Entry]
 	root   string
 	opt    Options
 	native bool
 	dev    int64             // the root's device (OneFilesystem)
-	prune  func(string) bool // immutable directory predicate, set before workers start
 	keyOut func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
@@ -185,7 +185,12 @@ func (p *Provider) warnf(format string, a ...any) {
 	p.warn(fmt.Sprintf(format, a...))
 }
 
-var _ source.Provider[Range, Entry] = (*Provider)(nil)
+var (
+	_ source.Provider[Range, Entry]      = (*Provider)(nil)
+	_ source.Disposer[Range]             = (*Provider)(nil)
+	_ tree.Reader[string, *chunk, Entry] = walkReader{}
+	_ tree.Disposer[*chunk]              = walkReader{}
+)
 
 // New validates root and returns a provider for it. A root that is not a
 // directory (a file, as du and ls take one) lists as its one entry, keyed
@@ -212,42 +217,44 @@ func New(root string, opt Options) (*Provider, error) {
 			return nil, err
 		}
 	}
+	p.Walker = tree.NewWalker(Range{Dir: p.root}, walkReader{p}, tree.Options[Entry]{NoDirs: opt.NoDirs, Size: entrySize})
 	return p, nil
 }
 
-// Root is the root directory range.
-func (p *Provider) Root() Range { return Range{path: p.root} }
+func entrySize(e *Entry) int64 { return e.Size }
 
-// Stats returns the counters so far.
+// Stats returns the counters so far: the provider's and the walker's.
 func (p *Provider) Stats() Stats {
+	w := p.Walker.Stats()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.stats
 	s.Samples = slices.Clone(s.Samples)
+	s.Files, s.Dirs, s.Bytes, s.Skipped, s.OtherDevice = w.Files, w.Dirs, w.Bytes, w.Omitted, w.Pruned
+	s.PrunedDirs = w.Excluded
 	return s
 }
 
-// Expand lists one range.
-// Dispose releases a range that will never be expanded (a chunk's share of
-// its directory descriptor). It implements source.Disposer.
-func (p *Provider) Dispose(r Range) { disposeChunk(r) }
+// walkReader is the provider as the walker's tree.Reader.
+type walkReader struct{ p *Provider }
 
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Entry]) error {
-	// A chunk's share of its descriptor is released however Expand ends,
-	// a cancellation before any work included: a range a worker has taken
-	// is no longer queued, so the order stage will not dispose it.
+// Dispose releases a chunk that will never be read: its share of its
+// directory descriptor.
+func (rd walkReader) Dispose(c *chunk) { disposeChunk(Range{Seg: c, InSeg: true}) }
+
+// Read lists one range.
+func (rd walkReader) Read(ctx context.Context, r Range, out *Out) error {
+	p := rd.p
+	// A chunk's share of its descriptor is released however Read ends.
 	defer disposeChunk(r)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
 	var st Stats
 	var err error
 	if p.file {
-		err = p.expandFile(e, &st)
+		err = p.expandFile(out, &st)
 	} else if p.native {
-		err = p.expandNative(ctx, r, e, &st)
+		err = p.expandNative(ctx, r, out, &st)
 	} else {
-		err = p.expandPortable(ctx, r, e, &st)
+		err = p.expandPortable(ctx, r, out, &st)
 	}
 	p.mu.Lock()
 	p.stats.add(&st)
@@ -255,71 +262,31 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	return err
 }
 
-// emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row. The run's own output (Skip) is
-// dropped, a directory with its subtree.
-func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
-	start := 0
-	for i := range rows {
-		row := &rows[i]
-		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
-			st.Skipped++
-			if err := e.Rows(rows[start:i]); err != nil {
-				return err
-			}
-			start = i + 1
-			continue
+// emit hands a directory's sorted rows to out, which splices each
+// subdirectory in as a child range right after its DIR row. The run's own
+// output (Skip) is dropped, a directory with its subtree, an entry of any
+// other kind alone (tree.Omit); a directory on another device is listed
+// and not walked (tree.Prune).
+func (p *Provider) emit(r Range, rows []Row, out *Out) error {
+	return out.Rows(rows, func(row *Row) (string, tree.Walk) {
+		switch {
+		case len(p.opt.Skip) > 0 && p.opt.Skip[row.Key]:
+			return "", tree.Omit
+		case row.Data.Kind != KindDir:
+			return "", tree.Leaf
+		case p.otherDevice(row):
+			return "", tree.Prune
 		}
-		if row.Data.Kind != KindDir {
-			st.Files++
-			st.Bytes += row.Data.Size
-			continue
-		}
-		st.Dirs++
-		stop := p.otherDevice(row)
-		if stop {
-			st.OtherDevice++
-		} else if p.prune != nil && p.prune(row.Key) {
-			st.PrunedDirs++
-			stop = true
-		}
-		if stop {
-			if !p.opt.NoDirs {
-				continue // listed with the rows after it; its subtree is not walked
-			}
-			if err := e.Rows(rows[start:i]); err != nil {
-				return err
-			}
-			start = i + 1
-			continue
-		}
-		end := i + 1
-		if p.opt.NoDirs {
-			end = i
-		}
-		// The child is taken from the row before the rows are handed over:
-		// the emitter owns them then, and a filter may clear the DIR row.
-		// The key is a view of the directory's key arena: the child's
-		// prefix is a copy, so a queued subdirectory does not keep its
-		// parent's names alive.
 		key := row.Key
-		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
-		if err := e.Rows(rows[start:end]); err != nil {
-			return err
-		}
-		start = i + 1
-		if err := e.Child(child); err != nil {
-			return err
-		}
-	}
-	return e.Rows(rows[start:])
+		return r.Dir + string(os.PathSeparator) + key[len(r.Prefix):len(key)-1], tree.Descend
+	})
 }
 
 // expandFile lists a root that is not a directory: its one row, keyed by
 // its name, read as its directory's listing reads the entry: at the run's
 // tier, a symbolic link as itself (New's stat followed it only to find
 // that it does not name a directory).
-func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
+func (p *Provider) expandFile(out *Out, st *Stats) error {
 	row := Row{Key: filepath.Base(p.root)}
 	var err error
 	switch fi := fs.FileInfo(nil); {
@@ -345,9 +312,7 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 			st.note(&st.ReadlinkErrors, p.root, err)
 		}
 	}
-	st.Files++
-	st.Bytes += row.Data.Size
-	return e.Rows([]Row{row})
+	return p.emit(Range{}, []Row{row}, out)
 }
 
 func sortRows(rows []Row) {
@@ -355,7 +320,7 @@ func sortRows(rows []Row) {
 }
 
 // expandPortable lists a directory with os.File.ReadDir and Lstat.
-func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
+func (p *Provider) expandPortable(ctx context.Context, r Range, out *Out, st *Stats) error {
 	f, ok := openChecked(r, st)
 	if !ok {
 		return nil
@@ -364,7 +329,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	defer f.Close() // statEntry stats relative to it on darwin
 	ents, err := f.ReadDir(-1)
 	if err != nil {
-		st.note(&st.ReadErrors, r.path, err)
+		st.note(&st.ReadErrors, r.Dir, err)
 	}
 	rows := make([]Row, 0, len(ents))
 	for i, d := range ents {
@@ -372,8 +337,8 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 			return ctx.Err()
 		}
 		name := d.Name()
-		row := Row{Key: r.prefix + name}
-		path := r.path + string(os.PathSeparator) + name
+		row := Row{Key: r.Prefix + name}
+		path := r.Dir + string(os.PathSeparator) + name
 		if p.opt.Fields == Names {
 			row.Data.Kind = kindOf(d.Type())
 		} else {
@@ -407,7 +372,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	} else {
 		sortRows(rows)
 	}
-	return p.emit(r, rows, e, st)
+	return p.emit(r, rows, out)
 }
 
 // leftOut says the filters leave out the entry at key (its name below the
@@ -421,7 +386,7 @@ func (p *Provider) leftOut(key string, dir, known bool) bool {
 		return false
 	}
 	asFile := p.keyOut(key)
-	asDir := p.keyOut(key+"/") && p.prune != nil && p.prune(key+"/")
+	asDir := p.keyOut(key+"/") && p.Excludes(key+"/")
 	switch {
 	case !known:
 		return asFile && asDir
@@ -436,19 +401,19 @@ func (p *Provider) leftOut(key string, dir, known bool) bool {
 // object as the opened file (fstat): best-effort protection against a
 // directory swapped for a symlink between listing and open.
 func openChecked(r Range, st *Stats) (*os.File, bool) {
-	f, err := os.Open(r.path)
+	f, err := os.Open(r.Dir)
 	if err != nil {
-		st.note(&st.OpenErrors, r.path, err)
+		st.note(&st.OpenErrors, r.Dir, err)
 		return nil, false
 	}
-	if r.prefix == "" {
+	if r.Prefix == "" {
 		return f, true
 	}
 	ffi, err1 := f.Stat()
-	lfi, err2 := os.Lstat(r.path)
+	lfi, err2 := os.Lstat(r.Dir)
 	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
 		f.Close()
-		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
+		st.note(&st.Unsafe, r.Dir, errors.New("directory changed before open"))
 		return nil, false
 	}
 	return f, true

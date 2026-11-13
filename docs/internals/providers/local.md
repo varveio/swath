@@ -9,6 +9,11 @@ A range is a directory. Its entries are sorted by key, where a directory's key i
 else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a directory's DIR row followed
 by its subtree, before the next sibling, is global order. A directory with more than 4096 entries is split into
 chunk ranges of 2048 sorted names that share one reference-counted directory fd, so several workers stat it.
+The walk is the [tree core](../tree-sources.md)'s: `tree.Walker` is the `source.Provider`, the provider is its
+`Reader` (its engines below read, sort and stat a directory; `emit` is the walk decision per row: a
+directory is walked, pruned by `--one-file-system` or omitted as the run's own output, as is a file the run writes), chunks are the
+walker's segments, and `files`, `dirs`, `bytes`, `skipped_outputs` and `other_device_dirs` are the walker's
+counts. Listings and count reports are unchanged by the move.
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
@@ -76,8 +81,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `Report` adds `no_dirs` to the filters likewise.
 - **Recursive exclusion pruning.** Before workers start, `opened.Run` derives an immutable directory
   predicate from `registry.Env.Filter`. The filter package's glob compiler recognizes terminal `/**`
-  segments without a second glob language. The shared `emit` path retains the directory row for the
-  ordinary row filter but submits no child for a matching directory; this applies to ordered listings,
+  segments without a second glob language. `Walker.SetPruneDirectories` installs it in the tree
+  core, which retains the directory row for the ordinary row filter but submits no child for a matching
+  directory; this applies to ordered listings,
   counts, native chunks/slabs and the portable engine. Includes, metadata filters, directory-row-only
   exclusions and regexes do not themselves stop descent. The run's own output (`Options.Skip`, set by
   `opened.Exclude` for each path the pipeline names: a dataset directory, or a text file, its temporary and
@@ -92,7 +98,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   The report's `pruning` classifies configured rules: `reason` is `no_excludes`, `row_filters_only`, or
   `recursive_excludes`; `recursive_globs`, `row_only_globs` and `regex_rules` count the rules in each
   class, as given (repeated rules count separately). `pruned_dirs` counts child traversals prevented,
-  once per directory even when rules overlap;
+  once per directory even when rules overlap (`tree.Stats.Excluded`);
+  reader decisions take precedence: `Omit` for the run's own output, then `Prune` for another device
+  (`tree.Stats.Omitted` maps to `skipped_outputs`, `tree.Stats.Pruned` only to `other_device_dirs`);
   `dirs_read`, `skipped_outputs` and `other_device_dirs` keep their existing meanings. No excluded
   descendant counts or bytes are estimated. Original filter descriptions stay in `coverage.filters`;
   pruning adds neither unreadable entries nor output-directory exclusions.

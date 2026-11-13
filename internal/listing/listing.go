@@ -708,7 +708,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 	if cfg.Trace != nil {
 		t, ok := src.(source.Traced)
 		if !ok {
-			return sum.failed(&ConfigError{Reason: "--trace: this source is not listed by the range engine (S3, GCS and Azure Blob are)"})
+			return sum.failed(&ConfigError{Reason: "--trace: this source is not listed by the range engine (S3, GCS and a flat Azure Blob account are; an Azure account with a hierarchical namespace is listed directory by directory)"})
 		}
 		t.TraceTo(cfg.Trace)
 	}

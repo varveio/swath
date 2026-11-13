@@ -10,8 +10,11 @@
 // between names whose first differing scalars are one in U+E000..U+FFFF
 // and one at U+10000 and above. The engine's pages come from the
 // byte-order adapter (internal/source/azblob/order), which reads Azure's
-// order and serves each query in unsigned byte order; and the provider
-// lists only accounts whose namespace is positively flat.
+// order and serves each query in unsigned byte order. Provider lists only
+// accounts whose namespace is positively flat. An account with a
+// hierarchical namespace lists in directory-tree order ('/' lowest), which
+// no byte-order seek can cover; it is listed on the tree core instead
+// (Tree, tree.go), one directory at a time.
 package azblob
 
 import (
@@ -29,6 +32,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/client"
@@ -92,7 +96,7 @@ type Options struct {
 	Anonymous bool   // send no credentials, whatever the environment holds
 	SAS       string // shared access signature; else the root's, else EnvSAS
 	// Flat asserts a flat namespace where admission cannot establish it
-	// (--azure-assume-flat); an answered hierarchical namespace still refuses.
+	// (--azure-assume-flat); it never overrides a reported hierarchical namespace.
 	// It is part of the resume identity and the report.
 	Flat    bool
 	Timeout time.Duration
@@ -185,13 +189,19 @@ func RedactRoot(arg string) string {
 
 // Stats are the provider's part of the run report.
 type Stats struct {
-	Anonymous   bool   `json:"anonymous"`
-	Credentials string `json:"credentials,omitempty"`
-	// Namespace is how admission found the namespace flat: "account
+	// Recursive-exclude accounting is present for tree listings only.
+	Pruning     *filter.Pruning `json:"pruning,omitempty"`
+	PrunedDirs  int64           `json:"pruned_dirs,omitempty"`
+	Anonymous   bool            `json:"anonymous"`
+	Credentials string          `json:"credentials,omitempty"`
+	// Namespace is how admission read the namespace: "account
 	// information", "filesystem properties", "filesystem endpoint blocked"
 	// (the Data Lake host refused the flat account for soft delete or blob
 	// events) or "asserted" (--azure-assume-flat).
-	Namespace   string            `json:"namespace"`
+	Namespace string `json:"namespace"`
+	// Listing is "tree" for a hierarchical namespace listed on the tree
+	// core; absent for a flat account.
+	Listing     string            `json:"listing,omitempty"`
 	NoVerifySSL bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	MeanActive  float64           `json:"mean_active"`
 	Counters    counters.Snapshot `json:"counters"`
@@ -216,7 +226,7 @@ type provider[P any] struct {
 	anonymous        bool
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
-	namespace        string // how admission found the namespace flat (Stats.Namespace)
+	namespace        string // how admission read the namespace (Stats.Namespace)
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
@@ -236,6 +246,8 @@ var (
 // account '/' sorts lowest, and after a byte cursor "a.z" the key "a/child" is
 // still in range, but a seek that sorts '/' lowest skips it while every page
 // still ascends, so nothing downstream could notice.
+// The registered source (open) lists a hierarchical namespace on the tree
+// core instead (Tree).
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, errors.New("Azure Blob: Options.AllVersions lists every entry: use NewVersions")
@@ -253,21 +265,40 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	return build(ctx, opt, &VersionSchema, (*VersionsProvider).version, func(v *Version) int64 { return v.Size })
 }
 
+// build connects, admits and binds a flat provider; a hierarchical
+// namespace is refused here (the tree core lists it: open, Tree).
 func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row func(*provider[P], *client.Item) P, size func(*P) int64) (*provider[P], error) {
-	p, own, err := connect[P](ctx, opt)
+	p, own, hns, err := admitted(ctx, opt, s, row, size)
 	if err != nil {
 		return nil, err
+	}
+	if hns {
+		return nil, source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); the flat provider lists only flat accounts", p.opt.Account, p.namespace))
+	}
+	return p, p.flat(own)
+}
+
+// admitted connects and admits the account (admit): hns reports a
+// hierarchical namespace.
+func admitted[P any](ctx context.Context, opt Options, s *schema.Schema[P], row func(*provider[P], *client.Item) P, size func(*P) int64) (p *provider[P], own, hns bool, err error) {
+	if p, own, err = connect[P](ctx, opt); err != nil {
+		return nil, false, false, err
 	}
 	p.schema, p.row, p.size = s, row, size
-	if err := p.admit(ctx); err != nil {
-		return nil, err
+	if hns, err = p.admit(ctx); err != nil {
+		return nil, false, false, err
 	}
+	return p, own, hns, nil
+}
+
+// flat binds the provider to the range engine.
+func (p *provider[P]) flat(own bool) error {
 	e, err := keyrange.New(p.engineOptions(own), p.description(), p.fetch)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	p.Engine = e
-	return p, nil
+	return nil
 }
 
 // description is what the range engine must know about the provider.
@@ -352,23 +383,28 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 	return p.Engine.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
 
-// admit refuses the run unless the account's namespace is flat: (1) Get
-// Account Information on the blob endpoint, whose x-ms-is-hns-enabled
-// false passes and true refuses; (2) when that call is refused (401, the
-// answer to any anonymous caller, or 403) or the header is absent,
-// Filesystem Get Properties on the account's Data Lake host (only for an
+// admit establishes the account's namespace: (1) Get Account Information
+// on the blob endpoint, whose x-ms-is-hns-enabled false is flat and true
+// hierarchical (hns); (2) when that call is refused (401, the answer to any
+// anonymous caller, or 403) or the header is absent, Filesystem Get
+// Properties on the account's Data Lake host (only for an
 // ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
-// false passes and true refuses, and whose 409
-// EndpointUnsupportedAccountFeatures passes (flatFeatures); (3) anything
-// else is unknown, which
-// refuses unless Options.Flat asserts a flat namespace. Credentials that
-// could not be had, or that the service refused (a signed caller's 401 or
-// 403), are that failure (class auth or access denied), as on any later
-// request: the Data Lake host would need the same.
-func (p *provider[P]) admit(ctx context.Context) error {
-	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
+// answers the same, and whose 409 EndpointUnsupportedAccountFeatures is
+// flat (flatFeatures); (3) anything else is unknown, which refuses unless
+// Options.Flat asserts a flat namespace (a reported hierarchical one is
+// never overridden). When both calls were refused (a container SAS, or an
+// anonymous caller where the Data Lake host also refuses) and no flat
+// namespace is asserted, one directory listing of the scope (listedHNS,
+// maxresults 1) may show a hierarchical namespace: its entries name their
+// resource type, which a flat account's never do. An asserted run sends no
+// such request, so a flat account's requests are unchanged. Credentials that could not be had, or that the
+// service refused (a signed caller's 401 or 403), are that failure (class
+// auth or access denied), as on any later request: the Data Lake host would
+// need the same.
+func (p *provider[P]) admit(ctx context.Context) (hns bool, err error) {
+	hns, err = p.client.AccountInfo(ctx, p.opt.Container)
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
-		return fmt.Errorf("Azure Blob client: %w", err)
+		return false, fmt.Errorf("Azure Blob client: %w", err)
 	}
 	how := "account information"
 	if err != nil && ctx.Err() == nil && fallback(err) {
@@ -385,13 +421,21 @@ func (p *provider[P]) admit(ctx context.Context) error {
 			}
 		}
 	}
+	if err != nil && ctx.Err() == nil && !p.opt.Flat && refused(err) {
+		h, lerr := p.listedHNS(ctx)
+		if ce := (*objhttp.CredentialError)(nil); errors.As(lerr, &ce) {
+			return false, fmt.Errorf("Azure Blob client: %w", lerr)
+		}
+		if lerr == nil && h {
+			hns, err, how = true, nil, "listing"
+		}
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return context.Cause(ctx)
-	case err == nil && hns:
-		return source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
+		return false, context.Cause(ctx)
 	case err == nil:
 		p.namespace = how
+		return hns, nil
 	case p.opt.Flat:
 		p.namespace = "asserted"
 		if p.opt.Warn != nil {
@@ -399,11 +443,23 @@ func (p *provider[P]) admit(ctx context.Context) error {
 		}
 	case !p.unsigned() && refused(err):
 		// Credentials the service rejected: what any request would meet.
-		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
+		return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	default:
-		return source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
+		return false, source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish its namespace (%w); a flat namespace can be asserted with --azure-assume-flat", p.opt.Account, err))
 	}
-	return nil
+	return false, nil
+}
+
+// listedHNS lists the scope's first entry as a hierarchical namespace's
+// directory listing would (one request, maxresults 1) and reports whether
+// the service named its resource type (client.Item.Hierarchical).
+func (p *provider[P]) listedHNS(ctx context.Context) (bool, error) {
+	dir := p.opt.Prefix[:strings.LastIndexByte(p.opt.Prefix, '/')+1]
+	out, err := p.client.List(ctx, &client.ListInput{Container: p.opt.Container, Prefix: dir, Delimiter: "/", MaxResults: 1, Tree: true})
+	if err != nil {
+		return false, err
+	}
+	return len(out.Items) > 0 && out.Items[0].Hierarchical, nil
 }
 
 // unsigned says requests go anonymous, which Get Account Information
@@ -598,10 +654,16 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	return page, nil
 }
 
-// object is a listed blob's row payload.
+// object is a listed blob's row payload: its properties as listed, the
+// asked-for columns filled (fill).
 func (p *provider[P]) object(it *client.Item) Object {
-	o := Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
-		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	o := itemObject(it)
 	p.fill(&o)
 	return o
+}
+
+// itemObject is an item's properties as listed.
+func itemObject(it *client.Item) Object {
+	return Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
+		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
 }

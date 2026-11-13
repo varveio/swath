@@ -5,9 +5,13 @@ range the engine made, claimed, paged, split and ended, one JSON object per line
 ([counters.md](counters.md)) say how often each path engaged; the trace says where in the keyspace and when.
 [`tools/explainer`](../../tools/explainer/README.md) turns a trace into a report and a video.
 
-It covers the sources on the range engine ([range-engine.md](range-engine.md)): S3, GCS and Azure Blob. A local
-tree lists through its own engines ([providers/local.md](providers/local.md)), which keep no ranges; `--trace`
-with a local source is refused (exit 2). A `--sequential` run lists one continuation-token chain, not ranges:
+It covers the sources on the range engine ([range-engine.md](range-engine.md)): S3, GCS and a flat Azure Blob
+account. A local tree lists through its own engines ([providers/local.md](providers/local.md)), which keep no
+ranges; `--trace` with a local source is refused (exit 2). An Azure account with a hierarchical namespace is
+listed directory by directory on the tree core ([providers/azblob.md](providers/azblob.md#hierarchical-namespaces-the-tree-mode)):
+its large directories' segments run on a range engine, but their ranges are one directory's and its first
+pages and lookups are not range-engine events, so a trace would show part of the run as the whole; `--trace`
+is refused there too (exit 2: the tree source is not `source.Traced`). A `--sequential` run lists one continuation-token chain, not ranges:
 its trace holds `run_start` and `run_end` only.
 
 ## Writing it
