@@ -860,7 +860,9 @@ running. Three rounds on 2026-11-07, 19:17 to 19:52 UTC, the Java server (see
 [the comparison](replay-java.md#measurements-both-servers)) measured back to back with this one for each
 configuration; every figure below is the median of the three runs, with the range of the three where a cell gives
 one. Fixtures, page cache warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups,
-22.7 MB, written by `bench/replay/make-fixtures.sh`) and the `noaa-gk2a-pds` recording (a public bucket's listing,
+22.7 MB, the Java-written fixture of
+[`make-fixtures.sh`](https://github.com/varveio/swath/blob/java-final/go/bench/replay/make-fixtures.sh), since replaced
+by `bench/replay/fixtures`) and the `noaa-gk2a-pds` recording (a public bucket's listing,
 18,483,603 keys, 2 parts, recorded 2026-11-07 18:30 to 18:33 UTC; not in the repository). Run-to-run spread on
 this host: the three throughputs of a configuration spread by 0.6% to 25% (range over median), the widest for
 16 walks over the recording (25%) and 64 walks over the synthetic fixture (20%, one slower first round), so
@@ -1142,11 +1144,8 @@ main/dispatch; `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` a
   serves that dataset (sorted, served as it is) and an unsorted
   capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
   refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.
-- `go-fixtures` (inputs: main/reader, shared CI inputs, the `swath-replay`, `swath-core` and `swath-model` Gradle modules,
-  the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
-  `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,
-  `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
-  `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
+- `go-fixtures` (inputs: main/reader, shared CI inputs, `docs/replay-provider-evidence.tar.gz`,
+  `docs/replay-provider-expectations.json`): `go run ./bench/replay/fixtures` into the runner's temporary
   directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
   `SWATH_REPLAY_FIXTURES` set: the store's fixture tests (`internal/replay/store`), the GCS
   evidence replay (`internal/replay/evidence`) and the Azure evidence replay (`internal/replay/azure`

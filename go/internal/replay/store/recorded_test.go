@@ -27,20 +27,19 @@ import (
 // recordedRoot returns the fixture root named by SWATH_REPLAY_FIXTURES, or
 // skips: these fixtures are large or real recordings and are never
 // committed. The root holds fixtures/ (the synthetic and evidence fixtures
-// go/bench/replay/make-fixtures.sh writes with the Java tool) and,
-// optionally, recordings/BUCKET/dataset/data (the Java tool's sorted
-// listings of public buckets).
+// go/bench/replay/fixtures writes) and, optionally,
+// recordings/BUCKET/dataset/data (the Java tool's sorted listings of public
+// buckets).
 func recordedRoot(t *testing.T) string {
 	root := os.Getenv("SWATH_REPLAY_FIXTURES")
 	if root == "" {
-		t.Skip("SWATH_REPLAY_FIXTURES is not set: the Java-written fixtures are not available")
+		t.Skip("SWATH_REPLAY_FIXTURES is not set: the replay fixtures are not available")
 	}
 	return root
 }
 
 // walk pages a store from the start at limit 1,000 and returns the row
-// count and the SHA-256 over each key followed by a newline, the digest the
-// fixture inventory records for the Java server's walks.
+// count and the SHA-256 over each key followed by a newline.
 func walk(t *testing.T, s Store) (int, string) {
 	t.Helper()
 	digest := sha256.New()
@@ -63,57 +62,35 @@ func walk(t *testing.T, s Store) (int, string) {
 	}
 }
 
-// fixturesTime is the modification time make-fixtures.sh gives every file
-// it writes, which makes the fixture identity reproducible.
-var fixturesTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// madeByScript reports whether every part under dir carries fixturesTime.
-func madeByScript(t *testing.T, dir string) bool {
-	t.Helper()
-	parts, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
-	if err != nil || len(parts) == 0 {
-		t.Fatalf("no parts in %s: %v", dir, err)
-	}
-	for _, part := range parts {
-		info, err := os.Stat(part)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !info.ModTime().Equal(fixturesTime) {
-			return false
-		}
-	}
-	return true
-}
-
-// TestJavaWrittenFixtures opens the Java sort-fixture outputs that
-// go/bench/replay/make-fixtures.sh writes and requires a full walk with the
-// row count and key digest of the Java server's walk of the same fixture,
-// and, for a tree the script wrote (its fixed modification time), the
-// fixture identity the Java server reports for it.
-func TestJavaWrittenFixtures(t *testing.T) {
+// TestGeneratedFixtures opens the sorted fixtures go/bench/replay/fixtures
+// writes, requires each to be a SeekParquet dataset of sortfixture.SchemaID
+// and sorted-rolled to have more than one part, and requires a full walk
+// with the row count and key digest the Java server's walk of the Java
+// tool's fixtures from the same inputs recorded.
+func TestGeneratedFixtures(t *testing.T) {
 	root := recordedRoot(t)
 	cases := []struct {
-		path, identity, keys string
-		rows                 int
+		path, keys string
+		rows       int
+		rolled     bool
 	}{
-		{"fixtures/synthetic-10k/sorted", "5605661b90219d9a03e4d09e7554e8ed3472c13d5f468b4739308bae4e7f4dfd", "c1120808838fb37f025e09a7052f00013bd7f4d7298e266338ebb5d5f1da60ef", 10_000},
-		{"fixtures/synthetic-1m/sorted", "dfb9d41d22a0c73e05e8ee7792557ffab3ac31f479ed0bb95d588fe8366759f3", "dc0d1a4c3e4d4d15edfded5ef51f705b4d6a320fb4db179de122eab2ca1c140c", 1_000_000},
-		{"fixtures/synthetic-1m/sorted-rolled", "55cfec6d03c61348560fec1668f8ba987c133857e3ea792f19439d18d73b9c96", "dc0d1a4c3e4d4d15edfded5ef51f705b4d6a320fb4db179de122eab2ca1c140c", 1_000_000},
-		{"fixtures/evidence-gcs/sorted", "2b1ce480c0e87a09b1bd0fd9ead5da6731110141c5124b318b2c93aeea13c83a", "580359890e444fa01ceb86fe51216fff0ff36529cdc4e3ff88ccc21c6441c518", 1_084},
+		{"fixtures/synthetic-10k/sorted", "c1120808838fb37f025e09a7052f00013bd7f4d7298e266338ebb5d5f1da60ef", 10_000, false},
+		{"fixtures/synthetic-1m/sorted", "dc0d1a4c3e4d4d15edfded5ef51f705b4d6a320fb4db179de122eab2ca1c140c", 1_000_000, false},
+		{"fixtures/synthetic-1m/sorted-rolled", "dc0d1a4c3e4d4d15edfded5ef51f705b4d6a320fb4db179de122eab2ca1c140c", 1_000_000, true},
+		{"fixtures/evidence-gcs/sorted", "580359890e444fa01ceb86fe51216fff0ff36529cdc4e3ff88ccc21c6441c518", 1_084, false},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
-			dir := filepath.Join(root, c.path)
-			s, meta, err := Open(context.Background(), dir, Options{})
+			s, meta, err := Open(context.Background(), filepath.Join(root, c.path), Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if !madeByScript(t, dir) {
-				t.Logf("identity not compared: the parts' modification times are not the script's")
-			} else if meta.Identity != c.identity {
-				t.Errorf("identity %s, the Java server's %s", meta.Identity, c.identity)
+			if meta.Kind != KindSeekParquet || meta.SchemaID != sortfixture.SchemaID {
+				t.Errorf("a %s dataset of schema %s", meta.Kind, meta.SchemaID)
+			}
+			if c.rolled && meta.Parts < 2 {
+				t.Errorf("%d parts, want more than one", meta.Parts)
 			}
 			if n, keys := walk(t, s); n != c.rows || keys != c.keys {
 				t.Errorf("walk: %d rows, keys %s; want %d, %s", n, keys, c.rows, c.keys)

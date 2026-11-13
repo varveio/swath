@@ -31,8 +31,8 @@ import (
 // The load tests drive a server with many concurrent token walks for a
 // few seconds each; SWATH_REPLAY_LOAD=1 runs them. With
 // SWATH_REPLAY_FIXTURES=ROOT they serve ROOT/fixtures/synthetic-1m/
-// sorted-rolled (bench/replay/make-fixtures.sh), otherwise a generated
-// fixture of the same key shape.
+// sorted-rolled (bench/replay/fixtures), otherwise one written in the test
+// of the same key shape.
 const loadEnv = "SWATH_REPLAY_LOAD"
 
 func loadGate(t *testing.T) {

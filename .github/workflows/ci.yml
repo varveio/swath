@@ -783,8 +783,9 @@ jobs:
         working-directory: go/objfile
         run: go vet ./... && go test -count=1 -timeout 15m ./...
 
-  # Go replay interoperability with externally generated fixtures. The shared
-  # policy includes main/reader changes and the Java/evidence inputs of these fixtures.
+  # The replay fixture tier: go/bench/replay/fixtures writes the synthetic and evidence
+  # fixtures, and the gated replay tests run on them. The shared policy selects it with main
+  # and reader changes and the evidence inputs of these fixtures.
   go-fixtures:
     needs: changes
     runs-on: ubuntu-latest
@@ -801,44 +802,20 @@ jobs:
         with:
           key: go-fixtures
 
-      - name: Set up JDK 25
+      - name: Replay fixtures
         if: needs.changes.outputs.fixtures == 'true'
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      # This job runs the wrapper itself, so it validates it itself (see fast-tests).
-      - name: Validate Gradle wrapper
-        if: needs.changes.outputs.fixtures == 'true'
-        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c  # v6.4.1
-
-      - name: Set up Gradle
-        if: needs.changes.outputs.fixtures == 'true'
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c  # v6.4.1
-
-      - name: Java replay distribution
-        if: needs.changes.outputs.fixtures == 'true'
-        working-directory: .
-        run: ./gradlew --no-daemon --stacktrace :swath-replay:installDist
-
-      - name: Java-written replay fixtures
-        if: needs.changes.outputs.fixtures == 'true'
-        run: |
-          set -euo pipefail
-          PATH="$GITHUB_WORKSPACE/swath-replay/build/install/swath-replay/bin:$PATH" \
-            bench/replay/make-fixtures.sh "$RUNNER_TEMP/replay-fixtures/fixtures"
+        run: go run ./bench/replay/fixtures "$RUNNER_TEMP/replay-fixtures/fixtures"
 
       # FIXTURE_PACKAGES and FIXTURE_TESTS select the gated tests this tier runs; a new gated
       # test is added to both. Every named test must run and pass: a name that matches nothing,
       # or a test that skips (the gate it reads unset), would otherwise pass vacuously.
-      - name: Gated replay tests on the Java-written fixtures
+      - name: Gated replay tests on the replay fixtures
         if: needs.changes.outputs.fixtures == 'true'
         env:
           SWATH_REPLAY_FIXTURES: ${{ runner.temp }}/replay-fixtures
           FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence ./internal/replay/azure
           FIXTURE_TESTS: >-
-            TestJavaWrittenFixtures
+            TestGeneratedFixtures
             TestSortsTheAzureEvidenceCorpus
             TestStartupCost
             TestSortFixtureMemory
@@ -854,7 +831,7 @@ jobs:
             echo "::error::a fixture-tier test skipped"
             exit 1
           fi
-          # The Azure evidence replay falls back to the manifest in memory when the Java-written
+          # The Azure evidence replay falls back to the manifest in memory when the fixture
           # capture under the fixture root is missing; here the capture is the point, so that
           # fallback fails the tier. (The Azure corruption test serves from memory by design and
           # logs the root-less path, which this does not match.)

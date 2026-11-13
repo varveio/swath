@@ -2033,7 +2033,7 @@ excludes the build, read 879 ms with the index and 157 ms without in the first p
 
 The functional comparison of the Go and Java replay servers for #352: the Java server on each Java-era fixture,
 the Go server on its footer-only SeekParquet conversion with the list index on (its default). One GCP Batch run,
-`20261111-0013`, of [`bench/replay/java-compare.sh`](../../bench/replay/java-compare.sh), 00:14:30 to 00:53:00 UTC,
+`20261111-0013`, of [`bench/replay/java-compare.sh`](https://github.com/varveio/swath/blob/java-final/go/bench/replay/java-compare.sh) (at tag `java-final`), 00:14:30 to 00:53:00 UTC,
 verdict PASS, task status 0; receipts in
 `gs://s3-listing-study-results-29c02004/swath-352/20261111-0013/receipts/` (`summary.md`, `summary.json`, one
 directory per step). It is functional evidence and descriptive startup and resource figures, not a performance
@@ -2048,7 +2048,8 @@ DuckDB 1.4.1. The Java server at the launcher's defaults (no `SWATH_REPLAY_OPTS`
 `JAVA_TOOL_OPTIONS`; maximum heap 16.9 GB), both servers `--serving-mode sorted` with their other flags at their
 defaults. The binaries' SHA-256 and `go version -m` are in `build/`.
 
-**Fixtures and conversion.** make-fixtures.sh's synthetic-10k, synthetic-1m (sorted, and rolled into 6 parts
+**Fixtures and conversion.** The Java-written fixtures of [`make-fixtures.sh`](https://github.com/varveio/swath/blob/java-final/go/bench/replay/make-fixtures.sh) (at tag
+`java-final`, since replaced by the Go `bench/replay/fixtures`): synthetic-10k, synthetic-1m (sorted, and rolled into 6 parts
 and 110 row groups) and evidence-gcs, written by the Java `sort-fixture` in the run; the study's NARA
 (`nara-1950-census`, 13,540,310 rows, 4 parts), FourCast (`noaa-nws-fourcastnetgfs-pds`, 4,081,170, 1 part)
 and blockchain (`aws-public-blockchain`, 143,008,674, 4 parts) Java-era fixtures, their pinned study digests

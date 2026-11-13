@@ -774,13 +774,13 @@ func loadEvidence(t *testing.T) *evidence {
 	return &evidence{root, &index, cases}
 }
 
-// fixtures are the corpora the replay runs against: the Java-written
-// sorted fixture under the fixture root when present, and always the
-// corpus written in the test.
+// fixtures are the corpora the replay runs against: the sorted
+// evidence-gcs fixture under the fixture root (go/bench/replay/fixtures)
+// when present, and always the corpus written in the test.
 func (ev *evidence) fixtures(t *testing.T, root string) map[string]string {
 	out := map[string]string{"generated": corpus(t, ev.root, t.TempDir(), ev.index)}
-	if java := filepath.Join(root, "fixtures", "evidence-gcs", "sorted"); isDir(java) {
-		out["java-sorted"] = java
+	if fixture := filepath.Join(root, "fixtures", "evidence-gcs", "sorted"); isDir(fixture) {
+		out["fixture"] = fixture
 	}
 	return out
 }
