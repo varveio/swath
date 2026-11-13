@@ -221,6 +221,14 @@ func (o *opened) Exclude(path string) error {
 // locate is path's key below the root ("a/b/" for a directory, "a/b"
 // otherwise), "" when it is not below it.
 func (o *opened) locate(path string) (string, error) {
+	if runtime.GOOS == "windows" {
+		// Windows removes "." and ".." from a path by its spelling
+		// (GetFullPathName, which Abs calls) before it follows any link:
+		// link\.. is the directory holding link there, unlike POSIX.
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
 	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 		rel, inside, err := dataset.LocateInside(o.p.root, path)
 		if !inside {
@@ -245,9 +253,10 @@ func (o *opened) locate(path string) (string, error) {
 }
 
 // splitParent splits path after its last separator into the directory as
-// spelled, which the system resolves (not lexically cleaned:
+// spelled, which the system resolves (not lexically cleaned: on POSIX
 // link/.. is the parent of link's target, not the directory holding
-// link), and the name in it: dir+name is path, and dir+n names n there.
+// link; locate has spelled a Windows path as Windows resolves it), and
+// the name in it: dir+name is path, and dir+n names n there.
 func splitParent(path string) (dir, name string) {
 	i := len(path) - 1
 	for i >= len(filepath.VolumeName(path)) && !os.IsPathSeparator(path[i]) {

@@ -83,7 +83,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `opened.Exclude` for each path the pipeline names: a dataset directory, or a text file, its temporary and
   its scratch directory) is dropped in `emit` before anything else: its row, and for a directory its
   traversal. A directory is located by identity, a file by its name in its directory as the system resolves
-  the path, never cleaned first (`link/..` is the parent of `link`'s target), located by identity (the file
+  the path, never cleaned first on POSIX (`link/..` is the parent of `link`'s target; Windows removes `..` by
+  its spelling, `GetFullPathName`, and the path is taken so there), located by identity (the file
   may not exist yet, and a commit renames over the name). An existing file is left out under the spelling the
   directory stores (`storedName`): where it ignores case, the one entry equal without case that is the same
   file by identity, never another hard link or a name merely equal without case. `skipped_outputs` counts the entries dropped and

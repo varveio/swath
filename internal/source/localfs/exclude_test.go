@@ -7,49 +7,75 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
 
 // TestExcludeResolvesTheParent: a text output's file is left out by its
-// name in the directory the system resolves its path to, not the one its
-// spelling cleans to: through a symbolic link followed by "..", the file
-// lands beside the link's target. TREE/link/../rows.jsonl, with link
+// name in the directory a write through its path lands in, not the one
+// its spelling cleans to. On POSIX a symbolic link followed by ".." is
+// the parent of the link's target: TREE/link/../rows.jsonl, with link
 // pointing outside the tree, is written outside and leaves the user's
 // TREE/rows.jsonl listed; OUTSIDE/back/../rows.jsonl, with back pointing
-// into the tree, is written there and left out.
+// into the tree, is written there and left out. Windows removes ".." by
+// the spelling first, so there the same paths land beside the links. The
+// want is where a write through the path lands, checked against the
+// platform's rule.
 func TestExcludeResolvesTheParent(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "TREE")
-	for _, d := range []string{filepath.Join(root, "sub", "deep"), filepath.Join(base, "OUTSIDE", "child")} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(root, "rows.jsonl"), []byte("the user's\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join("..", "OUTSIDE", "child"), filepath.Join(root, "link")); err != nil {
-		t.Skipf("no symbolic links here: %v", err)
-	}
-	if err := os.Symlink(filepath.Join("..", "TREE", "sub", "deep"), filepath.Join(base, "OUTSIDE", "back")); err != nil {
-		t.Fatal(err)
-	}
 	sep := string(filepath.Separator)
-	for path, want := range map[string][]string{
-		root + sep + "link" + sep + ".." + sep + "rows.jsonl":                   nil,
-		base + sep + "OUTSIDE" + sep + "back" + sep + ".." + sep + "rows.jsonl": {"sub/rows.jsonl"},
-		root + sep + "rows.jsonl":                                               {"rows.jsonl"},
+	for _, c := range []struct {
+		name  string
+		path  func(base string) string
+		posix []string // the key on POSIX; Windows' is windows
+		win   []string
+	}{
+		{"link out and back", func(b string) string { return b + sep + "TREE" + sep + "link" + sep + ".." + sep + "rows.jsonl" }, nil, []string{"rows.jsonl"}},
+		{"link in and back", func(b string) string { return b + sep + "OUTSIDE" + sep + "back" + sep + ".." + sep + "rows.jsonl" }, []string{"sub/rows.jsonl"}, nil},
+		{"plain", func(b string) string { return b + sep + "TREE" + sep + "rows.jsonl" }, []string{"rows.jsonl"}, []string{"rows.jsonl"}},
 	} {
-		for _, portable := range []bool{false, true} {
-			o := pruneOpen(t, root, Options{Portable: portable}).(*opened)
-			if err := o.Exclude(path); err != nil {
-				t.Fatalf("%s: %v", path, err)
+		t.Run(c.name, func(t *testing.T) {
+			base := t.TempDir()
+			root := filepath.Join(base, "TREE")
+			for _, d := range []string{filepath.Join(root, "sub", "deep"), filepath.Join(base, "OUTSIDE", "child")} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if got := slices.Sorted(maps.Keys(o.p.opt.Skip)); !slices.Equal(got, want) {
-				t.Errorf("%s (portable %v): left out %q, want %q", path, portable, got, want)
+			if err := os.Symlink(filepath.Join("..", "OUTSIDE", "child"), filepath.Join(root, "link")); err != nil {
+				t.Skipf("no symbolic links here: %v", err)
 			}
-		}
+			if err := os.Symlink(filepath.Join("..", "TREE", "sub", "deep"), filepath.Join(base, "OUTSIDE", "back")); err != nil {
+				t.Fatal(err)
+			}
+			want := c.posix
+			if runtime.GOOS == "windows" {
+				want = c.win
+			}
+			// Where a write through the path lands: the key want names.
+			path := c.path(base)
+			if err := os.WriteFile(path, []byte("probe"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var landed []string
+			for _, k := range []string{"rows.jsonl", "sub/rows.jsonl"} {
+				if b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(k))); err == nil && string(b) == "probe" {
+					landed = append(landed, k)
+				}
+			}
+			if !slices.Equal(landed, want) {
+				t.Fatalf("%s: a write landed at %q in the tree; the test wants %q", path, landed, want)
+			}
+			for _, portable := range []bool{false, true} {
+				o := pruneOpen(t, root, Options{Portable: portable}).(*opened)
+				if err := o.Exclude(path); err != nil {
+					t.Fatalf("%s: %v", path, err)
+				}
+				if got := slices.Sorted(maps.Keys(o.p.opt.Skip)); !slices.Equal(got, want) {
+					t.Errorf("%s (portable %v): left out %q, want %q", path, portable, got, want)
+				}
+			}
+		})
 	}
 }
 
