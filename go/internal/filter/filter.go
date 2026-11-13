@@ -9,10 +9,10 @@
 // list). A row is kept when there is no include rule or one of them
 // (glob or regex) matches, no exclude matches, and the other filters pass;
 // the order rules are given in does not matter. Filters reduce the rows
-// emitted, not the requests made, except that includes sharing a literal
-// prefix narrow the listed prefix (NarrowPrefix). A filtered dataset says
-// so in its manifest (coverage.filters), and a reader that needs a whole
-// source refuses it.
+// emitted. Includes sharing a literal prefix narrow the listed prefix
+// (NarrowPrefix); recursive excludes can prune local directory traversal
+// (PruneDirectories). A filtered dataset says so in its manifest
+// (coverage.filters), and a reader that needs a whole source refuses it.
 //
 // Regular expressions are Go's (RE2), not Java's: the syntax is largely
 // shared, but backreferences, lookaround, possessive quantifiers and

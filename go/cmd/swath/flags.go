@@ -118,10 +118,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",
 		Long: "Matched against the key below SOURCE: with a '/' from SOURCE's root (logs/*.gz), without one the last segment at any depth (*.gz). " +
-			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix. Filters keep or drop rows; they do not prune the walk."})
+			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix. Filters select rows; recursive excludes can also prune local traversal."})
 	def(source.Flag{Name: "exclude", Value: appendTo(&o.filter.Exclude), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "drop keys this glob matches (repeatable; beats any include)",
-		Long:  "Matched as --include is. dir/ drops a directory's own row, dir/** the rows below it; the walk still lists them."})
+		Long:  "Matched as --include is. dir/ drops a directory's own row, dir/** the rows below it. Local trees skip traversal below directories covered by a terminal /**; other excludes only filter rows."})
 	def(source.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
 		Usage: "keep keys this RE2 regex matches anywhere in the full key (repeatable)",
 		Long:  "The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
