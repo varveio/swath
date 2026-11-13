@@ -263,7 +263,7 @@ partial sample, or entries that could not be read). See [Exit codes](../referenc
 
 ## Environment
 
-The provider's credential variables ([Sources](../sources.md)); a resume reads them again.
+The provider's credential variables ([Sources](../sources/README.md)); a resume reads them again.
 
 ## Files
 

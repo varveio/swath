@@ -23,9 +23,8 @@ every push to `main`. Nothing about the published site is stored in a branch.
 The Markdown in `docs/` is the source of truth and stays readable on GitHub: no front matter, relative `.md`
 links, GitHub alerts and GitHub heading anchors. The build adapts it without editing it:
 
-- `docs/PAGE.md` is served at `/docs/PAGE.html`, and `docs/README.md` at `/docs/`.
-- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/`, `docs/style.md` and
-  `docs/upgrade.md`. Every other Markdown file under `docs/` is published.
+- `docs/PAGE.md` is served at `/docs/PAGE`, and a directory's `README.md` at the directory, as `/docs/`.
+- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/` and `docs/style.md`. Every other Markdown file under `docs/` is published.
 - Headings get GitHub's anchors, so `page.md#heading` links resolve on the site as they do on GitHub.
 - A link from a published page to anything outside the published set (an internals page, code, the
   repository README) is rewritten to its GitHub URL on `main`. The build prints how many it rewrote.

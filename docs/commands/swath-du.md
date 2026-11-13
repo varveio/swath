@@ -381,9 +381,9 @@ dataset's listing did not cover its scope. An interrupted `swath du` is run agai
 ## Environment
 
 `TZ` sets the time zone of the table's times; see also [swath(1)](swath.md#environment) and
-[Sources](../sources.md).
+[Sources](../sources/README.md).
 
 ## See also
 
 [swath list](swath-list.md), [swath show](swath-show.md), [Output](../output.md#du-rows),
-[Filters](../filters.md), [Sources](../sources.md)
+[Filters](../filters.md), [Sources](../sources/README.md)

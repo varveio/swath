@@ -13,7 +13,7 @@ listing again. swath reads listing metadata only; it never reads, changes or del
 - `swath du --from-dataset` totals a saved inventory again without listing.
 
 Sources: Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local or mounted
-filesystems ([what each supports](https://swath.varve.io/docs/sources.html)).
+filesystems ([what each supports](https://swath.varve.io/docs/sources/)).
 
 ## Install
 
@@ -60,7 +60,7 @@ three minutes on one 32-vCPU VM
 ## Limits worth knowing
 
 - Azure Blob Storage: flat namespaces only. An account with a hierarchical namespace (Data Lake Storage Gen2)
-  is refused ([Sources](https://swath.varve.io/docs/sources.html#azure-blob-storage)).
+  is refused ([Sources](https://swath.varve.io/docs/sources/azure.html)).
 - Only object-store runs that write a dataset resume; a directory listing, text output and `swath du` start
   over ([Stopping and resuming](https://swath.varve.io/docs/running.html#stopping-and-resuming)).
 - Windows refuses dataset runs of S3, GCS and Azure Blob and `swath resume`, for lack of directory sync;
@@ -74,7 +74,7 @@ The documentation is at [swath.varve.io](https://swath.varve.io/):
 [Start here](https://swath.varve.io/docs/start-here.html),
 [Install](https://swath.varve.io/docs/install.html),
 [Your first inventory](https://swath.varve.io/docs/first-inventory.html),
-[Sources](https://swath.varve.io/docs/sources.html),
+[Sources](https://swath.varve.io/docs/sources/),
 [Commands](https://swath.varve.io/docs/commands/swath.html),
 [Dataset](https://swath.varve.io/docs/dataset.html) and
 [Troubleshooting](https://swath.varve.io/docs/troubleshooting.html).
