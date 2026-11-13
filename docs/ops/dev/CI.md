@@ -105,12 +105,14 @@ the docs tier alone: `go-lint`, `scripts` and `site.yml` as on every event, and 
 those tests instead of the main module's race shards, non-race tier, builds, fixtures and
 cross-OS legs. A docs rewrite lands as many such pull requests, and every one of them used to pay for
 the whole suite. The tier is safe to select by path only because its membership is enforced rather
-than listed: a test reads a page through `docs.Path`, which fails any test not named `TestDocs*`, and
-`go test ./docs` fails a test file that reaches `docs/` around it; `go-docs` runs `TestDocs*` in the
+than listed: a test reads a page through `docs.Path`, which fails any test not named `TestDocs*` and
+any page under the light paths; `go test ./docs` fails a Go file that names a path under `docs/`
+around it, or that imports the `docs` package outside a test; `go-docs` runs `TestDocs*` in the
 packages whose tests import the `docs` package ([docs tier](../../internals/testing.md#docs-tier)).
-Any other file under `docs/` (the `docs` package's Go files, data such as the provider evidence) still
-selects main, and a page beside any main-module input selects main as before, whose race shards run
-the same tests. Main, dispatch and full-scope pull requests run `go-docs` as well.
+Other files under `docs/` keep their selection: the `docs` package's Go files and data such as the
+provider evidence or a new file type select main, and files under the light `docs/assets/` and
+`docs/ops/` select nothing, as their pages do. A page beside any main-module input selects main as
+before, whose race shards run the same tests. Main, dispatch and full-scope pull requests run `go-docs` as well.
 
 The provider evidence the replay fixtures are written from selects main and the fixture tier. An absent/zero base or empty diff selects full validation; a failed diff is an error. Both
 sides of renames are considered.

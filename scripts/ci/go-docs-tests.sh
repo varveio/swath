@@ -2,8 +2,9 @@
 # The docs tier (ci.yml `go-docs`): the main module's tests that read pages under docs/, run at the
 # repository root. They are the tests named TestDocs* (docs.TestPrefix) in the packages whose tests
 # import github.com/varveio/swath/docs: docs.Path refuses any other test name, and
-# docs/readers_test.go refuses a test file that reads docs/ without docs.Path, so the two lists
-# cannot drift from the code. `go test ./docs` (links, anchors, that guard) runs in go-lint.
+# docs/readers_test.go refuses a Go file that names a path under docs/ and a regular (non-test) file
+# that imports the docs package, so the selection cannot drift from the code. `go test ./docs`
+# (links, anchors, those guards) runs in go-lint.
 #
 #   go-docs-tests.sh   list the packages, run their TestDocs* tests, fail on a skip or a package
 #                      that runs none
@@ -12,8 +13,13 @@ set -euo pipefail
 module=$(go list -m)
 helper="$module/docs"
 pattern='^TestDocs'
-mapfile -t packages < <(go list -f '{{.ImportPath}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... |
-  awk -v helper="$helper" '{ for (i = 2; i <= NF; i++) if ($i == helper) { print $1; next } }')
+# Captured first, so a failing go list fails the script instead of selecting fewer packages.
+imports=$(go list -f '{{.ImportPath}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./...)
+selected=$(awk -v helper="$helper" '{ for (i = 2; i <= NF; i++) if ($i == helper) { print $1; next } }' <<<"$imports")
+packages=()
+if [ -n "$selected" ]; then
+  mapfile -t packages <<<"$selected"
+fi
 if [ "${#packages[@]}" -eq 0 ]; then
   echo "no package's tests import $helper" >&2
   exit 1

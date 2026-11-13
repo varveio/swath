@@ -116,16 +116,23 @@ exact commit; a green PR or mere ancestry in main is insufficient.
 ### Docs tier
 
 A pull request that changes only pages under `docs/`, alone or with the light files above, runs `go-lint`
-(the license headers and `go test ./docs`: links, anchors and the guard below), `scripts` (whose
-provider-conformance tests read `docs/replay-provider-*`), `site.yml`, and `go-docs`: the tests that read
+(the license headers and `go test ./docs`: links, anchors and the guards below), `scripts` (whose
+provider-conformance tests read `docs/replay-provider-ledger.json` and
+`docs/internals/replay-provider-conformance.md`), `site.yml`, and `go-docs`: the tests that read
 pages, without the race shards, the non-race tier, the builds, the fixtures or the cross-OS legs. Those
 tests are named `TestDocs*` (`docs.TestPrefix`) and reach a page only through `docs.Path(t, "commands/swath-list.md")`.
-`docs.Path` fails a test of any other name, and `docs/readers_test.go` fails a test file anywhere in the
-repository that names the directory itself (`"../../docs/..."`, or `"docs"` in a path join) other than for
-the provider evidence. [`scripts/ci/go-docs-tests.sh`](../../scripts/ci/go-docs-tests.sh) runs
-`go test -run '^TestDocs'` over the packages whose tests import `github.com/varveio/swath/docs`, found with
-`go list`, and fails when one of them runs no such test or a test skips. No list names the tests, so a new
-test that reads a page joins the tier by its name, and the full suite fails it until it has that name.
+`docs.Path` fails a test of any other name, and a page under the light paths (`docs.Unread`, which
+`scripts/ci/test-ci-policy.py` holds equal to the policy's `LIGHT_DOCS`): a change there selects no Go
+test, so no test may read one. `docs/readers_test.go` fails any Go file in the repository that names a path
+under `docs/` in a string literal (`"../../docs/x.md"`, `"docs/reference/x.md"`, or `"docs"` passed as a
+path element), except the provider evidence `docs/replay-provider-*`, and any regular (non-test) file that
+imports the `docs` package, since a helper calling `docs.Path` would hide its callers from discovery. Its
+`TestViolations` table holds the snippets the guard accepts and rejects.
+[`scripts/ci/go-docs-tests.sh`](../../scripts/ci/go-docs-tests.sh) runs `go test -run '^TestDocs'` over
+the packages whose tests import `github.com/varveio/swath/docs`, found with `go list`, and fails when
+`go list` fails, when no package qualifies, when one of them runs no such test, or when a test skips. No
+list names the tests, so a new test that reads a page joins the tier by its name, and the full suite fails
+it until it has that name.
 The tests are in `cmd/swath` (option blocks, command table and synopses, log events, the refusals
 `docs/troubleshooting.md` quotes), `internal/listing` (`docs/reference/run-report.md`) and
 `internal/source/s3` (`docs/internals/counters.md`). Locally, `./scripts/ci/go-docs-tests.sh` from the root
