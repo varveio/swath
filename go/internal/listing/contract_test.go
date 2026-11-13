@@ -75,11 +75,9 @@ func checkContract(t testing.TB, out string) []string {
 		if int64(len(b)) != p.Bytes || hex.EncodeToString(sum[:]) != p.SHA256 {
 			t.Fatalf("part %d: bytes or sha256 differ from the manifest", i)
 		}
-		f, err := os.Open(filepath.Join(out, p.Path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		pf, err := pq.OpenFile(f, int64(len(b)))
+		// Read from the bytes already read: no handle is left open when a
+		// check below fails (TestCheckContractRefuses fails it on purpose).
+		pf, err := pq.OpenFile(bytes.NewReader(b), int64(len(b)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +105,6 @@ func checkContract(t testing.TB, out string) []string {
 		r := pq.NewReader(pf)
 		n, _ := r.ReadRows(rows)
 		r.Close()
-		f.Close()
 		first := len(keys)
 		for _, row := range rows[:n] {
 			keys = append(keys, string(row[0].ByteArray()))
