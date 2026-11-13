@@ -115,6 +115,13 @@ Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#rea
 A dataset run of an object store stopped by a signal (130, 143), `--max-duration` (124), `--stall-timeout`
 (75) or a full disk (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
+A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
+statistics say `no file written`. After `--max-duration` the last line says which applies:
+
+```text
+swath: deadline: --max-duration reached (swath resume inv continues it)
+swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)
+```
 
 On Windows, journaled dataset runs of S3, GCS and Azure Blob sources are refused for both local and
 bucket destinations: a bucket destination still keeps its journal in a local `--work-dir`, whose

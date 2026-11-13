@@ -1054,6 +1054,9 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	switch {
 	case err != nil:
 		err = explain(err)
+		if out.Class == listing.ClassDeadline {
+			err = deadlineAdvice(err, out.Resumable, dir)
+		}
 		if failing != "" {
 			err = fmt.Errorf("%w%s", err, failing)
 		}
@@ -1125,6 +1128,15 @@ func explain(err error) error {
 		return &credentialRefusal{error: err, line: line}
 	}
 	return err
+}
+
+// deadlineAdvice says what follows a run --max-duration stopped: a resume,
+// or, for a run without a journal (text, swath du, a local tree), a new run.
+func deadlineAdvice(err error, resumable bool, dir string) error {
+	if resumable {
+		return fmt.Errorf("%w (swath resume %s continues it)", err, dir)
+	}
+	return fmt.Errorf("%w (it cannot be resumed: run it again with a longer --max-duration, or without one)", err)
 }
 
 // credentialRefusal is a credential failure that will not pass, shown as

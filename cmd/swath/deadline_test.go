@@ -125,8 +125,8 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	// a shared CI runner took 1.2 s for them) before over twice the stall
 	// timeout of empty pages.
 	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "6s", "--report", report), io.Discard, false)
-	if c := exitCode(t, err); c != exitDeadline {
-		t.Fatalf("exit %d (%v), want %d", c, err, exitDeadline)
+	if c := exitCode(t, err); c != exitDeadline || !strings.HasSuffix(err.Error(), "--max-duration reached (swath resume "+dir+" continues it)") {
+		t.Fatalf("exit %d (%v), want %d naming swath resume", c, err, exitDeadline)
 	}
 	if d := time.Duration(s.latestNs.Load() - s.firstNs.Load()); d < 2*stall || s.fresh.Load() < 100 {
 		t.Fatalf("%d fresh empty pages over %s, not over twice the stall timeout", s.fresh.Load(), d)
@@ -162,6 +162,30 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
+	}
+}
+
+// TestDeadlineWithoutJournal: a run --max-duration stops that keeps no
+// journal (a text file, a local tree's dataset) says to run it again, and
+// the statistics do not count the text file it discarded as written.
+// Before, they said "1 file · N written" and the error line stopped at
+// "--max-duration reached".
+func TestDeadlineWithoutJournal(t *testing.T) {
+	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	src := localSource(t)
+	const advice = "swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)\n"
+	file := filepath.Join(t.TempDir(), "rows.tsv")
+	for _, out := range []string{file, filepath.Join(t.TempDir(), "ds")} {
+		stderr.Reset()
+		code := conclude(run(context.Background(), []string{src, "--max-duration", "1ns", "-o", out, "--stats", "--no-progress"}, io.Discard, false))
+		got := stderr.String()
+		if code != exitDeadline || !strings.HasSuffix(got, advice) || out == file && !strings.Contains(got, "\n  no file written") {
+			t.Fatalf("-o %s: exit %d, stderr %q", out, code, got)
+		}
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("the text file was kept: %v", err)
 	}
 }
 

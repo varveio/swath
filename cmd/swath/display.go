@@ -598,8 +598,10 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	}
 	var out []string
 	written := r.Output.OutputBytes
-	if t := r.Output.Text; t != nil && t.Destination != "-" {
+	if t := r.Output.Text; t != nil && t.Destination != "-" && o.Status == listing.StatusWritten {
 		out, written = append(out, "1 file"), t.Bytes
+	} else if t != nil && t.Destination != "-" {
+		out, written = append(out, "no file written"), 0 // a stopped run discards its file
 	} else if parts := int64(r.Output.PartsWritten + r.Output.PartsRetained); parts > 0 {
 		out = append(out, count(parts)+" "+plural(parts, "part", "parts"))
 	}
