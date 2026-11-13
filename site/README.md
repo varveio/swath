@@ -12,7 +12,6 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | Path | What it is |
 | --- | --- |
 | `index.md` | The home page, served at `/`. |
-| `404.md` | The page for a missing address. VitePress renders it in the browser. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
 | `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |

@@ -151,8 +151,8 @@ TERMINOLOGY_ALLOW: list[tuple[str, str, str, str]] = [
 A11Y_MAIN_EXEMPT = {"index.html"}
 
 # VitePress writes 404.html with an empty #app on purpose: Pages serves it for every missing
-# URL, so it is rendered in the browser (from site/404.md, inside the theme's layout and its
-# skip link). There is no static markup here to hold to the landmark and skip-link rules.
+# URL, so it is rendered in the browser (the theme's not-found page, inside its layout and skip
+# link). There is no static markup here to hold to the landmark and skip-link rules.
 A11Y_CLIENT_RENDERED = {"404.html"}
 
 # --------------------------------------------------------------------------------------

@@ -116,7 +116,6 @@ export default defineConfig({
   srcExclude,
   rewrites: {
     'site/index.md': 'index.md',
-    'site/404.md': '404.md',
     'docs/README.md': 'docs/index.md',
   },
   outDir: '.vitepress/dist',
@@ -155,6 +154,13 @@ export default defineConfig({
     ],
     socialLinks: [{ icon: 'github', link: GITHUB }],
     search: { provider: 'local' },
+    // An unknown address is rendered in the browser by the theme's not-found page.
+    notFound: {
+      title: 'Page not found',
+      quote: 'There is no page at this address. Start from the home page, or search for a command, an option or an error message.',
+      linkLabel: 'Go to the home page',
+      linkText: 'Go to the home page',
+    },
     editLink: {
       pattern: `${GITHUB}/edit/main/:path`,
       text: 'Edit this page on GitHub',

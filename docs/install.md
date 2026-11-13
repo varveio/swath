@@ -29,25 +29,26 @@ Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` 
 
 ### Verify and install
 
-On Linux, with the [GitHub CLI](https://cli.github.com/) and [cosign](https://docs.sigstore.dev/):
+On Linux, with the [GitHub CLI](https://cli.github.com/) and [cosign](https://docs.sigstore.dev/). The
+commands are chained with `&&`, so a failed check stops them before anything is extracted or installed:
 
 ```bash
 VERSION=0.4.0-rc.2
 ARCHIVE=swath-$VERSION-linux-amd64.tar.gz
-gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*'
-
+gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
-sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify "$ARCHIVE" --repo varveio/swath
-
-tar -xzf "$ARCHIVE"
-install -m 755 "swath-$VERSION-linux-amd64/swath" ~/.local/bin/
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS &&
+sha256sum --check --ignore-missing SHA256SUMS &&
+gh attestation verify "$ARCHIVE" --repo varveio/swath &&
+tar -xzf "$ARCHIVE" &&
+mkdir -p ~/.local/bin &&
+install -m 755 "swath-$VERSION-linux-amd64/swath" ~/.local/bin/ &&
 swath --version
 ```
 
-The cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive
+`~/.local/bin` must be on your `PATH` for the last line, and for `swath` to run without its full path. The
+cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive
 matches it, and the attestation records the build that produced it. `swath --version` prints the version and
 the commit it was built from:
 
@@ -57,7 +58,8 @@ swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
 
 Every run report carries the same in `build`; keep it with any result you may need to investigate.
 
-On macOS, `shasum -a 256 ARCHIVE` computes the hash to compare with its line in `SHA256SUMS`. The macOS
+On macOS, `shasum -a 256 ARCHIVE` computes the hash to compare with its line in `SHA256SUMS`; if they differ,
+delete the archive rather than extract it. The macOS
 binaries are not yet signed with an Apple Developer ID or notarized
 ([#420](https://github.com/varveio/swath/issues/420)), so Gatekeeper refuses a binary downloaded with a
 browser. After verifying, clear the quarantine attribute (`darwin-amd64` on Intel):
@@ -68,7 +70,8 @@ xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-arm64/swath
 
 A download with `gh` or `curl` carries no quarantine attribute, and `xattr` then reports "No such xattr".
 
-On Windows, PowerShell's `Get-FileHash ARCHIVE -Algorithm SHA256` computes the hash.
+On Windows, PowerShell's `Get-FileHash ARCHIVE -Algorithm SHA256` computes the hash; again, extract the
+archive only if it matches its line in `SHA256SUMS`.
 
 ## Container images
 
@@ -79,9 +82,18 @@ docker run --rm -v "$PWD:/data:ro" ghcr.io/varveio/swath:0.4.0-rc.2 du -d 1 /dat
 ```
 
 The image `ghcr.io/varveio/swath:0.4.0-rc.2` is distroless, with no shell; its entrypoint is
-`/opt/swath/swath` and it runs as user `65532:65532`. Mount a directory that user can write for `-o`, and pass
-cloud credentials through the environment or a read-only mount under `/home/nonroot`, for example
-`-v ~/.aws:/home/nonroot/.aws:ro`. A release candidate publishes only its own tag, never `latest`. Pin the
+`/opt/swath/swath` and it runs as user `65532:65532`, which cannot write your directories or read your
+`0600` credential files. Run it as yourself instead, and point the AWS SDK at the mounted files:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v ~/.aws:/aws:ro -e AWS_SHARED_CREDENTIALS_FILE=/aws/credentials -e AWS_CONFIG_FILE=/aws/config \
+  -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0-rc.2 \
+  list s3://bucket/prefix/ -o /out/inventory
+```
+
+Credentials in the environment work too (`-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e
+AWS_SESSION_TOKEN`). A release candidate publishes only its own tag, never `latest`. Pin the
 image digest for runs that must use the same image; the image signature and provenance checks are in
 [RELEASING.md](../RELEASING.md#verifying-a-release).
 
