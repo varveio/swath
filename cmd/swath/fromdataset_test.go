@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -75,7 +76,11 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, extra := range [][]string{nil, {"--allocated"}, {"--count-links-once"}, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}} {
+	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}}
+	if runtime.GOOS != "windows" { // Windows reads no allocated bytes, link count or inode
+		extras = append(extras, []string{"--allocated"}, []string{"--count-links-once"})
+	}
+	for _, extra := range extras {
 		for depth := range 4 {
 			for _, sort := range []string{"name", "size"} {
 				for _, format := range []string{"tsv", "jsonl", "table"} {
@@ -91,16 +96,19 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err != nil || !strings.Contains(got, "\t2\t1\t7\t0\t") || !strings.HasSuffix(got, "\ta/b/\n") || strings.Count(got, "\n") != 3 {
 		t.Fatalf("PREFIX a/: %v\n%s", err, got)
 	}
-	// Stderr says it is the dataset, its source and coverage, not a live
-	// listing; JSONL rows carry it.
-	if s := stderr.String(); !strings.Contains(s, "swath: totals of the dataset "+ds+", not a live listing: "+root+" as listed ") || !strings.Contains(s, "; complete\n") {
+	// Stderr says it is the dataset, its source (as its manifest records
+	// the root) and coverage, not a live listing; JSONL rows carry it.
+	var m dataset.Manifest
+	readJSON(t, filepath.Join(ds, dataset.ManifestName), &m)
+	src := m.Source.URI
+	if s := stderr.String(); src == "" || !strings.Contains(s, "swath: totals of the dataset "+ds+", not a live listing: "+src+" as listed ") || !strings.Contains(s, "; complete\n") {
 		t.Fatalf("stderr: %s", s)
 	}
 	got, err = duRun(t, "--from-dataset", ds, "--format", "jsonl")
 	var row struct {
 		Dataset provenance `json:"dataset"`
 	}
-	if err != nil || json.Unmarshal([]byte(got), &row) != nil || row.Dataset.Path != ds || *row.Dataset.Source != root || !*row.Dataset.Complete ||
+	if err != nil || json.Unmarshal([]byte(got), &row) != nil || row.Dataset.Path != ds || *row.Dataset.Source != src || !*row.Dataset.Complete ||
 		row.Dataset.SchemaID != "swath/local-entries/v1" || row.Dataset.ListingFinishedAt == nil {
 		t.Fatalf("JSONL: %v %s", err, got)
 	}
@@ -136,7 +144,7 @@ func TestDuFromDatasetObjectStore(t *testing.T) {
 	store := []string{"--endpoint-url", end, "--anonymous"}
 	ds, logs := filepath.Join(t.TempDir(), "ds"), filepath.Join(t.TempDir(), "logs")
 	for _, l := range []struct{ src, dir string }{{"s3://bkt", ds}, {"s3://bkt/logs/", logs}} {
-		if err := run(context.Background(), append([]string{l.src, "-o", l.dir, "--no-stats"}, store...), io.Discard, false); err != nil {
+		if err := run(context.Background(), append(append([]string{l.src, "-o", l.dir, "--no-stats"}, store...), unjournaled...), io.Discard, diagList); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -444,7 +452,7 @@ func TestDuFromDatasetManyParts(t *testing.T) {
 	end := s3test.Bucket(t, s3test.Keys(3000, 7))
 	store := []string{"--endpoint-url", end, "--anonymous"}
 	ds := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"s3://bkt", "-o", ds, "--part-size", "4KiB", "--no-stats"}, store...), io.Discard, false); err != nil {
+	if err := run(context.Background(), append(append([]string{"s3://bkt", "-o", ds, "--part-size", "4KiB", "--no-stats"}, store...), unjournaled...), io.Discard, diagList); err != nil {
 		t.Fatal(err)
 	}
 	var m dataset.Manifest
