@@ -83,7 +83,7 @@ _swath_du() {
     _arguments \
         '(-d --depth)'{-d+,--depth=}'[also total each prefix down to N levels below SOURCE (0: the total)]:N: ' \
         '--allocated[local: total the files'\'' allocated bytes instead of their apparent size]' \
-        '--count-links-once[local: count a file with several hard links once, as du does]' \
+        '(-l --count-links)'{-l,--count-links}'[local: count a file with several hard links under each of its names]' \
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \

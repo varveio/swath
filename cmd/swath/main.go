@@ -534,10 +534,10 @@ type options struct {
 	partMaxRows            int64
 	seedFrom               string
 	// swath du's per-prefix totals: --depth, --max-prefixes, and the
-	// local --allocated, --count-links-once and --max-inodes; totals is
-	// their output, resolved.
+	// local --allocated, --count-links and --max-inodes; totals is their
+	// output, resolved.
 	depth, maxPrefixes, maxInodes int
-	allocated, linksOnce          bool
+	allocated, countLinks         bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
 	// A bucket -o (gs://, s3:// or az://): its work directory, its
@@ -1118,7 +1118,7 @@ func explain(err error) error {
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
 	case errors.As(err, &le) && le.Inodes:
-		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every link without --count-links-once)", err)
+		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every name with --count-links)", err)
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	case errors.As(err, &ce) && ce.CredentialRefused():

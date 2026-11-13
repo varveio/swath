@@ -102,8 +102,8 @@ touching the output. An object store's factory also gives `KeyPrefix(root)`, the
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
 are relative to the root. `WithPrefix(root, prefix)` (S3 and GCS) names another prefix of the same bucket, through
 which includes sharing a literal prefix narrow the listed prefix; Azure has none, and lists its root as given.
-`CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` or
-`--count-links-once` with `--metadata names`) before the source opens, and `CheckFilter` (the local provider)
+`CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` with `--metadata names`; it turns off counting hard links once there, the names tier reading no
+link counts) before the source opens, and `CheckFilter` (the local provider)
 filters on values its options do not read (sizes and times with `--metadata names`, storage classes).
 
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by

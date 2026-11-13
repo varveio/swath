@@ -174,8 +174,7 @@ Read the totals with care:
   {"depth":0,"prefix":"","objects":4,"dirs":3,"size":0,"unsized":4,"last_modified":null}
   ```
 
-- **`--allocated` renames the field.** The bytes are then `allocated_size` (blocks on disk, as `du` reports by
-  default), not `size`; a script that reads `size` finds no such field:
+- **`--allocated` renames the field.** The bytes are then `allocated_size` (the files' blocks on disk), not `size`; a script that reads `size` finds no such field:
 
   ```text
   $ swath du /data/photos --allocated --format jsonl

@@ -197,13 +197,18 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	if err != nil {
 		return err
 	}
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: o.linksOnce}
+	// A local tree's file with several hard links counts once, as du
+	// counts it, unless --count-links.
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes}
 	if o.allocated {
 		opt.BytesColumn = totals.AllocatedBytes
 	}
-	if pf, err := registry.Lookup(root); err == nil && pf.CheckTotals != nil {
-		if err := pf.CheckTotals(o.sources[pf.Scheme], opt); err != nil {
-			return err
+	if pf, err := registry.Lookup(root); err == nil {
+		opt.LinksOnce = pf.Scheme == "" && !o.countLinks
+		if pf.CheckTotals != nil {
+			if err := pf.CheckTotals(o.sources[pf.Scheme], &opt); err != nil {
+				return err
+			}
 		}
 	}
 	o.totals = &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}

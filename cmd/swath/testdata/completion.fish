@@ -120,7 +120,7 @@ complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l s3-du
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l s3-fetch-owner -d 'fill owner_id and owner_display_name'
 complete -c swath -n '__swath_cmd "du"' -l depth -s d -x -d 'also total each prefix down to N levels below SOURCE (0: the total)'
 complete -c swath -n '__swath_cmd "du"' -l allocated -d 'local: total the files\' allocated bytes instead of their apparent size'
-complete -c swath -n '__swath_cmd "du"' -l count-links-once -d 'local: count a file with several hard links once, as du does'
+complete -c swath -n '__swath_cmd "du"' -l count-links -s l -d 'local: count a file with several hard links under each of its names'
 complete -c swath -n '__swath_cmd "du"' -l sort -x -a 'name size' -d 'order prefixes by name, or by size, largest first'
 complete -c swath -n '__swath_cmd "du"' -l max-prefixes -x -d 'fail rather than hold more than N distinct prefixes'
 complete -c swath -n '__swath_cmd "du"' -l max-inodes -x -d 'local: the most hard-linked files to remember'

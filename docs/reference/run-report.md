@@ -125,7 +125,7 @@ touched). `totals` is a
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
 `objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
 markers), `unsized` (objects without a value in the bytes column: the sizes are then unknown), `links_once`
-(`--count-links-once`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
+(a local tree's hard-linked files counted once: without `--count-links` and `--metadata names`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
 them, each counted once) and `max_inodes` (their cap).
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's

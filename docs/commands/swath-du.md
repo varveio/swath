@@ -36,13 +36,16 @@ The bytes are the objects' sizes as listed: not the storage consumed, replicas o
 directories are counted in `dirs`, never as objects, and their own size is in no total. With `--all-versions`
 every version is an object; an S3 delete marker adds its prefixes but no object, bytes or time.
 
-On a local tree, `--allocated` totals the files' allocated blocks (`st_blocks` × 512, what `du` reports by
-default; a sparse file counts its blocks, not its length) instead of their apparent size, and the field is then
-`allocated_size`. `--count-links-once` counts a file with several hard links once, as `du` does (swath's
-default counts each name, as `du -l`): its object and bytes go to the prefixes of its first name in byte order,
-so the totals do not depend on which name the walk reached first. It remembers each such inode, up to
-`--max-inodes` (1,000,000 by default), past which the run fails (exit 1, cause `inode_limit`). Both need each
-entry's stat, so `--metadata names` refuses them.
+On a local tree, `--allocated` totals the files' allocated blocks (`st_blocks` × 512; a sparse file counts its
+blocks, not its length) instead of their apparent size, and the field is then `allocated_size`. A directory's own
+blocks are in no total, so a tree's total is below `du -sB1`'s by them. `--allocated` needs each entry's stat, so
+`--metadata names` refuses it.
+
+A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
+its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
+each such inode, up to `--max-inodes` (1,000,000 by default), past which the run fails (exit 1, cause
+`inode_limit`). `-l`, `--count-links` counts every name, as `du -l`. `--metadata names` reads no link counts, so
+every name counts there.
 
 The [filters](../filters.md) apply before counting, to every row: on a local tree directories too, so
 `--min-size 1M` keeps the large files and drops the directories, whose own size is small.
@@ -64,9 +67,12 @@ Totals:
   -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
                                 A prefix ends at a '/'; each includes what is below it, as du.
       --allocated             local: total the files' allocated bytes instead of their apparent size
-                                st_blocks x 512, as du; a directory's own blocks are not counted.
-      --count-links-once      local: count a file with several hard links once, as du does
-                                Under the first of its names in byte order.
+                                The files' st_blocks x 512. A directory's own blocks are not
+                                counted, so a tree's total is below du's by them.
+  -l, --count-links           local: count a file with several hard links under each of its names
+                                By default such a file counts once, as du counts it, under the first
+                                of its names in byte order. The names metadata tier reads no links:
+                                every name counts there.
       --sort name|size        order prefixes by name, or by size, largest first (default name)
                                 By size the prefixes below each parent are ordered, each still above
                                 its own; the total keeps its place (last in the table, first in TSV
@@ -76,8 +82,8 @@ Totals:
                                 (about 150 bytes a prefix); it bounds memory, never the objects
                                 counted.
       --max-inodes N          local: the most hard-linked files to remember (default 1000000)
-                                With --count-links-once. Raise it for a tree of more hard-linked
-                                files when memory allows (about 100 bytes each).
+                                Unless --count-links. Raise it for a tree of more hard-linked files
+                                when memory allows (about 100 bytes each).
 
 Output:
       --format auto|table|tsv|jsonl
@@ -285,10 +291,10 @@ Read the totals of a bucket's first two levels as JSONL:
 swath du gs://bucket -d 2 --format jsonl
 ```
 
-Total what a local tree takes on disk, counting hard links once, without crossing into other filesystems:
+Total what a local tree's files take on disk, without crossing into other filesystems:
 
 ```bash
-swath du /home --allocated --count-links-once --one-file-system
+swath du /home --allocated --one-file-system
 ```
 
 Total the objects larger than 1 GiB:

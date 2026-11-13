@@ -96,8 +96,9 @@ type Factory struct {
 	// "a local directory" for local paths).
 	Usage string
 	// CheckTotals, if set, refuses per-prefix totals (swath du) that the
-	// provider's options value cannot give, before the source is opened.
-	CheckTotals func(options any, t totals.Options) error
+	// provider's options value cannot give, before the source is opened,
+	// and turns off in t a default its options do not read.
+	CheckTotals func(options any, t *totals.Options) error
 	// CheckFilter, if set, refuses filters on columns the provider's
 	// options do not fill (filter.Spec.Reads), before the source is opened.
 	CheckFilter func(options any, f *filter.Spec) error

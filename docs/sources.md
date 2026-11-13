@@ -225,7 +225,7 @@ symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never f
 | `--one-file-system` | do not walk into a directory on another device (a mount point), as `du -x` and `find -xdev`; its row is kept |
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole tree (`coverage.filters` holds `no_dirs`
-or `one_filesystem`). `--one-file-system`, `--allocated` and `--count-links-once` need each entry's stat:
+or `one_filesystem`). `--one-file-system` and `--allocated` need each entry's stat:
 they are refused with `--metadata names`.
 
 The output may not be the listed tree itself or contain it. A new or empty directory inside the tree is

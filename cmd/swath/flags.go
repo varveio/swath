@@ -70,10 +70,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "A prefix ends at a '/'; each includes what is below it, as du."})
 	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: total the files' allocated bytes instead of their apparent size",
-		Long:  "st_blocks x 512, as du; a directory's own blocks are not counted."})
-	def(source.Flag{Name: "count-links-once", Value: source.Switch(&o.linksOnce), Group: source.GroupTotals, Commands: []string{cmdDu},
-		Usage: "local: count a file with several hard links once, as du does",
-		Long:  "Under the first of its names in byte order."})
+		Long:  "The files' st_blocks x 512. A directory's own blocks are not counted, so a tree's total is below du's by them."})
+	def(source.Flag{Name: "count-links", Short: "l", Value: source.Switch(&o.countLinks), Group: source.GroupTotals, Commands: []string{cmdDu},
+		Usage: "local: count a file with several hard links under each of its names",
+		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier reads no links: every name counts there."})
 	o.sortBy = sortName
 	def(source.Flag{Name: "sort", Value: source.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "order prefixes by name, or by size, largest first",
@@ -83,7 +83,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long: "Raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted."})
 	def(source.Flag{Name: "max-inodes", Value: source.Count(&o.maxInodes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxInodes),
 		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
-		Long: "With --count-links-once. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
+		Long: "Unless --count-links. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
 
 	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
@@ -253,7 +253,7 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 }
 
 // localTotalsFlags are the totals' flags only a local source takes.
-var localTotalsFlags = []string{"allocated", "count-links-once", "max-inodes"}
+var localTotalsFlags = []string{"allocated", "count-links", "max-inodes"}
 
 // undoName is the other spelling of switch name: --no-x for --x, --x for
 // --no-x.

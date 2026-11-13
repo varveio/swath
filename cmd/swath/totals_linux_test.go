@@ -159,10 +159,13 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 	return sums
 }
 
-// TestDuMatchesLstat: swath du over a real tree, with each combination of
-// --allocated and --count-links-once, at several depths, equals the
+// TestDuMatchesLstat: swath du over a real tree, with and without
+// --allocated, counting a hard-linked file once (the default, as du) or
+// under every name (-l, --count-links), at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
-// in JSONL (a name that is not UTF-8 as prefix_base64).
+// in JSONL (a name that is not UTF-8 as prefix_base64). Before, every name
+// counted by default. With --metadata names, which
+// reads no links, every name counts.
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
@@ -173,8 +176,8 @@ func TestDuMatchesLstat(t *testing.T) {
 					if allocated {
 						args = append(args, "--allocated")
 					}
-					if once {
-						args = append(args, "--count-links-once")
+					if !once {
+						args = append(args, []string{"--count-links", "-l"}[depth%2])
 					}
 					want := duOracle(t, root, depth, allocated, once)
 					size := "size"
@@ -259,6 +262,13 @@ func TestDuMatchesLstat(t *testing.T) {
 			}
 		}
 	}
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{root, "--metadata", "names", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if w := duOracle(t, root, 0, false, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\n0\t%d\t%d\t0\t%d\t", w.objects, w.dirs, w.objects)) {
+		t.Fatalf("--metadata names: %q, want every name of %+v", out.String(), w)
+	}
 	// The sparse file is where the two byte counts part.
 	var app, alloc bytes.Buffer
 	if err := runDu(context.Background(), []string{filepath.Join(root, "s"), "--format=tsv", "--no-stats"}, &app); err != nil {
@@ -283,12 +293,12 @@ func TestDuLocalRefusals(t *testing.T) {
 		want string
 	}{
 		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to Local sources, not to S3 sources"},
-		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to Local sources, not to GCS sources"},
+		{true, []string{"gs://bkt", "--count-links", "--depth", "1"}, "--count-links applies to Local sources, not to GCS sources"},
 		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to Local sources, not to Azure Blob sources"},
 		{true, []string{"s3://bkt", "--one-file-system"}, "--one-file-system applies to Local sources, not to S3 sources"},
 		{false, []string{"az://acct/ctr", "--one-file-system"}, "--one-file-system applies to Local sources, not to Azure Blob sources"},
 		{false, []string{root, "--allocated"}, "--allocated has no meaning for swath list"},
-		{false, []string{root, "--count-links-once"}, "--count-links-once has no meaning for swath list"},
+		{false, []string{root, "-l"}, "--count-links has no meaning for swath list"},
 		{true, []string{root, "--allocated", "--metadata", "names"}, "not with --metadata names"},
 		{true, []string{root, "--one-file-system", "--metadata", "names"}, "names metadata tier"},
 	} {
@@ -307,7 +317,7 @@ func TestDuLocalRefusals(t *testing.T) {
 	// listing stopped there.
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--allocated", "--one-file-system", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t8\t9\t") || strings.Count(out.String(), "\n") != 2 { // hard links once
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
