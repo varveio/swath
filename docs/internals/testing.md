@@ -13,7 +13,8 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 
 | Method | Proves | Trigger | Runner | Workflow / job |
 |---|---|---|---|---|
-| Headers, links, format, vet, shard check | every `.go` file's license header, `go test ./docs` (every Markdown file's relative links), `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | headers and links: always; PR: format if any module selected, main vet/shards if main selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-lint` |
+| Headers, links, format, vet, shard check | every `.go` file's license header, `go test ./docs` (every Markdown file's relative links and anchors; every test that reads `docs/` does so through `docs.Path`), `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | headers and links: always; PR: format if any module selected, main vet/shards if main selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-lint` |
+| Docs tier (`TestDocs*`) | the tests that read pages under `docs/`: the generated option, synopsis, log-event, run report and counter blocks, and the messages `docs/troubleshooting.md` quotes ([docs tier](#docs-tier)) | PR: pages under `docs/` changed and no main-module input; main, dispatch: always | ubuntu-latest | `ci.yml` `go-docs` |
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
@@ -82,7 +83,8 @@ suites for changed modules and their dependants, not a guessed subset of individ
 |---|---|
 | `reader/**` | reader and main (main imports reader via a local replacement) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
-| `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `docs/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including generated-help docs, testdata and embeds | main |
+| `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
+| Pages under `docs/` (`docs/**/*.md`) but the light ones below and the provider evidence | the [docs tier](#docs-tier) (`go-docs`) alone; with a main-module input, main instead, whose race shards run the same tests |
 | Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
 | Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
@@ -100,8 +102,8 @@ image builds and platform tests. A maintainer can add **`ci:full`** to run every
 all label events reevaluate selection, so an unrelated label change also replaces the current PR run. These heuristics cannot prove a change is platform-independent.
 Full main validation covers the configurations an ordinary PR defers.
 
-Every push to **main** and every manual **dispatch** selects all Go modules, platforms, fixtures and
-images, even for a documentation-only change. PRs use `git diff --no-renames` against the base:
+Every push to **main** and every manual **dispatch** selects all Go modules, platforms, fixtures,
+images and the docs tier, even for a documentation-only change. PRs use `git diff --no-renames` against the base:
 renames select both old and new owners, and deletions select the former owner. Missing/zero base or
 an empty diff runs full validation; an unreadable git diff fails instead of silently skipping work.
 
@@ -111,11 +113,37 @@ work is selected. Full-scope PRs and main/dispatch additionally emit **`go-full-
 selections are true, and both expanded matrices match full validation. Release requires that qualification from the main push run of its
 exact commit; a green PR or mere ancestry in main is insufficient.
 
+### Docs tier
+
+A pull request that changes only pages under `docs/`, alone or with the light files above, runs `go-lint`
+(the license headers and `go test ./docs`: links, anchors and the guards below), `scripts` (whose
+provider-conformance tests read `docs/replay-provider-ledger.json` and
+`docs/internals/replay-provider-conformance.md`), `site.yml`, and `go-docs`: the tests that read
+pages, without the race shards, the non-race tier, the builds, the fixtures or the cross-OS legs. Those
+tests are named `TestDocs*` (`docs.TestPrefix`) and reach a page only through `docs.Path(t, "commands/swath-list.md")`.
+`docs.Path` fails a test of any other name, and a page under the light paths (`docs.Unread`, which
+`scripts/ci/test-ci-policy.py` holds equal to the policy's `LIGHT_DOCS`): a change there selects no Go
+test, so no test may read one. `docs/readers_test.go` fails any Go file in the repository that names a path
+under `docs/` in a string literal (`"../../docs/x.md"`, `"docs/reference/x.md"`, or `"docs"` passed as a
+path element), except the provider evidence `docs/replay-provider-*`, and any regular (non-test) file that
+imports the `docs` package, since a helper calling `docs.Path` would hide its callers from discovery. Its
+`TestViolations` table holds the snippets the guard accepts and rejects.
+[`scripts/ci/go-docs-tests.sh`](../../scripts/ci/go-docs-tests.sh) runs `go test -run '^TestDocs'` over
+the packages whose tests import `github.com/varveio/swath/docs`, found with `go list`, and fails when
+`go list` fails, when no package qualifies, when one of them runs no such test, or when a test skips. No
+list names the tests, so a new test that reads a page joins the tier by its name, and the full suite fails
+it until it has that name.
+The tests are in `cmd/swath` (option blocks, command table and synopses, log events, the refusals
+`docs/troubleshooting.md` quotes), `internal/listing` (`docs/reference/run-report.md`) and
+`internal/source/s3` (`docs/internals/counters.md`). Locally, `./scripts/ci/go-docs-tests.sh` from the root
+runs the tier and prints its command; `UPDATE=1` with that command rewrites the generated blocks.
+
 ### Go jobs per push
 
 | Job | Runs | Runner |
 |---|---|---|
-| `go-lint` | `scripts/ci/check-spdx.sh` (every tracked `.go` file starts with the license header), `go test ./docs` (Markdown links), `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
+| `go-lint` | `scripts/ci/check-spdx.sh` (every tracked `.go` file starts with the license header), `go test ./docs` (Markdown links and anchors, and the [docs tier](#docs-tier)'s guard), `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
+| `go-docs` | `scripts/ci/go-docs-tests.sh`: `go test -count=1 -v -run '^TestDocs'` on the packages whose tests import `./docs` ([docs tier](#docs-tier)); its steps skip unless the docs tier is selected | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a selected main module, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
@@ -452,7 +480,7 @@ against `bench/s3fake`.
 | provider constructor and bounds wiring | `source/s3` `TestVersionsConstructorRefusals`; `source/gcs` `TestGenerationsConstructorRefusal`, `TestListInputBounds` (current/generation bound mapping and one omitted-end counter per request); `source/s3/client` and `source/azblob/client` `TestEndpointRefusal` checks direct client endpoint refusal |
 | journal | `journal` `TestJournalRoundTripAndTornTail`, `TestCheck` (identity table: pipeline fields, and source fields added, dropped, changed or respelled) |
 | overwrite safety | `dataset` `TestPrepareNeverDeletesTheTree`, `TestReplaceRemovesOnlyOwnEntries` |
-| command surface and report schema | `cmd/swath` `TestCLIDocFlags` (the option blocks of docs/commands/ and docs/internals/diagnostics.md are the generated `--help` groups of each command), `TestEventGolden` (docs/reference/log-events.md's events), `TestHelpGroupsCoverFlags` (every flag in exactly one help group; the Diagnostics group is exactly the flags `swath list` refuses), `TestMovedFlagsNameDiag` (each flag moved to `swath diag` is refused on `swath list` and `swath du` with exit 2 naming `swath diag`, accepted by `swath diag list`), `TestCountRefusesOutputFlags`, `TestCount`, `TestOldNamesRejected` (the names of the builds of `main` before 0.4 and Java's, `--concurrency`, `--spill-max`, `--force`, `--count-only`, `--endpoint`, `--report-format`, `--one-filesystem`, `--limiter`, `--region` and `--azblob-sas`, are unknown flags, exit 2), `TestEveryHelpExitsZero`, `TestPipedToHeadExitsZero` (`swath list ... | head` as a real process: its stdout, fd 1, a pipe closed after three lines, the process exits 0 with no stack trace and its report says `downstream_closed`; it builds the binary, and skips on Windows), `TestPercentRootIsLiteral` (a `%` in an `s3://` or `gs://` root is a byte of the prefix: `web/https%3A%2F/` lists neither `web/https:/` nor a twice-encoded form); `listing` `TestReportSchemaGolden` (`testdata/report-schema.golden`: every JSON path of the run report), `TestReportSchemaDoc` (docs/reference/run-report.md names every field), `TestProgressSchemaDoc` (and every progress.json field), `TestHistoryBounded` |
+| command surface and report schema | `cmd/swath` `TestDocsCLIFlags` (the option blocks of docs/commands/ and docs/internals/diagnostics.md are the generated `--help` groups of each command), `TestDocsLogEvents` (docs/reference/log-events.md's events), `TestHelpGroupsCoverFlags` (every flag in exactly one help group; the Diagnostics group is exactly the flags `swath list` refuses), `TestMovedFlagsNameDiag` (each flag moved to `swath diag` is refused on `swath list` and `swath du` with exit 2 naming `swath diag`, accepted by `swath diag list`), `TestCountRefusesOutputFlags`, `TestCount`, `TestOldNamesRejected` (the names of the builds of `main` before 0.4 and Java's, `--concurrency`, `--spill-max`, `--force`, `--count-only`, `--endpoint`, `--report-format`, `--one-filesystem`, `--limiter`, `--region` and `--azblob-sas`, are unknown flags, exit 2), `TestEveryHelpExitsZero`, `TestPipedToHeadExitsZero` (`swath list ... | head` as a real process: its stdout, fd 1, a pipe closed after three lines, the process exits 0 with no stack trace and its report says `downstream_closed`; it builds the binary, and skips on Windows), `TestPercentRootIsLiteral` (a `%` in an `s3://` or `gs://` root is a byte of the prefix: `web/https%3A%2F/` lists neither `web/https:/` nor a twice-encoded form); `listing` `TestReportSchemaGolden` (`testdata/report-schema.golden`: every JSON path of the run report), `TestDocsReportSchema` (docs/reference/run-report.md names every field), `TestDocsProgressSchema` (and every progress.json field), `TestHistoryBounded` |
 
 ## Oracles
 

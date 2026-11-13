@@ -28,8 +28,8 @@ coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 entries that could not be read and are missing, `filters` the rules that left rows out, `exclusions` what was left out by design
 (an output directory inside the tree). With `complete=true stop=completed unreadable=0 filters=0` the dataset covers
 the `source` and `scope` on the line above it, minus its exclusions
-([results.md](../results.md#coverage-and-unreadable-entries),
-[dataset.md](../dataset.md#the-swath-extension)).
+([Understand your results](../results.md#coverage-and-unreadable-entries),
+[The swath dataset](../dataset.md#the-swath-extension)).
 
 For the work directory of a dataset written to a bucket (`-o s3://...`, `gs://...` or `az://...` with
 `--work-dir DIR`), it prints the same summary of the manifest the run committed there, under the destination
@@ -59,8 +59,8 @@ shell line: an argument the shell would split or expand (a path with a space, a 
 single quotes, or on Windows in double quotes, so the line can be pasted as it is.
 
 `swath show` reads no rows. `swath du --from-dataset DIR` totals them per prefix
-([swath-du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
-lists ([running.md](../running.md#reading-the-output)).
+([swath du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
+lists ([Running swath](../running.md#reading-the-output)).
 
 ## Options
 
@@ -98,4 +98,4 @@ manifest it committed, under `DIR/.swath/`.
 
 ## See also
 
-[swath-list](swath-list.md), [swath-resume](swath-resume.md), [dataset.md](../dataset.md)
+[swath list](swath-list.md), [swath resume](swath-resume.md), [The swath dataset](../dataset.md)

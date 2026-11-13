@@ -18,7 +18,6 @@ MODULES = {'go': 'go.mod', 'reader': 'reader/go.mod', 'objfile': 'objfile/go.mod
 # Their links are checked by go-lint on every event, like the root prose.
 LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
 # The Go tree: the nested modules' directories, and the main module's directories and root files.
-# docs/ is the main module's (its links test and the generated CLI and report blocks).
 NESTED = ('objfile/', 'reader/')
 MAIN_DIRS = ('cmd/', 'internal/', 'bench/', 'testdata/', 'docs/')
 MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_dataset_readers.py'}
@@ -36,7 +35,7 @@ def fixture_module(path):
 
 def select(paths, event, *, force_full=False, unknown=False, build_tags=False, toolchain=False):
     out = dict.fromkeys(('go', 'reader', 'objfile', 'fixtures', 'images',
-                         'platforms', 'full'), False)
+                         'platforms', 'docs', 'full'), False)
     # Main and manual runs qualify the whole Go tree, even on a docs-only merge.
     out['full'] = event != 'pull_request' or force_full or unknown or not paths or toolchain
     for path in paths:
@@ -52,6 +51,10 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
                                   'scripts/benchmarks/'))
               or path in {'.gitignore', '.gitattributes', '.editorconfig'}):
             pass  # go-lint checks every Markdown file's links on every event
+        elif path.startswith('docs/') and path.endswith('.md'):
+            # Any other page: the tests that read pages (TestDocs*, scripts/ci/go-docs-tests.sh).
+            # Other files under docs/ stay the main module's: the docs package, and data tests read.
+            out['docs'] = True
         elif in_go_tree(path):
             # Longest module prefix owns source, tests, embeds and fixtures alike.
             if path.startswith('objfile/'):
@@ -73,8 +76,10 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
     if build_tags:
         out['platforms'] = True
     if out['full']:
-        for key in ('go', 'reader', 'objfile', 'fixtures', 'images', 'platforms'):
+        for key in ('go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs'):
             out[key] = True
+    elif out['go']:
+        out['docs'] = False  # main's race shards run the TestDocs tests with the rest
     # Reader changes already selected main above. Main's tests consume the replay fixtures.
     out['fixtures'] |= out['go']
     return out
@@ -106,7 +111,9 @@ def detect(event, base, labels):
     if not unknown:
         # Missing/unreadable git history is an error, never an empty successful selection.
         paths = git('diff', '--no-renames', '--name-only', '-z', base, 'HEAD').decode(errors='surrogateescape').split('\0')[:-1]
-        diff = git('diff', '--no-renames', '--unified=0', base, 'HEAD', '--', *GO_TREE).decode(errors='replace')
+        # Markdown builds nothing: a page quoting `//go:build` or a `go 1.x` line escalates nothing.
+        diff = git('diff', '--no-renames', '--unified=0', base, 'HEAD', '--', *GO_TREE,
+                   ':(exclude,glob)**/*.md').decode(errors='replace')
         changed_lines = [line[1:] for line in diff.splitlines()
                          if line[:1] in {'+', '-'} and not line.startswith(('+++', '---'))]
         build_tags = any(re.match(r'\s*//\s*(go:build|\+build)\b', line) for line in changed_lines)

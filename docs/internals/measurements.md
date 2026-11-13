@@ -362,7 +362,9 @@ No throttle, no retry, both counts exact. At 64 wide and the measured p50 the nb
 fake. fourcastnetgfs still sends 9 % more requests than Java (empty children on a small bucket). One run per
 tool: an observation on that VM and that hour, not a rate.
 
-**A billion live objects** (runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07). sentinel-cogs in AWS
+### A billion live objects (sentinel-cogs, 2026-11-07)
+
+Runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07. sentinel-cogs in AWS
 us-west-2 (about 1.09 billion objects), listed anonymously from one n4-highcpu-32 in GCP us-east1 with a 400 GB
 disk, arms one after another, each capped at 40 minutes; the delta+zstd build `bf5e6d52` unless named. Java's
 rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
@@ -382,6 +384,8 @@ At 1,024 workers the sorted run is bound by its output: after listing ends, the 
 Parquet part at a time, and neither a larger row budget nor more encoders moved the wall. Java's sorted run at
 the same concurrency was faster on this bucket. One run per arm, cross-cloud: an observation on that VM and
 that day.
+
+### Workers, one core and the study harness (through the fake)
 
 **Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
 medians over the lists):

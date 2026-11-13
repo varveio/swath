@@ -48,3 +48,154 @@
   --vp-button-brand-active-bg: #5bbfcf;
   --vp-home-hero-name-color: #5bbfcf;
 }
+
+/* The development-docs notice (themeConfig.devDocsNotice), fixed above the navigation. The
+   theme offsets the navigation, sidebar and content by --vp-layout-top-height. */
+html:has(.swath-dev-banner) {
+  --vp-layout-top-height: 40px;
+}
+.swath-dev-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--vp-z-index-layout-top);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0 6px;
+  flex-wrap: wrap;
+  height: var(--vp-layout-top-height);
+  padding: 0 16px;
+  background: color-mix(in srgb, var(--vp-c-brand-1) 10%, var(--vp-c-bg));
+  border-bottom: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  line-height: 18px;
+  text-align: center;
+}
+.swath-dev-banner a {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+@media (max-width: 639px) {
+  html:has(.swath-dev-banner) {
+    --vp-layout-top-height: 64px;
+  }
+}
+
+/* The home page's terminal example, in the hero's image slot: beside the text on a wide
+   screen, below it on a narrow one. */
+.VPHero.has-image .container {
+  text-align: left !important;
+}
+.VPHero.has-image .name,
+.VPHero.has-image .text,
+.VPHero.has-image .tagline {
+  margin: 0 !important;
+}
+.VPHero.has-image .actions {
+  justify-content: flex-start !important;
+}
+.VPHero .image {
+  order: 3;
+  margin: 32px 0 0;
+}
+.VPHero .image-container {
+  width: auto;
+  height: auto;
+  transform: none;
+}
+.VPHero .image-bg {
+  display: none;
+}
+@media (min-width: 960px) {
+  .VPHero .image {
+    order: 2;
+    margin: 0 0 0 32px;
+    display: flex;
+    align-items: center;
+  }
+  .VPHero .image-container {
+    width: 100%;
+  }
+}
+.swath-terminal {
+  margin: 0;
+  text-align: left;
+  width: 100%;
+  max-width: 560px;
+}
+.swath-terminal-caption {
+  margin-bottom: 8px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}
+.swath-terminal pre {
+  margin: 0;
+  padding: 16px 20px;
+  overflow-x: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: #151515;
+  color: #f0efec;
+  font-family: var(--vp-font-family-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.swath-terminal-prompt {
+  color: #46aaba;
+}
+
+/* Generated option lists are long, wide preformatted text: a code block is capped in height
+   and scrolls inside itself in both directions, so a long list does not run off the page. */
+.vp-doc div[class*='language-'] {
+  max-height: 70vh;
+  overflow: auto;
+}
+.vp-doc div[class*='language-'] pre {
+  overflow: visible;
+}
+
+/* Wide tables scroll sideways. On a narrow screen each row becomes a stack of cells, each
+   labelled with its column's header (data-label, set at build time). */
+.vp-doc table {
+  display: block;
+  overflow-x: auto;
+}
+@media (max-width: 639px) {
+  .vp-doc table,
+  .vp-doc table tbody,
+  .vp-doc table tr,
+  .vp-doc table td {
+    display: block;
+    width: 100%;
+  }
+  .vp-doc table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .vp-doc table tr {
+    border-top: 1px solid var(--vp-c-divider);
+    padding: 8px 0;
+  }
+  .vp-doc table tr:nth-child(2n) {
+    background: transparent;
+  }
+  .vp-doc table td {
+    border: none;
+    padding: 4px 12px;
+  }
+  .vp-doc table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--vp-c-text-2);
+    font-size: 12px;
+    font-weight: 600;
+  }
+}

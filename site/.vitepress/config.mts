@@ -3,14 +3,16 @@
 // GitHub: no front matter, relative `.md` links, GitHub alerts and GitHub heading anchors.
 // Everything that adapts it to the site happens here, at build time:
 //
-// - srcDir is the repository root, so docs/x.md is served at /docs/x.html and the page's
-//   edit link names its real path. Every other top-level entry, and the contributor pages
+// - srcDir is the repository root, so docs/x.md is served at /docs/x (clean URLs; the
+//   /docs/x.html file behind it answers too) and the page's edit link names its real path. Every other top-level entry, and the contributor pages
 //   under docs/, are excluded, so they are neither published nor searchable.
 // - Heading anchors use GitHub's slug rules, so `page.md#some-heading` links resolve on
 //   the site exactly as they do on GitHub.
 // - A link from a published page to anything outside the published set (internals, code,
 //   the repository README) is rewritten to its GitHub URL. A link to a directory's README.md
 //   becomes a link to the directory, which the README is served as.
+// - Each page's description (meta, og:description) is its first sentence of prose, and its
+//   canonical URL the clean one; a few titles are made distinct from the site's name.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -96,6 +98,26 @@ function rewriteOutsideLinks(md: any) {
   })
 }
 
+// Each table cell carries its column's header as data-label, so a narrow screen can show a row
+// as a stack of labelled cells (custom.css) instead of squeezing every column.
+function labelTableCells(md: any) {
+  md.core.ruler.push('swath_table_labels', (state: any) => {
+    let headers: string[] = []
+    let column = 0
+    for (let i = 0; i < state.tokens.length; i++) {
+      const token = state.tokens[i]
+      if (token.type === 'thead_open') headers = []
+      else if (token.type === 'th_open') {
+        headers.push((state.tokens[i + 1]?.content ?? '').replace(/[`*_]/g, '').trim())
+      } else if (token.type === 'tr_open') column = 0
+      else if (token.type === 'td_open') {
+        const label = headers[column++]
+        if (label) token.attrSet('data-label', label)
+      }
+    }
+  })
+}
+
 // The pages in docs/ have no node_modules above them, so the bare imports VitePress compiles
 // into every page (`vue`, `vue/server-renderer`) are resolved as if the page were in site/.
 const resolveFromSite = {
@@ -110,6 +132,64 @@ const resolveFromSite = {
   },
 }
 
+// While the site documents main ahead of a release, a notice above the navigation says so and
+// links to what differs in the newest download. Set it to false when a release is documented
+// (scripts/ci/check-site.py requires it while data/channel.json names the main channel).
+const DEV_DOCS_NOTICE: false | { text: string; linkText: string; link: string } = {
+  text: 'These docs describe the upcoming 0.4.0; the newest download is 0.4.0-rc.2.',
+  linkText: 'What differs',
+  link: '/docs/release-candidate',
+}
+
+// Titles that would repeat the site's name or another page's.
+const TITLES: Record<string, string> = {
+  'docs/commands/swath.md': 'The swath command',
+}
+
+// The first sentence of a page's prose: the paragraph after its title, without Markdown.
+function firstSentence(file: string): string | undefined {
+  let text: string
+  try {
+    text = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8')
+  } catch {
+    return undefined
+  }
+  text = text.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/<!--[\s\S]*?-->/g, '')
+  let fenced = false
+  const paragraph: string[] = []
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced
+      if (paragraph.length) break
+      continue
+    }
+    if (fenced) continue
+    const plain = line.trim()
+    if (!plain) {
+      if (paragraph.length) break
+      continue
+    }
+    if (/^(#|\||>|[-*] |\d+\. |<)/.test(plain)) {
+      if (paragraph.length) break
+      continue
+    }
+    paragraph.push(plain)
+  }
+  if (!paragraph.length) return undefined
+  const prose = paragraph
+    .join(' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const sentence = prose.match(/^.*?\.(?=\s|$)/)?.[0] ?? prose
+  return sentence.length > 200 ? sentence.slice(0, 197).replace(/\s+\S*$/, '') + '…' : sentence
+}
+
+function cleanPath(relativePath: string): string {
+  return '/' + relativePath.replace(/(^|\/)index\.md$/, '$1').replace(/\.md$/, '')
+}
+
 export default defineConfig({
   vite: { plugins: [resolveFromSite] },
   srcDir: '..',
@@ -118,6 +198,7 @@ export default defineConfig({
     'site/index.md': 'index.md',
     'docs/README.md': 'docs/index.md',
   },
+  cleanUrls: true,
   outDir: '.vitepress/dist',
   cacheDir: '.vitepress/cache',
 
@@ -125,7 +206,7 @@ export default defineConfig({
   title: 'swath',
   titleTemplate: ':title · swath',
   description:
-    'Parallel listing and inventory for large object stores and filesystems: S3, GCS, Azure Blob and local trees.',
+    'Parallel listing and inventory for object stores and filesystems: totals by directory or prefix, and sorted Parquet inventories you can query.',
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#2B7A88' }],
@@ -137,15 +218,42 @@ export default defineConfig({
   ],
   sitemap: { hostname: ORIGIN },
 
+  transformPageData(pageData) {
+    const title = TITLES[pageData.filePath]
+    if (title) pageData.title = title
+    if (!pageData.frontmatter.description && !pageData.isNotFound) {
+      const description = firstSentence(pageData.filePath)
+      if (description) pageData.description = description
+    }
+  },
+
+  transformHead({ pageData, siteData }) {
+    if (pageData.isNotFound) return []
+    const url = ORIGIN + cleanPath(pageData.relativePath)
+    const home = pageData.relativePath === 'index.md'
+    const title = home ? siteData.title : `${pageData.title} · ${siteData.title}`
+    const description = pageData.description || siteData.description
+    return [
+      ['link', { rel: 'canonical', href: url }],
+      ['meta', { property: 'og:url', content: url }],
+      ['meta', { property: 'og:title', content: title }],
+      ['meta', { property: 'og:description', content: description }],
+    ]
+  },
+
   markdown: {
     anchor: { slugify: githubSlug },
-    config: rewriteOutsideLinks,
+    config: (md) => {
+      rewriteOutsideLinks(md)
+      labelTableCells(md)
+    },
   },
 
   themeConfig: {
     siteTitle: 'swath',
     // Varve's chevron mark, in its light and dark strokes; the name beside it is the text.
-    logo: { light: '/logo-light.svg', dark: '/logo-dark.svg', alt: '' },
+    logo: { light: '/logo-light.svg', dark: '/logo-dark.svg', alt: 'swath logo' },
+    devDocsNotice: DEV_DOCS_NOTICE,
     nav: [
       { text: 'Docs', link: '/docs/start-here', activeMatch: '^/docs/(?!commands/)' },
       { text: 'Commands', link: '/docs/commands/swath', activeMatch: '^/docs/commands/' },
@@ -176,6 +284,7 @@ export default defineConfig({
           items: [
             { text: 'Start here', link: '/docs/start-here' },
             { text: 'Install', link: '/docs/install' },
+            { text: 'Differences in 0.4.0-rc.2', link: '/docs/release-candidate' },
             { text: 'Your first inventory', link: '/docs/first-inventory' },
             { text: 'Understand your results', link: '/docs/results' },
           ],
@@ -196,7 +305,7 @@ export default defineConfig({
             { text: 'S3-compatible stores', link: '/docs/sources#s3-compatible-stores' },
             { text: 'Google Cloud Storage', link: '/docs/sources#google-cloud-storage' },
             { text: 'Azure Blob Storage', link: '/docs/sources#azure-blob-storage' },
-            { text: 'Local and mounted trees', link: '/docs/sources#local-and-mounted-trees' },
+            { text: 'Local and mounted filesystems', link: '/docs/sources#local-and-mounted-trees' },
           ],
         },
         {
@@ -215,7 +324,7 @@ export default defineConfig({
               ],
             },
             { text: 'Dataset', link: '/docs/dataset' },
-            { text: 'Text formats', link: '/docs/output' },
+            { text: 'Output', link: '/docs/output' },
             { text: 'Exit codes', link: '/docs/reference/exit-codes' },
             { text: 'Run report', link: '/docs/reference/run-report' },
             { text: 'Log events', link: '/docs/reference/log-events' },

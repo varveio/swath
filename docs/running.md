@@ -1,8 +1,8 @@
 # Running swath
 
 How to size, run, watch, stop and resume a large listing, and keep a refreshed inventory. A short checklist
-for whoever schedules runs is [production.md](production.md); what each exit code means is
-[reference/exit-codes.md](reference/exit-codes.md).
+for whoever schedules runs is [Running swath in production](production.md); what each exit code means is
+[Exit codes](reference/exit-codes.md).
 
 ```bash
 swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
@@ -99,7 +99,7 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
   the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  Its schema: [reference/run-report.md](reference/run-report.md).
+  Its schema: [Run report and progress file](reference/run-report.md).
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
   The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
   that keeps returning rows or pages forever. Give every unattended attempt one.
@@ -153,7 +153,7 @@ stage's resources. The report written at the end keeps the curve (`history`, up 
 (`timings.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
 resources and the provider's counters (`source.stats.counters.values`: attempt latency percentiles, the
 limiter's steps, the split counters). Both schemas are in
-[reference/run-report.md](reference/run-report.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
+[Run report and progress file](reference/run-report.md); the counters in [Counters (internals)](internals/counters.md). The signals to read:
 
 **The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
 parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
@@ -218,7 +218,7 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 ## Stopping and resuming
 
 A dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
-supervisor does with each code is in [reference/exit-codes.md](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
+supervisor does with each code is in [Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
 "Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
 again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
@@ -250,7 +250,7 @@ roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
 a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
 as listed), and the resume replays each certificate it can validate instead of listing it, then lists only
-the gaps between them ([internals/ordering.md](internals/ordering.md#durable-spill)). The report says what it
+the gaps between them ([Ordering (internals)](internals/ordering.md#durable-spill)). The report says what it
 reused: `resources.spill.durable.resume` (`accepted`, `replayed_rows`, `gaps`, `requests_saved_est`,
 `rejected` by reason).
 
@@ -331,7 +331,7 @@ A reader starts only once `manifest.json` exists and reads the parts it lists (n
 application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
 `completed`, `coverage.unreadable` 0, `coverage.filters` empty, `scope.kind` `whole`, the `source` it
 expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
-([dataset.md](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
+([The swath dataset](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.
 
 This DuckDB query reads the parts a local dataset's manifest lists and totals its rows by kind:
@@ -359,7 +359,7 @@ DIR/
 ```
 
 By default, object-store datasets list current objects only; `--all-versions` selects S3 versions, GCS
-generations or every Azure Blob entry (below). The 0.3 release's reader does not open these datasets ([upgrade.md](upgrade.md)).
+generations or every Azure Blob entry (below). The 0.3 release's reader does not open these datasets ([Migrating from 0.3](upgrade.md)).
 
 ### Verify a dataset
 
@@ -445,4 +445,4 @@ and for S3 the delete-marker state, in wire order.
   of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
   ([measurements](internals/measurements.md#known-gaps)).
 
-When a run fails: [troubleshooting.md](troubleshooting.md).
+When a run fails: [Troubleshooting](troubleshooting.md).

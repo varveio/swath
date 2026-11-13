@@ -17,15 +17,45 @@ filesystems ([what each supports](https://swath.varve.io/docs/sources.html)).
 
 ## Install
 
+<<<<<<< HEAD
 swath 0.4.0 is in release candidates: download one from the
 [releases page](https://github.com/varveio/swath/releases) and verify it as
 [Install](https://swath.varve.io/docs/install.html) describes. The documentation describes `main`, which has
 more than the newest candidate, such as `swath du --from-dataset`. swath is pre-1.0, so flags and schemas can
 still change. To build `main` with Go 1.26 or later:
+=======
+These are single-run S3 observations, not expected times for every source or machine.
+The [measurements and setup](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07) keep the operations, conditions and
+other runs separate.
+
+## Supported sources
+
+| Source | Listing and summaries | Limits |
+| --- | --- | --- |
+| Local and mounted filesystems | Text or dataset listing; direct `du` summaries | No scan resume. Mounted shares use the OS filesystem, not a native NFS or SMB client. |
+| Amazon S3 | Text or dataset listing; prefix totals; eligible dataset resume | General-purpose buckets, not directory buckets. `--all-versions` lists versions and delete markers. Check S3-compatible endpoints separately. |
+| Google Cloud Storage | Native `gs://` listing; prefix totals; eligible dataset resume | `--all-versions` lists live and noncurrent generations. Their metadata differs from S3 versions. |
+| Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces only. `--all-versions` lists versions, snapshots and soft-deleted blobs. Hierarchical namespaces are unsupported. |
+
+Eligible journaled object-store dataset scans can resume. Local scans and text output
+cannot. Windows currently refuses journaled object-store dataset runs and recovery through resume
+because directory sync is unavailable; local scans work without resume. See
+[platform and recovery limits](docs/running.md#known-limits).
+
+<a id="quickstart"></a>
+
+## Quick start
+
+Download a [release candidate](docs/install.md#download-a-release-candidate), or **build from source**
+with Go 1.26 or later (the `go` line of [`go.mod`](go.mod)) and git:
+>>>>>>> origin/main
 
 ```bash
 git clone https://github.com/varveio/swath.git && cd swath && ./build.sh -o swath
 ```
+
+The build leaves the binary at `./swath`; put it on your `PATH` (for example `install swath ~/.local/bin/`) to
+run the examples as written.
 
 ## Try it
 
@@ -34,7 +64,7 @@ On a directory of yours, with no account or credentials:
 ```bash
 swath du -d 1 ~/Downloads                          # totals per directory, one level down
 swath list ~/Downloads -o downloads-inventory      # a sorted Parquet inventory
-swath du --from-dataset downloads-inventory -d 1   # the same totals, from the inventory
+swath du --from-dataset downloads-inventory -d 1   # the same totals, from the inventory (main; not in rc.2)
 ```
 
 On a public S3 prefix, without credentials:
@@ -51,7 +81,7 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
 parallel, which matters once a bucket holds tens of millions of keys. A billion-object S3 bucket lists in about
 three minutes on one 32-vCPU VM
-([how this was measured](docs/internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
+([how this was measured](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 
 ## Limits worth knowing

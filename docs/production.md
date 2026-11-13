@@ -1,8 +1,8 @@
 # Running swath in production
 
-A short guide for whoever schedules and watches swath. The full reference is [running.md](running.md);
+A short guide for whoever schedules and watches swath. The full reference is [Running swath](running.md);
 every option is in the [command reference](commands/swath.md). Numbers below are observations on the stated runs
-([internals/measurements.md](internals/measurements.md)), not limits or promises.
+([Measurements (internals)](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
 
@@ -14,7 +14,7 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
-  point readers at it once its `manifest.json` exists ([running.md](running.md#overwrite-and-refresh)).
+  point readers at it once its `manifest.json` exists ([Running swath](running.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset (warm start, below). Leave it out on the first night.
 - `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
@@ -112,7 +112,7 @@ if it happens again.
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
 `limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
 shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--no-adaptive-limit --request-rate N` ([running.md](running.md#throttling)).
+sustained throttling, use `--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
 
 ## Resume after a kill
 
@@ -127,7 +127,7 @@ directory listing keeps no journal and starts over.
   the output), read back from `DIR/.swath/spill/durable/` instead of listed again.
 - **Listed again:** the keys after the last published key that no certified file holds. The report's
   `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
-  [running.md](running.md#stopping-and-resuming) owns the rules.
+  [Running swath](running.md#stopping-and-resuming) owns the rules.
 
 The resume replays the recorded command. Only the resource, reporting and request options may change
 ([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
@@ -137,7 +137,7 @@ The resume replays the recorded command. Only the resource, reporting and reques
 The output directory's layout is in [swath-list](commands/swath-list.md#files). Spill lives under
 `DIR/.swath/spill/`, on the output's filesystem: disposable spill is removed by the next run, and certified
 spill (`spill/durable/`) is kept after a stop for the resume and removed when the dataset commits
-([running.md](running.md#stopping-and-resuming)); text on stdout spills under
+([Running swath](running.md#stopping-and-resuming)); text on stdout spills under
 `$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem, and a run
 that spills there warns once, at its first spill.
 
@@ -182,7 +182,7 @@ run's metadata.
   `http://127.0.0.1:10000`) is `https://ACCOUNT.blob.core.windows.net` by default, is never taken from the
   environment, and is fixed for the run, as are the account and container.
 - **Azure staged blocks need no rule:** a part larger than 8 MiB is staged in blocks and created by its block
-  list. Blocks an aborted, failed or killed upload staged are uncommitted: never a blob, never visible, and the
+  list. Blocks staged by an aborted, failed or killed upload are uncommitted: never a blob, never visible, and the
   service discards them a week after the last was staged (or when a blob is created at the name), so no
   lifecycle rule is needed for them. The orphans swath deletes are not always gone: with blob soft delete on,
   each is kept as a soft-deleted blob until the account's retention period expires; with blob versioning on,
@@ -190,7 +190,7 @@ run's metadata.
   its bytes can stay billed indefinitely. In a versioned account, add a lifecycle rule that deletes previous
   versions under the dataset prefixes (`daysAfterCreationGreaterThan` on `version`).
 - **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
-  A failed or cancelled upload is aborted and the abort confirmed, but one a killed process leaves is not (its
+  A failed or cancelled upload is aborted and the abort confirmed, but one that a killed process leaves is not (its
   id dies with it), nor one whose abort the bucket refused or did not confirm (the report's
   `aborts_unconfirmed`), and S3 keeps an incomplete upload's parts, billed and invisible to listings, until it
   is aborted. Set a lifecycle
@@ -205,7 +205,7 @@ run's metadata.
   runners sharing one work directory are refused by its lock; two work directories writing one prefix race
   at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
 - **Windows:** a bucket run of an object store keeps a journal, which Windows refuses (directories cannot be
-  synced there: [running.md](running.md#known-limits)), so it is refused there, as a journaled local dataset is;
+  synced there: [Running swath](running.md#known-limits)), so it is refused there, as a journaled local dataset is;
   a local tree, which keeps no journal, can be written to a bucket on Windows, without resume.
 - **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects

@@ -8,12 +8,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/docs"
 )
 
-// TestProgressSchemaDoc: docs/reference/run-report.md's progress-file table, the one
+// TestDocsProgressSchema: docs/reference/run-report.md's progress-file table, the one
 // schema of progress.json, names every field ProgressSnapshot writes.
-func TestProgressSchemaDoc(t *testing.T) {
-	b, err := os.ReadFile("../../docs/reference/run-report.md")
+func TestDocsProgressSchema(t *testing.T) {
+	b, err := os.ReadFile(docs.Path(t, "reference/run-report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

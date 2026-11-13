@@ -31,7 +31,7 @@ prefixes it has. Each row includes everything below it, so add up rows of one de
 
 On a terminal the rows are a table with the total last; in a pipe they are TSV, and `--format jsonl` gives
 JSONL; both put the total first, at depth 0. The fields, and the care their totals need, are in
-[output.md](../output.md#du-rows).
+[Output](../output.md#du-rows).
 
 The bytes are the objects' sizes as listed: not the storage consumed, replicas or a bill. A local tree's
 directories are counted in `dirs`, never as objects, and their own size is in no total. With `--all-versions`
@@ -94,7 +94,7 @@ is refused, since the dataset cannot total it.
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
 and how far the listing reached (`complete`, `INCOMPLETE` with the reason, the entries it could not read, the
 listing's filters and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with
-the same facts ([output.md](../output.md#du-rows)). A dataset whose listing did not complete, such as a
+the same facts ([Output](../output.md#du-rows)). A dataset whose listing did not complete, such as a
 `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
 counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
@@ -376,14 +376,14 @@ swath du --from-dataset bucket-inventory logs/2026/ -d 3
 prefixes passed `--max-prefixes`, and with `--from-dataset` when the dataset could not be read; 2 for a usage
 error; 3 when the totals are printed but are incomplete: entries could not be read, or with `--from-dataset` the
 dataset's listing did not cover its scope. An interrupted `swath du` is run again: it keeps no journal. See
-[reference/exit-codes.md](../reference/exit-codes.md).
+[Exit codes](../reference/exit-codes.md).
 
 ## Environment
 
 `TZ` sets the time zone of the table's times; see also [swath(1)](swath.md#environment) and
-[sources.md](../sources.md).
+[Sources](../sources.md).
 
 ## See also
 
-[swath-list](swath-list.md), [swath-show](swath-show.md), [output.md](../output.md#du-rows),
-[filters.md](../filters.md), [sources.md](../sources.md)
+[swath list](swath-list.md), [swath show](swath-show.md), [Output](../output.md#du-rows),
+[Filters](../filters.md), [Sources](../sources.md)
