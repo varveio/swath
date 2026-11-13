@@ -288,7 +288,7 @@ records `no_dirs` in `coverage.filters`):
 | Column | Type | Source |
 |---|---|---|
 | `key` | binary, required | the path relative to the root, `/`-separated, no leading `/`; a directory's ends in `/`; the name's exact bytes |
-| `size` | int64 | `st_size` (apparent bytes) |
+| `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'DIR'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du`'s total |
 | `last_modified` | timestamp | `st_mtime` |
 | `kind` | STRING, required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
 | `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
