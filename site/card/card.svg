@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- The social card, rendered to site/static/card.png by site/card/render.sh. Fonts and colors
+       are Varve's (varve ui/src/design.css): Inter and Geist Mono, the light-theme tokens. -->
+  <style>
+    @font-face { font-family: 'Inter Variable'; font-weight: 100 900;
+      src: url('../node_modules/@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2') format('woff2'); }
+    @font-face { font-family: 'Geist Mono Variable'; font-weight: 100 900;
+      src: url('../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2') format('woff2'); }
+    .name { font: 600 60px 'Inter Variable'; fill: #0B0B0B; letter-spacing: -1px; }
+    .headline { font: 700 54px 'Inter Variable'; fill: #0B0B0B; letter-spacing: -1.2px; }
+    .sub { font: 400 25px 'Inter Variable'; fill: #52514E; }
+    .url { font: 600 24px 'Geist Mono Variable'; fill: #1E5763; }
+  </style>
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FCFCFB"/>
+      <stop offset="1" stop-color="#EEEBE2"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#ground)"/>
+
+  <!-- Faint waves and the large mark behind the text. -->
+  <g fill="none" stroke="#2B7A88" stroke-opacity="0.16" stroke-width="1.5">
+    <path d="M660 94 C 820 40, 960 150, 1200 140"/>
+    <path d="M630 152 C 800 100, 980 230, 1200 200"/>
+    <path d="M0 440 C 260 400, 520 470, 760 380 S 1080 380, 1200 392"/>
+    <path d="M0 492 C 300 470, 560 520, 820 440 S 1100 440, 1200 452"/>
+  </g>
+  <g fill="none" stroke="#2B7A88" stroke-opacity="0.11" stroke-linecap="round" stroke-linejoin="round"
+     stroke-width="30" transform="translate(690,96) scale(7.5)">
+    <path d="M8 15 L32 28 L56 15" stroke-width="4"/>
+    <path d="M13 24 L32 35 L51 24" stroke-width="4"/>
+    <path d="M18 33 L32 42 L46 33" stroke-width="4"/>
+    <path d="M23 42 L32 49 L41 42" stroke-width="4"/>
+  </g>
+
+  <!-- The mark and the name. -->
+  <g transform="translate(72,62) scale(1.5)" fill="none" stroke-linecap="round" stroke-linejoin="round"
+     stroke-width="4.2">
+    <path d="M8 15 L32 28 L56 15" stroke="#5BB6C4"/>
+    <path d="M13 24 L32 35 L51 24" stroke="#3C95A4"/>
+    <path d="M18 33 L32 42 L46 33" stroke="#2B7A88"/>
+    <path d="M23 42 L32 49 L41 42" stroke="#143C44"/>
+  </g>
+  <text class="name" x="186" y="150">swath</text>
+
+  <text class="headline" x="72" y="282">Parallel listing and inventory</text>
+  <text class="headline" x="72" y="348">for object stores and filesystems.</text>
+
+  <text class="sub" x="72" y="426">S3, Google Cloud Storage, Azure Blob and local trees.</text>
+  <text class="sub" x="72" y="462">Totals by prefix, sorted Parquet inventories.</text>
+
+  <rect x="72" y="541" width="100" height="4" rx="2" fill="#2B7A88"/>
+  <text class="url" x="190" y="552">swath.varve.io</text>
+</svg>

@@ -14,9 +14,10 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `index.md` | The home page, served at `/`. |
 | `404.md` | The page for a missing address. VitePress renders it in the browser. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
-| `.vitepress/theme/` | The default theme with swath's accent color; no custom components. |
-| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, the social card `card.png`, and `data/channel.json`. |
-| `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and its locked dependencies. |
+| `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
+| `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
+| `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
 ## How the documentation is published
 
@@ -48,6 +49,20 @@ current documentation; that the version the home page offers matches `data/chann
 image tag on the site; and a small set of accessibility smoke tests.
 
 To work on the pages with live reload, run `npm ci && npx vitepress dev` in this directory.
+
+## Branding and the social card
+
+The colors, fonts and chevron mark are Varve's, from its UI's design tokens (`ui/src/design.css` in the
+Varve repository): the accent petrol for links and buttons, the brand teal for the hero name, the neutral
+backgrounds and text, and the mark's four stroke colors per theme in the logo files. The footer links to
+varve.io.
+
+`static/card.png` (1200x630, the `og:image` and `twitter:image` of every page) is rendered from
+`card/card.svg`. After editing the SVG, regenerate the PNG and commit both:
+
+```bash
+site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP server for the fonts
+```
 
 ## Releasing a new version
 
