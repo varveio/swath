@@ -14,7 +14,7 @@ object-store dataset resume, S3 versions and delete markers, and GCS generations
 The [Go guide](docs/getting-started.md) and [command reference](docs/commands/swath.md) describe their limits.
 These capabilities should not be listed as future backend work.
 
-The [publication checklist](docs/go-release-copy-checklist.md) keeps installation,
+The [publication checklist](docs/ops/dev/go-release-copy-checklist.md) keeps installation,
 repository metadata and documentation aligned with the release transition.
 
 ## Planned work

@@ -1,4 +1,4 @@
 {
-  "description": "Replay outcomes that changed after the evidence archive was built. Each entry replaces the expectation NativeEvidenceReplayTest derives from the archive's pin for that capture; see docs/replay-provider-conformance.md.",
+  "description": "Replay outcomes that changed after the evidence archive was built. Each entry replaces the expectation NativeEvidenceReplayTest derives from the archive's pin for that capture; see docs/internals/replay-provider-conformance.md.",
   "azure": {}
 }
