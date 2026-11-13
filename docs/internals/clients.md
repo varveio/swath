@@ -31,15 +31,23 @@ clients are described in [providers.md](providers.md) and the page of each provi
   call with a stored transient signal is requeued. Provider admission runs before the engine exists and
   can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
   requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
-- **An endpoint that never answered fails fast.** While nothing has answered a client, an attempt whose
+- **A run in which nothing answers stops early.** The command arms one fail-fast for the run
+  (`source.ArmUnreachable`, process-wide like the watch). While nothing in the run has answered, an attempt whose
   connection failed deterministically (`source.Unreachable`: refused, the host not found, no route to the network
-  or host) is retried as any transport failure for `source.UnreachableGrace` (15 s) from the first; past it the
-  failure is final, class `unreachable`, naming the endpoint's scheme and host and the cause, and the run ends
-  fatal instead of requeueing until `--stall-timeout`. Any other outcome (an answer of any status, a timeout, a cut
-  connection) disarms it for the client's life, so an endpoint that answered once and then refuses is an outage,
-  requeued as before. A refused certificate needs no grace: it is never retried. The counters
-  `unreachable.attempts` and `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`,
-  `TestUnreachableGraceRecovers`, `TestUnreachableAfterAnswer`, `TestUnreachable`).
+  or host) is retried as any transport failure until `source.UnreachableGrace` (30 s, at most half an explicit
+  `--stall-timeout`) has passed since the run's first such failure; then the failure is final, class
+  `unreachable` (`source.ErrUnreachable`), naming the endpoint's scheme and host and the cause, and the command
+  stops the run as stuck early: exit 75, cause `unreachable`, resumable as the journal allows. Any answer, from
+  any client, turns it off for the rest of the run: the Guard records it as soon as a response's headers arrive,
+  whatever the status and however slowly the body follows, and also a failure that is not deterministic (a
+  timeout, a cut connection). A client first used later (a destination, a token endpoint) is then retried to the
+  stall timeout as before, and so is an endpoint that answered once and then refuses. A credential failure never
+  counts: its endpoint is not the one listed. The state is one atomic: an answer and the expiry both move it by
+  compare-and-swap, so no caller stops the run once an answer is recorded, and once off it costs one atomic load.
+  A refused certificate needs no grace: it is never retried. The counters `unreachable.attempts` and
+  `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`, `TestUnreachableResumes`,
+  `TestUnreachableGraceRecovers`, `TestUnreachableAfterAnswer`, `TestUnreachableRunWide`,
+  `TestUnreachableSlowAnswer`, `TestUnreachableAnswerRace`, `TestUnreachableStates`).
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's
   deadline (all waiters sharing one outstanding call, `tokensource.Shared`), before an attempt is counted: a
   credential failure is a `*objhttp.CredentialError` (class `auth`, or retried when transient) and no request is

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 )
 
 // TestUnreachable: a real refused connection and a host not found are
@@ -48,5 +49,70 @@ func TestUnreachable(t *testing.T) {
 		if got := Unreachable(c.err); got != c.want {
 			t.Errorf("%s: Unreachable(%v) = %v", c.name, c.err, got)
 		}
+	}
+}
+
+// TestUnreachableStates: armed, the first deterministic connect failure
+// starts the grace and one past it expires the run; an answer before
+// that turns it off for good; disarmed (or never armed) it never expires;
+// the grace is at most half an explicit stall timeout.
+func TestUnreachableStates(t *testing.T) {
+	g := UnreachableGrace
+	UnreachableGrace = time.Second
+	t.Cleanup(func() { UnreachableGrace = g })
+	t0 := time.Unix(1_000_000, 0)
+	grace, disarm := ArmUnreachable(time.Second)
+	disarm()
+	if grace != 500*time.Millisecond {
+		t.Fatalf("grace %s under a 1s stall timeout", grace)
+	}
+	if expired, _ := ConnectFailed(t0.Add(time.Hour)); expired {
+		t.Fatal("expired while not armed")
+	}
+	grace, disarm = ArmUnreachable(0)
+	defer disarm()
+	if expired, _ := ConnectFailed(t0); expired {
+		t.Fatal("expired at the first failure")
+	}
+	if expired, _ := ConnectFailed(t0.Add(grace - 1)); expired {
+		t.Fatal("expired inside the grace")
+	}
+	if expired, since := ConnectFailed(t0.Add(grace)); !expired || since != grace {
+		t.Fatalf("not expired at the grace (%v, %s)", expired, since)
+	}
+	if expired, _ := ConnectFailed(t0.Add(grace + 1)); !expired {
+		t.Fatal("an expired run un-expired")
+	}
+	ArmUnreachable(0)
+	ConnectFailed(t0)
+	Contacted()
+	if _, armed := UnreachableArmed(); armed {
+		t.Fatal("armed after an answer")
+	}
+	if expired, _ := ConnectFailed(t0.Add(time.Hour)); expired {
+		t.Fatal("expired after an answer")
+	}
+}
+
+// TestUnreachableAnswerRace: a caller that has read the run as armed and
+// past its grace, and pauses, while another records an answer, does not
+// stop the run: the expiry is a compare-and-swap the answer defeats (the
+// interleaving the review reproduced: answered, yet unreachable).
+func TestUnreachableAnswerRace(t *testing.T) {
+	grace, disarm := ArmUnreachable(0)
+	defer disarm()
+	t0 := time.Unix(1_000_000, 0)
+	ConnectFailed(t0)
+	paused := 0
+	reach.hook = func(int64) {
+		paused++
+		Contacted() // another worker's answer, between the load and the swap
+	}
+	t.Cleanup(func() { reach.hook = nil })
+	if expired, _ := ConnectFailed(t0.Add(grace)); expired || paused != 1 {
+		t.Fatalf("expired %v after an answer recorded mid-decision (hook ran %d times)", expired, paused)
+	}
+	if _, armed := UnreachableArmed(); armed {
+		t.Fatal("armed after the answer")
 	}
 }

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
@@ -60,10 +60,11 @@ func (r *unreachableReport) value(name string) int64 {
 }
 
 // TestUnreachableEndpoint: an endpoint override that refuses every
-// connection, nothing ever answering there, ends the run fatal (exit 1,
-// cause unreachable) once the grace has passed, long before the stall
-// timeout, for S3, GCS and Azure Blob alike: the message names the
-// endpoint and the cause, and the report counts the fail-fast.
+// connection, nothing in the run ever answering, stops the run as stuck
+// (exit 75, cause unreachable) once the grace has passed, long before the
+// stall timeout, for S3, GCS and Azure Blob alike: the message names the
+// endpoint and the cause, the report counts the fail-fast, and a text run
+// is not resumable.
 func TestUnreachableEndpoint(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	s3test.NoCredentials(t)
@@ -85,7 +86,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 			t0 := time.Now()
 			err := run(context.Background(), args, io.Discard, false)
 			took := time.Since(t0)
-			if code := exitCode(t, err); code != exitFatal {
+			if code := exitCode(t, err); code != exitStuck {
 				t.Fatalf("exit %d after %s (%v)", code, took, err)
 			}
 			// Generous: Windows takes about 2 s to refuse a local connection.
@@ -98,7 +99,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 			var rep unreachableReport
 			readJSON(t, report, &rep)
 			o := rep.Outcome
-			if o.Class != listing.ClassFatal || o.ExitCode != exitFatal || o.Cause != string(objhttp.ClassUnreachable) || o.Resumable {
+			if o.Class != listing.ClassStuck || o.ExitCode != exitStuck || o.Cause != source.CauseUnreachable || o.Resumable || strings.Contains(o.Error, "every request was failing") {
 				t.Fatalf("outcome %+v", o)
 			}
 			if rep.value("unreachable.stops") < 1 || rep.value("unreachable.attempts") < 2 {
@@ -107,7 +108,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 		})
 	}
 	// The persistent-failure warning, when it came first, said how long.
-	if strings.Contains(stderr.String(), "(retrying;") && !strings.Contains(stderr.String(), "nothing has answered: the run stops 1s after the first attempt)") {
+	if strings.Contains(stderr.String(), "(retrying;") && !strings.Contains(stderr.String(), "nothing has answered: the run stops as unreachable 1s after the first attempt)") {
 		t.Fatalf("the warning does not say how long retrying lasts: %s", stderr.String())
 	}
 }
@@ -170,7 +171,45 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 	}
 	var rep unreachableReport
 	readJSON(t, report, &rep)
-	if rep.value("unreachable.stops") != 0 || rep.Outcome.Class != listing.ClassStuck {
+	if rep.value("unreachable.stops") != 0 || rep.Outcome.Class != listing.ClassStuck || rep.Outcome.Cause == source.CauseUnreachable {
 		t.Fatalf("outcome %+v, counters %v", rep.Outcome, rep.Source.Stats.Counters.Values)
+	}
+}
+
+// TestUnreachableResumes: a dataset run against an endpoint that is not up
+// yet stops as unreachable (exit 75) with its journal intact and resumable,
+// and swath resume lists it once the endpoint answers.
+func TestUnreachableResumes(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureSyncStderr(t)
+	s3test.NoCredentials(t)
+	shortGrace(t, 500*time.Millisecond)
+	host := closedPort(t)
+	dir := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(context.Background(), []string{"s3://bkt/", "--endpoint-url", "http://" + host, "--s3-path-style", "--s3-region", "us-east-1", "--anonymous",
+		"--report", report, "-o", dir}, io.Discard, false)
+	if code := exitCode(t, err); code != exitStuck {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	var rep unreachableReport
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.Class != listing.ClassStuck || o.Cause != source.CauseUnreachable || !o.Resumable {
+		t.Fatalf("outcome %+v", o)
+	}
+	var saved listing.Outcome
+	readJSON(t, filepath.Join(dir, errorName), &saved)
+	if saved.Cause != source.CauseUnreachable || !saved.Resumable {
+		t.Fatalf("error.json %+v", saved)
+	}
+	ln, lerr := net.Listen("tcp", host)
+	if lerr != nil {
+		t.Skipf("the port was taken meanwhile: %v", lerr)
+	}
+	srv := &http.Server{Handler: s3test.Handler(s3test.Backend(t, s3test.Keys(5, 1)))}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	if err := dispatch(context.Background(), []string{"resume", dir}, io.Discard); err != nil {
+		t.Fatalf("resume once the endpoint answers: %v", err)
 	}
 }

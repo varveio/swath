@@ -290,10 +290,6 @@ type failureWatch struct {
 	stall    time.Duration // --stall-timeout (0: none), which a warning names
 	answers  atomic.Int64  // answered exchanges: a streak lasts while none comes
 	warnings atomic.Int64  // warnings printed
-	// contacted: an exchange got an answer of any status, or failed
-	// otherwise than to connect (source.Unreachable): the client's
-	// fail-fast no longer applies, and a warning names the stall timeout.
-	contacted atomic.Bool
 
 	mu      sync.Mutex
 	streaks map[string]*streak // by "HOST: CAUSE"
@@ -313,15 +309,15 @@ func newFailureWatch(provider string, stall time.Duration) *failureWatch {
 	return &failureWatch{provider: provider, stall: stall, streaks: map[string]*streak{}}
 }
 
-// until says how long a failure (e) is retried: while nothing ever
-// answered and the connection fails deterministically, the clients'
-// fail-fast grace (source.UnreachableGrace); otherwise, or when it is
-// shorter, until the stall timeout passes without progress.
+// until says how long a failure (e) is retried: while nothing in the run
+// has answered and the connection fails deterministically, the run's
+// fail-fast grace (source.ArmUnreachable); otherwise until the stall
+// timeout passes without progress.
 func (w *failureWatch) until(e source.Exchange) string {
-	grace := source.UnreachableGrace
+	grace, armed := source.UnreachableArmed()
 	switch {
-	case !w.contacted.Load() && source.Unreachable(e.Err) && (w.stall <= 0 || grace < w.stall):
-		return fmt.Sprintf("; nothing has answered: the run stops %s after the first attempt", grace)
+	case armed && source.Unreachable(e.Err):
+		return fmt.Sprintf("; nothing has answered: the run stops as unreachable %s after the first attempt", grace)
 	case w.stall > 0:
 		return fmt.Sprintf("; the run stops as stuck after %s without progress", w.stall)
 	}
@@ -349,9 +345,6 @@ func exchangeCause(e source.Exchange) string {
 func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	if e.Err != nil && errors.Is(e.Err, context.Canceled) {
 		return // the run stopping
-	}
-	if e.Err == nil || !source.Unreachable(e.Err) {
-		w.contacted.Store(true)
 	}
 	cause := exchangeCause(e)
 	if cause == "" {

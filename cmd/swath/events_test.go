@@ -181,20 +181,19 @@ func TestFailureWatch(t *testing.T) {
 	}
 }
 
-// TestPersistentFailureRun (D2): a GCS endpoint that refuses connections
-// warns without -v while the run retries, the run ends stuck with its
-// statistics, its error naming the cause, and the report counts the
-// warnings.
+// TestPersistentFailureRun (D2): a GCS endpoint that cuts every
+// connection warns without -v while the run retries, the run ends stuck
+// with its statistics, its error naming the cause, and the report counts
+// the warnings. (A cut connection is not a wrong address: the unreachable
+// fail-fast does not apply; TestUnreachableEndpoint has refused ones.)
 func TestPersistentFailureRun(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	persistFor = 300 * time.Millisecond
 	t.Cleanup(func() { persistFor = 10 * time.Second })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	host := ln.Addr().String()
-	ln.Close() // connections to it are refused
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }))
+	t.Cleanup(srv.Close)
+	host := srv.Listener.Addr().String()
+	var err error
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
@@ -202,7 +201,7 @@ func TestPersistentFailureRun(t *testing.T) {
 	if exitCode(t, err) != exitStuck {
 		t.Fatalf("exit %v", err)
 	}
-	// The cause in the platform's words (connection refused).
+	// The cause in the platform's words (EOF, a reset).
 	warning := regexp.MustCompile(`(?m)^swath: warning: GCS ` + regexp.QuoteMeta(host) + `: ([^(]+) \(retrying; \d+ attempts; the run stops as stuck after 2s without progress\)$`)
 	s := stderr.String()
 	m := warning.FindAllStringSubmatch(s, -1)

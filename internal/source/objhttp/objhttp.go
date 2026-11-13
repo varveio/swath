@@ -285,7 +285,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func(ctx conte
 		actx := context.WithValue(ctx, targetKey{}, t)
 		v, admitted, f := admit(ctx, r, func() (T, error) { return attempt(actx) })
 		if f == nil {
-			c.reached.Store(true)
+			source.Contacted() // a supplied client's answer, which no Guard saw
 			c.answered.Add(1)
 			return v, nil
 		}
@@ -379,8 +379,8 @@ type Counts struct {
 	// from a malformed document delivered to the parser.
 	ParseFailures int64 `json:"parse_failures"`
 	// Unreachable counts attempts that failed to connect deterministically
-	// (Unreachable) before the endpoint had answered; UnreachableStops the
-	// calls the fail-fast ended after source.UnreachableGrace (unreachable.go).
+	// (source.Unreachable) while nothing in the run had answered;
+	// UnreachableStops the calls the run's fail-fast stopped (unreachable.go).
 	Unreachable      int64 `json:"unreachable"`
 	UnreachableStops int64 `json:"unreachable_stops"`
 	// InflightMax is the most attempts in flight at once (admitted, from
@@ -408,12 +408,8 @@ type Counters struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 	answered                                              atomic.Int64
 	inflight, inflightMax, inflightNs                     atomic.Int64
-	// The fail-fast (unreachable.go): reached is set by any outcome but a
-	// deterministic connect failure; unreachableSince is the first such
-	// failure's time (Unix ns, 0: none).
-	reached                                             atomic.Bool
-	unreachableSince, connectFailures, unreachableStops atomic.Int64
-	latency                                             latencyHist
+	connectFailures, unreachableStops                     atomic.Int64 // the fail-fast's (unreachable.go)
+	latency                                               latencyHist
 }
 
 // latencyHist is a fixed log-spaced histogram of durations in ns: four
@@ -581,8 +577,8 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CThrottles] = counters.Def{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"}
 	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past -request-timeout, retried or not"}
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
-	d[CUnreachable] = counters.Def{Key: "unreachable.attempts", Kind: counters.Count, Unit: "requests", Help: "attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while the endpoint had never answered"}
-	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls failed as unreachable: nothing had answered and every attempt failed so for " + source.UnreachableGrace.String() + " (the run ends fatal, cause unreachable)"}
+	d[CUnreachable] = counters.Def{Key: "unreachable.attempts", Kind: counters.Count, Unit: "requests", Help: "attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while nothing in the run had answered"}
+	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls stopped as unreachable: nothing in the run had answered, and connections had failed so for " + source.UnreachableGrace.String() + " (at most half --stall-timeout; exit 75, cause unreachable)"}
 	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
 	for id, q := range map[ClientCounter]string{CInflightP50: "50", CInflightP90: "90", CInflightP99: "99"} {

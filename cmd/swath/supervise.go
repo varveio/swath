@@ -171,6 +171,12 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "remote_altered"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitIncomplete, false
+	case errors.Is(err, source.ErrUnreachable):
+		// Nothing in the run answered and every connection failed
+		// deterministically for the grace (objhttp's fail-fast): no
+		// progress and nothing reachable, the stall reached early.
+		// Resumable as the journal says, once the endpoint answers.
+		o.Class, o.ExitCode, o.Cause = listing.ClassStuck, exitStuck, source.CauseUnreachable
 	case errors.Is(cause, errStuck):
 		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
 		var st *stuckError

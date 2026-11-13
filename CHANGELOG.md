@@ -5,9 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: an object-store endpoint that has never answered, every connection refused or its host not found,
-  ends the run after 15 s, exit 1, cause `unreachable`, naming the endpoint (it was retried for the whole
-  `--stall-timeout` and stopped as stuck, exit 75); one that answered once is still retried as an outage. The
+- Go port: a run in which nothing has answered, every connection refused or its host not found, stops as
+  stuck after 30 s (at most half `--stall-timeout`), exit 75, cause `unreachable`, naming the endpoint, and
+  resumable as its journal allows (it waited out the whole `--stall-timeout`); once anything has answered,
+  failures are retried as an outage, as before. The
   persistent-failure warning says how long retrying lasts. A stuck run without an output directory writes its
   goroutine dump to a file in the temporary directory and names it (the stacks reach stderr only with `-v`),
   and the tmpfs spill warning is printed at a run's first spill, not at every start.

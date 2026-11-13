@@ -119,7 +119,7 @@ warning event's `stacks` field, where a supervisor collecting the log finds them
 **The persistent-failure warning.** Without `-v`, when requests have failed with one transport or service
 cause (a connection refused, a 503) for 10 s with none answered, one warning names the provider, the endpoint
 host and the cause and says how long retrying lasts (until the stall timeout, or for a connection that
-nothing has ever answered at, the clients' 15 s fail-fast grace:
+nothing in the run has answered, the run's 30 s fail-fast grace, exit 75 cause `unreachable`:
 [clients](clients.md#what-swath-keeps)), and again at most once a minute while it lasts; a run that then ends stuck or at its
 deadline names the cause in its final error line, the outcome's `message` and the report's `outcome.error`
 (and so does one that ends so with no request ever answered, however short it was);

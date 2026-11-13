@@ -227,15 +227,16 @@ swath: deadline: --max-duration reached; every request was failing: S3 127.0.0.1
 ## The endpoint cannot be reached
 
 ```text
-swath: warning: S3 127.0.0.1:9000: connection refused (retrying; 18 attempts; nothing has answered: the run stops 15s after the first attempt)
-swath: list s3://bucket/: endpoint http://127.0.0.1:9000 cannot be reached (connection refused): nothing answered there in 17.1s; check the endpoint address, and that the service is running
+swath: warning: S3 127.0.0.1:9000: connection refused (retrying; 25 attempts; nothing has answered: the run stops as unreachable 30s after the first attempt)
+swath: list s3://bucket/: endpoint http://127.0.0.1:9000 cannot be reached (connection refused): nothing has answered in 30.4s; check the endpoint address, and that the service is running
 ```
 
-Exit 1, cause `unreachable`, not resumable. No request has ever been answered at the endpoint, and for 15
-seconds every connection was refused, its host was not found, or no route led to it: a mistyped
-`--endpoint-url` (or `AWS_ENDPOINT_URL`, `STORAGE_EMULATOR_HOST`), or an emulator (MinIO, Azurite, the GCS
-emulator) that is not running. The 15 seconds let an emulator that is still starting answer. An endpoint
-that answered once and then stops is an outage instead: swath retries it until `--stall-timeout`.
+Exit 75, cause `unreachable`: the run is stuck, found early. Nothing in the run has been answered, and for 30
+seconds (at most half `--stall-timeout`) every connection was refused, its host was not found, or no route led
+to it: a mistyped `--endpoint-url` (or `AWS_ENDPOINT_URL`, `STORAGE_EMULATOR_HOST`), or an emulator (MinIO,
+Azurite, the GCS emulator) that is not running yet. A dataset run of an object store keeps its journal: once
+the endpoint answers, `swath resume DIR` continues it; other runs are run again. Once anything has answered,
+connections that fail later are an outage instead: swath retries them until `--stall-timeout`.
 
 ## The disk filled (exit 74)
 

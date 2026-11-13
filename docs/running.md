@@ -204,7 +204,8 @@ timeout and latency brakes, and counters.
 - Exhausted engine listing calls requeue while the run lives; admission failures are described
   under [object-store requests](sources.md#object-store-requests). A stall watchdog or deadline can stop
   a run that keeps failing. An endpoint that has never answered, every connection refused or its host not
-  found, ends the run after 15 s instead ([troubleshooting](troubleshooting.md#the-endpoint-cannot-be-reached)).
+  found, with nothing in the run answered, stops it as stuck after 30 s instead (exit 75, cause `unreachable`;
+  [troubleshooting](troubleshooting.md#the-endpoint-cannot-be-reached)).
 
 Measured on the synthetic S3 fake ([measurements](internals/measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
 throttle answers no longer move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
