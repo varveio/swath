@@ -33,7 +33,7 @@ _swath_list() {
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
-        '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
+        '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
@@ -99,7 +99,7 @@ _swath_du() {
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
-        '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
+        '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
@@ -173,7 +173,7 @@ _swath_diag_list() {
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
-        '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
+        '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
@@ -260,7 +260,7 @@ _swath_diag_count() {
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
-        '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
+        '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
@@ -324,7 +324,7 @@ _swath_resume() {
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
-        '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
+        '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \

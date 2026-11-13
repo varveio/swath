@@ -298,8 +298,11 @@ func TestOneTerminalAccount(t *testing.T) {
 }
 
 // TestStacksWholeAndBounded: the goroutine dump is the whole profile (it
-// was cut at 1 MiB by runtime.Stack, which hundreds of workers exceed);
-// only its stderr fallback is cut at stacksMax.
+// was cut at 1 MiB by runtime.Stack, which hundreds of workers exceed).
+// Without an output directory it goes whole to a file in the temporary
+// directory, stderr naming it in one line; -v puts the stacks on stderr
+// too, cut at stacksMax; --log-format json keeps them in its event and
+// writes no file.
 func TestStacksWholeAndBounded(t *testing.T) {
 	park := make(chan struct{})
 	defer close(park)
@@ -310,13 +313,42 @@ func TestStacksWholeAndBounded(t *testing.T) {
 	if err := pprof.Lookup("goroutine").WriteTo(&whole, 2); err != nil || whole.Len() <= stacksMax {
 		t.Fatalf("profile %d bytes (%v): too small to show the bound", whole.Len(), err)
 	}
-	var b bytes.Buffer
-	errOut = &b
-	t.Cleanup(func() { errOut = os.Stderr })
-	if where := dumpStacks("", nil, "stuck", "test", listing.ProgressSnapshot{}); where != "stderr" {
-		t.Fatalf("dump went to %s", where)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp) // os.TempDir: Unix
+	t.Setenv("TMP", tmp)    // Windows
+	stderr := captureSyncStderr(t)
+	for _, c := range []struct {
+		name   string
+		term   termOptions
+		file   bool // the dump is in a file in tmp
+		stacks bool // stderr carries the stacks, cut at stacksMax
+	}{
+		{"default", termOptions{logFormat: logText}, true, false},
+		{"-v", termOptions{verbose: 1, logFormat: logText}, true, true},
+		{"json", termOptions{logFormat: logJSON}, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setLog(c.term, "")
+			n := len(stderr.String())
+			where := dumpStacks("", nil, "stuck", "test", listing.ProgressSnapshot{})
+			out := stderr.String()[n:]
+			if c.file {
+				b, err := os.ReadFile(where)
+				if err != nil || filepath.Dir(where) != filepath.Clean(tmp) || !bytes.HasPrefix(b, []byte("swath goroutine dump: stuck (test)")) || len(b) <= stacksMax {
+					t.Fatalf("dump at %q: %d bytes (%v)", where, len(b), err)
+				}
+				if !strings.HasPrefix(out, "swath: warning: goroutine dump written to "+where+"\n") {
+					t.Fatalf("stderr does not name the file: %.200q", out)
+				}
+			} else if where != "stderr" {
+				t.Fatalf("dump went to %s", where)
+			}
+			if got := strings.Contains(out, "cut at 1 MiB"); got != c.stacks || len(out) > stacksMax+stacksMax/8 { // JSON escapes its tabs and newlines
+				t.Fatalf("stderr: %d bytes, the stacks cut there %v", len(out), got)
+			}
+		})
 	}
-	if b.Len() > stacksMax+4096 || !strings.Contains(b.String(), "cut at 1 MiB") {
-		t.Fatalf("stderr dump: %d bytes, cut marker %v", b.Len(), strings.Contains(b.String(), "cut at 1 MiB"))
+	if ents, _ := os.ReadDir(tmp); len(ents) != 2 {
+		t.Fatalf("%d files in the temporary directory, want the two text runs'", len(ents))
 	}
 }

@@ -89,6 +89,24 @@ func TestShowDataset(t *testing.T) {
 	}
 }
 
+// TestShowNotADataset: swath show on a path that is no dataset, a
+// missing one or a file (a text listing), says what it does not hold,
+// with and without --journal, never an open error ("not a directory").
+func TestShowNotADataset(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rows.tsv")
+	if err := os.WriteFile(file, []byte("key\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{file, filepath.Join(t.TempDir(), "missing")} {
+		for _, args := range [][]string{{dir}, {dir, "--journal"}} {
+			err := show(args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), dir+" holds ") || strings.Contains(err.Error(), "not a directory") {
+				t.Fatalf("show %q: %v", args, err)
+			}
+		}
+	}
+}
+
 // TestPrintedCommandsQuoted: a command swath prints for the user to run
 // (the resume advice after a stop, the command an interrupted run
 // recorded) quotes an argument the shell would split or expand, so a

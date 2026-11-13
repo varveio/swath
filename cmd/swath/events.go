@@ -286,9 +286,10 @@ var persistFor, persistEvery = 10 * time.Second, time.Minute
 // review): one transport or service cause failing every request for
 // persistFor names itself and the endpoint host, without -v.
 type failureWatch struct {
-	provider string       // the registry's Title: S3, GCS, Azure Blob
-	answers  atomic.Int64 // answered exchanges: a streak lasts while none comes
-	warnings atomic.Int64 // warnings printed
+	provider string        // the registry's Title: S3, GCS, Azure Blob
+	stall    time.Duration // --stall-timeout (0: none), which a warning names
+	answers  atomic.Int64  // answered exchanges: a streak lasts while none comes
+	warnings atomic.Int64  // warnings printed
 
 	mu      sync.Mutex
 	streaks map[string]*streak // by "HOST: CAUSE"
@@ -304,8 +305,23 @@ type streak struct {
 // maxStreaks bounds the causes a watch holds at once.
 const maxStreaks = 64
 
-func newFailureWatch(provider string) *failureWatch {
-	return &failureWatch{provider: provider, streaks: map[string]*streak{}}
+func newFailureWatch(provider string, stall time.Duration) *failureWatch {
+	return &failureWatch{provider: provider, stall: stall, streaks: map[string]*streak{}}
+}
+
+// until says how long a failure (e) is retried: while nothing in the run
+// has answered and the connection fails deterministically, the run's
+// fail-fast grace (source.ArmUnreachable); otherwise until the stall
+// timeout passes without progress.
+func (w *failureWatch) until(e source.Exchange) string {
+	grace, armed := source.UnreachableArmed()
+	switch {
+	case armed && source.Unreachable(e.Err):
+		return fmt.Sprintf("; nothing has answered: the run stops as unreachable %s after the first attempt", grace)
+	case w.stall > 0:
+		return fmt.Sprintf("; the run stops as stuck after %s without progress", w.stall)
+	}
+	return ""
 }
 
 // exchangeCause is a failed exchange's cause ("" for an answer): the
@@ -361,7 +377,7 @@ func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	w.mu.Unlock()
 	if l := elog(); due && l.shows(lvWarn) {
 		w.warnings.Add(1)
-		l.event(lvWarn, evWarning, fmt.Sprintf("%s %s (retrying; %d attempts)", w.provider, key, n),
+		l.event(lvWarn, evWarning, fmt.Sprintf("%s %s (retrying; %d attempts%s)", w.provider, key, n, w.until(e)),
 			failureFields{host, cause, n})
 	}
 }

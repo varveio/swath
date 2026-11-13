@@ -138,8 +138,8 @@ The output directory's layout is in [swath-list](commands/swath-list.md#files). 
 `DIR/.swath/spill/`, on the output's filesystem: disposable spill is removed by the next run, and certified
 spill (`spill/durable/`) is kept after a stop for the resume and removed when the dataset commits
 ([running.md](running.md#stopping-and-resuming)); text on stdout spills under
-`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the run
-warns at start.
+`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem, and a run
+that spills there warns once, at its first spill.
 
 ## Writing to a bucket
 

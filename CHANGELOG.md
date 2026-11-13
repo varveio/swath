@@ -5,6 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a run in which nothing has answered, every connection refused or its host not found, stops as
+  stuck after 30 s (at most half `--stall-timeout`), exit 75, cause `unreachable`, naming the endpoint, and
+  resumable as its journal allows (it waited out the whole `--stall-timeout`); once anything has answered,
+  failures are retried as an outage, as before. The
+  persistent-failure warning says how long retrying lasts. A stuck run without an output directory writes its
+  goroutine dump to a file in the temporary directory and names it (the stacks reach stderr only with `-v`),
+  and the tmpfs spill warning is printed at a run's first spill, not at every start.
+
 - Go port: `swath du --from-dataset DIR [PREFIX]` totals a committed local dataset (`swath list -o DIR`)
   instead of listing the source again: the same rows, depths, orders, formats and filters as `swath du` of the
   source, read in one parallel pass over the key and the columns the totals need, seeking to PREFIX when one is

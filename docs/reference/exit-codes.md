@@ -31,6 +31,7 @@ The `cause` of exit 75 says what rose while nothing progressed:
 | `stuck_timeouts` | requests kept running past `--request-timeout` |
 | `stuck_empty_chain` | the service kept answering empty pages with a new continuation token |
 | `stuck_no_rows` | none of these: requests failing or hanging, or a stopped pipeline |
+| `unreachable` | found early: nothing in the run has answered, and every connection was refused, its host not found or unroutable for 30 s (at most half `--stall-timeout`); the message names the endpoint |
 
 The other causes are the provider's failure class (`auth`, `access_denied`, `not_found`, `region_redirect`, `throttle`, `timeout`,
 `parse`, `unsupported`), `protocol`, `no_space`, the limits named above, and a dataset in a bucket's `commit_unresolved`,

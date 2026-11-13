@@ -137,8 +137,12 @@ func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := next.RoundTrip(req)
 	if err != nil {
+		if !source.Unreachable(err) && !errors.Is(err, context.Canceled) {
+			source.Contacted() // a timeout or a reset, not a wrong address (a cancelled request says nothing)
+		}
 		return nil, err
 	}
+	source.Contacted() // the headers arrived, whatever the status and the body
 	defer resp.Body.Close()
 
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300

@@ -142,7 +142,9 @@ permission refusal), `not_found` (the source's bucket or Azure container does no
 `notFound` to a listing, Azure `ContainerNotFound`; never a missing object or prefix, which lists empty,
 nor a missing output bucket),
 `region_redirect` (S3 answered that the bucket is in another region and named it; the message says which),
-`throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
+`throttle`, `timeout`, `parse`, `unsupported` and `unreachable` (nothing in the run answered and every
+connection was refused, its host not found or unroutable for 30 s; the message names the endpoint, and the
+outcome is `stuck`, exit 75, cause `unreachable`). These labels describe the failure;
 retry and engine requeue use its stored transient signal. Other service errors retain their HTTP status
 and provider code or reason in the message without a separate report label. Invalid pages remain protocol
 violations; caller cancellation keeps its stop disposition.

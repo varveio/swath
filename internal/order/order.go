@@ -66,6 +66,9 @@ type Options struct {
 	// spill directory inside the output must still be in the directory
 	// the run owns (journal.Lock.Verify).
 	SpillVerify func() error
+	// Spilling, if set, is called once, without the stage's lock, when the
+	// first rows frame has been written to spill: the run spills.
+	Spilling func()
 	// Gauges, if set, receives the stage's live resource counts.
 	Gauges *Gauges
 	// After, if set, is a resume's last published key: every row must sort
@@ -669,7 +672,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			cancel(nil)
 			return nil, nil, err
 		}
-		sp.wake, sp.verify = wake, opt.SpillVerify
+		sp.wake, sp.verify, sp.spilling = wake, opt.SpillVerify, opt.Spilling
 		sp.g = o.g
 		o.sp = sp
 		if n := spareReaders(); n > 0 {
