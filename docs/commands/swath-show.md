@@ -44,8 +44,9 @@ identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part
 
 The command is recorded in its canonical spelling, each option `--name=value`, then SOURCE.
 
-`swath show` reads no rows; to query a dataset, read the parts its manifest lists
-([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
+`swath show` reads no rows. `swath du --from-dataset DIR` totals them per prefix
+([swath-du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
+lists ([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
 
 ## Options
 

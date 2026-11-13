@@ -286,7 +286,12 @@ with accessors; missing, repeated or mistyped role columns are refused. A schema
 
 A producer also declares its storage-class column, `schema.Info.StorageClass` (`storage_class` for S3 and GCS,
 `access_tier` for Azure Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
-a declaration that names no string column.
+a declaration that names no string column. A local tree declares its containers the same way,
+`schema.Info.Containers` (the rows whose `kind` is `DIR`): `schema.Bind` derives `Schema.Container` from it,
+which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Each provider
+lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
+declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
+the dataset's columns (`registry.DatasetTotals`).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer

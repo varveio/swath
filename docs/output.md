@@ -156,7 +156,11 @@ depth	objects	dirs	size	unsized	last_modified	prefix
 | `prefix` | the prefix, up to and including its `/`; the total's is SOURCE's prefix up to its last `/`, empty for a whole bucket or tree |
 
 TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; JSONL has the same
-fields (`prefix_base64` for a prefix that is not valid UTF-8). Both sort the rows by prefix in byte order, the
+fields (`prefix_base64` for a prefix that is not valid UTF-8). Totals read from a saved dataset
+(`swath du --from-dataset`) add a last JSONL member, `dataset`: the directory (`path`), the listed `source`, the
+`schema_id`, `listing_started_at` and `listing_finished_at`, and the listing's coverage from its manifest
+(`complete`, `stop_reason`, `skipped_entries`, `filters`, `exclusions`; null where the manifest does not say),
+so a stored row still says it was not a live listing and how complete it was. Both sort the rows by prefix in byte order, the
 total first and each parent before its children; the table puts the total last. Select the total by
 `depth`, not by its place: `jq 'select(.depth == 0) | .size'`. An object-store source has no `dirs` and
 `unsized` fields.

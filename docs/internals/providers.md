@@ -152,7 +152,8 @@ opened source with `registry.Bind`. A range-engine source embeds `keyrange.Regis
 provider. The opened type supplies `Locator`, `Identity`, `Capabilities`, `Report` and, where known,
 `Tariff`, with compile-time interface assertions for each row type. The factory declares classification
 (`objhttp.Label` for the object stores), encoder admission, prefix helpers, root redaction, secrets,
-operational flags, help hints and root usage as applicable. Command dispatch, scheme lists, help, flag
+operational flags, help hints and root usage as applicable, and its bound schemas' `Info` (`Schemas`), by
+which `swath du --from-dataset` reads its datasets. Command dispatch, scheme lists, help, flag
 ownership, resume overrides and argument redaction derive from registration.
 
 These integrations still require work outside the provider directory:
