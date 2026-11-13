@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -287,6 +288,29 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 		return
 	}
 	noteKept(errOut, "swath: "+msg+"\n")
+}
+
+// savedInventory is the commands that list SOURCE (as given, redacted)
+// once into a dataset and total it at the live run's depth and order: the
+// hint a large live swath du ends with. DIR is a placeholder.
+func savedInventory(root string, o options) []string {
+	du := "swath du --from-dataset DIR"
+	if o.depth > 0 {
+		du += " -d " + strconv.Itoa(o.depth)
+	}
+	if o.sortBy == sortSize {
+		du += " --sort size"
+	}
+	return []string{"swath list " + shellQuote(registry.Redact(root)) + " -o DIR", du}
+}
+
+// shellQuote is s as one POSIX shell word: as it is when it holds only
+// characters no shell treats specially, else in single quotes.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ago is an age in whole units: seconds, minutes, hours, then days.

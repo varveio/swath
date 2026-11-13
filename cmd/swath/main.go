@@ -859,6 +859,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, usageError{err})
 	}
+	given := root // as typed, before an --include narrows it: the hint's SOURCE
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
@@ -957,6 +958,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	n := rowNouns(pf.Scheme == "", o.versions())
 	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
+	if o.totals != nil {
+		tt.saveHint = savedInventory(given, o)
+	}
 	defer watchRequests(fw)() // removed before stderr is restored
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)

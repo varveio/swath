@@ -57,7 +57,9 @@ totals; the run still exits 0 and says so on stderr.
 ### Totals from a saved dataset
 
 Each `swath du SOURCE` lists SOURCE again. To look at a large source at several depths, or with other filters,
-list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead:
+list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead (a live `swath du` that listed
+a million entries or more says so on a terminal: its statistics end with `hint:` lines giving both commands
+for its SOURCE):
 
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size

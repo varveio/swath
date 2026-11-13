@@ -289,6 +289,70 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	}
 }
 
+// TestDuSaveHint: a live swath du that listed hintRows entries or more ends
+// its statistics on a terminal with the commands that save its SOURCE
+// (quoted) once and total that, at its depth and order; not below the
+// threshold, with -q, --no-stats, json logs or a stderr that is no
+// terminal, nor after --from-dataset or swath list.
+func TestDuSaveHint(t *testing.T) {
+	stderr := captureSyncStderr(t)
+	was, rows := stderrTerminal, hintRows
+	tty := true
+	stderrTerminal = func() (bool, int) { return tty, 120 }
+	t.Cleanup(func() { stderrTerminal, hintRows = was, rows })
+	parent := t.TempDir()
+	root := filepath.Join(parent, "my tree")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a/x", "a/y", "b/z"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, f), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ds := filepath.Join(parent, "ds")
+	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	hintRows = 5 // the tree's 5 entries: 3 files, 2 directories
+	want := "hint: this run listed 5 entries; to explore them again without relisting, save an inventory once and total that:\n" +
+		"hint:   swath list '" + root + "' -o DIR\n" +
+		"hint:   swath du --from-dataset DIR -d 1 --sort size\n"
+	try := func(name string, shown bool, cmd func() error) {
+		t.Helper()
+		stderr.b.Reset()
+		if err := cmd(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := strings.Contains(stderr.String(), "hint:"); got != shown || shown && !strings.HasSuffix(stderr.String(), want) {
+			t.Errorf("%s: hint %v, want %v:\n%s", name, got, shown, stderr.String())
+		}
+	}
+	du := func(args ...string) func() error {
+		return func() error {
+			return runDu(context.Background(), append([]string{root, "-d", "1", "--sort", "size", "--format", "tsv", "--color", "never"}, args...), io.Discard)
+		}
+	}
+	try("at the threshold", true, du("--stats", "--no-progress"))
+	try("-q", false, du("--stats", "-q"))
+	try("--no-stats", false, du("--no-stats"))
+	try("json logs", false, du("--stats", "--log-format", "json"))
+	try("from a dataset", false, func() error {
+		_, err := duRun(t, "--from-dataset", ds, "-d", "1", "--sort", "size")
+		return err
+	})
+	try("swath list", false, func() error {
+		return run(context.Background(), []string{root, "--stats", "--no-progress", "--color", "never"}, io.Discard, false)
+	})
+	tty = false
+	try("not a terminal", false, du("--stats"))
+	tty, hintRows = true, 6
+	try("below the threshold", false, du("--stats", "--no-progress"))
+}
+
 // TestDuFromDatasetManyParts: a dataset of many parts, scanned by parallel
 // shards, totals as the live listing does, whole and under a PREFIX.
 func TestDuFromDatasetManyParts(t *testing.T) {
