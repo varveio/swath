@@ -46,6 +46,10 @@ Diagnostics:
       --slow-split          split a range whose pages are slow without waiting for an idle worker
       --sequential          list with one continuation-token chain (no ranges; the reference)
       --max-keys N          with --sequential, stop after N objects (marked incomplete)
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              Every range made, claimed, paged, split and ended, with its keys;
+                              tools/explainer reads it. Events the file cannot keep up with are
+                              dropped, never waited for (trace.dropped).
       --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- diag-list:end -->
@@ -66,6 +70,10 @@ Diagnostics:
       --slow-split   split a range whose pages are slow without waiting for an idle worker
       --sequential   list with one continuation-token chain (no ranges; the reference)
       --max-keys N   with --sequential, stop after N objects (marked incomplete)
+      --trace FILE   write the range engine's run trace (JSON Lines) to FILE
+                       Every range made, claimed, paged, split and ended, with its keys;
+                       tools/explainer reads it. Events the file cannot keep up with are dropped,
+                       never waited for (trace.dropped).
       --page-size N  ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- diag-count:end -->
@@ -82,6 +90,10 @@ Diagnostics:
                               Derived: one part per encoder, at least 1 GiB.
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              Every range made, claimed, paged, split and ended, with its keys;
+                              tools/explainer reads it. Events the file cannot keep up with are
+                              dropped, never waited for (trace.dropped).
       --spill-compress      undo a recorded --no-spill-compress
       --no-spill-plain      undo a recorded --spill-plain
       --no-adaptive-limit-slow-start
@@ -111,6 +123,10 @@ Diagnostics:
   delta-coded frames); `--spill-plain` writes each key and payload whole instead of delta-coding them, the
   comparison arm ([ordering.md](ordering.md)).
 - **`--no-journal`** publishes parts only at the end, without the journal a resume needs.
+- **`--trace FILE`** writes the range engine's run trace (S3, GCS, Azure Blob): every range made, claimed,
+  paged, split and ended, with its keys, one JSON object per line. It never slows the listing: events the
+  file cannot keep up with are dropped and counted (`trace.dropped`). The schema, the drop policy and what a
+  trace proves are [trace.md](trace.md); [`tools/explainer`](../../tools/explainer/README.md) reads it.
 
 ## Environment
 

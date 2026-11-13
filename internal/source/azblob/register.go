@@ -188,7 +188,7 @@ func (o *opened[P]) Report() source.Report {
 	return keyrange.Report("azblob", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
-// The registered source's whole method set (keyrange.Registered: the ten
+// The registered source's whole method set (keyrange.Registered: the eleven
 // optional interfaces a range-engine provider gives the pipeline); a
 // capability whose method went missing would silently be off.
 var (

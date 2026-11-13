@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
@@ -247,6 +248,10 @@ type Engine[P any] struct {
 	slowQueued int
 	area       float64 // ∫ active dt, for the mean
 	areaAt     time.Time
+	// tr is the run trace (TraceTo; nil: none); lanes are the worker
+	// lanes its events name, held by the ranges in Expand (lane).
+	tr    *runtrace.Writer
+	lanes []bool
 }
 
 // New returns an engine over fetch.
@@ -322,6 +327,7 @@ func (p *Engine[P]) Stats() Stats {
 	defer p.unlock()
 	p.account(time.Now())
 	p.priorErrors()
+	p.traceStats()
 	s := Stats{Counters: p.c.Snapshot(p.disabled()...)}
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el

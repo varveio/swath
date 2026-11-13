@@ -97,8 +97,9 @@ jobs:
   # Self-tests of the Python scripts that no Go job runs: the OSV image policy (synthetic
   # fixtures keep its fail-closed parsing of scanner JSON and Ubuntu USN groups under the
   # per-commit gate without downloading a scanner database or building an image), the
-  # provider-conformance campaign, evidence and ledger tools, and the replay benchmark
-  # runners' statistics, fault and observer helpers. Hermetic and a few seconds long,
+  # provider-conformance campaign, evidence and ledger tools, the replay benchmark
+  # runners' statistics, fault and observer helpers, and the run explainer (its checks over
+  # a captured Go trace). Hermetic and a few seconds long,
   # so they run on every event without change detection.
   scripts:
     runs-on: ubuntu-latest
@@ -116,6 +117,9 @@ jobs:
 
       - name: Replay benchmark runner tests
         run: python3 -m unittest discover -s scripts/benchmarks/replay -p 'test_*.py'
+
+      - name: Run explainer self-test
+        run: python3 tools/explainer/explainer.py --self-test
 
   # Go jobs run concurrently. PRs test complete affected modules; main/dispatch
   # select all modules, platforms, fixtures and images for release qualification.

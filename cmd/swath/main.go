@@ -34,6 +34,7 @@ import (
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
@@ -506,6 +507,7 @@ type options struct {
 	countOnly              bool     // swath du or swath diag count: rows counted, none written
 	du                     bool     // swath du: the per-prefix totals
 	report                 string   // --report: a file, or - for stdout
+	trace                  string   // --trace: the run trace's file, resolved (checkSidePaths)
 	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
@@ -577,7 +579,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -806,6 +808,9 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
 	}
+	if fl := f.Lookup(source.TraceFlag); fl != nil {
+		o.trace = fl.Value.String() // the range engine's flag group's (keyrange.Flags)
+	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
@@ -896,6 +901,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if prof != nil {
 		cfg.ListingDone = prof.listingDone
 	}
+	var traceFile *os.File
+	if o.trace != "" {
+		if traceFile, err = createNoFollow(o.trace); err != nil {
+			return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
+		}
+		cfg.Trace = runtrace.New(traceFile)
+	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	if o.maxDuration > 0 {
@@ -978,7 +990,33 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
-	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	if cfg.Trace != nil {
+		// After the dataset, run.json and --report: the run's accounts
+		// never wait on the trace file, and its end waits at most
+		// traceCloseWait.
+		closeTrace(cfg.Trace, traceFile, o.trace, sum.Outcome.Status, out.Class)
+	}
+	return err
+}
+
+// traceCloseWait is how long the end of a run waits for the trace file to
+// take what the trace holds (runtrace.Writer.Close).
+var traceCloseWait = 2 * time.Second
+
+// closeTrace closes the run trace with the run's outcome, warning when it
+// could not be written. A file that stopped taking writes is abandoned,
+// not closed in line: closing a file with a write stuck in it can block.
+func closeTrace(w *runtrace.Writer, f *os.File, path, status, class string) {
+	err := w.Close(traceCloseWait, status, class)
+	if stalled := (*runtrace.Stalled)(nil); errors.As(err, &stalled) {
+		go f.Close()
+	} else if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		elog().warn("--trace " + path + ": " + err.Error())
+	}
 }
 
 // versions says --all-versions is on: the run lists every version.

@@ -35,6 +35,10 @@ type Common struct {
 	// versions and delete markers, GCS generations, Azure Blob versions,
 	// snapshots and soft-deleted blobs, in the providers' versions schemas.
 	AllVersions bool
+	// Trace is the run trace's file (swath diag --trace): the command
+	// checks, opens and closes it (source.TraceFlag) and hands the trace
+	// to the engine (TraceTo); a provider does not read it.
+	Trace string
 }
 
 // Options are the engine options this policy sets.
@@ -91,6 +95,9 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
 			Usage: "with --sequential, stop after N objects (marked incomplete)"})
+		source.Define(f, source.Flag{Name: source.TraceFlag, Value: source.Text(&c.Trace), Metavar: "FILE",
+			Usage: "write the range engine's run trace (JSON Lines) to FILE",
+			Long:  "Every range made, claimed, paged, split and ended, with its keys; tools/explainer reads it. Events the file cannot keep up with are dropped, never waited for (trace.dropped)."})
 		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d; default the provider's)", PageKeys),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)

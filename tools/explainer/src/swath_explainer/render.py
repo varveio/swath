@@ -18,7 +18,7 @@ FACTS_FIELDS = [
     ("swath commit", "swath.commit"),
     ("Captured at", "captured_at"),
     ("Source URI", "target.uri"),
-    ("S3 region", "target.region"),
+    ("Region", "target.region"),
     ("Client provider", "client.provider"),
     ("Client region", "client.region"),
     ("Machine", "client.machine_type"),
@@ -123,7 +123,7 @@ def render_report(model, facts=None):
 def render_video(model, style="strip"):
     """A capture-oriented 1080x1350 page.
 
-    ``strip`` shows the algorithm as it happens — seed cuts, parallel drains, stealing.
+    ``strip`` shows the algorithm as it happens — seed cuts, parallel drains, splits.
     ``map`` shows the space-time carving diagram: denser, more diagnostic, harder to narrate
     cold. Both expose ``window.__seek(ms)`` and draw synchronously so a driver can step them
     frame by frame instead of racing a live animation.

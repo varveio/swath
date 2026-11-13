@@ -26,6 +26,7 @@ import (
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
@@ -92,6 +93,10 @@ type Config struct {
 	// stopped listing and a dry run (nothing ordered) never call it. It
 	// should return promptly: the drain's segments are planned after it.
 	ListingDone func()
+	// Trace, if set, is the run trace (swath diag list --trace): handed to
+	// the source before it lists (source.Traced; a source without one is
+	// refused); the caller closes it after Run.
+	Trace *runtrace.Writer
 
 	// remote is the remote dataset's run, once its destination is opened.
 	remote *remoteState
@@ -699,6 +704,13 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 		if err := jr.src.Restart(string(last.Part.MaxKey)); err != nil {
 			return sum.failed(err)
 		}
+	}
+	if cfg.Trace != nil {
+		t, ok := src.(source.Traced)
+		if !ok {
+			return sum.failed(&ConfigError{Reason: "--trace: this source is not listed by the range engine (S3, GCS and Azure Blob are)"})
+		}
+		t.TraceTo(cfg.Trace)
 	}
 	sum.Output.PartsRetained, sum.Output.RowsRetained = jr.resumedParts(), jr.resumedRows()
 	return pipeline(ctx, cfg, sum, src, s, jr)

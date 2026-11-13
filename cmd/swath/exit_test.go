@@ -135,11 +135,17 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143 and 130: signals, graceful, resumable.
+	// 143 and 130: signals, graceful, resumable. The interrupted run is
+	// traced: its trace parses and ends in run_end with the outcome.
 	slow.Store(true)
 	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted} {
 		dir := filepath.Join(t.TempDir(), "sig")
-		cmd := exec.Command(bin, s3args("bkt", dir)...)
+		args := s3args("bkt", dir)
+		trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
+		if sig == syscall.SIGINT {
+			args = append(append([]string{"diag"}, args...), "--trace", trace)
+		}
+		cmd := exec.Command(bin, args...)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -150,6 +156,25 @@ func TestExitCodes(t *testing.T) {
 		}
 		if o := outcome(dir); o.ExitCode != want || !o.Resumable {
 			t.Fatalf("%v: %+v", sig, o)
+		}
+		if sig != syscall.SIGINT {
+			continue
+		}
+		b, err := os.ReadFile(trace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
+		var end map[string]any
+		for i, l := range lines {
+			var e map[string]any
+			if err := json.Unmarshal(l, &e); err != nil {
+				t.Fatalf("trace line %d %q: %v", i, l, err)
+			}
+			end = e
+		}
+		if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
+			t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
 		}
 	}
 	// 75: stuck, when nothing progresses for the stall timeout.

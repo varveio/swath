@@ -3,7 +3,11 @@
 
 package source
 
-import "time"
+import (
+	"time"
+
+	"github.com/varveio/swath/internal/runtrace"
+)
 
 // Locator says what a source lists, for the dataset's metadata.
 type Locator struct {
@@ -42,6 +46,15 @@ type Resumable interface {
 	// Restart is called before Root: every row the source emits must sort
 	// after key after.
 	Restart(after string) error
+}
+
+// Traced sources write a run trace (swath diag list --trace,
+// docs/internals/trace.md): the range engine's.
+type Traced interface {
+	// TraceTo is called before Root, after Restart: the source writes its
+	// run_start and every later event to w. The caller closes w after the
+	// run.
+	TraceTo(w *runtrace.Writer)
 }
 
 // Capable sources say which optional behaviours this instance supports;
