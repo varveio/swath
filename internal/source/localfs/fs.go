@@ -182,11 +182,19 @@ var _ source.Provider[Range, Entry] = (*Provider)(nil)
 
 // New validates root and returns a provider for it. A root that is not a
 // directory (a file, as du and ls take one) lists as its one entry, keyed
-// by its name.
+// by its name. A root directory that cannot be opened is an error, as one
+// that does not exist: a listing of it would hold nothing.
 func New(root string, opt Options) (*Provider, error) {
 	fi, err := os.Stat(root)
 	if err != nil {
 		return nil, err
+	}
+	if fi.IsDir() {
+		d, err := os.Open(root)
+		if err != nil {
+			return nil, err
+		}
+		_ = d.Close()
 	}
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")

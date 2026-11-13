@@ -211,6 +211,9 @@ is not a directory: regular files, symbolic links, devices) and directories, eac
 `/`. swath walks the tree through the operating system, so a mounted share (NFS, SMB, a FUSE mount) lists as
 any directory does.
 
+A root directory that does not exist or cannot be opened (permissions) stops the run before anything is
+written, with exit 1 and one line on stderr (`swath: DIR: permission denied`).
+
 A SOURCE that is a file is read as the same entry in a listing of its parent: at the `--metadata` tier, and a
 symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never followed. Its key is its name.
 
