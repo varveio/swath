@@ -121,7 +121,8 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 
 The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
 (`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
-(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`). A provider on the range engine has them all, and they
+(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`), and `Traced` (`TraceTo`, the run trace:
+[trace.md](trace.md)). A provider on the range engine has them all, and they
 are listed once, as `keyrange.Registered` (with `Listed`): its opened source embeds that interface set to the
 provider, beside the `registry.Bound` of the same provider, so the methods are promoted and nothing else of the
 provider is (not its `Root`, `Expand`, `Stats`, `Options` or counter `Set`); a provider that lacks one fails to
@@ -152,7 +153,8 @@ opened source with `registry.Bind`. A range-engine source embeds `keyrange.Regis
 provider. The opened type supplies `Locator`, `Identity`, `Capabilities`, `Report` and, where known,
 `Tariff`, with compile-time interface assertions for each row type. The factory declares classification
 (`objhttp.Label` for the object stores), encoder admission, prefix helpers, root redaction, secrets,
-operational flags, help hints and root usage as applicable. Command dispatch, scheme lists, help, flag
+operational flags, help hints and root usage as applicable, and its bound schemas' `Info` (`Schemas`), by
+which `swath du --from-dataset` reads its datasets. Command dispatch, scheme lists, help, flag
 ownership, resume overrides and argument redaction derive from registration.
 
 These integrations still require work outside the provider directory:

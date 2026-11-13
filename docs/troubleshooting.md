@@ -96,6 +96,20 @@ swath dataset there and nothing else; a directory holding other files stays refu
 swath: -o: inventory: output directory does not hold a previous swath dataset
 ```
 
+An output inside the local tree being listed (`swath list tree -o tree/inventory`) is refused when it is not empty, with or without `--overwrite`,
+which never replaces anything inside the listed tree. Write the dataset to a new directory outside it:
+
+```text
+swath: -o: tree/inventory: output directory is not empty, and cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)
+```
+
+When that directory holds an interrupted run (of another source), `swath resume DIR` still continues it; it is
+never replaced there:
+
+```text
+swath: -o: tree/inventory: output directory is not empty, and cannot replace an output inside the listed root: it holds an interrupted run (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)
+```
+
 A directory that holds an interrupted run is continued with `swath resume DIR`, or replaced with `--overwrite`:
 
 ```text
@@ -201,6 +215,12 @@ A part, the journal or the manifest could not be written. Free space, or move th
 larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almost every row once on the
 output's filesystem: size the disk as [production.md](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
+
+A run that is far short of spill room does not exit 74: it keeps going at the output's pace, which on a very
+large bucket can be a few rows a second. `resources.spill.refused` above 0 in the report, or a request rate in
+`progress.json` that collapsed, is the sign
+([the first bad pattern](production.md#three-bad-patterns)). Stop it and resume on a larger disk or with a
+larger `--spill-budget`.
 
 ## Memory is higher than `--sort-buffer`
 

@@ -1,4 +1,4 @@
-"""swath-explainer — turn a swath run's --trace log into a readable explanation.
+"""swath-explainer — turn a swath run trace (swath diag list --trace) into a readable explanation.
 
 See the README beside this package for what it produces and how to run it.
 """

@@ -234,7 +234,8 @@ The manifest's fields are in [../dataset.md](../dataset.md#the-swath-extension).
 
 Output safety: the source root is validated first; the output may not be the root or an ancestor of it (by path
 and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of
-this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk.
+this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk
+(`source.Excluder`), as a text file, its temporary and its scratch directory are.
 
 **`--overwrite` is a destructive replacement, not an atomic one.** Under the output lock, before anything is
 listed, the previous dataset's commit record (`manifest.json`, or an earlier layout's `_SUCCESS`) is removed
@@ -286,7 +287,12 @@ with accessors; missing, repeated or mistyped role columns are refused. A schema
 
 A producer also declares its storage-class column, `schema.Info.StorageClass` (`storage_class` for S3 and GCS,
 `access_tier` for Azure Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
-a declaration that names no string column.
+a declaration that names no string column. A local tree declares its containers the same way,
+`schema.Info.Containers` (the rows whose `kind` is `DIR`): `schema.Bind` derives `Schema.Container` from it,
+which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Each provider
+lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
+declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
+the dataset's columns (`registry.DatasetTotals`).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer

@@ -117,6 +117,8 @@ func TestRegisteredSources(t *testing.T) {
 		missing("Reusing", ok)
 		_, ok = src.(source.Fencing)
 		missing("Fencing", ok)
+		_, ok = src.(source.Traced)
+		missing("Traced", ok)
 		if _, ok := src.(source.Priced); ok != c.priced {
 			t.Errorf("%s: Priced %v, want %v", c.name, ok, c.priced)
 		}

@@ -129,6 +129,43 @@ func TestProfilePathsCannotReplaceManagedOutput(t *testing.T) {
 	}
 }
 
+// TestOpenedSidePathsNotInOutput: a profile, which is opened before the
+// run, may not be an ordinary name directly in an existing empty output
+// directory either: the run would find the directory not empty and refuse
+// its own file. It is refused up front (exit 2) and nothing is created;
+// --report, written after the run, may go there. (--trace is checked as a
+// profile is: TestTraceFlag.)
+func TestOpenedSidePathsNotInOutput(t *testing.T) {
+	captureStderr(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	for _, env := range []string{"SWATH_CPUPROFILE", "SWATH_MEMPROFILE"} {
+		out := filepath.Join(t.TempDir(), "OUT")
+		if err := os.Mkdir(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(env, filepath.Join(out, "run.prof"))
+		err := run(context.Background(), []string{src, "-o", out, "--no-progress", "--no-stats"}, &buf, false)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "is in the output directory") {
+			t.Fatalf("%s in OUT: %v, want a refusal", env, err)
+		}
+		if ents, _ := os.ReadDir(out); len(ents) != 0 {
+			t.Fatalf("%s in OUT: the refused run left %d entries", env, len(ents))
+		}
+		t.Setenv(env, "")
+	}
+	out := filepath.Join(t.TempDir(), "OUT")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background(), []string{src, "-o", out, "--report", filepath.Join(out, "r.json"), "--no-progress", "--no-stats"}, &buf, false); err != nil {
+		t.Fatalf("--report in an empty OUT: %v", err)
+	}
+}
+
 // TestResumeCannotReplaceManagedOutput (R8): swath resume checks --report
 // before any refusal or completion settles, as a list command does. On a
 // committed dataset, a resume with --report OUT/manifest.json is refused
@@ -361,10 +398,10 @@ func TestSamePlace(t *testing.T) {
 	o := options{out: filepath.Join(base, "NEW")}
 	for _, f := range []bool{false, true} {
 		fold = f
-		if _, err := checkSidePath(o, filepath.Join(base, "new", "manifest.json")); (err != nil) != f {
+		if _, err := checkSidePath(o, filepath.Join(base, "new", "manifest.json"), false); (err != nil) != f {
 			t.Errorf("a fresh output's manifest, other case, fold %v: %v", f, err)
 		}
-		if _, err := checkSidePath(o, filepath.Join(base, "new", "report.json")); err != nil {
+		if _, err := checkSidePath(o, filepath.Join(base, "new", "report.json"), false); err != nil {
 			t.Errorf("an ordinary report, fold %v: %v", f, err)
 		}
 	}
@@ -491,7 +528,7 @@ func TestFoldsCaseProbe(t *testing.T) {
 		t.Error("foldsCase: a letterless name not deferred to its parent's")
 	}
 	o := options{out: filepath.Join(dir, "x")}
-	if _, err := checkSidePath(o, filepath.Join(dir, "X", "manifest.json")); err != nil {
+	if _, err := checkSidePath(o, filepath.Join(dir, "X", "manifest.json"), false); err != nil {
 		t.Errorf("a distinct fresh directory differing by case refused: %v", err)
 	}
 }

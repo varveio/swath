@@ -11,6 +11,7 @@ import (
 
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/client"
 	"github.com/varveio/swath/internal/source/keyrange"
@@ -18,7 +19,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, GenerationSchema.Info}, Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Operational: []string{"gcs-credentials-file"},
 		Title:       "GCS", Example: "gs://bucket", Usage: "gs://bucket[/prefix]"})
@@ -152,7 +153,7 @@ func (o *opened[P]) Report() source.Report {
 	return keyrange.Report("gcs", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
-// The registered source's whole method set (keyrange.Registered: the ten
+// The registered source's whole method set (keyrange.Registered: the eleven
 // optional interfaces a range-engine provider gives the pipeline); a
 // capability whose method went missing would silently be off.
 var (

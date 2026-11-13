@@ -5,6 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `swath du --from-dataset DIR [PREFIX]` totals a committed local dataset (`swath list -o DIR`)
+  instead of listing the source again: the same rows, depths, orders, formats and filters as `swath du` of the
+  source, read in one parallel pass over the key and the columns the totals need, seeking to PREFIX when one is
+  given. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
+  `dataset` member; a dataset whose listing did not complete prints its totals and exits 1 (`incomplete`).
+  Options that shape a listing, a dataset in a bucket and an interrupted run are refused. Plain `swath du DIR`
+  still totals DIR's files (#392).
+
 - The Java implementation, its Gradle build, Java images and Java CI jobs are removed from the
   repository; the last Java release is v0.3.2, and the final tree is preserved at the tag
   `java-final` (#73).

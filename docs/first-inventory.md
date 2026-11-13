@@ -86,6 +86,14 @@ was published, what was listed, how completely, and what the parts hold. Here `c
 `skipped=0` and no filters means the dataset covers the whole tree. Read the coverage line before you rely
 on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains each field.
 
+The saved inventory answers step 1 again without walking the tree:
+
+```bash
+swath du --from-dataset media-inventory -d 1
+```
+
+It prints the totals of step 1 as they were when the tree was listed, and says on stderr when that was and
+whether the listing was complete ([swath du](commands/swath-du.md#totals-from-a-saved-dataset)).
 To read the rows themselves, open the parts the manifest lists with DuckDB, Python or another Parquet
 reader ([reading a dataset](running.md#reading-the-output)).
 

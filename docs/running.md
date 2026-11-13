@@ -18,7 +18,7 @@ swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
 | Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling. A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
 | Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `invocation.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by an encoder allowance of 1/16 of memory (at most 1 GiB, whatever `--sort-buffer` says), each encoder priced at the schema's calculated working set plus, writing to a bucket, its upload buffer (a GCS chunk, an S3 part or an Azure block), and by the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
-| Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's in `$TMPDIR/swath-ATTEMPT-RANDOM/spill/`, as a stream has no directory; a listed tree holding either leaves it out; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
 
 ### Disk
@@ -28,9 +28,9 @@ filesystem (spill lives under the output directory, or beside a text file). The 
 durable spill a journaled run keeps for a resume (`DIR/.swath/spill/durable/`): a certified file stays on
 disk, charged to the cap, until the published dataset covers its keys, and when the cap is reached the
 oldest file already consumed is evicted (its keys are then relisted after a crash); the report's
-`resources.spill.durable.retained_bytes` and `peak_retained_bytes` show it. A text file's scratch directory
-is its attempt's own (created exclusively, named for the file and the attempt), so two runs writing sibling
-files, or the same one, never share or remove each other's; the attempt removes it when it ends, after
+`resources.spill.durable.retained_bytes` and `peak_retained_bytes` show it. A text file's scratch directory,
+and a stdout stream's under `$TMPDIR`, is its attempt's own (created exclusively, named for the file and the
+attempt), so two runs writing sibling files, the same one, or streams never share or remove each other's; the attempt removes it when it ends, after
 success or failure. Only a killed run leaves one behind, with its `.NAME.*.tmp`: delete both. Estimate the dataset from a representative prefix: the
 report's `output.output_bytes` over `output.rows_committed`; `resources.free_disk_min_bytes` is the least free space the run saw. If the dataset outgrows the disk the run stops with exit
 74 and resumes once there is space. Spill backs off rather than fail when a frame does not fit (the run
@@ -92,7 +92,8 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
 - **Output directory.** `-o DIR` must be empty or absent. A non-empty directory is refused (exit 2) unless
   `--overwrite`, which replaces only a previous dataset of this tool. For a local source the output may not be
   the listed root or contain it; a new or empty directory inside the root is accepted (the listing skips it),
-  but `--overwrite` of an output inside the root is refused.
+  but `--overwrite` of an output inside the root is refused, and a non-empty one is refused saying so: write
+  to a new directory outside the root.
 - **The outcome of record** is the exit code plus the report written to `--report FILE` when the attempt ends,
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when

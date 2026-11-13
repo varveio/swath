@@ -69,6 +69,10 @@ per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still lis
 64-worker ideal (`stale4`, 2026-11-07). The prior must be the same bucket and prefix, or the run is refused
 (exit 2). The output is the same with or without a prior.
 
+A prior does not reduce spill: the run still lists ahead of the output across the whole keyspace, so size the
+disk as for a cold run ([disk sizing](#disk-sizing)). What the previous dataset does give is the size to plan
+for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
+
 ## A healthy run report
 
 Five fields to check in the `--report` file of a sorted listing of a million keys or more:
@@ -89,9 +93,14 @@ key-uniform order and the output waits for the leftmost one.
 
 **Spill refused, workers waiting.** `resources.spill.refused` is above 0 and `resources.budget_wait_ns` is
 large. `resources.free_disk_min_bytes` is close to `resources.spill.reserve_bytes`, or the spill reached
-`resources.spill.max_bytes`. Listing then runs at the output's pace. Give it disk: a larger filesystem for
-the output, or a larger `--spill-budget` when the filesystem has the room. An interrupted run resumes with the
-new value: `swath resume DIR --spill-budget 200GiB`.
+`resources.spill.max_bytes`. Listing then runs at the output's pace, and on a very large bucket that pace
+can be a small fraction of the listing's: three listings of 8 to 30 billion objects on a 100 GiB disk at 2,048
+workers fell from about 7,000 requests a second to about 10 once the spill cap filled, and were stopped after
+four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
+The run does not fail and does not stop by itself: watch `progress.json`, or bound the run with
+`--max-duration`. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
+filesystem has the room. The cap is fixed when the run starts, so enlarging the disk under a running process
+does not raise it: stop the run and resume with the new value, `swath resume DIR --spill-budget 200GiB`.
 
 **A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `rows`
 rises while `encoded` and `parts` stay flat and `part_age_ms` grows. One range at the front of the output is
@@ -265,10 +274,16 @@ machine:
   keys with real ETags in the frame benchmark, and about 30 bytes per row on the live listing above (`cogslive1`:
   32 GB for 1.08 billion spilled rows). At the peak, a median 71 % of the rows were listed ahead of the output
   on lists of 20M keys or more (candidate 4, run `c4big`, plain frames), so live spill can come close to the
-  dataset's own size.
-- **Peak spill** ≈ 0.7 × rows × spill bytes per row. The default spill budget is half of (free space at the
+  dataset's own size. On listings of a billion objects and more it reaches it: 96 to 99 % of the rows were
+  ahead of the output at the peak, at 18 to 22 bytes per row
+  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
+- **Peak spill** ≈ 0.7 × rows × spill bytes per row; above a billion objects plan for every row, rows × spill
+  bytes per row. The default spill budget is half of (free space at the
   start − the 1 GiB reserve), so the free space needed is about the dataset plus twice the peak spill plus
   1 GiB.
+- **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing of
+  a bucket is the one that can outgrow its disk. Give it room to spare, bound it with `--max-duration`, and
+  size later runs from its manifest's row count.
 - **A dataset in a bucket:** the work directory needs no room for the dataset. Size it as the spill budget
   plus metadata plus the 1 GiB reserve: set `--spill-budget` explicitly (the default, half the free space,
   follows whatever disk there is), and allow for the metadata, which grows with the parts (a claim receipt of
@@ -278,5 +293,6 @@ machine:
   run's `resources.spill.peak_bytes` before shrinking the disk.
 - **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;
   so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
-  disk the run still completes, but frames are refused and listing slows to the output's pace (the first bad
-  pattern above); set `--spill-budget` explicitly when you know the room.
+  disk frames are refused and listing slows to the output's pace (the first bad
+  pattern above): a run a little short of disk still completes, and a run far short of it may not finish in
+  any useful time. Set `--spill-budget` explicitly when you know the room.

@@ -1,29 +1,31 @@
 """Key bytes, and the projections that make a keyspace drawable."""
 
 import collections
-import re
 
 POS_BYTES = 8
-
-_ESCAPE_RE = re.compile(r"\\x([0-9a-fA-F]{2})")
 
 
 # --------------------------------------------------------------------------- keys
 
 
-def unescape(text):
-    """Reverse ``ControlCharEscaper``: ``\\xHH`` back to the character it stands for.
+def key_bytes(value):
+    """A trace key as the bytes swath compares.
 
-    Exact for every key that does not itself contain the literal sequence
-    backslash-x-hexdigit-hexdigit — an ambiguity inherent to the trace format, not
-    introduced here.
+    The trace writes a key as a JSON string when it is valid UTF-8 and as
+    ``{"hex": "..."}`` when it is not (docs/internals/trace.md), so every byte
+    survives either way. ``None`` (an absent field) stays ``None``.
     """
-    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return bytes.fromhex(value.get("hex", ""))
+    return value.encode("utf-8", errors="surrogatepass")
 
 
-def key_bytes(text):
-    """A trace key string as the UTF-8 bytes swath itself compares."""
-    return unescape(text).encode("utf-8", errors="surrogatepass")
+def key_text(value):
+    """A trace key for display: its text, with any byte that is not UTF-8 as ``\\xNN``."""
+    kb = key_bytes(value)
+    return None if kb is None else kb.decode("utf-8", errors="backslashreplace")
 
 
 def common_prefix(items):
@@ -48,21 +50,21 @@ def _fraction(kb, skip):
 class MassAxis:
     """The measured key-mass CDF, as a projection of key bytes onto [0, 1].
 
-    Built from ``(cursor, keys)`` pairs — one per committed page. Sorting them by cursor
-    and accumulating the key counts gives the empirical distribution of objects across the
-    keyspace; a key's position is its share of the bucket below it. Equal width is
-    therefore equal objects, which is what makes a dense region legible instead of a
-    hairline.
+    Built from ``(last, rows)`` pairs — one per page. Sorting them by key and
+    accumulating the row counts gives the empirical distribution of objects across
+    the keyspace; a key's position is its share of the bucket below it. Equal width
+    is therefore equal objects, which is what makes a dense region legible instead
+    of a hairline.
 
-    A key falling between two measured cursors is interpolated by byte value inside that
-    gap, so the projection stays monotone for the synthesized pivots and seed bounds that
-    were never themselves a page cursor.
+    A key falling between two measured page ends is interpolated by byte value inside
+    that gap, so the projection stays monotone for the synthesized pivots and seed
+    bounds that were never themselves a page's last key.
     """
 
     def __init__(self, points):
         merged = collections.OrderedDict()
-        for cursor, keys in sorted(points):
-            merged[cursor] = merged.get(cursor, 0) + keys
+        for key, rows in sorted(points):
+            merged[key] = merged.get(key, 0) + rows
         self.keys = list(merged.keys())
         total = float(sum(merged.values())) or 1.0
         self.cum, running = [], 0.0
@@ -95,5 +97,3 @@ class MassAxis:
         a, b, k = _fraction(left, skip), _fraction(right, skip), _fraction(kb, skip)
         frac = 0.0 if b <= a else min(1.0, max(0.0, (k - a) / (b - a)))
         return below + (above - below) * frac
-
-

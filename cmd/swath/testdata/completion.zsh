@@ -87,6 +87,7 @@ _swath_du() {
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
+        '--from-dataset=[total the dataset saved in DIR (swath list -o DIR) instead of listing]:DIR:_files -/' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
@@ -204,6 +205,7 @@ _swath_diag_list() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
@@ -285,6 +287,7 @@ _swath_diag_count() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
@@ -344,6 +347,7 @@ _swath_resume() {
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--s3-profile=[the shared config profile to take credentials and region from]:NAME: ' \

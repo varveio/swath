@@ -20,7 +20,8 @@ import (
 // the same for every source. prefix_base64 replaces prefix for a prefix
 // that is not UTF-8 (a local name's bytes), which a JSON string cannot
 // carry exactly; allocated_size replaces size with --allocated; a local
-// tree's rows add dirs and unsized.
+// tree's rows add dirs and unsized; JSONL totals read from a dataset add
+// dataset (TotalsLayout.Dataset).
 const (
 	FieldDepth         = "depth"
 	FieldPrefix        = "prefix"
@@ -31,6 +32,7 @@ const (
 	FieldAllocatedSize = "allocated_size"
 	FieldUnsized       = "unsized"
 	FieldLastModified  = "last_modified"
+	FieldDataset       = "dataset"
 )
 
 // The table's headings are the fields' names, as the rows table's are the
@@ -56,6 +58,11 @@ type TotalsLayout struct {
 	// Loc is the table's time zone (nil: time.Local); TSV and JSONL are
 	// UTC.
 	Loc *time.Location
+	// Dataset, if set, is a JSON object that every JSONL row carries as
+	// its last member, FieldDataset: where totals read from a saved
+	// dataset came from (swath du --from-dataset). TSV and the table have
+	// a fixed shape, and the command states it on stderr instead.
+	Dataset []byte
 }
 
 // WriteTotals writes per-prefix totals (swath du): TSV under a header line
@@ -133,6 +140,9 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 				b = append(appendTime(append(b, `,"`+FieldLastModified+`":"`...), r.Newest), '"')
 			} else {
 				b = append(b, `,"`+FieldLastModified+`":null`...)
+			}
+			if l.Dataset != nil {
+				b = append(append(b, `,"`+FieldDataset+`":`...), l.Dataset...)
 			}
 			b = append(b, '}')
 		case Table:

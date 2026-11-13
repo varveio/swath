@@ -15,7 +15,8 @@ How swath works, what it promises and how that is tested and measured. The user'
 7. [run-lifecycle.md](run-lifecycle.md): outcome classification and recording, liveness, the forced exit,
    side-path checks, encoder sizing.
 8. [counters.md](counters.md): every counter in the run report.
-9. [diagnostics.md](diagnostics.md): `swath diag` and its options, tracing and profiling.
+9. [diagnostics.md](diagnostics.md): `swath diag` and its options, tracing and profiling;
+   [trace.md](trace.md) for the run trace's schema.
 10. [dependencies.md](dependencies.md): the modules swath depends on and why.
 11. [testing.md](testing.md): test tiers, CI jobs, stress repeats, fixtures.
 12. [measurements.md](measurements.md): the evidence, by run and date.

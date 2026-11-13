@@ -26,6 +26,7 @@ import (
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
@@ -92,6 +93,10 @@ type Config struct {
 	// stopped listing and a dry run (nothing ordered) never call it. It
 	// should return promptly: the drain's segments are planned after it.
 	ListingDone func()
+	// Trace, if set, is the run trace (swath diag list --trace): handed to
+	// the source before it lists (source.Traced; a source without one is
+	// refused); the caller closes it after Run.
+	Trace *runtrace.Writer
 
 	// remote is the remote dataset's run, once its destination is opened.
 	remote *remoteState
@@ -700,6 +705,13 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 			return sum.failed(err)
 		}
 	}
+	if cfg.Trace != nil {
+		t, ok := src.(source.Traced)
+		if !ok {
+			return sum.failed(&ConfigError{Reason: "--trace: this source is not listed by the range engine (S3, GCS and Azure Blob are)"})
+		}
+		t.TraceTo(cfg.Trace)
+	}
 	sum.Output.PartsRetained, sum.Output.RowsRetained = jr.resumedParts(), jr.resumedRows()
 	return pipeline(ctx, cfg, sum, src, s, jr)
 }
@@ -820,6 +832,20 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			return a.sum.failed(err)
 		}
 		text, env.Text = t, t
+		// A text file inside a local tree is left out of it, as a dataset
+		// directory is (owned): the file (a previous run's, until this one
+		// renames over it), its temporary and this attempt's scratch.
+		if ex, ok := src.(source.Excluder); ok {
+			for _, p := range append(t.Paths(), scratch) {
+				if p == "" {
+					continue
+				}
+				if err := ex.Exclude(p); err != nil {
+					t.Abort()
+					return a.sum.failed(err)
+				}
+			}
+		}
 	}
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes
@@ -1062,20 +1088,22 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		// A text file spills beside itself, on the filesystem it is
 		// written to; a stream has no directory of its own and spills
 		// under the temporary directory ($TMPDIR), which the user points
-		// at a disk.
-		oopt.SpillDir = os.TempDir()
+		// at a disk. Either way in this attempt's own scratch directory,
+		// which a listed tree holding it leaves out.
+		dir, name := os.TempDir(), ""
 		if path := cfg.Output.Text.Path; path != "" {
-			if scratch, err = textScratch(path, cfg.Attempt); err != nil {
-				return oopt, "", err
-			}
-			oopt.SpillDir = filepath.Join(scratch, "spill")
+			dir, name = filepath.Dir(path), filepath.Base(path)
 		}
+		if scratch, err = textScratch(dir, name, cfg.Attempt); err != nil {
+			return oopt, "", err
+		}
+		oopt.SpillDir = filepath.Join(scratch, "spill")
 	}
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
 			fix := "write the output to a disk"
-			if scratch == "" && cfg.Output.Dir == "" {
+			if cfg.Output.Dir == "" && cfg.Output.Text != nil && cfg.Output.Text.Path == "" {
 				fix = "set TMPDIR to a disk"
 			}
 			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix))
@@ -1106,19 +1134,23 @@ func removeSpill(spill string, keep bool) error {
 	return errors.Join(errs...)
 }
 
-// textScratch makes the scratch directory of one attempt writing the text
-// file path: beside it, named for it and the attempt
+// textScratch makes the scratch directory of one attempt writing text: for
+// the file NAME, in its directory dir, named for it and the attempt
 // (.NAME.swath-ATTEMPT-RANDOM, created exclusively), so its spill is on
-// the output's filesystem, and two attempts writing sibling outputs, or
-// the same one, never share or remove each other's. Only the attempt that
-// made it removes it; a killed attempt leaves it (with its .NAME.*.tmp)
-// for the user to delete.
-func textScratch(path string, att *Attempt) (string, error) {
-	prefix := "." + filepath.Base(path) + ".swath-"
+// the output's filesystem; for the stream (name ""), in the temporary
+// directory dir (swath-ATTEMPT-RANDOM). Two attempts writing sibling
+// outputs, the same one, or streams never share or remove each other's.
+// Only the attempt that made it removes it; a killed attempt leaves it
+// (with a file's .NAME.*.tmp) for the user to delete.
+func textScratch(dir, name string, att *Attempt) (string, error) {
+	prefix := "swath-"
+	if name != "" {
+		prefix = "." + name + ".swath-"
+	}
 	if att != nil && len(att.ID) >= 8 {
 		prefix += att.ID[:8] + "-"
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(path), prefix+"*")
+	dir, err := os.MkdirTemp(dir, prefix+"*")
 	if err != nil {
 		return "", fmt.Errorf("text output: scratch directory: %w", err)
 	}
