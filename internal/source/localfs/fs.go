@@ -312,7 +312,14 @@ func (p *Provider) expandFile(out *Out, st *Stats) error {
 			st.note(&st.ReadlinkErrors, p.root, err)
 		}
 	}
-	return p.emit(Range{}, []Row{row}, out)
+	// A leaf whatever its kind: a root that became a directory after New is
+	// its one row, not a walk (its range is the file root's, read again).
+	return out.Rows([]Row{row}, func(row *Row) (string, tree.Walk) {
+		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
+			return "", tree.Omit
+		}
+		return "", tree.Leaf
+	})
 }
 
 func sortRows(rows []Row) {

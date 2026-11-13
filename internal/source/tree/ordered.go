@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/internal/counters"
@@ -115,6 +116,21 @@ type Ordered[P any] struct {
 
 	mu    sync.Mutex
 	known map[string]*known[P] // per directory: what has been read of it
+
+	// advanced and emptyChained are the mode's own reads' progress for the
+	// watchdog (Frontier), beside the engine's: first pages, inner
+	// resolution pages and lookups.
+	advanced, emptyChained atomic.Int64
+}
+
+// Frontier is the walk's key-space progress (source.Advancing): the
+// engine's, plus the mode's own reads that held an entry, ended a
+// directory or answered a lookup, and a directory's empty continuing first
+// pages within keyrange.EmptyChainLive of their run; past that bound they
+// are emptyChained (followed, but not progress), as the engine counts its own.
+func (o *Ordered[P]) Frontier() (advanced, emptyChained int64) {
+	a, e := o.eng.Frontier()
+	return a + o.advanced.Load(), e + o.emptyChained.Load()
 }
 
 var _ Reader[struct{}, keyrange.Range, int] = (*Ordered[int])(nil)
@@ -160,6 +176,7 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 	q := &keyrange.Query{Prefix: r.Prefix, Max: o.page}
 	var pg *keyrange.Page[P]
 	wait := requeueFirstWait
+	empty := 0 // the run of empty continuing first pages
 	for {
 		var err error
 		if pg, err = o.list(ctx, q, k); err != nil {
@@ -182,7 +199,15 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 			continue
 		}
 		if !pg.Truncated || len(pg.Rows) > 0 {
+			if len(pg.Rows) == 0 {
+				o.advanced.Add(1) // a directory ended (its entries' reads counted in list)
+			}
 			break
+		}
+		if empty++; empty <= keyrange.EmptyChainLive {
+			o.advanced.Add(1)
+		} else {
+			o.emptyChained.Add(1)
 		}
 		if pg.Token == "" {
 			return source.Violation(fmt.Errorf("%w: truncated directory page without a token in %q", keyrange.ErrInvalidPage, r.Prefix))
@@ -355,6 +380,9 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 			continue
 		}
 		wait = requeueFirstWait
+		if len(pg.Entries) > 0 {
+			o.advanced.Add(1)
+		}
 		for i := range pg.Entries {
 			e := &pg.Entries[i]
 			if e.Name == "" || strings.IndexByte(e.Name, '/') >= 0 || (prev != "" || i > 0) && e.Name <= prev {
@@ -400,6 +428,7 @@ func (o *Ordered[P]) lookup(ctx context.Context, k *known[P], dir, name string) 
 	if err != nil {
 		return Entry[P]{}, false, err
 	}
+	o.advanced.Add(1)
 	if ok && (e.Name != name || !e.Dir) {
 		return Entry[P]{}, false, source.Violation(fmt.Errorf("%w: lookup of %q in %q answered %q", keyrange.ErrInvalidPage, name, dir, e.Name))
 	}

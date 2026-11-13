@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
@@ -475,5 +476,30 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestFileRootBecomesDir: a file root replaced by a directory after New is
+// listed as its one row, a leaf, not walked again and again.
+func TestFileRootBecomesDir(t *testing.T) {
+	root := t.TempDir()
+	mk(t, root, "d/f", false)
+	file := filepath.Join(root, "d", "f")
+	p, err := New(file, Options{NoDirs: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	mk(t, file, "inner", false)
+	c := &collect{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := order.Run[Range, Entry](ctx, p, c, &Schema, order.Options{Workers: 2, Budget: 1 << 20}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.rows) != 1 || c.rows[0].Key != "f" {
+		t.Fatalf("rows %+v", c.rows)
 	}
 }

@@ -483,3 +483,48 @@ func TestOrderedCacheBounded(t *testing.T) {
 		t.Fatalf("fallback lookup: entry=%+v ok=%v err=%v requests=%d", e, ok, err, h.lookups.Load())
 	}
 }
+
+// emptyFirst answers a directory's first page with n empty continuing
+// pages before the namespace's own.
+type emptyFirst struct {
+	*hns
+	n int
+}
+
+func (e *emptyFirst) List(ctx context.Context, q *DirQuery) (*DirPage[obj], error) {
+	k := 0
+	if t, ok := strings.CutPrefix(q.Token, "empty:"); ok {
+		k, _ = strconv.Atoi(t)
+	} else if q.Token != "" {
+		return e.hns.List(ctx, q)
+	}
+	if k < e.n {
+		return &DirPage[obj]{Truncated: true, Token: "empty:" + strconv.Itoa(k+1)}, nil
+	}
+	in := *q
+	in.Token = ""
+	return e.hns.List(ctx, &in)
+}
+
+// TestOrderedFrontier: a directory's empty continuing first pages advance
+// the walk only within keyrange.EmptyChainLive of their run; past it they
+// are emptyChained, so the watchdog sees a run of them as no progress.
+func TestOrderedFrontier(t *testing.T) {
+	h := &emptyFirst{hns: newHNS([]string{"a", "b"}), n: keyrange.EmptyChainLive + 5}
+	o, err := NewOrdered[obj](h, keyrange.Options{Workers: 1, PageSize: 10}, keyrange.Description[obj]{Target: "hns", Listing: keyrange.Listing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := NewWalker[struct{}, keyrange.Range, obj](OrderedRange{}, o, Options[obj]{})
+	c := &collect{}
+	if _, err := order.Run[OrderedRange, obj](context.Background(), w, c, &testSchema, order.Options{Workers: 1, Budget: 1 << 24}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.keys, []string{"a", "b"}) {
+		t.Fatalf("keys %q", c.keys)
+	}
+	adv, empty := o.Frontier()
+	if empty != 5 || adv != int64(keyrange.EmptyChainLive)+1 {
+		t.Fatalf("frontier %d advanced, %d empty chained", adv, empty)
+	}
+}

@@ -214,6 +214,8 @@ var (
 	_ source.Reporter   = (*treeOpened)(nil)
 	_ source.Live       = (*treeOpened)(nil)
 	_ source.Faulted    = (*treeOpened)(nil)
+	_ source.Advancing  = (*treeOpened)(nil)
+	_ source.Requested  = (*treeOpened)(nil)
 )
 
 // Run installs recursive excludes before either whole-directory reads or
@@ -234,7 +236,15 @@ func (o *treeOpened) Listed() int64 {
 	return st.Files + st.Dirs
 }
 
-func (o *treeOpened) Answered() int64                     { return o.t.Answered() }
+func (o *treeOpened) Answered() int64 { return o.t.Answered() }
+
+// Frontier is the walk's key-space progress (source.Advancing), which the
+// watchdog takes in place of Answered: an empty continuing page answers
+// but does not advance.
+func (o *treeOpened) Frontier() (advanced, emptyChained int64) { return o.t.ord.Frontier() }
+
+// Requests is the run's live request account (source.Requested).
+func (o *treeOpened) Requests() source.Requests           { return o.t.Requests() }
 func (o *treeOpened) Faults() (throttles, timeouts int64) { return o.t.Faults() }
 
 // Locator records the root without its SAS.
