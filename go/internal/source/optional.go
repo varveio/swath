@@ -187,6 +187,21 @@ type Report struct {
 	// Coverage is what the dataset covers; it goes into the manifest,
 	// where applications read it.
 	Coverage Coverage
+	// Filesystem is the space of the filesystem that holds a local root,
+	// as the operating system reported it; nil when not measured (a remote
+	// source, a platform without a measurement, a failed call). It goes
+	// into the manifest.
+	Filesystem *FilesystemSpace
+}
+
+// FilesystemSpace is a filesystem's space as the operating system reports
+// it: what the filesystem says of itself, not a physical disk's capacity
+// or a promise of writable bytes.
+type FilesystemSpace struct {
+	TotalBytes     int64 // the filesystem's size
+	FreeBytes      int64 // free, including space reserved for the superuser
+	AvailableBytes int64 // free to an unprivileged writer (on Windows, within the caller's quota)
+	MeasuredAt     time.Time
 }
 
 // Coverage is what a dataset claims to cover.

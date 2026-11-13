@@ -169,7 +169,10 @@ type Manifest struct {
 	// predates it, a manifest written before the member existed) and never
 	// 0 for unknown.
 	CommittedObjectBytes *int64
-	Parts                []ManifestPart // in key order; part i is data/part-%05d.parquet
+	// Filesystem is extensions.swath.filesystem: the space of the
+	// filesystem that holds a local source's root; nil when not measured.
+	Filesystem *FilesystemSpace
+	Parts      []ManifestPart // in key order; part i is data/part-%05d.parquet
 }
 
 // Totals is a committed dataset's account, from its manifest: its rows and
@@ -209,18 +212,19 @@ func ObjectBytes(parts []Part, sized bool) *int64 {
 
 // swathExtension is extensions.swath.
 type swathExtension struct {
-	Version              int       `json:"version"`
-	PublishedAt          time.Time `json:"published_at"`
-	Source               Source    `json:"source"`
-	Scope                Scope     `json:"scope"`
-	Coverage             Coverage  `json:"coverage"`
-	CommittedObjectBytes *int64    `json:"committed_object_bytes,omitempty"`
+	Version              int              `json:"version"`
+	PublishedAt          time.Time        `json:"published_at"`
+	Source               Source           `json:"source"`
+	Scope                Scope            `json:"scope"`
+	Coverage             Coverage         `json:"coverage"`
+	CommittedObjectBytes *int64           `json:"committed_object_bytes,omitempty"`
+	Filesystem           *FilesystemSpace `json:"filesystem,omitempty"`
 }
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
 	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
-		CommittedObjectBytes: m.CommittedObjectBytes}
+		CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
@@ -255,7 +259,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
 		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, CommittedObjectBytes: x.CommittedObjectBytes,
-		Parts: make([]ManifestPart, len(sm.Parts))}
+		Filesystem: x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}
@@ -296,6 +300,17 @@ type Coverage struct {
 	ListingFinishedAt time.Time `json:"listing_finished_at"`
 }
 
+// FilesystemSpace is the space of the filesystem that holds a local
+// source's root, as its operating system reported it when the listing
+// ended. Free may exceed total on Windows, where a quota bounds the total
+// and the available bytes but not the free bytes.
+type FilesystemSpace struct {
+	TotalBytes     int64     `json:"total_bytes"`
+	FreeBytes      int64     `json:"free_bytes"`
+	AvailableBytes int64     `json:"available_bytes"`
+	MeasuredAt     time.Time `json:"measured_at"`
+}
+
 // ManifestPart is one part in the manifest: its path, relative to the
 // dataset root, and its PartInfo (keys exact, never truncated, base64).
 type ManifestPart struct {
@@ -315,6 +330,9 @@ type Meta struct {
 	// CommittedObjectBytes is the dataset's object bytes (ObjectBytes;
 	// nil: unknown, and the manifest leaves the member out).
 	CommittedObjectBytes *int64
+	// Filesystem is the local root's filesystem space (nil: not measured,
+	// and the manifest leaves the member out).
+	Filesystem *FilesystemSpace
 }
 
 // ReportError is a run report that could not be written after the dataset

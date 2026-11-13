@@ -27,7 +27,9 @@ func TestParseMetadata(t *testing.T) {
 		"scope": {"kind": "prefix", "prefix": "logs/"},
 		"coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0, "exclusions": [], "filters": [], "snapshot": false,
 			"listing_started_at": "2026-11-08T17:00:00Z", "listing_finished_at": "2026-11-08T17:59:00Z"},
-		"committed_object_bytes": 81234, "part_md5": ["ignored"]}, "other": {"x": 1}}`)
+		"committed_object_bytes": 81234,
+		"filesystem": {"total_bytes": 994662584320, "free_bytes": 462012616704, "available_bytes": 430573547520, "measured_at": "2026-11-08T17:59:01Z"},
+		"part_md5": ["ignored"]}, "other": {"x": 1}}`)
 	m, err := ParseMetadata(full)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +40,26 @@ func TestParseMetadata(t *testing.T) {
 		!*c.Complete || *c.StopReason != "completed" || *c.SkippedEntries != 0 || c.Exclusions == nil || c.Filters == nil || len(c.Filters) != 0 || *c.Snapshot ||
 		c.ListingStartedAt.Hour() != 17 || c.ListingFinishedAt.Minute() != 59 || m.CommittedObjectBytes == nil || *m.CommittedObjectBytes != 81234 {
 		t.Fatalf("parsed %+v", m)
+	}
+	if f := m.Filesystem; f == nil || *f.TotalBytes != 994662584320 || *f.FreeBytes != 462012616704 || *f.AvailableBytes != 430573547520 || f.MeasuredAt.Second() != 1 {
+		t.Fatalf("filesystem %+v", f)
+	}
+
+	// filesystem: absent or null is nil; its absent or null members are
+	// nil; zero free space and free above total (a Windows quota) are
+	// figures.
+	for _, ext := range []string{`{"swath": {"version": 1}}`, `{"swath": {"version": 1, "filesystem": null}}`} {
+		if m, err := ParseMetadata(manifestWith(ext)); err != nil || m.Filesystem != nil {
+			t.Fatalf("%s: %+v, %v", ext, m.Filesystem, err)
+		}
+	}
+	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "filesystem": {"total_bytes": 100, "free_bytes": 500, "available_bytes": null}}}`))
+	if f := m.Filesystem; err != nil || f == nil || *f.TotalBytes != 100 || *f.FreeBytes != 500 || f.AvailableBytes != nil || f.MeasuredAt != nil {
+		t.Fatalf("partial filesystem %+v, %v", f, err)
+	}
+	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "filesystem": {"total_bytes": 100, "free_bytes": 0, "available_bytes": 0}}}`))
+	if f := m.Filesystem; err != nil || f == nil || f.FreeBytes == nil || *f.FreeBytes != 0 || f.AvailableBytes == nil || *f.AvailableBytes != 0 {
+		t.Fatalf("a full filesystem %+v, %v", f, err)
 	}
 
 	// committed_object_bytes 0 is a total (a dataset of empty objects, or of none);
@@ -72,6 +94,11 @@ func TestParseMetadata(t *testing.T) {
 		`{"swath": {"version": 1, "published_at": "yesterday"}}`,
 		`{"swath": {"version": 1, "committed_object_bytes": "81234"}}`,
 		`{"swath": {"version": 1, "committed_object_bytes": 1.5}}`,
+		`{"swath": {"version": 1, "filesystem": 5}}`,
+		`{"swath": {"version": 1, "filesystem": {"total_bytes": "100"}}}`,
+		`{"swath": {"version": 1, "filesystem": {"free_bytes": 1.5}}}`,
+		`{"swath": {"version": 1, "filesystem": {"available_bytes": 9223372036854775808}}}`,
+		`{"swath": {"version": 1, "filesystem": {"measured_at": "yesterday"}}}`,
 		`{"swath": []}`,
 	} {
 		_, err := ParseMetadata(manifestWith(ext))
