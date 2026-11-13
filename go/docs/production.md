@@ -192,9 +192,9 @@ run's metadata.
   A work directory belongs to its run (`--overwrite` is refused with a bucket): a new run takes a new or empty
   one.
 - **Supervision:** as for a local dataset, `swath resume DIR` until exit 0. Give every attempt the same work
-  directory; if the runner's disk is lost the resume is lost with it, and a new run starts over at a new
-  prefix. Two runners sharing one work directory are refused by its lock; two work directories writing one
-  prefix race at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
+  directory; if it is lost the resume is lost with it ([below](#on-a-preemptible-or-spot-machine)). Two
+  runners sharing one work directory are refused by its lock; two work directories writing one prefix race
+  at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
 - **Windows:** a bucket run of an object store keeps a journal, which Windows refuses (directories cannot be
   synced there: [running.md](running.md#known-limits)), so it is refused there, as a journaled local dataset is;
   a local tree, which keeps no journal, can be written to a bucket on Windows, without resume.
@@ -211,7 +211,10 @@ run's metadata.
   (`AZURE_SDK_GO_LOGGING=all` prints nothing), for the destination as for the source.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
-  rule on the bucket. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
+  rule on the bucket. A run whose work directory was lost is abandoned the same way, without that list. A new
+  run at the same prefix does not clean them: it is not refused (only a `manifest.json` is), its manifest
+  names its own parts only, and the lost run's stay under `PREFIX/data/RUN/` beside them, so start it at a new
+  prefix. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
   Azure's uncommitted blocks (a week); S3's incomplete multipart uploads do not (the rule above).
 - **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
   whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which
@@ -221,6 +224,37 @@ run's metadata.
   uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads), the orphans deleted and,
   for S3, `aborts_unconfirmed` (multipart uploads the lifecycle rule must remove).
   Uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
+
+### On a preemptible or Spot machine
+
+A bucket run resumes from its work directory only. `DIR/.swath/` holds the journal (the recorded command and
+one record per published part: its object, version, size and SHA-256), the durable spill and its ledger
+(`spill/durable/`), and the claim receipts, the allocation log and the candidate manifest (`remote/`). The
+parts are not kept there: they stream to the bucket, which holds nothing else of the run until its commit. A
+lost work directory cannot be resumed, and the parts the run published are not reused
+([leftovers](#writing-to-a-bucket), above).
+
+To survive a preempted VM, put `--work-dir` on a disk that outlives the VM (one not deleted with the
+instance), attach it to the replacement machine and run `swath resume DIR` at its mount point there. The
+resume replays the recorded command with `DIR` as the work directory and the recorded bucket and prefix.
+Nothing binds the work directory to a machine or a path: the lock is a `flock`, and the run's identity
+(source, schema, part size, filters, destination) names neither the machine nor a local path. On the new
+machine:
+
+- **Paths the command recorded** are replayed as written, a relative one against the new working directory.
+  `--gcs-credentials-file`, `--output-gcs-credentials-file`, the directory of `--report` and a `--ca-bundle`
+  (unless the command also has `--no-verify-ssl`, which skips it) must exist there, or be given again to
+  `swath resume` (each may change on resume); a `--seed-from` that is missing only warns, and the resume lists
+  without it.
+- **Secrets** are never recorded (`--azure-sas-token`, `--output-azure-sas-token`,
+  `--s3-bearer-token-command`): give them again, or the resume is refused. The source's `--azure-sas-token`
+  may come from `AZURE_STORAGE_SAS_TOKEN` instead; `--output-azure-sas-token` has no such variable.
+- **The spill cap** is a positive `--spill-budget` the run recorded or the resume gives; without one (or with
+  0) it is half the free space on the new disk, after the reserve, when the resume starts. Certified spill files that do not fit under it are
+  listed again (`rejected.budget` in `resources.spill.durable.resume`).
+- **Verification:** before listing continues, the resume reads every part the journal records back from the
+  bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):
+  everything published so far is downloaded once, at the bucket's read rate and price.
 
 ## Disk sizing
 

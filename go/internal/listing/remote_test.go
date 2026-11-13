@@ -88,9 +88,21 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 	if !orphans {
 		return
 	}
+	d.onlyDataset(t, name, prefix, m, nil)
+}
+
+// onlyDataset: nothing is under prefix but the manifest m, its parts, the
+// run report and the objects at unproven (names relative to prefix): names
+// the run allocated and never recorded creating, which its cleanup leaves
+// (dataset.DeleteOwned).
+func (d *destination) onlyDataset(t *testing.T, name, prefix string, m dataset.Manifest, unproven []string) {
+	t.Helper()
 	want := []string{prefix + "/" + dataset.ManifestName, prefix + "/" + dataset.ReportName}
 	for _, p := range m.Parts {
 		want = append(want, prefix+"/"+p.Path)
+	}
+	for _, n := range unproven {
+		want = append(want, prefix+"/"+n)
 	}
 	slices.Sort(want)
 	var got []string
@@ -282,6 +294,108 @@ func TestRemoteRecoveryKilled(t *testing.T) {
 				}
 				d.sameAsLocal(t, p.point, ref, prefix, true)
 			})
+		}
+	})
+}
+
+// TestRemoteResumeMovedWorkDir: a bucket run with durable spill on, killed
+// at its first retirement (parts recorded, certificates sealed), is resumed
+// from a copy of its work directory at another path (new inodes), the
+// original removed, as a work directory on a disk moved to another machine
+// would be: the bucket holds the uninterrupted run's parts byte for byte
+// with no orphan left, the resume replays sealed certificates from the
+// copy, and nothing is created at the original path. Each try writes to a
+// prefix of its own and must pass all of that; a kill that leaves no
+// certificate above K for the resume to replay (the ranges ahead of the
+// slow frontier got none sealed) is tried again, at most six times, never
+// skipped.
+func TestRemoteResumeMovedWorkDir(t *testing.T) {
+	eachProvider(t, func(t *testing.T, p provider) {
+		datasettest.RequireJournal(t)
+		url, _, _ := slowFrontier(t, "d06/")
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		d := newDestination(t, p, nil)
+		config := func(ws, prefix string, resume bool) Config {
+			cfg := durableConfig(url, ws, resume)
+			cfg.Output.Remote = d.output(prefix)
+			return cfg
+		}
+		const tries = 6
+		for try := 1; ; try++ {
+			prefix := fmt.Sprintf("moved%d", try)
+			ws := filepath.Join(t.TempDir(), "work")
+			crashDurable(t, config(ws, prefix, false), "spill-unlink", 1)
+			st, err := journal.Read(ws)
+			if err != nil || len(st.Records) == 0 {
+				t.Fatalf("no part recorded before the kill: %v", err)
+			}
+			if _, _, types, _ := ledgerFrames(t, ws); !slices.Contains(types, 'S') {
+				t.Fatalf("no certificate sealed before the kill: ledger frames %q", types)
+			}
+			moved := filepath.Join(t.TempDir(), "moved")
+			if err := os.CopyFS(moved, os.DirFS(ws)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(ws); err != nil {
+				t.Fatal(err)
+			}
+			crashed, err := readLedger(moved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, rec := range st.Records {
+				if _, ok := crashed.Created[rec.Object]; !ok {
+					t.Fatalf("recorded part %s has no creation in the allocation log", rec.Object)
+				}
+			}
+			sum, err := Run(context.Background(), config(moved, prefix, true))
+			if err != nil {
+				t.Fatalf("resume from the copy: %v", err)
+			}
+			if _, err := os.Lstat(ws); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the resume created the original work directory: %v", err)
+			}
+			d.sameAsLocal(t, "moved work directory", ref, prefix, false)
+			// The kill may land while an upload is in flight: the store has
+			// the object, the crashed attempt never recorded creating it, and
+			// the cleanup leaves it, counted as unproven. Exactly those may
+			// stay: a name the crashed attempt allocated and never recorded,
+			// no more of them than the report counts; nothing else.
+			m := d.manifest(t, prefix)
+			var unproven []string
+			for _, n := range crashed.Names {
+				if _, ok := crashed.Created[n]; ok || slices.ContainsFunc(m.Parts, func(p dataset.ManifestPart) bool { return p.Path == n }) {
+					continue
+				}
+				if _, ok := d.Object(prefix + "/" + n); ok {
+					unproven = append(unproven, n)
+				}
+			}
+			if r := sum.Output.Remote; int64(len(unproven)) > r.OrphansUnproven || r.OrphansLeft != 0 {
+				t.Fatalf("%d unrecorded objects of the crashed attempt left (%v); report: %d unproven, %d left", len(unproven), unproven, r.OrphansUnproven, r.OrphansLeft)
+			}
+			d.onlyDataset(t, "moved work directory", prefix, m, unproven)
+			if r := sum.Output.Remote; r == nil || r.WorkDir != moved || r.Commit != dataset.CommitCreated {
+				t.Fatalf("report %+v", r)
+			}
+			if sum.Output.PartsRetained == 0 || sum.Output.Remote.ObjectsVerified != int64(sum.Output.PartsRetained) {
+				t.Fatalf("retained %d parts, verified %d", sum.Output.PartsRetained, sum.Output.Remote.ObjectsVerified)
+			}
+			du := sum.Resources.Spill.Durable
+			if du == nil || du.Resume == nil {
+				t.Fatalf("no durable spill resume account: %+v", sum.Resources.Spill)
+			}
+			res := du.Resume
+			t.Logf("try %d: %d parts retained and verified, %d unrecorded objects left; durable resume %+v", try, sum.Output.PartsRetained, len(unproven), *res)
+			if res.Accepted > 0 && res.ReplayedRows > 0 {
+				return
+			}
+			if try == tries {
+				t.Fatalf("%d kills, none leaving a certificate the moved resume replays", tries)
+			}
 		}
 	})
 }

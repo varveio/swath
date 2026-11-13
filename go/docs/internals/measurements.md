@@ -1593,7 +1593,17 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   bind-mount cycle is not detected. A directory is read whole and sorted on one worker, so a huge flat
   directory is serial. Local keys have no length cap (S3 keys are capped at 1,024 bytes). Timestamps are
   microseconds. A local run keeps no journal: an interrupted one starts over.
-- **Resume rework: the whole speculative suffix.** S3 and GCS resume at part granularity: a resume lists the
+- **Resume rework: the whole speculative suffix.** *Superseded 2026-11-13.* This entry predates durable spill
+  (#282). A resume now replays the certified spill files sealed above K instead of listing them again: on 64
+  production lists of 20 to 150 million keys the resumes took a median 0.66x the cold run's requests after a
+  kill at 40 % (p90 0.99) and 0.22x after a kill at 70 % (p90 0.43) ([Durable spill](#durable-spill)). What
+  stays true, for S3, GCS and Azure Blob: a resume lists again the ranges unfinished at the kill (a durable
+  file seals only when its range completes), the ranges that got no certificate slot, and the rows held in
+  memory or in disposable spill; and no kill and resume with durable spill is measured above 150 million keys.
+  The relisted-work gate below is a target: the engine does not enforce it and no test asserts it
+  (`bench/sortab_table.py` evaluates it on the sort A/B bench's killed cells only). The entry as first
+  written:
+  S3 and GCS resume at part granularity: a resume lists the
   scope again from K, the last published part's max key (`keyrange` tiles `(K, ⊤]` afresh: the seed's listings above K, or one range), so everything
   the killed attempt had listed above K is listed again: the open part's rows, rows buffered in memory or in
   disposable spill for ranges ahead of a slow frontier, and parts closed but not yet recorded (a gap in the
@@ -1621,8 +1631,9 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off, unmeasured). Under
   sustained throttling it holds the limit at 1–2 for the whole run ([above](#throttling-through-the-fault-proxy)).
   It has never met real 503s.
-- **Not built:** versions mode, Azure. Java CLI features deliberately not ported, each with its reason, are in
-  [cli-inventory.md](cli-inventory.md).
+- **Not built:** versions mode, Azure. *Superseded 2026-11-13: both are built (`--all-versions` for S3, GCS and
+  Azure Blob, [running.md](../running.md#listing-every-version); Azure Blob in `internal/source/azblob`).*
+  Java CLI features deliberately not ported, each with its reason, are in [cli-inventory.md](cli-inventory.md).
 - **Restored Java CLI features, tested in process only.** Text output (TSV, JSONL, table; stdout and files;
   gzip and zstd), the seven filters (Go RE2, not Java regular expressions), the stderr progress display and
   statistics, `-v`/`-q`/`--color`, bearer-token authentication, the report's `cost`, `efficiency`, `args_hash`,

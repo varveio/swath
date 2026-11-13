@@ -44,7 +44,9 @@ ended unresolved (exit 75) is resumed the same way: the resume creates the very 
 destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`), and an
 Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azure: account and container),
 prefix, endpoint and S3 region are fixed. A lost work directory loses the
-resume: the parts already uploaded are not reused, and a new run writes to a new prefix.
+resume: the parts already uploaded are not reused. A new run at the same prefix is not refused (only a prefix
+holding a `manifest.json` is), but nothing removes the lost run's parts, so start it at a new prefix
+([production.md](../production.md#on-a-preemptible-or-spot-machine)).
 
 Rows listed but not yet in a published part are listed again, except those a validated spill file still
 holds ([running.md](../running.md#stopping-and-resuming)).
