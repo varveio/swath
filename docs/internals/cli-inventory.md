@@ -176,6 +176,6 @@ decision to add it later).
 | `--tune seed.mode=none\|shallow` | `swath diag list --no-seed` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
 | none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [range-engine.md](range-engine.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
-| `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
+| `--trace PATH` (JSONL run trace) | `swath diag list --trace FILE` (and `swath diag count`): the range engine's run trace, a schema of its own ([trace.md](trace.md)) | renamed | not ported 2026-11-06; added 2026-11-13 for the run explainer (#193) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |
 | Stuck: a snapshot of thread stacks and in-flight counts to the log before interrupting | goroutine stacks and progress counts to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`, else a file in the temporary directory (stderr names it; the stacks there with `-v`) | kept | – |

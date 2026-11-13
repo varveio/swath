@@ -414,3 +414,8 @@ var StoreGroup = &FlagGroup{
 // of every key. The command reads it by name for the terminal's nouns (a
 // versions run counts rows, not keys) without importing the engine.
 const AllVersionsFlag = "all-versions"
+
+// TraceFlag names the range engine's diagnostic --trace FILE, the run
+// trace: the engine's flag group takes it, so only its providers do, and
+// the command reads the path by name to check, open and close the file.
+const TraceFlag = "trace"

@@ -212,6 +212,9 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	p.queued += p.queue(out)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.unlock()
+	if p.tr != nil {
+		p.traceTiles(out)
+	}
 	for _, t := range out {
 		if err := e.Child(t); err != nil {
 			return err

@@ -1,7 +1,8 @@
 # explainer
 
-Turns a swath run's `--trace` event log into something a person can read: a self-contained HTML
-report that explains what the run did and why, and a share-ready video of the same run.
+Turns a swath run trace (`swath diag list --trace`) into something a person can read: a
+self-contained HTML report that explains what the run did and why, and a share-ready video of the
+same run.
 
 It works on **any bucket**. Nothing about the output is written for a particular listing — the
 tool computes the run's findings from its events and states them in prose, so it describes
@@ -20,11 +21,13 @@ tools/explainer/
 ├── capture-video.js              # optional video frame driver (Node + playwright)
 └── src/swath_explainer/
     ├── keys.py                   # key bytes, and the mass-CDF keyspace projection
-    ├── trace.py                  # lenient --trace JSONL reading
-    ├── model.py                  # the reduction: figures, lineage, findings
+    ├── trace.py                  # lenient trace reading
+    ├── model.py                  # the reduction: figures, lineage, ledger, findings
     ├── render.py                 # model + template -> page
     ├── cli.py                    # argument handling
-    ├── selftest.py               # 29 checks, no inputs needed
+    ├── selftest.py               # checks over a captured trace; CI runs them
+    ├── testdata/
+    │   └── small.trace.jsonl     # a small run captured as below
     └── templates/
         ├── report.html           # the explainer report
         ├── video-strip.html      # video: the algorithm as it happens
@@ -34,15 +37,15 @@ tools/explainer/
 The templates are real `.html` files rather than string literals in Python, so the CSS and
 canvas code are editable as themselves. `render.py` substitutes one placeholder into them.
 
-## Run it on a Java trace
+## Capture a trace and explain it
 
-The explainer reads the `--trace` JSONL of the Java tool: the v0.3.2 release, or a build of the
-tag `java-final`. The Go tool does not emit a trace yet; issue #193 tracks it.
+The trace is the range engine's, so it covers S3, GCS and Azure Blob; a local tree has no ranges
+and refuses `--trace`. Its schema, its drop policy and what it proves are
+[`docs/internals/trace.md`](../../docs/internals/trace.md).
 
 ```bash
-# 1. list a bucket with tracing on, using the Java tool (its list/resume runs accept --trace)
-swath list s3://your-bucket/ --region us-east-1 --format parquet -o out/ \
-      --trace run.trace.jsonl
+# 1. list with tracing on (swath diag count lists without writing a dataset)
+swath diag list s3://your-bucket/ -o out/ --trace run.trace.jsonl --report run.report.json
 
 # 2. explain it
 tools/explainer/explainer.py run.trace.jsonl -o run.html --title "s3://your-bucket"
@@ -53,17 +56,40 @@ uv run tools/explainer/explainer.py run.trace.jsonl -o run.html
 
 Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark.
 
+**What to keep** of a run you mean to publish or come back to: the trace itself (the page is
+regenerated from it, byte for byte), the run report (`--report`: the command line, the outcome,
+the request account, and `source.stats.counters` with `trace.events` and `trace.dropped`), and,
+for a page that states its provenance, a run-facts record (below). The trace's own `run_start`
+names the swath version and the engine options it ran with. A trace whose `run_end` reports
+dropped events is incomplete: the page says so, and its ledger will not balance.
+
+**Without a bucket**, `swath-replay` serves a key list through the S3 API
+([`docs/internals/swath-replay.md`](../../docs/internals/swath-replay.md)). The self-test's
+trace was captured so, from 1,670 keys (`big/` holding 1,500 of them, `a/`, `c/` to `f/` 30
+each, `z/` 20) in a `.tsv` key list:
+
+```bash
+./build.sh -o swath ./cmd/swath && ./build.sh -o swath-replay ./cmd/swath-replay
+./swath-replay serve --fixture small.tsv --bucket small --port 19194 \
+    --inject-latency 'worker_page=40ms,pivot_probe=40ms,structure_probe=40ms' &
+./swath diag count s3://small --endpoint-url http://127.0.0.1:19194 --s3-path-style --anonymous \
+    --workers 4 --page-size 50 --trace small.trace.jsonl
+```
+
+The injected latency is what gives a local run a timeline worth drawing: without it every page
+answers in microseconds and the run is over before a worker is idle.
+
 ```text
 explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize] [--run-facts FACTS.json]
                              [--video [--video-style strip|map]]
-explainer.py --self-test              # 29 checks, no inputs needed
+explainer.py --self-test              # checks over the captured trace in testdata/
 ```
 
 | Flag | What it does |
 |---|---|
 | `--title` | Page heading. Defaults to the trace file's stem. |
 | `--anonymize` | Withhold every key name — positions and counts only. Use when the picture has to travel further than the trace does. |
-| `--run-facts` | Path to a `swath-public-run-v1` JSON provenance record for this specific run (run ID, swath version/commit, capture date, target, client, command, clocks). Rendered as a visible provenance table, embedded as machine-readable JSON in `<script type="application/json" id="swath-run-facts">` (reserialized compactly — every value is preserved, not the source file's exact bytes), and used for a static `<noscript>` summary. Report only; a trace carries no such facts on its own, so any field the record omits reads "unknown in retained evidence" rather than being inferred. Not read at all with `--video`. |
+| `--run-facts` | Path to a `swath-public-run-v1` JSON provenance record for this specific run (run ID, swath version/commit, capture date, target, client, command, clocks). Rendered as a visible provenance table, embedded as machine-readable JSON in `<script type="application/json" id="swath-run-facts">` (reserialized compactly — every value is preserved, not the source file's exact bytes), and used for a static `<noscript>` summary. Report only; any field the record omits reads "unknown in retained evidence" rather than being inferred. Not read at all with `--video`. |
 | `--video` | Emit a 1080×1350 capture page instead of the report (see below). |
 | `--video-style` | `strip` (default) or `map`. Two different arguments about the same run. |
 
@@ -73,19 +99,20 @@ Sections, in the order a newcomer needs them:
 
 1. **The guesses, and how they turned out** — the seed ranges ranked by the objects actually
    found behind them. Weight rolls up through the split genealogy, so each bar is the work that
-   guess was really responsible for, not just what drained before it got cut.
-2. **What the run actually felt like** — objects/s and live ranges over time, plus the
-   owner-split gate ledger.
-3. **Most of these keys do not exist** — the pivot cascade with sample pivots verbatim.
+   guess was really responsible for, not just what its first range listed before it split.
+2. **What the run actually felt like** — objects/s and live ranges over time.
+3. **Most of these keys do not exist** — the split mechanisms (`reflect`, `midpoint`, `density`,
+   `structure`) with sample pivots verbatim.
 4. **The whole run, on one map** — keyspace × time.
 5. **Watch it happen** — the same events replayed.
-6. **The ledger** — `seeds + splits == claimed == completed`, and request overhead against the
-   theoretical floor.
+6. **The ledger** — `seeded + 2 × splits = claimed = completed + splits` (a split ends its range
+   and makes two), whether the listed ranges tile the keyspace when rebuilt from the trace alone,
+   and pages against the floor for the run's page size.
 
 Above all of it, the findings the tool decided were worth stating. A run whose seed was accurate
 does not get told a dramatic story: the "guess that was wrong" finding only appears when one seed
-lineage actually held a large share, and an interrupted run gets its unbalanced ledger flagged
-instead.
+lineage actually held a large share, and an interrupted or lossy trace gets its unbalanced ledger
+flagged instead.
 
 ## Video
 
@@ -114,10 +141,12 @@ opening it as a file, since headless Chromium blocks `file://` navigation.
 **Two styles, deliberately kept:**
 
 - **`strip`** — the algorithm as it happens. The keyspace is cut into seed ranges, all of them
-  drain in parallel with each bar filling to its worker's cursor, then stealing subdivides
-  whatever is left. Seed cut points are drawn as fence posts, the heaviest guesses are labelled
-  with their real bounds, and prefix families are named over the span their objects occupy. This
-  is the one to share.
+  drain in parallel with each bar filling to its worker's cursor, then splitting subdivides
+  whatever is left: a range stops at its cursor and the rest becomes two ranges that idle workers
+  take. Seed cut points are drawn as fence posts, the heaviest guess is labelled with its real
+  bounds, and prefix families are named over the span their objects occupy. It is paced for a run
+  of minutes; a run of a second or two plays its whole timeline in the opening scenes. This is
+  the one to share.
 - **`map`** — the space-time carving diagram: every range a rectangle over the keyspace it owned
   and the time it owned it, accumulating downward. Denser, and closer to a flame graph in feel.
   Harder to narrate cold, but it shows structure the strip cannot — split-chain depth, which
@@ -125,17 +154,17 @@ opening it as a file, since headless Chromium blocks `file://` navigation.
 
 ## Two design decisions worth knowing
 
-**The keyspace axis is the measured key-mass CDF**, built from `page_committed`'s
-`(cursor, keys)` pairs. **Equal width means an equal number of objects**, so a range's area is
-proportional to the work it did, and a region holding two thirds of a bucket gets two thirds of
-the picture. The two obvious alternatives both fail on real data: a raw byte-value axis collapses
-a deep-prefix bucket onto a hairline, and an axis anchored on range boundaries gives every
-boundary equal width, so a run seeded into hundreds of ranges renders as hundreds of identical
-slivers and width encodes nothing. The cost, stated on the generated page too: **screen distance
-is not byte distance**, and empty keyspace takes no width.
+**The keyspace axis is the measured key-mass CDF**, built from each `page` event's `(last, rows)`.
+**Equal width means an equal number of objects**, so a range's area is proportional to the work
+it did, and a region holding two thirds of a bucket gets two thirds of the picture. The two
+obvious alternatives both fail on real data: a raw byte-value axis collapses a deep-prefix bucket
+onto a hairline, and an axis anchored on range boundaries gives every boundary equal width, so a
+run seeded into hundreds of ranges renders as hundreds of identical slivers and width encodes
+nothing. The cost, stated on the generated page too: **screen distance is not byte distance**,
+and empty keyspace takes no width.
 
-**Color is seed lineage, not worker id.** A reader cares which original guess the work descends
-from, not which of N threads happened to run it. With 64 workers and a palette of 8, color-by-
+**Color is seed lineage, not worker.** A reader cares which original guess the work descends
+from, not which of N lanes happened to run it. With 64 workers and a palette of 8, color-by-
 worker is decoration; color-by-lineage is information.
 
 ## Determinism, and what wrote what
@@ -147,19 +176,17 @@ every run. What varies with the data is every number, every figure, and which fi
 
 ## Sensitivity
 
-A trace carries real key names on nearly every event ([`metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md)
-§7) — the same sensitivity class as the listing output itself. The report inherits that: seed
-bounds and split pivots are shown verbatim, because they are most of the value. `--anonymize`
-withholds all of them and emits positions and counts only.
+A trace carries real key names on nearly every event — the same sensitivity class as the listing
+output itself. The report inherits that: seed bounds and split pivots are shown verbatim, because
+they are most of the value. `--anonymize` withholds all of them and emits positions and counts
+only. A key that is not UTF-8 is shown with its other bytes as `\xNN`.
 
 ## Reading a picture
 
 - **Healthy run** — confetti: many short drains, everyone busy, wide short rectangles.
 - **Dense serial tail** — a single tall thin column outliving the rest of the run.
-- **Thief probe storm** — many steal attempts with few committed children behind them.
-- **Owner-split confetti** — a stack of hairline rectangles in one keyspace region.
+- **Split staircase** — a heavy range peeled by successive splits: each rectangle ends at the
+  cursor where it split, and its children start beside it.
 
-The trace format itself is specified in
-[`docs/internals/metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md) §7. A consumer
-is required to tolerate a torn final line after a hard kill and to ignore event kinds it does not
-know; this tool does both.
+A reader is required to tolerate a torn final line after a hard kill and to ignore event kinds
+it does not know; this tool does both, and refuses a file without a `run_start`.

@@ -22,7 +22,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
   `split` with `--sequential`, `structure` with `--structure=off` (`--sequential`
   and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
-  without `--max-keys`, `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
+  without `--max-keys`, `trace` without `--trace` ([trace.md](trace.md)), `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
   `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 
@@ -263,6 +263,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
 | `groups.overfetch_rows` | count | rows | groups | rows above a range end read to close its last key group (excludes resume suppression and split relisting) |
 | `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
+| `trace.events` | count | events | trace | events the engine handed to the run trace (--trace) |
+| `trace.dropped` | count | events | trace | trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

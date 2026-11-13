@@ -14,7 +14,7 @@ import (
 )
 
 // checkSidePaths refuses, before the source is opened, a file the command
-// writes beside its output (--report, the SWATH_CPUPROFILE and
+// writes beside its output (--report, --trace, the SWATH_CPUPROFILE and
 // SWATH_MEMPROFILE profiles and their phase files) where it would replace managed output: the
 // text output file; inside the dataset directory anything but an ordinary
 // name directly in it (not data/, the manifest, run.json, error.json, the
@@ -35,6 +35,7 @@ func checkSidePaths(o *options) error {
 		phases []string // the phase files written beside it (profile.go)
 	}{
 		{"--report", &o.report, nil},
+		{"--trace", &o.trace, nil},
 		{"SWATH_CPUPROFILE", &o.cpuProfile, []string{phaseListing, phaseTail}},
 		{"SWATH_MEMPROFILE", &o.memProfile, []string{phaseListing, phaseExit}},
 	} {
@@ -72,10 +73,11 @@ func checkSidePaths(o *options) error {
 type sideFile struct{ what, given, dest string }
 
 // checkSideFile checks one side file's path (checkSidePath, writable) and
-// returns its destination; a profile's (profile) may not be a symbolic
-// link.
+// returns its destination; a file opened before the run (profile: the
+// profiles, --trace) may not be a symbolic link, nor in the output
+// directory.
 func checkSideFile(o options, path string, profile bool) (string, error) {
-	dest, err := checkSidePath(o, path)
+	dest, err := checkSidePath(o, path, profile)
 	if err == nil {
 		err = writable(dest)
 	}
@@ -104,18 +106,21 @@ func writable(dest string) error {
 // The destination keeps its last name as given (sideDest), so a reserved
 // slot is refused by its name whatever a symbolic link there points at;
 // where that name is such a link, what it reaches (a profile's open
-// follows it) is checked too.
-func checkSidePath(o options, path string) (string, error) {
+// follows it) is checked too. A file opened before the run (opened) may
+// not be in the output directory at all: the run then finds the directory
+// it is to create or fill not empty, and refuses it; --report is written
+// after the run, so an ordinary name directly in the directory is fine.
+func checkSidePath(o options, path string, opened bool) (string, error) {
 	dest, through := sideDest(path)
 	for _, p := range []string{dest, through} {
-		if err := checkDest(o, p); err != nil {
+		if err := checkDest(o, p, opened); err != nil {
 			return "", err
 		}
 	}
 	return dest, nil
 }
 
-func checkDest(o options, p string) error {
+func checkDest(o options, p string, opened bool) error {
 	if o.text != nil && o.text.Path != "" {
 		td, tt := sideDest(o.text.Path)
 		if samePlace(p, td) || samePlace(p, tt) {
@@ -142,6 +147,8 @@ func checkDest(o options, p string) error {
 				return fmt.Errorf("is inside the output's %s: only an ordinary name directly in the output directory may be written there", below[0])
 			case dataset.Reserved(below[0]):
 				return fmt.Errorf("is the output's own %s", below[0])
+			case opened:
+				return fmt.Errorf("is in the output directory: it is opened before the run, which needs the directory empty (only --report, written at the end, may go there)")
 			}
 			break
 		}

@@ -1,7 +1,7 @@
 [project]
 name = "swath-explainer"
 version = "0.1.0"
-description = "Turn a swath run's --trace event log into a readable HTML explainer and a share-ready video."
+description = "Turn a swath run trace (swath diag list --trace) into a readable HTML explainer and a share-ready video."
 readme = "README.md"
 requires-python = ">=3.11"
 # No runtime dependencies, deliberately: the generator is stdlib-only so the public repo keeps
@@ -20,5 +20,5 @@ build-backend = "hatchling.build"
 packages = ["src/swath_explainer"]
 
 [tool.hatch.build]
-# The templates ARE the pages; they must ship inside the wheel.
-artifacts = ["src/swath_explainer/templates/*.html"]
+# The templates ARE the pages, and the self-test reads its captured trace: both ship in the wheel.
+artifacts = ["src/swath_explainer/templates/*.html", "src/swath_explainer/testdata/*.jsonl"]
