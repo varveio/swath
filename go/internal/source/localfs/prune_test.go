@@ -6,12 +6,15 @@ package localfs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,6 +75,42 @@ func pruneReferenceText(t *testing.T, rows []Row) []byte {
 	return dst.Bytes()
 }
 
+// Keep the byte comparison authoritative; decode only its first differing
+// row to make a key/order difference distinguishable from metadata drift.
+func pruneTextDifference(got, want []byte) string {
+	actual, expected := bytes.Split(got, []byte{'\n'}), bytes.Split(want, []byte{'\n'})
+	for i := range max(len(actual), len(expected)) {
+		if i >= len(actual) || i >= len(expected) {
+			return fmt.Sprintf("row %d: output ended, got %d lines, want %d", i+1, len(actual), len(expected))
+		}
+		if bytes.Equal(actual[i], expected[i]) {
+			continue
+		}
+		var a, b map[string]json.RawMessage
+		if json.Unmarshal(actual[i], &a) != nil || json.Unmarshal(expected[i], &b) != nil {
+			return fmt.Sprintf("row %d: got %.1024q, want %.1024q", i+1, actual[i], expected[i])
+		}
+		var columns, changes []string
+		for name := range a {
+			columns = append(columns, name)
+		}
+		for name := range b {
+			columns = append(columns, name)
+		}
+		slices.Sort(columns)
+		for _, name := range slices.Compact(columns) {
+			if !bytes.Equal(a[name], b[name]) {
+				changes = append(changes, fmt.Sprintf("%s: got %.256s, want %.256s", name, a[name], b[name]))
+			}
+		}
+		if len(changes) == 0 {
+			return fmt.Sprintf("row %d: encoding differs: got %.1024q, want %.1024q", i+1, actual[i], expected[i])
+		}
+		return fmt.Sprintf("row %d key got=%.256s want=%.256s: %s", i+1, a["key"], b["key"], strings.Join(changes, "; "))
+	}
+	return "no differing row"
+}
+
 func pruneOpen(t *testing.T, root string, opt Options) registry.Source {
 	t.Helper()
 	factory, err := registry.Lookup(root)
@@ -106,7 +145,7 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 			t.Fatal(err)
 		}
 		if expected := pruneReferenceText(t, want); !bytes.Equal(dst.Bytes(), expected) {
-			t.Fatalf("ordered row payload differs: got %d bytes (%d rows), want %d bytes (%d rows)", dst.Len(), st.Rows, len(expected), len(want))
+			t.Fatalf("ordered row payload differs: got %d bytes (%d rows), want %d bytes (%d rows); %s", dst.Len(), st.Rows, len(expected), len(want), pruneTextDifference(dst.Bytes(), expected))
 		}
 	}
 	if st.Rows != int64(len(want)) || ordered.Load() != st.Rows {
@@ -121,6 +160,35 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 		t.Fatalf("intentional pruning damaged coverage: %+v stats %+v", report.Coverage, stats)
 	}
 	return stats
+}
+
+// Finish fixture mutations before either walk. Explicit times make fixture
+// mtimes deterministic; the payload comparison keeps all its existing columns.
+func pruneFinalizeTimes(t *testing.T, root string) {
+	t.Helper()
+	at := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+			return nil
+		}
+		return os.Chtimes(path, at, at)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := os.Chtimes(dirs[i], at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func pruneTree(t *testing.T) string {
@@ -146,6 +214,7 @@ func pruneTree(t *testing.T) string {
 	if !unicodeNames {
 		mk(t, root, "bad\xffdir/inner.txt", false)
 	}
+	pruneFinalizeTimes(t, root)
 	return root
 }
 
@@ -273,6 +342,7 @@ func TestPruneWideDirectory(t *testing.T) {
 	for _, name := range []string{"wide/a-drop/sub/file", "wide/f04000-drop/sub/file", "wide/z-drop/sub/file", "wide/z-drop0/keep"} {
 		mk(t, root, name, false)
 	}
+	pruneFinalizeTimes(t, root)
 	spec := filter.Spec{Exclude: []string{"wide/*-drop/**"}}
 	for _, portable := range []bool{false, true} {
 		for _, fields := range []Fields{Names, Stat} {
@@ -301,6 +371,7 @@ func TestPruneWideDirectory(t *testing.T) {
 func TestPruneSkipAndOneFilesystem(t *testing.T) {
 	root := pruneTree(t)
 	mk(t, root, "out/parts/data", false)
+	pruneFinalizeTimes(t, root)
 	for _, portable := range []bool{false, true} {
 		for _, oneFS := range []bool{false, true} {
 			if oneFS && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
