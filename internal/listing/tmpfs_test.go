@@ -50,7 +50,7 @@ func TestTmpfsSpillWarning(t *testing.T) {
 			}
 			out := filepath.Join(base, strings.ReplaceAll(c.name, " ", "-"))
 			sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "frontier://x"}, Output: OutputConfig{Dir: out}, Warn: warn,
-				Limits: Limits{RowBudget: minRowBudget, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}})
+				Limits: Limits{RowBudget: MinRowBudget, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}})
 			if err != nil {
 				t.Fatal(err)
 			}
