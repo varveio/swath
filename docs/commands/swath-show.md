@@ -28,7 +28,7 @@ coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
 errors that kept entries out, `filters` the rules that left rows out, `exclusions` what was left out by design
 (an output directory inside the tree). With `complete=true stop=completed skipped=0 filters=0` the dataset covers
 the `source` and `scope` on the line above it, minus its exclusions
-([getting-started.md](../getting-started.md#5-check-that-it-is-complete),
+([results.md](../results.md#coverage-and-unreadable-entries),
 [dataset.md](../dataset.md#the-swath-extension)).
 
 For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts committed
@@ -45,7 +45,7 @@ identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part
 The command is recorded in its canonical spelling, each option `--name=value`, then SOURCE.
 
 `swath show` reads no rows; to query a dataset, read the parts its manifest lists
-([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
+([running.md](../running.md#reading-the-output)).
 
 ## Options
 

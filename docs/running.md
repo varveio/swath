@@ -327,9 +327,23 @@ A reader starts only once `manifest.json` exists and reads the parts it lists (n
 application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
 `completed`, `coverage.skipped_entries` 0, `coverage.filters` empty, `scope.kind` `whole`, the `source` it
 expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
-([dataset.md](dataset.md#the-swath-extension)). [getting-started.md](getting-started.md#6-query-it-with-duckdb)
-shows a DuckDB query over the manifest's part list. Listed ETags are not portable content hashes; check the
+([dataset.md](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.
+
+This DuckDB query reads the parts a local dataset's manifest lists and totals its rows by kind:
+
+```bash
+duckdb -c "
+  SET VARIABLE parts = (SELECT list('media-inventory/' || p.path)
+                        FROM (SELECT unnest(parts) AS p FROM read_json('media-inventory/manifest.json')));
+  SELECT kind, count(*) AS entries, sum(size) AS bytes
+  FROM read_parquet(getvariable('parts'), union_by_name = true)
+  GROUP BY kind ORDER BY kind;"
+```
+
+`union_by_name = true` reads optional columns by name across parts. A local tree's `key` is binary, since file
+names need not be UTF-8: `decode(key)` reads it as text. An object store's `key` is text. The columns of each
+source are in the [schema registry](dataset.md#schema-registry).
 
 ```text
 DIR/

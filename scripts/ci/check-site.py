@@ -3,39 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 """Consistency checks for the published website and the current public documentation.
 
-The website source lives in `site/` on `main` and CI publishes it as a GitHub Pages
-artifact. That makes the site reviewable alongside the code and docs it describes --
-and it makes the drift these checks look for fixable in the first place, because a
-behavior change and the page that explains it now land in one pull request.
+The website is built from `site/` and `docs/` on `main` (scripts/ci/build-site.sh) and CI
+publishes it as a GitHub Pages artifact. That makes the site reviewable alongside the code
+and docs it describes -- and it makes the drift these checks look for fixable in the first
+place, because a behavior change and the page that explains it now land in one pull request.
 
-Six checks, each independently runnable with `--only`:
+Four checks, each independently runnable with `--only`:
 
-  links        every site-local href, media source, and fragment resolves, and every
-               link into this repository names a file (and heading) that exists here
-  media        the videos the deploy fetches from a release are declared, digest-pinned,
-               and referenced -- and match their pin wherever they are already present
+  links        every site-local href, asset and fragment resolves, every link into this
+               repository names a file (and heading) that exists here, and no contributor
+               page (docs/internals/, docs/ops/) is published
   terminology  the public spelling and naming rules in docs/style.md, over the site
                and the current documentation -- not over code or dated evidence notes
-  channel      the version the site advertises matches the channel record and the
-               newest released version, and runnable image tags are pinned to it
-  run-facts    site/data/runs/*.json is well formed, and the figures the pages quote
-               equal the record they came from
+  channel      the version the home page offers matches the channel record (and, on the
+               release channel, the newest released version), and image tags name it
   a11y         landmark, skip-link, duplicate-id, and text-alternative smoke tests
-
-The run-facts check guards the records where the *site* quotes them. It checks the
-schema version and the run id as its own preconditions, since every page assertion
-below reads through them.
 
 Usage:
     python3 scripts/ci/check-site.py
     python3 scripts/ci/check-site.py --only links --only a11y
-    python3 scripts/ci/check-site.py --site build/site   # check a built tree
+    python3 scripts/ci/check-site.py --site build/site   # the tree build-site.sh built
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
 import json
 import re
@@ -146,113 +138,38 @@ TERMINOLOGY_EXCLUDE = [
 TERMINOLOGY_ALLOW: list[tuple[str, str, str, str]] = [
     ("docs/dataset.md", "project-casing", "Swath",
      "the reader module's Go field `reader.Metadata.Swath`, an identifier, not the project name"),
+    ("docs/dataset.html", "project-casing", "Swath",
+     "the same identifier on the published page built from docs/dataset.md"),
 ]
 
 # --------------------------------------------------------------------------------------
-# Run-facts rules
+# Accessibility rules
 # --------------------------------------------------------------------------------------
-RUN_FACTS_SCHEMA = "swath-public-run-v1"
+# VitePress's default home layout (hero and features) renders no <main> landmark, and the
+# site uses the default theme without custom components. The home page still has its skip
+# link to the content; every other page is held to exactly one <main>.
+A11Y_MAIN_EXEMPT = {"index.html"}
 
-TRACE_RUN = "noaa-gestofs-pds-field-guide-trace"
-RECORDING_RUN = "noaa-gestofs-pds-2026-08-03-505ae26"
-
-# Generated report pages that embed their own run-facts record, as
-# `<script type="application/json" id="swath-run-facts">`: page -> run id.
-EMBEDDED_RUN_FACTS = {
-    "runs/noaa-gestofs-pds/index.html": TRACE_RUN,
-}
-
-# The field guide's result panels quote the trace record. Label -> (run id, JSON pointer,
-# format). Every `<dt>` carrying one of these labels must show the record's value.
-FIELD_GUIDE_FIGURES: list[tuple[str, str, str, str]] = [
-    ("Objects listed", TRACE_RUN, "/result/objects", "int"),
-    ("Initial ranges", TRACE_RUN, "/result/initial_ranges", "int"),
-    ("In one range", TRACE_RUN, "/result/heaviest_initial_range/share_percent", "percent"),
-    ("Behind one range", TRACE_RUN, "/result/heaviest_initial_range/objects", "int"),
-    ("Splits in that lineage", TRACE_RUN, "/result/heaviest_initial_range/splits_in_lineage", "int"),
-    ("Ranges completed", TRACE_RUN, "/result/completed_ranges", "int"),
-    ("Ranges failed", TRACE_RUN, "/result/failed_ranges", "int"),
-    ("Listing workers", TRACE_RUN, "/result/listing_workers_observed", "int"),
-    ("Trace event span", TRACE_RUN, "/clocks/trace_event_span/display", "text"),
-    ("Worker utilization", TRACE_RUN, "/analysis/share_of_perfect_speedup_percent", "percent"),
-]
-
-
-def quoted_figures(runs: dict[str, dict]) -> tuple[list[tuple[str, str, int, str]], list[str]]:
-    """Sentences on the site whose numbers come from a run record.
-
-    Each entry is (page, exact expected text, how many times it appears, what it is). The
-    text is *built* from the record, so rewording the record's figures without reworking the
-    prose fails here. The count matters: a figure quoted twice must stay right in both
-    places, and a bare "is it present" test would pass on one of them being edited.
-
-    A field these sentences need can legitimately be null in a record -- provenance that
-    was never captured. That is a failure of this pairing, not a crash: a page cannot
-    quote a figure the record does not establish.
-    """
-    trace = runs[TRACE_RUN]
-    rec = runs[RECORDING_RUN]
-    sources = {
-        "objects": (trace, "/result/objects"),
-        "ranges": (trace, "/result/initial_ranges"),
-        "splits": (trace, "/result/splits"),
-        "owner_splits": (trace, "/result/owner_splits"),
-        "share": (trace, "/result/heaviest_initial_range/share_percent"),
-        "span_ms": (trace, "/clocks/trace_event_span/ms"),
-        "rec_objects": (rec, "/result/objects"),
-    }
-    values = {name: get(record, pointer) for name, (record, pointer) in sources.items()}
-    missing = [f"{record['run_id']}.json: {pointer} is null, but the site quotes it"
-               for name, (record, pointer) in sources.items() if values[name] is None]
-    if missing:
-        return [], missing
-
-    objects = values["objects"]
-    ranges = values["ranges"]
-    splits = values["splits"]
-    owner_splits = values["owner_splits"]
-    share = values["share"]
-    span_ms = values["span_ms"]
-    rec_objects = values["rec_objects"]
-    return [
-        ("index.html", TRACE_RUN, 1, "the trace run's id"),
-        ("index.html", RECORDING_RUN, 1, "the recording run's id"),
-        ("index.html", f"{span_ms:,.1f} ms", 1, "the trace event span in milliseconds"),
-        ("index.html", f"{span_ms / 1000:.1f} seconds", 1, "the trace event span in seconds"),
-        ("index.html", f"created {ranges:,} ranges", 1, "the initial range count"),
-        ("index.html", f"({rec_objects:,} objects)", 2, "the recording's object total"),
-        ("field-guide/index.html", f"{splits - owner_splits:,} of the run's {splits:,} splits",
-         1, "thief-taken splits out of all splits"),
-        ("field-guide/index.html",
-         f"one of {ranges:,} initial ranges held {share}% of the {objects:,} objects",
-         1, "the skew sentence"),
-        ("field-guide/index.html", f"returned {rec_objects:,} objects",
-         1, "the recording's object total, as the other capture"),
-    ], []
-
+# VitePress writes 404.html with an empty #app on purpose: Pages serves it for every missing
+# URL, so it is rendered in the browser (from site/404.md, inside the theme's layout and its
+# skip link). There is no static markup here to hold to the landmark and skip-link rules.
+A11Y_CLIENT_RENDERED = {"404.html"}
 
 # --------------------------------------------------------------------------------------
 # Release-channel rules
 # --------------------------------------------------------------------------------------
-# Sentences in which a page declares which swath it documents. Every one of them, on every
-# page, must name the version in site/data/channel.json -- otherwise the homepage and the
-# field guide can drift a release apart from each other, which is how this started.
+# Sentences in which a page declares which swath it offers. Every one of them, on every
+# page, must name the version in data/channel.json (source: site/static/data/channel.json),
+# as must every container image tag, so the home page and the install page cannot drift apart.
 VERSION_DECLARATIONS = [
-    re.compile(r"Documentation for swath ([\w.+-]+)\.(?=\s|$)"),
-    re.compile(r"This guide describes swath ([\w.+-]+)\.(?=\s|$)"),
+    re.compile(r"The newest published build is swath ([\w.+-]+?),(?=\s)"),
 ]
 
 # The page that must always carry one, so the declaration cannot simply be deleted.
 VERSION_DECLARATION_REQUIRED_ON = "index.html"
 
-
-# --------------------------------------------------------------------------------------
-# Accessibility rules
-# --------------------------------------------------------------------------------------
-# Generated report pages are exempt from the landmark/skip-link rule: they are rendered by
-# tools/explainer from a template, so the fix belongs in that template and ships with the
-# next regeneration, not as a hand edit to a generated artifact. Tracked in issue #195.
-A11Y_LANDMARK_EXEMPT = {"runs/noaa-gestofs-pds/index.html"}
+# Contributor pages are published on GitHub only (site/.vitepress/config.mts excludes them).
+UNPUBLISHED_PREFIXES = ("docs/internals/", "docs/ops/")
 
 
 # --------------------------------------------------------------------------------------
@@ -269,7 +186,6 @@ class Page:
     ids: list[str] = field(default_factory=list)
     names: list[str] = field(default_factory=list)
     links: list[tuple[str, str, str]] = field(default_factory=list)  # (tag, attr, value)
-    definitions: list[tuple[str, str]] = field(default_factory=list)  # (dt text, dd text)
     mains: int = 0
     imgs_without_alt: int = 0
     canvases_without_label: list[tuple[str, list[str]]] = field(default_factory=list)
@@ -277,7 +193,7 @@ class Page:
 
 
 class PageParser(HTMLParser):
-    """Collects ids, links, definition pairs, and a11y-relevant elements."""
+    """Collects ids, links, and a11y-relevant elements."""
 
     # Attributes that carry a URL we can resolve locally.
     URL_ATTRS = {"href", "src", "poster", "data"}
@@ -285,9 +201,6 @@ class PageParser(HTMLParser):
     def __init__(self, page: Page) -> None:
         super().__init__(convert_charrefs=False)
         self.page = page
-        self._capture: str | None = None
-        self._buffer: list[str] = []
-        self._pending_dt: str | None = None
         self._in_a: str | None = None
         self._a_text: list[str] = []
 
@@ -316,43 +229,20 @@ class PageParser(HTMLParser):
             elif not name:
                 # Recorded for resolution once the page's ids are all known.
                 self.page.canvases_without_label.append((a.get("id", "<unnamed>"), refs))
-        if tag in ("dt", "dd"):
-            self._capture = tag
-            self._buffer = []
         if tag == "a":
             self._in_a = a.get("href", "")
             self._a_text = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "dt" and self._capture == "dt":
-            self._pending_dt = "".join(self._buffer).strip()
-            self._capture = None
-        elif tag == "dd" and self._capture == "dd":
-            if self._pending_dt is not None:
-                self.page.definitions.append(
-                    (self._pending_dt, "".join(self._buffer).strip()))
-                self._pending_dt = None
-            self._capture = None
-        elif tag == "a" and self._in_a is not None:
+        if tag == "a" and self._in_a is not None:
             text = "".join(self._a_text).strip()
             if re.search(r"skip to\b", text, re.IGNORECASE):
                 self.page.skip_links.append(self._in_a)
             self._in_a = None
 
     def handle_data(self, data: str) -> None:
-        if self._capture:
-            self._buffer.append(data)
         if self._in_a is not None:
             self._a_text.append(data)
-
-    def handle_entityref(self, name: str) -> None:
-        # Definition values are compared literally, so keep entities as written.
-        if self._capture:
-            self._buffer.append(f"&{name};")
-
-    def handle_charref(self, name: str) -> None:
-        if self._capture:
-            self._buffer.append(f"&#{name};")
 
 
 def visible_text(markup: str) -> str:
@@ -378,24 +268,6 @@ def load_pages(site: Path) -> list[Page]:
         parser.close()
         pages.append(page)
     return pages
-
-
-def get(node: dict, pointer: str):
-    """Minimal JSON-pointer read; returns None for a missing branch."""
-    cur = node
-    for part in pointer.strip("/").split("/"):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
-
-
-def strip_markup(value: str) -> str:
-    """Definition values as a reader sees them: markup and footnote daggers removed."""
-    value = re.sub(r"<[^>]+>", "", value)
-    value = value.replace("&#8224;", "").replace("&dagger;", "").replace("†", "")
-    value = value.replace("&nbsp;", " ").replace("\xa0", " ")
-    return " ".join(value.split())
 
 
 def gh_slug(heading: str) -> str:
@@ -457,21 +329,18 @@ SKIP_SCHEMES = ("data:", "mailto:", "javascript:", "tel:")
 
 def check_links(site: Path, pages: list[Page], repo: Path) -> list[str]:
     """Site-local targets exist, fragments resolve, repo links name files that are here."""
-    failures: list[str] = []
+    failures: list[str] = [f"{page.rel}: a contributor page is published; exclude it in "
+                           f"site/.vitepress/config.mts"
+                           for page in pages if page.rel.startswith(UNPUBLISHED_PREFIXES)]
     ids_by_page = {p.rel: set(p.ids) | set(p.names) for p in pages}
     md_anchors: dict[str, set[str]] = {}
-    # The videos are not in git; the deploy fetches them from a release and verifies their
-    # digests. A declared path counts as resolvable so this check runs offline against a
-    # source tree, and `media` is what holds the declaration itself to account.
-    manifest, _ = load_media_manifest(site)
-    fetched = {entry.get("path") for entry in manifest.get("files", [])}
 
     def resolve_local(page: Page, target: str) -> str:
         """Map a site-local URL path to the file a server would return for it.
 
         A directory becomes its `index.html` whether or not the URL had a trailing slash,
-        so `href="field-guide#terms"` is checked against the guide's ids rather than
-        silently passing because the directory exists.
+        so `href="docs#start"` is checked against the index's ids rather than silently
+        passing because the directory exists.
         """
         target = unquote(target)
         if target.startswith("/"):
@@ -537,9 +406,8 @@ def check_links(site: Path, pages: list[Page], repo: Path) -> list[str]:
             path = path.partition("?")[0]  # a query string is not part of the file path
             frag = unquote(frag)
             rel = resolve_local(page, path) if path else page.rel
-            if not (site / rel).is_file() and rel not in fetched:
-                failures.append(f"{page.rel}: {where} -> {value} is missing from the site "
-                                f"tree and is not declared in data/media.json")
+            if not (site / rel).is_file():
+                failures.append(f"{page.rel}: {where} -> {value} is missing from the site tree")
                 continue
             if frag:
                 check_fragment(page, rel, frag, where)
@@ -622,173 +490,15 @@ def check_channel(site: Path, pages: list[Page], repo: Path) -> list[str]:
             failures.append(
                 f"data/channel.json: {version} is not a release version for a release channel")
 
-    # Runnable container examples on a release-pinned site must name the pinned version,
-    # never a tag that moves under the reader.
+    # Runnable container examples must name the version the site offers, never a tag that
+    # moves under the reader.
     tag_pattern = re.compile(r"ghcr\.io/varveio/swath(?:-replay)?:([\w.\-]+)")
     for page in pages:
         for tag in set(tag_pattern.findall(page.text)):
-            if name == "release" and tag != version:
+            if tag != version:
                 failures.append(
                     f"{page.rel}: image tag ghcr.io/varveio/swath:{tag} does not match the "
-                    f"declared release version {version}")
-    return failures
-
-
-def load_run_records(site: Path) -> tuple[dict[str, dict], list[str]]:
-    failures: list[str] = []
-    runs: dict[str, dict] = {}
-    directory = site / "data" / "runs"
-    if not directory.is_dir():
-        return runs, [f"{directory} is missing: the site has no canonical run records"]
-    for path in sorted(directory.glob("*.json")):
-        rel = path.relative_to(site).as_posix()
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            failures.append(f"{rel}: does not parse: {exc}")
-            continue
-        schema = record.get("schema_version")
-        if schema != RUN_FACTS_SCHEMA:
-            failures.append(f"{rel}: schema_version is {schema!r}, expected {RUN_FACTS_SCHEMA!r}")
-        run_id = record.get("run_id")
-        if run_id != path.stem:
-            failures.append(f"{rel}: run_id {run_id!r} does not match the file name")
-        if run_id in runs:
-            failures.append(f"{rel}: run_id {run_id!r} is already used by another record")
-        if isinstance(run_id, str):
-            runs[run_id] = record
-    return runs, failures
-
-
-def format_figure(value, kind: str) -> str:
-    if kind == "int":
-        return f"{value:,}"
-    if kind == "percent":
-        return f"{value}%"
-    return str(value)
-
-
-def check_run_facts(site: Path, pages: list[Page]) -> list[str]:
-    runs, failures = load_run_records(site)
-
-    for rel, run_id in EMBEDDED_RUN_FACTS.items():
-        page = next((p for p in pages if p.rel == rel), None)
-        if page is None:
-            failures.append(f"{rel} is missing from the site tree")
-            continue
-        m = re.search(
-            r'<script type="application/json" id="swath-run-facts">(.*?)</script>',
-            page.text, re.S)
-        if not m:
-            failures.append(f"{rel}: no embedded swath-run-facts record")
-            continue
-        try:
-            embedded = json.loads(m.group(1))
-        except json.JSONDecodeError as exc:
-            failures.append(f"{rel}: embedded run facts do not parse: {exc}")
-            continue
-        canonical = runs.get(run_id)
-        if canonical is None:
-            failures.append(f"{rel}: embeds run {run_id!r}, which has no canonical record")
-        elif embedded != canonical:
-            failures.append(
-                f"{rel}: the embedded run facts differ from site/data/runs/{run_id}.json "
-                f"(regenerate the report from the record rather than editing the page)")
-
-    guide = next((p for p in pages if p.rel == "field-guide/index.html"), None)
-    if guide is None:
-        failures.append("field-guide/index.html is missing from the site tree")
-    else:
-        labels = {label for label, _, _, _ in FIELD_GUIDE_FIGURES}
-        shown: dict[str, list[str]] = {label: [] for label in labels}
-        for term, definition in guide.definitions:
-            term = strip_markup(term)
-            if term in labels:
-                shown[term].append(strip_markup(definition))
-        for label, run_id, pointer, kind in FIELD_GUIDE_FIGURES:
-            record = runs.get(run_id)
-            if record is None:
-                failures.append(f"field guide quotes run {run_id!r}, which has no record")
-                continue
-            value = get(record, pointer)
-            if value is None:
-                failures.append(f"{run_id}.json: {pointer} is null but the field guide shows it")
-                continue
-            expected = format_figure(value, kind)
-            if not shown[label]:
-                failures.append(f"field-guide/index.html: no figure labeled {label!r}")
-            for actual in shown[label]:
-                if actual != expected:
-                    failures.append(
-                        f"field-guide/index.html: {label!r} shows {actual!r}, but "
-                        f"{run_id}.json {pointer} is {expected!r}")
-
-    if TRACE_RUN in runs and RECORDING_RUN in runs:
-        by_rel = {p.rel: p for p in pages}
-        expectations, missing = quoted_figures(runs)
-        failures.extend(missing)
-        for rel, expected, times, what in expectations:
-            page = by_rel.get(rel)
-            if page is None:
-                failures.append(f"{rel} is missing from the site tree")
-                continue
-            seen = page.visible.count(expected)
-            if seen != times:
-                failures.append(
-                    f"{rel}: states {what} as the record has it {seen} time(s), expected "
-                    f"{times}: {expected!r}")
-    else:
-        failures.append("the two published NOAA captures must both have canonical records")
-
-    return failures
-
-
-def load_media_manifest(site: Path) -> tuple[dict, list[str]]:
-    """The pinned video assets: what the deploy fetches and the digest it must see."""
-    record = site / "data" / "media.json"
-    if not record.exists():
-        return {}, [f"{record} is missing: the site cannot declare its off-repository media"]
-    try:
-        manifest = json.loads(record.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return {}, [f"data/media.json: does not parse: {exc}"]
-    return manifest, []
-
-
-def check_media(site: Path, pages: list[Page]) -> list[str]:
-    """Every off-repository video is declared, pinned, referenced, and (if here) intact."""
-    manifest, failures = load_media_manifest(site)
-    if not manifest:
-        return failures
-    if not manifest.get("release"):
-        failures.append("data/media.json: no release tag naming where the assets live")
-    declared = manifest.get("files")
-    if not isinstance(declared, list) or not declared:
-        return failures + ["data/media.json: files must be a non-empty list"]
-
-    referenced = {
-        value.lstrip("/").partition("#")[0]
-        for page in pages for _, _, value in page.links
-        if not value.startswith(SKIP_SCHEMES) and not re.match(r"^[a-z][a-z0-9+.-]*:", value)
-    }
-    for entry in declared:
-        path = entry.get("path", "")
-        if not path or not entry.get("asset"):
-            failures.append(f"data/media.json: an entry is missing path or asset: {entry}")
-            continue
-        if not re.fullmatch(r"[0-9a-f]{64}", entry.get("sha256", "")):
-            failures.append(f"data/media.json: {path} has no sha256 digest to verify against")
-        if path not in referenced:
-            failures.append(
-                f"data/media.json: {path} is declared but no page references it -- "
-                f"drop the entry or the release asset it pins")
-        local = site / path
-        if local.exists():
-            digest = hashlib.sha256(local.read_bytes()).hexdigest()
-            if digest != entry.get("sha256"):
-                failures.append(
-                    f"{path}: present in the checked tree but hashes to {digest}, "
-                    f"not the {entry.get('sha256')} pinned in data/media.json")
+                    f"version {version} in data/channel.json")
     return failures
 
 
@@ -808,9 +518,9 @@ def check_a11y(pages: list[Page]) -> list[str]:
                 failures.append(
                     f"{page.rel}: <canvas id={canvas}> is labelled by "
                     f"{' '.join(refs)}, which is not an id on this page")
-        if page.rel in A11Y_LANDMARK_EXEMPT:
+        if page.rel in A11Y_CLIENT_RENDERED:
             continue
-        if page.mains != 1:
+        if page.mains != 1 and not (page.mains == 0 and page.rel in A11Y_MAIN_EXEMPT):
             failures.append(f"{page.rel}: {page.mains} <main> landmarks, expected exactly 1")
         if not page.skip_links:
             failures.append(f"{page.rel}: no 'Skip to ...' link")
@@ -821,7 +531,7 @@ def check_a11y(pages: list[Page]) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------
-CHECKS = ("links", "media", "terminology", "channel", "run-facts", "a11y")
+CHECKS = ("links", "terminology", "channel", "a11y")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -849,14 +559,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     results: dict[str, list[str]] = {}
     if "links" in selected:
         results["links"] = check_links(site, pages, repo)
-    if "media" in selected:
-        results["media"] = check_media(site, pages)
     if "terminology" in selected:
         results["terminology"] = check_terminology(repo, pages)
     if "channel" in selected:
         results["channel"] = check_channel(site, pages, repo)
-    if "run-facts" in selected:
-        results["run-facts"] = check_run_facts(site, pages)
     if "a11y" in selected:
         results["a11y"] = check_a11y(pages)
 

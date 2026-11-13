@@ -12,9 +12,9 @@ Parquet output. The latest published release is the S3-focused Java v0.3.2, whic
 replaces at release. The Java implementation is no longer on `main`; it is preserved at
 the tag `java-final`.
 
-Start with [`README.md`](README.md) and the [Go guide](docs/getting-started.md). The
-[visual field guide](https://swath.varve.io/field-guide/) is historical Java v0.3.2
-documentation, not the Go algorithm.
+Start with [`README.md`](README.md) and the [user guide](docs/start-here.md). The website,
+swath.varve.io, is a VitePress build of `docs/` and the home page in `site/`
+([`site/README.md`](site/README.md)).
 
 ## Sources of truth
 

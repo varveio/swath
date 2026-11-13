@@ -11,7 +11,7 @@ The latest published release is the S3-focused Java v0.3.2. The Go implementatio
 Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
 Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible
 object-store dataset resume, S3 versions and delete markers, and GCS generations.
-The [Go guide](docs/getting-started.md) and [command reference](docs/commands/swath.md) describe their limits.
+The [first inventory guide](docs/first-inventory.md) and [command reference](docs/commands/swath.md) describe their limits.
 These capabilities should not be listed as future backend work.
 
 The [publication checklist](docs/ops/dev/go-release-copy-checklist.md) keeps installation,

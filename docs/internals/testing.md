@@ -33,7 +33,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Script self-tests | the OSV image policy's self-test, the provider-conformance tools' tests and the replay benchmark runners' tests | PR, main, dispatch | ubuntu-latest | `ci.yml` `scripts` |
 | OSV scan | the Go images (`Dockerfile`): the Go version and modules linked into each binary, and the lister base's packages, against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
 | Release guards | tag SHA and ancestry, the version's form and the release notes (`source`); the exact asset set, archives, signatures and attestations (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
-| Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
+| Site and documentation checks | VitePress build of the site, links and anchors of the built pages, `docs/style.md` terminology over `docs/**/*.md`, the channel version, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
 | CodeQL (external check) | static analysis; languages and schedule are repository settings | as the setting says (on 2026-11-08: PR, push to `main`, weekly) | GitHub-hosted | code-scanning default setup, not configured in this repository (`gh api repos/varveio/swath/code-scanning/default-setup`); not in `ci-gate` |
 | CodeRabbit (external check) | review comments | pull requests, by the installed app | CodeRabbit | not configured in this repository (no `.coderabbit.yaml`); not in `ci-gate` |
 
@@ -83,7 +83,7 @@ suites for changed modules and their dependants, not a guessed subset of individ
 | `reader/**` | reader and main (main imports reader via a local replacement) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
 | `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `docs/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including generated-help docs, testdata and embeds | main |
-| Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/go-release-copy-checklist.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
+| Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
 | Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
 | Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier |

@@ -75,7 +75,7 @@ Five fields to check in the `--report` file of a sorted listing of a million key
 
 | Field | Normal |
 |---|---|
-| `outcome.class` | `completed` (exit 0), with `outcome.complete` true; for the whole source, also the dataset's coverage ([check](getting-started.md#5-check-that-it-is-complete)) |
+| `outcome.class` | `completed` (exit 0), with `outcome.complete` true; for the whole source, also the dataset's coverage ([check](results.md#coverage-and-unreadable-entries)) |
 | `efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
 | `resources.spill.refused` | 0 |
 | `resources.budget_wait_ns` | 0 or close to it |

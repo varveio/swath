@@ -15,7 +15,7 @@ The fields most runs need:
 | Field | What it says |
 |---|---|
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([exit-codes.md](exit-codes.md)) |
-| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.skipped_entries` and `coverage.filters`: [whole-source check](../getting-started.md#5-check-that-it-is-complete)) |
+| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.skipped_entries` and `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
 | `attempt.id` | this attempt; `error.json` carries the same |
 | `output.rows_committed`, `output.committed_object_bytes` | the committed dataset's rows and the sizes of its objects, after a resume too |
 | `output.object_bytes` | the bytes of the objects this attempt listed |

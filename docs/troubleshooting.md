@@ -10,7 +10,7 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
-| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
+| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](results.md#coverage-and-unreadable-entries) |
 
 The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
 and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their

@@ -26,7 +26,7 @@ A bare local destination or bucket prefix whose final path element ends in `.par
 refused. Use a name without that suffix, or add a trailing separator to explicitly select a directory,
 such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-style directory).
 The same name rule applies to `swath resume DIR`.
-Querying one is shown in [getting-started.md](getting-started.md#6-query-it-with-duckdb).
+Querying one is shown in [running.md](running.md#reading-the-output).
 
 A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,
 compare or schedule. A dataset is not a direct `rclone --files-from` input: a handoff must generate and test a

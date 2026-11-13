@@ -1,0 +1,14 @@
+/* swath's one accent color, a deep teal, on the default theme. */
+:root {
+  --vp-c-brand-1: #0f766e;
+  --vp-c-brand-2: #115e59;
+  --vp-c-brand-3: #0d9488;
+  --vp-c-brand-soft: rgba(13, 148, 136, 0.14);
+}
+
+.dark {
+  --vp-c-brand-1: #2dd4bf;
+  --vp-c-brand-2: #5eead4;
+  --vp-c-brand-3: #0f766e;
+  --vp-c-brand-soft: rgba(45, 212, 191, 0.16);
+}
