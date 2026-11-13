@@ -16,10 +16,6 @@ JAVA_INPUTS = re.compile(
     r'|^docs/(configuration\.md|replay-provider-(evidence\.tar\.gz|expectations\.json))$'
     r'|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?|Dockerfile(\.replay)?'
     r'|\.dockerignore|LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$')
-FIXTURE_INPUTS = re.compile(
-    r'^(swath-replay|swath-core|swath-model|build-logic|gradle)/'
-    r'|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?)$'
-    r'|^scripts/(benchmarks/replay|provider-conformance)/')
 PLATFORM_FILE = re.compile(r'_(windows|darwin|linux|unix|arm64|amd64)(_|\.)|\.s$')
 PLATFORM_PATHS = ('go/internal/journal/', 'go/internal/source/localfs/',
                   'go/internal/parquetout/', 'go/internal/order/')
@@ -66,8 +62,6 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
         elif path.startswith('docs/replay-provider-'):
             # Also read directly by the Azure client tests, outside the gated fixture tier.
             out['go'] = out['fixtures'] = True
-        elif FIXTURE_INPUTS.search(path):
-            out['fixtures'] = True
         elif (JAVA_INPUTS.search(path) or path in ROOT_PROSE
               or path.startswith(('docs/', 'site/', 'config/', 'swath-', 'scripts/legal/'))
               or path in {'.gitignore', '.gitattributes', '.editorconfig'}):
