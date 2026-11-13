@@ -48,10 +48,9 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 ## When it fits
 
 `du` and `find` answer most questions about a small directory, and a scheduled provider inventory costs less
-when a daily or weekly report is fresh enough. `aws s3 ls`, `gcloud storage ls` and `rclone` list a bucket one
-page after another; swath divides the key space into ranges and lists them in parallel, which matters once a
-bucket holds tens of millions of keys. On one 32-vCPU VM it listed and counted the 1,088,794,418 objects of a
-public S3 bucket in 177 seconds, without writing an inventory
+when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
+parallel, which matters once a bucket holds tens of millions of keys. A billion-object S3 bucket lists in about
+three minutes on one 32-vCPU VM
 ([how this was measured](docs/internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 
