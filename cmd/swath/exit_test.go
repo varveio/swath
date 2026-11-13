@@ -484,6 +484,18 @@ func TestCappedTextRunIsIncomplete(t *testing.T) {
 	}
 }
 
+// TestCappedCountPrintsCounts: swath diag count capped by --max-keys prints
+// its partial counts, then exits 3; it printed nothing.
+func TestCappedCountPrintsCounts(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := runCount(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--no-stats"}, &out)
+	if c := exitCode(t, err); c != exitIncomplete || !strings.Contains(out.String(), " rows=10 object_bytes=") {
+		t.Fatalf("exit %d (%v), stdout %q", c, err, out.String())
+	}
+}
+
 // TestProtocolViolationIsUnresumable: a GCS service that answers, three
 // quarters through a run, with pages whose first two keys are swapped (out
 // of order: the engine cannot recover) fails the run with exit 1, cause

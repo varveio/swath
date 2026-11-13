@@ -401,6 +401,14 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
+	// swath diag count prints its partial counts, then exits 3 (it printed
+	// nothing).
+	stderr.Reset()
+	out.Reset()
+	if code := conclude(runCount(context.Background(), []string{root, "--no-stats"}, &out)); code != exitIncomplete ||
+		!strings.Contains(out.String(), " rows=") || !strings.HasSuffix(stderr.String(), end) {
+		t.Fatalf("diag count: exit %d, stdout %q, stderr %q", code, out.String(), stderr.String())
+	}
 	// A reader that closed the stream took what it wanted: exit 0, as
 	// documented for a closed stdout, the unreadable entry notwithstanding
 	// (it exited 3).

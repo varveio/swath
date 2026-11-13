@@ -1054,6 +1054,9 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	}
 	// Entries left out say so, whatever the statistics' gating.
 	reportUnreadable(&sum)
+	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
+		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
+	}
 	switch {
 	case err != nil:
 		err = explain(err)
@@ -1066,20 +1069,22 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
 	case rerr != nil:
 		return reportFailed(nil, rerr)
-	case o.report == "-":
-		return nil // stdout carries the report
-	case !o.countOnly || o.du:
-		return nil // stdout carries the rows (swath du's: Deliver), or nothing: the data went to -o; --stats prints the account on stderr
 	}
+	// stdout carries the report (--report -), the rows (swath du's:
+	// Deliver), swath diag count's line, or nothing: the data went to -o;
+	// --stats prints the account on stderr.
+	return nil
+}
+
+// countLine is swath diag count's output: its one line of counts.
+func countLine(stdout io.Writer, sum listing.Report) {
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
 	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
 		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
 		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
-	// swath diag count's output is its one line of counts.
 	fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
-	return nil
 }
 
 // measured formats a measurement divided by unit, or "-" where the
