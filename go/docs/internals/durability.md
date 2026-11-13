@@ -557,7 +557,8 @@ tail as JSON lines.
 - **A write or an fsync that fails** (a part file, a journal record, the manifest; half the bytes written then
   `ENOSPC`, or the bytes written and the sync failing with `EIO`): the run fails with that error and no
   manifest, the published parts stay, and a resume completes the uninterrupted run's dataset
-  (`TestDiskFaultMatrix`, through the `faults.SetIO` seam); a full disk exits 74, class `disk_full`, resumable
+  (`TestDiskFaultMatrix`, through the `faults.SetIO` seam). The same faults on the run report, written after
+  the commit, are a warning: the run is committed and a resume finds it complete. A full disk exits 74, class `disk_full`, resumable
   (`TestDiskFullExits74`). The kernel's behavior after a failed fsync
   (pages it may drop or mark clean) is not modeled.
 - **Power loss or a kernel crash.** Recovery holds when the filesystem honors `fsync` on files and

@@ -198,7 +198,8 @@ func TestOutOfOrderListingFails(t *testing.T) {
 }
 
 func TestParseURL(t *testing.T) {
-	for in, want := range map[string][2]string{"s3://b": {"b", ""}, "s3://b/": {"b", ""}, "s3://b/p/q/": {"b", "p/q/"}} {
+	for in, want := range map[string][2]string{"s3://b": {"b", ""}, "s3://b/": {"b", ""}, "s3://b/p/q/": {"b", "p/q/"},
+		"s3://b/web/https%3A%2F/": {"b", "web/https%3A%2F/"}} { // '%' is literal, never decoded
 		b, p, err := ParseURL(in)
 		if err != nil || b != want[0] || p != want[1] {
 			t.Errorf("%s: %q %q %v", in, b, p, err)

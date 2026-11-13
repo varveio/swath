@@ -75,7 +75,7 @@ func TestS3Dataset(t *testing.T) {
 	}
 }
 
-func readJSON(t *testing.T, path string, v any) {
+func readJSON(t testing.TB, path string, v any) {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {

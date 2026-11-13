@@ -4,6 +4,7 @@
 package listing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/filter"
+	"github.com/varveio/swath/go/internal/journal"
 )
 
 // footerRows is the row count in a part file's footer.
@@ -229,5 +232,75 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 				t.Fatalf("%d parts after the resume, a clean run %d", n, ref0)
 			}
 		})
+	}
+}
+
+// TestTimeCutLastPartEmptyTail: the part interval closes the last part
+// that will hold a row while the listing goes on through a tail the
+// filters drop entirely (--include '*.csv', no .csv key in the last stretch
+// of the bucket), so Close finds no open part and no record is marked
+// final. A run stopped there, every part recorded and published and no
+// manifest, is not complete to its resume: the resume restarts after the
+// last recorded key, lists the tail again, routes nothing, and commits the
+// retained part alone, the dataset of a clean run. Deterministic: the
+// tail's first range waits until part 0, cut by time, is being recorded.
+func TestTimeCutLastPartEmptyTail(t *testing.T) {
+	datasettest.RequireJournal(t)
+	keys := []string{"a.csv"}
+	for i := range 20 {
+		keys = append(keys, fmt.Sprintf("b%03d.txt", i))
+	}
+	tail := int64(len(keys) - 1)
+	run := func(out string, resume bool, p *scripted) (Report, error) {
+		scriptMu.Lock()
+		scriptNext = p
+		scriptMu.Unlock()
+		return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Filter: &filter.Spec{Include: []string{"*.csv"}},
+			Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 1 << 20, Workers: 1, RowBudget: 128 << 10, PartInterval: 20 * time.Millisecond}})
+	}
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := run(ref, false, &scripted{keys: keys, chunk: 1}); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	recording := make(chan struct{})
+	var appends atomic.Int64
+	restore := faults.Set(func(p string) error {
+		switch {
+		case p == "journal-append" && appends.Add(1) == 2: // 1: the header; 2: part 0's record
+			close(recording)
+		case p == "published": // every part recorded and published, no manifest
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := run(out, false, &scripted{keys: keys, chunk: 1, hold: recording, holdAt: 1})
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("crash not injected: %v", err)
+	}
+	st, err := journal.Read(out)
+	if err != nil || len(st.Records) != 1 || st.Last().Final || st.Last().RowsTotal != 1 {
+		t.Fatalf("journal: %v, want one record of one row, not final", err)
+	}
+	sum, err := run(out, true, &scripted{keys: keys, chunk: 1})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if o := sum.Output; o.RowsRetained != 1 || o.RowsEmitted != 0 || o.RowsFiltered != tail {
+		t.Fatalf("resume: %d rows retained, %d emitted, %d filtered; want 1, 0, %d (the tail listed again)", o.RowsRetained, o.RowsEmitted, o.RowsFiltered, tail)
+	}
+	if got, want := checkContract(t, out), checkContract(t, ref); !slices.Equal(got, want) {
+		t.Fatalf("keys %q, a clean run %q", got, want)
+	}
+	for _, dir := range []string{ref, out} {
+		if parts, _ := filepath.Glob(filepath.Join(dir, dataset.DataDir, "*")); len(parts) != 1 {
+			t.Fatalf("%s: %d parts, want 1", dir, len(parts))
+		}
+	}
+	a, _ := os.ReadFile(filepath.Join(ref, dataset.DataDir, dataset.PartName(0)))
+	b, _ := os.ReadFile(filepath.Join(out, dataset.DataDir, dataset.PartName(0)))
+	if !bytes.Equal(a, b) {
+		t.Fatal("part 0 differs from a clean run's")
 	}
 }

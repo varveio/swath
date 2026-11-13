@@ -147,7 +147,8 @@ func TestBoundsAtExactKeys(t *testing.T) {
 }
 
 func TestParseURL(t *testing.T) {
-	for in, want := range map[string][2]string{"gs://b": {"b", ""}, "gs://b/p/q": {"b", "p/q"}} {
+	for in, want := range map[string][2]string{"gs://b": {"b", ""}, "gs://b/p/q": {"b", "p/q"},
+		"gs://b/web/https%3A%2F/": {"b", "web/https%3A%2F/"}} { // '%' is literal, never decoded
 		b, p, err := ParseURL(in)
 		if err != nil || b != want[0] || p != want[1] {
 			t.Fatalf("%s: %q %q %v", in, b, p, err)

@@ -574,6 +574,54 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	check("resumed run", rep)
 }
 
+// TestResumeAtAnotherPath: swath resume DIR continues the interrupted run
+// in DIR wherever DIR is now, never at the --output the journal recorded:
+// a run started with a relative -o (cd /a && swath list ... -o ds) resumed
+// from another working directory by its absolute path, and a run whose
+// directory was moved (mv /a/ds /b/moved) resumed at its new path, given
+// relative to the working directory. Each completes with a clean run's
+// rows, and nothing is created at the recorded place.
+func TestResumeAtAnotherPath(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	ctx := context.Background()
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	args := func(out string) []string {
+		return []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--part-size", "4KiB", "--sort-buffer", "512KiB", "-o", out}
+	}
+	ref := filepath.Join(t.TempDir(), "ref")
+	if err := run(ctx, args(ref), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	want := datasetKeys(t, ref)
+	resume := func(how, operand, dir string) {
+		t.Helper()
+		if err := dispatch(ctx, []string{"resume", operand}, io.Discard); err != nil {
+			t.Fatalf("%s: swath resume %s: %v", how, operand, err)
+		}
+		if got := datasetKeys(t, dir); !slices.Equal(got, want) {
+			t.Fatalf("%s: %d rows, a clean run %d (or they differ)", how, len(got), len(want))
+		}
+	}
+	started, elsewhere := t.TempDir(), t.TempDir()
+	t.Chdir(started)
+	crashRun(t, args("ds"), 2)
+	t.Chdir(elsewhere)
+	resume("relative -o, resumed from another directory", filepath.Join(started, "ds"), filepath.Join(started, "ds"))
+	if _, err := os.Lstat(filepath.Join(elsewhere, "ds")); !os.IsNotExist(err) {
+		t.Fatalf("the resume created the recorded relative output in its working directory: %v", err)
+	}
+	old := filepath.Join(t.TempDir(), "ds")
+	crashRun(t, args(old), 2)
+	if err := os.Rename(old, filepath.Join(elsewhere, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	resume("moved, resumed by a relative path", "moved", filepath.Join(elsewhere, "moved"))
+	if _, err := os.Lstat(old); !os.IsNotExist(err) {
+		t.Fatalf("the resume created the recorded output: %v", err)
+	}
+}
+
 // TestRefusalsExit2: a refusal that is the caller's to fix exits 2 with
 // class refused, in the exit code and the report, as Java's guarded
 // refusals: a non-empty output without --overwrite, --overwrite on
