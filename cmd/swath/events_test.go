@@ -65,9 +65,9 @@ func captureSyncStderr(t *testing.T) *syncBuffer {
 // on every platform.
 var errConnRefused = errors.New("connection refused")
 
-// TestEventGolden pins --log-format json: each event once, as
+// TestDocsLogEvents pins --log-format json: each event once, as
 // docs/reference/log-events.md shows it (UPDATE=1 rewrites the block).
-func TestEventGolden(t *testing.T) {
+func TestDocsLogEvents(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	logClock = func() time.Time { return at }
@@ -111,7 +111,7 @@ func TestEventGolden(t *testing.T) {
 			t.Fatalf("no %s event in %s", e, got)
 		}
 	}
-	docBlock(t, "../../docs/reference/log-events.md", "events", "json", got)
+	docBlock(t, "reference/log-events.md", "events", "json", got)
 }
 
 // TestFailureWatch: one cause failing every request warns once it has

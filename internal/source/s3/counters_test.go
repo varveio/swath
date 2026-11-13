@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/counters"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/objhttp"
@@ -16,10 +17,10 @@ import (
 // Counters is the S3 tally in report order, assembled for documentation and ID checks.
 var Counters = append(append([]counters.Def(nil), keyrange.Counters...), clientCounters...)
 
-// TestCountersDoc keeps the S3 table in docs/internals/counters.md generated
+// TestDocsCounters keeps the S3 table in docs/internals/counters.md generated
 // from Counters: run with UPDATE=1 to rewrite it.
-func TestCountersDoc(t *testing.T) {
-	const path, begin, end = "../../../docs/internals/counters.md", "<!-- s3:begin -->\n", "<!-- s3:end -->"
+func TestDocsCounters(t *testing.T) {
+	path, begin, end := docs.Path(t, "internals/counters.md"), "<!-- s3:begin -->\n", "<!-- s3:end -->"
 	doc, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +40,7 @@ func TestCountersDoc(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("docs/internals/counters.md is stale; run UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc")
+	t.Fatal("docs/internals/counters.md is stale; run UPDATE=1 go test ./internal/source/s3 -run TestDocsCounters")
 }
 
 // TestCountersMatchIDs: one client counter definition per ID; keys unique

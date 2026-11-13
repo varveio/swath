@@ -20,8 +20,11 @@ swath is the Go module at the repository root and uses the toolchain declared in
 `go vet ./... && go test -race ./...`, at the root and in each nested module (`objfile/`, `reader/`); run focused tests locally and use the sharded CI
 for the full suite, as described in [testing](docs/internals/testing.md). For a provider, follow the
 [provider checklist](docs/internals/providers.md#adding-a-provider), including reader, verifier
-and conformance integration outside its directory. Regenerate CLI documentation with
-`UPDATE=1 go test ./cmd/swath -run '^TestCLIDoc'`; do not edit the generated synopsis and option blocks.
+and conformance integration outside its directory. Regenerate the generated documentation blocks
+(synopses, options, log events, counters) with
+`UPDATE=1 go test -run '^TestDocs' ./cmd/swath ./internal/source/s3`; do not edit them by hand. A test
+that reads a page under `docs/` is named `TestDocs...` and opens it with `docs.Path`, so that a
+documentation-only pull request runs it ([docs tier](docs/internals/testing.md#docs-tier)).
 
 Documentation is checked like code: `go test ./docs` checks the relative links (inline,
 reference definitions, HTML `href`) and their anchors in every Markdown file of the repository; it does not fetch
