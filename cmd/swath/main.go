@@ -917,7 +917,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
-	fw := newFailureWatch(pf.Title)
+	fw := newFailureWatch(pf.Title, o.stall)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
 	// One terminal result (terminal): the classification is applied to the

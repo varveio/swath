@@ -21,6 +21,7 @@ import (
 
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // The event log is every line swath writes to stderr outside the redrawn
@@ -286,9 +287,14 @@ var persistFor, persistEvery = 10 * time.Second, time.Minute
 // review): one transport or service cause failing every request for
 // persistFor names itself and the endpoint host, without -v.
 type failureWatch struct {
-	provider string       // the registry's Title: S3, GCS, Azure Blob
-	answers  atomic.Int64 // answered exchanges: a streak lasts while none comes
-	warnings atomic.Int64 // warnings printed
+	provider string        // the registry's Title: S3, GCS, Azure Blob
+	stall    time.Duration // --stall-timeout (0: none), which a warning names
+	answers  atomic.Int64  // answered exchanges: a streak lasts while none comes
+	warnings atomic.Int64  // warnings printed
+	// contacted: an exchange got an answer of any status, or failed
+	// otherwise than to connect (objhttp.Unreachable): the client's
+	// fail-fast no longer applies, and a warning names the stall timeout.
+	contacted atomic.Bool
 
 	mu      sync.Mutex
 	streaks map[string]*streak // by "HOST: CAUSE"
@@ -304,8 +310,23 @@ type streak struct {
 // maxStreaks bounds the causes a watch holds at once.
 const maxStreaks = 64
 
-func newFailureWatch(provider string) *failureWatch {
-	return &failureWatch{provider: provider, streaks: map[string]*streak{}}
+func newFailureWatch(provider string, stall time.Duration) *failureWatch {
+	return &failureWatch{provider: provider, stall: stall, streaks: map[string]*streak{}}
+}
+
+// until says how long a failure (e) is retried: while nothing ever
+// answered and the connection fails deterministically, the clients'
+// fail-fast grace (objhttp.UnreachableGrace); otherwise, or when it is
+// shorter, until the stall timeout passes without progress.
+func (w *failureWatch) until(e source.Exchange) string {
+	grace := objhttp.UnreachableGrace
+	switch {
+	case !w.contacted.Load() && objhttp.Unreachable(e.Err) && (w.stall <= 0 || grace < w.stall):
+		return fmt.Sprintf("; nothing has answered: the run stops %s after the first attempt", grace)
+	case w.stall > 0:
+		return fmt.Sprintf("; the run stops as stuck after %s without progress", w.stall)
+	}
+	return ""
 }
 
 // exchangeCause is a failed exchange's cause ("" for an answer): the
@@ -329,6 +350,9 @@ func exchangeCause(e source.Exchange) string {
 func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	if e.Err != nil && errors.Is(e.Err, context.Canceled) {
 		return // the run stopping
+	}
+	if e.Err == nil || !objhttp.Unreachable(e.Err) {
+		w.contacted.Store(true)
 	}
 	cause := exchangeCause(e)
 	if cause == "" {
@@ -361,7 +385,7 @@ func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	w.mu.Unlock()
 	if l := elog(); due && l.shows(lvWarn) {
 		w.warnings.Add(1)
-		l.event(lvWarn, evWarning, fmt.Sprintf("%s %s (retrying; %d attempts)", w.provider, key, n),
+		l.event(lvWarn, evWarning, fmt.Sprintf("%s %s (retrying; %d attempts%s)", w.provider, key, n, w.until(e)),
 			failureFields{host, cause, n})
 	}
 }

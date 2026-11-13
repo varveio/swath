@@ -285,6 +285,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func(ctx conte
 		actx := context.WithValue(ctx, targetKey{}, t)
 		v, admitted, f := admit(ctx, r, func() (T, error) { return attempt(actx) })
 		if f == nil {
+			c.reached.Store(true)
 			c.answered.Add(1)
 			return v, nil
 		}
@@ -297,6 +298,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func(ctx conte
 		if !admitted {
 			return zero, f
 		}
+		f = c.unreachable(f, t)
 		if f.Throttle {
 			c.throttles.Add(1)
 		}
@@ -376,6 +378,11 @@ type Counts struct {
 	// retried, never dropped. A failed body read is classified separately
 	// from a malformed document delivered to the parser.
 	ParseFailures int64 `json:"parse_failures"`
+	// Unreachable counts attempts that failed to connect deterministically
+	// (Unreachable) before the endpoint had answered; UnreachableStops the
+	// calls the fail-fast ended after UnreachableGrace (unreachable.go).
+	Unreachable      int64 `json:"unreachable"`
+	UnreachableStops int64 `json:"unreachable_stops"`
 	// InflightMax is the most attempts in flight at once (admitted, from
 	// send to body read); InflightNs sums their time in flight, so
 	// InflightNs over the listing's wall time is the mean in flight.
@@ -401,7 +408,12 @@ type Counters struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 	answered                                              atomic.Int64
 	inflight, inflightMax, inflightNs                     atomic.Int64
-	latency                                               latencyHist
+	// The fail-fast (unreachable.go): reached is set by any outcome but a
+	// deterministic connect failure; unreachableSince is the first such
+	// failure's time (Unix ns, 0: none).
+	reached                                             atomic.Bool
+	unreachableSince, connectFailures, unreachableStops atomic.Int64
+	latency                                             latencyHist
 }
 
 // latencyHist is a fixed log-spaced histogram of durations in ns: four
@@ -509,7 +521,7 @@ func (c *Counters) Live() source.Requests {
 func (c *Counters) Load() Counts {
 	q := c.latency.quantiles(0.50, 0.90, 0.99)
 	return Counts{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(),
-		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load(), InflightMax: c.inflightMax.Load(),
+		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load(), Unreachable: c.connectFailures.Load(), UnreachableStops: c.unreachableStops.Load(), InflightMax: c.inflightMax.Load(),
 		InflightNs: c.inflightNs.Load(), P50Ns: q[0], P90Ns: q[1], P99Ns: q[2], LatencyOverflow: c.latency.b[latencyOverflow].Load()}
 }
 
@@ -525,6 +537,8 @@ const (
 	CThrottles
 	CTimeouts
 	CParseFailures
+	CUnreachable
+	CUnreachableStops
 	CInflightMax
 	CInflightNs
 	CInflightP50
@@ -567,6 +581,8 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CThrottles] = counters.Def{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"}
 	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past -request-timeout, retried or not"}
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
+	d[CUnreachable] = counters.Def{Key: "unreachable.attempts", Kind: counters.Count, Unit: "requests", Help: "attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while the endpoint had never answered"}
+	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls failed as unreachable: nothing had answered and every attempt failed so for " + UnreachableGrace.String() + " (the run ends fatal, cause unreachable)"}
 	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
 	for id, q := range map[ClientCounter]string{CInflightP50: "50", CInflightP90: "90", CInflightP99: "99"} {
@@ -604,6 +620,8 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 	put(CThrottles, n.Throttles)
 	put(CTimeouts, n.Timeouts)
 	put(CParseFailures, n.ParseFailures)
+	put(CUnreachable, n.Unreachable)
+	put(CUnreachableStops, n.UnreachableStops)
 	put(CInflightMax, n.InflightMax)
 	put(CInflightNs, n.InflightNs)
 	put(CInflightP50, n.P50Ns)

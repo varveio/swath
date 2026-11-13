@@ -198,16 +198,30 @@ other clients, set `--request-rate N` below it. If the limit stays near 1 under 
 ## A warning repeats about failing requests
 
 ```text
-swath: warning: S3 127.0.0.1:9: connection refused (retrying; 14 attempts)
+swath: warning: S3 127.0.0.1:9: 503 Service Unavailable (retrying; 14 attempts; the run stops as stuck after 10m0s without progress)
 ```
 
 Every request has failed with one cause for 10 seconds. swath keeps retrying until `--stall-timeout` or
-`--max-duration`; check the endpoint, the network and `--endpoint-url`. A run that ends without any request
+`--max-duration`, as the warning says; check the endpoint, the network and `--endpoint-url`. A connection that
+nothing has ever answered at is the next section's. A run that ends without any request
 answered names the cause in its final error:
 
 ```text
 swath: deadline: --max-duration reached; every request was failing: S3 127.0.0.1:1: connection refused (30 attempts)
 ```
+
+## The endpoint cannot be reached
+
+```text
+swath: warning: S3 127.0.0.1:9000: connection refused (retrying; 18 attempts; nothing has answered: the run stops 15s after the first attempt)
+swath: list s3://bucket/: endpoint http://127.0.0.1:9000 cannot be reached (connection refused): nothing answered there in 17.1s; check the endpoint address, and that the service is running
+```
+
+Exit 1, cause `unreachable`, not resumable. No request has ever been answered at the endpoint, and for 15
+seconds every connection was refused, its host was not found, or no route led to it: a mistyped
+`--endpoint-url` (or `AWS_ENDPOINT_URL`, `STORAGE_EMULATOR_HOST`), or an emulator (MinIO, Azurite, the GCS
+emulator) that is not running. The 15 seconds let an emulator that is still starting answer. An endpoint
+that answered once and then stops is an outage instead: swath retries it until `--stall-timeout`.
 
 ## The disk filled (exit 74)
 

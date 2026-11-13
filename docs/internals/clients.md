@@ -31,6 +31,15 @@ clients are described in [providers.md](providers.md) and the page of each provi
   call with a stored transient signal is requeued. Provider admission runs before the engine exists and
   can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
   requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
+- **An endpoint that never answered fails fast.** While nothing has answered a client, an attempt whose
+  connection failed deterministically (`objhttp.Unreachable`: refused, the host not found, no route to the network
+  or host) is retried as any transport failure for `objhttp.UnreachableGrace` (15 s) from the first; past it the
+  failure is final, class `unreachable`, naming the endpoint's scheme and host and the cause, and the run ends
+  fatal instead of requeueing until `--stall-timeout`. Any other outcome (an answer of any status, a timeout, a cut
+  connection) disarms it for the client's life, so an endpoint that answered once and then refuses is an outage,
+  requeued as before. A refused certificate needs no grace: it is never retried. The counters
+  `unreachable.attempts` and `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`,
+  `TestUnreachableGraceRecovers`, `TestUnreachableAfterAnswer`, `TestUnreachable`).
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's
   deadline (all waiters sharing one outstanding call, `tokensource.Shared`), before an attempt is counted: a
   credential failure is a `*objhttp.CredentialError` (class `auth`, or retried when transient) and no request is
@@ -102,7 +111,7 @@ cause that has passed the provider's redaction boundary. The shared vocabulary l
 engine's requeue consume that value; exhaustion wraps it, and `errors.Is` still reaches the cancellation and
 invalid-page sentinels. The report's diagnostic labels are `auth`, `access_denied`, `not_found` (the bucket or container
 only: S3 `NoSuchBucket`, GCS's 404 `notFound` to objects.list, Azure `ContainerNotFound`), `region_redirect` (S3 named the bucket's region in a redirect), `throttle`, `timeout`,
-`parse` and `unsupported`, the ones [the run report](../reference/run-report.md) documents; other errors keep their status and code
+`parse`, `unsupported` and `unreachable` (the fail-fast above), the ones [the run report](../reference/run-report.md) documents; other errors keep their status and code
 without a label. Each provider's `Failure` method in its `classify.go` produces the signals from status and code,
 held by the shared contract `objhttptest.Contract` that every client passes (`TestRetryContract`).
 

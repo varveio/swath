@@ -268,6 +268,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |
 | `timeouts` | count | requests |  | attempts past -request-timeout, retried or not |
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
+| `unreachable.attempts` | count | requests |  | attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while the endpoint had never answered |
+| `unreachable.stops` | count | calls |  | calls failed as unreachable: nothing had answered and every attempt failed so for 15s (the run ends fatal, cause unreachable) |
 | `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
 | `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
 | `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
