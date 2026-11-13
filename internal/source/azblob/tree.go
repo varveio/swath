@@ -62,7 +62,7 @@ func newTree(p *Provider, own bool) (*Tree, error) {
 	eo.Seed, eo.SeedFirstPage, eo.Structure = false, false, keyrange.StructureOff
 	d := p.description()
 	t := &Tree{p: p, Activity: p.Activity}
-	ord, err := tree.NewOrdered[Object](dirLister{c: treeClient{p.client}, container: opt.Container}, eo, d)
+	ord, err := tree.NewOrdered[Object](dirLister{c: treeClient{p.client}, p: p}, eo, d)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +77,7 @@ func newTree(p *Provider, own bool) (*Tree, error) {
 func (t *Tree) Expand(ctx context.Context, r tree.OrderedRange, e source.Emitter[tree.OrderedRange, Object]) error {
 	eng := t.ord.Engine()
 	a := order.New(treeClient{t.p.client}, t.p.opt.Container, eng.Set(), eng.ID(len(client.CounterDefs)))
+	a.Include = t.p.include() // the fetch flags: the tree lists current blobs only
 	defer a.Release()
 	return t.Walker.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
@@ -118,8 +119,8 @@ func (c treeClient) List(ctx context.Context, in *client.ListInput) (*client.Lis
 // dirLister is the ordered mode's Lister: one directory's names through
 // the Expand's byte-order adapter, and Lookup as one listing request.
 type dirLister struct {
-	c         treeClient
-	container string
+	c treeClient
+	p *Provider // container, include, rows as the flat listing makes them
 }
 
 var _ tree.Lister[Object] = dirLister{}
@@ -135,7 +136,7 @@ func (l dirLister) List(ctx context.Context, q *tree.DirQuery) (*tree.DirPage[Ob
 	}
 	out, err := a.Fetch(ctx, &keyrange.Query{Prefix: q.Dir, Delimiter: "/", After: after, Token: q.Token, Max: q.Max})
 	if err != nil {
-		return nil, err
+		return nil, l.p.tagsRefused(err)
 	}
 	pg := &tree.DirPage[Object]{Entries: make([]tree.Entry[Object], 0, len(out.Items)), Truncated: out.Truncated, Token: out.Token}
 	for i := range out.Items {
@@ -144,7 +145,7 @@ func (l dirLister) List(ctx context.Context, q *tree.DirQuery) (*tree.DirPage[Ob
 		if !ok || it.Prefix {
 			return nil, source.Violation(fmt.Errorf("%w: %q in a listing of directory %q", objhttp.ErrInvalidPage, it.Name, q.Dir))
 		}
-		pg.Entries = append(pg.Entries, tree.Entry[Object]{Name: name, Dir: it.Dir, Data: objectOf(it)})
+		pg.Entries = append(pg.Entries, tree.Entry[Object]{Name: name, Dir: it.Dir, Data: l.p.object(it)})
 	}
 	return pg, nil
 }
@@ -152,21 +153,14 @@ func (l dirLister) List(ctx context.Context, q *tree.DirQuery) (*tree.DirPage[Ob
 // Lookup asks for the first entry under dir+name by name: the directory
 // named name, if there is one, sorts before every other name it begins.
 func (l dirLister) Lookup(ctx context.Context, dir, name string) (tree.Entry[Object], bool, error) {
-	out, err := l.c.List(ctx, &client.ListInput{Container: l.container, Prefix: dir + name, Delimiter: "/", MaxResults: 1})
+	out, err := l.c.List(ctx, &client.ListInput{Container: l.p.opt.Container, Prefix: dir + name, Delimiter: "/", MaxResults: 1, Include: l.p.include()})
 	if err != nil {
-		return tree.Entry[Object]{}, false, err
+		return tree.Entry[Object]{}, false, l.p.tagsRefused(err)
 	}
 	if len(out.Items) == 0 || out.Items[0].Name != dir+name || !out.Items[0].Dir {
 		return tree.Entry[Object]{}, false, nil
 	}
-	return tree.Entry[Object]{Name: name, Dir: true, Data: objectOf(&out.Items[0])}, true, nil
-}
-
-// objectOf is an item's row payload: the properties every listing carries
-// (the tree's listings send no include, so the fetch flags fill nothing).
-func objectOf(it *client.Item) Object {
-	return Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
-		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	return tree.Entry[Object]{Name: name, Dir: true, Data: l.p.object(&out.Items[0])}, true, nil
 }
 
 // treeOpened is the registered source of a hierarchical namespace.

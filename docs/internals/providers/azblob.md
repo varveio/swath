@@ -5,8 +5,8 @@
 `az://account/container[/prefix]` lists current blobs: a flat namespace on the range engine, a
 hierarchical namespace (HNS) on the tree core ([tree mode](#hierarchical-namespaces-the-tree-mode)).
 With `--all-versions` a flat namespace lists every entry (versions, snapshots, soft-deleted blobs;
-`NewVersions`, below); a hierarchical one is refused, and its tree listings send no `include`, so the
-`--azure-fetch-*` flags fill nothing there. Namespace admission is required even for a public
+`NewVersions`, below); a hierarchical one is refused; its tree listings send only the
+`--azure-fetch-*` flags' `include`. Namespace admission is required even for a public
 container; `--azure-assume-flat` only overrides an unknown result, never an account reported as
 hierarchical.
 [Shared object-store controls](../../sources.md#object-store-requests) cover authentication,

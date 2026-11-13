@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,5 +318,52 @@ func TestTreeListedNamespace(t *testing.T) {
 	_, err = open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: refusedInfo{azblobtest.NewStore([]string{"a/b", "c"})}}, Workers: 1})
 	if err == nil || strings.Contains(err.Error(), "hierarchical") {
 		t.Fatalf("flat account with a refused account call: %v", err)
+	}
+}
+
+// includeRec records the include each tree listing sends.
+type includeRec struct {
+	*azblobtest.TreeStore
+	mu   sync.Mutex
+	seen []client.Include
+}
+
+func (s *includeRec) List(ctx context.Context, in *client.ListInput) (*client.ListOutput, error) {
+	s.mu.Lock()
+	s.seen = append(s.seen, in.Include)
+	s.mu.Unlock()
+	return s.TreeStore.List(ctx, in)
+}
+
+// TestTreeFetchFlags: the tree's listings send the fetch flags' include
+// (never versions or snapshots: the tree lists current blobs), and its rows
+// take the flat listing's empty values for what a blob lacks.
+func TestTreeFetchFlags(t *testing.T) {
+	store := &includeRec{TreeStore: azblobtest.NewTreeStore(hnsCorpus(10))}
+	src, err := open(context.Background(), registry.Request{Root: "az://acct/c",
+		Options: &Options{Client: store, FetchMetadata: true, FetchTags: true}, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := runTree(context.Background(), src.(*treeOpened), 2)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("%d rows, %v", len(rows), err)
+	}
+	for _, r := range rows {
+		if r.Data.Metadata != "{}" || r.Data.Tags != "{}" {
+			t.Fatalf("row %q: metadata %q, tags %q", r.Key, r.Data.Metadata, r.Data.Tags)
+		}
+	}
+	listed := 0
+	for _, in := range store.seen {
+		if in.Versions || in.Snapshots || in.Deleted {
+			t.Fatalf("a tree listing asked for %+v", in)
+		}
+		if in.Metadata && in.Tags {
+			listed++
+		}
+	}
+	if listed == 0 {
+		t.Fatalf("no listing sent the fetch flags: %+v", store.seen)
 	}
 }

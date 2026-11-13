@@ -422,7 +422,11 @@ func (p *provider[P]) admit(ctx context.Context) (hns bool, err error) {
 		}
 	}
 	if err != nil && ctx.Err() == nil && !p.opt.Flat && refused(err) {
-		if h, lerr := p.listedHNS(ctx); lerr == nil && h {
+		h, lerr := p.listedHNS(ctx)
+		if ce := (*objhttp.CredentialError)(nil); errors.As(lerr, &ce) {
+			return false, fmt.Errorf("Azure Blob client: %w", lerr)
+		}
+		if lerr == nil && h {
 			hns, err, how = true, nil, "listing"
 		}
 	}
