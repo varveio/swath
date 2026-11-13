@@ -227,19 +227,35 @@ func (o *opened) locate(path string) (string, error) {
 		}
 		return rel + "/", err
 	}
-	dir := filepath.Dir(path)
+	dir, name := splitParent(path)
 	rfi, err := os.Stat(o.p.root)
 	if err != nil {
 		return "", err
 	}
 	if dfi, err := os.Stat(dir); err == nil && os.SameFile(dfi, rfi) {
-		return filepath.Base(path), nil // directly in the root
+		return name, nil // directly in the root
 	}
 	rel, inside, err := dataset.LocateInside(o.p.root, dir)
 	if !inside {
 		return "", err
 	}
-	return rel + "/" + filepath.Base(path), err
+	return rel + "/" + name, err
+}
+
+// splitParent splits path at its last separator into the directory as
+// spelled, which the system resolves (not lexically cleaned:
+// link/.. is the parent of link's target, not the directory holding
+// link), and the name in it.
+func splitParent(path string) (dir, name string) {
+	i := len(path) - 1
+	for i >= len(filepath.VolumeName(path)) && !os.IsPathSeparator(path[i]) {
+		i--
+	}
+	dir, name = path[:i+1], path[i+1:]
+	if dir == "" {
+		dir = "."
+	}
+	return dir, name
 }
 
 // Report: an entry counts as skipped when an error kept it (or its subtree)
