@@ -572,3 +572,45 @@ func TestRemoteAzureSASEchoed(t *testing.T) {
 		t.Fatalf("the refusal is not in error.json: %s", errFile)
 	}
 }
+
+// TestShowRemoteWorkDir: after a run that committed its dataset to a
+// bucket, swath show WORK_DIR reports the dataset there (its destination,
+// the commit finalized) from the manifest the work directory committed,
+// not an error about a local manifest a bucket dataset never has.
+func TestShowRemoteWorkDir(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	s3test.NoCredentials(t)
+	awsProfiles(t, "output")
+	src := httptest.NewServer(s3test.Handler(s3test.Backend(t, s3test.Keys(3, 7))))
+	t.Cleanup(src.Close)
+	dst := httptest.NewServer(s3fake.New("out"))
+	t.Cleanup(dst.Close)
+	work := filepath.Join(t.TempDir(), "work dir")
+	if err := dispatch(context.Background(), []string{"list", "s3://bkt", "--endpoint-url", src.URL, "--s3-path-style", "--anonymous",
+		"-o", "s3://out/inv", "--work-dir", work, "--output-endpoint-url", dst.URL, "--output-s3-profile", "output", "--output-s3-region", "us-east-1", "--no-stats"}, io.Discard); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var shown bytes.Buffer
+	if err := show([]string{work}, &shown); err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n")
+	if len(lines) != 6 || !strings.HasPrefix(lines[0], "dataset s3://out/inv/ at "+dst.URL+": SeekParquet format ") || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") ||
+		!strings.Contains(lines[4], " 3 rows, ") || lines[5] != "committed from the work directory "+work+" (finalized)" {
+		t.Fatalf("show:\n%s", shown.String())
+	}
+	// Committed, its cleanup not finished: a resume finishes it.
+	marker := filepath.Join(work, dataset.RemoteCommitName)
+	b, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, bytes.Replace(b, []byte(`"finalized": true`), []byte(`"finalized": false`), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shown.Reset()
+	if err := show([]string{work}, &shown); err != nil || !strings.HasSuffix(shown.String(), "\ncommitted from the work directory "+work+", its cleanup unfinished (swath resume "+shellQuote(work)+" finishes it)\n") {
+		t.Fatalf("show unfinalized: %v\n%s", err, shown.String())
+	}
+}

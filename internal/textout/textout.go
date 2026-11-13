@@ -225,6 +225,15 @@ func zstdOptions(jobs int) []zstd.EOption {
 	return append(o, zstd.WithEncoderConcurrency(jobs), zstd.WithConcurrentBlocks(true))
 }
 
+// Paths are the paths a file output writes: the file and its temporary
+// (none for the stream).
+func (o *Out) Paths() []string {
+	if o.f == nil {
+		return nil
+	}
+	return []string{o.cfg.Path, o.f.Temp()}
+}
+
 // Format is the output's format.
 func (o *Out) Format() string { return o.cfg.Format }
 

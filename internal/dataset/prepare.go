@@ -49,6 +49,9 @@ func Usable(out, root, schemaID string, replace bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// inside reports whether out is inside root, asked only where it
+	// decides the refusal.
+	inside := func() (bool, error) { return false, nil }
 	if root != "" { // a local listing: protect the listed tree
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -64,12 +67,13 @@ func Usable(out, root, schemaID string, replace bool) (string, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("stat output: %w", err)
 		}
+		inside = func() (bool, error) { return insideRoot(absRoot, absOut) }
 		if replace {
-			inside, err := insideRoot(absRoot, absOut)
+			in, err := inside()
 			if err != nil {
 				return "", err
 			}
-			if inside {
+			if in {
 				return "", fmt.Errorf("%s: %w", out, ErrInsideRoot)
 			}
 		}
@@ -78,6 +82,11 @@ func Usable(out, root, schemaID string, replace bool) (string, error) {
 	switch {
 	case err == nil && nonLock(absOut, ents) > 0:
 		if !replace {
+			// Inside the root, replacing is refused too: say so now,
+			// before --overwrite is tried.
+			if in, err := inside(); err == nil && in {
+				return "", fmt.Errorf("%s: %w, and %w", out, ErrNotEmpty, ErrInsideRoot)
+			}
 			return "", fmt.Errorf("%s: %w", out, ErrNotEmpty)
 		}
 		if !isDataset(absOut, schemaID) {

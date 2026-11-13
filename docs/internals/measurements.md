@@ -2262,6 +2262,31 @@ the same listing identical through its projection; format 2 is 2.2 % smaller. A 
 dataset; the reader dispatches on the schema id and reads every provider's datasets
 ([upgrade.md, "What a reader of the Java layout changes"](../upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
 
+## Spill at billion scale, and a spill cap too small (2026-11-13)
+
+Production listings of public buckets with 0.4.0-rc.2, sorted
+Parquet written to a bucket, spill on the work directory's disk. Figures are from the runs' reports and
+progress logs; they are individual runs, not a benchmark.
+
+- **Ample disk.** 35 buckets, 50.6 billion objects in all, completed. At the peak 96 to 99 % of the rows were
+  ahead of the output (usgs-lidar-public: 1.949 of 1.973 billion; 21 of its 677 parts were published before
+  listing ended). Spill peaked at 18 to 22 bytes per row, about the size of the Parquet output.
+  `resources.spill.refused` and `resources.budget_wait_ns` were 0 in every run.
+- **A cap too small.** Three buckets of 29.6, 10.3 and 8.4 billion objects on a 100 GiB disk (a 91 GiB spill
+  cap) at 2,048 workers fell from about 7,000 requests a second to about 10 once the cap filled. After the cap,
+  rows listed per second equalled rows written per second, at about 8,000 to 12,000: one range paged serially.
+  The runs were cancelled after four hours; none had failed. Which wait the other workers were in was not
+  measured.
+- **Durable-spill limits bind.** On aind-open-data (9.07 billion rows, 73,081 spilled ranges) the ledger
+  history reached its 40,000-record cap: 20,000 ranges sealed, `no_slot` 24,030, `history_exhausted` 29,038.
+  On usgs-lidar-public: 10,084 sealed, `no_slot` 4,237. A resume of a listing this size would list most of it
+  again ([#513](https://github.com/varveio/swath/issues/513)).
+- **One writer during listing.** Across 104 runs with a listing phase over one second, the single part writer
+  ran at a median of about 1 million rows a second (0.8 to 1.6 million by size class) and the output thread
+  spent a median 13 to 26 % of the listing blocked on it above 10 million rows (at most 76 %); the parallel
+  tail after listing wrote 6.6 to 8.5 million rows a second and took about a third of the wall time. The
+  two shares come from counters that overlap in a few runs, so they are approximate.
+
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 
 Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
