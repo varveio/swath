@@ -12,10 +12,10 @@ swath du -d 1 media
 
 ```text
     size  files  dirs  last_modified (local)  path
-65.5 MiB      3     0  2026-11-02 09:30:00    archive/
+64.8 MiB      2     0  2026-11-02 09:30:00    archive/
 6.10 MiB      3     2  2026-01-20 12:00:00    photos/
 29.6 MiB      1     0  2026-11-02 09:30:00    videos/
- 101 MiB      7     5  2026-11-02 09:30:00    (total)
+ 100 MiB      6     5  2026-11-02 09:30:00    (total)
 ```
 
 Each row totals everything below it, as `du` does: its files, its directories, their bytes and the newest
@@ -25,8 +25,8 @@ whole tree, and every row and the total include everything below them. Without `
 
 The sizes are apparent bytes, the length of each file as `ls -l` shows it, not the disk space it takes. Here
 `archive/` holds a sparse 64 MiB disk image that takes almost no disk space, and two names for one hard-linked
-file, each counted. `--allocated` totals allocated bytes and `--count-links-once` counts a hard-linked file
-once. [Understand your results](results.md) explains both.
+file, counted once, as `du` counts it. `--allocated` totals allocated bytes and `-l` (`--count-links`) counts
+every name. [Understand your results](results.md) explains both.
 
 ## 2. List every entry
 
@@ -62,7 +62,8 @@ swath list media -o media-inventory
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest and `run.json`, the run report. Its 12 rows are the 7 files and 5 directories.
+manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 directories;
+two of the names are one hard-linked file.
 
 The output directory must be new or empty. Keep it outside the tree you list; if it is inside, swath skips it
 and records it as an exclusion.
@@ -77,13 +78,13 @@ swath show media-inventory
 dataset media-inventory: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
 key key unique=true, published 2026-11-13T20:16:47Z
 source /home/you/media, scope whole ""
-coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
+coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 1 part, 12 rows, 4125 bytes, keys "archive/" .. "videos/trip.mp4"
 ```
 
 `swath show` reads the manifest, not the rows. The lines say which schema the rows follow, when the dataset
 was published, what was listed, how completely, and what the parts hold. Here `complete=true` with
-`skipped=0` and no filters means the dataset covers the whole tree. Read the coverage line before you rely
+`unreadable=0`, no filters and no exclusions means the dataset covers the whole tree. Read the coverage line before you rely
 on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains each field.
 
 The saved inventory answers step 1 again without walking the tree:

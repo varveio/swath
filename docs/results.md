@@ -18,15 +18,15 @@ both the scope and the filters, so you can tell later what it was meant to hold 
 ## Apparent and allocated bytes
 
 `size` is a file's apparent size: its length, as `ls -l` shows it. It is not the disk space the file takes.
-In the example, `swath du` reports 101 MiB, but `swath du --allocated` reports 37.2 MiB, close to what
+In the example, `swath du` reports 100 MiB, but `swath du --allocated` reports 36.4 MiB, close to what
 `du -sh` prints for the same tree:
 
 ```text
 allocated_size  files  dirs  last_modified (local)  path
-      1.53 MiB      3     0  2026-11-02 09:30:00    archive/
+       784 KiB      2     0  2026-11-02 09:30:00    archive/
       6.11 MiB      3     2  2026-01-20 12:00:00    photos/
       29.6 MiB      1     0  2026-11-02 09:30:00    videos/
-      37.2 MiB      7     5  2026-11-02 09:30:00    (total)
+      36.4 MiB      6     5  2026-11-02 09:30:00    (total)
 ```
 
 The difference is a sparse 64 MiB disk image that occupies no blocks; compression and block rounding also
@@ -39,32 +39,39 @@ size: storage classes, minimum storage durations, versions and replication are o
 
 ## Hard links
 
-A file with several hard links has several names, and swath lists each name as a row. `swath du` counts the
-bytes of every name, unlike `du`, which counts a file once. In the example, `notes.tar` and `notes-latest.tar`
-are one file of 800,000 bytes, counted twice. `--count-links-once` counts it once, under the first of its names
-in byte order. In a listing, the `inode`, `dev` and `nlink` columns identify names of the same file.
+A file with several hard links has several names, and `swath list` writes each name as a row. `swath du`
+counts the file once, as `du` does, under the first of its names in byte order. In the example, `notes.tar`
+and `notes-latest.tar` are one file of 800,000 bytes, counted once; `-l` (`--count-links`) counts it under
+both names, and the total becomes 101 MiB. In a listing, the `inode`, `dev` and `nlink` columns identify
+names of the same file.
 
 ## Coverage and unreadable entries
 
-An entry swath cannot read, such as a directory without read permission, is left out of the result. swath
-names it on stderr and still exits with code 0:
+An entry swath cannot read, such as a directory without read permission, is missing from the output with
+everything below it. The rest is still listed and written; swath names the entry on stderr, ends with a line
+that counts the missing entries (it is printed under `-q` too), and exits with code 3:
 
 ```text
-swath: warning: 1 entry could not be read: the output leaves them out
+swath: warning: unreadable entries:
   /home/you/media/private: permission denied
+swath: 1 entry could not be read and is missing from the output
 ```
+
+A symbolic link whose target cannot be read keeps its row and is not counted, and an entry removed while
+swath walks the tree is no longer part of it. A source directory that cannot be opened at all stops the run
+with exit code 1 ([troubleshooting](troubleshooting.md#entries-could-not-be-read)).
 
 A dataset keeps the count. `swath show` prints it on the coverage line:
 
 ```text
-coverage complete=true stop=completed skipped=1 filters=0 exclusions=0
+coverage complete=true stop=completed unreadable=1 filters=0 exclusions=0
 ```
 
 `complete=true` says only that the listing reached the end of its scope. The dataset holds the whole scope
-when `stop=completed`, `skipped=0` and `filters=0` too. `exclusions` names what was left out by design, such as
-an output directory inside the tree. A program reads the same fields from the manifest
-([dataset](dataset.md#the-swath-extension)), and the run report's `outcome.unreadable` is true when any entry
-could not be read ([run report](reference/run-report.md)).
+when `stop=completed`, `unreadable=0`, `filters=0` and `exclusions=0` too, or when you accept its exclusions
+explicitly. `exclusions` names what was left out by design, such as an output directory inside the tree. A
+program reads the same fields from the manifest ([dataset](dataset.md#the-swath-extension)); the run report's
+`outcome.unreadable` holds the same count ([run report](reference/run-report.md)).
 
 ## Observation time
 
