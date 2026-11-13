@@ -2,7 +2,7 @@
 
 What `internal/parquetout` and `internal/dataset` write, and why. Each choice lists what depends on it. The dataset
 is a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft revision 1 (the format's
-`spec/format-1.md`; the swath dataset profile it carries is [../dataset.md](../dataset.md); what changed from the Java tool's format 1 is in [../upgrade.md](../upgrade.md#seekparquet)); swath's own
+`spec/format-1.md`; the swath dataset profile it carries is [../dataset.md](../dataset.md); what changed from the Java tool's format 1 is in [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md#seekparquet)); swath's own
 guarantees are in [contracts.md](contracts.md#dataset-guarantees-readers-rely-on-these). This page says how the
 Go writer meets them.
 
@@ -256,7 +256,7 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
   checks this writer's datasets against the format's reference validator ([testing.md](testing.md#seekparquet-conformance)).
 - **The downstream reader** dispatches on the manifest's format, accepts whole-bucket coverage from the
   manifest's swath extension, and reads the SeekParquet stamps and each schema id's columns
-  ([../upgrade.md](../upgrade.md#what-a-reader-of-the-java-layout-changes)); the recorded probe
+  ([../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md#what-a-reader-of-the-java-layout-changes)); the recorded probe
   ([measurements](measurements.md#downstream-reader-compatibility)) predates SeekParquet.
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.

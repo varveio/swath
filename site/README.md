@@ -14,7 +14,7 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `index.md` | The home page, served at `/`. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
-| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
 | `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
@@ -23,9 +23,8 @@ every push to `main`. Nothing about the published site is stored in a branch.
 The Markdown in `docs/` is the source of truth and stays readable on GitHub: no front matter, relative `.md`
 links, GitHub alerts and GitHub heading anchors. The build adapts it without editing it:
 
-- `docs/PAGE.md` is served at `/docs/PAGE.html`, and `docs/README.md` at `/docs/`.
-- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/`, `docs/style.md` and
-  `docs/upgrade.md`. Every other Markdown file under `docs/` is published.
+- `docs/PAGE.md` is served at `/docs/PAGE`, and a directory's `README.md` at the directory, as `/docs/`.
+- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/` and `docs/style.md`. Every other Markdown file under `docs/` is published.
 - Headings get GitHub's anchors, so `page.md#heading` links resolve on the site as they do on GitHub.
 - A link from a published page to anything outside the published set (an internals page, code, the
   repository README) is rewritten to its GitHub URL on `main`. The build prints how many it rewrote.
@@ -64,6 +63,9 @@ site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP s
 ```
 
 ## Releasing a new version
+
+When 0.4.0 is released, set `DEV_DOCS_NOTICE` in `.vitepress/config.mts` to `false` to remove the
+development-docs notice above the navigation, and retire `docs/release-candidate.md`.
 
 `static/data/channel.json` names the version the site offers: `{"channel": "main", "version": "X.Y.Z-rc.N"}`
 while the documentation describes `main` ahead of a release, `{"channel": "release", "version": "X.Y.Z"}`

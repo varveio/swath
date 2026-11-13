@@ -1,5 +1,74 @@
 # The swath dataset
 
+`swath list SOURCE -o DIR` saves an inventory: a directory of sorted Parquet parts and a `manifest.json` that
+commits them. DuckDB, Python or any Parquet reader can query it. Below are a query to start from and how to tell
+whether an inventory is complete; [the format contract](#the-format-contract) after them defines every file,
+column and field.
+
+## Query an inventory with DuckDB
+
+Read the parts the manifest lists, not a glob of the directory: a directory can hold parts of a run that has
+not committed. This query lists the five largest files of a local inventory in `inventory/`:
+
+```bash
+duckdb -c "
+  SET VARIABLE parts = (SELECT list('inventory/' || p.path)
+                        FROM (SELECT unnest(parts) AS p FROM read_json('inventory/manifest.json')));
+  SELECT decode(key) AS key, size
+  FROM read_parquet(getvariable('parts'), union_by_name = true)
+  WHERE kind = 'FILE'
+  ORDER BY size DESC
+  LIMIT 5;"
+```
+
+```text
+┌───────────────────────┬──────────┐
+│          key          │   size   │
+│        varchar        │  int64   │
+├───────────────────────┼──────────┤
+│ archive/disk.img      │ 67108864 │
+│ videos/trip.mp4       │ 31000000 │
+│ photos/2025/beach.jpg │  2400000 │
+│ photos/2026/snow.jpg  │  2100000 │
+│ photos/2025/hills.jpg │  1900000 │
+└───────────────────────┴──────────┘
+```
+
+A local tree's `key` is binary, since file names need not be UTF-8, so `decode(key)` reads it as text; an
+object store's `key` is text already, so write `key`, and leave out `kind`, which only a local tree has.
+`union_by_name = true` reads optional columns by name across parts. Each source's columns are in the
+[schema registry](#schema-registry).
+
+## Check that an inventory is complete
+
+`swath show DIR` prints the coverage on one line; a program reads the same from the manifest:
+
+```bash
+duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
+                  len(c.filters) AS filters, len(c.exclusions) AS exclusions
+           FROM (SELECT extensions.swath.coverage AS c FROM read_json('inventory/manifest.json'))"
+```
+
+```text
+┌──────────┬─────────────┬────────────┬─────────┬────────────┐
+│ complete │ stop_reason │ unreadable │ filters │ exclusions │
+│ boolean  │   varchar   │   int64    │  int64  │   int64    │
+├──────────┼─────────────┼────────────┼─────────┼────────────┤
+│ true     │ completed   │          0 │       0 │          0 │
+└──────────┴─────────────┴────────────┴─────────┴────────────┘
+```
+
+The inventory holds its whole scope when `complete` is true, `stop_reason` is `completed`, `unreadable` is 0,
+and `filters` and `exclusions` are empty, or you accept its exclusions explicitly. Check too that the manifest's
+`source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
+([the swath extension](#the-swath-extension)).
+
+> [!NOTE]
+> A dataset written by 0.4.0-rc.2 names the count `skipped_entries` instead of `unreadable`
+> ([differences in 0.4.0-rc.2](release-candidate.md)).
+
+## The format contract
+
 `swath list ... -o DIR` writes a **swath dataset**: a [SeekParquet](https://github.com/varveio/seekparquet)
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
@@ -7,8 +76,7 @@ operation checks, the key semantics a consumer outside `reader` must know, and h
 The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/7264a9f88420/spec/format-1.md),
 at the commit `go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`reader`](../reader/README.md) is the Go API over this profile;
-[internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
-[upgrade.md](upgrade.md) maps the 0.3 release's format 1 onto it.
+[Parquet output (internals)](internals/parquet-output.md) explains how the writer meets it.
 
 Nothing here is released. Until the first release, any of this profile may change outright, with no
 compatibility window for datasets written by earlier builds.
@@ -104,7 +172,7 @@ own is inspectable Parquet, not evidence that a dataset exists, is complete, or 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
 lists), `run.json` (the run report: operational, written after the commit and never part of the dataset), and
 `.swath/` (the run's private workspace, which readers ignore). The full tree and the publication order are in
-[internals/parquet-output.md](internals/parquet-output.md#publication-gate-and-order).
+[Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
 ## A dataset in a bucket
 
@@ -136,8 +204,8 @@ directory (`.swath/remote/allocated`).
 `DIR`, the work directory, is local and holds what a resume needs: the lock, the journal, spill, a claim
 receipt per part (`.swath/remote/claims/`), the names allocated before their uploads began, the candidate
 manifest and, once committed, `commit.json` (finalized once the orphans are cleaned and `run.json` is in place). `swath resume DIR` continues the run against the recorded
-destination. [internals/durability.md](internals/durability.md#a-dataset-in-a-bucket) has the protocol;
-[production.md](production.md#writing-to-a-bucket) the operating guide.
+destination. [Durability and resume (internals)](internals/durability.md#a-dataset-in-a-bucket) has the protocol;
+[Running swath in production](production.md#writing-to-a-bucket) the operating guide.
 
 ## The swath extension
 

@@ -5,10 +5,13 @@ your `PATH`.
 
 The current builds are release candidates for 0.4.0, published on the
 [releases page](https://github.com/varveio/swath/releases). A candidate is for trying swath before the final
-release; GitHub marks it as a pre-release, so choose it explicitly. These pages describe the upcoming 0.4.0.
-The newest published build is swath 0.4.0-rc.2, which does not yet have everything described here, such as
-`swath du --from-dataset`. Versions 0.3.x and earlier were a
-different tool, written in Java, with another command line ([changelog](../CHANGELOG.md)).
+release; GitHub marks it as a pre-release, so choose it explicitly. Versions 0.3.x and earlier were a different
+tool, written in Java, with another command line ([changelog](../CHANGELOG.md)).
+
+> [!NOTE]
+> These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, which does not yet
+> have everything described here, such as `swath du --from-dataset`. [Differences in 0.4.0-rc.2](release-candidate.md)
+> lists what behaves differently.
 
 ## Download a release candidate
 
@@ -16,25 +19,30 @@ For v0.4.0-rc.2, choose the archive for your platform:
 
 | Platform | Archive |
 |---|---|
-| Linux, x86-64 | `swath-0.4.0-rc.2-linux-amd64.tar.gz` |
-| Linux, ARM64 | `swath-0.4.0-rc.2-linux-arm64.tar.gz` |
-| macOS, Intel | `swath-0.4.0-rc.2-darwin-amd64.tar.gz` |
-| macOS, Apple silicon | `swath-0.4.0-rc.2-darwin-arm64.tar.gz` |
-| Windows, x86-64 | `swath-0.4.0-rc.2-windows-amd64.zip` |
+| Linux, x86-64 | [`swath-0.4.0-rc.2-linux-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-linux-amd64.tar.gz) |
+| Linux, ARM64 | [`swath-0.4.0-rc.2-linux-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-linux-arm64.tar.gz) |
+| macOS, Intel | [`swath-0.4.0-rc.2-darwin-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-darwin-amd64.tar.gz) |
+| macOS, Apple silicon | [`swath-0.4.0-rc.2-darwin-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-darwin-arm64.tar.gz) |
+| Windows, x86-64 | [`swath-0.4.0-rc.2-windows-amd64.zip`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-windows-amd64.zip) |
 
 Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` on Windows), `LICENSE`,
 `NOTICE` and `THIRD_PARTY_NOTICES` in a `swath-0.4.0-rc.2-OS-ARCH/` directory. The release also carries
-`SHA256SUMS`, an SPDX SBOM (`swath-0.4.0-rc.2.spdx.json`) and a keyless cosign signature bundle
-(`.sigstore.json`) for each of them.
+[`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0-rc.2.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2.spdx.json))
+and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
 
-### Verify and install
+Each block below downloads with the [GitHub CLI](https://cli.github.com/), verifies, extracts, installs and
+runs `swath --version`. A failed check stops it before anything is extracted or installed. The cosign step
+proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive matches it, and
+the attestation records the build that produced it.
 
-On Linux, with the [GitHub CLI](https://cli.github.com/) and [cosign](https://docs.sigstore.dev/). The
-commands are chained with `&&`, so a failed check stops them before anything is extracted or installed:
+### Linux
+
+With [cosign](https://docs.sigstore.dev/) installed:
 
 ```bash
 VERSION=0.4.0-rc.2
-ARCHIVE=swath-$VERSION-linux-amd64.tar.gz
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+ARCHIVE=swath-$VERSION-linux-$ARCH.tar.gz
 gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
@@ -43,14 +51,12 @@ sha256sum --check --ignore-missing SHA256SUMS &&
 gh attestation verify "$ARCHIVE" --repo varveio/swath &&
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
-install -m 755 "swath-$VERSION-linux-amd64/swath" ~/.local/bin/ &&
+install -m 755 "swath-$VERSION-linux-$ARCH/swath" ~/.local/bin/ &&
 swath --version
 ```
 
-`~/.local/bin` must be on your `PATH` for the last line, and for `swath` to run without its full path. The
-cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive
-matches it, and the attestation records the build that produced it. `swath --version` prints the version and
-the commit it was built from:
+`~/.local/bin` must be on your `PATH` for the last line, and for `swath` to run without its full path.
+`swath --version` prints the version and the commit it was built from:
 
 ```text
 swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
@@ -58,20 +64,56 @@ swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
 
 Every run report carries the same in `build`; keep it with any result you may need to investigate.
 
-On macOS, `shasum -a 256 ARCHIVE` computes the hash to compare with its line in `SHA256SUMS`; if they differ,
-delete the archive rather than extract it. The macOS
-binaries are not yet signed with an Apple Developer ID or notarized
-([#420](https://github.com/varveio/swath/issues/420)), so Gatekeeper refuses a binary downloaded with a
-browser. After verifying, clear the quarantine attribute (`darwin-amd64` on Intel):
+### macOS
+
+With cosign installed (`brew install cosign gh`); the block picks the Apple silicon or the Intel archive:
 
 ```bash
-xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-arm64/swath
+VERSION=0.4.0-rc.2
+ARCH=$(uname -m | sed 's/x86_64/amd64/')
+ARCHIVE=swath-$VERSION-darwin-$ARCH.tar.gz
+gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS &&
+grep " $ARCHIVE\$" SHA256SUMS | shasum -a 256 --check &&
+gh attestation verify "$ARCHIVE" --repo varveio/swath &&
+tar -xzf "$ARCHIVE" &&
+mkdir -p ~/.local/bin &&
+install -m 755 "swath-$VERSION-darwin-$ARCH/swath" ~/.local/bin/ &&
+swath --version
 ```
 
-A download with `gh` or `curl` carries no quarantine attribute, and `xattr` then reports "No such xattr".
+`~/.local/bin` must be on your `PATH`. The macOS binaries are not yet signed with an Apple Developer ID or
+notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `gh` or `curl`, as above,
+runs as it is. Gatekeeper refuses a binary downloaded with a browser: after verifying, clear its quarantine
+attribute, `xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-ARCH/swath`, with `arm64` on Apple silicon
+and `amd64` on Intel.
 
-On Windows, PowerShell's `Get-FileHash ARCHIVE -Algorithm SHA256` computes the hash; again, extract the
-archive only if it matches its line in `SHA256SUMS`.
+### Windows
+
+In PowerShell, with the GitHub CLI installed:
+
+```powershell
+$Version = "0.4.0-rc.2"
+$Archive = "swath-$Version-windows-amd64.zip"
+gh release download "v$Version" --repo varveio/swath --pattern $Archive --pattern "SHA256SUMS*"
+$Sum = Select-String -Path SHA256SUMS -SimpleMatch "  $Archive"
+$Ok = $Sum -and ((Get-FileHash $Archive -Algorithm SHA256).Hash -eq $Sum.Line.Split(" ")[0])
+if ($Ok) { gh attestation verify $Archive --repo varveio/swath; $Ok = $LASTEXITCODE -eq 0 }
+if ($Ok) {
+  Expand-Archive $Archive -DestinationPath . -Force
+  $Bin = "$env:LOCALAPPDATA\Programs\swath"
+  New-Item -ItemType Directory -Force $Bin | Out-Null
+  Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
+  & "$Bin\swath.exe" --version
+} else { Write-Error "verification failed: do not use $Archive" }
+```
+
+Then add `%LOCALAPPDATA%\Programs\swath` to your user `PATH` (Settings, "Edit environment variables for your
+account") and open a new terminal. This block checks the checksum and the attestation but not the signature
+on `SHA256SUMS`: for that, install cosign for Windows and run the `cosign verify-blob` command from the Linux
+block. On Windows, dataset runs of S3, GCS and Azure Blob sources are refused ([platforms](#platforms)).
 
 ## Container images
 
@@ -95,7 +137,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 Credentials in the environment work too (`-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e
 AWS_SESSION_TOKEN`). A release candidate publishes only its own tag, never `latest`. Pin the
 image digest for runs that must use the same image; the image signature and provenance checks are in
-[RELEASING.md](../RELEASING.md#verifying-a-release).
+[Releasing swath](../RELEASING.md#verifying-a-release).
 
 ## Build from source
 

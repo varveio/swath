@@ -33,6 +33,10 @@ describing a user interface or a dataset's physical output directory.
 
 ### Local trees: entry, file, and directory
 
+In product copy the category is **filesystems** ("local and mounted filesystems") and one instance is **a
+directory**; do not write "local tree" there. Name the sources in one place, the sources page, rather than
+in headlines, cards, descriptions or the social card.
+
 A local directory tree is not an object store, and its words are its own. Its rows are
 **entries**: **files** (every kind that is not a directory: regular files, symbolic links,
 devices) and **directories**. Do not call a local entry an object in prose or on the
@@ -134,7 +138,7 @@ sentences and link to that owner.
 | First successful workflow | `docs/first-inventory.md`; what a result means: `docs/results.md` |
 | Go commands and options | `docs/commands/` (options generated from the flag table) and installed Go CLI help |
 | Go output formats and filters | `docs/output.md`, `docs/filters.md` |
-| Go sources, credentials and endpoints | `docs/sources.md` |
+| Go sources, credentials and endpoints | `docs/sources/` (one page per source) |
 | Go exit codes, run report and log events | `docs/reference/` |
 | Go operations and recovery | `docs/running.md` |
 | Go schemas and dataset layout | `docs/dataset.md` |

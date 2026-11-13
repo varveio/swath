@@ -40,7 +40,7 @@ tool; it is described with the [internals](../internals/diagnostics.md).
 
 The scheme is matched in any case (`S3://bucket`). The prefix is a key prefix, not a directory:
 `s3://bucket/logs` lists `logs/` and `logs-old/`, `s3://bucket/logs/` only `logs/`. Each source's URL form,
-credentials and limits are in [sources.md](../sources.md).
+credentials and limits are in [Sources](../sources/README.md).
 
 ### Command line
 
@@ -132,7 +132,7 @@ swath: warning: S3 127.0.0.1:9: connection refused (retrying; 14 attempts)
 ```
 
 `--log-format json` writes stderr as one JSON object per line instead, with no redrawn line and no statistics
-block: [reference/log-events.md](../reference/log-events.md).
+block: [Log events](../reference/log-events.md).
 
 On Unix, `SIGUSR1` (and `SIGINFO`, Ctrl-T, on macOS and the BSDs) prints one progress record on stderr, whatever
 the progress settings.
@@ -199,7 +199,7 @@ swath du -h
 | 130 | interrupted (SIGINT) |
 | 143 | terminated (SIGTERM) |
 
-What each one means and what to do: [reference/exit-codes.md](../reference/exit-codes.md).
+What each one means and what to do: [Exit codes](../reference/exit-codes.md).
 
 ## Environment
 
@@ -209,12 +209,12 @@ What each one means and what to do: [reference/exit-codes.md](../reference/exit-
 | `CLICOLOR_FORCE` | color even when stderr is not a terminal |
 | `TERM` | `dumb`: no color with `--color auto` |
 | `TZ` | the time zone of the tables' local times |
-| `TMPDIR` | where text rows on stdout spill (see [running.md](../running.md#sizing-a-run)) |
-| `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [sources.md](../sources.md) |
+| `TMPDIR` | where text rows on stdout spill (see [Running swath](../running.md#sizing-a-run)) |
+| `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [Sources](../sources/README.md) |
 | `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE` | write Go CPU and allocation profiles to that file and beside it, split at the end of listing: `FILE.listing`, `FILE.tail` (CPU), `FILE.exit` (allocations); `SWATH_MEMPROFILERATE` sets the allocation sample rate ([phase profiles](../internals/diagnostics.md#phase-profiles)) |
 
 ## See also
 
-[swath-list](swath-list.md), [swath-du](swath-du.md), [swath-resume](swath-resume.md),
-[swath-show](swath-show.md), [swath-completion](swath-completion.md),
-[first-inventory.md](../first-inventory.md), [output.md](../output.md), [sources.md](../sources.md)
+[swath list](swath-list.md), [swath du](swath-du.md), [swath resume](swath-resume.md),
+[swath show](swath-show.md), [swath completion](swath-completion.md),
+[Your first inventory](../first-inventory.md), [Output](../output.md), [Sources](../sources/README.md)

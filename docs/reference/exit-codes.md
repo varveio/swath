@@ -61,7 +61,7 @@ report; treat its outcome as unknown, never as the one in an older `error.json`.
 The outcome of an attempt is its exit code plus the report it wrote to `--report FILE` (on failure too). Give
 each attempt a fresh path outside the output directory. The report's `outcome` has `class`, `exit_code`,
 `resumable`, `cause`, `complete`, `stop_reason`, and `attempt.id` names the attempt
-([run-report.md](run-report.md)).
+([Run report and progress file](run-report.md)).
 
 `DIR/error.json` holds the same outcome inside a dataset directory that did not complete:
 
@@ -90,4 +90,4 @@ directory, credentials that do not load), print one line on stderr and no statis
 swath: nosuchdir: no such file or directory
 ```
 
-How swath classifies and records an outcome, and its liveness rules: [../internals/run-lifecycle.md](../internals/run-lifecycle.md).
+How swath classifies and records an outcome, and its liveness rules: [Run lifecycle (internals)](../internals/run-lifecycle.md).

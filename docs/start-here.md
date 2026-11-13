@@ -4,7 +4,7 @@ swath lists what an object store or a filesystem holds, and reports what it foun
 only: names, sizes, times and storage fields. It never reads, changes or deletes the contents.
 
 A source is a local or mounted directory, `s3://bucket/prefix`, `gs://bucket/prefix` or
-`az://account/container/prefix` ([sources](sources.md)).
+`az://account/container/prefix` ([sources](sources/README.md)).
 
 ## Pick a job
 
@@ -19,13 +19,13 @@ directory. It needs no account and no credentials.
 
 ## When swath fits
 
-- **`du` and `find`** answer most questions about a small local tree. swath walks a tree with many workers
-  at once, which helps on a large tree or a slow network mount, and it can save the walk as a dataset.
+- **`du` and `find`** answer most questions about a small directory. swath walks a directory with many workers
+  at once, which helps on a large directory or a slow network mount, and it can save the walk as a dataset.
 - **`aws s3 ls`, `gcloud storage ls` and `rclone`** list a bucket one page of keys after another. swath
   divides the key space into ranges and lists them in parallel, which matters once a bucket holds tens of
   millions of keys.
 - **Scheduled inventories** (S3 Inventory, GCS Storage Insights, Azure Blob inventory) cost less than any
   live listing when a daily or weekly report is fresh enough. Use swath when you need the answer now, for a
-  prefix the report does not cover, or for a source without one, such as a local tree.
+  prefix the report does not cover, or for a source without one, such as a local or mounted filesystem.
 
 swath only lists: it does not copy data, schedule runs, compare inventories or send alerts.

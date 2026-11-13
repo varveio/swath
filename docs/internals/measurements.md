@@ -10,7 +10,7 @@ seen in `vmstat`), so **compare absolute times only within one table**; each tab
 one session. Ratios held across sessions.
 
 **Commands as run.** Commands and flags are quoted as the build of the day took them. Since report version 2
-and the command-line cleanup ([../upgrade.md](../upgrade.md#command-line)): `swath list --count-only` is
+and the command-line cleanup ([../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md#command-line)): `swath list --count-only` is
 `swath diag count` (`swath count` from 2026-11-07 to 2026-11-09); `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
 are `swath diag list` (or `swath diag count`) flags, and the
 seed is on by default, so `--seed` alone is the default; `--spill-max` is `--spill-budget`; the report's
@@ -33,7 +33,7 @@ Every comparison was row-identical on the 13 canonical columns, with identical m
 |---|---:|
 | Live buckets, Go listing directly against the Java recording of the same bucket | 21 |
 | Synthetic fixtures served by replay (10k keys; 1,000,020 keys from `bench/gen_fixture_1m.py`), each in 5 Go modes (sequential, 4 and 8 workers, with and without `--seed`) | 2 × 5 |
-| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([../upgrade.md](../upgrade.md)) | 2 |
+| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)) | 2 |
 
 The 21 live buckets are noaa-normals-pds, noaa-nws-fourcastnetgfs-pds, real-changesets and 18 open buckets
 chosen for the Java policy features they engage (among them noaa-eri-pds and pansurg-curation-raw-open-data),
@@ -362,7 +362,9 @@ No throttle, no retry, both counts exact. At 64 wide and the measured p50 the nb
 fake. fourcastnetgfs still sends 9 % more requests than Java (empty children on a small bucket). One run per
 tool: an observation on that VM and that hour, not a rate.
 
-**A billion live objects** (runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07). sentinel-cogs in AWS
+### A billion live objects (sentinel-cogs, 2026-11-07)
+
+Runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07. sentinel-cogs in AWS
 us-west-2 (about 1.09 billion objects), listed anonymously from one n4-highcpu-32 in GCP us-east1 with a 400 GB
 disk, arms one after another, each capped at 40 minutes; the delta+zstd build `bf5e6d52` unless named. Java's
 rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
@@ -382,6 +384,8 @@ At 1,024 workers the sorted run is bound by its output: after listing ends, the 
 Parquet part at a time, and neither a larger row budget nor more encoders moved the wall. Java's sorted run at
 the same concurrency was faster on this bucket. One run per arm, cross-cloud: an observation on that VM and
 that day.
+
+### Workers, one core and the study harness (through the fake)
 
 **Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
 medians over the lists):
@@ -2245,7 +2249,7 @@ AVX2 digests unchanged. The test now pins a golden per path
 
 ## Downstream reader compatibility
 
-The changes in [../upgrade.md](../upgrade.md) were applied to a scratch copy of the downstream reader. It accepts a
+The changes in [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md) were applied to a scratch copy of the downstream reader. It accepts a
 format-2 dataset by the manifest's coverage (whole bucket, fails closed), dispatches on the manifest's
 `format` first, and reads every schema id and the `swath.profile` stamp. Probe on a 20,000-key synthetic fake
 bucket (open, stream, list one prefix):
@@ -2260,7 +2264,7 @@ bucket (open, stream, list one prefix):
 The reader's own tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1 datasets of
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
-([upgrade.md, "What a reader of the Java layout changes"](../upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
+([upgrade.md, "What a reader of the Java layout changes"](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
 
 ## Spill at billion scale, and a spill cap too small (2026-11-13)
 

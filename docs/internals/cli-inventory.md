@@ -3,7 +3,7 @@
 Every option, output mode, exit code, report field class and documented guarantee of the Java `swath` CLI
 (`swath-cli`, [docs/cli.md](https://github.com/varveio/swath/blob/java-final/docs/cli.md), [docs/usage.md](https://github.com/varveio/swath/blob/java-final/docs/usage.md),
 [docs/metrics-and-observability.md](https://github.com/varveio/swath/blob/java-final/docs/metrics-and-observability.md)) against this tool
-([../commands/swath.md](../commands/swath.md), [../upgrade.md](../upgrade.md)). Dates are owner decisions.
+([../commands/swath.md](../commands/swath.md), [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)). Dates are owner decisions.
 
 Legend (the Decision column records implementation dates and reasons for omitting Java features): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
 **removed** (with the recorded decision and its date, or "no decision recorded"), **deferred** (a recorded
@@ -22,7 +22,7 @@ decision to add it later).
 | `--fetch-owner` | `--s3-fetch-owner` | renamed | – |
 | `--bearer-token-command CMD` | `--s3-bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--s3-bearer-token-refresh-interval` (45 m; one refresh in flight) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](../sources.md#credentials-on-every-object-store) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
+| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](../sources/README.md#credentials-on-every-object-store) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
@@ -144,7 +144,7 @@ decision to add it later).
 | Report: `error_class` | `outcome.cause` | renamed | – |
 | Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `engine_flags` | `resources.features` | renamed | – |
-| Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [../upgrade.md](../upgrade.md)) | renamed | no Java names, 2026-11-05 |
+| Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)) | renamed | no Java names, 2026-11-05 |
 | Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint and for Azure Blob), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
 | Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
 | Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |

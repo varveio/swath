@@ -28,6 +28,11 @@ The sizes are apparent bytes, the length of each file as `ls -l` shows it, not t
 file, counted once, as `du` counts it. `--allocated` totals allocated bytes and `-l` (`--count-links`) counts
 every name. [Understand your results](results.md) explains both.
 
+> [!NOTE]
+> 0.4.0-rc.2 counts a hard-linked file under each of its names: there `archive/` shows 65.5 MiB in 3 files and
+> the total 101 MiB in 7, and `--count-links-once` counts it once
+> ([differences in 0.4.0-rc.2](release-candidate.md)).
+
 ## 2. List every entry
 
 ```bash
@@ -44,8 +49,8 @@ archive/notes.tar	800000	FILE	2026-11-02T09:30:00.000000Z
 
 There is one row per entry, files and directories both, in ascending byte order of the key. A key is the path
 below the directory you named, and a directory's key ends in `/`. In a pipe the rows are TSV with a header
-line. On a terminal they are a table, `--format jsonl` gives JSON lines, and `-o rows.tsv.zst` writes a
-compressed file. Without `--columns` every metadata column is there ([text formats](output.md)). Closing the
+line. On a terminal they are a table, `--format jsonl` gives JSONL, and `-o rows.tsv.zst` writes a
+compressed file. Without `--columns` every metadata column is there ([output](output.md)). Closing the
 pipe early, as `head` does, ends the run with exit code 0.
 
 ## 3. Save an inventory
@@ -84,8 +89,17 @@ coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 
 `swath show` reads the manifest, not the rows. The lines say which schema the rows follow, when the dataset
 was published, what was listed, how completely, and what the parts hold. Here `complete=true` with
-`unreadable=0`, no filters and no exclusions means the dataset covers the whole tree. Read the coverage line before you rely
-on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains each field.
+`unreadable=0`, no filters and no exclusions means the dataset covers the whole tree. Read the coverage line
+before you rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains
+each field. 0.4.0-rc.2 prints `skipped=0` where this prints `unreadable=0`.
+
+To read the rows themselves, open the parts the manifest lists with DuckDB, Python or another Parquet
+reader ([the swath dataset](dataset.md)).
+
+## 5. Total the saved inventory
+
+> [!NOTE]
+> Coming in 0.4.0: 0.4.0-rc.2 does not have `--from-dataset` and stops with `unknown flag --from-dataset`.
 
 The saved inventory answers step 1 again without walking the tree:
 
@@ -95,11 +109,9 @@ swath du --from-dataset media-inventory -d 1
 
 It prints the totals of step 1 as they were when the tree was listed, and says on stderr when that was and
 whether the listing was complete ([swath du](commands/swath-du.md#totals-from-a-saved-dataset)).
-To read the rows themselves, open the parts the manifest lists with DuckDB, Python or another Parquet
-reader ([reading a dataset](running.md#reading-the-output)).
 
 ## Next
 
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
-- [Sources](sources.md): list an S3, GCS or Azure Blob bucket the same way.
+- [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
 - [Run large listings](running.md): size, watch, stop and resume a long run.

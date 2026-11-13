@@ -551,10 +551,10 @@ against `bench/s3fake`.
 The Java tool and its replay server are the reference producer. The Go tool is held to them on recorded
 listings: Java-produced recordings are the differential input, and the Go dataset must hold the same rows
 (`bench/diffds.py`, all 13 format-1 columns, the SeekParquet fields projected with the constants of
-[../upgrade.md](../upgrade.md)). That establishes logical value parity, not format compatibility: Java's reader
+[../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)). That establishes logical value parity, not format compatibility: Java's reader
 does not read SeekParquet (its sorted reader requires Java format-1 sort stamps), so a
 Go dataset is accepted by the downstream reader and by an independent Parquet reader, DuckDB through
-`verify.py` (below; [../upgrade.md](../upgrade.md#gates)). In a fresh container (JDK 25 is required; the system JDK
+`verify.py` (below; [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md#gates)). In a fresh container (JDK 25 is required; the system JDK
 will not run the launchers):
 
 ```bash
