@@ -1,0 +1,50 @@
+/* Varve's design tokens (varve ui/src/design.css) mapped onto the default theme's variables.
+   Links and buttons use the accent petrol; the brighter brand teal is kept for the large hero
+   name, where it reads at 3:1 as large text. Every text color meets 4.5:1 on its background. */
+:root {
+  --vp-font-family-base: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --vp-font-family-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --vp-c-bg: #fcfcfb;
+  --vp-c-bg-alt: #f7f7f5;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f7f7f5;
+  --vp-c-text-1: #0b0b0b;
+  --vp-c-text-2: #52514e;
+  --vp-c-text-3: #6d6b67;
+  --vp-c-divider: rgb(11 11 11 / 10%);
+  --vp-c-border: rgb(11 11 11 / 16%);
+  --vp-c-gutter: rgb(11 11 11 / 6%);
+
+  --vp-c-brand-1: #1e5763;
+  --vp-c-brand-2: #143c44;
+  --vp-c-brand-3: #1e5763;
+  --vp-c-brand-soft: rgb(30 87 99 / 10%);
+  --vp-button-brand-hover-bg: #143c44;
+  --vp-button-brand-active-bg: #143c44;
+  --vp-home-hero-name-color: #2a8597;
+}
+
+.dark {
+  --vp-c-bg: #151515;
+  --vp-c-bg-alt: #0b0b0b;
+  --vp-c-bg-elv: #20201f;
+  --vp-c-bg-soft: #1a1a19;
+  --vp-c-text-1: #f0efec;
+  --vp-c-text-2: #c3c2b7;
+  --vp-c-text-3: #9a988f;
+  --vp-c-divider: rgb(240 239 236 / 10%);
+  --vp-c-border: rgb(240 239 236 / 16%);
+  --vp-c-gutter: rgb(0 0 0 / 60%);
+
+  --vp-c-brand-1: #46aaba;
+  --vp-c-brand-2: #5bbfcf;
+  --vp-c-brand-3: #46aaba;
+  --vp-c-brand-soft: rgb(70 170 186 / 14%);
+  --vp-button-brand-text: #0b0b0b;
+  --vp-button-brand-hover-text: #0b0b0b;
+  --vp-button-brand-active-text: #0b0b0b;
+  --vp-button-brand-hover-bg: #5bbfcf;
+  --vp-button-brand-active-bg: #5bbfcf;
+  --vp-home-hero-name-color: #5bbfcf;
+}

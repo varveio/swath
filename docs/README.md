@@ -1,16 +1,17 @@
 # swath documentation
 
-swath is not released yet: build it from source ([install.md](install.md)). The latest published release, v0.3.2,
-has another command line and dataset format ([its docs](https://github.com/varveio/swath/tree/v0.3.2/docs);
-[migrating from 0.3](upgrade.md)).
+swath lists local and mounted filesystems, S3, Google Cloud Storage and Azure Blob Storage flat namespaces in
+parallel, prints size totals and text rows, and writes sorted Parquet inventories. Release candidates for 0.4.0
+are published on the [releases page](https://github.com/varveio/swath/releases) ([install.md](install.md)).
+These pages are also published at [swath.varve.io](https://swath.varve.io/docs/).
 
 **Start**
 
-- [getting-started.md](getting-started.md): build swath, total a directory, list a public prefix, write and
-  query a dataset, interrupt and resume a run.
-- [concepts.md](concepts.md): sources and scope, key order, ranges, parts and the manifest, coverage, the
-  journal and resume, spill, the outcome: what each promises and what it does not.
-- [install.md](install.md): build from source, verify the binary, platforms.
+- [start-here.md](start-here.md): pick a job, and when swath fits.
+- [install.md](install.md): release binaries and their verification, the container image, a source build.
+- [first-inventory.md](first-inventory.md): total a local directory, list it, save and inspect an inventory.
+- [results.md](results.md): scope, apparent and allocated bytes, hard links, coverage, observation time, live
+  and saved results.
 
 **Use**
 
@@ -37,21 +38,5 @@ has another command line and dataset format ([its docs](https://github.com/varve
 - [Exit codes](reference/exit-codes.md), [run report and progress file](reference/run-report.md),
   [log events](reference/log-events.md).
 
-**Migrating from 0.3**: [upgrade.md](upgrade.md): the command line, the run report and the dataset.
-
-**Contributing**: [internals/README.md](internals/README.md): architecture, the invariants, providers, testing
-and dated measurements. `swath diag` and its options are in [internals/diagnostics.md](internals/diagnostics.md).
-
-**Repository layout**
-
-| Path | What it is |
-|---|---|
-| `cmd/swath` | the command |
-| `cmd/swath-replay` | the replay server ([internals/swath-replay.md](internals/swath-replay.md)) |
-| `internal/` | the lister's packages ([architecture](internals/architecture.md#packages)) |
-| `reader/`, `objfile/` | nested modules, importable on their own ([`reader`](../reader/README.md), [`objfile`](../objfile/README.md)) |
-| `docs/` | this documentation; `go test ./docs` checks the relative links of the repository's Markdown |
-| `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
-
-The gate is `go vet ./... && go test -race ./...` at the root, and the same in `objfile/` and `reader/`
-([testing](internals/testing.md)).
+**Contributing**: [internals/README.md](internals/README.md): the repository layout, architecture, the invariants,
+providers, testing and dated measurements.

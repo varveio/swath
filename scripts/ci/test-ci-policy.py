@@ -120,7 +120,7 @@ class PolicyTests(unittest.TestCase):
             (['docs/replay-provider-expectations.json'], {'go', 'fixtures'}),
             (['docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
             (['docs/style.md'], set()),
-            (['docs/go-release-copy-checklist.md'], set()),
+            (['docs/ops/dev/go-release-copy-checklist.md'], set()),
             (['docs/ops/dev/CI.md'], set()),
             (['README.md', 'SECURITY.md'], set()),
             (['AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md'], set()),

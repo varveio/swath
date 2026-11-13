@@ -94,3 +94,21 @@ updates:
         update-types: [minor, patch]
     commit-message:
       prefix: "deps"
+
+  # The website's build: VitePress and its dependencies, from site/package-lock.json. VitePress
+  # stays on 1.x: the 2.0 line is still in alpha, so its major updates are not proposed.
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: vitepress
+        update-types: ["version-update:semver-major"]
+    groups:
+      site:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"

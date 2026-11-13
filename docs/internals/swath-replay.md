@@ -286,7 +286,7 @@ the list selector stays on the S3 route as before.
   not authenticate (`server` `TestAzureSASQueries`). A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
   malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
   and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
-  matrix in [`../../../docs/replay-provider-conformance.md`](../replay-provider-conformance.md) records.
+  matrix in [`docs/internals/replay-provider-conformance.md`](replay-provider-conformance.md) records.
   `+` is a literal plus. Raw non-ASCII bytes in the query are read as UTF-8.
 - Names are listed in UTF-16 code-unit order, as live Azure lists them; the fixture stays byte-sorted
   ([replay.md](replay.md#the-azure-route)). With a delimiter, `Blob` and `BlobPrefix` entries
@@ -627,7 +627,7 @@ not base64 (live S3's own token is skipped on `giab`).
 
 Every difference the first runs found, by matrix case (the same on each bucket where the case was sent). The S3
 route now answers twelve of them as live S3 does (The S3 route, above). The S3 rows of
-`docs/replay-provider-conformance.md` are `UNMEASURED`.
+`docs/internals/replay-provider-conformance.md` are `UNMEASURED`.
 
 | Case | Request | Live S3 | Replay at the first runs | Replay now |
 |---|---|---|---|---|
@@ -703,7 +703,7 @@ directory of three stands in for `r/`; those cases are listed as run on a reduce
 
 Pinned differences (counted as differing in the table above; the comparison now lists them as documented):
 every difference but the ones below reproduces, message for message, the mismatch the
-owned-bucket evidence pins for its case (`docs/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
+owned-bucket evidence pins for its case (`docs/internals/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
 refused), `gcs-05e` to `gcs-05i` (malformed escapes, invalid UTF-8 and duplicate parameters refused; live GCS
 serves them), `gcs-06a`, `06b`, `06l`, `06m` (`maxResults` 0, leading zeros and duplicates refused), `gcs-06e`
 (live GCS returns 1,001 items for `maxResults=1001`; the replay caps at 1,000), `gcs-06f`, `06g`, `06i`, `06j`, `06k`,
@@ -1080,7 +1080,7 @@ prefix is open), and a pinned mismatch that now matches is logged as an improvem
 outcomes to `DIR/<fixture>/gcs-outcomes.json`.
 `scripts/provider-conformance/evidence.py go-receipts` runs this replay and the Azure one at a clean commit and
 writes a `producer: go` receipt for each capture they match (see
-[Go receipts](../replay-provider-conformance.md#go-receipts)).
+[Go receipts](replay-provider-conformance.md#go-receipts)).
 
 ```bash
 SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v ./internal/replay/evidence
