@@ -179,19 +179,9 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	if !o.du {
 		return nil
 	}
-	format := o.format
-	switch format {
-	case "", "auto":
-		format = textout.TSV
-		if stdoutTTY {
-			format = textout.Table
-		}
-	case textout.TSV, textout.Table, textout.JSONL:
-	default:
-		return fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
-	}
-	if o.sortBy != sortName && o.sortBy != sortSize {
-		return fmt.Errorf("--sort %q: want name or size", o.sortBy)
+	format, err := totalsFormat(o, stdoutTTY)
+	if err != nil {
+		return err
 	}
 	origin, err := keyOrigin(root)
 	if err != nil {
@@ -213,6 +203,26 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	}
 	o.totals = &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}
 	return nil
+}
+
+// totalsFormat is swath du's --format (auto: the table on a terminal, TSV
+// otherwise), its --sort checked.
+func totalsFormat(o *options, stdoutTTY bool) (string, error) {
+	format := o.format
+	switch format {
+	case "", "auto":
+		format = textout.TSV
+		if stdoutTTY {
+			format = textout.Table
+		}
+	case textout.TSV, textout.Table, textout.JSONL:
+	default:
+		return "", fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+	}
+	if o.sortBy != sortName && o.sortBy != sortSize {
+		return "", fmt.Errorf("--sort %q: want name or size", o.sortBy)
+	}
+	return format, nil
 }
 
 // keyOrigin is the prefix swath du's depth counts from: the key prefix the

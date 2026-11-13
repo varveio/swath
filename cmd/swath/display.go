@@ -645,6 +645,11 @@ type termUI struct {
 	noun    nouns
 	dataset bool      // the run writes a dataset (its progress shows parts)
 	began   time.Time // the invocation's start
+	tty     bool      // stderr is a terminal (and not --log-format json)
+	// saveHint, for a live swath du, is the commands that save its source
+	// once and total the saved rows (savedInventory): the statistics end
+	// with them after a large listing (hintRows).
+	saveHint []string
 }
 
 // startTerminal resolves the terminal preferences for a run and starts its
@@ -658,7 +663,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 	if json {
 		tty, width = false, 0
 	}
-	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started}
+	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started, tty: tty}
 	elog().start(start)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
@@ -683,7 +688,32 @@ func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
 		return
 	}
 	lines := statsLines(r, brokenPipe, tt.noun)
-	writeStats(errOut, lines, tt.pal, brokenPipe || r.Outcome.ExitCode != exitCompleted || r.Outcome.Class == "incomplete")
+	failed := brokenPipe || r.Outcome.ExitCode != exitCompleted || r.Outcome.Class == "incomplete"
+	writeStats(errOut, lines, tt.pal, failed)
+	if n := r.Output.RowsEmitted; tt.saveHint != nil && tt.tty && tt.opt.quiet == 0 && !failed && n >= hintRows {
+		var b strings.Builder
+		b.WriteString(tt.pal.dim("hint: this run listed "+approx(n)+" "+tt.noun.rows+"; to explore them again without relisting, save an inventory once and total that:") + "\n")
+		for _, c := range tt.saveHint {
+			b.WriteString(tt.pal.dim("hint:   "+c) + "\n")
+		}
+		noteKept(errOut, b.String())
+	}
+}
+
+// hintRows is the rows a live swath du lists before its statistics suggest
+// saving an inventory (termUI.saveHint); a var so that tests can lower it.
+var hintRows int64 = 1_000_000
+
+// approx is a count of rows as a person reads a large one: 12.4M, 1.3B;
+// under a million, exactly.
+func approx(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	}
+	return count(n)
 }
 
 // status prints one progress record of s now, whatever the display's

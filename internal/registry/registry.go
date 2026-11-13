@@ -106,6 +106,25 @@ type Factory struct {
 	// instead of its own (KeyPrefix): an anchored --include narrows the
 	// listed prefix through it. Without it the root is listed as given.
 	WithPrefix func(root, prefix string) string
+	// Schemas are the bound schemas of the rows the provider writes (its
+	// current rows', and its versions' with --all-versions), by which a
+	// dataset's rows are read again (SchemaInfo).
+	Schemas []schema.Info
+}
+
+// SchemaInfo is the producer's declaration of schema id (Factory.Schemas):
+// what a reader of its datasets interprets the rows by besides the reader
+// module's spec (the storage-class column, the containers' rows). False
+// when no registered provider writes id.
+func SchemaInfo(id string) (schema.Info, bool) {
+	for _, f := range Factories() {
+		for _, s := range f.Schemas {
+			if s.ID == id {
+				return s, true
+			}
+		}
+	}
+	return schema.Info{}, false
 }
 
 // RegisterFlags registers f's flags and its shared groups' on fs, a flag

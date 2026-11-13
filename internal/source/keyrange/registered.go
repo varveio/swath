@@ -29,4 +29,5 @@ type Registered interface {
 	source.Seeded
 	source.Reusing
 	source.Fencing
+	source.Traced
 }

@@ -43,6 +43,8 @@ const (
 	evRequest  = "request"
 	evRetry    = "retry"
 	evOutcome  = "outcome"
+	evDataset  = "dataset" // swath du --from-dataset: the dataset the totals are read from
+	evRead     = "read"    // swath du --from-dataset -v: what was read of it
 
 	lvDebug = "debug"
 	lvInfo  = "info"

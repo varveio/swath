@@ -58,8 +58,9 @@ The command is recorded in its canonical spelling, each option `--name=value`, t
 shell line: an argument the shell would split or expand (a path with a space, a leading `=`) is quoted, in
 single quotes, or on Windows in double quotes, so the line can be pasted as it is.
 
-`swath show` reads no rows; to query a dataset, read the parts its manifest lists
-([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
+`swath show` reads no rows. `swath du --from-dataset DIR` totals them per prefix
+([swath-du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
+lists ([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
 
 ## Options
 

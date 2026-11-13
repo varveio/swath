@@ -34,6 +34,7 @@ import (
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
@@ -513,6 +514,7 @@ type options struct {
 	countOnly              bool     // swath du or swath diag count: rows counted, none written
 	du                     bool     // swath du: the per-prefix totals
 	report                 string   // --report: a file, or - for stdout
+	trace                  string   // --trace: the run trace's file, resolved (checkSidePaths)
 	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
@@ -543,6 +545,9 @@ type options struct {
 	allocated, countLinks         bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
+	// swath du --from-dataset DIR [PREFIX]: the dataset directory, and the
+	// key prefix the totals are restricted to ("": the dataset's scope).
+	fromDataset, datasetPrefix string
 	// A bucket -o (gs://, s3:// or az://): its work directory, its
 	// credentials, region and endpoint (--work-dir,
 	// --output-gcs-credentials-file, --output-s3-profile,
@@ -564,11 +569,14 @@ type totalsOut struct {
 	format string
 	bySize bool
 	tally  *totals.Tally
+	// dataset is the JSON object JSONL rows read from a dataset carry
+	// (textout.TotalsLayout.Dataset); nil for a live run.
+	dataset []byte
 }
 
 // write writes the tally's rows to w.
 func (t *totalsOut) write(w io.Writer) error {
-	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs()}
+	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs(), Dataset: t.dataset}
 	rows := t.tally.Result()
 	if t.bySize {
 		totals.SortBySize(rows)
@@ -578,7 +586,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -761,6 +769,8 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	switch {
 	case err != nil:
 		return o, "", err
+	case o.fromDataset != "" && cmd.du:
+		return o, "", datasetOptions(f, &o, p.operands)
 	case len(p.operands) == 0:
 		return o, "", seeHelp{usageError{errors.New("missing SOURCE")}, cmd.name()}
 	case len(p.operands) > 1:
@@ -810,6 +820,9 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
 	}
+	if fl := f.Lookup(source.TraceFlag); fl != nil {
+		o.trace = fl.Value.String() // the range engine's flag group's (keyrange.Flags)
+	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
@@ -834,6 +847,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		att = newAttempt()
 	}
 	o, root, err := parseList(args, stdout, cmd)
+	if o.fromDataset != "" && cmd.du && o.parsed {
+		if err != nil {
+			return err // refused before any report: --from-dataset takes no --report
+		}
+		setLog(o.term, att.ID) // the outcome event ends it, as every run
+		return duFromDataset(ctx, o, stdout)
+	}
 	if u := (usageError{}); err != nil && o.parsed && o.report != "" && !(errors.As(err, &u) && u.error == errReportStdout) {
 		// A refusal of a command line that parsed has a report, unless
 		// its destination is itself refused.
@@ -858,6 +878,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, usageError{err})
 	}
+	given := root // as typed, before an --include narrows it: the hint's SOURCE
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
@@ -891,6 +912,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	if prof != nil {
 		cfg.ListingDone = prof.listingDone
+	}
+	var traceFile *os.File
+	if o.trace != "" {
+		if traceFile, err = createNoFollow(o.trace); err != nil {
+			return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
+		}
+		cfg.Trace = runtrace.New(traceFile)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -956,6 +984,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	n := rowNouns(pf.Scheme == "", o.versions())
 	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
+	if o.totals != nil {
+		tt.saveHint = savedInventory(given, o)
+	}
 	defer watchRequests(fw)() // removed before stderr is restored
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)
@@ -971,7 +1002,33 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
-	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	if cfg.Trace != nil {
+		// After the dataset, run.json and --report: the run's accounts
+		// never wait on the trace file, and its end waits at most
+		// traceCloseWait.
+		closeTrace(cfg.Trace, traceFile, o.trace, sum.Outcome.Status, out.Class)
+	}
+	return err
+}
+
+// traceCloseWait is how long the end of a run waits for the trace file to
+// take what the trace holds (runtrace.Writer.Close).
+var traceCloseWait = 2 * time.Second
+
+// closeTrace closes the run trace with the run's outcome, warning when it
+// could not be written. A file that stopped taking writes is abandoned,
+// not closed in line: closing a file with a write stuck in it can block.
+func closeTrace(w *runtrace.Writer, f *os.File, path, status, class string) {
+	err := w.Close(traceCloseWait, status, class)
+	if stalled := (*runtrace.Stalled)(nil); errors.As(err, &stalled) {
+		go f.Close()
+	} else if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		elog().warn("--trace " + path + ": " + err.Error())
+	}
 }
 
 // versions says --all-versions is on: the run lists every version.

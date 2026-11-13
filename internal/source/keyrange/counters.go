@@ -152,6 +152,8 @@ const (
 	cGroupsMaxRows
 	cGroupsOverfetchRows
 	cSplitSkippedGroupOpen
+	cTraceEvents
+	cTraceDropped
 	numCounters
 )
 
@@ -303,6 +305,8 @@ var Counters = table([numCounters]counters.Def{
 	cGroupsOverfetchRows:          d("groups.overfetch_rows", counters.Count, "rows", "rows above a range end read to close its last key group (excludes resume suppression and split relisting)", "groups"),
 	cGroupsMaxRows:                d("groups.max_rows", counters.Max, "rows", "the largest observed key group in emitted or held rows (all emission paths, before filters)", "groups"),
 	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
+	cTraceEvents:                  d("trace.events", counters.Count, "events", "events the engine handed to the run trace (--trace)", "trace"),
+	cTraceDropped:                 d("trace.dropped", counters.Count, "events", "trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file", "trace"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is
@@ -373,6 +377,9 @@ func (p *Engine[P]) disabled() []string {
 	}
 	if !p.d.Groups {
 		off = append(off, "groups")
+	}
+	if p.tr == nil {
+		off = append(off, "trace")
 	}
 	return append(off, p.opt.ClientOff...)
 }

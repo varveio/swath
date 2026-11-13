@@ -93,12 +93,13 @@ func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error 
 				n, ok1 := k.nlink(p)
 				dev, ok2 := k.dev(p)
 				ino, ok3 := k.inode(p)
-				if !ok1 || !ok2 || !ok3 {
-					b.Discard()
-					return fmt.Errorf("per-prefix totals: %q has no link count, device or inode to count its links once by (a metadata tier or platform that does not read them)", seg[i].Key)
+				// A row without a link count, device or inode (a dataset
+				// listed at the names tier, or on Windows) counts under
+				// its name: nothing tells its links apart. nlink is
+				// unsigned, its bits carried in the int64.
+				if ok1 && ok2 && ok3 {
+					r.Link, r.Dev, r.Inode = uint32(n) > 1, dev, ino
 				}
-				// nlink is unsigned, its bits carried in the int64
-				r.Link, r.Dev, r.Inode = uint32(n) > 1, dev, ino
 			}
 			b.Add(&r)
 		}
