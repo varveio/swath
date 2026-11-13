@@ -381,6 +381,12 @@ enough; `split.unsplittable` and `split.unsplittable_keys` are ranges a guard ma
 worker then drained alone. `SWATH_SPLIT_TRACE=1` prints each split with its pivot source, depth, gallop
 generation and the anchor its upper child carries.
 
+**The run trace.** `swath diag list --trace FILE` records the ranges themselves: each tile, claim, page
+(cursor before and after, rows, request time), split (cursor, pivot, mechanism, the demand and estimates the
+decision saw) and end, timestamped, from which the tiling can be rebuilt and checked ([trace.md](trace.md)).
+The hooks sit beside the coverage test hook (`Options.Trace`) and cost a nil check when off; with a trace, events
+are encoded outside the decision mutex and never wait for the file.
+
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
 byte-identical to the parallel core's. It is the only mode where `--max-keys` stops early (the dataset is
 then marked incomplete).

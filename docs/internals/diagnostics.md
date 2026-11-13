@@ -35,6 +35,10 @@ Diagnostics:
       --no-spill            wait on the sort buffer instead of spilling rows to disk
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              S3, GCS and Azure Blob. Every range made, claimed, paged, split and
+                              ended, with its keys; tools/explainer reads it. Events the file cannot
+                              keep up with are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
       --no-seed             start from one range, without the delimiter-listing seed
@@ -55,6 +59,10 @@ Diagnostics:
 <!-- diag-count:begin -->
 ```text
 Diagnostics:
+      --trace FILE   write the range engine's run trace (JSON Lines) to FILE
+                       S3, GCS and Azure Blob. Every range made, claimed, paged, split and ended,
+                       with its keys; tools/explainer reads it. Events the file cannot keep up with
+                       are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                      start the limit at 4 in flight, doubling each second to --workers
       --no-seed      start from one range, without the delimiter-listing seed
@@ -80,6 +88,10 @@ Diagnostics:
       --spill-plain         write spill frames without delta coding (a comparison arm)
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              S3, GCS and Azure Blob. Every range made, claimed, paged, split and
+                              ended, with its keys; tools/explainer reads it. Events the file cannot
+                              keep up with are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
       --spill-compress      undo a recorded --no-spill-compress
@@ -111,6 +123,10 @@ Diagnostics:
   delta-coded frames); `--spill-plain` writes each key and payload whole instead of delta-coding them, the
   comparison arm ([ordering.md](ordering.md)).
 - **`--no-journal`** publishes parts only at the end, without the journal a resume needs.
+- **`--trace FILE`** writes the range engine's run trace (S3, GCS, Azure Blob): every range made, claimed,
+  paged, split and ended, with its keys, one JSON object per line. It never slows the listing: events the
+  file cannot keep up with are dropped and counted (`trace.dropped`). The schema, the drop policy and what a
+  trace proves are [trace.md](trace.md); [`tools/explainer`](../../tools/explainer/README.md) reads it.
 
 ## Environment
 

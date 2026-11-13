@@ -17,6 +17,7 @@ import (
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/totals"
 )
 
@@ -195,6 +196,9 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		def(source.Flag{Name: "spill-reserve", Value: &o.spillReserve, Metavar: "SIZE", Commands: []string{cmdDiagList},
 			Usage: "free space spill leaves on its filesystem (0: derived)",
 			Long:  "Derived: one part per encoder, at least 1 GiB."})
+		def(source.Flag{Name: traceFlag, Value: source.Text(&o.trace), Metavar: "FILE", Commands: []string{cmdDiagList, cmdDiagCount},
+			Usage: "write the range engine's run trace (JSON Lines) to FILE",
+			Long:  "S3, GCS and Azure Blob. Every range made, claimed, paged, split and ended, with its keys; tools/explainer reads it. Events the file cannot keep up with are dropped, never waited for (trace.dropped)."})
 	}
 	registerProviders(f, o, diag)
 	undoFlags(f, o)
@@ -250,7 +254,16 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 	for _, n := range localTotalsFlags {
 		o.owners[n] = []string{""}
 	}
+	// The run trace is the range engine's: the providers on it take it.
+	for _, p := range registry.Factories() {
+		if slices.Contains(p.Shared, keyrange.Group) {
+			o.owners[traceFlag] = append(o.owners[traceFlag], p.Scheme)
+		}
+	}
 }
+
+// traceFlag is --trace, the range engine's run trace.
+const traceFlag = "trace"
 
 // localTotalsFlags are the totals' flags only a local source takes.
 var localTotalsFlags = []string{"allocated", "count-links-once", "max-inodes"}

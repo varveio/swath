@@ -121,7 +121,8 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 
 The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
 (`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
-(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`). A provider on the range engine has them all, and they
+(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`), and `Traced` (`TraceTo`, the run trace:
+[trace.md](trace.md)). A provider on the range engine has them all, and they
 are listed once, as `keyrange.Registered` (with `Listed`): its opened source embeds that interface set to the
 provider, beside the `registry.Bound` of the same provider, so the methods are promoted and nothing else of the
 provider is (not its `Root`, `Expand`, `Stats`, `Options` or counter `Set`); a provider that lacks one fails to

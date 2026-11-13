@@ -34,6 +34,7 @@ import (
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
@@ -504,6 +505,7 @@ type options struct {
 	countOnly              bool     // swath du or swath diag count: rows counted, none written
 	du                     bool     // swath du: the per-prefix totals
 	report                 string   // --report: a file, or - for stdout
+	trace                  string   // --trace: the run trace's file, resolved (checkSidePaths)
 	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
@@ -569,7 +571,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "trace", "max-duration", "stall-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -878,6 +880,14 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if prof != nil {
 		cfg.ListingDone = prof.listingDone
 	}
+	if o.trace != "" {
+		f, err := createNoFollow(o.trace)
+		if err != nil {
+			return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
+		}
+		defer f.Close()
+		cfg.Trace = runtrace.New(f)
+	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	if o.maxDuration > 0 {
@@ -950,6 +960,11 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
+	if cfg.Trace != nil {
+		if terr := cfg.Trace.Close(sum.Outcome.Status); terr != nil {
+			elog().warn("--trace " + o.trace + ": " + terr.Error())
+		}
+	}
 	tt.disp.stop()
 	if prof != nil {
 		prof.stop()

@@ -14,7 +14,7 @@ import (
 )
 
 // checkSidePaths refuses, before the source is opened, a file the command
-// writes beside its output (--report, the SWATH_CPUPROFILE and
+// writes beside its output (--report, --trace, the SWATH_CPUPROFILE and
 // SWATH_MEMPROFILE profiles and their phase files) where it would replace managed output: the
 // text output file; inside the dataset directory anything but an ordinary
 // name directly in it (not data/, the manifest, run.json, error.json, the
@@ -35,6 +35,7 @@ func checkSidePaths(o *options) error {
 		phases []string // the phase files written beside it (profile.go)
 	}{
 		{"--report", &o.report, nil},
+		{"--trace", &o.trace, nil},
 		{"SWATH_CPUPROFILE", &o.cpuProfile, []string{phaseListing, phaseTail}},
 		{"SWATH_MEMPROFILE", &o.memProfile, []string{phaseListing, phaseExit}},
 	} {

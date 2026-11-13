@@ -190,6 +190,7 @@ _swath_diag_list() {
         '--no-journal[publish parts only at the end, without the journal resume needs]' \
         '--no-spill[wait on the sort buffer instead of spilling rows to disk]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -271,6 +272,7 @@ _swath_diag_count() {
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -337,6 +339,7 @@ _swath_resume() {
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \

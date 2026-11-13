@@ -129,6 +129,7 @@ complete -c swath -n '__swath_cmd "diag list" "resume"' -l spill-plain -d 'write
 complete -c swath -n '__swath_cmd "diag list"' -l no-journal -d 'publish parts only at the end, without the journal resume needs'
 complete -c swath -n '__swath_cmd "diag list"' -l no-spill -d 'wait on the sort buffer instead of spilling rows to disk'
 complete -c swath -n '__swath_cmd "diag list" "resume"' -l spill-reserve -x -d 'free space spill leaves on its filesystem (0: derived)'
+complete -c swath -n '__swath_cmd "diag list" "diag count" "resume"' -l trace -r -F -d 'write the range engine\'s run trace (JSON Lines) to FILE'
 complete -c swath -n '__swath_cmd "diag list" "diag count" "resume"' -l adaptive-limit-slow-start -d 'start the limit at 4 in flight, doubling each second to --workers'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l no-seed -d 'start from one range, without the delimiter-listing seed'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l structure -x -a 'auto on off' -d 'probes whose folder boundaries splits pivot on'
