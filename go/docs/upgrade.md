@@ -516,6 +516,15 @@ are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles
 tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
 tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
 
+**Local recursive exclusions.** A local or mounted tree no longer walks below directories covered by
+exclude globs ending in a recursive `/**` segment. The retained rows have the same filter semantics;
+the directory's own row is still eligible. The local report adds `source.stats.pruning` (configured-rule
+classification) and `source.stats.pruned_dirs` (child traversals prevented). Unvisited descendants are
+not counted in fetched or filtered rows. Errors below pruned directories are no longer observed, so
+`outcome.unreadable` and `coverage.skipped_entries` can decrease for the same command. Original rules
+stay in `coverage.filters`; pruning is not a skipped-entry error. Object-store exclusions and arbitrary
+regex exclusions keep their existing behavior. See [filters](filters.md#globs).
+
 **Run report: version 6.** Version 6 adds `output.committed_object_bytes`, the committed dataset's object
 bytes: every row's size summed as the writers wrote them, retained parts and rows replayed from spill included,
 so a resumed run reports the dataset's total where `output.object_bytes` holds only what that attempt listed. It is

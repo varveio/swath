@@ -103,10 +103,12 @@ Filters:
                                 (logs/*.gz), without one the last segment at any depth (*.gz). * and
                                 ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
                                 \c. Includes sharing a literal prefix narrow the listed prefix.
-                                Filters keep or drop rows; they do not prune the walk.
+                                Filters select rows; recursive excludes can also prune local
+                                traversal.
       --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
                                 Matched as --include is. dir/ drops a directory's own row, dir/**
-                                the rows below it; the walk still lists them.
+                                the rows below it. Local trees skip traversal below directories
+                                covered by a terminal /**; other excludes only filter rows.
       --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
                                 The full key, SOURCE's object-store prefix included (a glob matches
                                 the key below SOURCE). Any include, glob or regex, keeps a key. ^

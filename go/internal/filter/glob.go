@@ -25,13 +25,20 @@ import (
 // globRegexp translates it to an RE2 expression, which matches in time
 // linear in the key, newlines included.
 func globRegexp(p string) (string, error) {
+	row, _, err := globRegexps(p)
+	return row, err
+}
+
+// globRegexps also derives the directory keys whose descendants a terminal
+// recursive segment covers, using the row expression's parser and anchoring.
+func globRegexps(p string) (row, descendants string, err error) {
 	if p == "" {
-		return "", errors.New("empty pattern")
+		return "", "", errors.New("empty pattern")
 	}
 	anchored := strings.Contains(p, "/")
 	body := strings.TrimPrefix(p, "/")
 	if body == "" {
-		return "", errors.New("nothing after the leading /")
+		return "", "", errors.New("nothing after the leading /")
 	}
 	var b strings.Builder
 	b.WriteString(`\A`)
@@ -44,12 +51,13 @@ func globRegexp(p string) (string, error) {
 		case c == '*' && i+1 < len(body) && body[i+1] == '*':
 			end := i+2 == len(body)
 			if inBrace || i > 0 && body[i-1] != '/' || !end && body[i+2] != '/' {
-				return "", errors.New("** must be a whole segment (a/**/b, **/x, a/**)")
+				return "", "", errors.New("** must be a whole segment (a/**/b, **/x, a/**)")
 			}
 			switch {
 			case end && i > 0:
 				// a/** is what lies below a/, not the a/ row itself
 				// (as gitignore's): --exclude a or a/ drops that row.
+				descendants = b.String() + `\z`
 				b.WriteString(`(?s:.+)`)
 				i += 2
 			case end:
@@ -68,12 +76,12 @@ func globRegexp(p string) (string, error) {
 		case c == '[':
 			n, err := globClass(&b, body[i:])
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
 			i += n
 		case c == '{':
 			if inBrace {
-				return "", errors.New("nested { is not supported")
+				return "", "", errors.New("nested { is not supported")
 			}
 			inBrace = true
 			b.WriteString(`(?:`)
@@ -83,7 +91,7 @@ func globRegexp(p string) (string, error) {
 			i++
 		case c == '}':
 			if !inBrace {
-				return "", errors.New("} without {")
+				return "", "", errors.New("} without {")
 			}
 			inBrace = false
 			b.WriteByte(')')
@@ -91,7 +99,7 @@ func globRegexp(p string) (string, error) {
 		default:
 			if c == '\\' {
 				if i++; i == len(body) {
-					return "", errors.New(`trailing \`)
+					return "", "", errors.New(`trailing \`)
 				}
 			}
 			_, n := utf8.DecodeRuneInString(body[i:])
@@ -100,13 +108,13 @@ func globRegexp(p string) (string, error) {
 		}
 	}
 	if inBrace {
-		return "", errors.New("{ without }")
+		return "", "", errors.New("{ without }")
 	}
 	if !strings.HasSuffix(body, "/") {
 		b.WriteString(`/?`)
 	}
 	b.WriteString(`\z`)
-	return b.String(), nil
+	return b.String(), descendants, nil
 }
 
 // anySegments is ** followed by '/': zero or more whole segments.
