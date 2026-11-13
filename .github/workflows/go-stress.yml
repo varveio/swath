@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: Package pattern relative to go/ (e.g. ./internal/listing)
+        description: Package pattern relative to the repository root (e.g. ./internal/listing)
         required: true
         default: ./...
       run:
@@ -52,14 +52,13 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # The ci.yml setup, restored and never saved: the shared module cache, which every runner
       # has, and the build cache of the ci.yml job on the same runner (go-race (rest) on amd64,
       # go-race (listing-rest) on arm64, go-xos on macOS and Windows; go-xos builds without -race).
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: ${{ inputs.os == 'ubuntu-latest' && 'go-race-rest' || inputs.os == 'ubuntu-24.04-arm' && 'go-race-listing-rest' || 'go-xos' }}

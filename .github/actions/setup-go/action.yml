@@ -1,6 +1,6 @@
 name: Set up Go with a shared module cache and a per-job build cache
 description: >
-  Go at the version go/go.mod names, with two caches. The module cache (GOMODCACHE) is one entry
+  Go at the version go.mod names, with two caches. The module cache (GOMODCACHE) is one entry
   per runner OS and architecture and dependency set, shared by every job. The build cache
   (GOCACHE) is per job (the `key` input) and per commit, restored from the job's newest. A push
   to main saves both when the job ends; any other event restores only. setup-go's own cache is
@@ -14,13 +14,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Set up Go (version from go/go.mod)
+    - name: Set up Go (version from go.mod)
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
-        go-version-file: go/go.mod
+        go-version-file: go.mod
         cache: false
 
-    # deps fingerprints the dependency set of all three modules (go, go/objfile, go/reader): the
+    # deps fingerprints the dependency set of all three modules (the root, objfile, reader): the
     # module cache holds all of them, and a changed manifest can select other versions without
     # changing a sum file.
     - name: Locate the Go caches
@@ -29,7 +29,7 @@ runs:
       run: |
         echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-        echo "deps=${{ hashFiles('go/go.mod', 'go/go.sum', 'go/objfile/go.mod', 'go/objfile/go.sum', 'go/reader/go.mod', 'go/reader/go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "deps=${{ hashFiles('go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
 
     # The module cache's key names no job and no commit, and a key once saved is never
     # overwritten. Several main-push jobs may save it at once: the first upload wins and the
@@ -54,7 +54,7 @@ runs:
         restore-keys: |
           go-mod-${{ runner.os }}-${{ runner.arch }}-
 
-    # Jobs build different module graphs (go/reader has no cloud SDK), so the job that saves a new
+    # Jobs build different module graphs (reader has no cloud SDK), so the job that saves a new
     # module key first would otherwise freeze only what it happened to need, and an exact hit
     # never adds what is missing. Every module's `all` is downloaded before any job may save: the
     # build list alone leaves out modules that only dependencies' tests import, which
@@ -62,7 +62,7 @@ runs:
     # `go mod download all` adds the hashes of what it fetched to go.sum, which would then fail
     # `go mod tidy -diff`, so it runs on a copy of the three modules' go.mod and go.sum: the module
     # cache is global, the checkout stays as committed. The copy keeps the repository layout
-    # (go/, go/objfile/, go/reader/) because go/go.mod replaces the reader module with ./reader,
+    # (the root, objfile/, reader/) because go.mod replaces the reader module with ./reader,
     # which `go mod download` resolves by reading reader/go.mod relative to the module. The
     # directories are absolute because the callers' working directories differ.
     - name: Download every Go module's dependencies (new module-cache key on main)
@@ -71,11 +71,11 @@ runs:
       run: |
         set -euo pipefail
         copy=$(mktemp -d)
-        for dir in go go/objfile go/reader; do
+        for dir in . objfile reader; do
           mkdir -p "$copy/$dir"
           cp "$GITHUB_WORKSPACE/$dir/go.mod" "$GITHUB_WORKSPACE/$dir/go.sum" "$copy/$dir/"
         done
-        for dir in go go/objfile go/reader; do
+        for dir in . objfile reader; do
           (cd "$copy/$dir" && go mod download all)
         done
         rm -r "$copy"

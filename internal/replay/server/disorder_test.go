@@ -1,0 +1,83 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package server
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
+)
+
+// TestDisorderedFixtureNamesOnlyThePart: a fixture disordered inside a row
+// group fails the request with the replay wire contract's envelope (500
+// InternalError, x-swath-replay-error: fixture_disordered, the reason, the
+// row group and the part's file name in the message), and the server's
+// directory layout reaches the log only.
+func TestDisorderedFixtureNamesOnlyThePart(t *testing.T) {
+	disorder := &legacy.DisorderError{Part: "/srv/captures/some-bucket/part-00001.parquet", RowGroup: 7, Row: 42,
+		Detail: "its keys must be in strictly ascending unsigned order"}
+	st := &hookStore{Store: memstore.Keys(memstore.Options{}, "a"), hook: func(context.Context) error { return disorder }}
+	cfg := config(st)
+	var log strings.Builder
+	cfg.Log = &syncWriter{w: &log}
+	s := start(t, cfg)
+	r := get(t, s, "/bucket?list-type=2&delimiter=%2F")
+	const want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<Error><Code>InternalError</Code>` +
+		`<Message>row group 7 of part-00001.parquet is not sorted (reason=row_group_disorder): its keys must be in strictly ascending unsigned order</Message>` +
+		`<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`
+	if r.status != 500 || r.body != want || r.header.Get("x-swath-replay-error") != "fixture_disordered" {
+		t.Errorf("%d %v\n%s", r.status, r.header, r.body)
+	}
+	if !strings.Contains(log.String(), "/srv/captures/some-bucket/part-00001.parquet") {
+		t.Errorf("log lacks the path: %s", log.String())
+	}
+	if count(s, metrics.HTTPErrors) != 1 {
+		t.Errorf("meters: %s", s.reg.AppendMeters(nil))
+	}
+}
+
+// TestDisorderedPartOverHTTP serves a stamped part whose one row group
+// holds a, c, b, d through the real store: the read that meets the
+// disorder answers fixture_disordered with the complete Java message, and
+// each refused read, a range read or a "/" rollup, is counted in
+// serving.refused{reason=row_group_disorder} and parquet.query.errors.
+func TestDisorderedPartOverHTTP(t *testing.T) {
+	dir := t.TempDir()
+	var rows []legacytest.Row
+	for i, k := range []string{"a", "c", "b", "d"} {
+		rows = append(rows, legacytest.Object(k, i))
+	}
+	if err := legacytest.Write(filepath.Join(dir, "part-00001.parquet"),
+		legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)}); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err := store.Open(context.Background(), dir, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := start(t, config(st))
+	r := get(t, s, "/bucket?list-type=2&max-keys=1000")
+	// The message, the store's detail included, is the Java server's for
+	// the same part: the row in its group and the key in hex.
+	const want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<Error><Code>InternalError</Code>` +
+		`<Message>row group 0 of part-00001.parquet is not sorted (reason=row_group_disorder): ` +
+		`its keys must be in strictly ascending unsigned order, but row 2 (62) is at or below its predecessor</Message>` +
+		`<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`
+	if r.status != 500 || r.header.Get("x-swath-replay-error") != "fixture_disordered" || r.body != want {
+		t.Errorf("%d %v\n%s", r.status, r.header, r.body)
+	}
+	if r := get(t, s, "/bucket?list-type=2&delimiter=/"); r.status != 500 {
+		t.Errorf("rollup: %d", r.status)
+	}
+	if n := count(s, metrics.ServingRefused, "row_group_disorder"); n != 2 || count(s, metrics.ParquetQueryErrors) != 2 {
+		t.Errorf("serving.refused %d, parquet.query.errors %d, want 2 each", n, count(s, metrics.ParquetQueryErrors))
+	}
+}

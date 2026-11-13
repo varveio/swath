@@ -69,9 +69,6 @@ jobs:
     needs: source
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -84,7 +81,7 @@ jobs:
       # actions/setup-go@v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: go/go.mod
+          go-version-file: go.mod
           cache: false
 
       - name: go vet
@@ -113,7 +110,7 @@ jobs:
           exit "$status"
 
       - name: go test -race (reader module)
-        working-directory: go/reader
+        working-directory: reader
         run: go test -race -count=1 -timeout 10m ./...
 
       - name: Upload the go test -json stream
@@ -127,7 +124,7 @@ jobs:
           retention-days: 30
 
   # Builds the release once: every target's binaries, stamped with the tag's version and
-  # commit, and their third-party notices (go/notices.sh, which fails on a linked module whose
+  # commit, and their third-party notices (notices.sh, which fails on a linked module whose
   # license is not allowed or not recognized), packed into the archives the release publishes,
   # with an SBOM of the binaries and SHA256SUMS. The publish job takes the images' binaries and
   # notices out of these archives.
@@ -147,7 +144,7 @@ jobs:
       # actions/setup-go@v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: go/go.mod
+          go-version-file: go.mod
           cache: false
 
       - name: Build every target (CGO_ENABLED=0, version and commit stamped) and the notices
@@ -237,7 +234,7 @@ jobs:
           name: release-assets
           path: release-assets
 
-      # The images carry the archived bytes: Dockerfile.go's build stage is replaced by the
+      # The images carry the archived bytes: the Dockerfile's build stage is replaced by the
       # linux binaries out of the verified archives, so nothing is compiled a second time.
       - name: Verify release assets and unpack the image binaries
         run: |
@@ -300,7 +297,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath
           build-contexts: build=image-context
           platforms: linux/amd64,linux/arm64
@@ -317,7 +314,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath-replay
           build-contexts: build=image-context
           platforms: linux/amd64,linux/arm64

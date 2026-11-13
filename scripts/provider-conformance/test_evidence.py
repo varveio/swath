@@ -506,7 +506,7 @@ class EvidenceTest(unittest.TestCase):
         evidence.validate_matrix(matrix, ledger)
         # Every archived capture is checked against its manifest. REPLAY_MATCH receipts also
         # bind a replay distribution, which `evidence.py validate --distribution` checks, and Go
-        # receipts the binary go/build.sh builds at their commit, which `validate --repo-root`
+        # receipts the binary build.sh builds at their commit, which `validate --repo-root`
         # rebuilds; here those rows are held to the OBSERVED proof they contain.
         observed = json.loads(json.dumps(ledger))
         for row in observed["rows"]:
@@ -560,7 +560,7 @@ class EvidenceTest(unittest.TestCase):
                     {("azure", "2026-10-06"): version10}, root)
 
 
-# A stand-in for go/build.sh: the "binary" is go/main.go, the target settings and the commit, so a
+# A stand-in for build.sh: the "binary" is main.go, the target settings and the commit, so a
 # test can compute the bytes the receipt commit builds without a Go toolchain.
 FAKE_BUILD = """#!/bin/sh
 set -eu
@@ -581,7 +581,7 @@ cat "$FAKE_OUTCOMES/azure.json" > "$SWATH_REPLAY_PROVIDER_REPORT/azure-outcomes.
 
 
 class GoReceiptTest(unittest.TestCase):
-    """A `producer: go` receipt binds the Go evidence test sources and go/build.sh's binary at its
+    """A `producer: go` receipt binds the Go evidence test sources and build.sh's binary at its
     commit; both are recomputed there by `validate`, and the commit must be an ancestor."""
 
     MANIFEST = {"provider": "gcs", "namespace_mode": "flat-ubla", "region": "test-region",
@@ -612,21 +612,21 @@ class GoReceiptTest(unittest.TestCase):
         self.git("config", "user.name", "Replay Test")
         self.git("config", "user.email", "replay-test@example.invalid")
         self.git("config", "commit.gpgsign", "false")
-        self.write("go/go.mod", "module example.invalid/replay\n\ngo 1.26.0\n\ntoolchain go1.26.10\n")
-        self.write("go/go.sum", "")
-        self.write("go/main.go", "package main\n")
-        build = self.write("go/build.sh", FAKE_BUILD)
+        self.write("go.mod", "module example.invalid/replay\n\ngo 1.26.0\n\ntoolchain go1.26.10\n")
+        self.write("go.sum", "")
+        self.write("main.go", "package main\n")
+        build = self.write("build.sh", FAKE_BUILD)
         build.chmod(0o755)
-        self.write("go/internal/replay/evidence/doc.go", "package evidence\n")
-        self.write("go/internal/replay/evidence/evidence_test.go",
+        self.write("internal/replay/evidence/doc.go", "package evidence\n")
+        self.write("internal/replay/evidence/evidence_test.go",
                    "package evidence\n\nfunc TestGCSNativeCapturesMatchReplay(t *testing.T) {}\n")
-        self.write("go/internal/replay/legacy/legacytest/legacytest.go", "package legacytest\n")
-        self.write("go/internal/replay/azure/evidence_test.go",
+        self.write("internal/replay/legacy/legacytest/legacytest.go", "package legacytest\n")
+        self.write("internal/replay/azure/evidence_test.go",
                    "package azure_test\n\nfunc TestAzureEvidenceReplay(t *testing.T) {}\n")
-        self.write("go/internal/replay/azure/evidencecmp_test.go", "package azure_test\n")
-        self.write("go/internal/replay/azure/sdk_test.go", "package azure_test\n")
+        self.write("internal/replay/azure/evidencecmp_test.go", "package azure_test\n")
+        self.write("internal/replay/azure/sdk_test.go", "package azure_test\n")
         # Not part of the bound set: the route's other tests do not run in the evidence replay.
-        self.write("go/internal/replay/azure/port_test.go", "package azure\n")
+        self.write("internal/replay/azure/port_test.go", "package azure\n")
         self.write("EvidenceTest.java", "class EvidenceTest { @Test void exactTest() {} }")
         self.write(".gitignore", "/evidence/\n")
         self.digest = hashlib.sha256(evidence.canonical(self.MANIFEST)).hexdigest()
@@ -638,7 +638,7 @@ class GoReceiptTest(unittest.TestCase):
         self.receipt_commit = self.commit("fixture")
 
     def binary_sha256(self, commit):
-        main = subprocess.run(("git", "-C", str(self.root), "show", f"{commit}:go/main.go"), check=True,
+        main = subprocess.run(("git", "-C", str(self.root), "show", f"{commit}:main.go"), check=True,
                               capture_output=True).stdout
         return hashlib.sha256(main + f"linux/amd64 cgo=0 {commit}".encode()).hexdigest()
 
@@ -646,15 +646,15 @@ class GoReceiptTest(unittest.TestCase):
         sources = {path: hashlib.sha256(subprocess.run(
             ("git", "-C", str(self.root), "show", f"{self.receipt_commit}:{path}"), check=True,
             capture_output=True).stdout).hexdigest() for path in (
-            "go/go.mod", "go/go.sum", "go/internal/replay/evidence/doc.go",
-            "go/internal/replay/evidence/evidence_test.go",
-            "go/internal/replay/legacy/legacytest/legacytest.go",
-            "go/internal/replay/azure/evidence_test.go", "go/internal/replay/azure/evidencecmp_test.go",
-            "go/internal/replay/azure/sdk_test.go")}
+            "go.mod", "go.sum", "internal/replay/evidence/doc.go",
+            "internal/replay/evidence/evidence_test.go",
+            "internal/replay/legacy/legacytest/legacytest.go",
+            "internal/replay/azure/evidence_test.go", "internal/replay/azure/evidencecmp_test.go",
+            "internal/replay/azure/sdk_test.go")}
         receipt = {"schema_version": "provider-match-receipt-v2", "producer": "go",
                    "comparison": "ProviderExchangeComparator", "status": "PASS",
                    "test": "TestGCSNativeCapturesMatchReplay",
-                   "test_path": "go/internal/replay/evidence/evidence_test.go",
+                   "test_path": "internal/replay/evidence/evidence_test.go",
                    "test_sources": sorted(sources),
                    "test_source_sha256": hashlib.sha256(evidence.canonical(sources)).hexdigest(),
                    "api_version": "json-v1", "evidence_kind": "exchange", "compared_steps": 1,
@@ -688,7 +688,7 @@ class GoReceiptTest(unittest.TestCase):
 
     def test_go_receipt_validates_at_its_commit_and_later_commits(self):
         self.validate(self.row(self.receipt()))
-        self.write("go/main.go", "package main // changed after the receipt\n")
+        self.write("main.go", "package main // changed after the receipt\n")
         later = self.commit("change the replay")
         # The binary is recomputed at the receipt commit, so a later commit keeps the receipt valid.
         self.validate(self.row(self.receipt()), later)
@@ -697,7 +697,7 @@ class GoReceiptTest(unittest.TestCase):
     def test_changed_binary_hash_is_refused(self):
         with self.assertRaisesRegex(ValueError, "binary differs"):
             self.validate(self.row(self.receipt(distribution_sha256="f" * 64)))
-        later = self.commit_change("go/main.go", "package main // changed\n")
+        later = self.commit_change("main.go", "package main // changed\n")
         # A receipt naming the later commit's binary but the earlier commit is refused too.
         with self.assertRaisesRegex(ValueError, "binary differs"):
             self.validate(self.row(self.receipt(distribution_sha256=self.binary_sha256(later))), later)
@@ -710,17 +710,17 @@ class GoReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "test sources differ from its commit"):
             self.validate(self.row(self.receipt(test_source_sha256="f" * 64)))
         with self.assertRaisesRegex(ValueError, "test sources differ from its commit"):
-            self.validate(self.row(self.receipt(test_sources=["go/internal/replay/evidence/evidence_test.go"])))
+            self.validate(self.row(self.receipt(test_sources=["internal/replay/evidence/evidence_test.go"])))
         # A test of the route outside the bound set may change; a bound source may not.
-        self.commit_change("go/internal/replay/azure/port_test.go", "package azure // changed\n")
+        self.commit_change("internal/replay/azure/port_test.go", "package azure // changed\n")
         self.validate(self.row(self.receipt()))
-        for path in ("go/internal/replay/azure/sdk_test.go", "go/go.sum"):
+        for path in ("internal/replay/azure/sdk_test.go", "go.sum"):
             with self.subTest(path=path):
                 self.commit_change(path, "// changed\n")
                 with self.assertRaisesRegex(ValueError, "changed since the receipt commit"):
                     self.validate(self.row(self.receipt()))
                 self.git("reset", "-q", "--hard", "HEAD~1")
-        self.commit_change("go/internal/replay/evidence/new_test.go", "package evidence\n")
+        self.commit_change("internal/replay/evidence/new_test.go", "package evidence\n")
         with self.assertRaisesRegex(ValueError, "changed since the receipt commit"):
             self.validate(self.row(self.receipt()))
 
@@ -730,35 +730,35 @@ class GoReceiptTest(unittest.TestCase):
         row = self.row(self.receipt())
         self.validate(row)
         self.write("docs/ledger-note.md", "unrelated unstaged edit\n")
-        self.write("go/internal/replay/azure/port_test.go", "package azure // unrelated unstaged edit\n")
+        self.write("internal/replay/azure/port_test.go", "package azure // unrelated unstaged edit\n")
         self.validate(row)
         self.git("add", "docs/ledger-note.md")
         self.validate(row)
-        source = "go/internal/replay/evidence/evidence_test.go"
+        source = "internal/replay/evidence/evidence_test.go"
         original = (self.root / source).read_text()
         for name, change in (("unstaged", lambda: self.write(source, original + "// edited\n")),
                              ("staged", lambda: (self.write(source, original + "// edited\n"),
                                                  self.git("add", source))),
-                             ("added", lambda: self.write("go/internal/replay/evidence/extra_test.go",
+                             ("added", lambda: self.write("internal/replay/evidence/extra_test.go",
                                                           "package evidence\n")),
                              ("added in a staged directory", lambda: (
-                                 self.write("go/internal/replay/legacy/legacytest/extra.go", "package x\n"),
-                                 self.git("add", "go/internal/replay/legacy/legacytest/extra.go"))),
-                             ("go.sum", lambda: self.write("go/go.sum", "x\n")),
+                                 self.write("internal/replay/legacy/legacytest/extra.go", "package x\n"),
+                                 self.git("add", "internal/replay/legacy/legacytest/extra.go"))),
+                             ("go.sum", lambda: self.write("go.sum", "x\n")),
                              ("deleted", lambda: (self.root / source).unlink())):
             with self.subTest(name):
                 change()
                 with self.assertRaisesRegex(ValueError, "working tree differ"):
                     self.validate(row)
                 self.git("reset", "-q", "--hard", "HEAD")
-                self.git("clean", "-qfd", "go")
+                self.git("clean", "-qfd", "internal")
                 self.git("reset", "-q")
                 self.validate(row)
 
     def test_non_ancestor_commit_is_refused(self):
         main = self.git("rev-parse", "--abbrev-ref", "HEAD")
         self.git("checkout", "-q", "-b", "side")
-        side = self.commit_change("go/main.go", "package main // side\n")
+        side = self.commit_change("main.go", "package main // side\n")
         self.git("checkout", "-q", main)
         head = self.commit_change("README", "main line\n")
         receipt = self.receipt(replay_commit=side, distribution_sha256=self.binary_sha256(side))

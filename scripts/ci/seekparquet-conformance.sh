@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SeekParquet conformance of what swath reads and writes (go/docs/internals/testing.md), run from go/:
+# SeekParquet conformance of what swath reads and writes (docs/internals/testing.md), run from the repository root:
 #
 #   1. the conformance suite against the Go adapter of the seekparquet module version go.mod pins
 #      (the reader the replay server serves datasets through, and the validator): every target it

@@ -9,9 +9,9 @@ filesystems, S3, GCS, and Azure Blob Storage (flat namespace). It can summarize 
 directory or prefix (`du`) and write sorted Parquet inventories.
 
 > **Release candidates available.** Download v0.4.0-rc.2 from the
-> [releases page](https://github.com/varveio/swath/releases) ([install and verify](go/docs/install.md)),
+> [releases page](https://github.com/varveio/swath/releases) ([install and verify](docs/install.md)),
 > or build from source below. These are candidates for the first Go release. The earlier S3-only
-> Java v0.3.2 has another command line and dataset format ([migrating from 0.3](go/docs/upgrade.md)).
+> Java v0.3.2 has another command line and dataset format ([migrating from 0.3](docs/upgrade.md)).
 
 ## Measured scale
 
@@ -22,7 +22,7 @@ one 32-vCPU `n4-highcpu-32` VM with a 400 GB disk in GCP `us-east1`, listing ano
 across clouds from AWS `us-west-2`.
 
 These are single-run S3 observations, not expected times for every source or machine.
-The [measurements and setup](go/docs/internals/measurements.md) keep the operations, conditions and
+The [measurements and setup](docs/internals/measurements.md) keep the operations, conditions and
 other runs separate.
 
 ## Supported sources
@@ -37,18 +37,18 @@ other runs separate.
 Eligible journaled object-store dataset scans can resume. Local scans and text output
 cannot. Windows currently refuses journaled object-store dataset runs and recovery through resume
 because directory sync is unavailable; local scans work without resume. See
-[platform and recovery limits](go/docs/running.md#known-limits).
+[platform and recovery limits](docs/running.md#known-limits).
 
 <a id="quickstart"></a>
 
 ## Quick start
 
-Download a [release candidate](go/docs/install.md#download-a-release-candidate), or **build from source**
-with Go 1.26 or later (the `go` line of [`go/go.mod`](go/go.mod)) and git:
+Download a [release candidate](docs/install.md#download-a-release-candidate), or **build from source**
+with Go 1.26 or later (the `go` line of [`go.mod`](go.mod)) and git:
 
 ```bash
 git clone https://github.com/varveio/swath.git
-cd swath/go
+cd swath
 ./build.sh -o swath
 ./swath --version
 ```
@@ -75,7 +75,7 @@ This small public NOAA prefix needs no cloud account:
 
 Object-store listings go to the terminal or a pipe as text. GCS and Azure Blob use the
 same `list` command with their own source and authentication options. Cloud listings make
-provider requests and may incur charges; read the [running guide](go/docs/running.md)
+provider requests and may incur charges; read the [running guide](docs/running.md)
 before a large or requester-pays scan.
 
 ### Keep an inventory
@@ -88,7 +88,7 @@ before a large or requester-pays scan.
 The destination must be new or empty and should be outside the tree being scanned. `swath show` prints its summary, not SQL results.
 A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that commits
 them, in the [SeekParquet format](https://github.com/varveio/seekparquet), with a swath
-schema and metadata ([dataset profile](go/docs/dataset.md)). Read it with DuckDB, Python
+schema and metadata ([dataset profile](docs/dataset.md)). Read it with DuckDB, Python
 or another Parquet tool, after checking coverage and schema.
 
 ## Output and resume
@@ -102,8 +102,8 @@ or another Parquet tool, after checking coverage and schema.
 swath reads listing metadata and does not change source contents. A live walk or
 multi-request listing is not an atomic storage snapshot. Check coverage, filters,
 entry errors and freshness before treating the result as a whole-source inventory.
-[Concepts](go/docs/concepts.md) defines what each of these promises; the
-[running guide](go/docs/running.md) owns recovery and resource limits.
+[Concepts](docs/concepts.md) defines what each of these promises; the
+[running guide](docs/running.md) owns recovery and resource limits.
 
 ## When to use it
 
@@ -120,18 +120,18 @@ supported schemas rather than assuming every swath dataset is accepted.
 
 ## Documentation
 
-- **Start:** [getting started](go/docs/getting-started.md), [concepts](go/docs/concepts.md),
-  [install](go/docs/install.md).
-- **Use:** [command reference](go/docs/commands/swath.md), [sources](go/docs/sources.md),
-  [output](go/docs/output.md), [running guide](go/docs/running.md),
-  [production checklist](go/docs/production.md), [troubleshooting](go/docs/troubleshooting.md).
-- **Read the output:** [swath dataset profile](go/docs/dataset.md); from Go, the
-  [`reader`](go/reader/README.md) module.
-- **Understand:** [architecture](go/docs/internals/architecture.md), [contracts](go/docs/internals/contracts.md),
-  [providers](go/docs/internals/providers.md), [measurements](go/docs/internals/measurements.md).
-- **Migrate from 0.3:** [migration guide](go/docs/upgrade.md); the
+- **Start:** [getting started](docs/getting-started.md), [concepts](docs/concepts.md),
+  [install](docs/install.md).
+- **Use:** [command reference](docs/commands/swath.md), [sources](docs/sources.md),
+  [output](docs/output.md), [running guide](docs/running.md),
+  [production checklist](docs/production.md), [troubleshooting](docs/troubleshooting.md).
+- **Read the output:** [swath dataset profile](docs/dataset.md); from Go, the
+  [`reader`](reader/README.md) module.
+- **Understand:** [architecture](docs/internals/architecture.md), [contracts](docs/internals/contracts.md),
+  [providers](docs/internals/providers.md), [measurements](docs/internals/measurements.md).
+- **Migrate from 0.3:** [migration guide](docs/upgrade.md); the
   [v0.3.2 documentation](https://github.com/varveio/swath/tree/v0.3.2/docs).
-- **Contribute:** [contribution guide](CONTRIBUTING.md), [tests](go/docs/internals/testing.md),
+- **Contribute:** [contribution guide](CONTRIBUTING.md), [tests](docs/internals/testing.md),
   [roadmap](ROADMAP.md).
 
 swath is pre-1.0. Flags and schemas can change; keep the build revision with inventories
@@ -176,4 +176,4 @@ The evidence behind the published large-scale runs is in the
 
 [Apache-2.0](LICENSE). The Go release archives and images carry `THIRD_PARTY_NOTICES`, the
 licenses of every module linked into the binaries, generated at release by
-[`go/notices.sh`](go/notices.sh).
+[`notices.sh`](notices.sh).

@@ -69,25 +69,45 @@ class PolicyTests(unittest.TestCase):
 
     def test_module_and_tier_selection(self):
         cases = [
-            (['go/internal/x.go'], {'go', 'fixtures'}),
-            (['go/docs/guide.md'], {'go', 'fixtures'}),
-            (['go/reader/read_test.go'], {'go', 'reader', 'fixtures'}),
-            (['go/objfile/testdata/fixture'], {'objfile'}),
-            (['go/objfile/go.sum'], {'objfile', 'platforms'}),
-            (['go/go.mod'], {'go', 'fixtures', 'images', 'platforms'}),
-            (['go/reader/go.sum'], {'go', 'reader', 'fixtures', 'images', 'platforms'}),
-            (['go/cmd/swath/foo_windows.go'], {'go', 'fixtures', 'platforms'}),
-            (['go/internal/journal/lock.go'], {'go', 'fixtures', 'platforms'}),
-            (['go/internal/source/localfs/scan.go'], {'go', 'fixtures', 'platforms'}),
-            (['go/internal/parquetout/sink.go'], {'go', 'fixtures', 'platforms'}),
-            (['go/objfile/foo_arm64.s'], {'objfile', 'platforms'}),
-            (['Dockerfile.go'], {'go', 'fixtures', 'images', 'platforms'}),
-            (['go/notices.sh'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['internal/x.go'], {'go', 'fixtures'}),
+            (['cmd/swath/main.go'], {'go', 'fixtures'}),
+            (['cmd/swath-replay/main_test.go'], {'go', 'fixtures'}),
+            (['bench/s3fake/main.go'], {'go', 'fixtures'}),
+            (['bench/compare.sh'], {'go', 'fixtures'}),
+            (['testdata/readers/s3.json'], {'go', 'fixtures'}),
+            (['verify.py'], {'go', 'fixtures'}),
+            (['dataset_schema.py'], {'go', 'fixtures'}),
+            (['test_dataset_readers.py'], {'go', 'fixtures'}),
+            (['docs/getting-started.md'], {'go', 'fixtures'}),
+            (['docs/commands/swath-list.md'], {'go', 'fixtures'}),
+            (['docs/internals/testing.md'], {'go', 'fixtures'}),
+            (['docs/links_test.go'], {'go', 'fixtures'}),
+            (['reader/read_test.go'], {'go', 'reader', 'fixtures'}),
+            (['reader/README.md'], {'go', 'reader', 'fixtures'}),
+            (['objfile/object.go'], {'objfile'}),
+            (['objfile/testdata/fixture'], {'objfile'}),
+            (['objfile/go.sum'], {'objfile', 'platforms'}),
+            (['go.mod'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['go.sum'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['reader/go.sum'], {'go', 'reader', 'fixtures', 'images', 'platforms'}),
+            (['cmd/swath/foo_windows.go'], {'go', 'fixtures', 'platforms'}),
+            (['internal/journal/lock.go'], {'go', 'fixtures', 'platforms'}),
+            (['internal/source/localfs/scan.go'], {'go', 'fixtures', 'platforms'}),
+            (['internal/parquetout/sink.go'], {'go', 'fixtures', 'platforms'}),
+            (['internal/order/spill.go'], {'go', 'fixtures', 'platforms'}),
+            (['objfile/foo_arm64.s'], {'objfile', 'platforms'}),
+            (['Dockerfile'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['.dockerignore'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['build.sh'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['notices.sh'], {'go', 'fixtures', 'images', 'platforms'}),
             (['LICENSE'], {'go', 'fixtures', 'images', 'platforms'}),
             (['docs/replay-provider-expectations.json'], {'go', 'fixtures'}),
             (['docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
             (['docs/style.md'], set()),
+            (['docs/go-release-copy-checklist.md'], set()),
+            (['docs/ops/dev/CI.md'], set()),
             (['README.md', 'SECURITY.md'], set()),
+            (['AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md'], set()),
             (['site/data/runs/facts.json'], set()),
             (['docs/assets/demo.mp4'], set()),
             (['site/index.html'], set()),
@@ -99,8 +119,10 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(paths=paths):
                 got = policy.select(paths, 'pull_request')
                 self.assertEqual({key for key, value in got.items() if value}, expected)
+        # A Go file or module outside the known tree has no owner yet: everything runs.
         for paths in [['.github/workflows/ci.yml'], ['.github/actions/setup-go/action.yml'],
-                      ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], []]:
+                      ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], [],
+                      ['pkg/new.go'], ['tools/x/go.mod'], ['internal/new/go.mod']]:
             got = policy.select(paths, 'pull_request')
             self.assertTrue(all(got.values()), paths)
         for kwargs in [dict(force_full=True), dict(unknown=True), dict(toolchain=True)]:
@@ -109,13 +131,13 @@ class PolicyTests(unittest.TestCase):
         for event in ['push', 'workflow_dispatch']:
             got = policy.select(['README.md'], event)
             self.assertTrue(all(got.values()))
-        self.assertTrue(policy.select(['go/internal/foo.go'], 'pull_request',
+        self.assertTrue(policy.select(['internal/foo.go'], 'pull_request',
                                       build_tags=True)['platforms'])
 
     def test_dependency_closure_uses_modules_not_cache_keys(self):
         manifests = {'go': 'module example/main\nrequire example/reader v1.0.0',
                      'reader': 'module example/reader', 'objfile': 'module example/objfile'}
-        out = policy.select(['go/objfile/object.go'], 'pull_request')
+        out = policy.select(['objfile/object.go'], 'pull_request')
         self.assertFalse(policy.dependants(out, manifests)['go'])
         manifests['reader'] += '\nrequire example/objfile v1.0.0'
         out = policy.dependants(out, manifests)
@@ -131,7 +153,7 @@ class PolicyTests(unittest.TestCase):
                 f = cwd / path
                 f.parent.mkdir(parents=True, exist_ok=True)
                 f.write_text('module example/' + flag + '\ngo 1.26.0\n')
-            source = cwd / 'go/objfile/source.go'
+            source = cwd / 'objfile/source.go'
             source.write_text('package objfile\n')
             subprocess.run(['git', 'add', '.'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'base'], cwd=temp, check=True)
@@ -147,7 +169,8 @@ class PolicyTests(unittest.TestCase):
                 rows = dict(line.split('=', 1) for line in output.read_text().splitlines())
                 return result, rows
 
-            subprocess.run(['git', 'mv', 'go/objfile/source.go', 'go/source.go'], cwd=temp, check=True)
+            (cwd / 'internal').mkdir()
+            subprocess.run(['git', 'mv', 'objfile/source.go', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'move across modules'], cwd=temp, check=True)
             result, rows = run()
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -156,21 +179,21 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(rows['full'], 'true')
             # Adding, editing a constrained body, or deleting a build constraint
             # must escalate even when the filename has no platform suffix.
-            (cwd / 'go/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage objfile\n')
-            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            (cwd / 'internal/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage objfile\n')
+            subprocess.run(['git', 'add', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'constraint'], cwd=temp, check=True)
             self.assertEqual(run()[1]['platforms'], 'true')
             constrained_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
-            (cwd / 'go/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage changed\n')
-            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            (cwd / 'internal/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage changed\n')
+            subprocess.run(['git', 'add', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'constrained body'], cwd=temp, check=True)
             self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
-            (cwd / 'go/source.go').write_text('package changed\n')
-            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            (cwd / 'internal/source.go').write_text('package changed\n')
+            subprocess.run(['git', 'add', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'remove constraint'], cwd=temp, check=True)
             self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
-            (cwd / 'go/go.mod').write_text('module example/go\ngo 1.27.0\n')
-            subprocess.run(['git', 'add', 'go/go.mod'], cwd=temp, check=True)
+            (cwd / 'go.mod').write_text('module example/go\ngo 1.27.0\n')
+            subprocess.run(['git', 'add', 'go.mod'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'toolchain'], cwd=temp, check=True)
             self.assertEqual(run()[1]['full'], 'true')
             for bad_base in ['missing-ref']:
@@ -180,20 +203,20 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(run(BASE='')[1]['full'], 'true')
             # Go ignores fixture module declarations; binary/non-UTF-8 fixture
             # contents and filenames still select their enclosing module.
-            fixture = cwd / 'go/objfile/testdata/sample'
+            fixture = cwd / 'objfile/testdata/sample'
             fixture.mkdir(parents=True)
             (fixture / 'go.mod').write_text('module example/fixture\n')
             raw_name = os.fsdecode(b'latin-\xff.txt')
             (fixture / raw_name).write_bytes(b'fixture\xff\n')
-            subprocess.run(['git', 'add', 'go/objfile/testdata'], cwd=temp, check=True)
+            subprocess.run(['git', 'add', 'objfile/testdata'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'fixtures'], cwd=temp, check=True)
             result, rows = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(rows['objfile'], 'true')
             # A new nested module cannot silently miss every existing job.
-            (cwd / 'go/new').mkdir()
-            (cwd / 'go/new/go.mod').write_text('module example/new\n')
-            subprocess.run(['git', 'add', 'go/new/go.mod'], cwd=temp, check=True)
+            (cwd / 'internal/new').mkdir()
+            (cwd / 'internal/new/go.mod').write_text('module example/new\n')
+            subprocess.run(['git', 'add', 'internal/new/go.mod'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'new module'], cwd=temp, check=True)
             result, rows = run()
             self.assertNotEqual(result.returncode, 0)

@@ -1,0 +1,437 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package s3_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/johannesboyne/gofakes3"
+	"github.com/johannesboyne/gofakes3/backend/s3mem"
+
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile/s3"
+)
+
+const bucket = "bkt"
+
+// fake is a gofakes3 bucket behind an httptest server and an SDK client.
+type fake struct {
+	backend *s3mem.Backend
+	client  *awss3.Client
+}
+
+func newFake(t *testing.T, wrap func(http.Handler) http.Handler) fake {
+	t.Helper()
+	return newFakeVia(t, wrap, nil)
+}
+
+// observedFake is newFake with the observing transport objfile/remote
+// installs, its client recorded as observing.
+func observedFake(t *testing.T, wrap func(http.Handler) http.Handler) fake {
+	t.Helper()
+	f := newFakeVia(t, wrap, ranged.Observe(http.DefaultTransport))
+	ranged.SetObserving(f.client, true)
+	t.Cleanup(func() { ranged.SetObserving(f.client, false) })
+	return f
+}
+
+// newFakeVia is newFake whose client sends through tr, when not nil.
+func newFakeVia(t *testing.T, wrap func(http.Handler) http.Handler, tr http.RoundTripper) fake {
+	t.Helper()
+	b := s3mem.New()
+	if err := b.CreateBucket(bucket); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(wrap(gofakes3.New(b).Server()))
+	t.Cleanup(srv.Close)
+	opts := awss3.Options{
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		Region:       "us-east-1",
+		Credentials:  aws.AnonymousCredentials{},
+	}
+	if tr != nil {
+		opts.HTTPClient = &http.Client{Transport: tr}
+	}
+	client := awss3.New(opts)
+	return fake{backend: b, client: client}
+}
+
+func (f fake) put(t testing.TB, name string, data []byte) {
+	t.Helper()
+	if _, err := f.backend.PutObject(bucket, name, nil, bytes.NewReader(data), int64(len(data)), nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ifMatch makes the fake answer a GET whose If-Match names another ETag than
+// the version it serves with 412, as S3 does; gofakes3 checks If-Match only on
+// writes.
+func ifMatch(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := r.Header.Get("If-Match")
+		if r.Method != http.MethodGet || want == "" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code/100 == 2 && rec.Header().Get("ETag") != want {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	})
+}
+
+// unversioned drops the version id gofakes3 gives objects of a bucket without
+// versioning on some responses; S3 sends none there.
+func unversioned(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(dropVersion{w}, r)
+		w.Header().Del("x-amz-version-id") // a response with no body or status written
+	})
+}
+
+type dropVersion struct{ http.ResponseWriter }
+
+func (d dropVersion) WriteHeader(code int) {
+	d.Header().Del("x-amz-version-id")
+	d.ResponseWriter.WriteHeader(code)
+}
+
+func (d dropVersion) Write(b []byte) (int, error) {
+	d.Header().Del("x-amz-version-id")
+	return d.ResponseWriter.Write(b)
+}
+
+func (d dropVersion) Flush() { d.ResponseWriter.(http.Flusher).Flush() }
+
+func TestOpener(t *testing.T) {
+	objfiletest.Run(t, func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+		f := newFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+		return objfiletest.Store{
+			Opener: s3.New(f.client, bucket),
+			Put:    f.put,
+			Delete: func(t testing.TB, name string) {
+				if _, err := f.backend.DeleteObject(bucket, name); err != nil {
+					t.Fatal(err)
+				}
+			},
+		}
+	})
+}
+
+// TestSendsIfMatch: every read carries the ETag Open saw.
+func TestSendsIfMatch(t *testing.T) {
+	var sent []string
+	f := newFake(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				sent = append(sent, r.Header.Get("If-Match"))
+			}
+			h.ServeHTTP(w, r)
+		})
+	})
+	f.put(t, "obj", objfiletest.Data(100, 1))
+	file, err := s3.New(f.client, bucket).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.ReadAt(make([]byte, 10), 5); err != nil {
+		t.Fatal(err)
+	}
+	head, err := f.client.HeadObject(context.Background(), &awss3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String("obj")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 || sent[0] != aws.ToString(head.ETag) {
+		t.Fatalf("If-Match sent %q", sent)
+	}
+}
+
+// TestETagCheck: a store that ignores If-Match still cannot hand back another
+// version's bytes; the response's ETag is checked.
+func TestETagCheck(t *testing.T) {
+	f := newFake(t, func(h http.Handler) http.Handler { return h })
+	f.put(t, "obj", objfiletest.Data(100, 1))
+	file, err := s3.New(f.client, bucket).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.put(t, "obj", objfiletest.Data(100, 2))
+	p := make([]byte, 10)
+	if n, err := file.ReadAt(p, 0); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 || !bytes.Equal(p, make([]byte, 10)) {
+		t.Fatalf("ReadAt = %d, %v; want 0, ErrObjectChanged", n, err)
+	}
+}
+
+// TestVersionPinned: in a versioned bucket the Object reads the version it
+// opened, after the key has a newer one.
+func TestVersionPinned(t *testing.T) {
+	f := newFake(t, ifMatch)
+	if err := f.backend.SetVersioningConfiguration(bucket, gofakes3.VersioningConfiguration{Status: gofakes3.VersioningEnabled}); err != nil {
+		t.Fatal(err)
+	}
+	old := objfiletest.Data(100, 1)
+	f.put(t, "obj", old)
+	file, err := s3.New(f.client, bucket).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.put(t, "obj", objfiletest.Data(100, 2))
+	p := make([]byte, 100)
+	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) {
+		t.Fatalf("ReadAt of the pinned version: %v, same bytes %v", err, bytes.Equal(p, old))
+	}
+}
+
+// TestNullVersion: an object written before versioning was enabled has the
+// version id "null", and the Object reads that version by it after the key is
+// overwritten. gofakes3 never reports "null", so a handler plays S3.
+func TestNullVersion(t *testing.T) {
+	old, current := objfiletest.Data(10, 1), objfiletest.Data(10, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, etag, version := current, `"b"`, "v2"
+		if r.URL.Query().Get("versionId") == "null" || r.Method == http.MethodHead {
+			data, etag, version = old, `"a"`, "null"
+		}
+		if m := r.Header.Get("If-Match"); m != "" && m != etag {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("x-amz-version-id", version)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(data)-1, len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{BaseEndpoint: aws.String(srv.URL), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{}})
+	file, err := s3.New(client, bucket).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 10)
+	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) || file.Identity() != `"a"` {
+		t.Fatalf("ReadAt of the null version: %v, same bytes %v, Identity %q", err, bytes.Equal(p, old), file.Identity())
+	}
+}
+
+// TestNullVersionIdentity: overwriting an object at version "null" (a
+// versioning-suspended bucket) keeps the version id "null", so Identity is the
+// ETag, a replacement of the same size has another Identity, and an Object
+// pinned before the overwrite, from Open or OpenSized, reads none of the new
+// bytes (If-Match fails). An object with a real version id is identified by it.
+func TestNullVersionIdentity(t *testing.T) {
+	var data []byte
+	var etag, version string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if m := r.Header.Get("If-Match"); m != "" && m != etag {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("x-amz-version-id", version)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(data)-1, len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{BaseEndpoint: aws.String(srv.URL), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{}})
+	open := func() objfile.Object {
+		t.Helper()
+		file, err := s3.New(client, bucket).Open(context.Background(), "obj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	data, etag, version = objfiletest.Data(10, 1), `"a"`, "null"
+	opened := open()
+	sized, err := s3.New(client, bucket).OpenSized(context.Background(), "obj", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 10)
+	if _, err := sized.ReadAt(p, 0); err != nil || sized.Identity() != `"a"` {
+		t.Fatalf("first read of the sized object: %v, Identity %q", err, sized.Identity())
+	}
+	data, etag = objfiletest.Data(10, 2), `"b"`
+	for name, file := range map[string]objfile.Object{"Open": opened, "OpenSized": sized} {
+		q := make([]byte, 10)
+		if n, err := file.ReadAt(q, 0); n != 0 || !errors.Is(err, objfile.ErrObjectChanged) || !bytes.Equal(q, make([]byte, 10)) {
+			t.Fatalf("%s: ReadAt after a same-size overwrite at version null = %d, %v", name, n, err)
+		}
+	}
+	if first, second := opened.Identity(), open().Identity(); first != `"a"` || second != `"b"` {
+		t.Fatalf("Identity of a null version before and after a same-size overwrite = %q, %q; want the ETags", first, second)
+	}
+	version = "v3"
+	if id := open().Identity(); id != "v3" {
+		t.Fatalf("Identity of version v3 = %q", id)
+	}
+}
+
+// TestBudget: the requests a sized, batched and whole-object read make.
+func TestBudget(t *testing.T) {
+	objfiletest.RunBudget(t, objfiletest.Budget{
+		New: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f := newFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+			return objfiletest.Store{Opener: s3.New(f.client, bucket), Put: f.put}
+		},
+		Classify: func(r *http.Request) (objfiletest.Kind, bool) {
+			pinned := r.Header.Get("If-Match") != ""
+			switch {
+			case r.Method == http.MethodHead:
+				return objfiletest.Metadata, pinned
+			case r.Method == http.MethodGet && r.Header.Get("Range") != "":
+				return objfiletest.Ranged, pinned
+			case r.Method == http.MethodGet:
+				return objfiletest.Whole, pinned
+			}
+			return objfiletest.Other, pinned
+		},
+		UnknownTotalOK: true,
+		Observed: func(t *testing.T, wrap func(http.Handler) http.Handler) objfiletest.Store {
+			f := observedFake(t, func(h http.Handler) http.Handler { return wrap(unversioned(ifMatch(h))) })
+			return objfiletest.Store{Opener: s3.New(f.client, bucket), Put: f.put}
+		},
+	})
+}
+
+// TestUnknownTotalOneConnection: a sized read whose response states no
+// total proves the size with a metadata request after letting go of that
+// response, so it completes on a client of one connection.
+func TestUnknownTotalOneConnection(t *testing.T) {
+	b := s3mem.New()
+	if err := b.CreateBucket(bucket); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(objfiletest.UnknownTotal(ifMatch(gofakes3.New(b).Server())))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		Region:       "us-east-1",
+		Credentials:  aws.AnonymousCredentials{},
+		HTTPClient:   &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}},
+	})
+	data := objfiletest.Data(1<<20, 1)
+	if _, err := b.PutObject(bucket, "obj", nil, bytes.NewReader(data), int64(len(data)), nil); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s3.New(client, bucket).OpenSized(context.Background(), "obj", int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second) // a deadlock fails, not hangs
+	defer cancel()
+	p := make([]byte, 100)
+	if _, err := f.WithContext(ctx).ReadAt(p, 1000); err != nil || !bytes.Equal(p, data[1000:1100]) {
+		t.Fatalf("read on one connection: %v", err)
+	}
+
+	// Concurrent first reads of a fresh Object, end to end through the SDK:
+	// none may hold the only connection while another proves the size. The
+	// scheduling here does not force the interleaving that deadlocked;
+	// ranged's TestOneConnectionInterleaving does.
+	for range 5 {
+		g, err := s3.New(client, bucket).OpenSized(ctx, "obj", int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Go(func() {
+				p := make([]byte, 100)
+				off := i * 10000
+				if _, err := g.WithContext(ctx).ReadAt(p, int64(off)); err != nil || !bytes.Equal(p, data[off:off+100]) {
+					t.Errorf("concurrent first read %d on one connection: %v", i, err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+}
+
+// preconditionFailed answers every GET with 412.
+func preconditionFailed(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// TestPreconditionFailed: a 412 is ErrObjectChanged only for a request that
+// sent the pin's If-Match; a first sized read or a whole-object read sent
+// none, and its 412 is the store's error.
+func TestPreconditionFailed(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, preconditionFailed)
+	f.put(t, "obj", objfiletest.Data(100, 1))
+	o := s3.New(f.client, bucket)
+	sized, err := o.OpenSized(ctx, "obj", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sized.ReadAt(make([]byte, 10), 0); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a first sized read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	if _, _, err := o.(objfile.ObjectReader).ReadObject(ctx, "obj", 1000); err == nil || errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a whole-object read = %v; want the store's error, not ErrObjectChanged", err)
+	}
+	opened, err := o.Open(ctx, "obj") // HEAD: pinned
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.ReadAt(make([]byte, 10), 0); !errors.Is(err, objfile.ErrObjectChanged) {
+		t.Fatalf("412 of a pinned read = %v; want ErrObjectChanged", err)
+	}
+}
+
+// TestPinnedOpenRecordsAtOpen: varve's stack, Pin over Limit over a store
+// (no KnownSizes, no OpenSized), records an object at its Open, before any
+// read, as it did before sized opens existed.
+func TestPinnedOpenRecordsAtOpen(t *testing.T) {
+	f := newFake(t, func(h http.Handler) http.Handler { return h })
+	f.put(t, "ds/manifest.json", objfiletest.Data(100, 1))
+	p := objfile.Pin(objfile.Limit(objfile.Root(s3.New(f.client, bucket), "ds"), 4), "s3://bkt/ds/")
+	o, err := p.Open(context.Background(), "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := p.Snapshot()
+	if err != nil || !strings.Contains(string(snap), `"manifest.json":{"size":100,"identity":`) || o.Identity() == "" {
+		t.Fatalf("snapshot after Open, before any read: %s, %v", snap, err)
+	}
+}

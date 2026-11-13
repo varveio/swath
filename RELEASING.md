@@ -5,7 +5,7 @@ scheme and the per-release steps. The heavy lifting is automated by
 [`.github/workflows/release.yml`](.github/workflows/release.yml); this document is the
 human side of it.
 
-A release ships the Go implementation (`go/`): the `swath` lister and the `swath-replay`
+A release ships the Go implementation (the module at the repository root): the `swath` lister and the `swath-replay`
 server. The Java implementation's last release was v0.3.2; it is no longer on `main` and is
 preserved at the tag `java-final`.
 
@@ -16,7 +16,7 @@ preserved at the tag `java-final`.
   release workflow rejects them. `-rc.N` is the only pre-release form the pipeline
   implements publish semantics for.
 - **The tag is the one source of truth.** The workflow reads the version from the `vX.Y.Z`
-  tag and stamps it into every binary (`go/build.sh` links `$SWATH_VERSION` into
+  tag and stamps it into every binary (`build.sh` links `$SWATH_VERSION` into
   `internal/buildinfo`), so `swath --version`, the run report's `build.version`, the
   Parquet footer's `created_by`, the archive names, the image tags and the image labels
   all carry it. There is no version file to bump. A build from a source checkout reports
@@ -35,13 +35,13 @@ For each `vX.Y.Z` tag, once the environment is approved:
   `swath-X.Y.Z-darwin-arm64.tar.gz` and
   `swath-X.Y.Z-windows-amd64.zip` (`.exe` binaries). The binaries are static
   (`CGO_ENABLED=0`, `-trimpath`), built once by `scripts/ci/release-assets.sh build`, which
-  also generates `THIRD_PARTY_NOTICES` with `go/notices.sh`: the license of every module
+  also generates `THIRD_PARTY_NOTICES` with `notices.sh`: the license of every module
   linked into the binaries, and the Go distribution's;
 - `swath-X.Y.Z.spdx.json`, an SPDX SBOM of the modules linked into every shipped binary;
 - `SHA256SUMS` over all of them, and a keyless (cosign) signature bundle per asset;
 - multi-arch (`linux/amd64`, `linux/arm64`) images `ghcr.io/varveio/swath` (the lister, on
   distroless static, for its CA certificates) and `ghcr.io/varveio/swath-replay` (on
-  `scratch`), both from `Dockerfile.go`, signed and attested. They carry the archived linux
+  `scratch`), both from the `Dockerfile`, signed and attested. They carry the archived linux
   binaries byte for byte, and the archives' three legal files in `/licenses/`: the publish job
   replaces the Dockerfile's build stage with the binaries and notices unpacked from the
   verified archives (`release-assets.sh image-context`);
@@ -86,10 +86,10 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
 - `go-tests`: `go vet ./...` and `go test -race ./...` of the main module unsharded on
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
 - `build`: the static builds for all five targets and their `--version` stamp, and the
-  license gate: `go/notices.sh` fails on a linked module whose license go-licenses does not
+  license gate: `notices.sh` fails on a linked module whose license go-licenses does not
   recognize or that is not on its allow-list (SPDX identifiers), or when
   the targets link different modules
-  ([license gate](go/docs/internals/testing.md#license-gate));
+  ([license gate](docs/internals/testing.md#license-gate));
 - `publish`, before any tag exists: both images' `--version` against the pushed digests,
   the image smoke (`scripts/ci/smoke-container.sh`: an anonymous listing of a
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's

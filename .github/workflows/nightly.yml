@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   # Supply-chain scan of the artifacts a user actually receives: the two release images, built
-  # from Dockerfile.go. osv-scanner reads the Go version and module list embedded in each static
+  # from the Dockerfile. osv-scanner reads the Go version and module list embedded in each static
   # binary, so this covers the Go standard library and every module linked into swath and
   # swath-replay (the archives carry the same binaries), plus the few Debian packages of the
   # lister's distroless base; the replay image is `scratch` and holds only its binary. Nightly
@@ -62,7 +62,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath
           load: true
           tags: swath:osv
@@ -72,7 +72,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath-replay
           load: true
           tags: swath-replay:osv
@@ -100,15 +100,12 @@ jobs:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-race-nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Restores the shared module cache and ci.yml's amd64 race build cache (go-race-rest); saves
       # nothing off a push to main.
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: go-race-rest
@@ -149,15 +146,12 @@ jobs:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-macos'
     runs-on: macos-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Restores the shared module cache and ci.yml's macOS build cache (go-xos); saves nothing
       # off a push to main.
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: go-xos
@@ -177,14 +171,13 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: go
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Restores the shared module cache and ci.yml's Windows build cache (go-xos); saves nothing
       # off a push to main.
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: go-xos
@@ -195,25 +188,22 @@ jobs:
       - name: go test (no -race)
         run: go test -count=1 -timeout 25m ./...
 
-  # The Go port's shape suite at full scale (go/bench/shapes; go/docs/internals/testing.md): every bucket
+  # The Go port's shape suite at full scale (bench/shapes; docs/internals/testing.md): every bucket
   # shape at about 2M keys behind the in-process fake, with its service behaviours (latency
   # 10/50/200 ms, jitter, 1 % and 5 % throttling, a rate cap, slow prefixes, slow continuations
   # and seeks, a slow first page). A wrong listing fails the job. A number that moved by more
-  # than 20 % against the committed baseline (go/bench/baselines/shapes.json) is annotated, not
+  # than 20 % against the committed baseline (bench/baselines/shapes.json) is annotated, not
   # failed, until the baselines have held steady for about two weeks.
   go-shapes:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-shapes'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Restores the shared module cache and ci.yml's non-race build cache (go-nonrace); saves
       # nothing off a push to main.
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: go-nonrace

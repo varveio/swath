@@ -1,0 +1,58 @@
+# Build context for the Dockerfile.
+#
+# The context is what the build stage compiles and the images carry: the main module's go.mod,
+# go.sum, build.sh and notices.sh, the packages the two commands build from (cmd/, internal/) and
+# the nested modules go.mod replaces them with (objfile/, reader/), plus LICENSE and NOTICE for
+# /licenses/. Nothing else from the repository: not docs/ (its media and evidence archives),
+# bench/, testdata/, site/, tools/, scripts/ or .git. Inside the directories it admits it leaves
+# out what a working tree accumulates and the build never reads: built binaries, listing output
+# (Parquet parts, dataset data/ directories, run.json and error.json, checkpoints and the
+# lister's .swath/ state), databases, logs, caches, editor and OS files, and private or agent
+# working material. The rules mirror the repository .gitignore.
+*
+!go.mod
+!go.sum
+!build.sh
+!notices.sh
+!cmd/
+!internal/
+!objfile/
+!reader/
+!LICENSE
+!NOTICE
+
+# Built binaries (build.sh -o swath, swath-<os>-<arch>, swath-replay, swath-replay-<os>-<arch>)
+swath
+swath-*
+swath.exe
+**/bin/
+**/out/
+**/build/
+
+# Listing output, checkpoints and databases
+**/*.parquet
+**/data/part-*.parquet
+**/.swath/
+**/.swath-checkpoint/
+**/run.json
+**/error.json
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/tmp-fixtures/
+
+# Logs, caches, editor and OS files
+**/*.log
+**/*.swp
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/*.iml
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+
+# Private and agent working material
+**/private/
+**/.agent/
