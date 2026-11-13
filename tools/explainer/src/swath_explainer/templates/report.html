@@ -118,10 +118,10 @@
   <div class="sec">
     <div class="sec-head"><span class="eyebrow">§1</span><h2>The guesses, and how they turned out</h2></div>
     <div class="col">
-      <p>Before any worker starts, swath spends one <code>delimiter=/</code> request asking S3
-      where the directories are, and turns the answer into starting ranges. A directory name says
-      nothing about how many objects are behind it, so this is a guess — and it is the only free
-      information the engine will ever get.</p>
+      <p>Before any range lists, swath asks the store where the folders are — a few
+      <code>delimiter=/</code> listings of the top of the tree — and cuts the keyspace at them into
+      starting ranges. A folder name says nothing about how many objects are behind it, so this is
+      a guess, and it is the only cheap information the engine will get.</p>
       <p id="seed-lede"></p>
     </div>
     <div class="card">
@@ -145,12 +145,6 @@
       <canvas id="rate" role="img" aria-label="Two series over the run's duration: objects listed per second, and the number of live ranges."></canvas>
       <p class="cap" id="rate-cap"></p>
     </div>
-    <div class="card" id="gate-card">
-      <h3>Owner-split gate decisions</h3>
-      <table><thead><tr><th>Gate outcome</th><th style="text-align:right">Times</th></tr></thead>
-      <tbody id="gate-table"></tbody></table>
-      <p class="cap" id="gate-cap"></p>
-    </div>
   </div>
 
   <div class="sec">
@@ -158,20 +152,13 @@
     <div class="col">
       <p id="mech-lede"></p>
       <p>To split a range swath needs a boundary key, and it does <b>not</b> need one that exists —
-      <code>start-after</code> accepts any byte string. The pivots below are verbatim from this
-      run. The odd-looking ones are synthesized coordinates, not object names: a trailing
-      <code>:</code> is one byte past <code>9</code>, so it means "past every key ending in a
-      digit here".</p>
+      a listing can start after any key. The pivots below are verbatim from this run; most are
+      synthesized coordinates, not object names.</p>
     </div>
     <div class="card">
       <table><thead><tr><th>Mechanism</th><th style="text-align:right">Splits</th><th>Sample pivots, verbatim</th></tr></thead>
       <tbody id="mech-table"></tbody></table>
       <p class="cap" id="mech-cap"></p>
-    </div>
-    <div class="card" id="steal-card">
-      <h3>How each thief attempt ended</h3>
-      <table><tbody id="steal-table"></tbody></table>
-      <p class="cap" id="steal-cap"></p>
     </div>
   </div>
 
@@ -196,7 +183,8 @@
   <div class="sec">
     <div class="sec-head"><span class="eyebrow">§5</span><h2>Watch it happen</h2></div>
     <div class="col"><p>The same events replayed in order, on the same axis. Bands are live ranges,
-    filled to each worker's cursor; ticks are split pivots as they commit.</p></div>
+    filled to each worker's cursor; ticks are split pivots as they commit. A split ends its range
+    at the cursor and hands the rest on as two new ranges.</p></div>
     <div class="card">
       <div class="bar">
         <button id="play" type="button">Pause</button>
@@ -235,7 +223,10 @@
   var M = /*__MODEL__*/null;
   if (!M) { return; }
   var meta=M.meta, F=M.findings, stream=M.stream;
-  var K_SEED=0,K_CLAIM=1,K_PAGE=2,K_SPLIT=3,K_OWNER=4,K_DONE=5,K_FAIL=6,K_STEAL=7;
+  // The stream's records (model.py): [t,K_SEED,id,lo,hi] [t,K_CLAIM,id,worker,lo,cur,hi,root]
+  // [t,K_PAGE,id,worker,last,rows,pages] [t,K_SPLIT,id,lower,upper,worker,cursor,pivot,hi,mech,root]
+  // [t,K_DONE,id] [t,K_FAIL,id]
+  var K_SEED=0,K_CLAIM=1,K_PAGE=2,K_SPLIT=3,K_DONE=4,K_FAIL=5;
 
   var LIN_L=["#A33F28","#0D6E60","#2E7C86","#6E7B3C","#38617E"], REST_L="#9AA79F";
   var LIN_D=["#E4826A","#56C9B1","#6FBBD0","#BCC076","#7FA8CE"], REST_D="#5E6B65";
@@ -265,7 +256,7 @@
   var FACTS = /*__FACTS__*/null;
   var FACTS_FIELDS = [
     ["Run ID","run_id"],["swath version","swath.version"],["swath commit","swath.commit"],
-    ["Captured at","captured_at"],["Source URI","target.uri"],["S3 region","target.region"],
+    ["Captured at","captured_at"],["Source URI","target.uri"],["Region","target.region"],
     ["Client provider","client.provider"],["Client region","client.region"],
     ["Machine","client.machine_type"],
     ["Output mode","output.format"],
@@ -319,32 +310,40 @@
       (F.ratio>4 ? ", about "+fmt(F.ratio)+"× the median of the rest" : "")+
       ". Nothing about its bounds said so; the only way to find out was to list it.",
       F.topSplits>0
-        ? "Work-stealing took it apart at runtime: "+fmt(F.topSplits)+" of the run's "+
+        ? "Splitting took it apart at runtime: "+fmt(F.topSplits)+" of the run's "+
           fmt(F.totalSplits)+" splits ("+pct(F.topSplits,F.totalSplits)+
           "%) were carved out of that one range and its descendants, and "+fmt(F.topWorkers)+
           " of the "+fmt(meta.workers)+" workers ended up inside it."
         : "No split ever divided it, so it drained on a single worker for as long as it took."
     ]);
   }
-  if (F.firstStealMs!==null && F.peakLive>=meta.workers) {
+  if (F.firstSplitMs!==null && F.peakLive>=meta.workers && F.seedCount>1) {
     finding("calm","Seeding alone carried the start",[
       "Every worker was busy within "+secs(F.peakLiveMs)+" ("+fmt(F.peakLive)+
-      " ranges live at once), and the first steal attempt did not happen until "+
-      secs(F.firstStealMs)+". For that whole stretch there was nothing to steal — every worker "+
-      "had its own structurally disjoint slice, bought with a single request."]);
+      " ranges live at once), and the first split did not happen until "+
+      secs(F.firstSplitMs)+". For that whole stretch no worker was idle, so nothing was split — "+
+      "every worker had its own slice of the seed's tiling"+
+      (F.seedRequests ? ", bought with "+fmt(F.seedRequests)+" delimiter request"+
+        (F.seedRequests===1?"":"s") : "")+"."]);
+  }
+  if (F.seedWhole) {
+    finding("calm","One page held the whole scope",[
+      "The seed's first data page, sent with its first delimiter request, came back complete: "+
+      "the whole listing was one page, and no range was needed."]);
   }
   if (F.totalSplits>0) {
     var ev=F.totalSplits-F.uniformSplits, evShare=ev/F.totalSplits;
     if (evShare >= 0.8) {
       finding("calm","Pivots came from evidence, not from the middle",[
         fmt(ev)+" of "+fmt(F.totalSplits)+" splits ("+pct(ev,F.totalSplits)+
-        "%) placed their pivot from something the run had observed — drained density, a real "+
-        "directory boundary, the alphabet seen in returned keys. Only "+fmt(F.uniformSplits)+
-        " used the plain byte midpoint."]);
+        "%) placed their pivot from something the run had observed — how far the range's chain "+
+        "had come (reflect), the keys' density on the last page, a real folder boundary. "+
+        (F.uniformSplits ? "Only "+fmt(F.uniformSplits)+" used the plain midpoint."
+                         : "None used the plain midpoint.")]);
     } else if (F.totalSplits >= 20 && F.uniformSplits > F.totalSplits/2) {
       finding("","Most pivots fell back to the uniform midpoint",[
         fmt(F.uniformSplits)+" of "+fmt(F.totalSplits)+" splits ("+
-        pct(F.uniformSplits,F.totalSplits)+"%) used the plain byte midpoint rather than an "+
+        pct(F.uniformSplits,F.totalSplits)+"%) used the plain midpoint rather than an "+
         "estimate conditioned on observed mass. On a skewed bucket that tends to aim pivots "+
         "into empty keyspace — worth checking why the mass-aware paths did not engage."]);
     }
@@ -366,8 +365,8 @@
   var seedTotal=meta.totalKeys||1;
   bars(document.getElementById("seed-bars"),
        M.seeds.map(function(s){
-         var nm = s.lo===null ? ("range at "+(100*s.x0).toFixed(1)+"%")
-                : ((s.lo===""?"⊥":s.lo)+" → "+(s.open?"∅ (open frontier)":(s.hi===null?"?":s.hi)));
+         var nm = (s.lo===null&&meta.anonymized) ? ("range at "+(100*s.x0).toFixed(1)+"%")
+                : ((s.lo===""||s.lo===null?"⊥":s.lo)+" → "+(s.open?"⊤ (open frontier)":(s.hi===null?"?":s.hi)));
          return {label:nm, value:s.keys, id:s.id};
        }), seedTotal, function(r){ return lineage(r.id); });
   document.getElementById("seed-cap").textContent =
@@ -376,7 +375,11 @@
     "genealogy — so this is the work each original guess was really responsible for. "+
     fmt(F.emptySeeds)+" seed ranges held no objects at all.";
   document.getElementById("seed-lede").textContent =
-    "This run's seed produced "+fmt(F.seedCount)+" ranges. The heaviest held "+
+    (F.seedRequests!==null ? "Here the seed sent "+fmt(F.seedRequests)+" delimiter request"+
+      (F.seedRequests===1?"":"s")+" in "+fmt(F.seedRoundTrips)+" round trip"+
+      (F.seedRoundTrips===1?"":"s")+" ("+secs(F.seedMs)+") and stopped: "+F.seedStop+". "
+      : "This run did not seed from the folder tree. ")+
+    "It started from "+fmt(F.seedCount)+" range"+(F.seedCount===1?"":"s")+". The heaviest held "+
     F.topShare+"% of the objects"+(F.medianKeys? ", against a median of "+fmt(F.medianKeys)+
     " for the rest":"")+
     (F.emptySeeds? ", and "+fmt(F.emptySeeds)+" held nothing at all":"")+".";
@@ -421,33 +424,20 @@
   document.getElementById("time-lede").textContent =
     "Objects listed per second, against the number of ranges alive at the same moment. A trough "+
     "in both at once is what it looks like when the well-guessed ranges have finished and a "+
-    "badly-guessed one is still going — the moment stealing has to earn its keep. Whether this "+
+    "badly-guessed one is still going — the moment splitting has to earn its keep. Whether this "+
     "run has one is visible above."+
     (F.firstSplitMs!==null? " Its first split committed at "+secs(F.firstSplitMs)+".":"");
 
-  var gt=document.getElementById("gate-table");
-  M.gateRows.forEach(function(r){ var tr=el("tr");
-    tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); gt.appendChild(tr); });
-  if (!M.gateRows.length) { document.getElementById("gate-card").hidden=true; }
-  else {
-    var carved=F.ownerSplits||0, consults=F.gateTotal||0;
-    var refusedShare = consults ? (consults-carved)/consults : 0;
-    document.getElementById("gate-cap").textContent =
-      "The owner-side split gate was consulted "+fmt(consults)+" times and carved "+fmt(carved)+
-      " times — it refused "+(100*refusedShare).toFixed(1)+"% of the time. " +
-      (refusedShare > 0.9
-        ? "That is the design working: the split mechanism is global, but its trigger is local "+
-          "and demand-driven, so while every worker is busy there is no reason to shed work and "+
-          "the gate stays shut."
-        : "The gate admitted a large share of what it was asked, which is worth checking against "+
-          "the demand signal — a trigger that rarely refuses is not gating much.");
-  }
 
   // ---- mechanisms ---------------------------------------------------------
+  var MECH={reflect:"the cursor reflected from where its chain began: each split doubles the distance covered",
+            midpoint:"halfway between the cursor and the range's end",
+            density:"stepped ahead by the keys' density on the last page",
+            structure:"a folder boundary a structure probe found"};
   var mt=document.getElementById("mech-table");
   M.mechRows.forEach(function(r){
     var tr=el("tr"), td=el("td","k"); td.textContent=r.name;
-    if(r.kind==="owner_split"){ td.appendChild(el("div","cap","owner-side")); }
+    if(MECH[r.name]){ td.appendChild(el("div","cap",MECH[r.name])); }
     tr.appendChild(td); tr.appendChild(el("td","n",fmt(r.n)));
     var pv=el("td","pv");
     (r.pivots||[]).forEach(function(p){ if(p!==null) pv.appendChild(el("div",null,p)); });
@@ -455,36 +445,15 @@
     tr.appendChild(pv); mt.appendChild(tr);
   });
   document.getElementById("mech-cap").textContent =
-    "Ordered by how often each rung of the pivot cascade fired. Owner-side splits are placed by a "+
-    "range's own worker ahead of its cursor; the rest are taken by idle thieves.";
+    "Ordered by how often each rule placed a split's pivot: the further of the reflection and the "+
+    "density step, the midpoint where the reflection would pass the range's end, and a folder "+
+    "boundary ahead of them when a probe found one.";
   document.getElementById("mech-lede").textContent =
-    "This run committed "+fmt(F.totalSplits)+" splits. "+fmt(F.ownerSplits)+
-    " were owner-side — a range's own worker carving ahead of its cursor, because on a dense "+
-    "fast-draining range a thief loses the race to the pivot — and "+fmt(F.totalSplits-F.ownerSplits)+
-    " were taken by idle thieves.";
-
-  var st=document.getElementById("steal-table");
-  M.outcomeRows.forEach(function(r){ var tr=el("tr");
-    tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); st.appendChild(tr); });
-  if(!M.outcomeRows.length) { document.getElementById("steal-card").hidden=true; }
-  else {
-    var attempts=M.outcomeRows.reduce(function(a,r){ return a+r.n; },0);
-    var made=M.outcomeRows.filter(function(r){ return /CHILD_CREATED/.test(r.name); })
-                          .reduce(function(a,r){ return a+r.n; },0);
-    var hit = attempts ? made/attempts : 0;
-    document.getElementById("steal-cap").textContent =
-      fmt(attempts)+" thief attempts produced "+fmt(made)+" child ranges ("+
-      (100*hit).toFixed(0)+"%). " + (
-        (attempts >= 20 && hit < 0.25)
-          ? "Many attempts against few children: idle workers were probing without finding "+
-            "anything splittable — the probe-storm signature."
-          : attempts < (F.totalSplits||1)*0.2
-            ? "Note how few attempts there were relative to "+fmt(F.totalSplits)+" total splits: "+
-              "the worklist was refilled mostly by owner-side splitting, not by thieves."
-            : attempts >= 20
-              ? "A high hit rate: when a thief looked for work, it usually found something to take."
-              : "Too few steal attempts in this run to read a pattern from.");
-  }
+    "This run committed "+fmt(F.totalSplits)+" split"+(F.totalSplits===1?"":"s")+". A range "+
+    "splits on its own worker, after a page, when another worker is idle: it stops at its cursor "+
+    "and hands the rest on as two new ranges, cursor to pivot and pivot to its end, which the idle "+
+    "workers take."+(F.slowSplits ? " "+fmt(F.slowSplits)+" of them split a range whose pages "+
+    "were slow, without waiting for an idle worker." : "");
 
   // ---- static map ---------------------------------------------------------
   var sv=document.getElementById("static"), sc=sv.getContext("2d");
@@ -509,8 +478,8 @@
       sc.globalAlpha=1; sc.strokeStyle=col; sc.lineWidth=.5; sc.strokeRect(x0+.25,y0+.25,bw,bh);
     });
     stream.forEach(function(e){
-      if(e[1]!==K_SPLIT&&e[1]!==K_OWNER) return;
-      sc.beginPath(); sc.arc(sx(e[5]),sy(e[0]),e[1]===K_OWNER?2.6:2.0,0,6.284);
+      if(e[1]!==K_SPLIT) return;
+      sc.beginPath(); sc.arc(sx(e[7]),sy(e[0]),2.2,0,6.284);
       sc.fillStyle=css("--signal"); sc.globalAlpha=.75; sc.fill(); sc.globalAlpha=1;
     });
     if(!M.segments.length){ sc.textAlign="center"; sc.fillStyle=css("--ink3");
@@ -537,21 +506,23 @@
   // ---- replay -------------------------------------------------------------
   var nodes,live,marks,cursor,stats,clockMs=0,running=true,rate=1,last=0;
   function reset(){ nodes={}; live=0; marks=[]; cursor=0;
-    stats={keys:0,pages:0,splits:0,steals:0,busy:{}}; }
+    stats={keys:0,pages:0,splits:0,ranges:0,busy:{}}; }
+  function free(n){ if(n && n.worker>=0){ stats.busy[n.worker]--;
+    if(stats.busy[n.worker]<=0) delete stats.busy[n.worker]; } }
   function apply(e){
     var k=e[1],n;
-    if(k===K_SEED){ nodes[e[2]]={lo:e[3],hi:e[4],cur:e[3],root:e[2],state:"pending"}; }
+    if(k===K_SEED){ nodes[e[2]]={lo:e[3],hi:e[4],cur:e[3],root:e[2],state:"pending"}; stats.ranges++; }
     else if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={});
       n.lo=e[4]; n.hi=e[6]; n.cur=e[5]; n.worker=e[3]; n.root=e[7]; n.state="live";
       stats.busy[e[3]]=(stats.busy[e[3]]||0)+1; }
     else if(k===K_PAGE){ stats.keys+=e[5]; stats.pages+=(e[6]||1); n=nodes[e[2]]; if(n){ n.cur=e[4]; } }
-    else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
-      nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],state:"pending"};
-      marks.push({x:e[5],age:0,owner:k===K_OWNER}); stats.splits++; }
+    else if(k===K_SPLIT){ n=nodes[e[2]];
+      if(n){ n.hi=e[6]; n.cur=e[6]; n.state="done"; free(n); }
+      nodes[e[3]]={lo:e[6],hi:e[7],cur:e[6],root:e[10],state:"pending"};
+      nodes[e[4]]={lo:e[7],hi:e[8],cur:e[7],root:e[10],state:"pending"};
+      marks.push({x:e[7],age:0}); stats.splits++; stats.ranges+=2; }
     else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
-      if(n){ n.state=k===K_DONE?"done":"failed";
-        if(n.worker>=0){ stats.busy[n.worker]--; if(stats.busy[n.worker]<=0) delete stats.busy[n.worker]; } } }
-    else if(k===K_STEAL){ stats.steals++; }
+      if(n){ n.state=k===K_DONE?"done":"failed"; free(n); } }
   }
   function seekTo(t){ if(t<clockMs) reset();
     while(cursor<stream.length && stream[cursor][0]<=t) apply(stream[cursor++]);
@@ -587,12 +558,12 @@
     }
     for(var m=marks.length-1;m>=0;m--){ var k=marks[m]; k.age++;
       if(k.age>34){ marks.splice(m,1); continue; }
-      ctx.globalAlpha=1-k.age/34; ctx.strokeStyle=css("--signal"); ctx.lineWidth=k.owner?2:1.3;
+      ctx.globalAlpha=1-k.age/34; ctx.strokeStyle=css("--signal"); ctx.lineWidth=1.6;
       ctx.beginPath(); ctx.moveTo(px(k.x),actY-6); ctx.lineTo(px(k.x),actY+bh+5); ctx.stroke();
       ctx.globalAlpha=1; }
   }
   var lt=document.getElementById("live-tiles");
-  var liveDd=[["Objects"],["Committed pages"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
+  var liveDd=[["Objects"],["Committed pages"],["Live ranges"],["Busy"],["Splits"],["Ranges made"]].map(function(d){
     var w=el("div"); w.appendChild(el("dt",null,d[0]));
     var dd=el("dd",null,"0"); w.appendChild(dd); lt.appendChild(w); return dd; });
   var scrub=document.getElementById("scrub"), playBtn=document.getElementById("play");
@@ -600,7 +571,7 @@
     liveDd[0].textContent=fmt(stats.keys); liveDd[1].textContent=fmt(stats.pages);
     liveDd[2].textContent=fmt(live);
     liveDd[3].textContent=fmt(Object.keys(stats.busy).length)+" / "+meta.workers;
-    liveDd[4].textContent=fmt(stats.splits); liveDd[5].textContent=fmt(stats.steals);
+    liveDd[4].textContent=fmt(stats.splits); liveDd[5].textContent=fmt(stats.ranges);
     document.getElementById("clock").textContent=secs(clockMs)+" / "+secs(meta.durationMs);
     scrub.value=String(Math.round(1000*clockMs/Math.max(1,meta.durationMs)));
   }
@@ -629,26 +600,31 @@
       "The gap is "+fmt(F.idleSec)+" idle worker-seconds — worker time not spent listing. "+
       "Partition correction is one cause; startup, throttling, request latency, more workers "+
       "than splittable work, and an unsplittable tail are others, and this report does not "+
-      "separate them. The live-range trace in §2 below shows when it was spent."
+      "separate them. The live-range trace in §2 shows when it was spent."
     ].map(function(x){ return x.replace(/<B>|<\/B>/g,""); }));
   }
   document.getElementById("ledger-lede").textContent =
-    fmt(F.seedCount)+" seed ranges plus "+fmt(F.totalSplits)+" splits is "+
-    fmt(F.seedCount+F.totalSplits)+" ranges; the trace records "+fmt(F.claimed)+" claimed and "+
-    fmt(F.completed)+" completed, with "+fmt(F.failed)+" failed."+
-    (F.ledgerOk ? " Those balance exactly: every range created was claimed, and every range "+
-      "claimed finished. That is a lifecycle reconciliation — it does not by itself inspect "+
-      "boundaries, so it evidences no lost or abandoned range rather than proving coverage."
-                : " Those do not balance, which is expected if the run was interrupted or the "+
-      "trace is a partial prefix.")+
-    (F.floorPages ? " The run committed "+fmt(meta.pagesSeen)+" data pages against a theoretical "+
-      "floor of "+fmt(F.floorPages)+" for this many objects — "+
+    "A split ends its range and makes two, so "+fmt(F.seedCount)+" seed ranges plus twice "+
+    fmt(F.totalSplits)+" splits is "+fmt(F.seedCount+2*F.totalSplits)+" ranges; the trace "+
+    "records "+fmt(F.claimed)+" claimed, and "+fmt(F.completed)+" completed plus "+
+    fmt(F.totalSplits)+" split, with "+fmt(F.failed)+" failed."+
+    (F.ledgerOk ? " Those balance exactly: every range made was claimed, and every range "+
+      "claimed ended once."
+                : " Those do not balance, which is expected if the run was interrupted, the "+
+      "trace is a partial prefix"+(F.dropped ? ", or, as here, the trace dropped "+fmt(F.dropped)+
+      " events its writer could not keep up with" : "")+".")+
+    (F.tiled ? " And the ranges it listed, each through its bound or, if it split, through its "+
+      "cursor, tile the keyspace: rebuilt from the trace alone, no gap and no overlap."
+             : " The listed ranges, rebuilt from the trace, do not tile the keyspace.")+
+    (F.floorPages ? " The run committed "+fmt(meta.pagesSeen)+" data pages against a floor of "+
+      fmt(F.floorPages)+" at "+fmt(F.pageSize)+" keys a page — "+
       (100*meta.pagesSeen/F.floorPages-100).toFixed(1)+"% more pages than the minimum. "+
-      "Probe and retry requests are not in this figure; the run summary's api_calls is the "+
-      "count of actual HTTP requests." : "");
+      "Seed and structure-probe requests are not in this figure; the run report's "+
+      "requests.http_attempts counts every HTTP request." : "");
 
-  var prov=["Rendered from a swath --trace JSONL file by tools/explainer/explainer.py",
-            fmt(meta.events)+" events parsed"];
+  var prov=["Rendered from a swath run trace (swath diag list --trace) by tools/explainer/explainer.py",
+            fmt(meta.events)+" events parsed"+(meta.version ? ", written by swath "+meta.version : "")];
+  if(F.dropped) prov.push("the trace dropped "+fmt(F.dropped)+" events its writer could not keep up with");
   if(meta.skippedLines) prov.push(meta.skippedLines+" unparseable line(s) skipped");
   if(meta.keepEvery>1) prov.push("the replay is downsampled "+meta.keepEvery+":1 ("+
     fmt(meta.pagesPlotted)+" of "+fmt(meta.pagesSeen)+" page events); every figure, count and "+

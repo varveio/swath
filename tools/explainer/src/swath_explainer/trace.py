@@ -1,15 +1,24 @@
-"""Reading a --trace JSONL file, leniently."""
+"""Reading a run trace (swath diag list --trace), leniently."""
 
-import collections
 import json
 import re
 
+# The trace schema this reader understands (run_start's trace_version).
+TRACE_VERSION = 1
+
+
+class NotATrace(ValueError):
+    """The file is not a swath run trace."""
+
 
 def load_events(path):
-    """Parse a trace file leniently.
+    """Parse a trace file leniently, in time order.
 
-    Tolerates the two things metrics-internals.md §7 requires a consumer to tolerate: a
-    torn final line after a hard kill, and event kinds this reader does not know.
+    Tolerates what docs/internals/trace.md requires a reader to tolerate: a torn
+    final line after a hard kill, and event kinds this reader does not know. Events
+    of concurrent ranges may be written slightly out of ``ts_ns`` order; a stable
+    sort restores time order and keeps a range's own events, which the file holds in
+    causal order, in that order.
     """
     events, skipped = [], 0
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
@@ -26,7 +35,16 @@ def load_events(path):
                 events.append(event)
             else:
                 skipped += 1
+    events.sort(key=lambda e: e["ts_ns"])
     return events, skipped
+
+
+def run_start(events):
+    """The trace's run_start, or NotATrace: every swath trace begins with one."""
+    for e in events:
+        if e.get("event") == "run_start":
+            return e
+    raise NotATrace("no run_start event: not a swath run trace (swath diag list --trace)")
 
 
 def family_of(key):
@@ -38,5 +56,3 @@ def family_of(key):
     """
     seg = (key or "").split("/")[0]
     return re.sub(r"\d{6,}", "N", seg) or "(root)"
-
-
