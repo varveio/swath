@@ -88,6 +88,79 @@ func TestShowDataset(t *testing.T) {
 	}
 }
 
+// TestPrintedCommandsQuoted: a command swath prints for the user to run
+// (the resume advice after a stop, the command an interrupted run
+// recorded) quotes an argument the shell would split or expand, so a
+// path with a space can be pasted as printed.
+func TestPrintedCommandsQuoted(t *testing.T) {
+	for in, want := range map[string]string{"/data/ds": "/data/ds", "--output=/data/ds": "--output=/data/ds", "s3://b/p": "s3://b/p",
+		"/data/my ds": "'/data/my ds'", "": "''", "it's": `'it'\''s'`, "a*": "'a*'", "~/ds": "'~/ds'", "$HOME": "'$HOME'"} {
+		if got := quoteFor("linux", in); got != want {
+			t.Errorf("quoteFor(linux, %q) = %s, want %s", in, got, want)
+		}
+	}
+	// This platform's quoting (TestQuoteFor) for the commands below.
+	quoted := func(s string) string {
+		if q := shellQuote(s); q != s {
+			return q
+		}
+		t.Fatalf("%q is not quoted", s)
+		return ""
+	}
+	dir := filepath.Join(t.TempDir(), "my inventory")
+	r := &listing.Report{Outcome: listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
+	r.Invocation.Out = dir
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume "+quoted(dir) {
+		t.Fatalf("disposition %q", l[0])
+	}
+	// A directory named like a flag is an operand only as ./-inv.
+	r.Invocation.Out = "-inv"
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume ./-inv" {
+		t.Fatalf("disposition %q", l[0])
+	}
+	if got := shellOperand("-my inv"); got != quoted("./-my inv") {
+		t.Fatalf("shellOperand(-my inv) = %s", got)
+	}
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, []string{"list", "--output=" + dir, "s3://b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	var shown bytes.Buffer
+	if err := show([]string{dir}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if want := "\ncommand: swath list " + quoted("--output="+dir) + " s3://b\n"; !strings.Contains(shown.String(), want) {
+		t.Fatalf("show:\n%s\nwant %q", shown.String(), want)
+	}
+}
+
+// TestQuoteFor: a word the shell of the platform would change is quoted
+// for it: zsh expands a leading '=' (=ls is ls's path), so it is quoted
+// with POSIX single quotes; on Windows, where cmd and PowerShell take
+// neither single quotes nor a POSIX escape, in double quotes (a Windows
+// path holds no '"'), its backslashes and drive colon plain.
+func TestQuoteFor(t *testing.T) {
+	for _, c := range []struct{ goos, in, want string }{
+		{"linux", "=ls", "'=ls'"},
+		{"linux", "--output=/d", "--output=/d"},
+		{"darwin", "=x/y", "'=x/y'"},
+		{"windows", `C:\data\ds`, `C:\data\ds`},
+		{"windows", `C:\my data\ds`, `"C:\my data\ds"`},
+		{"windows", "=ls", `"=ls"`},
+		{"windows", "", `""`},
+		{"windows", "a,b", `"a,b"`},
+		{"windows", "%PATH%", `"%PATH%"`},
+		{"windows", "--output=C:\\ds", "--output=C:\\ds"},
+		{"windows", `C:\my data\`, `"C:\my data\\"`},
+		{"windows", `say "hi"`, `"say \"hi\""`},
+	} {
+		if got := quoteFor(c.goos, c.in); got != c.want {
+			t.Errorf("quoteFor(%s, %q) = %s, want %s", c.goos, c.in, got, c.want)
+		}
+	}
+}
+
 func TestVersion(t *testing.T) {
 	var b bytes.Buffer
 	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath ") {

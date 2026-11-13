@@ -6,8 +6,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -281,6 +285,87 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	out.Reset()
 	if err := run(context.Background(), []string{root, "-o", filepath.Join(dir, "ds"), "--stats"}, &out, false); err != nil || out.Len() != 0 {
 		t.Fatalf("dataset: %v, stdout %q", err, out.String())
+	}
+}
+
+// TestTextOutputInsideTree: a text file written inside the tree it lists
+// is left out of it, as a dataset directory is: the file itself (a
+// previous run's, on a repeat), its temporary and the attempt's scratch
+// (its spill), whatever the format and compression and wherever in the
+// tree it is written. The rows are the tree's as a run to stdout lists it.
+func TestTextOutputInsideTree(t *testing.T) {
+	keysOf := func(name string, b []byte) []string {
+		var r io.Reader = bytes.NewReader(b)
+		switch {
+		case strings.HasSuffix(name, ".gz"):
+			zr, err := gzip.NewReader(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r = zr
+		case strings.HasSuffix(name, ".zst"):
+			zr, err := zstd.NewReader(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer zr.Close()
+			r = zr
+		}
+		var keys []string
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			if strings.Contains(name, ".jsonl") {
+				var row struct{ Key string }
+				if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+					t.Fatal(err)
+				}
+				keys = append(keys, row.Key)
+			} else if k, _, _ := strings.Cut(sc.Text(), "\t"); k != "key" {
+				keys = append(keys, k)
+			}
+		}
+		return keys
+	}
+	for _, name := range []string{"rows.tsv", "rows.jsonl", "rows.jsonl.gz", "rows.tsv.zst", "c/rows.tsv"} {
+		root, _ := depthTree(t)
+		var want bytes.Buffer
+		if err := run(context.Background(), []string{root, "--no-stats"}, &want, false); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(root, name)
+		for attempt := 1; attempt <= 2; attempt++ {
+			if err := run(context.Background(), []string{root, "-o", file, "--no-stats"}, io.Discard, false); err != nil {
+				t.Fatalf("%s, run %d: %v", name, attempt, err)
+			}
+			b, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := keysOf(name, b); !slices.Equal(got, keysOf("want.tsv", want.Bytes())) {
+				t.Fatalf("%s, run %d: listed %q, want the tree's %q", name, attempt, got, keysOf("want.tsv", want.Bytes()))
+			}
+		}
+	}
+	// To stdout with the temporary directory in the tree: the attempt's
+	// scratch there (its spill) is left out and removed after; the
+	// temporary directory itself is listed.
+	root, _ := depthTree(t)
+	var want, got bytes.Buffer
+	if err := run(context.Background(), []string{root, "--no-stats"}, &want, false); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(root, "c")
+	for _, v := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(v, tmp)
+	}
+	if err := run(context.Background(), []string{root, "--no-stats"}, &got, false); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keysOf("got.tsv", got.Bytes()), keysOf("want.tsv", want.Bytes())) {
+		t.Fatalf("stdout with TMPDIR in the tree: listed %q, want the tree's %q", keysOf("got.tsv", got.Bytes()), keysOf("want.tsv", want.Bytes()))
+	}
+	if ents, err := os.ReadDir(tmp); err != nil || len(ents) != 1 || ents[0].Name() != "h" {
+		t.Fatalf("TMPDIR after the run: %v %v", ents, err)
 	}
 }
 

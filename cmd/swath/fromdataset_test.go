@@ -411,7 +411,7 @@ func TestDuSaveHint(t *testing.T) {
 	}
 	hintRows = 5 // the tree's 5 entries: 3 files, 2 directories
 	want := "hint: this run listed 5 entries; to explore them again without relisting, save an inventory once and total that:\n" +
-		"hint:   swath list '" + root + "' -o DIR\n" +
+		"hint:   swath list " + shellQuote(root) + " -o DIR\n" +
 		"hint:   swath du --from-dataset DIR -d 1 --sort size\n"
 	try := func(name string, shown bool, cmd func() error) {
 		t.Helper()

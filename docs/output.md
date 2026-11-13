@@ -38,7 +38,9 @@ The `-o` name chooses the format and the compression: `NAME.tsv` or `NAME.jsonl`
 `.gz` or `.zst`. Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
 is the table on a terminal and TSV otherwise, or `table`, `tsv`, `jsonl`. Compress stdout with a pipe
 (`| zstd`). The file's directory must exist; the file is written beside its name and renamed into place when
-complete, replacing a previous file.
+complete, replacing a previous file. A file written inside the local tree it lists is left out of the listing,
+with everything the run writes beside it: the file itself (a previous run's, on a repeat), its temporary
+`.NAME.*.tmp` and the attempt's scratch directory ([sources](sources.md#local-and-mounted-trees)).
 
 TSV and JSONL rows have the dataset's columns under the dataset's names, by default `key`, then `size`,
 `last_modified` and the rest of the source's schema, in the schema's order
