@@ -381,7 +381,7 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 // exit 0 when it covers its scope, else incomplete with exit 3, never
 // completed with 0.
 func committedOutcome(o *Outcome, c dataset.Coverage) {
-	o.Complete, o.StopReason = c.Complete, c.StopReason
+	o.Complete, o.StopReason, o.Unreadable = c.Complete, c.StopReason, c.Unreadable
 	o.Class, o.ExitCode = ClassCompleted, 0
 	if !c.Complete || c.Unreadable > 0 {
 		o.Class, o.ExitCode = ClassIncomplete, 3

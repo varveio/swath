@@ -285,7 +285,7 @@ func account(r *listing.Outcome, o outcome) {
 func committedAccount(dir string, r *listing.Report) {
 	r.Outcome.Status = listing.StatusCommitted
 	if m, ok := committedManifest(dir); ok {
-		r.Outcome.Complete, r.Outcome.StopReason = m.Coverage.Complete, m.Coverage.StopReason
+		r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Unreadable = m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable
 		r.Output.Committed(m)
 	}
 }
@@ -293,10 +293,18 @@ func committedAccount(dir string, r *listing.Report) {
 // finalizedSample is err, a resume's listing.ErrComplete, as the user reads
 // it for dir: a dataset committed with partial coverage (a --max-keys
 // sample) is a finalized partial sample, which nothing continues, not a
-// complete one. It still is ErrComplete to classify: incomplete, exit 3.
+// complete one; so is one that left out entries it could not read. It
+// still is ErrComplete to classify: incomplete, exit 3.
 func finalizedSample(dir string, err error) error {
-	if m, ok := committedManifest(dir); ok && !m.Coverage.Complete {
+	m, ok := committedManifest(dir)
+	switch {
+	case !ok:
+	case !m.Coverage.Complete:
 		return &restated{err, fmt.Sprintf("%s holds a finalized partial sample (coverage complete=false stop=%s): it cannot be resumed", dir, m.Coverage.StopReason)}
+	case m.Coverage.Unreadable > 0:
+		n := m.Coverage.Unreadable
+		return &restated{err, fmt.Sprintf("%s left out %s it could not read (coverage unreadable=%d): it cannot be resumed; list the tree again once %s can be read",
+			dir, plural(n, "an entry", count(n)+" entries"), n, plural(n, "it", "they"))}
 	}
 	return err
 }

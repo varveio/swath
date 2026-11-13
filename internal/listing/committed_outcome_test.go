@@ -27,7 +27,7 @@ func TestCommittedOutcome(t *testing.T) {
 	} {
 		o := Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}
 		committedOutcome(&o, c.cov)
-		if o.Class != c.class || o.ExitCode != c.code || o.Complete != c.cov.Complete || o.StopReason != c.cov.StopReason || o.Status != StatusCommitted {
+		if o.Class != c.class || o.ExitCode != c.code || o.Complete != c.cov.Complete || o.StopReason != c.cov.StopReason || o.Unreadable != c.cov.Unreadable || o.Status != StatusCommitted {
 			t.Fatalf("%+v: outcome %+v", c.cov, o)
 		}
 	}

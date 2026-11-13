@@ -74,6 +74,9 @@ partial sample: nothing continues it, and its resume exits 3 (class `incomplete`
 ```text
 swath: sample holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed
 ```
+
+A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
+the count (`outcome.unreadable`).
  Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
 judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
 resumes, and a text file `rows.tsv` is refused as text output.

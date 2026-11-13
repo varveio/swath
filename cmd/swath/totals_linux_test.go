@@ -401,6 +401,19 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
+	// swath resume of it exits 3, and its report keeps the count and says
+	// why (it said unreadable 0 and "already complete").
+	stderr.Reset()
+	resumed := filepath.Join(t.TempDir(), "resume.json")
+	err = resume(context.Background(), []string{dir, "--report", resumed}, io.Discard)
+	want := dir + " left out an entry it could not read (coverage unreadable=1): it cannot be resumed; list the tree again once it can be read"
+	if code := conclude(err); code != exitIncomplete || err.Error() != want {
+		t.Fatalf("resume: exit %d (%v)", code, err)
+	}
+	readJSON(t, resumed, &rep)
+	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.StopReason != "completed" || o.ExitCode != exitIncomplete || o.Error != want {
+		t.Fatalf("resume report outcome %+v", o)
+	}
 	// swath diag count prints its partial counts, then exits 3 (it printed
 	// nothing).
 	stderr.Reset()
