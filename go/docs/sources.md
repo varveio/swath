@@ -229,6 +229,9 @@ The output may not be the listed tree itself or contain it. A new or empty direc
 accepted as the output: the walk skips it and the dataset records it in `coverage.exclusions`. `--overwrite`
 of an output inside the listed tree is refused (exit 2).
 
+Recursive exclude globs can prevent descent into entire subtrees ([filters](filters.md#globs));
+other row filters do not stop directory traversal.
+
 Entries that cannot be read (permissions, entries removed during the walk) are left out: swath names up to
 five of them with their cause on stderr, counts the rest, and still exits 0; the report's
 `outcome.unreadable` is then true.

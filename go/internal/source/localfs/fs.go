@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -84,7 +85,9 @@ type Stats struct {
 	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
-	OtherDevice int64 `json:"other_device_dirs"`
+	OtherDevice int64           `json:"other_device_dirs"`
+	PrunedDirs  int64           `json:"pruned_dirs"`
+	Pruning     *filter.Pruning `json:"pruning,omitempty"`
 }
 
 // Errors is the sum of the error counters.
@@ -125,6 +128,7 @@ func (s *Stats) add(o *Stats) {
 	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice
+	s.PrunedDirs += o.PrunedDirs
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -144,7 +148,8 @@ type Provider struct {
 	root   string
 	opt    Options
 	native bool
-	dev    int64 // the root's device (OneFilesystem)
+	dev    int64             // the root's device (OneFilesystem)
+	prune  func(string) bool // immutable directory predicate, set before workers start
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -255,8 +260,14 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 			continue
 		}
 		st.Dirs++
-		if p.otherDevice(row) {
+		stop := p.otherDevice(row)
+		if stop {
 			st.OtherDevice++
+		} else if p.prune != nil && p.prune(row.Key) {
+			st.PrunedDirs++
+			stop = true
+		}
+		if stop {
 			if !p.opt.NoDirs {
 				continue // listed with the rows after it; its subtree is not walked
 			}

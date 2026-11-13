@@ -155,6 +155,14 @@ const (
 // are not ordered: neither engine sorts a directory's entries (names in a
 // directory are distinct, and nothing consumes the order).
 func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
+	prune, plan, err := env.Filter.PruneDirectories()
+	if err != nil {
+		return order.Stats{}, nil, err
+	}
+	o.p.prune = prune
+	o.p.mu.Lock()
+	o.p.stats.Pruning = &plan
+	o.p.mu.Unlock()
 	if env.Count {
 		o.p.unsorted = true
 		env.Order.Unordered = true
