@@ -16,9 +16,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parquet-go/parquet-go"
+	seekparquet "github.com/varveio/seekparquet/go"
+	"github.com/varveio/seekparquet/go/local"
+	"github.com/varveio/seekparquet/go/write"
+
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/reader"
 )
 
 // duRun runs swath du with args and returns its stdout.
@@ -286,6 +292,50 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	if s := stderr.String(); !strings.Contains(s, "; complete, 2 entries skipped") ||
 		!strings.Contains(s, "swath: warning: 2 entries could not be read when the dataset was listed: the totals leave them out\n") {
 		t.Fatalf("stderr: %s", s)
+	}
+}
+
+// noKindRow is a swath/local-entries/v1 row without the kind column,
+// which every part of that schema has.
+type noKindRow struct {
+	Key          []byte `parquet:"key"`
+	Size         *int64 `parquet:"size,optional"`
+	LastModified *int64 `parquet:"last_modified,optional,timestamp(microsecond:utc)"`
+}
+
+type parquetRows struct{ rows []parquet.Row }
+
+func (r *parquetRows) ReadRows(out []parquet.Row) (int, error) {
+	n := copy(out, r.rows)
+	if r.rows = r.rows[n:]; len(r.rows) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// TestDuFromDatasetRefusesBrokenSchema: a committed dataset whose parts
+// break its schema id's columns (a local tree's without kind, so a
+// directory would count as a file) is refused before any row is totalled:
+// exit 1, the column named, nothing on stdout.
+func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
+	captureStderr(t)
+	size, at := int64(4096), int64(1_767_000_000_000_000)
+	s := parquet.SchemaOf(new(noKindRow))
+	rows := &parquetRows{rows: []parquet.Row{s.Deconstruct(nil, &noKindRow{Key: []byte("dir/"), Size: &size, LastModified: &at})}}
+	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
+		"source": map[string]any{"kind": "local-fs", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
+		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "skipped_entries": 0, "exclusions": []string{}, "filters": []string{}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds := filepath.Join(t.TempDir(), "ds")
+	if err := local.WriteDir(context.Background(), ds, s, rows, local.DatasetOptions{Extensions: ext, AllowUnsynced: true,
+		Part: write.PartOptions{Key: seekparquet.Key{Column: "key", Unique: true}, SchemaID: string(reader.LocalV1)}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
+	if exitOf(err) != exitFatal || !strings.Contains(err.Error(), "does not hold schema swath/local-entries/v1") || !strings.Contains(err.Error(), "kind") || out != "" {
+		t.Fatalf("exit %d (%v), stdout %q", exitOf(err), err, out)
 	}
 }
 

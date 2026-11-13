@@ -35,8 +35,9 @@ type DatasetRead struct {
 // declares, SchemaInfo) over a payload that reads the dataset's columns.
 // It seeks to prefix and reads the key and only the columns the totals and
 // the filters read, with workers concurrent scans (Plan.ScanParallel). A
-// totals or filter option the schema cannot answer is refused before any
-// row is read.
+// totals or filter option the schema cannot answer, and a dataset whose
+// parts break its schema (reader.Dataset.CheckSchema: every part's footer
+// and columns), are refused before any row is read.
 func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, f *filter.Spec, t *totals.Tally, workers int) (DatasetRead, error) {
 	var read DatasetRead
 	id := d.Metadata().SchemaID
@@ -70,6 +71,13 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, f *fil
 	sink, err := bindTotals(t, &s, vers, nil)
 	if err != nil {
 		return read, err
+	}
+	// The accessors read an absent column as null, which the schema allows
+	// only where a part may lack it: every part's columns are checked
+	// against the spec first, so a dataset that breaks it is refused, never
+	// totalled (a part without kind would count its directories as files).
+	if err := d.CheckSchema(ctx); err != nil {
+		return read, fmt.Errorf("the dataset does not hold schema %s as swath writes it: %w", id, err)
 	}
 	plan, err := d.SeekParquet().Plan(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan([]byte(prefix))}}, read.Columns, &read.Plan)
 	if err != nil {
