@@ -18,7 +18,7 @@ Each object has `ts` (RFC 3339, UTC, milliseconds), `level` (`debug`, `info`, `w
 |---|---|---|
 | `start` | `info` (`-v`) | `source`, `mode` (what the run writes: `rows` on stdout, a text `file`, a `dataset`, `totals`, or a `count`), `destination` (the path, `stdout`, or absent for a count) |
 | `progress` | `info` | the progress snapshot's fields, as `.swath/progress.json` has them (`rows`, `requests`, `duration_ms`, ...: [run-report.md](run-report.md#progress-file)) |
-| `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
+| `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` (a run without an output directory, or with `-v`) |
 | `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (the listing's own query parameters, such as `prefix`, as sent; every other parameter, name and value, shown as `[redacted]`), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
 | `retry` | `debug` (`-vv`) | `host` and `path` (the attempt's request, redacted as a `request` event's), `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
 | `dataset` | `info` (without `-v`; not with `-q`) | `swath du --from-dataset`: the dataset the totals are read from, as the JSONL rows' `dataset` member has it ([output.md](../output.md#du-rows)): `path`, `source`, `schema_id`, `listing_started_at`, `listing_finished_at`, `complete`, `stop_reason`, `skipped_entries`, `filters`, `exclusions` |

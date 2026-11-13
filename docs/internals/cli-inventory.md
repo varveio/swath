@@ -178,4 +178,4 @@ decision to add it later).
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |
-| Stuck: a snapshot of thread stacks and in-flight counts to the log before interrupting | goroutine stacks and progress counts to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`, else stderr | kept | – |
+| Stuck: a snapshot of thread stacks and in-flight counts to the log before interrupting | goroutine stacks and progress counts to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`, else a file in the temporary directory (stderr names it; the stacks there with `-v`) | kept | – |

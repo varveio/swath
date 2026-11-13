@@ -110,8 +110,11 @@ own 250 ms; past it the warnings left are dropped, counted, and the outcome gets
 
 **Forensics.** At a stall, before the run is canceled, and at a forced exit, every goroutine's stack and the
 progress counts are written whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each
-time) while the run owns the output, else, or when that write fails or blocks for 2 s, to stderr, cut at
-1 MiB.
+time) while the run owns the output, else to a new `swath-stacks-stuck-*.txt` or `swath-stacks-forced-exit-*.txt`
+in the temporary directory (`$TMPDIR`), and stderr gets one warning naming the file. The stacks are forensics,
+not output: they go to stderr as well only with `-v`, or instead when no file could be written within 2 s, cut
+at 1 MiB. Under `--log-format json` a run without an output directory writes no file and keeps them in the
+warning event's `stacks` field, where a supervisor collecting the log finds them (`TestStacksWholeAndBounded`).
 
 **The persistent-failure warning.** Without `-v`, when requests have failed with one transport or service
 cause (a connection refused, a 503) for 10 s with none answered, one warning names the provider, the endpoint

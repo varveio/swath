@@ -185,7 +185,8 @@ error body quotes back as `[redacted]`.
 Nothing progressed for `--stall-timeout` (10 minutes). The `cause` says what kept rising: `stuck_throttle`
 (the service throttled), `stuck_timeouts` (requests ran past `--request-timeout`), `stuck_empty_chain` (the
 service answered only empty pages), `stuck_no_rows` (requests failed or hung). swath wrote every goroutine's
-stack to `DIR/.swath/stacks-stuck.txt`. Resume once; if it happens again on the same output, keep that file and
+stack to `DIR/.swath/stacks-stuck.txt` (without an output directory, to the file in the temporary directory
+that its warning names; `-v` prints the stacks on stderr too). Resume once; if it happens again on the same output, keep that file and
 the report: a person needs to look. A service that is slow for minutes at a time needs a larger
 `--stall-timeout`.
 
@@ -261,8 +262,8 @@ during stat and failed link-target reads, but includes failed directory opens.
 ## Reporting a problem
 
 Include `swath --version`, the command line, the provider and region, and the `--report` file (redact bucket
-names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`,
-and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
+names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`
+(or the temporary file the warning named), and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
 
 The internals of these records, `error.json`'s rules, the watchdog and the forced exit, are in
 [internals/run-lifecycle.md](internals/run-lifecycle.md); the workspace under `.swath/` in
