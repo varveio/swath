@@ -163,11 +163,11 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 }
 
 // Finish fixture mutations before either walk. Explicit times make fixture
-// mtimes deterministic; the payload comparison keeps all its existing columns.
+// mtimes deterministic and distinct; the payload comparison keeps all its columns.
 func pruneFinalizeTimes(t *testing.T, root string) {
 	t.Helper()
 	at := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
-	var dirs []string
+	var paths []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -175,17 +175,17 @@ func pruneFinalizeTimes(t *testing.T, root string) {
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		if d.IsDir() {
-			dirs = append(dirs, path)
-			return nil
-		}
-		return os.Chtimes(path, at, at)
+		paths = append(paths, path)
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(dirs) - 1; i >= 0; i-- {
-		if err := os.Chtimes(dirs[i], at, at); err != nil {
+	// Reverse preorder finalizes children before parents; distinct times also
+	// catch metadata accidentally paired with another key on Windows.
+	for i := len(paths) - 1; i >= 0; i-- {
+		stamp := at.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(paths[i], stamp, stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
