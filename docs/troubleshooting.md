@@ -7,7 +7,7 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 |---|---|
 | 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
-| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](concepts.md#coverage) says which |
+| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](results.md#coverage-and-unreadable-entries) says which |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |

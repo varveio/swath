@@ -1,106 +1,75 @@
 # swath.varve.io source
 
-This directory is the website. Edit it here in a topic branch and pull request, alongside the behavior it describes.
-Do not push directly to `main`: that publishes the site.
+The website is a [VitePress](https://vitepress.dev/) build of the user documentation in
+[`docs/`](../docs/README.md) and the home page in this directory. Edit it in a topic branch and pull
+request, alongside the behavior it describes. Do not push directly to `main`: that publishes the site.
 
-The site is published by `.github/workflows/site.yml`, which builds this directory into a
-GitHub Pages artifact and deploys it on every push to `main`. Nothing about the published
-site is stored in a branch, so there is no generated tree to hand-edit and no deploy
-history to accumulate.
+`.github/workflows/site.yml` builds the site into a GitHub Pages artifact, checks it, and deploys it on
+every push to `main`. Nothing about the published site is stored in a branch.
 
 ## What is here
 
 | Path | What it is |
 | --- | --- |
-| `index.html` | The unreleased Go preview homepage, with an explicit link to the latest Java release. |
-| `field-guide/index.html` | Historical Java v0.3.2 visual field guide; source links are pinned to the release tag. |
-| `runs/<run>/index.html` | Generated report pages. Produced by `tools/explainer` from a run's `--trace` log — change the generator or the run record, not the page. |
-| `data/channel.json` | The latest published release (not the Go preview): `{"channel": "release", "version": "X.Y.Z"}`. |
-| `data/runs/*.json` | Canonical `swath-public-run-v1` records for the historical Java captures and their quoted figures. |
-| `data/media.json` | The videos, which are **not** in git: the release they live on, and the sha256 the deploy must see. |
-| `assets/`, `card.png` | Historical Java posters and social card. The Go homepage uses a text summary rather than the Java trace card. The videos land in `assets/` at deploy time. |
-| `CNAME`, `.nojekyll` | Custom domain and the marker that keeps Pages from running Jekyll. |
+| `index.md` | The home page, served at `/`. |
+| `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
+| `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
+| `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
+| `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
-`README.md` is the one file the build leaves behind; everything else here is served from
-the site root.
+## How the documentation is published
+
+The Markdown in `docs/` is the source of truth and stays readable on GitHub: no front matter, relative `.md`
+links, GitHub alerts and GitHub heading anchors. The build adapts it without editing it:
+
+- `docs/PAGE.md` is served at `/docs/PAGE.html`, and `docs/README.md` at `/docs/`.
+- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/`, `docs/style.md` and
+  `docs/upgrade.md`. Every other Markdown file under `docs/` is published.
+- Headings get GitHub's anchors, so `page.md#heading` links resolve on the site as they do on GitHub.
+- A link from a published page to anything outside the published set (an internals page, code, the
+  repository README) is rewritten to its GitHub URL on `main`. The build prints how many it rewrote.
+- Each page has an "Edit this page on GitHub" link to its source.
+
+A new user page in `docs/` needs a sidebar entry in `.vitepress/config.mts`; it is published either way.
 
 ## Before you push
 
 ```bash
-./scripts/ci/build-site.sh build/site            # exactly what gets deployed
-./scripts/ci/fetch-site-media.sh build/site      # pulls and verifies the videos
+./scripts/ci/build-site.sh build/site            # exactly what gets deployed; needs Node.js and npm
 python3 scripts/ci/check-site.py --site build/site
 ```
 
-The same three commands run in CI and gate the deploy. They check that site-local links,
-media, and fragments resolve; that links into this repository name files and headings that
-exist on `main`; that the public spelling and naming rules in
-[`docs/style.md`](../docs/style.md) hold across the site and the current documentation;
-that the version the homepage advertises matches `data/channel.json` and the newest
-release in the changelog; that the historical Java run figures quoted on the pages equal their records
-under `data/runs/`; and a small set of accessibility smoke tests.
+The same two commands run in CI and gate the deploy. The build fails on a dead link between pages. The
+checks then verify, over the built tree, that site-local links, assets and fragments resolve; that links into
+this repository name files and headings that exist on `main`; that no contributor page is published; that
+the public spelling and naming rules in [`docs/style.md`](../docs/style.md) hold across the site and the
+current documentation; that the version the home page offers matches `data/channel.json` and every container
+image tag on the site; and a small set of accessibility smoke tests.
 
-The fetch step needs network access. Without it, `check-site.py` still passes: a path
-declared in `data/media.json` counts as resolvable, and the digest is verified only for
-files actually present.
+To work on the pages with live reload, run `npm ci && npx vitepress dev` in this directory.
+
+## Branding and the social card
+
+The colors, fonts and chevron mark are Varve's, from its UI's design tokens (`ui/src/design.css` in the
+Varve repository): the accent petrol for links and buttons, the brand teal for the hero name, the neutral
+backgrounds and text, and the mark's four stroke colors per theme in the logo files. The footer links to
+varve.io.
+
+`static/card.png` (1200x630, the `og:image` and `twitter:image` of every page) is rendered from
+`card/card.svg`. After editing the SVG, regenerate the PNG and commit both:
+
+```bash
+site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP server for the fonts
+```
 
 ## Releasing a new version
 
-Update `data/channel.json` and the homepage's latest-published-release line together.
-The Go preview is unreleased on `main`; do not change the release channel merely to
-document it. Keep this distinction beside preview claims and build commands. The channel check fails while they disagree, and fails again if either disagrees
-with the newest released version in [`CHANGELOG.md`](../CHANGELOG.md).
-
-## Publishing a new run
-
-The Go headline measurements currently cite [`docs/internals/measurements.md`](../docs/internals/measurements.md)
-(the `cogslive1`/`cogslive2`/`cogslive3` observations). They were checked against that source
-when adding the copy, but are not covered by the historical Java run-fact assertions.
-Keep their revision, date, source, machine, regions, workers and output modes attached;
-review those measurements whenever changing the headline numbers.
-
-For a generated trace report or recorded capture, add its record under `data/runs/<run-id>.json` first; the pages quote the record, not the
-other way round. `scripts/ci/check-site.py` guards the copies here; nothing checks the copy in
-`README.md`.
-Capturing a run and regenerating its report end to end is issue #193.
-
-## Replacing a video
-
-Videos are deliberately not in git: a re-record replaces about 1.5 MB of binary content,
-and git keeps every version forever. They live as assets on a GitHub release, and the
-deploy fetches them and verifies each digest against `data/media.json`.
-
-**Treat a release asset as immutable once a deploy has referenced it.** Replacing bytes
-under an existing asset name would leave every reviewed digest describing something that no
-longer exists. Publish a new asset name, or a new dated media release, instead.
-
-The videos come from `tools/explainer`: `--video` renders a replay from a run's `--trace`
-log through `capture-video.js` (see [`tools/explainer/README.md`](../tools/explainer/README.md)).
-Capturing the run that feeds it is issue #193.
-
-```bash
-# 1. Hash the new file. This value is what makes the reference trustworthy.
-sha256sum swath-noaa-gestofs-2027-01.mp4
-
-# 2a. Add it to the current media release under a NEW asset name:
-gh release upload site-media-2026-09 swath-noaa-gestofs-2027-01.mp4
-
-# 2b. Or, when starting a fresh set, create a new dated release. Two flags matter:
-#     the tag must not start with `v` (that triggers .github/workflows/release.yml), and
-#     `--latest=false` keeps it from displacing the newest swath release as "Latest",
-#     which is what `/releases/latest` resolves to.
-gh release create site-media-2027-01 \
-  --title "Site media 2027-01" \
-  --latest=false \
-  --notes "Video assets served by swath.varve.io; fetched by the site deploy workflow, pinned by sha256." \
-  swath-noaa-gestofs-2027-01.mp4
-```
-
-3. Update `data/media.json`: the `release` tag if it changed, and the entry's `asset`,
-   `bytes`, and `sha256`. `path` is where the file lands in the built site and is what the
-   pages reference — keep it stable unless the pages change too.
-4. Update any `data/runs/<run-id>.json` record that carries the old video's `sha256` under
-   `artifacts.video`, so the run record still describes a file that exists.
-5. Open the pull request. `scripts/ci/fetch-site-media.sh` downloads each declared asset and
-   fails loudly on a digest mismatch, so a stale `media.json` or a swapped asset is caught
-   before it is published, not after.
+`static/data/channel.json` names the version the site offers: `{"channel": "main", "version": "X.Y.Z-rc.N"}`
+while the documentation describes `main` ahead of a release, `{"channel": "release", "version": "X.Y.Z"}`
+once it describes a release. Update it together with the "The newest published build is swath X, ..."
+sentence on the home page and in `docs/install.md` (with its note that the pages describe the upcoming
+release, which goes once the release is out) and the image tags in `docs/install.md`. The channel check
+requires that sentence on both pages and fails while any of them disagree, and
+on the release channel it also fails unless the version is the newest released version in
+[`CHANGELOG.md`](../CHANGELOG.md).

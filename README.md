@@ -102,7 +102,7 @@ or another Parquet tool, after checking coverage and schema.
 swath reads listing metadata and does not change source contents. A live walk or
 multi-request listing is not an atomic storage snapshot. Check coverage, filters,
 entry errors and freshness before treating the result as a whole-source inventory.
-[Concepts](docs/concepts.md) defines what each of these promises; the
+[Understand your results](docs/results.md) says what each of these covers; the
 [running guide](docs/running.md) owns recovery and resource limits.
 
 ## When to use it
@@ -120,8 +120,10 @@ supported schemas rather than assuming every swath dataset is accepted.
 
 ## Documentation
 
-- **Start:** [getting started](docs/getting-started.md), [concepts](docs/concepts.md),
-  [install](docs/install.md).
+The documentation is published at [swath.varve.io](https://swath.varve.io/), built from [`docs/`](docs/README.md).
+
+- **Start:** [start here](docs/start-here.md), [install](docs/install.md),
+  [your first inventory](docs/first-inventory.md), [understand your results](docs/results.md).
 - **Use:** [command reference](docs/commands/swath.md), [sources](docs/sources.md),
   [output](docs/output.md), [running guide](docs/running.md),
   [production checklist](docs/production.md), [troubleshooting](docs/troubleshooting.md).
@@ -152,18 +154,20 @@ that finished it; that resume invocation reported 41,582 `ListObjectsV2` attempt
 Parquet parts totaling 790.0 MB, a peak of about 1.7 GB RSS, and 1m36s elapsed for
 itself. swath prints an elapsed time per invocation, and no clock for the whole capture
 was recorded. The bucket and the current release can produce different figures; the
-[run facts](site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json) record what is known
+[run facts](https://github.com/varveio/swath/blob/java-final/site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json) record what is known
 about this capture and what is not. Read the
 [full-scale demonstration](https://github.com/varveio/swath/blob/java-final/docs/full-scale-demo.md) before reproducing it.*
 
-The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/) visualizes a
-separate capture of the same bucket, not this recording: run
+An interactive run trace, no longer served on the website and kept as
+[page source](https://github.com/varveio/swath/blob/java-final/site/runs/noaa-gestofs-pds/index.html) at the
+`java-final` tag, visualizes a separate capture of the same bucket, not this recording: run
 `noaa-gestofs-pds-field-guide-trace` listed 39,651,850 objects, 66,821 more than the
 recording above, and its
-[run facts](site/data/runs/noaa-gestofs-pds-field-guide-trace.json) leave version,
+[run facts](https://github.com/varveio/swath/blob/java-final/site/data/runs/noaa-gestofs-pds-field-guide-trace.json) leave version,
 commit, date, and command unknown.
 
-The historical Java [visual field guide](https://swath.varve.io/field-guide/) explains why S3 listing is
+The historical Java visual field guide, likewise kept as
+[page source](https://github.com/varveio/swath/blob/java-final/site/field-guide/index.html), explains why S3 listing is
 hard to parallelize and walks through the range model, safe splitting, work stealing,
 checkpointing, and cases where swath is not the right tool.
 

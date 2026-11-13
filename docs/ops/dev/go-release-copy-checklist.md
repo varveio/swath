@@ -31,9 +31,9 @@ while GitHub's latest release is still the Java distribution.
 - [ ] Update the GitHub description and topics above in the same release window.
 - [ ] Update README, site notices, navigation and search/social metadata together.
       Retire the unreleased notices only after the matching installation path exists.
-- [ ] Update `site/data/channel.json`, homepage and historical guide channel handling,
-      changelog and site checks together. The historical Java guide must stay labeled
-      Java v0.3.2 rather than inheriting the Go release number.
+- [ ] Update `site/static/data/channel.json`, the home page's current-version line
+      (`site/index.md`), the image tags in `docs/install.md`, the changelog and the site
+      checks together.
 - [ ] Recheck commands, backend limitations, output modes and integration schema support
       against the release. Keep `show` a summary command, not a query-engine claim.
 - [ ] Keep measured count-only and sorted-Parquet timings separate, with revision, date,

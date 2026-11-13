@@ -28,7 +28,7 @@ coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 entries that could not be read and are missing, `filters` the rules that left rows out, `exclusions` what was left out by design
 (an output directory inside the tree). With `complete=true stop=completed unreadable=0 filters=0` the dataset covers
 the `source` and `scope` on the line above it, minus its exclusions
-([getting-started.md](../getting-started.md#5-check-that-it-is-complete),
+([results.md](../results.md#coverage-and-unreadable-entries),
 [dataset.md](../dataset.md#the-swath-extension)).
 
 For the work directory of a dataset written to a bucket (`-o s3://...`, `gs://...` or `az://...` with
@@ -60,7 +60,7 @@ single quotes, or on Windows in double quotes, so the line can be pasted as it i
 
 `swath show` reads no rows. `swath du --from-dataset DIR` totals them per prefix
 ([swath-du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
-lists ([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).
+lists ([running.md](../running.md#reading-the-output)).
 
 ## Options
 
