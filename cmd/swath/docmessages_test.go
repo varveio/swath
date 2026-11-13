@@ -44,9 +44,24 @@ func TestTroubleshootingMessages(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("other", "f"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// "tree/inventory" holds a dataset inside the tree it lists.
+	if err := os.Mkdir("tree", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("tree", "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background(), []string{"tree", "-o", filepath.Join("tree", "inventory"), "-q"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
 	// "stopped" holds an interrupted run: a journal and no manifest.
 	j, err := journal.Create("stopped", journal.Identity{Tool: "swath"}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	// "tree/stopped" holds one inside the tree.
+	if j, err = journal.Create(filepath.Join("tree", "stopped"), journal.Identity{Tool: "swath"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	j.Close()
@@ -61,6 +76,8 @@ func TestTroubleshootingMessages(t *testing.T) {
 		{"provider option", []string{"list", "gs://bucket", "--s3-profile", "p"}, [2]string{}},
 		{"output not empty", []string{"list", src, "-o", "inventory"}, [2]string{}},
 		{"overwrite a stranger", []string{"list", src, "-o", "other", "--overwrite"}, [2]string{"other", "inventory"}},
+		{"output inside the tree", []string{"list", "tree", "-o", filepath.Join("tree", "inventory")}, [2]string{filepath.Join("tree", "inventory"), "tree/inventory"}},
+		{"interrupted run inside the tree", []string{"list", "tree", "-o", filepath.Join("tree", "stopped")}, [2]string{filepath.Join("tree", "stopped"), "tree/inventory"}},
 		{"csv output", []string{"list", src, "-o", "x.csv"}, [2]string{}},
 		{"interrupted run", []string{"list", src, "-o", "stopped"}, [2]string{"stopped", "inventory"}},
 	} {

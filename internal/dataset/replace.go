@@ -65,6 +65,9 @@ func NewPending(path string) (*Pending, error) {
 	return &Pending{path: path, tmp: f.Name(), f: f}, nil
 }
 
+// Temp is the temporary file's path.
+func (p *Pending) Temp() string { return p.tmp }
+
 // Write writes to the temporary file (through faults).
 func (p *Pending) Write(b []byte) (int, error) {
 	n, err := faults.Write(p.f, b)

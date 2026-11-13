@@ -230,7 +230,9 @@ they are refused with `--metadata names`.
 
 The output may not be the listed tree itself or contain it. A new or empty directory inside the tree is
 accepted as the output: the walk skips it and the dataset records it in `coverage.exclusions`. `--overwrite`
-of an output inside the listed tree is refused (exit 2).
+of an output inside the listed tree is refused (exit 2): write the dataset to a new directory outside the tree.
+A text file inside the tree is left out the same way, with its temporary and the attempt's scratch directory
+beside it: the rows never list the run's own output, on a first run or a repeat.
 
 Recursive exclude globs can prevent descent into entire subtrees ([filters](filters.md#globs));
 other row filters do not stop directory traversal.

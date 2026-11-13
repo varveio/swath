@@ -275,7 +275,7 @@ const (
 	// UnrecordedChanged: the run this invocation saw was completed,
 	// replaced or continued by another process before it held the lock.
 	UnrecordedChanged  = "another process completed or replaced the run before this one held the lock"
-	unrecordedComplete = "the dataset in the output is complete"
+	unrecordedComplete = "the dataset in the output is committed"
 	unrecordedNoRun    = "the output holds no unfinished run this invocation continues or replaces"
 	unrecordedLocked   = "another process owns the output"
 	// UnrecordedComplete, UnrecordedNoRun and UnrecordedNoOutput, for the

@@ -451,8 +451,18 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 		t.Fatalf("capped run kept a journal: %v", err)
 	}
 	want := dirTree(t, dir)
-	if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, listing.ErrComplete) {
-		t.Fatalf("resume of a capped run: %v", err)
+	// Refused as a finalized partial sample, not as complete: still exit
+	// 3, class incomplete, not resumable.
+	report := filepath.Join(t.TempDir(), "report.json")
+	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
+	if msg := dir + " holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
+		exitCode(t, err) != exitIncomplete || err.Error() != msg {
+		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.Class != "incomplete" || o.Resumable || o.Complete || o.Error != err.Error() || strings.Contains(o.Unrecorded, "complete") {
+		t.Fatalf("resume of a capped run: outcome %+v", o)
 	}
 	if got := dirTree(t, dir); !maps.Equal(want, got) {
 		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)

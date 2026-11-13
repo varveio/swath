@@ -290,6 +290,27 @@ func committedAccount(dir string, r *listing.Report) {
 	}
 }
 
+// finalizedSample is err, a resume's listing.ErrComplete, as the user reads
+// it for dir: a dataset committed with partial coverage (a --max-keys
+// sample) is a finalized partial sample, which nothing continues, not a
+// complete one. It still is ErrComplete to classify: incomplete, exit 3.
+func finalizedSample(dir string, err error) error {
+	if m, ok := committedManifest(dir); ok && !m.Coverage.Complete {
+		return &restated{err, fmt.Sprintf("%s holds a finalized partial sample (coverage complete=false stop=%s): it cannot be resumed", dir, m.Coverage.StopReason)}
+	}
+	return err
+}
+
+// restated is an error under another message.
+type restated struct {
+	error
+	msg string
+}
+
+func (e *restated) Error() string { return e.msg }
+
+func (e *restated) Unwrap() error { return e.error }
+
 // alreadyComplete accounts for a resume that found its output committed
 // and complete (exit 0): the report says so from the manifest's coverage,
 // and the text report says it in one line.

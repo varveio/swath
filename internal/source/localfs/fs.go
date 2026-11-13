@@ -54,7 +54,7 @@ type Options struct {
 	Fields     Fields
 	NoDirs     bool            // omit kind=DIR rows (directories are still walked)
 	LinkTarget bool            // read symlink targets (stat tiers)
-	Skip       map[string]bool // directory keys ("a/b/") neither emitted nor walked
+	Skip       map[string]bool // the run's own output: keys neither emitted nor, for a directory ("a/b/"), walked
 	Portable   bool            // use the portable engine even where a native one exists
 	// OneFilesystem lists a directory on another device than the root
 	// (a mount point) but does not walk it, as du -x and find -xdev.
@@ -73,7 +73,7 @@ type Stats struct {
 	Vanished         int64    `json:"vanished"` // gone between listing and stat
 	Changed          int64    `json:"changed"`  // type changed between listing and stat; dropped
 	ReadlinkErrors   int64    `json:"readlink_errors"`
-	Skipped          int64    `json:"skipped_dirs"`
+	Skipped          int64    `json:"skipped_outputs"`             // entries left out as the run's own output (Options.Skip)
 	Unsafe           int64    `json:"unsafe_dirs"`                 // a directory replaced by a symlink before open
 	Chunks           int64    `json:"chunks"`                      // large-directory chunks statted in parallel
 	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
@@ -251,22 +251,23 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 }
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row. Skipped directories are dropped.
+// as a child range right after its DIR row. The run's own output (Skip) is
+// dropped, a directory with its subtree.
 func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
 		row := &rows[i]
-		if row.Data.Kind != KindDir {
-			st.Files++
-			st.Bytes += row.Data.Size
-			continue
-		}
 		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
 			st.Skipped++
 			if err := e.Rows(rows[start:i]); err != nil {
 				return err
 			}
 			start = i + 1
+			continue
+		}
+		if row.Data.Kind != KindDir {
+			st.Files++
+			st.Bytes += row.Data.Size
 			continue
 		}
 		st.Dirs++

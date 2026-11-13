@@ -32,7 +32,9 @@ $ swath resume logs-inventory
 logs-inventory is already complete: nothing to resume
 ```
 
-[`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
+The `resume:` advice quotes a DIR the shell would split or expand (a path with a space; single quotes, double
+quotes on Windows), and spells
+one that begins with `-` as `./-DIR`, so it can be pasted as printed. [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
 A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
 `swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
@@ -66,7 +68,13 @@ Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in 
 `--s3-bearer-token-command` must be given it again.
 
 A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
-exit 0. Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
+exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys` sample) is a finalized
+partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
+
+```text
+swath: sample holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed
+```
+ Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
 judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
 resumes, and a text file `rows.tsv` is refused as text output.
 
@@ -247,7 +255,8 @@ swath resume container-inventory --azure-sas-token "$SAS"
 
 The codes of [`swath list`](swath-list.md#exit-status). 2 also when the directory holds no interrupted run, or
 when the environment resolves another route than the run's (another region or endpoint): the directory is
-left as it was. 0 when the dataset is already complete, 3 when it is committed with partial coverage. See [reference/exit-codes.md](../reference/exit-codes.md).
+left as it was. 0 when the dataset is already complete; 3 when it is committed with partial coverage (a finalized
+partial sample, or entries that could not be read). See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment
 

@@ -154,6 +154,8 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 		// Text rows or totals: a reader that closed the stream is not a
 		// partial listing.
 		err = &incompleteError{"the output is partial: the listing stopped before the end of its scope (" + sum.Outcome.StopReason + ")"}
+	case errors.Is(err, listing.ErrComplete):
+		err = finalizedSample(dir, err)
 	case errors.As(err, &pe):
 		// Found when the schema is bound, before the listing's first
 		// request: a usage error, as at parse time.
@@ -1107,11 +1109,18 @@ func explain(err error) error {
 		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-rotation-max-rows)", err)
 	case errors.Is(err, listing.ErrUnsafeLayout):
 		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
+	case errors.Is(err, dataset.ErrInsideRoot) && errors.Is(err, listing.ErrInterrupted):
+		// --overwrite is refused inside the root: it starts nothing over.
+		return fmt.Errorf("-o: %w (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)", err)
+	case errors.Is(err, dataset.ErrInsideRoot):
+		// Not empty, or --overwrite given: either way --overwrite cannot
+		// help here.
+		return fmt.Errorf("-o: %w (write the dataset to a new directory outside the listed root)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
-	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
+	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrNotDataset):
 		return fmt.Errorf("-o: %w", err)
 	case errors.As(err, &mm):
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
