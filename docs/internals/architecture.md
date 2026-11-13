@@ -75,15 +75,15 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 transitively.
 
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
-inherit the lister's dependencies: `go/reader` (`github.com/varveio/swath/go/reader`: the schema ids and their
+inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: the schema ids and their
 columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that opens a
 dataset, hands on its metadata, checks its schema, and exposes the underlying SeekParquet dataset for reads; the SeekParquet module
-and the standard library only; [../../reader/README.md](../../reader/README.md)) and `go/objfile` (a dataset in an object
+and the standard library only; [../../reader/README.md](../../reader/README.md)) and `objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
 credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The lister imports
-`go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
+`reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
 specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. It imports
-`go/objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
+`objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
 conditional creation and the read-back of retained parts go through `objfile/gcs`, `objfile/s3` or `objfile/azblob` and `objfile/remote.OpenDestination`,
 which links `cloud.google.com/go/storage` into the swath binary
 ([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister or the other nested module.

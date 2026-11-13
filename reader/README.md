@@ -1,6 +1,6 @@
 # reader
 
-`github.com/varveio/swath/go/reader` adds swath's schema and metadata knowledge to
+`github.com/varveio/swath/reader` adds swath's schema and metadata knowledge to
 [SeekParquet](https://github.com/varveio/seekparquet). It opens a dataset, exposes its
 metadata, checks its schema, and optionally decodes rows into concrete source types.
 Reading, parallel scanning, aggregation and pagination belong to SeekParquet, reached

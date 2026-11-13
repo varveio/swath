@@ -385,7 +385,7 @@ func versionsK(t *testing.T, out string) string {
 }
 
 // TestVersionsTailSeamsAtKeyChanges: the seam rule for the drain tail
-// (go/docs/internals/ordering.md, "Repeated keys"). Behind a slow frontier
+// (docs/internals/ordering.md, "Repeated keys"). Behind a slow frontier
 // the ranges ahead finish first and their rows are drained at the end, a
 // tail through the router; parts are cut every 5 rows, so most cut points
 // fall inside a hot key's 40 versions. Every cut must move to the next key

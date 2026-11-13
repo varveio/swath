@@ -4,7 +4,7 @@ This page explains how swath's GitHub Actions CI is shaped and why, for a mainta
 contributor who needs to change it. It owns the reasoning. The exact jobs, commands, triggers and
 runners are owned elsewhere and are only summarized here:
 
-- [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md): every Go job, the race shards, change
+- [`docs/internals/testing.md`](../../internals/testing.md): every Go job, the race shards, change
   detection, the Go caches, cross-OS skips, nightly and stress dispatches.
 - The workflows in [`.github/workflows/`](../../../.github/workflows/) and the scripts in
   [`scripts/ci/`](../../../scripts/ci/). Each workflow job carries a comment explaining its own
@@ -23,7 +23,7 @@ runners are owned elsewhere and are only summarized here:
 
 The split follows one question: what does a failure mean? A red `ci.yml` means this commit broke
 something and must not merge. A red nightly means an invariant broke outside the per-commit gate,
-or time passed (a new advisory in the OSV scan of the Go release images, built from `Dockerfile.go`)
+or time passed (a new advisory in the OSV scan of the Go release images, built from the `Dockerfile`)
 without any commit at all. A red release means the
 tag must not be published. `site.yml` keeps its checks and its deploy in one file so the deploy's
 gate is the file itself, not a branch rule someone has to remember. `go-stress.yml` is a tool, not a
@@ -38,7 +38,7 @@ binaries once into the release archives, builds both images from those archived 
 them by digest, smokes the digests, and only then applies tags and signs.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
-[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile.go`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. In `go` and `go/objfile` the Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in `go` (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../../go/docs/internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go/go.mod`, so the golang image digest in `Dockerfile.go` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `go/notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
+[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. In the root module and `objfile` the Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
 
 ## Registry and artifacts
 
@@ -47,7 +47,7 @@ selected Go images in `go-build`, and throw them away.
 Go images run on packaging/dependency/full PRs and on every main/dispatch run; static cross-builds and
 the license gate remain on every selected main-module PR. Nothing
 outside a release pushes a tag, so the registry holds release versions and nothing else. An
-unreleased commit's image is built locally from the checkout (`docker build -f Dockerfile.go .`).
+unreleased commit's image is built locally from the checkout (`docker build .`).
 
 The artifact uploads of `ci.yml`, `nightly.yml`, `go-stress.yml` and `release.yml` set their own `retention-days`
 instead of taking the repository default:
@@ -90,7 +90,7 @@ tiers. PR selection follows changed paths and local module dependencies: reader 
 object-file changes stay independent unless a consumer is added, and main changes do not retest an
 unchanged independent module. Testdata, embedded files, generated-help documents and external replay
 fixtures are inputs too. The exact module/tier mapping and escalation rules live in
-[Go testing](../../../go/docs/internals/testing.md#change-detection); regression cases exercise the actual selector,
+[Go testing](../../internals/testing.md#change-detection); regression cases exercise the actual selector,
 workflow matrix shell, rename/deletion behavior and the gate.
 
 Main and manual dispatch always select full Go validation. PRs can request it with the `ci:full` label;
@@ -130,7 +130,7 @@ cheap cross-compilation, and architecture-sensitive tests. It avoids repeating h
 packages without race instrumentation on the same arm64 runner. Other packages retain their arm64
 run, derived from the race-shard table. Packaging can wait for main except on relevant changes;
 its license check stays on PRs. Moving off-critical-path jobs saves runner capacity, not necessarily
-elapsed time. [Measurements](../../../go/docs/internals/measurements.md#ci-go-caches-race-shards-and-cross-os-legs-2026-11-09)
+elapsed time. [Measurements](../../internals/measurements.md#ci-go-caches-race-shards-and-cross-os-legs-2026-11-09)
 record the observed costs; there is no fixed PR-duration guarantee.
 
 This is a deliberate latency/coverage tradeoff. Comparable projects use different policies:
@@ -153,19 +153,19 @@ seconds, so the job runs on every event without change detection.
 
 The Go port's jobs run side by side so that a vet error reports in about a minute and the race
 tests' wall time is their slowest shard, not their sum (one serial job once took 17.5 minutes).
-[`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md) owns the commands.
+[`docs/internals/testing.md`](../../internals/testing.md) owns the commands.
 
 | Job | Purpose |
 | --- | --- |
-| `go-lint` | `gofmt`, `go vet`, `go mod tidy -diff`, and the shard table's self-test and coverage check |
+| `go-lint` | the license headers (`scripts/ci/check-spdx.sh`) and the Markdown links (`go test ./docs`) on every event, `gofmt`, `go vet`, `go mod tidy -diff`, and the shard table's self-test and coverage check |
 | `go-race (SHARD)` | `go test -race` on one shard of the main module |
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
-| `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes; the image build runs the Go license gate (`go/notices.sh`) |
-| `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
+| `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile`) for two architectures and their smokes; the image build runs the Go license gate (`notices.sh`) |
+| `go-objfile`, `go-reader` | the nested modules `objfile` and `reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch |
-| `go-fixtures` | the replay fixture tier on the fixtures `go/bench/replay/fixtures` writes |
+| `go-fixtures` | the replay fixture tier on the fixtures `bench/replay/fixtures` writes |
 
-The nested modules have their own `go.mod`, so `./...` in `go/` never reaches them; each needs its
+The nested modules have their own `go.mod`, so `./...` at the root never reaches them; each needs its
 own job or it is untested.
 
 ### Race shards
@@ -193,7 +193,7 @@ encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `interna
 
 In the measured history (2026-11-09, about 200 runs), a warm run took 7–8 minutes and its critical
 path was the single `go-race (rest)` shard at 5.4–8.4 minutes. That shard is now three
-(`rest-replay`, `rest-source`, `rest`); their observations are recorded in [measurements](../../../go/docs/internals/measurements.md).
+(`rest-replay`, `rest-source`, `rest`); their observations are recorded in [measurements](../../internals/measurements.md).
 
 Each leg runs with `-count=1`, because a restored build cache would otherwise replay earlier
 results as `(cached)` instead of racing them, and with a per-package `-timeout` below the job's
@@ -207,7 +207,7 @@ Ordinary PRs retain arm64 coverage for packages raced on amd64, using the comple
 table. They do not repeat `internal/listing` and `cmd/swath` there. Full platform validation runs
 on main and dispatch, and on PRs selected by platform/dependency inputs or `ci:full`. Cross-builds
 remain on PRs. The selected-module and platform-skip details belong to
-[Go testing](../../../go/docs/internals/testing.md#cross-os).
+[Go testing](../../internals/testing.md#cross-os).
 
 macOS and Windows runtime coverage is usually deferred because those jobs and their runner queues
 previously dominated PR turnaround. It has caught real platform differences, so it is retained on
@@ -239,7 +239,7 @@ the cache anyway.
 The module cache's contents depend only on the dependency set, so its key names no job and no
 commit, and one copy serves every job. A saved key is never overwritten: when several `main` jobs
 try to save the same new key, the first wins and the others log a warning. Because the jobs build
-different module graphs (`go/reader` has no cloud SDK), a `main` job that misses the module key
+different module graphs (`reader` has no cloud SDK), a `main` job that misses the module key
 downloads every module's whole dependency graph (`go mod download all`, which includes the test
 imports of dependencies that `go mod tidy -diff` loads) before it may save, so the first job to
 finish cannot freeze a partial cache.
@@ -314,7 +314,7 @@ minutes:
   artifact.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
   and the runner, and cite the run and its tally in the pull request (see
-  [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md#stress-repeats)).
+  [`docs/internals/testing.md`](../../internals/testing.md#stress-repeats)).
 - **Slow run:** compare the legs' durations; a shard that grew is rebalanced in the shard table
   using its `-json` artifact. A Go job that took minutes longer than usual on `main` probably
   missed its build cache; the `cache-prune` step summary lists the kept caches.
@@ -328,13 +328,13 @@ minutes:
   is legitimately event-gated, it passes as `skipped` only off pull requests.
 - **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
   own list if that tier reads it), and update the change-detection list in
-  [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md#change-detection).
+  [`docs/internals/testing.md`](../../internals/testing.md#change-detection).
 - **A new race shard:** add a row to the table in `go-race-shards.sh` and nothing else; run
-  `--self-test` and `--check` locally, and update the shard table in `go/docs/internals/testing.md`.
+  `--self-test` and `--check` locally, and update the shard table in `docs/internals/testing.md`.
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it
   should run.
 - **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`; its build
   cache is pruned automatically after the CI workflow completes.
-- **Any change:** a commit that touches `go/` needs the Go jobs green, and the owning page
-  ([`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md)) must be
+- **Any change:** a commit that touches Go code needs the Go jobs green, and the owning page
+  ([`docs/internals/testing.md`](../../internals/testing.md)) must be
   current in the same change.

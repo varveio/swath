@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Benchmark swath-local against find, fd and Python on the trees from gen_tree.py.
 # Usage: bench/run.sh [warm|cold] [tree...]
-#   env: BIN (swath binary built from go/cmd/swath), BASE ($BENCH_DATA), REPS (3), OUT (results dir), SCRATCH,
+#   env: BIN (swath binary built from cmd/swath), BASE ($BENCH_DATA), REPS (3), OUT (results dir), SCRATCH,
 #        FILTER (regex on config names, default all)
 # Warm: one untimed warm-up of the tree, then every configuration REPS times.
 # Cold: `sync; echo 3 > /proc/sys/vm/drop_caches` before each single run.

@@ -23,7 +23,7 @@ import (
 	"github.com/varveio/swath/internal/schema"
 )
 
-// Durable spill (go/docs/internals/ordering.md, "Durable spill"): a spill
+// Durable spill (docs/internals/ordering.md, "Durable spill"): a spill
 // file that holds every row of a logical interval (cs, ce] of its range, as
 // the provider certified with fences (source.Fencer), outlives the run
 // until the dataset's published prefix K covers it, so a resume replays it

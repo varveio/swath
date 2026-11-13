@@ -2,7 +2,7 @@
 
 This page maps the test methods of the Go port to what it proves, where it lives, how to run it, and when
 CI runs it. The invariants the tests hold are in [contracts.md](contracts.md). The reasoning behind CI's
-shape is in [docs/ops/dev/CI.md](../../../docs/ops/dev/CI.md).
+shape is in [docs/ops/dev/CI.md](../ops/dev/CI.md).
 
 ## Summary
 
@@ -13,11 +13,11 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 
 | Method | Proves | Trigger | Runner | Workflow / job |
 |---|---|---|---|---|
-| Format, vet, shard check | `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | PR: format if any module selected, main vet/shards if main selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-lint` |
+| Headers, links, format, vet, shard check | every `.go` file's license header, `go test ./docs` (every Markdown file's relative links), `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | headers and links: always; PR: format if any module selected, main vet/shards if main selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-lint` |
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
-| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `go/reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
+| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
 | Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
@@ -31,7 +31,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
 | Script self-tests | the OSV image policy's self-test, the provider-conformance tools' tests and the replay benchmark runners' tests | PR, main, dispatch | ubuntu-latest | `ci.yml` `scripts` |
-| OSV scan | the Go images (`Dockerfile.go`): the Go version and modules linked into each binary, and the lister base's packages, against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
+| OSV scan | the Go images (`Dockerfile`): the Go version and modules linked into each binary, and the lister base's packages, against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
 | Release guards | tag SHA and ancestry, the version's form and the release notes (`source`); the exact asset set, archives, signatures and attestations (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
 | CodeQL (external check) | static analysis; languages and schedule are repository settings | as the setting says (on 2026-11-08: PR, push to `main`, weekly) | GitHub-hosted | code-scanning default setup, not configured in this repository (`gh api repos/varveio/swath/code-scanning/default-setup`); not in `ci-gate` |
@@ -40,7 +40,6 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 ## Running tests locally
 
 ```bash
-cd go
 go test -count=1 -run '^TestName$' ./internal/listing    # one test: the local loop
 go test -short ./...                                      # skips the binary-building and slowest arms
 ```
@@ -61,10 +60,10 @@ flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB go test -race -count=1 -p 1 -run
 `BenchmarkList` (`internal/source/azblob/client`, sub-benchmarks `flat` and `hierarchy`) one Azure `List` call
 ([measurements](measurements.md#sdk-backed-clients-2026-11-09)).
 
-What a `go-race` leg runs, from `go/` (runner instructions: a whole shard belongs on a runner or `go-stress.yml`, not a development host):
+What a `go-race` leg runs, from the repository root (runner instructions: a whole shard belongs on a runner or `go-stress.yml`, not a development host):
 
 ```bash
-mapfile -t args < <(../scripts/ci/go-race-shards.sh crash)
+mapfile -t args < <(./scripts/ci/go-race-shards.sh crash)
 go test -race -count=1 -timeout 20m "${args[@]}"
 ```
 
@@ -76,14 +75,15 @@ of the `keyrange` laws. CI never passes `-short`.
 
 ### Change detection
 
-[`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) owns selection. PRs run complete
+[`scripts/ci/go-ci-policy.py`](../../scripts/ci/go-ci-policy.py) owns selection. PRs run complete
 suites for changed modules and their dependants, not a guessed subset of individual tests:
 
 | Changed input | Selected Go modules / tiers |
 |---|---|
-| `go/reader/**` | reader and main (main imports reader via a local replacement) |
-| `go/objfile/**` | object-file module; main only if a local module dependency is added |
-| Other `go/**`, including generated-help docs, testdata and embeds | main |
+| `reader/**` | reader and main (main imports reader via a local replacement) |
+| `objfile/**` | object-file module; main only if a local module dependency is added |
+| `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `docs/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including generated-help docs, testdata and embeds | main |
+| Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/go-release-copy-checklist.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
 | Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
 | Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier |
@@ -115,17 +115,17 @@ exact commit; a green PR or mere ancestry in main is insufficient.
 
 | Job | Runs | Runner |
 |---|---|---|
-| `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
+| `go-lint` | `scripts/ci/check-spdx.sh` (every tracked `.go` file starts with the license header), `go test ./docs` (Markdown links), `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a selected main module, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
-| `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
+| `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
 | `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest and windows-latest for escalated PRs, main and dispatch |
 | `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
-Every job above sets up Go through [`.github/actions/setup-go`](../../../.github/actions/setup-go/action.yml): the
+Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
 version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
-modules (`go`, `go/objfile`, `go/reader`).
+modules (the root, `objfile`, `reader`).
 
 | Cache | Path | Key | Restores from |
 |---|---|---|---|
@@ -143,7 +143,7 @@ on a copy of the three modules' `go.mod` and `go.sum` in the repository layout (
 reader with `./reader`, resolved relative to it), since it adds the hashes it fetches to `go.sum` and the
 checkout must stay as committed for `go mod tidy -diff`. A job that fails saves nothing.
 
-Retention: `cache-maintenance.yml` runs [`scripts/ci/cache-prune.sh`](../../../scripts/ci/cache-prune.sh)
+Retention: `cache-maintenance.yml` runs [`scripts/ci/cache-prune.sh`](../../scripts/ci/cache-prune.sh)
 after main CI (passed or not), on CodeQL completion events, hourly, and on manual dispatch. The
 hourly pass also covers dynamic CodeQL setups that do not emit completion events. It keeps the
 newest main Go build cache per job and module
@@ -151,7 +151,7 @@ cache per OS/architecture, with cache versions kept separate. It also bounds Cod
 and removes CodeQL PR dependency copies, preserving scanning and main's shared caches.
 Deletion uses a deduplicated snapshot and creation order, so overlapping main runs cannot delete
 a newer cache just because it belongs to another commit. `ci-gate` does not need housekeeping.
-See [CI architecture](../../../docs/ops/dev/CI.md#caching) for the policy and trust boundary.
+See [CI architecture](../ops/dev/CI.md#caching) for the policy and trust boundary.
 The DuckDB downloads of the Go image smoke and `release.yml` do not retry.
 SeekParquet conformance's `pip install` retries ten times.
 
@@ -160,7 +160,7 @@ amd64 nightly. Their additional non-race platform runs are full-validation work,
 
 ### Race shards
 
-The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../../scripts/ci/go-race-shards.sh); the
+The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
 `changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
 
 | shard | `go test -race` arguments | runner |
@@ -259,7 +259,7 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | `go-xos-macos` | on macos-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-macos` |
 | `go-xos-windows` | on windows-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
-| `osv-scan` | builds both `Dockerfile.go` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
+| `osv-scan` | builds both `Dockerfile` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
 
 The four Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
 cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on the matching platform
@@ -273,13 +273,13 @@ There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in C
 
 ### License gate
 
-[`go/notices.sh`](../../notices.sh) runs
+[`notices.sh`](../../notices.sh) runs
 [go-licenses](https://github.com/google/go-licenses) (version pinned in the script) over `./cmd/swath` and
 `./cmd/swath-replay` for linux, darwin and windows. It fails when a linked module's license is not recognized
 or is not on its allow-list (SPDX identifiers: Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
 targets link different modules. It then writes `THIRD_PARTY_NOTICES`: the module inventory, each module's
 license text, and the Go distribution's license. `go-build` runs it directly whenever main is selected
-and packaging is deferred; otherwise `Dockerfile.go`'s build stage runs it. This includes source/import
+and packaging is deferred; otherwise the `Dockerfile`'s build stage runs it. This includes source/import
 changes, not just manifest changes. Both images carry the file in `/licenses/`; `release-assets.sh build` runs it, so
 every release archive carries it. It needs the network: go-licenses is installed with `go install` and looks
 license URLs up online.
@@ -296,7 +296,7 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 
 | Input | Default | Meaning |
 |---|---|---|
-| `package` | `./...` | package pattern, relative to `go/` |
+| `package` | `./...` | package pattern, relative to the repository root |
 | `run` | (required) | the `-run` pattern |
 | `count` | `50` | `-count` |
 | `race` | `true` | `-race`; ignored on Windows |
@@ -311,7 +311,7 @@ on `ubuntu-24.04-arm`, `go-xos` on macOS and Windows, a build without `-race`), 
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
 `go-stress-OS-ARCH` artifact. Stress takes one package pattern and a `-run` pattern, not a race shard and not the shard table's
 comma-separated selectors: to repeat a shard, pass its row's arguments from
-[`scripts/ci/go-race-shards.sh`](../../../scripts/ci/go-race-shards.sh), one package or `./x/...` pattern per dispatch.
+[`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh), one package or `./x/...` pattern per dispatch.
 A long test at a high count can exceed the job's limit: split the count across several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
@@ -320,16 +320,16 @@ before and after the change when it fixes a flake, as #300 does.
 `release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
 `main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (`go vet ./...`
 and `go test -race -count=1 -timeout 40m ./...` unsharded on amd64, then `go vet` and the race tests of
-`go/reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
+`reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
 build`: `build.sh` for the five targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
 `--version` exactly the tag's version and commit, and the [license gate](#license-gate); the archives, an SBOM,
 `SHA256SUMS`), then `publish` (both
-`Dockerfile.go` images from the archived binaries, smoked by digest, assets and images signed, attested and
+`Dockerfile` images from the archived binaries, smoked by digest, assets and images signed, attested and
 verified), which runs only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`.
 It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: `source` requires a
-successful `go-full-gate` from that exact SHA's main push run ([RELEASING.md](../../../RELEASING.md#what-gates-a-release)).
+successful `go-full-gate` from that exact SHA's main push run ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
-Dependabot raises the Go modules and `Dockerfile.go`'s pinned images weekly; [CI.md](../../../docs/ops/dev/CI.md) says what it leaves to hand.
+Dependabot raises the Go modules and the `Dockerfile`'s pinned images weekly; [CI.md](../ops/dev/CI.md) says what it leaves to hand.
 
 ## Flakes
 
@@ -553,7 +553,7 @@ swath-replay serve --fixture /data/rec/noaa-normals-pds/data --bucket noaa-norma
 until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 1; done
 
 # 5. List it with the Go tool and compare.
-cd go && go build -o /tmp/swath ./cmd/swath
+go build -o /tmp/swath ./cmd/swath
 /tmp/swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style --anonymous -o /tmp/go-ds
 python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical: true
 python3 verify.py /tmp/go-ds                                         # the swath dataset, read by DuckDB
@@ -590,10 +590,10 @@ python3 verify.py /tmp/go-ds                                         # the swath
   `bench/gen_fixture_1m.py`; the replay fixture tier's synthetic captures are written with parquet-go by
   `bench/replay/fixtures` (below).
 - **Replay store fixtures:** the replay store's unit tests build every fixture in the test. Its fixture
-  tier (`go/internal/replay/store` `TestGeneratedFixtures`, `TestSortsTheAzureEvidenceCorpus`,
+  tier (`internal/replay/store` `TestGeneratedFixtures`, `TestSortsTheAzureEvidenceCorpus`,
   `TestStartupCost`, `TestSortFixtureMemory`, and `TestRecordings` when `recordings/BUCKET/dataset/data`
   exist) runs with `SWATH_REPLAY_FIXTURES=ROOT` and skips without it. `go run ./bench/replay/fixtures
-  ROOT/fixtures` (in `go/`) writes that tree: Parquet captures of the canonical 13-column schema (synthetic
+  ROOT/fixtures` (at the repository root) writes that tree: Parquet captures of the canonical 13-column schema (synthetic
   10k and 1M rows, the GCS and Azure evidence corpora from the manifests in
   `docs/replay-provider-evidence.tar.gz`), each sorted by `sortfixture` into a SeekParquet dataset except
   the Azure capture, plus the 1M capture in 1 MiB parts (`synthetic-1m/sorted-rolled`).
@@ -601,9 +601,9 @@ python3 verify.py /tmp/go-ds                                         # the swath
   the Java-written fixture of the same inputs; `bench/replay/fixtures` `TestWritesTheFixtures` holds the 10k
   and GCS fixtures to the same pins in every Go run. CI runs this tier, except `TestRecordings`, in the
   `go-fixtures` job ([swath-replay.md](swath-replay.md#continuous-integration)).
-  The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
+  The same variable runs the GCS evidence replay (`internal/replay/evidence`, see
   [swath-replay.md](swath-replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
-  `ROOT/fixtures/evidence-gcs/sorted` when present. The Azure evidence replay (`go/internal/replay/azure`
+  `ROOT/fixtures/evidence-gcs/sorted` when present. The Azure evidence replay (`internal/replay/azure`
   `TestAzureEvidenceReplay`) runs on the same variable and sorts `ROOT/fixtures/evidence-azure/capture`
   itself; CI's `go-fixtures` job runs both evidence replays.
 - **Policy toggles:** Java's policy layer can be switched off per mechanism with the hidden
@@ -622,7 +622,7 @@ python3 verify.py /tmp/go-ds                                         # the swath
   ranges per arm.
 
 - **Replay load tests:** `SWATH_REPLAY_LOAD=1` runs the replay server's load tests
-  (`go/internal/replay/server` `TestLoad*`: the request ceiling under the fault proxy, the reader-slot bound under
+  (`internal/replay/server` `TestLoad*`: the request ceiling under the fault proxy, the reader-slot bound under
   256 walks, no overrun at 64 walks), a few seconds each; they serve `ROOT/fixtures/synthetic-1m/sorted-rolled`
   when `SWATH_REPLAY_FIXTURES=ROOT` is set, else a generated fixture. `bench/replayload` is the walker the
   [replay measurements](swath-replay.md#measurements) use.
@@ -729,7 +729,6 @@ kill %1   # writes storm.tsv and prints the totals
 ## verify.py
 
 ```bash
-cd go
 python3 -m pip install duckdb
 python3 -m unittest -v test_dataset_readers
 python3 verify.py OUT [REFERENCE]
@@ -738,7 +737,7 @@ python3 verify.py OUT [REFERENCE]
 `verify.py` and its reader tests are a manual tier; CI and the normal Go test suite do not run the Python
 tests. The full reader suite needs DuckDB and Go on `PATH` (it invokes `listing` `TestVerifierFixtures`
 to generate real Parquet datasets). Without DuckDB, only the schema-only tests run and the SQL and
-verifier tests skip. The tests stay in `go/test_dataset_readers.py` beside `verify.py` and the shared
+verifier tests skip. The tests stay in `test_dataset_readers.py` beside `verify.py` and the shared
 `dataset_schema.py`, since they cover both the verifier and `bench/diffds.py`.
 
 `python3 /any/path/verify.py OUT [REFERENCE]` works from any working directory; its imports resolve beside
@@ -761,7 +760,7 @@ Python tests, including mutations of missing columns, required columns and numer
 
 The dataset is a [SeekParquet](https://github.com/varveio/seekparquet) dataset, and the replay server reads it
 through the seekparquet Go module, so the format's own conformance suite is a gate. CI's `go-nonrace` job runs
-`scripts/ci/seekparquet-conformance.sh` (from `go/`; under a minute, most of it installing the suite's Python
+`scripts/ci/seekparquet-conformance.sh` (from the repository root; under a minute, most of it installing the suite's Python
 dependencies):
 
 1. It checks out the seekparquet repository at the commit `go.mod` pins (the revision of the
@@ -781,7 +780,7 @@ targets are as long.
    paginated ranges, lookups, prefix reads and `/`-delimited listings over keys taken from the dataset exactly
    as the reference adapter does.
 
-Run it locally the same way: `cd go && ../scripts/ci/seekparquet-conformance.sh /tmp/spc` (Python 3 with
+Run it locally the same way: `./scripts/ci/seekparquet-conformance.sh /tmp/spc` (Python 3 with
 `venv`, network access for the checkout and the pinned wheels). Results are recorded in
 [measurements.md](measurements.md#seekparquet-conformance).
 
@@ -802,7 +801,7 @@ Failing inputs land in `testdata/fuzz/` and run as regular tests from then on. C
 
 Each target seeds from the goldens and fixtures of its package, runs its seeds in a plain `go test`, and
 states a property that holds for every input. `-fuzz` takes one target per run (a regular expression that
-matches one name, from inside `go/`):
+matches one name, from the repository root):
 
 ```bash
 nice go test ./internal/replay/s3 -run XXX -fuzz '^FuzzToken$' -fuzztime 2m

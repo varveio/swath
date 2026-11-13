@@ -501,18 +501,18 @@ A receipt names its producer. One without a `producer` field is a Java receipt, 
 `NativeEvidenceReplayTest`; the Go replay server's receipts carry `producer: go`, sit in
 `<provider>/receipts/go/` beside the Java receipts, and are cited in a version's
 `go_replay` entry in the ledger. A Go receipt binds the Git commit it was written at and,
-at that commit, the SHA-256 of the static linux/amd64 `swath-replay` that `go/build.sh`
-builds (`distribution_name` `swath-replay-linux-amd64`, with the toolchain `go/go.mod`
+at that commit, the SHA-256 of the static linux/amd64 `swath-replay` that `build.sh`
+builds (`distribution_name` `swath-replay-linux-amd64`, with the toolchain `go.mod`
 pins, recorded as `go_toolchain`) and one SHA-256 over the Go evidence test sources it
-lists in `test_sources`: the `go/internal/replay/evidence` package (the GCS evidence
+lists in `test_sources`: the `internal/replay/evidence` package (the GCS evidence
 replay), the test-only fixture writer it imports, the Azure route's evidence replay with
 its comparator and SDK runner (`evidence_test.go`, `evidencecmp_test.go` and `sdk_test.go`
-in `go/internal/replay/azure`), and `go/go.mod` and `go/go.sum`, which pin the SDKs its SDK
+in `internal/replay/azure`), and `go.mod` and `go.sum`, which pin the SDKs its SDK
 runs use. `evidence.py validate --repo-root DIR` checks out the receipt commit in a
 temporary worktree, rebuilds the binary and recomputes the source digest there, and
 refuses the receipt if either differs, if the receipt commit is not an ancestor of the
 current commit, or if the test sources have changed since; so it needs the Go toolchain.
-The binary is not compared at the current commit, because `go/build.sh` stamps the commit
+The binary is not compared at the current commit, because `build.sh` stamps the commit
 into it. A Go receipt is refused in a Java receipt's place, and one that names a jar, a
 Java test or lacks a Go field is refused as a Go receipt.
 

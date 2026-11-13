@@ -44,7 +44,7 @@ import (
 // failure.
 //
 // It runs with SWATH_REPLAY_FIXTURES=ROOT. The corpus is ROOT's
-// fixtures/evidence-azure/capture (go/bench/replay/fixtures' capture of
+// fixtures/evidence-azure/capture (bench/replay/fixtures' capture of
 // the manifest), sorted with a 4,096-byte key limit and checked row for row
 // against the manifest; without that capture the corpus is built in
 // memory from the manifest. SWATH_REPLAY_PROVIDER_REPORT=DIR writes

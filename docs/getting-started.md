@@ -12,7 +12,7 @@ The words used below are defined in [concepts.md](concepts.md).
 
 ```bash
 git clone https://github.com/varveio/swath.git
-cd swath/go
+cd swath
 ./build.sh -o swath
 ./swath --version
 ```

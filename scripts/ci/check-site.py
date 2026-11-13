@@ -144,7 +144,8 @@ TERMINOLOGY_EXCLUDE = [
 # Keep this list short. An entry here is a claim that the match is correct writing, not
 # a way to silence a finding.
 TERMINOLOGY_ALLOW: list[tuple[str, str, str, str]] = [
-    # (none today -- kept explicit so an addition is a reviewed decision)
+    ("docs/dataset.md", "project-casing", "Swath",
+     "the reader module's Go field `reader.Metadata.Swath`, an identifier, not the project name"),
 ]
 
 # --------------------------------------------------------------------------------------

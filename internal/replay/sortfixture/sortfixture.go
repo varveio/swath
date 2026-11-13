@@ -33,7 +33,7 @@
 // 3 s; TestSortFixtureMemory repeats it and an all-COMMON_PREFIX capture of
 // as many rows. A few million rows is the intended scope. The Go lister
 // writes sorted datasets directly; this command exists for captures
-// recorded before it and for the replay fixtures go/bench/replay/fixtures
+// recorded before it and for the replay fixtures bench/replay/fixtures
 // writes.
 package sortfixture
 

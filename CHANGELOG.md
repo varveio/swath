@@ -9,15 +9,15 @@ Notable changes per release. The full human summary for the current release is i
   repository; the last Java release is v0.3.2, and the final tree is preserved at the tag
   `java-final` (#73).
 
-- Go port: `go/reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
+- Go port: `reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
   `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `7264a9f88420`).
   The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
   `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
   and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.
-  Callers use SeekParquet types and errors directly; see the [reader guide](go/reader/README.md).
+  Callers use SeekParquet types and errors directly; see the [reader guide](reader/README.md).
 
-- Go port: `go/reader.Open` and `OpenDir` take `seekparquet.OpenOptions`; negative `Limits` fields fail
+- Go port: `reader.Open` and `OpenDir` take `seekparquet.OpenOptions`; negative `Limits` fields fail
   with `seekparquet.ErrInvalidRequest`, and limit failures are `*seekparquet.LimitError` wrapping
   `seekparquet.ErrLimitExceeded`. SeekParquet owns read statistics, listing read-ahead and callback stop
   behavior. `CheckSchema` prints an unannotated column's logical type as `NONE`.
@@ -39,7 +39,7 @@ Notable changes per release. The full human summary for the current release is i
   and `tags` (JSON objects) and the immutability policy and legal hold columns, null otherwise; tags need the
   SAS `t` permission or an Entra ID role that reads tags, and a listing refused for it stops naming the
   permission. The columns are added to `swath/azblob-objects/v1` as optional columns, as the dataset evolution
-  policy allows: parts written before lack them, and readers read them as null there (`go/reader`'s
+  policy allows: parts written before lack them, and readers read them as null there (`reader`'s
   `AzblobObject` decodes them). A dataset of the same container therefore gains these columns.
 
 - Fixed: Go port, Azure Blob: admission refused most public open-data containers (60 of the 64 Planetary Computer
@@ -53,12 +53,12 @@ Notable changes per release. The full human summary for the current release is i
   `Dataset.Aggregate` with named reductions and caller-selected workers and value budgets. A complete
   parallel scan checks key order across shards, including repeated unique keys at row-group boundaries;
   aggregation requests this validation with `AggregateOptions.CheckKeys`. See
-  [reading through SeekParquet](go/reader/README.md#reading-through-seekparquet).
+  [reading through SeekParquet](reader/README.md#reading-through-seekparquet).
 
 - Go port, Azure Blob: listings ask for the Arrow format and read XML wherever the service answers XML
   (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay) (#440). On the 468,557-blob
   `Crime/` prefix of a public container, on a 4-vCPU VM, a listing took 3.4 s and 3.9 CPU-seconds against
-  29.5 s and 58 for XML, with byte-identical output ([measurements](go/docs/internals/measurements.md#arrow-listing-format-2026-11-10)).
+  29.5 s and 58 for XML, with byte-identical output ([measurements](docs/internals/measurements.md#arrow-listing-format-2026-11-10)).
   An Arrow page is checked before it is decoded: a stream missing declared rows or failing to parse, a
   missing `NextMarker` or `NumberOfRecords`, or a written column in a type the decoder would read as nulls is
   refused, never listed as a shorter or final page. The run report counts pages per format (`list_format.*`).
@@ -68,7 +68,7 @@ Notable changes per release. The full human summary for the current release is i
 - Go port, Azure Blob: the default page is 1,000 entries, not the service's 5,000 (#448). A range reads to its
   first non-member, and at 5,000 most of each range's last page was discarded; at 1,000 the 1.84M-blob
   container listed in about half the time with half the memory, for three times the requests
-  ([measurements](go/docs/internals/measurements.md#azure-page-size-2026-11-10)). Follow-ups: #449.
+  ([measurements](docs/internals/measurements.md#azure-page-size-2026-11-10)). Follow-ups: #449.
 
 - Go port: a credential failure that will not pass (no credentials found, or configured ones that do not load
   or are refused) is reported on one line, the source and the first line of its cause, with `--anonymous`
@@ -87,11 +87,11 @@ Notable changes per release. The full human summary for the current release is i
   candidate is the first `release.yml` run with these pins.
 
 - Go port: ordered streaming uses SeekParquet's `Dataset.Scan` with a zero limit for one pass to the end
-  of the span. Callers select columns and optionally decode owning rows with `go/reader`'s concrete
+  of the span. Callers select columns and optionally decode owning rows with `reader`'s concrete
   decoders. SeekParquet reports per-call `ReadStats`; `Close` waits for callbacks, which must not call it.
 
 - Release: the Go archives and both images carry `THIRD_PARTY_NOTICES`, generated by
-  `go/notices.sh`, which fails the image build and the release on a linked module whose license
+  `notices.sh`, which fails the image build and the release on a linked module whose license
   is not recognized or not allowed. The nightly OSV scan covers the Go images and their linked
   modules instead of the Java distributions and images.
 
@@ -120,7 +120,7 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: contributors add a provider's runtime integration in its directory plus one blank
   command import, composing shared flags, range-engine interfaces and client activity. Reader
   schemas, verifier support and conformance tests still need explicit integration; the
-  [provider checklist](go/docs/internals/providers.md#adding-a-provider) lists the steps (#338).
+  [provider checklist](docs/internals/providers.md#adding-a-provider) lists the steps (#338).
 - Go port: the reader exposes version-column roles as `VersionSpec` on `SchemaSpec.Versions`.
   Text output, version counts and prefix totals use those declarations; typed decoders still
   read named columns. Schema ids, columns, dataset metadata and report fields are unchanged (#338).
@@ -129,19 +129,19 @@ Notable changes per release. The full human summary for the current release is i
   Azure binds its producer schema to the reader specification. Shared conformance tests check
   client and provider integration. Listing behavior, diagnostics and persisted bytes are unchanged;
   provider-specific credentials, endpoint rules and retry signals remain explicit.
-- Go port: `go/reader.DecodeLocalEntry` preserves every filesystem column and its nulls. SeekParquet's
+- Go port: `reader.DecodeLocalEntry` preserves every filesystem column and its nulls. SeekParquet's
   `List` and `Page` expose a common prefix's exact row for optional typed decoding. Local `CountRows` and
   `Sum(size)` reductions include directories and their own `st_size`; sums skip null/absent sizes, so request
   `CountNulls` and `CountAbsent` to detect unknown bytes under `--metadata names`. Azure rows decode
-  `access_tier` with `DecodeAzblobObject`. See the [reader guide](go/reader/README.md).
+  `access_tier` with `DecodeAzblobObject`. See the [reader guide](reader/README.md).
 - Go port: `--no-dirs` is recorded in a local dataset's `coverage.filters` (`no_dirs`).
-- Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
+- Go port: `objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
   JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
   parses dataset roots (`ParseLocation`: `s3://`, `gs://`, `az://ACCOUNT/CONTAINER`) and opens one with each
   provider's default credentials (`objfile/remote.Open`). Every ranged read now checks the offset the store served,
   and the GCS client `remote.Open` builds also checks the requests the SDK's reader sends on its own: a read returns
   exactly the requested bytes or fails.
-- Go port: `go/reader` opens and reads; it does not judge a dataset. `Open` exposes the manifest's source, scope
+- Go port: `reader` opens and reads; it does not judge a dataset. `Open` exposes the manifest's source, scope
   and coverage through `Metadata()`, and the application decides what to do with them; part digests are not
   checked on read. `IsRefusal` tells the data's refusals from other errors. Browse through SeekParquet's
   `Dataset.Page`, which returns a listing page with its next cursor and requested prefix reductions.
@@ -154,7 +154,7 @@ Notable changes per release. The full human summary for the current release is i
   them as SeekParquet datasets. Java-era fixtures are still served by `swath-replay`.
 - Go port: the local filesystem schema id is `swath/local-entries/v1` (was `swath-local/v1`); schema ids follow
   `swath/<row-contract>/vN`. The manifest's `extensions.swath` carries `"version": 1` as its first member, and
-  `swath show`, `--seed-from` and `go/reader` refuse a manifest whose `extensions.swath` lacks it or holds
+  `swath show`, `--seed-from` and `reader` refuse a manifest whose `extensions.swath` lacks it or holds
   another value ("unsupported swath metadata version"); generic SeekParquet reads ignore the extension. Re-list
   datasets written by earlier development builds. `swath show` names each layer: the SeekParquet format and
   draft, the swath schema id and the swath metadata version.

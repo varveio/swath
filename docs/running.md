@@ -345,7 +345,7 @@ generations or every Azure Blob entry (below). The 0.3 release's reader does not
 
 ### Verify a dataset
 
-`python3 verify.py DIR` (in `go/`) independently checks S3, GCS, Azure Blob and local datasets with DuckDB,
+`python3 verify.py DIR` (at the repository root) independently checks S3, GCS, Azure Blob and local datasets with DuckDB,
 including manifest part bounds, footer stamps and SHA-256 digests. For Azure, it also checks the `azblob`
 source kind and every part's column types and nullability, including UTC microsecond timestamps.
 

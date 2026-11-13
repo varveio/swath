@@ -11,7 +11,7 @@ The latest published release is the S3-focused Java v0.3.2. The Go implementatio
 Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
 Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible
 object-store dataset resume, S3 versions and delete markers, and GCS generations.
-The [Go guide](go/docs/getting-started.md) and [command reference](go/docs/commands/swath.md) describe their limits.
+The [Go guide](docs/getting-started.md) and [command reference](docs/commands/swath.md) describe their limits.
 These capabilities should not be listed as future backend work.
 
 The [publication checklist](docs/go-release-copy-checklist.md) keeps installation,
@@ -57,7 +57,7 @@ operation. Ordinary `swath resume` keeps source and destination identity fixed.
 ## Library interfaces
 
 The CLI is the product entry point. Internal engine packages are not a stable embedding
-API. The existing [Go dataset reader](go/reader/README.md) and
-[object-store I/O library](go/objfile/README.md) document their own interfaces; they are
+API. The existing [Go dataset reader](reader/README.md) and
+[object-store I/O library](objfile/README.md) document their own interfaces; they are
 not a promise of an embeddable listing engine. A curated engine API needs a separate
 contract after the CLI and lifecycle settle.

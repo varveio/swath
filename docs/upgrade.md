@@ -191,7 +191,7 @@ by field, from format 1:
 `parts[].sha256` is the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which
 the format's validators check at the digest level. MD5 is not written anywhere. Development builds before
 `extensions.swath.version` existed wrote manifests without it (some with the parts' MD5s under
-`extensions.swath.part_md5`). swath's metadata readers (`go/reader`, `swath show`, `--seed-from`) refuse them. A
+`extensions.swath.part_md5`). swath's metadata readers (`reader`, `swath show`, `--seed-from`) refuse them. A
 generic SeekParquet reader still opens them, because it ignores the extension. Re-list them into a new directory.
 
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
@@ -471,7 +471,7 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
 - **Rows.** The downstream reader reads `key`, `size` and `last_modified`. It rejects a null or negative `size`
   (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
   to 9999. A local dataset's directory rows are entries whose keys end in `/`.
-- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
+- **In Go.** The reader module (`reader`, [its README](../reader/README.md)) implements this contract:
   `Open` (manifest, schema id and metadata), `CheckSchema` (key and columns), and concrete
   typed row decoders. Use `Dataset.SeekParquet()` for scans, listings, aggregation and pagination.
   Coverage/source admission and the downstream reader's size/time rules remain application policy.
@@ -479,7 +479,7 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
   schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
-  test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
+  test_dataset_readers` from the repository root; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
   serves as the reader's fixture; the commands that produce them are in [internals/testing.md](internals/testing.md).
 
 ## Gates

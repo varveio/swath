@@ -65,7 +65,7 @@ func reportPaths() []string {
 
 // TestReportSchemaGolden: the run report's schema is testdata's golden
 // (report_version 3); a change to it shows in review as a diff of that
-// file, with ReportVersion and go/docs/upgrade.md to change beside it. Run
+// file, with ReportVersion and docs/upgrade.md to change beside it. Run
 // with UPDATE=1 to rewrite it.
 func TestReportSchemaGolden(t *testing.T) {
 	const golden = "testdata/report-schema.golden"
@@ -81,7 +81,7 @@ func TestReportSchemaGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(want) != got {
-		t.Fatalf("the run report's schema changed: bump ReportVersion, list the change in go/docs/upgrade.md and run UPDATE=1 go test ./internal/listing -run TestReportSchemaGolden\ngot:\n%s", got)
+		t.Fatalf("the run report's schema changed: bump ReportVersion, list the change in docs/upgrade.md and run UPDATE=1 go test ./internal/listing -run TestReportSchemaGolden\ngot:\n%s", got)
 	}
 }
 

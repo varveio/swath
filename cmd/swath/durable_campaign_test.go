@@ -53,13 +53,13 @@ import (
 // replayed certificate covers: no data request of any resume (a killed
 // first resume included) starts in
 // [max(cs, K), ce) of a certificate live in the ledger's prefix. Opt-in:
-// TestDurableMinIO runs with SWATH_MINIO_ENDPOINT (go/bench/minio.sh),
-// TestDurableCorpus with SWATH_CORPUS_ENDPOINT (go/bench/durable_corpus.sh);
+// TestDurableMinIO runs with SWATH_MINIO_ENDPOINT (bench/minio.sh),
+// TestDurableCorpus with SWATH_CORPUS_ENDPOINT (bench/durable_corpus.sh);
 // both skip without them, and both require SWATH_CAMPAIGN_KEYS (with
 // SWATH_CAMPAIGN_MAX_KEYS: its first lines only): the uninterrupted
 // dataset must list exactly that key file. The reuse arms (kills after
 // seals) must replay certificates. SWATH_CAMPAIGN_RESULTS names a file each arm
-// appends its result line to (go/docs/internals/measurements.md, "Durable spill").
+// appends its result line to (docs/internals/measurements.md, "Durable spill").
 
 // campaignFrontierDelay is the skewed fixture's slow frontier (contract
 // §6, "reuse"): a data request (fresh or continued) for keys below the key
@@ -83,15 +83,15 @@ const campaignInterval = "1s"
 
 // TestDurableMinIO runs the campaign against a MinIO bucket
 // (SWATH_MINIO_ENDPOINT, SWATH_MINIO_BUCKET, SWATH_MINIO_ACCESS_KEY,
-// SWATH_MINIO_SECRET_KEY; go/bench/minio.sh up starts and fills one).
+// SWATH_MINIO_SECRET_KEY; bench/minio.sh up starts and fills one).
 func TestDurableMinIO(t *testing.T) {
 	ep := os.Getenv("SWATH_MINIO_ENDPOINT")
 	if ep == "" {
-		t.Skip("SWATH_MINIO_ENDPOINT is not set (go/bench/minio.sh up)")
+		t.Skip("SWATH_MINIO_ENDPOINT is not set (bench/minio.sh up)")
 	}
 	bucket := orDefault(os.Getenv("SWATH_MINIO_BUCKET"), "swath-durable")
 	// 32 workers: at 64 concurrent listings the single-drive MinIO's heap
-	// outgrew its container and requests timed out (go/bench/minio.sh); at
+	// outgrew its container and requests timed out (bench/minio.sh); at
 	// 16 the captured ranges were still open at the 40 % kill, so that
 	// reuse arm had no certificate.
 	campaign(t, campaignFixture{name: "minio/" + bucket, upstream: ep, bucket: bucket, workers: orDefault(os.Getenv("SWATH_MINIO_WORKERS"), "32"), env: []string{
@@ -102,11 +102,11 @@ func TestDurableMinIO(t *testing.T) {
 
 // TestDurableCorpus runs the campaign against a key list served by the
 // bench's static fake (SWATH_CORPUS_ENDPOINT, SWATH_CORPUS_NAME;
-// go/bench/durable_corpus.sh serves each list and runs it).
+// bench/durable_corpus.sh serves each list and runs it).
 func TestDurableCorpus(t *testing.T) {
 	ep := os.Getenv("SWATH_CORPUS_ENDPOINT")
 	if ep == "" {
-		t.Skip("SWATH_CORPUS_ENDPOINT is not set (go/bench/durable_corpus.sh)")
+		t.Skip("SWATH_CORPUS_ENDPOINT is not set (bench/durable_corpus.sh)")
 	}
 	campaign(t, campaignFixture{name: orDefault(os.Getenv("SWATH_CORPUS_NAME"), "corpus"), upstream: ep, bucket: "bkt", anonymous: true})
 }

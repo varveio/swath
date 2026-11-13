@@ -13,13 +13,13 @@ import "runtime/debug"
 const Tool = "swath"
 
 // Version is the release version (X.Y.Z or X.Y.Z-rc.N), set at link time
-// by go/build.sh from $SWATH_VERSION (the release workflow passes its tag's
+// by build.sh from $SWATH_VERSION (the release workflow passes its tag's
 // version); empty, the Go module version is used, which is devel for a
 // build from a source checkout.
 var Version string
 
 // Revision is the commit the binary was built from, set at link time by
-// go/build.sh and CI (-ldflags -X .../internal/buildinfo.Revision=...);
+// build.sh and CI (-ldflags -X .../internal/buildinfo.Revision=...);
 // empty, the Go toolchain's VCS stamp is used, which a build in a git
 // worktree may lack.
 var Revision string

@@ -738,7 +738,7 @@ func UnknownTotal(h http.Handler) http.Handler {
 // bytes, text/html included). The clients are SDKs, never browsers, but the
 // bytes are a request's (an object's), so the response, also sent with
 // X-Content-Type-Options: nosniff, is never one a browser could take for a
-// page; go/bench/faultproxy types the bodies it passes through alike.
+// page; bench/faultproxy types the bodies it passes through alike.
 func bodyType(h http.Header) string {
 	switch mt, _, _ := mime.ParseMediaType(h.Get("Content-Type")); mt {
 	case "application/json", "application/xml", "text/xml":

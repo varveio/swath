@@ -27,7 +27,7 @@ import (
 // recordedRoot returns the fixture root named by SWATH_REPLAY_FIXTURES, or
 // skips: these fixtures are large or real recordings and are never
 // committed. The root holds fixtures/ (the synthetic and evidence fixtures
-// go/bench/replay/fixtures writes) and, optionally,
+// bench/replay/fixtures writes) and, optionally,
 // recordings/BUCKET/dataset/data (the Java tool's sorted listings of public
 // buckets).
 func recordedRoot(t *testing.T) string {
@@ -62,7 +62,7 @@ func walk(t *testing.T, s Store) (int, string) {
 	}
 }
 
-// TestGeneratedFixtures opens the sorted fixtures go/bench/replay/fixtures
+// TestGeneratedFixtures opens the sorted fixtures bench/replay/fixtures
 // writes, requires each to be a SeekParquet dataset of sortfixture.SchemaID
 // and sorted-rolled to have more than one part, and requires a full walk
 // with the row count and key digest the Java server's walk of the Java

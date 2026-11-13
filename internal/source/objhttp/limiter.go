@@ -15,7 +15,7 @@ import (
 // at a time, and growth (never the limit) freezes while successful
 // attempts are slow or attempts time out. Where Java cuts on every throttle
 // answer and grows only after 10 s without one, the throttle signal here is
-// read per round trip and as a fraction (go/docs/internals/clients.md,
+// read per round trip and as a fraction (docs/internals/clients.md,
 // "Request admission"): a background of random throttle answers that the client's
 // retries absorb is not congestion, and under Java's rules 1 % of answers
 // throttled held the limit at its floor.

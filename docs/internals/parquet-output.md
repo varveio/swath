@@ -7,7 +7,7 @@ guarantees are in [contracts.md](contracts.md#dataset-guarantees-readers-rely-on
 Go writer meets them.
 
 The format's mechanisms are the [seekparquet Go module](https://github.com/varveio/seekparquet)'s, at the
-commit `go/go.mod` pins (a pseudo-version of its `main` until it releases): the part writer (`write.NewPart`:
+commit `go.mod` pins (a pseudo-version of its `main` until it releases): the part writer (`write.NewPart`:
 pages, row groups, page indexes with exact bounds, the ascending key index, `sorting_columns`, the stamps, the
 key-order and profile checks, the SHA-256 computed as bytes are written), the manifest's JSON
 (`seekparquet.MarshalManifest`, `ParseManifest`) and footer inspection (`InspectFooter`, `InspectKeyPages`).
@@ -265,7 +265,7 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
 producer defines its schema beside its code. All producers bind their accessors to the specification
-`go/reader` registers for the schema id (`schema.Bind`, `reader.Schema`), which owns column order, names,
+`reader` registers for the schema id (`schema.Bind`, `reader.Schema`), which owns column order, names,
 types, nullability and key settings. This includes Azure's `reader.AzblobObjectsV1` binding in
 `internal/source/azblob/schema.go`; Azure keeps its accessors, `Delta` preferences, logical and heap accounting,
 and codec beside the provider. `azblob` `TestSchemaBinding` checks its reader contract and field behavior.

@@ -23,7 +23,7 @@ import (
 // settles) cannot reclassify it. The commit (the manifest's installation)
 // and its account are one step against a forced exit (commit, claim): the
 // dataset is committed iff the result the process exits with says so, with
-// two exceptions documented in go/docs/internals/durability.md ("The outcome
+// two exceptions documented in docs/internals/durability.md ("The outcome
 // of an attempt"). A forced exit that gets no snapshot within 2 s writes no
 // outcome, although a manifest may be visible. A manifest renamed into place
 // whose directory sync then fails stays visible under a failure result. Safe

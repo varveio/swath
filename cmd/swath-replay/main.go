@@ -104,7 +104,7 @@ Run "swath-replay serve -h" for the serve flags.
 }
 
 // version is this binary's build (internal/buildinfo: the version and
-// revision go/build.sh links in) under this command's name.
+// revision build.sh links in) under this command's name.
 func version() string {
 	b := buildinfo.Read()
 	if b.Revision == "" {

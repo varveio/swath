@@ -775,7 +775,7 @@ func loadEvidence(t *testing.T) *evidence {
 }
 
 // fixtures are the corpora the replay runs against: the sorted
-// evidence-gcs fixture under the fixture root (go/bench/replay/fixtures)
+// evidence-gcs fixture under the fixture root (bench/replay/fixtures)
 // when present, and always the corpus written in the test.
 func (ev *evidence) fixtures(t *testing.T, root string) map[string]string {
 	out := map[string]string{"generated": corpus(t, ev.root, t.TempDir(), ev.index)}

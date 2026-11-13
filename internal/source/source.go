@@ -73,7 +73,7 @@ type Disposer[R any] interface {
 }
 
 // Fencer is an Emitter that accepts coverage fences, the declarations a
-// durable spill certifies coverage from (go/docs/internals/ordering.md,
+// durable spill certifies coverage from (docs/internals/ordering.md,
 // "Durable spill"). An emitter that is not one ignores them; an adapter
 // between a provider and the order stage forwards both calls.
 type Fencer interface {

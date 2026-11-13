@@ -1801,7 +1801,7 @@ this host's noise of the plan-free pass. `TestStreamAllocations` measured 9.04 a
 `Scan` and `ScanBatches` split the plan into up to `shardsPerWorker` shards a worker and `Workers` goroutines
 take them in order, in place of exactly `Workers` shards with one goroutine each (varve#124: on an 18-core
 arm64 host and 57.9M commoncrawl objects, varve's overview took 3.9 s at one shard a core and 2.4 s asking for
-eight a core). Swath main `1357c628` with the change, against the same tree with `scan.go` and `batch.go` as
+eight a core). swath main `1357c628` with the change, against the same tree with `scan.go` and `batch.go` as
 on main, both with the same benchmark files; Go 1.27.4 (the module's toolchain), GOMAXPROCS 4, the shared
 4-vCPU host above, the 4M-row seed-1 fixture (20 row groups, so a scan has at most 20 shards), under `flock
 /tmp/swath-gates.lock`, other agents' test runs on the host throughout. `BenchmarkReaderScanSkewed` does 32

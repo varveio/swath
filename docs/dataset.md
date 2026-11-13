@@ -3,10 +3,10 @@
 `swath list ... -o DIR` writes a **swath dataset**: a [SeekParquet](https://github.com/varveio/seekparquet)
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
-operation checks, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
+operation checks, the key semantics a consumer outside `reader` must know, and how the profile evolves.
 The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/7264a9f88420/spec/format-1.md),
-at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
-order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
+at the commit `go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
+order and commit. [`reader`](../reader/README.md) is the Go API over this profile;
 [internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
 [upgrade.md](upgrade.md) maps the 0.3 release's format 1 onto it.
 
@@ -28,7 +28,7 @@ dataset. Any SeekParquet reader can still open it, and generic SeekParquet reads
 entirely. A swath dataset can also be partial: a listing stopped by `--max-keys`, or one with filters, is still
 a swath dataset, and opens and reads like any other.
 
-The reader opens and reads; it does not judge a dataset. Its operations (the `go/reader` names are given; other
+The reader opens and reads; it does not judge a dataset. Its operations (the `reader` names are given; other
 readers make the same distinctions):
 
 | Operation | What it establishes | Reads |
@@ -66,9 +66,9 @@ expects, and whether a dataset opened again is the one it saw before. Part diges
 after it is copied or moved, not for ordinary reads. `swath verify` is planned
 ([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
 [SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
-section of its `go/README.md`). From the root of a SeekParquet checkout that includes `go/cmd/seekparquet`
+section of its `go/README.md`). From the root of a SeekParquet checkout that includes `cmd/seekparquet`
 and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
-`github.com/varveio/seekparquet/go v0.1.1-0.20261112184929-7264a9f88420` in `go/go.mod`; use that
+`github.com/varveio/seekparquet/go v0.1.1-0.20261112184929-7264a9f88420` in `go.mod`; use that
 revision or one with a matching format, rather than assuming a published tag includes the command.
 
 ```bash
@@ -86,7 +86,7 @@ is incomplete, cannot run, or the arguments are invalid. With `go run`, a nonzer
 printed as `exit status N`; the `go` command itself exits 1.
 
 For a dataset produced with local output, the repository also has
-[`go/verify.py`](../verify.py): `python3 go/verify.py /path/to/dataset` from the repository root, with
+[`verify.py`](../verify.py): `python3 verify.py /path/to/dataset` from the repository root, with
 DuckDB installed. It checks swath metadata, schema-specific rules, row counts, key order and bounds,
 footer stamps and part SHA-256 digests independently of the Go reader. It expects the producer's flat
 `data/part-NNNNN.parquet` layout and `run.json`, so it is not a general validator for a bucket dataset
@@ -197,8 +197,8 @@ module's. JSON readers must not depend on that order.
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
-| `committed_object_bytes` | The dataset's object bytes: the `size` column summed over every row (a local tree's files only, not its directories; a null size not counted), as the parts' writers counted them, so a resumed dataset states the same total as an uninterrupted one. Absent when unknown (a schema without a size column, or a resumed run whose earlier parts were written by a build that did not count them); `0` is a real total. Added under `version` 1 | the application; `go/reader` (`Metadata.CommittedObjectBytes`); the run report's `output.committed_object_bytes` |
-| `filesystem` | A local source's filesystem space, as the operating system reported it when the listing ended: `total_bytes`, `free_bytes` (including space reserved for the superuser), `available_bytes` (what an unprivileged writer may use) and `measured_at`. It describes the filesystem that holds `source.uri` (for a symbolic link to a file, which lists as the link, the link's own; for a link to a directory, which is walked through, the target's); with `--one-file-system` that is the filesystem the walk stayed on, without it nested mounts are listed but not described. Measured with `statfs` on Linux (fragment units) and macOS, `GetDiskFreeSpaceEx` on Windows, where the total and available bytes are within the caller's quota and the free bytes are the volume's, so free can exceed total. Absent for a remote source, on other platforms, when the call fails, for a filesystem that reports a size of 0, and when the root no longer names what the listing started from (a link retargeted, a directory replaced). It is what the filesystem says of itself, not a disk's capacity: volumes that share a pool (an APFS container, a ZFS pool) each report the pool's free space, so it is not summed across datasets, and the dataset's size is not `total_bytes` minus `free_bytes` (scope, hard links, shared blocks, snapshots and the filesystem's overhead differ). Added under `version` 1 | the application; `go/reader` (`Metadata.Filesystem`) |
+| `committed_object_bytes` | The dataset's object bytes: the `size` column summed over every row (a local tree's files only, not its directories; a null size not counted), as the parts' writers counted them, so a resumed dataset states the same total as an uninterrupted one. Absent when unknown (a schema without a size column, or a resumed run whose earlier parts were written by a build that did not count them); `0` is a real total. Added under `version` 1 | the application; `reader` (`Metadata.CommittedObjectBytes`); the run report's `output.committed_object_bytes` |
+| `filesystem` | A local source's filesystem space, as the operating system reported it when the listing ended: `total_bytes`, `free_bytes` (including space reserved for the superuser), `available_bytes` (what an unprivileged writer may use) and `measured_at`. It describes the filesystem that holds `source.uri` (for a symbolic link to a file, which lists as the link, the link's own; for a link to a directory, which is walked through, the target's); with `--one-file-system` that is the filesystem the walk stayed on, without it nested mounts are listed but not described. Measured with `statfs` on Linux (fragment units) and macOS, `GetDiskFreeSpaceEx` on Windows, where the total and available bytes are within the caller's quota and the free bytes are the volume's, so free can exceed total. Absent for a remote source, on other platforms, when the call fails, for a filesystem that reports a size of 0, and when the root no longer names what the listing started from (a link retargeted, a directory replaced). It is what the filesystem says of itself, not a disk's capacity: volumes that share a pool (an APFS container, a ZFS pool) each report the pool's free space, so it is not summed across datasets, and the dataset's size is not `total_bytes` minus `free_bytes` (scope, hard links, shared blocks, snapshots and the filesystem's overhead differ). Added under `version` 1 | the application; `reader` (`Metadata.Filesystem`) |
 
 Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
 `coverage.complete` is never read as `false`, and a missing `filters` is never read as empty), and an application
@@ -208,7 +208,7 @@ by design. swath publishes the complete result of the live listing it performed;
 snapshot of a source that changes during the run.
 
 Readers ignore members they do not define and keep the raw extension (`reader.Metadata.Manifest`), so an
-informative member can be added under `version` 1. A member of the wrong JSON type is malformed: `go/reader`
+informative member can be added under `version` 1. A member of the wrong JSON type is malformed: `reader`
 reports it as `KindMetadata`, while an unsupported version is reported as `KindSchema`.
 
 ## Schema registry
@@ -314,7 +314,7 @@ the application.
 
 ## Keys and order
 
-This section is for consumers that read the parts without `go/reader`: DuckDB, Python, Spark.
+This section is for consumers that read the parts without `reader`: DuckDB, Python, Spark.
 
 - **Read the manifest's exact file list.** The dataset is the parts `manifest.json` lists, in the listed order.
   It is not every file under `data/`: a run in progress publishes parts there before its commit, and an

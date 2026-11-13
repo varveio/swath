@@ -1,6 +1,6 @@
 # objfile
 
-`github.com/varveio/swath/go/objfile` provides random-access reads and create-only
+`github.com/varveio/swath/objfile` provides random-access reads and create-only
 uploads for S3, Google Cloud Storage, and Azure Blob Storage. It turns an object
 into an `io.ReaderAt` with a known size and a pinned identity, suitable for
 [SeekParquet](https://github.com/varveio/seekparquet), parquet-go, and other file
@@ -37,7 +37,7 @@ import (
     "context"
 
     "github.com/parquet-go/parquet-go"
-    "github.com/varveio/swath/go/objfile/remote"
+    "github.com/varveio/swath/objfile/remote"
 )
 
 func rowCount(ctx context.Context) (int64, error) {
@@ -254,8 +254,8 @@ import (
     "errors"
     "io"
 
-    "github.com/varveio/swath/go/objfile"
-    "github.com/varveio/swath/go/objfile/remote"
+    "github.com/varveio/swath/objfile"
+    "github.com/varveio/swath/objfile/remote"
 )
 
 func upload(ctx context.Context, body io.Reader) (objfile.Receipt, error) {
@@ -329,4 +329,4 @@ The source comments own the API contract and provider settings:
 For dataset reading, see the [swath reader](../reader/README.md). For swath's
 publication and recovery protocol, see [durability](../docs/internals/durability.md)
 and [Parquet output](../docs/internals/parquet-output.md). Run this module's tests
-with `go test -race ./...` from `go/objfile`.
+with `go test -race ./...` from `objfile`.

@@ -66,14 +66,14 @@ snapshot semantics.
 
   > A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that
   > commits them, in the SeekParquet format, with one of swath's registered schema ids
-  > and valid swath metadata ([the swath dataset profile](../go/docs/dataset.md)).
+  > and valid swath metadata ([the swath dataset profile](dataset.md)).
 
 - **SeekParquet dataset** is the format term: any dataset that satisfies the SeekParquet
   sorted-key format, whoever wrote it. Use it when the format itself matters:
   interoperability, generic readers, conformance and diagnostics.
 - **swath dataset profile** is swath's contract on top of the format: its schema ids, the
   `extensions.swath` metadata and what it records. The Go port's
-  [`go/docs/dataset.md`](../go/docs/dataset.md) owns it.
+  [`docs/dataset.md`](dataset.md) owns it.
 - **Parquet part** is one Parquet file the manifest lists.
 - **Legacy Java dataset** is the Java tool's format 1, with its own commit rules
   (`_SUCCESS`, the run summary). Use the term in migration documents and legacy
@@ -131,15 +131,15 @@ sentences and link to that owner.
 | Fact | Owner |
 | --- | --- |
 | Product promise, fit and release status | root `README.md` |
-| Go first successful workflow | `go/docs/getting-started.md` |
-| Go commands and options | `go/docs/commands/` (options generated from the flag table) and installed Go CLI help |
-| Go output formats and filters | `go/docs/output.md`, `go/docs/filters.md` |
-| Go sources, credentials and endpoints | `go/docs/sources.md` |
-| Go exit codes, run report and log events | `go/docs/reference/` |
-| Go operations and recovery | `go/docs/running.md` |
-| Go schemas and dataset layout | `go/docs/dataset.md` |
-| Go engine and providers | `go/docs/internals/` |
-| Go dated measurements | `go/docs/internals/measurements.md` |
+| Go first successful workflow | `docs/getting-started.md` |
+| Go commands and options | `docs/commands/` (options generated from the flag table) and installed Go CLI help |
+| Go output formats and filters | `docs/output.md`, `docs/filters.md` |
+| Go sources, credentials and endpoints | `docs/sources.md` |
+| Go exit codes, run report and log events | `docs/reference/` |
+| Go operations and recovery | `docs/running.md` |
+| Go schemas and dataset layout | `docs/dataset.md` |
+| Go engine and providers | `docs/internals/` |
+| Go dated measurements | `docs/internals/measurements.md` |
 | Option syntax, accepted values, and defaults | installed CLI help |
 | Dated raw evidence | `docs/ops/dev/field-investigations.md` |
 

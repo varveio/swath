@@ -2,14 +2,14 @@
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
 #
-# The ordered-emission vs external-sort A/B (go/bench/sortab; the decision
+# The ordered-emission vs external-sort A/B (bench/sortab; the decision
 # record's experiment). Builds the harness (a test binary, never part of
 # the command), then runs every cell: reps outermost, arms A and B
 # interleaved innermost, each cell under $MEASURE (a lock or a wrapper) if
 # set. Results are JSON lines in $OUT; tabulate with sortab_table.py.
 #
 # Synthetic: every number comes from the trace generator configured here
-# (go/bench/sortab/trace_test.go, Shape); label it so.
+# (bench/sortab/trace_test.go, Shape); label it so.
 #
 #   SHAPES="slowfirst slowlast flat skewed" WORKERS="64 256 512" REPS=3 \
 #   KEYS=200000000 KILL="0 peak" WORK=/data/sortab OUT=ab.jsonl bench/sortab.sh

@@ -10,4 +10,4 @@ Those dependencies and their licenses are inventoried in a generated notices fil
 which — not this file — is the authoritative attribution record for bundled
 third-party code. The release archives and container images carry
 THIRD_PARTY_NOTICES, generated from the Go modules linked into swath and
-swath-replay (go/notices.sh).
+swath-replay (notices.sh).

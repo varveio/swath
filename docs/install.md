@@ -48,7 +48,7 @@ docker buildx imagetools inspect "ghcr.io/varveio/swath-replay:${TAG#v}"
 ```
 
 Use each image's top-level `Digest` (the multi-arch index) in the image signature and provenance
-commands in [RELEASING.md](../../RELEASING.md#verifying-a-release): replace `sha256:<digest>` and
+commands in [RELEASING.md](../RELEASING.md#verifying-a-release): replace `sha256:<digest>` and
 `sha256:<replay-digest>` with those values, and set `TAG=v0.4.0-rc.2` there too. Image signature
 verification needs cosign v3 or later.
 
@@ -69,23 +69,24 @@ inside the extracted directory on Linux or macOS.
 
 ## Build from source
 
-You need Go 1.26 or later (the `go` line of `go/go.mod`; with an older `go` command the toolchain named there is
+You need Go 1.26 or later (the `go` line of `go.mod`; with an older `go` command the toolchain named there is
 fetched) and git.
 
 ```bash
 git clone https://github.com/varveio/swath.git
-cd swath/go
+cd swath
 ./build.sh -o swath
 ./swath --version
 ```
 
 `./build.sh` builds `./cmd/swath` with `CGO_ENABLED=0`, strips the binary and stamps it with the checkout's
-commit (`-dirty` when `go/` has local changes, `$SWATH_REVISION` when set) and with `$SWATH_VERSION` as the
+commit (`-dirty` when the checkout has local changes, `$SWATH_REVISION` when set) and with `$SWATH_VERSION` as the
 version (a release sets its `X.Y.Z`; unset, the version reads `devel`). Put the binary on your `PATH`, for example
 `install -m 755 swath ~/.local/bin/`.
 
 A plain `go build ./cmd/swath` works too, but takes the revision from the Go toolchain's version-control stamp,
-which a build in a git worktree may lack.
+which a build in a git worktree may lack, and its version is the toolchain's, derived from the nearest release tag,
+rather than `devel`.
 
 ## Verify the binary
 
@@ -127,7 +128,7 @@ docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0-rc.2 \
 ```
 
 See [swath-replay](internals/swath-replay.md#container-image) for the replay server. To build an image
-from a checkout, run `docker build -f Dockerfile.go -t swath:dev .` from the repository root
+from a checkout, run `docker build -t swath:dev .` from the repository root
 (`--target swath-replay` for the replay server; `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"`
 stamps the commit, as the build context carries no `.git`). The build downloads modules and generates
 `THIRD_PARTY_NOTICES`, failing on a disallowed license ([license gate](internals/testing.md#license-gate)).

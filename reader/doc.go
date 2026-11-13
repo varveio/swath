@@ -27,5 +27,5 @@
 // the caller. Position preserves the key and equal-key offset for continuation.
 // IsRefusal recognizes swath semantic errors and SeekParquet data refusals.
 //
-// The swath dataset profile is documented in go/docs/dataset.md in the repository.
+// The swath dataset profile is documented in docs/dataset.md in the repository.
 package reader

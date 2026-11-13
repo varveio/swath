@@ -14,7 +14,6 @@ objects only.
 ## Build and run
 
 ```bash
-cd go
 ./build.sh -o swath-replay ./cmd/swath-replay        # CGO_ENABLED=0, revision stamped
 ./swath-replay serve --fixture /data/rec/noaa-normals-pds/dataset/data --bucket noaa-normals-pds \
   --host 127.0.0.1 --port 19090 --metrics-port 19192 &
@@ -287,7 +286,7 @@ the list selector stays on the S3 route as before.
   not authenticate (`server` `TestAzureSASQueries`). A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
   malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
   and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
-  matrix in [`../../../docs/replay-provider-conformance.md`](../../../docs/replay-provider-conformance.md) records.
+  matrix in [`../../../docs/replay-provider-conformance.md`](../replay-provider-conformance.md) records.
   `+` is a literal plus. Raw non-ASCII bytes in the query are read as UTF-8.
 - Names are listed in UTF-16 code-unit order, as live Azure lists them; the fixture stays byte-sorted
   ([replay.md](replay.md#the-azure-route)). With a delimiter, `Blob` and `BlobPrefix` entries
@@ -1062,7 +1061,7 @@ fields for every schema.
 
 ### The GCS evidence replay
 
-`go/internal/replay/evidence` replays the provider evidence archive (`docs/replay-provider-evidence.tar.gz`)
+`internal/replay/evidence` replays the provider evidence archive (`docs/replay-provider-evidence.tar.gz`)
 against this server. With `SWATH_REPLAY_FIXTURES=ROOT` it extracts the archive into a temporary directory,
 serves the capture corpus (from `ROOT/fixtures/evidence-gcs/sorted` when present, and always from the same
 corpus written in the test and sorted by sort-fixture) under the bucket `replay-bucket`, and replays every
@@ -1081,7 +1080,7 @@ prefix is open), and a pinned mismatch that now matches is logged as an improvem
 outcomes to `DIR/<fixture>/gcs-outcomes.json`.
 `scripts/provider-conformance/evidence.py go-receipts` runs this replay and the Azure one at a clean commit and
 writes a `producer: go` receipt for each capture they match (see
-[Go receipts](../../../docs/replay-provider-conformance.md#go-receipts)).
+[Go receipts](../replay-provider-conformance.md#go-receipts)).
 
 ```bash
 SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v ./internal/replay/evidence
@@ -1091,7 +1090,7 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 
 ## Container image
 
-The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an image that holds the static binary
+The `swath-replay` target of the `Dockerfile` (at the repository root) builds an image that holds the static binary
 and its legal files (`LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` in `/licenses/`) and nothing else:
 `/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `65532:65532`, and the runtime stage is
 `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
@@ -1099,15 +1098,15 @@ as `ghcr.io/varveio/swath-replay` ([install.md](../install.md#container-images))
 mount one read-only and pass its container path to `--fixture`.
 
 ```bash
-docker build -f Dockerfile.go --target swath-replay --build-arg SWATH_REVISION="$(git rev-parse HEAD)" \
+docker build --target swath-replay --build-arg SWATH_REVISION="$(git rev-parse HEAD)" \
   -t swath-replay:dev .
 docker run --rm -p 127.0.0.1:19090:19090 -p 127.0.0.1:19192:19192 -v /data/sorted:/fixtures:ro \
   swath-replay:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
 ```
 
 The server must bind `0.0.0.0` for a published port to reach it; it has no authentication, so bind the host
-side to loopback as shown unless an isolated container network is the boundary. The build context is `go/`
-alone (`Dockerfile.go.dockerignore`, which also leaves out local build output). The build stage, shared with the
+side to loopback as shown unless an isolated container network is the boundary. The build context is the
+module's sources alone (`.dockerignore`, which also leaves out local build output). The build stage, shared with the
 lister's image, cross-compiles both commands for the target platform, so `--platform linux/arm64` builds on an
 amd64 host without emulation. Build arguments: `SWATH_VERSION` is the version `--version` prints (`devel`
 without it), `SWATH_REVISION` the commit (the context carries no `.git`, so without it the binary names no
@@ -1137,7 +1136,7 @@ main/dispatch; `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` a
 
 - `go-build`: when main is selected, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
   darwin/amd64, darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit). Packaging/dependency/full PRs
-  and all main/dispatch runs also build both images of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
+  and all main/dispatch runs also build both images of the `Dockerfile`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
   `swath-go:ci` and `swath-replay-go:ci` and smoked on data written in the job, so none needs network or a
   recording. The lister image lists a `bench/s3fake` bucket of 2,000 keys into a dataset
   (`scripts/ci/smoke-container.sh`: read back with DuckDB, resumed as a no-op); the replay image
