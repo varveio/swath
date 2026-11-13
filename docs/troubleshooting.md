@@ -202,6 +202,12 @@ larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almos
 output's filesystem: size the disk as [production.md](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
+A run that is far short of spill room does not exit 74: it keeps going at the output's pace, which on a very
+large bucket can be a few rows a second. `resources.spill.refused` above 0 in the report, or a request rate in
+`progress.json` that collapsed, is the sign
+([the first bad pattern](production.md#three-bad-patterns)). Stop it and resume on a larger disk or with a
+larger `--spill-budget`.
+
 ## Memory is higher than `--sort-buffer`
 
 `--sort-buffer` bounds the rows held between listing and encoding, not the process's memory: pages in flight,
