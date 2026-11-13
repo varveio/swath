@@ -72,7 +72,8 @@ swath: totals of the dataset photos-inventory, not a live listing: /data/photos 
 
 The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
 formats and filters. They are read from the dataset's Parquet parts: the key and only the columns the totals
-and filters need, in one parallel pass. Depth counts from the dataset's scope, as it would from the source.
+and filters need, in one parallel pass, once every part's columns are checked against the dataset's schema (a
+dataset that breaks it is refused, exit 1). Depth counts from the dataset's scope, as it would from the source.
 Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold.
 
 An optional PREFIX after the directory restricts the totals to the keys under it, as the dataset holds them (a
