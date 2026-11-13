@@ -39,6 +39,11 @@ swath is an open-source command-line tool that lists files and objects in parall
 filesystems, Amazon S3 and S3-compatible stores, Google Cloud Storage, and Azure Blob Storage flat
 namespaces. It reads listing metadata only and never changes what it lists.
 
+On 2026-11-07 one run listed and counted 1,088,794,418 objects of the public `sentinel-cogs` S3 bucket in
+177 seconds, and a separate run wrote them as a sorted Parquet inventory in 846 seconds, each with 1,024
+workers on one 32-vCPU VM. These are individual runs, not a promise for every source or machine
+([measurements](../docs/internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
+
 ## Install
 
 The newest published build is swath 0.4.0-rc.2, a release candidate. Download the archive for your platform
@@ -58,6 +63,17 @@ swath show ~/downloads-inventory                # what it holds and how complete
 
 [Your first inventory](../docs/first-inventory.md) walks through the output, and
 [Understand your results](../docs/results.md) says what the numbers cover.
+
+## List a bucket
+
+```bash
+swath du s3://bucket/prefix/ -d 1                # totals per prefix
+swath list gs://bucket/prefix/ -o inventory      # a sorted Parquet inventory
+```
+
+Listing a bucket makes billable API requests and reads metadata, not object contents; credentials come from
+the provider's usual chain ([sources](../docs/sources.md)). An interrupted bucket inventory continues where it
+stopped with [`swath resume DIR`](../docs/commands/swath-resume.md).
 
 ## Documentation
 
