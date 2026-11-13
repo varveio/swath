@@ -10,7 +10,7 @@ help:
 # release workflow enforces.
 #
 # The tag is the version's one source: the release workflow stamps it into every binary
-# (go/build.sh, $SWATH_VERSION), the archive names and the image tags, so there is no version
+# (build.sh, $SWATH_VERSION), the archive names and the image tags, so there is no version
 # file to bump and no commit to make. The tagged commit must already be on origin/main, as the
 # workflow's ancestry guard requires.
 #

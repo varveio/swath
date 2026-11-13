@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deep runtime smoke for the swath lister image (Dockerfile.go).
+# Deep runtime smoke for the swath lister image (the Dockerfile).
 #
 #   smoke-container.sh <image-ref> [work-directory]
 #
@@ -13,14 +13,14 @@
 # its own output: the promise in the docs is that any Parquet reader queries the dataset
 # directly, so that is what gets tested. Exit status alone proves nothing here — a run can
 # exit 0 having written an unreadable or empty dataset. The dataset is read by the part list
-# of its manifest.json, as its readers are told to (go/docs/dataset.md).
+# of its manifest.json, as its readers are told to (docs/dataset.md).
 #
 # Run by release.yml publish against the release image, by digest, before its tags are
 # applied, and by ci.yml go-build against the image it builds, offline against bench/s3fake
 # (SWATH_SMOKE_ENDPOINT), so the release smoke is exercised on every Go pull request.
 #
 # Runnable locally against any image reference:
-#   docker build -f Dockerfile.go -t swath:dev . && scripts/ci/smoke-container.sh swath:dev
+#   docker build -t swath:dev . && scripts/ci/smoke-container.sh swath:dev
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then

@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TARGETS=(linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64)
 COMMANDS=(swath swath-replay)
 LEGAL=(LICENSE NOTICE)
-# Generated beside the binaries by go/notices.sh, which fails on a disallowed license.
+# Generated beside the binaries by notices.sh, which fails on a disallowed license.
 NOTICES=THIRD_PARTY_NOTICES
 
 usage() {
@@ -96,7 +96,7 @@ assert_exact() {
   done <<< "$expected"
 }
 
-# build: every command for every target through go/build.sh, stamped with the version (and
+# build: every command for every target through build.sh, stamped with the version (and
 # $SWATH_REVISION, or the checkout's HEAD), into BINARIES/OS-ARCH/, and their third-party
 # notices into BINARIES/THIRD_PARTY_NOTICES.
 build() {
@@ -109,10 +109,10 @@ build() {
       out="$binaries/$(platform "$target")/$cmd$(exe "$target")"
       echo "building $cmd for $target"
       GOOS=${target%/*} GOARCH=${target#*/} SWATH_VERSION=$version \
-        "$REPO_ROOT/go/build.sh" -o "$out" "./cmd/$cmd"
+        "$REPO_ROOT/build.sh" -o "$out" "./cmd/$cmd"
     done
   done
-  "$REPO_ROOT/go/notices.sh" "$binaries/$NOTICES"
+  "$REPO_ROOT/notices.sh" "$binaries/$NOTICES"
 }
 
 # stage: one archive per target, a top-level swath-VERSION-OS-ARCH/ directory holding the
@@ -158,7 +158,7 @@ stage() {
   rm -rf -- "$work"
 }
 
-# image-context: the linux commands out of the staged archives, as Dockerfile.go's build stage
+# image-context: the linux commands out of the staged archives, as the Dockerfile's build stage
 # would have written them (out/linux-ARCH/, and the notices at out/), for
 # `build-contexts: build=DIRECTORY`.
 image_context() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Supply-chain scan of what swath actually ships. The nightly job passes the release images
-# (Dockerfile.go): the scanner reads the Go version and module list embedded in each binary,
+# (the Dockerfile): the scanner reads the Go version and module list embedded in each binary,
 # and the OS packages of the image's base. Image findings are written as raw JSON and passed to
 # the checked-in policy in osv-image-policy.py, which applies the argued exceptions in
 # config/osv/osv-scanner.toml.

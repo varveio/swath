@@ -4,17 +4,17 @@
 # The Go images, one target each: `swath` (the lister, the default target) and `swath-replay`
 # (the replay server). Each holds its static binary and nothing it does not need:
 #
-#   docker build -f Dockerfile.go --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath:dev .
+#   docker build --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath:dev .
 #   docker run --rm -v "$PWD/out:/out" swath:dev list s3://bucket/prefix/ -o /out/inventory
-#   docker build -f Dockerfile.go --target swath-replay \
+#   docker build --target swath-replay \
 #     --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath-replay:dev .
 #   docker run --rm -p 127.0.0.1:19090:19090 -v /data/sorted:/fixtures:ro swath-replay:dev \
 #     serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090
 #
 # The build stage runs on the build platform and cross-compiles both commands for
-# TARGETOS/TARGETARCH (CGO_ENABLED=0 through go/build.sh), so a foreign-architecture image
+# TARGETOS/TARGETARCH (CGO_ENABLED=0 through build.sh), so a foreign-architecture image
 # needs no emulation. It writes them to /out/TARGETOS-TARGETARCH/, and their third-party notices
-# (go/notices.sh, which fails on a disallowed license) to /out/THIRD_PARTY_NOTICES. The release
+# (notices.sh, which fails on a disallowed license) to /out/THIRD_PARTY_NOTICES. The release
 # workflow replaces the stage with the contents of its release archives (`build-contexts:
 # build=DIR`, DIR holding out/linux-amd64/, out/linux-arm64/ and out/THIRD_PARTY_NOTICES), so the
 # images carry the archived bytes. Each image holds LICENSE, NOTICE and THIRD_PARTY_NOTICES in
@@ -38,23 +38,23 @@
 # names a module mirror where proxy.golang.org is not reachable (go.sum still verifies every
 # module).
 #
-# The builder's Go is the `toolchain` line of go/go.mod (go1.27.4), digest-pinned, so the image
+# The builder's Go is the `toolchain` line of go.mod (go1.27.4), digest-pinned, so the image
 # and CI compile with the same release: actions/setup-go reads that line from go-version-file.
 # Raise both together. GOTOOLCHAIN=local keeps the builder from downloading another.
 FROM --platform=$BUILDPLATFORM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS build
 ENV GOTOOLCHAIN=local
-WORKDIR /src/go
+WORKDIR /src
 
 # Modules first, so a source change reuses the downloaded module layer.
-COPY go/go.mod go/go.sum ./
+COPY go.mod go.sum ./
 # The reader and objfile modules, which go.mod replaces with ./reader and
 # ./objfile, are part of the module graph.
-COPY go/reader/go.mod go/reader/go.sum ./reader/
-COPY go/objfile/go.mod go/objfile/go.sum ./objfile/
+COPY reader/go.mod reader/go.sum ./reader/
+COPY objfile/go.mod objfile/go.sum ./objfile/
 ARG GOPROXY=https://proxy.golang.org,direct
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
-COPY go/ ./
+COPY . ./
 ARG GOFLAGS=
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     mkdir -p /out && ./notices.sh /out/THIRD_PARTY_NOTICES

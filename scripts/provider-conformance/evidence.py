@@ -106,22 +106,22 @@ GO_RECEIPT_FIELDS = JAVA_RECEIPT_FIELDS | {"producer", "test_sources", "go_toolc
 # writer it imports, the Azure route's evidence replay with its comparator and SDK runner (the
 # route's other test files are not compiled into that replay), and go.mod and go.sum, which pin
 # the SDK versions the SDK runs use.
-GO_EVIDENCE_TEST_SOURCES = ("go/go.mod", "go/go.sum",
-                            "go/internal/replay/evidence/",
-                            "go/internal/replay/legacy/legacytest/",
-                            "go/internal/replay/azure/evidence_test.go",
-                            "go/internal/replay/azure/evidencecmp_test.go",
-                            "go/internal/replay/azure/sdk_test.go")
+GO_EVIDENCE_TEST_SOURCES = ("go.mod", "go.sum",
+                            "internal/replay/evidence/",
+                            "internal/replay/legacy/legacytest/",
+                            "internal/replay/azure/evidence_test.go",
+                            "internal/replay/azure/evidencecmp_test.go",
+                            "internal/replay/azure/sdk_test.go")
 # Per provider: the Go evidence test, the file that declares it, the variable naming its outcome
 # report directory, and the report files under that directory (one per corpus it replays).
 GO_EVIDENCE_TESTS = {
-    "gcs": ("TestGCSNativeCapturesMatchReplay", "go/internal/replay/evidence/evidence_test.go",
+    "gcs": ("TestGCSNativeCapturesMatchReplay", "internal/replay/evidence/evidence_test.go",
             "SWATH_PROVIDER_REPORT", "*/gcs-outcomes.json"),
-    "azure": ("TestAzureEvidenceReplay", "go/internal/replay/azure/evidence_test.go",
+    "azure": ("TestAzureEvidenceReplay", "internal/replay/azure/evidence_test.go",
               "SWATH_REPLAY_PROVIDER_REPORT", "azure-outcomes.json"),
 }
 GO_TEST_PACKAGES = ("./internal/replay/evidence", "./internal/replay/azure")
-# The binary a Go receipt binds: `go/build.sh`'s static linux/amd64 replay server.
+# The binary a Go receipt binds: `build.sh`'s static linux/amd64 replay server.
 GO_DISTRIBUTION_NAME = "swath-replay-linux-amd64"
 # Build settings that change the binary's bytes; everything else comes from the receipt commit.
 GO_BUILD_ENV = {"GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "0",
@@ -843,7 +843,7 @@ def validate_receipt(proof: dict, version: str, kind: str, steps: int, producer:
                      repo_root: Path | None, replay_commit: str | None, distribution: Path | None) -> None:
     """Check one producer's PASS receipt for a capture: the fields both producers share, then what
     that producer binds (a Java receipt: the test source in the tree and the jar given; a Go
-    receipt: the test sources and `go/build.sh`'s binary, both recomputed at the receipt commit),
+    receipt: the test sources and `build.sh`'s binary, both recomputed at the receipt commit),
     then that the receipt commit is an ancestor of the current replay source."""
     if repo_root is None or not proof.get("replay_test") or not proof.get("replay_test_path") \
             or not SHA256.fullmatch(proof.get("replay_result_sha256", "")) or replay_commit is None:
@@ -902,7 +902,7 @@ def declares_test(suffix: str, source: str, name: str) -> bool:
 def validate_go_receipt(result: dict, repo_root: Path, replay_commit: str) -> None:
     """A Go receipt's own bindings, recomputed at its commit: the evidence test sources (which must
     also be unchanged at the current replay commit, as a Java receipt's test source must be), the
-    pinned toolchain, and the SHA-256 of the binary `go/build.sh` builds there."""
+    pinned toolchain, and the SHA-256 of the binary `build.sh` builds there."""
     if set(result) != GO_RECEIPT_FIELDS or result.get("distribution_name") != GO_DISTRIBUTION_NAME:
         raise ValueError("Go receipt carries fields of another producer")
     commit = result["replay_commit"]
@@ -918,9 +918,9 @@ def validate_go_receipt(result: dict, repo_root: Path, replay_commit: str) -> No
     if not declares_test(".go", git_blob(repo_root, commit, result["test_path"]).decode("utf-8"), result["test"]):
         raise ValueError("replay test identifier does not resolve to source")
     if result["go_toolchain"] != go_toolchain(repo_root, commit):
-        raise ValueError("Go receipt toolchain differs from go/go.mod at its commit")
+        raise ValueError("Go receipt toolchain differs from go.mod at its commit")
     if result["distribution_sha256"] != go_distribution_sha256(repo_root, commit):
-        raise ValueError("Go receipt binary differs from go/build.sh's build at its commit")
+        raise ValueError("Go receipt binary differs from build.sh's build at its commit")
 
 
 def git_output(repo_root: Path, *arguments: str) -> bytes:
@@ -970,14 +970,14 @@ def go_test_source_sha256(sources: dict[str, str]) -> str:
 
 
 def go_toolchain(repo_root: Path, commit: str) -> str:
-    """The toolchain go/go.mod pins at `commit`: its `toolchain` line, else its `go` line."""
-    mod = git_blob(repo_root, commit, "go/go.mod").decode("utf-8")
+    """The toolchain go.mod pins at `commit`: its `toolchain` line, else its `go` line."""
+    mod = git_blob(repo_root, commit, "go.mod").decode("utf-8")
     pinned = re.search(r"^toolchain\s+(go[0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
     if pinned:
         return pinned.group(1)
     version = re.search(r"^go\s+([0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
     if not version:
-        raise ValueError("go/go.mod names no Go version")
+        raise ValueError("go.mod names no Go version")
     return "go" + version.group(1)
 
 
@@ -1022,17 +1022,17 @@ def go_environment(toolchain: str, build: bool) -> dict[str, str]:
 
 
 def build_go_distribution(tree: Path, toolchain: str, out: Path) -> str:
-    """Build the replay server with the tree's go/build.sh and return the binary's SHA-256."""
-    run = subprocess.run(["sh", str(tree / "go" / "build.sh"), "-o", str(out), "./cmd/swath-replay"],
+    """Build the replay server with the tree's build.sh and return the binary's SHA-256."""
+    run = subprocess.run(["sh", str(tree / "build.sh"), "-o", str(out), "./cmd/swath-replay"],
                          env=go_environment(toolchain, True), capture_output=True)
     if run.returncode != 0:
-        raise ValueError("go/build.sh failed: " + run.stderr.decode("utf-8", "replace").strip())
+        raise ValueError("build.sh failed: " + run.stderr.decode("utf-8", "replace").strip())
     return hashlib.sha256(out.read_bytes()).hexdigest()
 
 
 @functools.cache
 def go_distribution_sha256(repo_root: Path, commit: str) -> str:
-    """The SHA-256 of the static linux/amd64 `swath-replay` that go/build.sh builds at `commit`."""
+    """The SHA-256 of the static linux/amd64 `swath-replay` that build.sh builds at `commit`."""
     toolchain = go_toolchain(repo_root, commit)
     with go_checkout(repo_root, commit) as tree:
         return build_go_distribution(tree, toolchain, tree.parent / GO_DISTRIBUTION_NAME)
@@ -1063,7 +1063,7 @@ def write_go_receipts(repo_root: Path, fixtures: Path, out: Path) -> dict[str, i
         for provider, (_, _, variable, _) in GO_EVIDENCE_TESTS.items():
             env[variable] = str(Path(temp) / provider)
         run = subprocess.run(["go", "test", "-count=1", "-p", "1", "-run", "^(" + "|".join(names) + ")$",
-                              *GO_TEST_PACKAGES], cwd=tree / "go", env=env, capture_output=True)
+                              *GO_TEST_PACKAGES], cwd=tree, env=env, capture_output=True)
         if run.returncode != 0:
             raise ValueError("Go evidence replay failed:\n" + run.stdout.decode("utf-8", "replace")[-4000:])
         with evidence_root(tree / EVIDENCE_ARCHIVE.relative_to(REPO_ROOT)) as root:

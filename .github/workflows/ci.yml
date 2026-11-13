@@ -119,23 +119,32 @@ jobs:
 
   # Go jobs run concurrently. PRs test complete affected modules; main/dispatch
   # select all modules, platforms, fixtures and images for release qualification.
-  # The cheap verdicts first: formatting, vet, and the race shard table's own check (every
-  # package and every test of a split package in exactly one shard).
+  # The cheap verdicts first: license headers, Markdown links, formatting, vet, and the race
+  # shard table's own check (every package and every test of a split package in exactly one
+  # shard).
   go-lint:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.reader == 'true' || needs.changes.outputs.objfile == 'true'
+      # Every tracked .go file starts with the two-line copyright and SPDX header.
+      - name: License headers
+        run: |
+          ./scripts/ci/check-spdx.sh --self-test
+          ./scripts/ci/check-spdx.sh
+
+      - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
           key: go-lint
+
+      # `go test ./docs` checks the relative links of every Markdown file in the repository, the
+      # root prose and site/README.md among them. A change to those selects no Go tier, so the
+      # check runs on every event; it builds no package outside the standard library.
+      - name: Markdown links (go test ./docs)
+        run: go test -count=1 ./docs
 
       - name: gofmt
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.reader == 'true' || needs.changes.outputs.objfile == 'true'
@@ -160,11 +169,11 @@ jobs:
 
       - name: Race shard table self-test
         if: needs.changes.outputs.go == 'true'
-        run: ../scripts/ci/go-race-shards.sh --self-test
+        run: ./scripts/ci/go-race-shards.sh --self-test
 
       - name: Race shards cover every test once
         if: needs.changes.outputs.go == 'true'
-        run: ../scripts/ci/go-race-shards.sh --check
+        run: ./scripts/ci/go-race-shards.sh --check
 
   # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
   # table into this matrix, so the table is the one place a shard is added). A leg's name is its
@@ -184,13 +193,10 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.go_shards) }}
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.go == 'true'
         uses: ./.github/actions/setup-go
         with:
@@ -203,7 +209,7 @@ jobs:
         run: |
           set -euo pipefail
           # Captured first, so a failing script fails the step instead of running no arguments.
-          shard_args=$(../scripts/ci/go-race-shards.sh "$SHARD")
+          shard_args=$(./scripts/ci/go-race-shards.sh "$SHARD")
           mapfile -t args <<<"$shard_args"
           printf 'go test -race -count=1 -timeout 20m'; printf " '%s'" "${args[@]}"; echo
           json="$RUNNER_TEMP/go-race.json"
@@ -238,19 +244,16 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.go == 'true'
         uses: ./.github/actions/setup-go
         with:
           key: go-nonrace
 
-      # The writer admission's heap gate (go/docs/internals/testing.md): its full arms allocate hundreds of
+      # The writer admission's heap gate (docs/internals/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
       - name: Heap gates (SWATH_HEAP_GATES=1, no -race)
         if: needs.changes.outputs.go == 'true'
@@ -258,19 +261,19 @@ jobs:
           SWATH_HEAP_GATES: "1"
         run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
 
-      # The shape suite at 200,000 keys per shape (internal/shapes, go/docs/internals/testing.md): a
+      # The shape suite at 200,000 keys per shape (internal/shapes, docs/internals/testing.md): a
       # measurement with order-of-magnitude bounds, skipped under -race (ten times slower, and the
       # code it drives is race-tested by its own packages), so it runs here without it.
       - name: Shape suite (TestShapes, no -race)
         if: needs.changes.outputs.go == 'true'
         run: go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes
 
-      # SeekParquet conformance (go/docs/internals/testing.md): the suite's reader target against the Go
+      # SeekParquet conformance (docs/internals/testing.md): the suite's reader target against the Go
       # adapter of the seekparquet module go.mod pins, then this build's datasets validated by the
       # suite's reference adapter (full and digest) and read alike by both adapters.
       - name: SeekParquet conformance
         if: needs.changes.outputs.go == 'true'
-        run: ../scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
+        run: ./scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
 
   # Static cross-builds stay on every main-module PR. Packaged images run on
   # main/dispatch and packaging/dependency/escalated PRs; the license gate stays on all.
@@ -278,13 +281,10 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.go == 'true'
         uses: ./.github/actions/setup-go
         with:
@@ -329,7 +329,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath
           platforms: linux/amd64,linux/arm64
           push: false
@@ -345,7 +345,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath-replay
           platforms: linux/amd64,linux/arm64
           push: false
@@ -357,7 +357,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath
           load: true
           tags: swath-go:ci
@@ -369,7 +369,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.go
+          file: Dockerfile
           target: swath-replay
           load: true
           tags: swath-replay-go:ci
@@ -410,14 +410,14 @@ jobs:
           trap 'kill "$fake"' EXIT
           for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
           SWATH_SMOKE_BUCKET=s3://smoke SWATH_SMOKE_ENDPOINT=http://127.0.0.1:19400 \
-            ../scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister"
-          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/lister/data" sorted
+            ./scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister"
+          ./scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/lister/data" sorted
           go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
-          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |
+          ./scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |
             tee "$smoke/capture-smoke.log"
           grep -q "sorting it with the image's sort-fixture" "$smoke/capture-smoke.log"
 
-  # go/objfile, a nested module (its own go.mod, so the jobs above, which run in go/, never
+  # objfile, a nested module (its own go.mod, so the jobs above, which run at the root, never
   # see it): vet, tidiness, race tests and the static cross-builds. go-lint's gofmt covers it.
   go-objfile:
     needs: changes
@@ -425,11 +425,11 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: go/objfile
+        working-directory: objfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.objfile == 'true'
         uses: ./.github/actions/setup-go
         with:
@@ -446,7 +446,7 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
-  # The reader module (go/reader), a nested module of its own: vet, tidiness, the race tests
+  # The reader module (reader/), a nested module of its own: vet, tidiness, the race tests
   # (the dependency-graph check among them) and the static cross-builds. go-lint's gofmt
   # covers it; the main module's tests decode its own writer's datasets with it.
   go-reader:
@@ -455,11 +455,11 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: go/reader
+        working-directory: reader
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.reader == 'true'
         uses: ./.github/actions/setup-go
         with:
@@ -491,11 +491,10 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: matrix.scope != 'off'
         uses: ./.github/actions/setup-go
         with:
@@ -509,7 +508,7 @@ jobs:
           set -euo pipefail
           packages=(./...)
           if [ "$SCOPE" = extra ]; then
-            selected=$(../scripts/ci/go-race-shards.sh --arm64-extra)
+            selected=$(./scripts/ci/go-race-shards.sh --arm64-extra)
             mapfile -t packages <<<"$selected"
           fi
           go vet "${packages[@]}"
@@ -517,28 +516,25 @@ jobs:
 
       - name: Reader module vet and tests (no -race)
         if: matrix.scope == 'full' && needs.changes.outputs.reader == 'true'
-        working-directory: go/reader
+        working-directory: reader
         run: go vet ./... && go test -count=1 -timeout 15m ./...
 
       - name: Object-file module vet and tests (no -race)
         if: matrix.scope == 'full' && needs.changes.outputs.objfile == 'true'
-        working-directory: go/objfile
+        working-directory: objfile
         run: go vet ./... && go test -count=1 -timeout 15m ./...
 
-  # The replay fixture tier: go/bench/replay/fixtures writes the synthetic and evidence
+  # The replay fixture tier: bench/replay/fixtures writes the synthetic and evidence
   # fixtures, and the gated replay tests run on them. The shared policy selects it with main
   # and reader changes and the evidence inputs of these fixtures.
   go-fixtures:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Go (version from go/go.mod)
+      - name: Set up Go (version from go.mod)
         if: needs.changes.outputs.fixtures == 'true'
         uses: ./.github/actions/setup-go
         with:

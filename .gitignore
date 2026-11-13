@@ -18,8 +18,8 @@ out/
 
 # Tool artifacts (never commit listing output or checkpoints)
 *.parquet
-# The reader's example dataset: seven rows, 3.7 KB, read by go/reader/example_test.go.
-!/go/reader/testdata/photos/data/part-00000.parquet
+# The reader's example dataset: seven rows, 3.7 KB, read by reader/example_test.go.
+!/reader/testdata/photos/data/part-00000.parquet
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
@@ -55,11 +55,11 @@ __pycache__/
 # binary back into history for every re-record, which is what the release indirection avoids.
 site/assets/*.mp4
 
-# Go build output (go/build.sh -o swath, cross builds -o swath-<os>-<arch>, Windows .exe)
-/go/swath
-/go/swath-*
-/go/swath.exe
-# The replay server (go/build.sh -o swath-replay ./cmd/swath-replay, cross builds, Windows .exe)
-/go/swath-replay
-/go/swath-replay-*
-/go/swath-replay.exe
+# Go build output (build.sh -o swath, cross builds -o swath-<os>-<arch>, Windows .exe)
+/swath
+/swath-*
+/swath.exe
+# The replay server (build.sh -o swath-replay ./cmd/swath-replay, cross builds, Windows .exe)
+/swath-replay
+/swath-replay-*
+/swath-replay.exe

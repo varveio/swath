@@ -3,9 +3,9 @@
 # where, so a shard cannot be added to the workflow and forgotten here, or the reverse.
 #
 #   go-race-shards.sh --matrix      the matrix ci.yml expands, as JSON (needs no Go)
-#   go-race-shards.sh SHARD         the `go test` arguments of SHARD, one per line (run in go/)
-#   go-race-shards.sh --check       every package's tests run in exactly one shard (run in go/)
-#   go-race-shards.sh --arm64-extra packages not already raced on arm64 (run in go/)
+#   go-race-shards.sh SHARD         the `go test` arguments of SHARD, one per line (run at the root)
+#   go-race-shards.sh --check       every package's tests run in exactly one shard (run at the root)
+#   go-race-shards.sh --arm64-extra packages not already raced on arm64 (run at the root)
 #   go-race-shards.sh --self-test   the table checks against synthetic package lists (needs no Go)
 #
 # A row names its packages and a -run pattern. A row with a pattern splits one package: the

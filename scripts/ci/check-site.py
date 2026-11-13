@@ -69,7 +69,7 @@ TERMINOLOGY_RULES: list[tuple[str, re.Pattern[str], str]] = [
     (
         "replay-doc-path",
         re.compile(r"docs/swath-replay-server\.md"),
-        "the replay guide is `go/docs/internals/swath-replay.md`",
+        "the replay guide is `docs/internals/swath-replay.md`",
     ),
     (
         "us-english",
