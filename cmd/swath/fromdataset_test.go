@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -292,6 +293,39 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	if s := stderr.String(); !strings.Contains(s, "; complete, 2 entries skipped") ||
 		!strings.Contains(s, "swath: warning: 2 entries could not be read when the dataset was listed: the totals leave them out\n") {
 		t.Fatalf("stderr: %s", s)
+	}
+}
+
+// cancelWriter is stdout that stops the command (cancel, as SIGINT does)
+// on its first write, then takes the rows.
+type cancelWriter struct {
+	bytes.Buffer
+	cancel context.CancelCauseFunc
+}
+
+func (w *cancelWriter) Write(p []byte) (int, error) {
+	w.cancel(&signalError{syscall.SIGINT})
+	return w.Buffer.Write(p)
+}
+
+// TestDuFromDatasetInterruptedOutput: a signal while the totals are being
+// written ends swath du --from-dataset interrupted (130), as a live swath
+// du of the same tree, not completed.
+func TestDuFromDatasetInterruptedOutput(t *testing.T) {
+	captureStderr(t)
+	root, _ := depthTree(t)
+	ds := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--from-dataset", ds}, {root}} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		w := &cancelWriter{cancel: cancel}
+		err := runDu(ctx, append(args, "-d", "1", "--format", "tsv", "--no-stats"), w)
+		if exitOf(err) != exitInterrupted || !strings.HasPrefix(w.String(), "depth\t") {
+			t.Errorf("%q: exit %d (%v), stdout %q", args, exitOf(err), err, w.String())
+		}
+		cancel(nil)
 	}
 }
 

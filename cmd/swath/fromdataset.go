@@ -105,10 +105,11 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 // the run that wrote it did.
 func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	fail := func(err error) error {
-		if ctx.Err() != nil {
-			err = context.Cause(ctx) // a signal: interrupted, as a listing
+		cause := context.Cause(ctx) // a signal: interrupted, as a listing
+		if cause != nil {
+			err = cause
 		}
-		out := classify(err, nil, "")
+		out := classify(err, cause, "")
 		return &exitError{error: explain(err), code: out.ExitCode, out: out}
 	}
 	d, err := openSaved(ctx, o.fromDataset)
@@ -172,6 +173,9 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		return nil // the reader closed stdout: exit 0, as a live swath du
 	} else if err != nil {
 		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err) // stopped (a signal) while the rows were written: interrupted, as a live swath du
 	}
 	c := m.Coverage
 	switch {
