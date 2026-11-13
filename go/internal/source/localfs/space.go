@@ -21,9 +21,14 @@ import (
 //
 // A root that is a symbolic link to a file lists the link itself, so its
 // directory is measured: the target may be on another filesystem. A link
-// to a directory is walked through, so its target is measured.
+// to a directory is walked through, so its target is measured. A root
+// that no longer names what New found (a link retargeted, a directory
+// replaced) is not measured: the path may now lead to another filesystem.
 func (p *Provider) filesystemSpace() *source.FilesystemSpace {
 	p.spaceOnce.Do(func() {
+		if now, err := os.Stat(p.root); err != nil || !os.SameFile(p.rootInfo, now) {
+			return
+		}
 		root, file := p.root, p.file
 		if fi, err := os.Lstat(root); file && err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 			root, file = filepath.Dir(root), false

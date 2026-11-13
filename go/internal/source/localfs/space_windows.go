@@ -15,15 +15,12 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// measureSpace: GetDiskFreeSpaceExW takes a directory, so a link is
-// resolved first and a file measures its directory; a UNC path needs a
-// trailing backslash. The total and the available bytes are the
+// measureSpace: GetDiskFreeSpaceExW takes a directory, so a file measures
+// its directory; it follows links and junctions itself, and a UNC path
+// needs a trailing backslash. The total and the available bytes are the
 // caller's (within a quota), the free bytes the volume's.
 func measureSpace(root string, file bool) *source.FilesystemSpace {
-	dir, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil
-	}
+	dir := root
 	if file {
 		dir = filepath.Dir(dir)
 	}

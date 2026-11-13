@@ -156,9 +156,11 @@ type Provider struct {
 	warn   func(string)
 	warnMu sync.Mutex
 	// space is the root's filesystem space, measured once (spaceOnce):
-	// nil when the measurement failed or the platform has none.
+	// nil when the measurement failed or the platform has none. rootInfo
+	// is the root New found, so a root replaced since is not measured.
 	spaceOnce sync.Once
 	space     *source.FilesystemSpace
+	rootInfo  fs.FileInfo
 }
 
 // warnf passes a warning to the user, if the run takes them.
@@ -184,7 +186,7 @@ func New(root string, opt Options) (*Provider, error) {
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
-	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir()}
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi}
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err

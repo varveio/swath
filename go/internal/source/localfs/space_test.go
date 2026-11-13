@@ -90,7 +90,8 @@ func TestFilesystemSpace(t *testing.T) {
 		}
 	}
 
-	symlinkFileRoot(t, dir)
+	t.Run("symlink file root", func(t *testing.T) { symlinkFileRoot(t, dir) })
+	t.Run("replaced root", func(t *testing.T) { replacedRoot(t, dir) })
 
 	gone := filepath.Join(dir, "gone")
 	if err := os.Mkdir(gone, 0o700); err != nil {
@@ -114,24 +115,50 @@ func TestFilesystemSpace(t *testing.T) {
 	}
 }
 
+// replacedRoot: a root replaced between New and the measurement (here a
+// link retargeted to another directory) is not measured, as the path may
+// now lead to another filesystem.
+func replacedRoot(t *testing.T, dir string) {
+	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	for _, d := range []string{first, second} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "root")
+	if err := os.Symlink(first, link); err != nil {
+		t.Skipf("no symbolic links: %v", err)
+	}
+	p, err := New(link, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(second, link); err != nil {
+		t.Fatal(err)
+	}
+	if s := p.filesystemSpace(); s != nil {
+		t.Fatalf("a retargeted root measured %+v", s)
+	}
+}
+
 // symlinkFileRoot lists a link, in dir, to a file on another filesystem
 // (Linux's /dev/shm): the link is the row, so the space is dir's.
 func symlinkFileRoot(t *testing.T, dir string) {
-	t.Helper()
 	if runtime.GOOS != "linux" {
-		return
+		t.Skip("needs Linux's /dev/shm")
 	}
 	target, err := os.CreateTemp("/dev/shm", "swath-space-*")
 	if err != nil {
-		t.Logf("no /dev/shm: %v", err)
-		return
+		t.Skipf("no /dev/shm: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(target.Name()) })
 	_ = target.Close()
 	here, there := measureSpace(dir, false), measureSpace(target.Name(), true)
 	if here == nil || there == nil || here.TotalBytes == there.TotalBytes {
-		t.Logf("/dev/shm is not told apart from %s by its size", dir)
-		return
+		t.Skipf("/dev/shm is not told apart from %s by its size", dir)
 	}
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink(target.Name(), link); err != nil {
