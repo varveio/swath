@@ -116,13 +116,15 @@ is flat, `true` hierarchical. Azure answers it anonymously for a public containe
 flat too (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
 without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
 ([soft delete overview](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)). Most
-public open-data accounts answer it (checked live on 2026-11-11). The host gives that 409 before it checks
+public open-data accounts answer it: 60 of the 64 Planetary Computer containers, and NOAA's GOES, HRRR, GFS and NWM and
+NAIP (checked live on 2026-11-11). The host gives that 409 before it checks
 credentials, so a signed caller whose credential Get Account Information rejected (class auth) keeps that failure;
 a container SAS that Get Account Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by
 the 409. One report attributes the same message to an account reached through a private endpoint for `blob`
 without one for `dfs`; whether a hierarchical account can answer it that way is unverified.
-(3) When both calls were refused (a container SAS gets 403 from both: `bingmlbuildings`, 2026-11-11) and no
-flat namespace is asserted, one delimiter listing of the scope's directory (`maxresults=1`,
+(3) A 403 `AuthorizationPermissionMismatch` there proves nothing: a container SAS met it on a flat account and on
+a hierarchical one alike (`bingmlbuildings`, 2026-11-11, where Get Account Information answered 403 too). When both
+calls were refused and no flat namespace is asserted, one delimiter listing of the scope's directory (`maxresults=1`,
 `ListInput.Tree`, `listedHNS`): an entry whose `ResourceType` is `file` or `directory` is a hierarchical
 namespace's (a flat account's XML entries carry none; Arrow's `blob` and `blobprefix` do not count). (4)
 Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
