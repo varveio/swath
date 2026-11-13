@@ -8,7 +8,7 @@ publishes it as a GitHub Pages artifact. That makes the site reviewable alongsid
 and docs it describes -- and it makes the drift these checks look for fixable in the first
 place, because a behavior change and the page that explains it now land in one pull request.
 
-Four checks, each independently runnable with `--only`:
+Five checks, each independently runnable with `--only`:
 
   links        every site-local href, asset and fragment resolves, every link into this
                repository names a file (and heading) that exists here, and no contributor
@@ -16,7 +16,11 @@ Four checks, each independently runnable with `--only`:
   terminology  the public spelling and naming rules in docs/style.md, over the site
                and the current documentation -- not over code or dated evidence notes
   channel      the version the home page offers matches the channel record (and, on the
-               release channel, the newest released version), and image tags name it
+               release channel, the newest released version), image tags name it, and
+               while the record names the main channel every page carries the
+               development-docs notice
+  metadata     every page has a distinct title, a description and a canonical URL, and
+               robots.txt names the sitemap
   a11y         landmark, skip-link, duplicate-id, and text-alternative smoke tests
 
 Usage:
@@ -188,6 +192,10 @@ class Page:
     names: list[str] = field(default_factory=list)
     links: list[tuple[str, str, str]] = field(default_factory=list)  # (tag, attr, value)
     mains: int = 0
+    title: str = ""
+    description: str = ""
+    canonical: str = ""
+    dev_banner: bool = False
     imgs_without_alt: int = 0
     canvases_without_label: list[tuple[str, list[str]]] = field(default_factory=list)
     skip_links: list[str] = field(default_factory=list)
@@ -204,6 +212,7 @@ class PageParser(HTMLParser):
         self.page = page
         self._in_a: str | None = None
         self._a_text: list[str] = []
+        self._in_title = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         a = {k: (v or "") for k, v in attrs}
@@ -218,6 +227,14 @@ class PageParser(HTMLParser):
             prop = a.get("property", "") or a.get("name", "")
             if prop in ("og:image", "og:url", "twitter:image") and a.get("content"):
                 self.page.links.append((tag, prop, a["content"]))
+            if prop == "description":
+                self.page.description = html.unescape(a.get("content", "")).strip()
+        if tag == "link" and a.get("rel") == "canonical":
+            self.page.canonical = a.get("href", "")
+        if tag == "title":
+            self._in_title = True
+        if "swath-dev-banner" in a.get("class", "").split():
+            self.page.dev_banner = True
         if tag == "main":
             self.page.mains += 1
         if tag == "img" and "alt" not in a:
@@ -235,6 +252,8 @@ class PageParser(HTMLParser):
             self._a_text = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
         if tag == "a" and self._in_a is not None:
             text = "".join(self._a_text).strip()
             if re.search(r"skip to\b", text, re.IGNORECASE):
@@ -244,6 +263,16 @@ class PageParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._in_a is not None:
             self._a_text.append(data)
+        if self._in_title:
+            self.page.title += data
+
+    def handle_entityref(self, name: str) -> None:
+        if self._in_title:
+            self.page.title += html.unescape(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._in_title:
+            self.page.title += html.unescape(f"&#{name};")
 
 
 def visible_text(markup: str) -> str:
@@ -360,6 +389,8 @@ def check_links(site: Path, pages: list[Page], repo: Path) -> list[str]:
         rel = "/".join(parts)
         if rel == "" or (site / rel).is_dir():
             rel = f"{rel}/index.html".lstrip("/")
+        elif not (site / rel).exists() and (site / f"{rel}.html").is_file():
+            rel = f"{rel}.html"  # a clean URL: GitHub Pages serves NAME.html for /NAME
         return rel
 
     def check_fragment(page: Page, rel: str, frag: str, where: str) -> None:
@@ -480,6 +511,14 @@ def check_channel(site: Path, pages: list[Page], repo: Path) -> list[str]:
                 failures.append(
                     f"{page.rel}: declares swath {shown} but data/channel.json says {version}")
 
+    # While the site documents main ahead of a release, every page says so
+    # (DEV_DOCS_NOTICE in site/.vitepress/config.mts).
+    if name == "main":
+        for page in pages:
+            if page.rel not in A11Y_CLIENT_RENDERED and not page.dev_banner:
+                failures.append(f"{page.rel}: no development-docs notice, but data/channel.json "
+                                f"names the main channel")
+
     if name == "release":
         released = newest_released_version(repo)
         if released is None:
@@ -533,7 +572,37 @@ def check_a11y(pages: list[Page]) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------
-CHECKS = ("links", "terminology", "channel", "a11y")
+# Pages rendered in the browser carry no static title or description to hold to account.
+METADATA_EXEMPT = {"404.html"}
+
+
+def check_metadata(site: Path, pages: list[Page]) -> list[str]:
+    """Distinct titles, descriptions and canonical URLs; robots.txt pointing at the sitemap."""
+    failures: list[str] = []
+    robots = site / "robots.txt"
+    if not robots.is_file():
+        failures.append("robots.txt is missing")
+    elif not re.search(r"^Sitemap: \S+/sitemap\.xml\s*$", robots.read_text(encoding="utf-8"), re.M):
+        failures.append("robots.txt names no Sitemap")
+    titles: dict[str, list[str]] = {}
+    for page in pages:
+        if page.rel in METADATA_EXEMPT:
+            continue
+        title = " ".join(page.title.split())
+        titles.setdefault(title, []).append(page.rel)
+        if not page.description:
+            failures.append(f"{page.rel}: no meta description")
+        if not page.canonical.startswith(SITE_ORIGIN + "/"):
+            failures.append(f"{page.rel}: no canonical URL on {SITE_ORIGIN}")
+    for title, rels in sorted(titles.items()):
+        if not title:
+            failures.append(f"{', '.join(rels)}: no <title>")
+        elif len(rels) > 1:
+            failures.append(f"title {title!r} is shared by {', '.join(rels)}")
+    return failures
+
+
+CHECKS = ("links", "terminology", "channel", "metadata", "a11y")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -565,6 +634,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         results["terminology"] = check_terminology(repo, pages)
     if "channel" in selected:
         results["channel"] = check_channel(site, pages, repo)
+    if "metadata" in selected:
+        results["metadata"] = check_metadata(site, pages)
     if "a11y" in selected:
         results["a11y"] = check_a11y(pages)
 

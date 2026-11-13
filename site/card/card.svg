@@ -47,8 +47,8 @@
   <text class="headline" x="72" y="282">Parallel listing and inventory</text>
   <text class="headline" x="72" y="348">for object stores and filesystems.</text>
 
-  <text class="sub" x="72" y="426">S3, Google Cloud Storage, Azure Blob and local trees.</text>
-  <text class="sub" x="72" y="462">Totals by prefix, sorted Parquet inventories.</text>
+  <text class="sub" x="72" y="426">Totals by directory or prefix.</text>
+  <text class="sub" x="72" y="462">Sorted Parquet inventories you can query.</text>
 
   <rect x="72" y="541" width="100" height="4" rx="2" fill="#2B7A88"/>
   <text class="url" x="190" y="552">swath.varve.io</text>
