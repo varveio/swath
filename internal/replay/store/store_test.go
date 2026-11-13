@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 func objects(keys ...string) []legacytest.Row {

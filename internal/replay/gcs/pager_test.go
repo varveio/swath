@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 func pagerOver(rollup bool, keys ...string) *Pager {

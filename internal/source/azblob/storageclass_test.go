@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/filter"
+	"github.com/varveio/swath/internal/filter"
 )
 
 // TestStorageClassIsTheAccessTier: --storage-class filters Azure Blob rows

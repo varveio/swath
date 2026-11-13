@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // refTime records LastModified as encoding/xml would hand it to a time.Time.

@@ -22,8 +22,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/redact"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/redact"
 )
 
 // S3's multipart limits: every part but the last at least MinPartSize, at

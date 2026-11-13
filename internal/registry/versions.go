@@ -7,9 +7,9 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // VersionCounts describes only this attempt's rows handed on by order

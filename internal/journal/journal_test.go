@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 func TestCheck(t *testing.T) {

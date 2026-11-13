@@ -15,7 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // onePerRequest is a credentials provider that fails a second lookup for

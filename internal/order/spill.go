@@ -21,8 +21,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Spill keeps workers listing when the reorder budget is used up: instead

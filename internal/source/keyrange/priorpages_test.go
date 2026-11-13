@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
 )
 
 // maxKeys records the largest page each request asked for.

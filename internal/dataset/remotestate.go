@@ -18,7 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/faults"
 )
 
 // A remote dataset's work-directory state is read and written only through

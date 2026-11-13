@@ -14,11 +14,11 @@ import (
 
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/source/s3/s3test/sdkoracle"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/s3/s3test/sdkoracle"
 )
 
 // oracleKeys mixes the shapes that stress encoding: spaces, '+', '%',

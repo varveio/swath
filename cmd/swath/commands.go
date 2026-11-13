@@ -17,12 +17,12 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // errNoCommand: an interrupted run that stopped before its journal header

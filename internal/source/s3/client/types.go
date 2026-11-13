@@ -6,7 +6,7 @@ package client
 import (
 	"fmt"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // ListInput is one ListObjectsV2 request.

@@ -54,12 +54,12 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // SchemaID is the schema id of every dataset Run writes: key, size,

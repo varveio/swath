@@ -9,7 +9,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/faults"
 )
 
 // DirSyncEnforced reports whether syncDir makes a directory's entries

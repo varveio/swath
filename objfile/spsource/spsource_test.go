@@ -13,8 +13,8 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
 )
 
 // fake is an Opener and ObjectReader whose calls return the errors set,

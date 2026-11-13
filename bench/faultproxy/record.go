@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 // Exchange is one line of a -record capture: a request the proxy

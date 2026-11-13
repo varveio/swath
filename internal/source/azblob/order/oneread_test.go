@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // buffered is the items a's registered chains hold read and not emitted.

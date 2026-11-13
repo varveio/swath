@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/output"
 )
 
 // ContentType is the Content-Type of every answer on the route, errors

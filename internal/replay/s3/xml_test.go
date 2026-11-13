@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/output"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 func sp(s string) *string { return &s }

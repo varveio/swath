@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/latency"
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 func gcsConfig(st store.Store, protocols ...string) Config {

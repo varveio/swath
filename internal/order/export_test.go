@@ -4,7 +4,7 @@
 package order
 
 import (
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // SpillRoundTrip writes frames (one per element) to a spill file under dir,

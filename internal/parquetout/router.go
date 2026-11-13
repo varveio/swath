@@ -4,7 +4,7 @@
 package parquetout
 
 import (
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/faults"
 	"os"
 	"path/filepath"
 
@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // initialRatio is the compression ratio (encoded / logical bytes) assumed

@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Parallel core: Swath's range tiling, seed, demand-driven owner split

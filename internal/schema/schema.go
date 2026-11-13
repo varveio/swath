@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/reader"
 )
 
 // Type is a column's physical and logical type: the reader module's, which

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 func snap() listing.ProgressSnapshot {

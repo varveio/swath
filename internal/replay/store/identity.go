@@ -14,7 +14,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/internal/replay/legacy/javaera"
 )
 
 // identityDomain prefixes every fixture identity digest. A Java-era

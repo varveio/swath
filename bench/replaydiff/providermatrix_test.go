@@ -41,7 +41,7 @@ func campaignCases(t *testing.T, module, class string) []campaignCase {
 		t.Skip("python3 not found: the campaign's matrix cannot be read")
 	}
 	_, file, _, _ := runtime.Caller(0)
-	dir := filepath.Join(filepath.Dir(file), "..", "..", "..", "scripts", "provider-conformance")
+	dir := filepath.Join(filepath.Dir(file), "..", "..", "scripts", "provider-conformance")
 	script := fmt.Sprintf(`import json, sys
 sys.path.insert(0, %q)
 import matrix, %s

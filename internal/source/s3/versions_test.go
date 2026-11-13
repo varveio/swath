@@ -6,7 +6,7 @@ package s3
 import (
 	"context"
 	"errors"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/client"
 )
 
 // TestVersionsSchemaColumns: s3-versions/v1 is s3-objects/v1's columns in

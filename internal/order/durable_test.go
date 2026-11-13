@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // fz is a fencedTree range: i -1 the root, else a range; replay >= 0 a

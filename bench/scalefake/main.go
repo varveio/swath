@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/internal/source/scalefake"
 )
 
 func main() {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/internal/counters"
 )
 
 // TestBetweenSources: betweenFrom names the synthesis that made its pivot.

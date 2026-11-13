@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/replay/store"
-	sourcegcs "github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/replay/store"
+	sourcegcs "github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // gcsProbe is one object of the probes of 2026-11-07 against Cloud

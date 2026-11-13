@@ -20,8 +20,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/sortfixture"
 )
 
 // recordedRoot returns the fixture root named by SWATH_REPLAY_FIXTURES, or

@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 const (

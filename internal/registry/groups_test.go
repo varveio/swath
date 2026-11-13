@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // panicOf runs f and returns what it panicked with, as text ("" if it did

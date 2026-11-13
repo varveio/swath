@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // sized sums the object sizes of the rows the order stage accepts from a

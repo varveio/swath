@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/latency"
 )
 
 func TestParseRequest(t *testing.T) {

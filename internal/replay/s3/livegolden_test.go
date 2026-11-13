@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/output"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // The tests in this file pin answers live S3 gave on 2026-11-07 to

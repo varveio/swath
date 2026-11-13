@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/internal/totals"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/reader"
 )
 
 // roleRow is a versions payload whose role columns have unconventional

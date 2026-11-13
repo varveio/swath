@@ -22,7 +22,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // Footer stamps and the values this profile accepts.

@@ -3,7 +3,7 @@
 
 package parquetout
 
-import "github.com/varveio/swath/go/internal/schema"
+import "github.com/varveio/swath/internal/schema"
 
 // tr is the tests' row payload: one column of every type the binding
 // supports, optional ones present per bit.

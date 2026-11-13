@@ -37,8 +37,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
 )
 
 // Dir and Name locate the journal inside the dataset directory.

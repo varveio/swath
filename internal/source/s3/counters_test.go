@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // Counters is the S3 tally in report order, assembled for documentation and ID checks.

@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestS3PlanRules holds the driver's reading of a request to the probed

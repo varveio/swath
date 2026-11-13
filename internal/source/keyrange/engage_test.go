@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/order"
 )
 
 // shapes are the synthetic layouts the pivot policy is gated on (about

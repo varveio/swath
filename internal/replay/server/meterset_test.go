@@ -16,9 +16,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // meterMix is the request mix the meter set is pinned on: on S3 a full

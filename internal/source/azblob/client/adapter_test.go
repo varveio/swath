@@ -29,9 +29,9 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/utf16order"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/utf16order"
 )
 
 // reqLog serves every request with answer and keeps the requests and the

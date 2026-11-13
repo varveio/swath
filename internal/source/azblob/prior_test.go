@@ -9,10 +9,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // TestAzurePriorPages: a counted prior lists in the service's largest

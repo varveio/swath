@@ -36,7 +36,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // ManifestName is the path ReadManifest reads, the dataset's manifest.

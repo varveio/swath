@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 func routeMaxRows(t *testing.T, rows []row, encoders int, partSize, maxRows int64) ([]dataset.Part, int64) {

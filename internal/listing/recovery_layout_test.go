@@ -16,9 +16,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // layoutRun is an interrupted journaled output in base/dataset, locked,

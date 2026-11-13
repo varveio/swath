@@ -8,7 +8,7 @@ package datasettest
 import (
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // RequireJournal skips t where a journaled run is refused

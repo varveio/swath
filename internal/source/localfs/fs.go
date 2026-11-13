@@ -21,8 +21,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Fields selects how much metadata is read per entry.

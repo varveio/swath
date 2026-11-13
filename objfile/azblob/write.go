@@ -30,8 +30,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/redact"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/redact"
 )
 
 // Block blob limits: a block (and the buffer, which is also a Put Blob's

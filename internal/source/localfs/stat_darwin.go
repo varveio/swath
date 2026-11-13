@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // statEntry fills r from one fstatat of d relative to its open directory,

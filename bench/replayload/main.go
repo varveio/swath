@@ -33,7 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 func main() {

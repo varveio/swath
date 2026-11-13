@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/server"
 )
 
 // captureWalk walks a prefix through the fake provider at base as a

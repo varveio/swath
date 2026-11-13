@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // measureSpace: GetDiskFreeSpaceExW takes a directory, so a file measures

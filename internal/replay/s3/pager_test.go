@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 func pager(keys ...string) *Pager { return &Pager{Store: memstore.Keys(memstore.Options{}, keys...)} }

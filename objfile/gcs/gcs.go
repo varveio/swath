@@ -44,8 +44,8 @@ import (
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/googleapi"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/ranged"
 )
 
 // New returns an Opener of the objects of bucket through client, which

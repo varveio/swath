@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // Arm A is the product's pipeline as the command runs it (listing.Run:

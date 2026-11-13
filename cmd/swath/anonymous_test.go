@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // remoteBody is a credential endpoint's HTML error page (what a metadata

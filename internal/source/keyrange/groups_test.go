@@ -18,10 +18,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // versioned is a fake versions listing (S3 ListObjectVersions-shaped):

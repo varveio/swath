@@ -3,7 +3,7 @@
 
 package s3
 
-import "github.com/varveio/swath/go/internal/source/objhttp"
+import "github.com/varveio/swath/internal/source/objhttp"
 
 // clientCounters follow the range engine's in the S3 tally (the client's
 // Counts.Store fills them).

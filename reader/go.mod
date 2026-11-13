@@ -1,4 +1,4 @@
-module github.com/varveio/swath/go/reader
+module github.com/varveio/swath/reader
 
 go 1.26.0
 

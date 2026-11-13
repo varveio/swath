@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/reader"
 )
 
 // Versions reads a versions row's roles, derived from the schema's

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // emptyAndNull returns two objects: "empty", whose six string columns are

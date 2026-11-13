@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // recorder answers without a network and keeps each request as it reaches

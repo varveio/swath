@@ -14,10 +14,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/s3/client"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/s3/client"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // TestEndpointURLDefaultsPathStyle: a custom endpoint addresses buckets

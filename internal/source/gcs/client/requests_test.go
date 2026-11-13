@@ -21,9 +21,9 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // recorder serves an empty objects envelope and records each request and

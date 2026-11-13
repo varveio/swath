@@ -17,7 +17,7 @@ import (
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 type obj struct {

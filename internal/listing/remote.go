@@ -19,17 +19,17 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/gcs"
-	"github.com/varveio/swath/go/objfile/remote"
-	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/gcs"
+	"github.com/varveio/swath/objfile/remote"
+	"github.com/varveio/swath/objfile/s3"
 )
 
 // RemoteOutput is a dataset written straight to an object store (gs://,

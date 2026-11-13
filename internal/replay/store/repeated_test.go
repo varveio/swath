@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // TestRepeatedKeysAreRefused: a SeekParquet dataset whose keys repeat (the

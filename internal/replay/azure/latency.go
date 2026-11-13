@@ -6,7 +6,7 @@ package azure
 import (
 	"unicode/utf16"
 
-	"github.com/varveio/swath/go/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/latency"
 )
 
 // Shape is the request's latency class: a delimiter request is a

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // TestArmBPeakCountsTheSpillingBuffer (B5): while a full buffer is being

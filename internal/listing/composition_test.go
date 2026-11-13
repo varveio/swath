@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // TestPriorSlowSplitPercentThrottleCompose: the warm start, the slow-range

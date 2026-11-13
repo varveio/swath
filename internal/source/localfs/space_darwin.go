@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // measureSpace: statfs(2) counts blocks of f_bsize, the fundamental block

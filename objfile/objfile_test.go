@@ -15,7 +15,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // An Object is a SeekParquet SourceFile and ContextBinder. Source's Open returns

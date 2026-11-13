@@ -15,9 +15,9 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp/objhttptest"
 )
 
 // wireSnapshot is the checked-in rendering of every request shape the

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // TestFileCacheBoundsHandles reads ten files concurrently through a cache

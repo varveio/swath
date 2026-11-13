@@ -11,10 +11,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/source/s3/client"
 )
 
 // recorder is an S3 API over the range engine's fake listing; it logs

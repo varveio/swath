@@ -9,7 +9,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // No native engine yet: getattrlistbulk(2) on macOS and directory

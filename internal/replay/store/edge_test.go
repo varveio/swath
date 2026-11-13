@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 // openParts writes parts as one Java-era fixture and opens it.

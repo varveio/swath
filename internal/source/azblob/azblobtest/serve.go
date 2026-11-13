@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // Container is the container (and S3 bucket) Serve exposes; the account is

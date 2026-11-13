@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Segment-parallel replay. Once listing is done every range is finished

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/varveio/swath/go/internal/shapes"
-	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/internal/shapes"
+	"github.com/varveio/swath/internal/source/scalefake"
 )
 
 const ms = time.Millisecond

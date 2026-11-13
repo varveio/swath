@@ -36,10 +36,10 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // The durable spill's validation campaign (contract §6: a real

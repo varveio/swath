@@ -15,11 +15,11 @@ import (
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/gcs"
-	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/gcs"
+	"github.com/varveio/swath/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile/internal/ranged"
 )
 
 const bucket = "bkt"

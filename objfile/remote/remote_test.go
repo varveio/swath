@@ -26,9 +26,9 @@ import (
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"google.golang.org/api/option"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile/internal/ranged"
 )
 
 const secret = "secret-key-never-recorded"

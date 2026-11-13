@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // TestWatch: the watch sees each round trip through a Guard (method, URL,

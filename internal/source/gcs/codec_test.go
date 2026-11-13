@@ -9,7 +9,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // TestDeltaHistoricalBytes pins bytes captured from the provider codec before

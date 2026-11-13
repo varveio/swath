@@ -16,10 +16,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // TestBearerToken: --s3-bearer-token-command authenticates every request

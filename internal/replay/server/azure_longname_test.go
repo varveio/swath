@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // azureMaxNameBytes is the longest Azure name in UTF-8: 1,024 UTF-16 code

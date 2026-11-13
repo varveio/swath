@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // item is a Blob (object set) or a rolled BlobPrefix spelled name.

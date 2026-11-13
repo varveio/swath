@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // totalsSink sums the counted rows per prefix (swath du) into a

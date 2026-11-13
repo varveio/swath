@@ -11,13 +11,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // versionEntries gives each name 1 to 5 entries in Azure's order within a

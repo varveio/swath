@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/output"
 )
 
 // jsonWriter stages the page in a fixed buffer and writes it to the

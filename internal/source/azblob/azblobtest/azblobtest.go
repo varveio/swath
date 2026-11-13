@@ -17,7 +17,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/varveio/swath/go/internal/replay/azure"
+	"github.com/varveio/swath/internal/replay/azure"
 )
 
 // The long names' lengths in UTF-8 bytes; MaxNameBytes is the longest an

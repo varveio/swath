@@ -20,9 +20,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // partSink is a Segmenter with the Parquet router's cut rule, in memory: a

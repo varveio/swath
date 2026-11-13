@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/replay/store"
-	sourcegcs "github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/replay/store"
+	sourcegcs "github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // TestNativeSchemaRendersTheBucketsMetadata lists a fake bucket with the

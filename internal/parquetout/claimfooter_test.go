@@ -12,8 +12,8 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // TestCutReproducesClaimedFooter: a part written by another build, one

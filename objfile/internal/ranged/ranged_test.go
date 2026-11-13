@@ -10,7 +10,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // cut is a body that yields at most n bytes, then fails.

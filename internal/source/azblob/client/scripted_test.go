@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // echoError writes an Azure error answer that quotes the request's query

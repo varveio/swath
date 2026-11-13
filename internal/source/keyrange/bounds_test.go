@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/order"
 )
 
 // inclusive is a fake listing with either start convention: inclusive

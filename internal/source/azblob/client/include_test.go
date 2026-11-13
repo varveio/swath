@@ -16,7 +16,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	amem "github.com/apache/arrow-go/v18/arrow/memory"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // listWith lists one page with in's include from a server answering body

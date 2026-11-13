@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // groupedSchema is testSchema in group mode: keys repeat, a key's rows

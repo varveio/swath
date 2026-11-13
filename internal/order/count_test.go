@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/source"
 )
 
 // TestCountCountsEveryRow: Count expands the whole tree and counts each

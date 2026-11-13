@@ -27,13 +27,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/replay/javanum"
-	"github.com/varveio/swath/go/internal/replay/latency"
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/replay/javanum"
+	"github.com/varveio/swath/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // usageError is a bad command line: exit 2.

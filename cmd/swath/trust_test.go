@@ -16,10 +16,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // tlsFront serves plain over HTTPS, under a certificate no system trusts,

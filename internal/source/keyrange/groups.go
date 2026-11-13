@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Group mode (Description.Groups): a versions listing returns a key once

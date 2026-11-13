@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/s3"
 )
 
 // request is one request of the matrix. A route's matrix is data: a list

@@ -6,8 +6,8 @@ package client
 import (
 	"sync/atomic"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // The client's own counters' offsets in CounterDefs, after objhttp's:

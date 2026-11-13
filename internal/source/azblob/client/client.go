@@ -41,10 +41,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"golang.org/x/oauth2"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 // Version is the service version every request names (x-ms-version):

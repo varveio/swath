@@ -12,11 +12,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
 )
 
 // The range engine's own tests (internal/source/keyrange), run with Azure's

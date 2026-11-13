@@ -13,9 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/s3"
-	"github.com/varveio/swath/go/objfile/s3/s3fake"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/s3"
+	"github.com/varveio/swath/objfile/s3/s3fake"
 )
 
 // fakeClient is an SDK client for the in-process fake bucket "bkt". A

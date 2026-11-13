@@ -16,8 +16,8 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	swathreader "github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/replay/legacy"
+	swathreader "github.com/varveio/swath/reader"
 )
 
 // Counters are the store's work counters, plain atomics read by whoever

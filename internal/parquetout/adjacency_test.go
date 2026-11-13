@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // TestRouterRefusesOverlapBeforePublish: parts each ascending on their own

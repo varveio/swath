@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/output"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // TestOversizedContentsAllocatesWithinTheCap renders an object whose ETag

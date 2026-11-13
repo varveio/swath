@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // textExts are the file extensions that name a text format (before a

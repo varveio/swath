@@ -26,10 +26,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
-	"github.com/varveio/swath/go/objfile/s3"
-	"github.com/varveio/swath/go/objfile/s3/s3fake"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile/s3"
+	"github.com/varveio/swath/objfile/s3/s3fake"
 )
 
 // part is the tests' part size: the fake's minimum is lowered to it, so a

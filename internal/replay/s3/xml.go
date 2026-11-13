@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/replay/output"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // The response body is assembled byte by byte rather than with

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/order"
 )
 
 // TestResumeAfterKey: a resume lists (K, ⊤] after K, the last published

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // Client is one client under test, built for an endpoint.

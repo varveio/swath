@@ -19,11 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // Arm B is the run-based external sort of sortout (PR #248, 7d99970):

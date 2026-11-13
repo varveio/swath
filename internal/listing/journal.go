@@ -18,13 +18,13 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Resume errors.

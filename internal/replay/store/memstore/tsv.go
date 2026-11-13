@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // The TSV fixture format: one object per line, tab-separated columns

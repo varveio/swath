@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader"
 )
 
 // rec is a synthetic payload whose role columns have unconventional names.

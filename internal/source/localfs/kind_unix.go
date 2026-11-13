@@ -8,7 +8,7 @@ package localfs
 import (
 	"golang.org/x/sys/unix"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 func kindOfMode(m uint32) Kind {

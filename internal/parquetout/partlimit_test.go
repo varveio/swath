@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // TestRouterRefusesPartPastLimit: part names have five digits, so the

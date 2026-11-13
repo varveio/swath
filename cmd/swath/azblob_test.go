@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/source/azblob"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/source/azblob"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 )
 
 // azEndpoint is a replay's --endpoint-url: without the account path

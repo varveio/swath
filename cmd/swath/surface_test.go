@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
 )
 
 // localSource is a directory with two files.

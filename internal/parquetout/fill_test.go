@@ -11,9 +11,9 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // referenceFill is the fill this package's replaced: each value built on

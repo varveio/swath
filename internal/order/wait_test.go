@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // The order stage's waits, each driven to its wait with a deterministic

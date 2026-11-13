@@ -16,10 +16,10 @@ import (
 
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3/client"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/client"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // clock gives every put its own, increasing modification time.

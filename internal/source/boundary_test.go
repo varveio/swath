@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
-const mod = "github.com/varveio/swath/go"
+const mod = "github.com/varveio/swath"
 
 // moduleDir is the module root (this file is in internal/source).
 func moduleDir(t *testing.T) string {

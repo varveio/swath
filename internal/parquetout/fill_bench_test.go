@@ -10,8 +10,8 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // s3Page is a 1,024-row page of S3 current objects shaped like

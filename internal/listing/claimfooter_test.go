@@ -14,11 +14,11 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
-	sourcegcs "github.com/varveio/swath/go/internal/source/gcs"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
+	sourcegcs "github.com/varveio/swath/internal/source/gcs"
 )
 
 // hasColumn reports whether the Parquet file at path has a top-level

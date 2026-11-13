@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 // TestFaultsRequeued: 503 ServerBusy throttles on most of the first 60

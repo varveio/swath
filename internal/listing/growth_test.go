@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // Ceilings on what a run keeps per part (one-row parts; keys of about 20

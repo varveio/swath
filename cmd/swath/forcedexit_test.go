@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // buildSwath builds the command for the subprocess tests.

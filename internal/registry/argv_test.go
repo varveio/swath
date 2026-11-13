@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // TestRedactEndpointArgv: the URL flags of the registered providers'

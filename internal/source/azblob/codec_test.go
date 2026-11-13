@@ -9,8 +9,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/azblob/client"
 )
 
 // TestDeltaHistoricalBytes pins bytes captured from the provider codec before

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // nativeProperties is the Properties element order of every Blob in the

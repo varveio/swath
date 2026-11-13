@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // liveKeys is a small tree with every role the provider matrix binds.

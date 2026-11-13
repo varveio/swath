@@ -6,7 +6,7 @@ package parquetout
 import (
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // FillPage is fillPage, for the external tests and benchmarks.

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
 )
 
 func TestLabel(t *testing.T) {

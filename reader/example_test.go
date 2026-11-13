@@ -10,7 +10,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/reader"
 )
 
 // testdata/photos is a dataset swath wrote with `swath list photos -o DIR`

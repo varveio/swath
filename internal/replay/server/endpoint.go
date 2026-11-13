@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/metrics"
 )
 
 // The metrics port is a second listener on purpose: a scrape never waits

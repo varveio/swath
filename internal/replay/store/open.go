@@ -14,8 +14,8 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy/javaera"
 )
 
 // expect states the type of every column a projection reads, by name,

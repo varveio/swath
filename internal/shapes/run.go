@@ -19,12 +19,12 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source/s3"
-	"github.com/varveio/swath/go/internal/source/scalefake"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/internal/source/scalefake"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // Arm is one listing of a shape.

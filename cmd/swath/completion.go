@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
 )
 
 // completionShells are the shells swath completion writes a script for.

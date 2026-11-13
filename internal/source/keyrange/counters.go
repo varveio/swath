@@ -4,7 +4,7 @@
 package keyrange
 
 import (
-	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/internal/counters"
 )
 
 // Counter IDs, the indices of Counters.

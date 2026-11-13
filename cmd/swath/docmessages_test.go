@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // TestTroubleshootingMessages keeps the refusals docs/troubleshooting.md

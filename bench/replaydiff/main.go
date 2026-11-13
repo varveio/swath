@@ -55,9 +55,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 type options struct {

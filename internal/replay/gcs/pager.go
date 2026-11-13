@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // walkBatch is the most rows one range read of the delimiter walk asks

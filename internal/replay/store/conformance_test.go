@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 type fixture struct {

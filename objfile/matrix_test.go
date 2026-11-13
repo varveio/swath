@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
 )
 
 // mstore is an in-memory store with the providers' semantics: Open pins by

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // apostropheNames are 5,000 names of 1,020 apostrophes and a four-digit

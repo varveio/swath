@@ -30,18 +30,18 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/parquetout"
-	srcs3 "github.com/varveio/swath/go/internal/source/s3"
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/azblob/azfake"
-	"github.com/varveio/swath/go/objfile/gcs"
-	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
-	objs3 "github.com/varveio/swath/go/objfile/s3"
-	"github.com/varveio/swath/go/objfile/s3/s3fake"
-	"github.com/varveio/swath/go/objfile/spsource"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/parquetout"
+	srcs3 "github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/azblob/azfake"
+	"github.com/varveio/swath/objfile/gcs"
+	"github.com/varveio/swath/objfile/gcs/gcsfake"
+	objs3 "github.com/varveio/swath/objfile/s3"
+	"github.com/varveio/swath/objfile/s3/s3fake"
+	"github.com/varveio/swath/objfile/spsource"
+	"github.com/varveio/swath/reader"
 )
 
 // geometry is one fixture: tenants of 20 folders of 50 objects, except

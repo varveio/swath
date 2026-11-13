@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // Policy is the engine's policy configuration, the same for every provider

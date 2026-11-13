@@ -23,9 +23,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // Shape is a deterministic synthetic keyspace: Ranges sibling ranges under

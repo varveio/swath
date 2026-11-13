@@ -27,10 +27,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestAzureEvidenceReplay replays every Azure capture of the published
@@ -78,7 +78,7 @@ func TestAzureEvidenceReplay(t *testing.T) {
 	}
 
 	pins := expectations(t, filepath.Join(az, "replay-expectations.json"),
-		filepath.Join("..", "..", "..", "..", "docs", "replay-provider-expectations.json"))
+		filepath.Join("..", "..", "..", "docs", "replay-provider-expectations.json"))
 	var improved []string
 	matched := 0
 	for _, key := range slices.Sorted(mapKeys(outcomes)) {
@@ -128,7 +128,7 @@ type evidence struct {
 func openEvidence(t *testing.T, root string) *evidence {
 	t.Helper()
 	dir := t.TempDir()
-	ev := &evidence{dir: filepath.Join(extractEvidence(t, filepath.Join("..", "..", "..", "..", "docs", "replay-provider-evidence.tar.gz"), dir), "azure")}
+	ev := &evidence{dir: filepath.Join(extractEvidence(t, filepath.Join("..", "..", "..", "docs", "replay-provider-evidence.tar.gz"), dir), "azure")}
 	readJSON(t, filepath.Join(ev.dir, "index.json"), &ev.index)
 	cases := map[string]caseRecord{}
 	for _, raw := range ev.index.Cases {

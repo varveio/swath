@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // TestWritesTheFixtures writes the synthetic-10k and GCS evidence fixtures
@@ -23,7 +23,7 @@ import (
 func TestWritesTheFixtures(t *testing.T) {
 	ctx := context.Background()
 	out := t.TempDir()
-	manifests, err := readManifests(filepath.Join("..", "..", "..", "..", "docs", "replay-provider-evidence.tar.gz"))
+	manifests, err := readManifests(filepath.Join("..", "..", "..", "docs", "replay-provider-evidence.tar.gz"))
 	if err != nil {
 		t.Fatal(err)
 	}

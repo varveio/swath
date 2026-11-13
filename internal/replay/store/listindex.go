@@ -9,7 +9,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // DefaultListIndexMaxBytes is the list index's retained-storage budget when

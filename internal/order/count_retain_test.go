@@ -9,7 +9,7 @@ import (
 	"testing"
 	"weak"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // heavy is a range holding memory, as a local directory's chunk holds the

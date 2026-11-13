@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
 )
 
 // reporting is an mstore that reports, or not, complete observation, as

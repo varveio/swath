@@ -17,8 +17,8 @@ import (
 	"google.golang.org/api/option"
 	storage "google.golang.org/api/storage/v1"
 
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // An official client library (the Go one) against the GCS route: its

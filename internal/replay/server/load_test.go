@@ -21,11 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/latency"
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 // The load tests drive a server with many concurrent token walks for a

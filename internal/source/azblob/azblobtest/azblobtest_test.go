@@ -12,7 +12,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/replay/azure"
+	"github.com/varveio/swath/internal/replay/azure"
 )
 
 // validName is the replay's rule for a name it lists unencoded, which is

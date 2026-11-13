@@ -5,14 +5,14 @@ package order_test
 
 import (
 	"fmt"
-	"github.com/varveio/swath/go/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/gcs"
 	"math/rand/v2"
 	"reflect"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // TestVersionFramesRoundTrip: S3 versions rows survive every frame format

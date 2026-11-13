@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // TestIEC: a table's size keeps at most three significant digits across

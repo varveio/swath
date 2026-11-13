@@ -24,8 +24,8 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 	"google.golang.org/api/googleapi"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/objfile"
 )
 
 // A remote dataset is written straight to an object store: its parts are

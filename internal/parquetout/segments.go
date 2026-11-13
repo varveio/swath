@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Segments. Once the order stage knows the rest of the stream (listing is

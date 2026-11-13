@@ -19,7 +19,7 @@ import (
 	"github.com/parquet-go/parquet-go/deprecated"
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // ErrRepeatedKeys refuses a SeekParquet dataset whose keys repeat (a

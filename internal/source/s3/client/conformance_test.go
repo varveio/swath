@@ -18,9 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // differentialKeys are the provider oracle's keys (TestRowsMatchSDK) and

@@ -3,7 +3,7 @@
 
 // Command fixtures writes the replay fixtures the gated replay tests read
 // (SWATH_REPLAY_FIXTURES=ROOT reads ROOT/fixtures, so pass ROOT/fixtures as
-// OUT). Run it in go/; OUT must not exist or be empty:
+// OUT). Run it at the repository root; OUT must not exist or be empty:
 //
 //	go run ./bench/replay/fixtures OUT
 //
@@ -41,8 +41,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/sortfixture"
 )
 
 // The corpus manifests in the evidence archive.
@@ -59,7 +59,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: fixtures OUT")
 		os.Exit(2)
 	}
-	archive := filepath.Join("..", "docs", "replay-provider-evidence.tar.gz")
+	archive := filepath.Join("docs", "replay-provider-evidence.tar.gz")
 	if err := writeAll(context.Background(), os.Args[1], archive, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "fixtures:", err)
 		os.Exit(1)

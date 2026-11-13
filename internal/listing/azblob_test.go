@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/source/azblob"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/source/azblob"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // azblobBucket serves n names through the replay's Azure route.

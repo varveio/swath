@@ -6,7 +6,7 @@ package source
 import (
 	"context"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Erase adapts a provider of ranges R to Provider[any, P], so the order

@@ -16,12 +16,12 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/replay/javanum"
-	"github.com/varveio/swath/go/internal/replay/latency"
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/output"
-	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/javanum"
+	"github.com/varveio/swath/internal/replay/latency"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/s3"
 )
 
 const protocolS3 = "s3"

@@ -31,8 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/ranged"
 )
 
 // New returns an Opener of the objects of bucket through client, which

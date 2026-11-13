@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // maxKeyBytes is the longest key a range-engine provider lists (S3's and

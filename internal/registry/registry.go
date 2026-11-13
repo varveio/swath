@@ -21,14 +21,14 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // A Factory opens one kind of source.

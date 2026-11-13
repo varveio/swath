@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/internal/registry"
 )
 
 // spellings are what the command must not spell: the registered providers'

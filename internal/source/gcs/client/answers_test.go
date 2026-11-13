@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 func jsonError(status int, code int, reason string) func(http.ResponseWriter, *http.Request) {

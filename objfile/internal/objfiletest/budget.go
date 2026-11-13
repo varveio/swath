@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // Kind is what a request to a store is.

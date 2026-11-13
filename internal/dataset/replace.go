@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/faults"
 )
 
 // Durability is what a replacement (Replace) promises after a crash.

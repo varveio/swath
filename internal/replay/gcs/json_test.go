@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/s3"
 )
 
 // evidenceIdentity is the fixture identity of the GCS evidence corpus the

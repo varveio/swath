@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 // TestRateLimitStormLowersConcurrency: 429 rateLimitExceeded answers to the

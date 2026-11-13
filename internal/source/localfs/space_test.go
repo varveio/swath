@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // TestBlockSpace: block counts become bytes in the filesystem's unit; a

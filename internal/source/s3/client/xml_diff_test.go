@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // sameAsOld checks body against the scanner as it was (xml_old_test.go),

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/schema"
 )
 
 type obj struct {

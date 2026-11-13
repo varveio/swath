@@ -6,8 +6,8 @@ package azure
 import (
 	"bytes"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/utf16order"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/utf16order"
 )
 
 // Azure Blob lists names in UTF-16 code-unit order. For valid UTF-8 that is

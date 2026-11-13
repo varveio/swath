@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/gcs"
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/gcs"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestGCSResponseLimitsAreEnforcedBeforeAllocating is the review's case:

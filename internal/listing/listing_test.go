@@ -17,13 +17,13 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
-	"github.com/varveio/swath/go/objfile/gcs"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/objfile/gcs"
 )
 
 func mk(t *testing.T, root string, files ...string) {

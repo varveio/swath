@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // The window cache's defaults: 192 windows of 12,500 rows, 2.4 million

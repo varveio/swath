@@ -23,12 +23,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // evidenceArchive is the published evidence of the October 2026 live
 // campaign (sanitised captures of real Azure responses), read in memory.
-const evidenceArchive = "../../../../../docs/replay-provider-evidence.tar.gz"
+const evidenceArchive = "../../../../docs/replay-provider-evidence.tar.gz"
 
 type captureExchange struct {
 	Request struct {

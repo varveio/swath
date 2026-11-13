@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/localfs"
 )
 
 // TestLocalRecordingS3View reads a swath/local-entries/v1 dataset the Go lister

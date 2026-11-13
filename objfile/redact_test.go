@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // TestRedactError: every URL in an error's text loses its query, user

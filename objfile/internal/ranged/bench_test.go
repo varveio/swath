@@ -9,7 +9,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // memBody is a reusable in-memory response body.

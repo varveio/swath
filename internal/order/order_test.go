@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // tree is a synthetic provider: range r covers keys "r/..." with fan-out

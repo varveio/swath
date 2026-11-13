@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // TestFiltersThroughTheCommand: the filters drop rows before the order

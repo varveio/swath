@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/internal/registry"
 )
 
 // TestReportFilters: --no-dirs leaves the directories' rows out, so the

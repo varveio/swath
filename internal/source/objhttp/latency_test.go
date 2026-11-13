@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/internal/counters"
 )
 
 // TestLatencyBuckets: the buckets tile the durations without gaps, each

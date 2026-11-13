@@ -23,13 +23,13 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // Endpoint userinfo is refused, and must also be removed from the recorded

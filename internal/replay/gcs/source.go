@@ -8,9 +8,9 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/reader"
 )
 
 // NativeSchemaID is the schema id of a dataset the lister wrote from a

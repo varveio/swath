@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // store is an in-memory object for a Getter and a Stat: its data and pin,

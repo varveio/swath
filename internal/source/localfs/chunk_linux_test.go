@@ -12,8 +12,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
 )
 
 // kids collects one Expand's child ranges.

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // TestSuspectOrderAtPartLimit: suspects are compared by ordinal at the

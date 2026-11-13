@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/azblob/client"
 )
 
 var (

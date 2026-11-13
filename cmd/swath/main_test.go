@@ -19,11 +19,11 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
 )
 
 func TestRun(t *testing.T) {

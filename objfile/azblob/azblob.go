@@ -34,8 +34,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/ranged"
 )
 
 // New returns an Opener of the blobs of containerName through client, which

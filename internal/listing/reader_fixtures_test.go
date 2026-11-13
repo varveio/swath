@@ -12,13 +12,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/azblob"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/azblob"
+	"github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // TestVerifierFixtures writes real Go Parquet parts for the independent

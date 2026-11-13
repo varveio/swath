@@ -6,9 +6,9 @@ package azblob
 import (
 	"encoding/binary"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/reader"
 )
 
 // Version is one entry of a name in a listing of every entry

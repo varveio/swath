@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // TestLiveAnonymous lists a public container (AZBLOB_LIVE_ROOT, e.g.

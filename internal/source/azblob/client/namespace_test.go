@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // toFake sends every request to the fake server, keeping the host it was

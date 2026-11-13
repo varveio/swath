@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // testSAS is a SAS whose signature is easy to find in a message. Its

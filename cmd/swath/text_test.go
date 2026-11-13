@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 func textBucket(t *testing.T, n int) (args []string, keys []string) {

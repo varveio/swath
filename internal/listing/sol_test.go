@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // TestCredentialRotationResumes: credentials are not identity. A run

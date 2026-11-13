@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 // TestRecordWritesEveryExchange: each forwarded exchange is one JSON

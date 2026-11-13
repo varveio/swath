@@ -17,8 +17,8 @@ import (
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/googleapi"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/redact"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/redact"
 )
 
 // DefaultChunkSize is the bytes a resumable upload sends per request, and

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/internal/counters"
 )
 
 func TestHostileFixturesMatchSequential(t *testing.T) {

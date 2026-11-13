@@ -18,7 +18,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 	"github.com/varveio/seekparquet/go/write"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy"
 )
 
 // ownedScan is seekReader.Scan as it was before borrowed batches: Read's

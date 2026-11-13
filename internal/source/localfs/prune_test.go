@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // pruneReference deliberately walks every subtree, using the pre-existing

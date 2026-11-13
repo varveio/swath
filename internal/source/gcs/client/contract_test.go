@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp/objhttptest"
 )
 
 type contractClient struct{ *Client }

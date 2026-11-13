@@ -6,9 +6,9 @@ package listing
 import (
 	"os"
 
-	"github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // The tests register both providers (the command does it the same way)

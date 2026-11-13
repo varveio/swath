@@ -11,9 +11,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/localfs"
 )
 
 type commandPruneReport struct {

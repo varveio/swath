@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/journal"
 )
 
 // TestEveryOutputIsOwned: a filesystem run (no journal) takes the output

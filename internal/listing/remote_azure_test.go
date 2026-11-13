@@ -19,11 +19,11 @@ import (
 
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/azblob/azfake"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/azblob/azfake"
 )
 
 // TestRemoteAzureOverlap: an Azure destination overlaps a listed root of

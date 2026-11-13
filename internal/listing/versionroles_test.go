@@ -12,11 +12,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/reader"
 )
 
 // rolePayload is a versions row whose role columns have unconventional

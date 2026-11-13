@@ -16,9 +16,9 @@ import (
 	"google.golang.org/api/option"
 	storage "google.golang.org/api/storage/v1"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // redirect sends requests addressed to Google's endpoint to the fake, so

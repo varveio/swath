@@ -19,8 +19,8 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/reader"
 )
 
 func part(i int, lo, hi string, n int64) Part {

@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 type tokenFunc func() (*oauth2.Token, error)

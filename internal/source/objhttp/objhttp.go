@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Class is a documented diagnostic label for the run report. Control

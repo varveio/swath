@@ -14,13 +14,13 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // The local filesystem takes roots without a scheme.

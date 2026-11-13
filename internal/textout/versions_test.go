@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/s3"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/reader"
 )
 
 // text writes rows through a sink bound to s on cfg (to a buffer) and

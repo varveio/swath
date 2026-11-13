@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/azure"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/azure"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // The reference comparator's own tests, ported to the Go comparator.

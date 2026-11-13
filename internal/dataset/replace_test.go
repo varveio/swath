@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/internal/faults"
 )
 
 // TestReplace: a replacement at either durability installs the new bytes;

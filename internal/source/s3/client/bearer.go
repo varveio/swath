@@ -6,7 +6,7 @@ package client
 import (
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 // Bearer-token authentication (--s3-bearer-token-command), as Java swath's:

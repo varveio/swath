@@ -13,10 +13,10 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 	"github.com/varveio/seekparquet/go/write"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Served-layout geometry (Swath's sorted output), passed to the module's

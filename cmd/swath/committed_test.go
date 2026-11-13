@@ -14,12 +14,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/objfile/gcs/gcsfake"
 )
 
 // committedReport checks a report of an invocation that found the dataset

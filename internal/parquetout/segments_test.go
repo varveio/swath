@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // segmentRun writes rows through a router: serially until the ratio is

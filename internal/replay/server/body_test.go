@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestUnsentBodyHoldsNothing: a listing request that declares a body (one

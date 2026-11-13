@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 // WaitToken waits for a shared token under the attempt's deadline. A nil

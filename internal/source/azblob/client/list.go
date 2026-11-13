@@ -99,10 +99,10 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/utf16order"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/utf16order"
 )
 
 // services builds one SDK service client per pooled transport, each over

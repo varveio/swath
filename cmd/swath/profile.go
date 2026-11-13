@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // The profiles' phase files beside FILE: the listing phase (from the start

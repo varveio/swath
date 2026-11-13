@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/javanum"
+	"github.com/varveio/swath/internal/replay/javanum"
 )
 
 // Shape is a request's class.

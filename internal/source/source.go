@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // ErrProtocol marks a violation of the listing contract that the engine

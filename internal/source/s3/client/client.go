@@ -48,11 +48,11 @@ import (
 	smithymiddleware "github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 // Config configures a Client. Zero values take the defaults.

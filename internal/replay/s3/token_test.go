@@ -14,7 +14,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestTokenGolden pins the wire bytes. They are this server's own: the

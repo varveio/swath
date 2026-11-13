@@ -21,8 +21,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // TestCredentialSources keeps the credential-service region independent of

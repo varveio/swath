@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // API is the one call the provider makes.

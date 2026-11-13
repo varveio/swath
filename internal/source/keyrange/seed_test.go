@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/order"
 )
 
 // seedShapes are keyspaces of the shapes a seed meets: flat, dense, narrow

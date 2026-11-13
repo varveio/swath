@@ -1,4 +1,4 @@
-module github.com/varveio/swath/go/objfile
+module github.com/varveio/swath/objfile
 
 go 1.26.0
 

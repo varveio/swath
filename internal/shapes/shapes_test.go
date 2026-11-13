@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/scalefake"
 )
 
 // small is the default tier's scale: about 200 pages per shape.

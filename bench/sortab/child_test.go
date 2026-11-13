@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // The test binary is also the harness: SORTAB_CHILD=<config.json> runs one

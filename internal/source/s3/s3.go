@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3/client"
 )
 
 // API is the one S3 call the provider makes. *client.Client implements

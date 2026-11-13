@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // measureSpace: statfs(2) counts blocks in fragment units (f_frsize);

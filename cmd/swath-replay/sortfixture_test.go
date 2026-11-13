@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 // subcommand runs this test binary as swath-replay with args and returns

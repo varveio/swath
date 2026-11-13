@@ -12,8 +12,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // A sorted run is a file of frames: a 4-byte little-endian length, a

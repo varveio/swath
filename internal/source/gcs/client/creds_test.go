@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // tokenServer is a local OAuth2 token endpoint: each refresh issues

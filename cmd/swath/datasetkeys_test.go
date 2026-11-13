@@ -11,7 +11,7 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // datasetKeys is a committed dataset's keys, part by part in manifest

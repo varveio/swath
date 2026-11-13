@@ -3,7 +3,7 @@
 
 package client
 
-import "github.com/varveio/swath/go/internal/source/objhttp"
+import "github.com/varveio/swath/internal/source/objhttp"
 
 // Failure maps the service answer once; labels do not drive retry policy.
 func (e *Error) Failure() objhttp.Failure {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // exitOf is the exit code main gives err.

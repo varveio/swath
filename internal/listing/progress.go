@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Progress is a run's live progress, read while it runs: by the command's

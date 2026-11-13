@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // syncBuffer is stderr for a test whose run writes it from several

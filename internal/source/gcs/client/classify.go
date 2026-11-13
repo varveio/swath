@@ -3,7 +3,7 @@
 
 package client
 
-import "github.com/varveio/swath/go/internal/source/objhttp"
+import "github.com/varveio/swath/internal/source/objhttp"
 
 // Failure preserves reason-sensitive throttling, including a 403, and
 // labels a missing bucket not_found.

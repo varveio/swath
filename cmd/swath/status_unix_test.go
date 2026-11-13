@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 var statusOnce sync.Once

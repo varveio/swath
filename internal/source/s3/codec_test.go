@@ -9,7 +9,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // TestDeltaCodecForms: the delta encoding picks the raw ETag only for

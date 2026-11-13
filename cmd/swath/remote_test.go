@@ -26,15 +26,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/objfile/azblob/azfake"
-	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
-	"github.com/varveio/swath/go/objfile/s3/s3fake"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/objfile/azblob/azfake"
+	"github.com/varveio/swath/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/objfile/s3/s3fake"
 )
 
 // TestRemoteOutputRefusals: what a bucket -o refuses at parse time.

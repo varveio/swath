@@ -23,8 +23,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // duTree is a small tree with what du's flags are about: hard links within

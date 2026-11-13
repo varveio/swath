@@ -14,7 +14,7 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // Options configures a Store.

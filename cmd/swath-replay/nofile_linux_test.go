@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 // nofileEnv lowers the soft descriptor limit of a served child before it

@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
 )
 
 // helpStyle is how help is printed: its width, bold headings and flag

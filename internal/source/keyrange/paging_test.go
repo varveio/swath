@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source"
 )
 
 // script is a provider that answers a fixed chain of pages: the first

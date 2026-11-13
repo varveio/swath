@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3/client"
 )
 
 // flaky fails its first n calls with err, then serves the stub.

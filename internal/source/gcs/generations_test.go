@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // TestGenerationSchema: the generations schema is gcs-objects/v1's columns

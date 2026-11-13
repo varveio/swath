@@ -13,9 +13,9 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy"
+	"github.com/varveio/swath/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 func TestSuccessorAndCommonPrefix(t *testing.T) {

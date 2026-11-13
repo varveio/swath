@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/output"
+	"github.com/varveio/swath/internal/replay/output"
 )
 
 // contractThresholds are the Java replay server's answers, from its own

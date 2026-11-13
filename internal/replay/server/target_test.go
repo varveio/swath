@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // rawGet sends target as the request line, byte for byte.

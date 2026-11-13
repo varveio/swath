@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/azure"
+	"github.com/varveio/swath/internal/replay/azure"
 )
 
 // TestCompareUTF16SortsTheCorpusAsTheReplay sorts the corpus with each

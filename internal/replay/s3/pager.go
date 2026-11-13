@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // Entry is one listing entry: an object, or a rolled-up common prefix

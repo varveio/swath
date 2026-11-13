@@ -15,15 +15,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3"
-	s3client "github.com/varveio/swath/go/internal/source/s3/client"
-	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/gcs"
+	gcsclient "github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3"
+	s3client "github.com/varveio/swath/internal/source/s3/client"
+	"github.com/varveio/swath/internal/source/scalefake"
 )
 
 func serve(t testing.TB, s scalefake.Shape, opt scalefake.Options) (*scalefake.Keyspace, *scalefake.Server, string) {

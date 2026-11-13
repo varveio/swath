@@ -20,12 +20,12 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/replay/store"
-	sourcegcs "github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/replay/store"
+	sourcegcs "github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // TestResumedGCSRecordingMixesParts: a GCS listing started by a build

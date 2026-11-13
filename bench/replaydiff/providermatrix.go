@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/s3"
 )
 
 // The live modes send the provider conformance matrix: the case

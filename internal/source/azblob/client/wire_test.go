@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
 )
 
 // newClient builds a client for cfg.

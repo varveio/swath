@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // gcsToken is a gcs1. token with the given flag, progress, binding byte

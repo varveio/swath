@@ -4,8 +4,8 @@
 package objhttp
 
 import (
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Activity is a listing client's request activity as the pipeline reads

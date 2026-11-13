@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/order"
 )
 
 // TestOneFilesystem: with OneFilesystem, a directory on another device

@@ -19,8 +19,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // randomBatches cuts rows into Write calls of 1 to 3 segments of 0 to 3,000

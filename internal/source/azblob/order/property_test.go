@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // alphabet is §7.2's: ASCII, the delimiter, two same-lead scalars, three

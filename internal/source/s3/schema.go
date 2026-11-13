@@ -7,8 +7,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader"
 )
 
 // Object is an S3 row's payload: one current object. Empty strings are

@@ -8,8 +8,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // Entry is one listing entry: a Blob (Object set) or a BlobPrefix.

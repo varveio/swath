@@ -6,11 +6,11 @@ package listing
 import (
 	"time"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // ReportVersion is the run report's version. 2: the clearer names

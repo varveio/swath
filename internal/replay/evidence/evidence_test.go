@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
-	"github.com/varveio/swath/go/internal/replay/server"
-	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/server"
+	"github.com/varveio/swath/internal/replay/sortfixture"
+	"github.com/varveio/swath/internal/replay/store"
 )
 
 // The GCS evidence replay. Every capture in the archive's gcs/ tree is
@@ -60,7 +60,7 @@ var duplicateQueryProbes = map[string]bool{"gcs-05": true, "azure-08": true, "gc
 	"gcs-06m": true, "azure-07h": true, "azure-07i": true, "azure-08m": true, "azure-08p": true, "s3-05h": true,
 	"s3-05i": true, "s3-06m": true, "s3-12d": true}
 
-var repo = filepath.Join("..", "..", "..", "..")
+var repo = filepath.Join("..", "..", "..")
 
 // fixtureRoot is SWATH_REPLAY_FIXTURES, or skips.
 func fixtureRoot(t *testing.T) string {

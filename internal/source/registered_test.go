@@ -14,19 +14,19 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob"
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3"
-	s3client "github.com/varveio/swath/go/internal/source/s3/client"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/azblob"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/gcs"
+	gcsclient "github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3"
+	s3client "github.com/varveio/swath/internal/source/s3/client"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // routedS3 is a supplied S3 client that names its route (s3.Routed);

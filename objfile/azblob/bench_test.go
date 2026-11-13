@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
 )
 
 // BenchmarkUpload measures the upload path's cost on the client: a 64 MiB

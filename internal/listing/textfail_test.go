@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // TestTextWriteFailureStopsListing: the text file's first write fails in

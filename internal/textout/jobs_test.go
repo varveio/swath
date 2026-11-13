@@ -22,8 +22,8 @@ import (
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // bigRows is n rows shaped as a real listing's (sorted keys sharing

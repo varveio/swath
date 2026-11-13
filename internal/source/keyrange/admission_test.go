@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/internal/counters"
 )
 
 // TestGaugeEstimates: the gauge reads a page of decimal counters in its

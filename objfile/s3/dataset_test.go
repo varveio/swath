@@ -18,8 +18,8 @@ import (
 	"github.com/varveio/seekparquet/go/local"
 	"github.com/varveio/seekparquet/go/write"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/s3"
 )
 
 // source adapts an Opener to seekparquet.Source, whose Open returns its own

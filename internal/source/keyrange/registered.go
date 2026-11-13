@@ -3,7 +3,7 @@
 
 package keyrange
 
-import "github.com/varveio/swath/go/internal/source"
+import "github.com/varveio/swath/internal/source"
 
 // Registered is what a provider on the range engine gives the pipeline
 // beyond registry.Bound, the one list of the optional interfaces of package

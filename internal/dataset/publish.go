@@ -14,8 +14,8 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/reader"
 )
 
 // Key is a key's exact bytes, held in a Go string and compared as unsigned

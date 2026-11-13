@@ -3,7 +3,7 @@
 
 package objhttp
 
-import "github.com/varveio/swath/go/internal/source"
+import "github.com/varveio/swath/internal/source"
 
 // Meter owns a built client's retry policy and request accounting. It must
 // not be copied after use.

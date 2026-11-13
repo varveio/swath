@@ -14,12 +14,12 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/spsource"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/spsource"
+	"github.com/varveio/swath/reader"
 )
 
 // cacheOpener opens immutable fixture files with a known identity, so every

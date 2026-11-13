@@ -17,7 +17,7 @@ cd "$(dirname "$0")"
 
 GO_LICENSES_VERSION=v2.0.1
 ALLOWED_LICENSES=Apache-2.0,MIT,MIT-0,ISC,BSD-2-Clause,BSD-3-Clause,EPL-1.0,EPL-2.0,CDDL-1.0,CDDL-1.1,CC0-1.0
-FIRST_PARTY=github.com/varveio/swath/go
+FIRST_PARTY=github.com/varveio/swath
 COMMANDS=(./cmd/swath ./cmd/swath-replay)
 GOOSES=(linux darwin windows)
 

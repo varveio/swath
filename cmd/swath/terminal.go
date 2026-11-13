@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // terminal is a run's one terminal result: frozen at its first

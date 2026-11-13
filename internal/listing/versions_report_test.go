@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	s3client "github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/source/gcs"
+	gcsclient "github.com/varveio/swath/internal/source/gcs/client"
+	"github.com/varveio/swath/internal/source/keyrange"
+	s3client "github.com/varveio/swath/internal/source/s3/client"
 )
 
 // TestVersionReportIncludesAllS3Counters: Successful S3 version reports serialize

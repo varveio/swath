@@ -7,7 +7,7 @@ import (
 	"math"
 	"unicode"
 
-	"github.com/varveio/swath/go/internal/replay/javanum"
+	"github.com/varveio/swath/internal/replay/javanum"
 	"unicode/utf8"
 )
 

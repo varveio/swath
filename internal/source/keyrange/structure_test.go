@@ -11,8 +11,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
 )
 
 func TestStructurePrefixes(t *testing.T) {

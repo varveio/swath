@@ -27,6 +27,6 @@ for last in "$@"; do :; done
 case "${last:-}" in
 ./cmd/*) pkg= ;;
 esac
-buildinfo=github.com/varveio/swath/go/internal/buildinfo
+buildinfo=github.com/varveio/swath/internal/buildinfo
 CGO_ENABLED=0 exec go build -trimpath \
 	-ldflags="-s -w -X $buildinfo.Version=${SWATH_VERSION:-} -X $buildinfo.Revision=$rev" "$@" $pkg

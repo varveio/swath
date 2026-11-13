@@ -15,7 +15,7 @@ import (
 	"testing"
 	_ "time/tzdata" // the zones below, wherever the test runs
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 // serveWith starts this binary as swath-replay serve with extra

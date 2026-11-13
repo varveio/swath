@@ -6,8 +6,8 @@ package gcs
 import (
 	"encoding/binary"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader"
 )
 
 // Object is one Cloud Storage object's listed metadata (objects.list).

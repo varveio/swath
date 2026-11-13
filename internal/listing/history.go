@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/internal/order"
 )
 
 // HistoryCap bounds the report's progress history: 300 samples (about 30

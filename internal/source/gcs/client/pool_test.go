@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/oauth2/google"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 func TestServicePool(t *testing.T) {

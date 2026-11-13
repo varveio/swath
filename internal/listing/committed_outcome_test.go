@@ -6,7 +6,7 @@ package listing
 import (
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // TestCommittedOutcome: the run.json a resume writes for a dataset an

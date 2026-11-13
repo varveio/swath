@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/internal/dataset"
 )
 
 // checkSidePaths refuses, before the source is opened, a file the command

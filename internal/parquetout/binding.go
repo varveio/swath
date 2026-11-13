@@ -12,7 +12,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // nodeOf builds the Parquet schema for s: the key column, then s.Columns in

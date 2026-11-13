@@ -6,8 +6,8 @@ package server
 import (
 	"testing"
 
-	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 // TestRequestMeterSpans pins where the request meters end on the S3 and

@@ -6,8 +6,8 @@ package keyrange
 import (
 	"fmt"
 
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
 )
 
 // Report is an engine provider's run report (source.Reporter): its stats

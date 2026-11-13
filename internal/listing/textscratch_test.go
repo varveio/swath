@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/source/scalefake"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/scalefake"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // scratchShape is small enough to list in a second and large enough that

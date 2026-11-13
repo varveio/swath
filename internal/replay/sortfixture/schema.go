@@ -6,7 +6,7 @@ package sortfixture
 import (
 	"encoding/binary"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // Object is a sorted capture row's payload: one current object. A size or

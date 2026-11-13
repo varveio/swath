@@ -21,14 +21,14 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"google.golang.org/api/option"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/azblob/azfake"
-	"github.com/varveio/swath/go/objfile/gcs"
-	"github.com/varveio/swath/go/objfile/gcs/gcsfake"
-	"github.com/varveio/swath/go/objfile/s3"
-	"github.com/varveio/swath/go/objfile/s3/s3fake"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/azblob/azfake"
+	"github.com/varveio/swath/objfile/gcs"
+	"github.com/varveio/swath/objfile/gcs/gcsfake"
+	"github.com/varveio/swath/objfile/s3"
+	"github.com/varveio/swath/objfile/s3/s3fake"
 )
 
 // The remote dataset tests run once per destination provider, each

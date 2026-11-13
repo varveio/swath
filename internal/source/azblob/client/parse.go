@@ -8,8 +8,8 @@ import (
 	"encoding/xml"
 	"fmt"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/utf16order"
+	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/utf16order"
 )
 
 // bom starts every body Azure sends, success or error (both service

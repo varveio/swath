@@ -27,24 +27,24 @@ import (
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/textout"
-	"github.com/varveio/swath/go/internal/totals"
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/objfile"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
-	_ "github.com/varveio/swath/go/internal/source/azblob"
-	_ "github.com/varveio/swath/go/internal/source/gcs"
-	_ "github.com/varveio/swath/go/internal/source/localfs"
-	_ "github.com/varveio/swath/go/internal/source/s3"
+	_ "github.com/varveio/swath/internal/source/azblob"
+	_ "github.com/varveio/swath/internal/source/gcs"
+	_ "github.com/varveio/swath/internal/source/localfs"
+	_ "github.com/varveio/swath/internal/source/s3"
 )
 
 // shutdownGrace bounds the time a stopped run (a signal, the deadline, a

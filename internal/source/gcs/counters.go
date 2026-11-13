@@ -4,8 +4,8 @@
 package gcs
 
 import (
-	"github.com/varveio/swath/go/internal/counters"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // The adapter's counters, after the client's.

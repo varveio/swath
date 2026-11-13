@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
 )
 
 func newCache(t *testing.T, n int64) *objfile.ByteCache {

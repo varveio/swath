@@ -6,8 +6,8 @@ package localfs
 import (
 	"encoding/binary"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader"
 )
 
 // Kind is a file type; its String form is the kind column value.

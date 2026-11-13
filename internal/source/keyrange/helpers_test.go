@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
 )
 
 // The engine's tests list through the fixtures' fake API (start-after

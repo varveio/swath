@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/source/localfs"
 )
 
 // recordLocal writes files (relative path to body) under a temporary

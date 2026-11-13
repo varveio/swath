@@ -22,10 +22,10 @@ import (
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/internal/objfiletest"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
-	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/internal/objfiletest"
+	"github.com/varveio/swath/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile/s3"
 )
 
 const bucket = "bkt"

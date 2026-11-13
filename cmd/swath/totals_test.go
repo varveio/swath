@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // depthTree is a small local tree with known sizes and times: a/b/f (5

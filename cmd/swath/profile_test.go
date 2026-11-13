@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // profileSpan reads a pprof profile's start (time_nanos, field 9) and

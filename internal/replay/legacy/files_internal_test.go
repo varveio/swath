@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	"github.com/varveio/swath/internal/replay/legacy/legacytest"
 )
 
 // openTwoParts writes two one-group parts and opens them through a

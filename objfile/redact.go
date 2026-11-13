@@ -3,7 +3,7 @@
 
 package objfile
 
-import "github.com/varveio/swath/go/objfile/internal/redact"
+import "github.com/varveio/swath/objfile/internal/redact"
 
 // RedactError returns err with every URL in its text reduced to its scheme,
 // host and path: user information, the query and the fragment are dropped.

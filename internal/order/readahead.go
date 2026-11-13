@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 )
 
 // The spill read-ahead. Once the provider has listed what is queued, the

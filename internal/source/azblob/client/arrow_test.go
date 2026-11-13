@@ -24,7 +24,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	amem "github.com/apache/arrow-go/v18/arrow/memory"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // The recorded pages: the first page (maxresults=50) of the public

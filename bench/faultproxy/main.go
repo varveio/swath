@@ -37,7 +37,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/internal/source/objhttp/faulttest"
 )
 
 type windows []faulttest.Window

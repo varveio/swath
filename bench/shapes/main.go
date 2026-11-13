@@ -34,8 +34,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/shapes"
-	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/internal/shapes"
+	"github.com/varveio/swath/internal/source/scalefake"
 )
 
 // SchemaVersion is the summary's format: the arms' fields and meaning. It

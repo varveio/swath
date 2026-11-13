@@ -16,12 +16,12 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/azblob"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
-	"github.com/varveio/swath/go/reader"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/azblob"
+	"github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/reader"
 )
 
 // readAll writes rows with this build's writer and reads them back through

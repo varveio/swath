@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/source"
 )
 
 // fenceEmitter records one range's emissions in order: rows, fences and

@@ -11,7 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 )
 
 // TestAzureAccountInformationSDK reads Get Account Information through the

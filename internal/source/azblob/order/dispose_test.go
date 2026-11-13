@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // TestAbandonedChains is §7.5: chains abandoned after every page, and

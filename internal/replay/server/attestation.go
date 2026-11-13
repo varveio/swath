@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/internal/replay/metrics"
 )
 
 // attestation reports the resource limits this process can see, for a

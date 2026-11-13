@@ -36,11 +36,11 @@ import (
 	"google.golang.org/api/option/internaloption"
 	htransport "google.golang.org/api/transport/http"
 
-	"github.com/varveio/swath/go/objfile"
-	"github.com/varveio/swath/go/objfile/azblob"
-	"github.com/varveio/swath/go/objfile/gcs"
-	"github.com/varveio/swath/go/objfile/internal/ranged"
-	"github.com/varveio/swath/go/objfile/s3"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob"
+	"github.com/varveio/swath/objfile/gcs"
+	"github.com/varveio/swath/objfile/internal/ranged"
+	"github.com/varveio/swath/objfile/s3"
 )
 
 // Store is a dataset root opened by Open: an objfile.Opener of the names

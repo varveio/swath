@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // rnode is a range of a random tree: rows batches and children, in key

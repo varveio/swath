@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/internal/replay/store/memstore"
+	"github.com/varveio/swath/internal/replay/store"
+	"github.com/varveio/swath/internal/replay/store/memstore"
 )
 
 func objects(names ...string) []store.Object {

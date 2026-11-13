@@ -20,8 +20,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // frontier is the step-3 adversarial shape: a slow, dense first range (the

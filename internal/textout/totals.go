@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/totals"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // The per-prefix totals' fields (swath du): TSV columns and JSONL members,

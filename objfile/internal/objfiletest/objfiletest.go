@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // Store is a fake store reached through an Opener of the package under test.

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/objfile"
+	"github.com/varveio/swath/objfile"
 )
 
 // memStore is an Opener of objects held in memory, each at a generation that

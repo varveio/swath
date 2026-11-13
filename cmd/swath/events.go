@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
 )
 
 // The event log is every line swath writes to stderr outside the redrawn

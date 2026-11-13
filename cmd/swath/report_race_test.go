@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/listing"
 )
 
 // TestConcurrentReportWriters (B3): the graceful and the forced account of

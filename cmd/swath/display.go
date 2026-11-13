@@ -16,9 +16,9 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record

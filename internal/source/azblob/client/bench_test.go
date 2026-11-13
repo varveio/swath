@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // memory answers every request with body from memory: no network, so a

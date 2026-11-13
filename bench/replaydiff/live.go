@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/internal/replay/s3"
 )
 
 // The live modes (-live-endpoint): the reference is the provider itself,

@@ -16,10 +16,10 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"golang.org/x/oauth2"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
-	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/source/tokensource"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/source/objhttp/objhttptest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/source/tokensource"
 )
 
 // wireSnapshot is the checked-in rendering of every request shape the

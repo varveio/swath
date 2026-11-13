@@ -16,9 +16,9 @@ import (
 	"google.golang.org/api/googleapi"
 	storage "google.golang.org/api/storage/v1"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/source/objhttp"
 )
 
 // List sends one objects.list request per attempt, retrying retryable

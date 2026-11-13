@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/go/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/azblob/client"
 )
 
 // The lead bytes that bound a scalar group under a parent Q: Q+leadE starts

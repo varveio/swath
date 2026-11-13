@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/gcs"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // typeNames spell each column type with the Parquet types the writer

@@ -5,7 +5,7 @@
 
 package localfs
 
-import "github.com/varveio/swath/go/internal/source"
+import "github.com/varveio/swath/internal/source"
 
 // measureSpace: other platforms do not measure their filesystem's space.
 func measureSpace(string, bool) *source.FilesystemSpace { return nil }

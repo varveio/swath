@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/localfs"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/internal/parquetout"
+	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source/localfs"
+	"github.com/varveio/swath/internal/source/s3"
 )
 
 // TestWriterAdmissionCoversHeap is the writer admission's heap gate: four
