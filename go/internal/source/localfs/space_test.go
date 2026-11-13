@@ -90,6 +90,8 @@ func TestFilesystemSpace(t *testing.T) {
 		}
 	}
 
+	symlinkFileRoot(t, dir)
+
 	gone := filepath.Join(dir, "gone")
 	if err := os.Mkdir(gone, 0o700); err != nil {
 		t.Fatal(err)
@@ -109,5 +111,38 @@ func TestFilesystemSpace(t *testing.T) {
 	}
 	if s := p.filesystemSpace(); s != nil {
 		t.Fatalf("a failed measurement was retried: %+v", s)
+	}
+}
+
+// symlinkFileRoot lists a link, in dir, to a file on another filesystem
+// (Linux's /dev/shm): the link is the row, so the space is dir's.
+func symlinkFileRoot(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		return
+	}
+	target, err := os.CreateTemp("/dev/shm", "swath-space-*")
+	if err != nil {
+		t.Logf("no /dev/shm: %v", err)
+		return
+	}
+	t.Cleanup(func() { _ = os.Remove(target.Name()) })
+	_ = target.Close()
+	here, there := measureSpace(dir, false), measureSpace(target.Name(), true)
+	if here == nil || there == nil || here.TotalBytes == there.TotalBytes {
+		t.Logf("/dev/shm is not told apart from %s by its size", dir)
+		return
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target.Name(), link); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := New(link, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := p.filesystemSpace(); s == nil || s.TotalBytes != here.TotalBytes {
+		t.Fatalf("a link to a file on another filesystem measured %+v, want the link's filesystem (%d bytes), not the target's (%d)", s, here.TotalBytes, there.TotalBytes)
 	}
 }

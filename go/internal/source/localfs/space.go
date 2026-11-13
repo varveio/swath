@@ -4,8 +4,11 @@
 package localfs
 
 import (
+	"io/fs"
 	"math"
 	"math/bits"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/varveio/swath/go/internal/source"
@@ -15,9 +18,17 @@ import (
 // measured the first time it is asked for (at the end of the walk, by
 // Report) and the same afterwards, a failed measurement included. A
 // failure leaves the dataset without it; it never fails the listing.
+//
+// A root that is a symbolic link to a file lists the link itself, so its
+// directory is measured: the target may be on another filesystem. A link
+// to a directory is walked through, so its target is measured.
 func (p *Provider) filesystemSpace() *source.FilesystemSpace {
 	p.spaceOnce.Do(func() {
-		p.space = measureSpace(p.root, p.file)
+		root, file := p.root, p.file
+		if fi, err := os.Lstat(root); file && err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			root, file = filepath.Dir(root), false
+		}
+		p.space = measureSpace(root, file)
 	})
 	return p.space
 }

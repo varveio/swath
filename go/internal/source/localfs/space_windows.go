@@ -16,8 +16,8 @@ import (
 )
 
 // measureSpace: GetDiskFreeSpaceExW takes a directory, so a link is
-// resolved first and a file root measures its directory; a UNC path needs
-// a trailing backslash. The total and the available bytes are the
+// resolved first and a file measures its directory; a UNC path needs a
+// trailing backslash. The total and the available bytes are the
 // caller's (within a quota), the free bytes the volume's.
 func measureSpace(root string, file bool) *source.FilesystemSpace {
 	dir, err := filepath.EvalSymlinks(root)
