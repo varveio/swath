@@ -52,3 +52,44 @@ func TestExcludeResolvesTheParent(t *testing.T) {
 		}
 	}
 }
+
+// TestExcludeStoredSpelling: -o TREE/ROWS.jsonl over an existing
+// TREE/rows.jsonl leaves the entry out under the spelling the listing
+// emits where the directory ignores case (it is the same entry, by
+// identity, and the only one); where it does not, the other spelling is
+// another file, even a hard link to the same one, and stays listed.
+func TestExcludeStoredSpelling(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "rows.jsonl"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := os.Lstat(filepath.Join(root, "ROWS.jsonl"))
+	folds := err == nil
+	if !folds {
+		// Case-sensitive: a hard link under the other spelling is another
+		// name, never taken for the destination's.
+		if err := os.Link(filepath.Join(root, "rows.jsonl"), filepath.Join(root, "ROWS.jsonl")); err != nil {
+			t.Skipf("no hard links here: %v", err)
+		}
+	}
+	o := pruneOpen(t, root, Options{}).(*opened)
+	if err := o.Exclude(filepath.Join(root, "ROWS.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ROWS.jsonl"}
+	if folds {
+		want = []string{"rows.jsonl"}
+	}
+	if got := slices.Sorted(maps.Keys(o.p.opt.Skip)); !slices.Equal(got, want) {
+		t.Fatalf("case-insensitive %v: left out %q, want %q", folds, got, want)
+	}
+	// A name equal without case that does not exist yet is created by the
+	// commit; the existing file of another spelling stays listed.
+	o = pruneOpen(t, root, Options{}).(*opened)
+	if err := o.Exclude(filepath.Join(root, "Rows.JSONL.new")); err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Sorted(maps.Keys(o.p.opt.Skip)); !slices.Equal(got, []string{"Rows.JSONL.new"}) {
+		t.Fatalf("a new name: left out %q", got)
+	}
+}

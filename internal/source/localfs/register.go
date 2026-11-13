@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/spf13/pflag"
 
@@ -228,6 +229,7 @@ func (o *opened) locate(path string) (string, error) {
 		return rel + "/", err
 	}
 	dir, name := splitParent(path)
+	name = storedName(dir, name)
 	rfi, err := os.Stat(o.p.root)
 	if err != nil {
 		return "", err
@@ -242,10 +244,10 @@ func (o *opened) locate(path string) (string, error) {
 	return rel + "/" + name, err
 }
 
-// splitParent splits path at its last separator into the directory as
+// splitParent splits path after its last separator into the directory as
 // spelled, which the system resolves (not lexically cleaned:
 // link/.. is the parent of link's target, not the directory holding
-// link), and the name in it.
+// link), and the name in it: dir+name is path, and dir+n names n there.
 func splitParent(path string) (dir, name string) {
 	i := len(path) - 1
 	for i >= len(filepath.VolumeName(path)) && !os.IsPathSeparator(path[i]) {
@@ -253,9 +255,44 @@ func splitParent(path string) (dir, name string) {
 	}
 	dir, name = path[:i+1], path[i+1:]
 	if dir == "" {
-		dir = "."
+		dir = "." + string(os.PathSeparator)
 	}
 	return dir, name
+}
+
+// storedName is the spelling under which dir holds an existing entry
+// named name, which the listing emits: name itself, unless the directory
+// ignores case (macOS's default APFS, NTFS) and holds no entry spelled
+// name but exactly one spelled otherwise that equals it without case and
+// is the same entry by identity. A hard link to the file under another
+// name, or a name only equal without case, is never taken for it.
+func storedName(dir, name string) string {
+	fi, err := os.Lstat(dir + name)
+	if err != nil {
+		return name // nothing there yet: the commit creates name
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return name
+	}
+	stored := ""
+	for _, e := range ents {
+		switch {
+		case e.Name() == name:
+			return name
+		case strings.EqualFold(e.Name(), name):
+			if efi, err := os.Lstat(dir + e.Name()); err == nil && os.SameFile(fi, efi) {
+				if stored != "" {
+					return name // two candidates: neither is taken
+				}
+				stored = e.Name()
+			}
+		}
+	}
+	if stored == "" {
+		return name
+	}
+	return stored
 }
 
 // Report: an entry counts as skipped when an error kept it (or its subtree)

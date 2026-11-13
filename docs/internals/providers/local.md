@@ -84,7 +84,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   its scratch directory) is dropped in `emit` before anything else: its row, and for a directory its
   traversal. A directory is located by identity, a file by its name in its directory as the system resolves
   the path, never cleaned first (`link/..` is the parent of `link`'s target), located by identity (the file
-  may not exist yet, and a commit renames over the name); `skipped_outputs` counts the entries dropped and
+  may not exist yet, and a commit renames over the name). An existing file is left out under the spelling the
+  directory stores (`storedName`): where it ignores case, the one entry equal without case that is the same
+  file by identity, never another hard link or a name merely equal without case. `skipped_outputs` counts the entries dropped and
   `coverage.exclusions` lists their keys, sorted.
   The report's `pruning` classifies configured rules: `reason` is `no_excludes`, `row_filters_only`, or
   `recursive_excludes`; `recursive_globs`, `row_only_globs` and `regex_rules` count the rules in each
