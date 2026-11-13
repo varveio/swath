@@ -7,19 +7,10 @@ import subprocess
 from pathlib import Path
 
 
-JAVA_INPUTS = re.compile(
-    r'^swath-[^/]+/|^(build-logic|gradle|config)/'
-    r'|^scripts/(legal|benchmarks/replay|provider-conformance)/'
-    r'|^scripts/ci/(check-instrumentation-drift\.(sh|py)|osv-image-policy\.py|report-test-counts\.sh)$'
-    r'|^\.github/workflows/(ci|nightly)\.yml$'
-    r'|^(docs/assets|site/data/runs)/'
-    r'|^docs/(configuration\.md|replay-provider-(evidence\.tar\.gz|expectations\.json))$'
-    r'|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?|Dockerfile(\.replay)?'
-    r'|\.dockerignore|LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$')
 PLATFORM_FILE = re.compile(r'_(windows|darwin|linux|unix|arm64|amd64)(_|\.)|\.s$')
 PLATFORM_PATHS = ('go/internal/journal/', 'go/internal/source/localfs/',
                   'go/internal/parquetout/', 'go/internal/order/')
-PACKAGING = {'Dockerfile.go', 'Dockerfile.go.dockerignore', '.dockerignore',
+PACKAGING = {'Dockerfile.go', 'Dockerfile.go.dockerignore',
              'go/build.sh', 'go/notices.sh', 'LICENSE', 'NOTICE'}
 ROOT_PROSE = {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'CONTRIBUTING.md',
               'CODE_OF_CONDUCT.md', 'SECURITY.md', 'RELEASING.md', 'LICENSE.txt'}
@@ -32,16 +23,14 @@ def fixture_module(path):
 
 
 def select(paths, event, *, force_full=False, unknown=False, build_tags=False, toolchain=False):
-    out = dict.fromkeys(('java', 'go', 'reader', 'objfile', 'fixtures', 'images',
+    out = dict.fromkeys(('go', 'reader', 'objfile', 'fixtures', 'images',
                          'platforms', 'full'), False)
     # Main and manual runs qualify the whole Go tree, even on a docs-only merge.
     out['full'] = event != 'pull_request' or force_full or unknown or not paths or toolchain
-    out['java'] = unknown or not paths or event == 'workflow_dispatch'
     for path in paths:
-        out['java'] |= bool(JAVA_INPUTS.search(path))
         if path.startswith('.github/') or path.startswith('scripts/ci/'):
             out['full'] = True
-        elif path in PACKAGING or path.startswith('config/license/'):
+        elif path in PACKAGING:
             out['go'] = out['images'] = out['platforms'] = True
         elif path.startswith('go/'):
             # Longest module prefix owns source, tests, embeds and fixtures alike.
@@ -62,8 +51,8 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
         elif path.startswith('docs/replay-provider-'):
             # Also read directly by the Azure client tests, outside the gated fixture tier.
             out['go'] = out['fixtures'] = True
-        elif (JAVA_INPUTS.search(path) or path in ROOT_PROSE
-              or path.startswith(('docs/', 'site/', 'config/', 'swath-', 'scripts/legal/'))
+        elif (path in ROOT_PROSE
+              or path.startswith(('docs/', 'site/', 'config/', 'scripts/provider-conformance/'))
               or path in {'.gitignore', '.gitattributes', '.editorconfig'}):
             pass
         else:

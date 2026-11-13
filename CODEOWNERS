@@ -6,7 +6,5 @@
 *                       @sagiba
 
 # Build and release machinery.
-/build-logic/           @sagiba
-/gradle/                @sagiba
 /.github/               @sagiba
 /config/                @sagiba

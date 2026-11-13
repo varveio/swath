@@ -752,13 +752,6 @@ class EvidenceStorageTest(unittest.TestCase):
             path.write_bytes(evidence.deterministic_gzip(payload))
             self.assertEqual(evidence.read_evidence(path), payload)
 
-    def test_duplicate_query_probe_rows_match_the_java_receipt(self):
-        source = (campaign.REPO_ROOT / "swath-replay/src/conformance/java/io/varve/swath/replay/"
-                  "conformance/provider/ProviderMatchReceipt.java").read_text()
-        declared = source.split("DUPLICATE_QUERY_PROBES = java.util.Set.of(", 1)[1].split(");", 1)[0]
-        self.assertEqual({part.strip().strip('"') for part in declared.split(",")},
-                         evidence.DUPLICATE_QUERY_PROBES)
-
     def test_duplicate_query_cases_are_exempt(self):
         for provider in ProviderMatrixTest.PROVIDERS:
             for case in provider.cases(RUN, "full"):

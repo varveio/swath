@@ -83,19 +83,16 @@ class PolicyTests(unittest.TestCase):
             (['go/objfile/foo_arm64.s'], {'objfile', 'platforms'}),
             (['Dockerfile.go'], {'go', 'fixtures', 'images', 'platforms'}),
             (['go/notices.sh'], {'go', 'fixtures', 'images', 'platforms'}),
-            (['LICENSE'], {'java', 'go', 'fixtures', 'images', 'platforms'}),
-            (['docs/replay-provider-expectations.json'], {'java', 'go', 'fixtures'}),
-            (['docs/replay-provider-evidence.tar.gz'], {'java', 'go', 'fixtures'}),
-            (['swath-replay/src/Test.java'], {'java'}),
-            (['build.gradle.kts'], {'java'}),
-            (['gradlew.bat'], {'java'}),
-            (['swath-cli/src/Test.java'], {'java'}),
-            (['docs/configuration.md'], {'java'}),
-            (['docs/internals/architecture.md'], set()),
+            (['LICENSE'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['docs/replay-provider-expectations.json'], {'go', 'fixtures'}),
+            (['docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
+            (['docs/style.md'], set()),
             (['README.md', 'SECURITY.md'], set()),
-            (['site/data/runs/facts.json'], {'java'}),
-            (['docs/assets/demo.mp4'], {'java'}),
+            (['site/data/runs/facts.json'], set()),
+            (['docs/assets/demo.mp4'], set()),
             (['site/index.html'], set()),
+            (['config/osv/osv-scanner.toml'], set()),
+            (['scripts/provider-conformance/campaign.py'], set()),
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):
@@ -104,13 +101,13 @@ class PolicyTests(unittest.TestCase):
         for paths in [['.github/workflows/ci.yml'], ['.github/actions/setup-go/action.yml'],
                       ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], []]:
             got = policy.select(paths, 'pull_request')
-            self.assertTrue(all(value for key, value in got.items() if key != 'java'), paths)
+            self.assertTrue(all(got.values()), paths)
         for kwargs in [dict(force_full=True), dict(unknown=True), dict(toolchain=True)]:
             got = policy.select(['README.md'], 'pull_request', **kwargs)
-            self.assertTrue(all(value for key, value in got.items() if key != 'java'), kwargs)
+            self.assertTrue(all(got.values()), kwargs)
         for event in ['push', 'workflow_dispatch']:
             got = policy.select(['README.md'], event)
-            self.assertTrue(all(value for key, value in got.items() if key != 'java'))
+            self.assertTrue(all(got.values()))
         self.assertTrue(policy.select(['go/internal/foo.go'], 'pull_request',
                                       build_tags=True)['platforms'])
 

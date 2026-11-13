@@ -2,13 +2,11 @@
 # Supply-chain scan of what swath actually ships. The nightly job passes the release images
 # (Dockerfile.go): the scanner reads the Go version and module list embedded in each binary,
 # and the OS packages of the image's base. Image findings are written as raw JSON and passed to
-# the checked-in policy in osv-image-policy.py. A directory target scans the jars in it (a Java
-# application distribution's `lib/`, its resolved closure) against the argued exceptions
-# in config/osv/osv-scanner.toml; `--no-ignore` is required because `lib/` lives under build/,
-# which .gitignore excludes and the scanner honors by default.
+# the checked-in policy in osv-image-policy.py, which applies the argued exceptions in
+# config/osv/osv-scanner.toml.
 #
-# Usage: scripts/ci/osv-scan.sh <target>...
-#   target  a directory of jars, or `image:<name>` for a local container image
+# Usage: scripts/ci/osv-scan.sh image:<name>...
+#   image:<name>  a local container image
 # Exit codes: 0 = clean or fully excepted, 1 = findings, 2 = script error.
 set -euo pipefail
 
@@ -24,7 +22,7 @@ IMAGE_POLICY="${REPO_ROOT}/scripts/ci/osv-image-policy.py"
 REPORT_DIR="${OSV_REPORT_DIR:-${REPO_ROOT}/build/reports/osv}"
 
 if [ "$#" -eq 0 ]; then
-    echo "usage: $0 <directory|image:NAME>..." >&2
+    echo "usage: $0 image:NAME..." >&2
     exit 2
 fi
 
@@ -71,24 +69,13 @@ for target in "$@"; do
             fi
             ;;
         *)
-            # The `artifact` plugin is what reads a bare .jar (Maven coordinates from the
-            # embedded pom.properties); the default plugin set only understands lockfiles.
-            scanner_status=0
-            "$scanner" scan source --config "$CONFIG" \
-                --experimental-plugins artifact --no-ignore --recursive "$target" \
-                || scanner_status=$?
-            if [ "$scanner_status" -gt 1 ]; then
-                echo "::error::OSV-Scanner failed for ${target} with exit code ${scanner_status}." >&2
-                exit 2
-            fi
-            if [ "$scanner_status" -eq 1 ]; then
-                status=1
-            fi
+            echo "::error::Not an image target: ${target} (expected image:NAME)." >&2
+            exit 2
             ;;
     esac
 done
 
 if [ "$status" -ne 0 ]; then
-    echo "::error::OSV found a non-excepted Java advisory or an image advisory rejected by policy." >&2
+    echo "::error::OSV found an image advisory rejected by policy." >&2
 fi
 exit "$status"
