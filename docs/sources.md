@@ -153,8 +153,8 @@ directory at a time, in directory-tree order (`/` sorts lowest), which no key ra
 lists it directory by directory (experimental, issue #263), splitting a large directory as it splits a flat
 container, and writes each directory as a row keyed with a trailing `/` (`RegionName=Guinea/`) with the
 properties the listing gives it, followed by its contents, in byte order like any listing. The source's
-prefix must then name a directory (end it with `/`), `--sequential` is refused, and such a run does not
-resume yet; the report's `listing` is `tree`, and the mode is recorded for resume. When the account will
+prefix must then name a directory (end it with `/`), `--sequential` and `--seed-from` are refused, and such
+a run does not resume yet; the report's `listing` is `tree`, and the mode is recorded for resume. When the account will
 not say (an anonymous caller is always refused that question, and swath then asks the account's Data Lake
 host, which answers public containers, and whose refusal of a flat account that has blob soft delete or
 events on also establishes a flat namespace; a container SAS is refused by both), one listing request shows
@@ -192,8 +192,9 @@ Azure lists nothing. Three switches ask for more, at the cost of larger response
 | `--azure-fetch-tags` | `tags`: the blob index tags as a JSON object (`{}` for none) | the right to read tags: a SAS with the `t` permission, or an Entra ID role with the tags read data action (Storage Blob Data Owner); never anonymous |
 | `--azure-fetch-immutability` | `immutability_policy_until`, `immutability_policy_mode`, `legal_hold` | listing permission |
 
-Without a switch its columns are null. Azure refuses a whole listing that asks for tags without the right to
-read them (401 anonymously, 403 `AuthorizationPermissionMismatch` with a SAS); swath then stops with that
+Without a switch its columns are null. On a hierarchical namespace the switches fill each file's row the
+same way; a directory's row keeps them null, since the listing returns none of them for a directory. Azure
+refuses a whole listing that asks for tags without the right to read them (401 anonymously, 403 `AuthorizationPermissionMismatch` with a SAS); swath then stops with that
 error and names the permission, and never lists without the tags it was asked for. A blob encrypted with a
 customer-provided key lists no metadata: its `metadata` is null. The switches are part of the run's identity.
 

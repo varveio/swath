@@ -654,10 +654,16 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	return page, nil
 }
 
-// object is a listed blob's row payload.
+// object is a listed blob's row payload: its properties as listed, the
+// asked-for columns filled (fill).
 func (p *provider[P]) object(it *client.Item) Object {
-	o := Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
-		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	o := itemObject(it)
 	p.fill(&o)
 	return o
+}
+
+// itemObject is an item's properties as listed.
+func itemObject(it *client.Item) Object {
+	return Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
+		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
 }

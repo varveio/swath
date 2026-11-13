@@ -7,10 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
+	"github.com/varveio/swath/internal/counters"
 	"github.com/varveio/swath/internal/filter"
 	orderstage "github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
@@ -31,17 +31,30 @@ import (
 // serves a flat account's keys. A directory is a row keyed with a trailing
 // '/' (its blob name plus '/'), with the properties the listing gives it;
 // its subtree follows it. A directory larger than one page is split by the
-// range engine like a flat container.
+// range engine like a flat container. The fetch flags fill a file's row as
+// on a flat account; a directory entry lists no metadata, tags or
+// immutability, so those columns stay null on its row (dirLister.object).
 //
 // The listing mode is part of the resume identity (listing tree); resume
 // itself is not implemented (docs/internals/tree-sources.md, "Resume").
 type Tree struct {
 	*tree.Walker[struct{}, keyrange.Range, Object]
 	objhttp.Activity
-	p       *Provider // the connected, admitted provider: client, options, route
-	ord     *tree.Ordered[Object]
-	pruning atomic.Pointer[filter.Pruning] // installed before workers start; reports may run concurrently
+	p        *Provider // the connected, admitted provider: client, options, route
+	client   treeClient
+	ord      *tree.Ordered[Object]
+	pruning  atomic.Pointer[filter.Pruning] // installed before workers start; reports may run concurrently
+	requests atomic.Int64                   // listing requests sent (treeClient): list_requests
 }
+
+// treeCounters are the tree listing's own, registered after the flat
+// provider's (the client's and the adapter's).
+var treeCounters = []counters.Def{
+	{Key: "list_requests", Kind: counters.Count, Unit: "requests", Help: "listing requests of the tree listing: directories' first pages, segment and resolve pages, lookups (a call the client retried is one; requests counts segment pages only)"},
+}
+
+// cListRequests is list_requests' index among the provider's counters.
+var cListRequests = len(client.CounterDefs) + len(order.CounterDefs)
 
 var _ source.Provider[tree.OrderedRange, Object] = (*Tree)(nil)
 
@@ -61,8 +74,10 @@ func newTree(p *Provider, own bool) (*Tree, error) {
 	// segment is one directory's names.
 	eo.Seed, eo.SeedFirstPage, eo.Structure = false, false, keyrange.StructureOff
 	d := p.description()
+	d.Counters = append(d.Counters, treeCounters...)
 	t := &Tree{p: p, Activity: p.Activity}
-	ord, err := tree.NewOrdered[Object](dirLister{c: treeClient{p.client}, p: p}, eo, d)
+	t.client = treeClient{c: p.client, n: &t.requests}
+	ord, err := tree.NewOrdered[Object](dirLister{c: t.client, p: p}, eo, d)
 	if err != nil {
 		return nil, err
 	}
@@ -73,11 +88,13 @@ func newTree(p *Provider, own bool) (*Tree, error) {
 }
 
 // Expand lists one range with its own byte-order adapter, as the flat
-// provider's Expand does, released however Expand returns.
+// provider's Expand does, released however Expand returns. Every page it
+// reads holds rows (the seed and structure probes are off), so each sends
+// the run's include, as a flat listing's pages do.
 func (t *Tree) Expand(ctx context.Context, r tree.OrderedRange, e source.Emitter[tree.OrderedRange, Object]) error {
 	eng := t.ord.Engine()
-	a := order.New(treeClient{t.p.client}, t.p.opt.Container, eng.Set(), eng.ID(len(client.CounterDefs)))
-	a.Include = t.p.include() // the fetch flags: the tree lists current blobs only
+	a := order.New(t.client, t.p.opt.Container, eng.Set(), eng.ID(len(client.CounterDefs)))
+	a.Include = t.p.include()
 	defer a.Release()
 	return t.Walker.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
@@ -100,6 +117,7 @@ func (t *Tree) Stats() Stats {
 		eng.Set().Set(eng.ID(client.CXMLPages), f.XMLPages)
 		eng.Set().Set(eng.ID(client.CXMLItems), f.XMLItems)
 	}
+	eng.Set().Set(eng.ID(cListRequests), t.requests.Load())
 	e := eng.Stats()
 	return Stats{Anonymous: t.p.anonymous, Credentials: t.p.creds, Namespace: t.p.namespace, Listing: "tree",
 		Pruning: t.pruning.Load(), PrunedDirs: t.Walker.Stats().Excluded,
@@ -107,10 +125,15 @@ func (t *Tree) Stats() Stats {
 }
 
 // treeClient sends every listing as a hierarchical namespace's directory
-// listing (client.ListInput.Tree), for the adapter and Lookup.
-type treeClient struct{ c API }
+// listing (client.ListInput.Tree), for the adapter and Lookup, and counts
+// them (n).
+type treeClient struct {
+	c API
+	n *atomic.Int64
+}
 
 func (c treeClient) List(ctx context.Context, in *client.ListInput) (*client.ListOutput, error) {
+	c.n.Add(1)
 	q := *in
 	q.Tree = true
 	return c.c.List(ctx, &q)
@@ -120,7 +143,7 @@ func (c treeClient) List(ctx context.Context, in *client.ListInput) (*client.Lis
 // the Expand's byte-order adapter, and Lookup as one listing request.
 type dirLister struct {
 	c treeClient
-	p *Provider // container, include, rows as the flat listing makes them
+	p *Provider
 }
 
 var _ tree.Lister[Object] = dirLister{}
@@ -145,22 +168,37 @@ func (l dirLister) List(ctx context.Context, q *tree.DirQuery) (*tree.DirPage[Ob
 		if !ok || it.Prefix {
 			return nil, source.Violation(fmt.Errorf("%w: %q in a listing of directory %q", objhttp.ErrInvalidPage, it.Name, q.Dir))
 		}
-		pg.Entries = append(pg.Entries, tree.Entry[Object]{Name: name, Dir: it.Dir, Data: l.p.object(it)})
+		pg.Entries = append(pg.Entries, tree.Entry[Object]{Name: name, Dir: it.Dir, Data: l.object(it)})
 	}
 	return pg, nil
 }
 
 // Lookup asks for the first entry under dir+name by name: the directory
 // named name, if there is one, sorts before every other name it begins.
+// Its row is a directory's, which no include adds to, so it sends none.
 func (l dirLister) Lookup(ctx context.Context, dir, name string) (tree.Entry[Object], bool, error) {
-	out, err := l.c.List(ctx, &client.ListInput{Container: l.p.opt.Container, Prefix: dir + name, Delimiter: "/", MaxResults: 1, Include: l.p.include()})
+	out, err := l.c.List(ctx, &client.ListInput{Container: l.p.opt.Container, Prefix: dir + name, Delimiter: "/", MaxResults: 1})
 	if err != nil {
-		return tree.Entry[Object]{}, false, l.p.tagsRefused(err)
+		return tree.Entry[Object]{}, false, err
 	}
 	if len(out.Items) == 0 || out.Items[0].Name != dir+name || !out.Items[0].Dir {
 		return tree.Entry[Object]{}, false, nil
 	}
-	return tree.Entry[Object]{Name: name, Dir: true, Data: l.p.object(&out.Items[0])}, true, nil
+	return tree.Entry[Object]{Name: name, Dir: true, Data: l.object(&out.Items[0])}, true, nil
+}
+
+// object is an entry's row payload: a file's as a flat listing makes it
+// (Provider.object, the asked-for columns filled); a directory's the
+// properties its entry (a BlobPrefix) carries, which hold no metadata,
+// tags or immutability whatever the include, so those columns stay null:
+// not read, as for a blob whose metadata a listing cannot read, rather
+// than "{}", which would claim it has none (a directory's metadata holds
+// hdi_isfolder at least).
+func (l dirLister) object(it *client.Item) Object {
+	if it.Dir {
+		return itemObject(it)
+	}
+	return l.p.object(it)
 }
 
 // treeOpened is the registered source of a hierarchical namespace.
@@ -218,12 +256,18 @@ func (o *treeOpened) Capabilities() source.Capabilities {
 	return source.Capabilities{Seek: source.SeekNone, Order: source.OrderOther}
 }
 
-// Report is the flat report's shape with the walk's counts.
+// Report is the flat report's shape with a brief of the whole walk: the
+// walker's files, directories and bytes, every listing request
+// (list_requests) and the directories listed (tree.first_pages), the
+// segments' splits and the client's retries. The engine's objects, bytes,
+// pages and requests count segment pages only; they stay in the counters.
 func (o *treeOpened) Report() source.Report {
 	st := o.t.Stats()
 	w := o.t.Walker.Stats()
+	v := st.Counters.Value
 	r := keyrange.Report("azblob", o.t.p.target(), o.t.p.opt.Prefix, &st, st.Counters)
-	r.Brief = "files=" + strconv.FormatInt(w.Files, 10) + " dirs=" + strconv.FormatInt(w.Dirs, 10) + " bytes=" + strconv.FormatInt(w.Bytes, 10) +
-		" first_pages=" + strconv.FormatInt(st.Counters.Value("tree.first_pages"), 10) + " " + r.Brief
+	r.Brief = fmt.Sprintf("files=%d dirs=%d bytes=%d requests=%d first_pages=%d splits=%d retries=%d truncated=%v",
+		w.Files, w.Dirs, w.Bytes, v("list_requests"), v("tree.first_pages"), v("split.accepted_bounded")+v("split.accepted_frontier"),
+		v("retries"), !r.Coverage.Complete)
 	return r
 }

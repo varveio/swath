@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -250,11 +249,15 @@ func TestTreeResolutionStops(t *testing.T) {
 
 // TestTreeIdentityAndReport: the listing mode is frozen in the identity
 // (a field the flat identity does not have, so neither resumes as the
-// other) and shown in the report; the tree mode declares no resume.
+// other) and shown in the report; the tree mode declares no resume and
+// takes no prior (not source.Seeded, so the listing refuses --seed-from).
 func TestTreeIdentityAndReport(t *testing.T) {
 	o := openTree(t, azblobtest.NewTreeStore([]string{"a/b"}), "", 1, 0)
 	if _, err := runTree(context.Background(), o, 1); err != nil {
 		t.Fatal(err)
+	}
+	if _, ok := any(o).(source.Seeded); ok {
+		t.Fatal("the tree mode takes a prior: --seed-from would tile a flat scope it does not list")
 	}
 	var listing string
 	for _, f := range o.Identity().Fields {
@@ -321,49 +324,165 @@ func TestTreeListedNamespace(t *testing.T) {
 	}
 }
 
-// includeRec records the include each tree listing sends.
-type includeRec struct {
-	*azblobtest.TreeStore
-	mu   sync.Mutex
-	seen []client.Include
+// lookupCorpus is hnsCorpus(n) with 2,000 names before big/part in big/,
+// so a split's candidate part lies past the directory's first page and is
+// looked up (tree.lookups) rather than found in what was read; and 60
+// directories a, a-, a--, ... in held/, each held until the next sorts
+// before it by key, so a page of 50 or fewer emits nothing and reads on
+// (tree.resolve_pages).
+func lookupCorpus(n int) []string {
+	keys := hnsCorpus(n)
+	for i := range 2000 {
+		keys = append(keys, fmt.Sprintf("big/a-%05d", i))
+	}
+	for i := range 60 {
+		keys = append(keys, "held/a"+strings.Repeat("-", i)+"/")
+	}
+	return append(keys, "held/z")
 }
 
-func (s *includeRec) List(ctx context.Context, in *client.ListInput) (*client.ListOutput, error) {
-	s.mu.Lock()
-	s.seen = append(s.seen, in.Include)
-	s.mu.Unlock()
-	return s.TreeStore.List(ctx, in)
-}
-
-// TestTreeFetchFlags: the tree's listings send the fetch flags' include
-// (never versions or snapshots: the tree lists current blobs), and its rows
-// take the flat listing's empty values for what a blob lacks.
+// TestTreeFetchFlags: on a hierarchical namespace the fetch flags fill a
+// file's columns as on a flat account (TestFetchFlags): every request that
+// lists rows (first, segment and resolve pages) sends the include, a file
+// without any gets the empty value and one encrypted with a
+// customer-provided key null metadata. A directory entry lists none of
+// them, so a directory's row keeps them null whatever was asked, and a
+// lookup, whose row is a directory's, sends no include.
 func TestTreeFetchFlags(t *testing.T) {
-	store := &includeRec{TreeStore: azblobtest.NewTreeStore(hnsCorpus(10))}
-	src, err := open(context.Background(), registry.Request{Root: "az://acct/c",
-		Options: &Options{Client: store, FetchMetadata: true, FetchTags: true}, Workers: 2})
+	full := client.Props{LeaseState: "available", TagCount: 1, Metadata: `{"k":"v"}`, Tags: `{"t":"1"}`,
+		ImmutabilityMode: "Locked", ImmutabilityUntil: 5, LegalHold: client.True}
+	for _, c := range []struct {
+		name string
+		set  func(*Options)
+		want client.Include
+		rows map[string]client.Props // by key; any other file's is none, a directory's is always zero
+		none client.Props
+	}{
+		{"default", func(*Options) {}, client.Include{}, map[string]client.Props{
+			"a/x": {LeaseState: "available", TagCount: 1}, "c": {CustomerProvidedKeySHA256: "key="}}, client.Props{}},
+		{"all", func(o *Options) { o.FetchMetadata, o.FetchTags, o.FetchImmutability = true, true, true },
+			client.Include{Metadata: true, Tags: true, Immutability: true}, map[string]client.Props{
+				"a/x": full, "c": {CustomerProvidedKeySHA256: "key=", Tags: "{}", LegalHold: client.False}},
+			client.Props{Metadata: "{}", Tags: "{}", LegalHold: client.False}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := azblobtest.NewTreeStore(lookupCorpus(3000))
+			store.SetProps("a/x", full)
+			store.SetProps("c", client.Props{CustomerProvidedKeySHA256: "key="})
+			opt := &Options{Client: store}
+			opt.Policy.PageSize = 50
+			c.set(opt)
+			src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: opt, Workers: 8})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := src.(*treeOpened)
+			rows, err := runTree(context.Background(), o, 8)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := keysOf(rows); !slices.Equal(got, store.Keys()) {
+				t.Fatalf("got %d keys, want %d; first difference %s", len(got), len(store.Keys()), firstDiff(got, store.Keys()))
+			}
+			for _, r := range rows {
+				want, ok := c.rows[r.Key]
+				switch {
+				case strings.HasSuffix(r.Key, "/"):
+					want = client.Props{}
+				case !ok:
+					want = c.none
+				}
+				if r.Data.Props != want {
+					t.Fatalf("%s: %+v, want %+v", r.Key, r.Data.Props, want)
+				}
+			}
+			lookups := 0
+			for _, r := range store.Log() {
+				want := c.want
+				if r.In.Prefix != "" && !strings.HasSuffix(r.In.Prefix, "/") { // a lookup: dir + name
+					want = client.Include{}
+					lookups++
+				}
+				if r.In.Include != want {
+					t.Fatalf("prefix %q sent %+v, want %+v", r.In.Prefix, r.In.Include, want)
+				}
+			}
+			if v := o.t.Stats().Counters.Value; lookups == 0 || v("tree.resolve_pages") == 0 || v("tree.dirs_split") == 0 {
+				t.Fatalf("lookups %d, resolve pages %d, split directories %d: a request kind went unchecked",
+					lookups, v("tree.resolve_pages"), v("tree.dirs_split"))
+			}
+		})
+	}
+}
+
+// TestTreeFetchTagsRefused: a tree listing refused while it asks for tags
+// names the permission tags need, its class kept, as a flat one does
+// (TestFetchTagsRefused); without the flag the refusal is reported as it is.
+func TestTreeFetchTagsRefused(t *testing.T) {
+	for _, tags := range []bool{true, false} {
+		store := azblobtest.NewTreeStore([]string{"a/b", "c"})
+		store.Fail = func(int) error {
+			return &client.Error{Status: 403, Code: "AuthorizationPermissionMismatch",
+				Message: "This request is not authorized to perform this operation using this permission."}
+		}
+		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: store, FetchTags: tags}, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = runTree(context.Background(), src.(*treeOpened), 1)
+		if err == nil {
+			t.Fatal("listed")
+		}
+		if f := objhttp.Normalize(err); f == nil || (&client.Error{Status: f.Status, Code: f.Code}).Failure().Class != objhttp.ClassAccessDenied {
+			t.Errorf("tags=%v: %v is not access denied", tags, err)
+		}
+		if strings.Contains(err.Error(), "t permission") != tags {
+			t.Errorf("tags=%v: %v", tags, err)
+		}
+	}
+}
+
+// TestTreeReportBrief: the brief is one account of the whole walk: its
+// requests are every request the store answered (first pages, segment and
+// resolve pages, lookups), not the engine's segment pages alone, and it
+// names one bytes, the walk's.
+func TestTreeReportBrief(t *testing.T) {
+	store := azblobtest.NewTreeStore(lookupCorpus(3000))
+	o := openTree(t, store, "", 8, 50)
+	rows, err := runTree(context.Background(), o, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := runTree(context.Background(), src.(*treeOpened), 2)
-	if err != nil || len(rows) == 0 {
-		t.Fatalf("%d rows, %v", len(rows), err)
-	}
+	var files, dirs, bytes int64
 	for _, r := range rows {
-		if r.Data.Metadata != "{}" || r.Data.Tags != "{}" {
-			t.Fatalf("row %q: metadata %q, tags %q", r.Key, r.Data.Metadata, r.Data.Tags)
+		if strings.HasSuffix(r.Key, "/") {
+			dirs++
+		} else {
+			files++
+		}
+		bytes += r.Data.Size
+	}
+	v := o.t.Stats().Counters.Value
+	log := int64(len(store.Log()))
+	if v("tree.lookups") == 0 || v("tree.resolve_pages") == 0 || v("requests") >= log {
+		t.Fatalf("lookups %d, resolve pages %d, segment requests %d of %d: the fixture does not tell the counts apart",
+			v("tree.lookups"), v("tree.resolve_pages"), v("requests"), log)
+	}
+	brief := o.Report().Brief
+	fields := map[string]string{}
+	for _, f := range strings.Fields(brief) {
+		k, val, _ := strings.Cut(f, "=")
+		if _, dup := fields[k]; dup {
+			t.Fatalf("brief names %s twice: %s", k, brief)
+		}
+		fields[k] = val
+	}
+	for k, want := range map[string]int64{"files": files, "dirs": dirs, "bytes": bytes, "requests": log, "first_pages": v("tree.first_pages")} {
+		if fields[k] != fmt.Sprint(want) {
+			t.Errorf("%s=%s, want %d (brief %s)", k, fields[k], want, brief)
 		}
 	}
-	listed := 0
-	for _, in := range store.seen {
-		if in.Versions || in.Snapshots || in.Deleted {
-			t.Fatalf("a tree listing asked for %+v", in)
-		}
-		if in.Metadata && in.Tags {
-			listed++
-		}
-	}
-	if listed == 0 {
-		t.Fatalf("no listing sent the fetch flags: %+v", store.seen)
+	if v("list_requests") != log {
+		t.Errorf("list_requests %d, the store logged %d", v("list_requests"), log)
 	}
 }

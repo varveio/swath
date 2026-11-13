@@ -5,8 +5,8 @@
 `az://account/container[/prefix]` lists current blobs: a flat namespace on the range engine, a
 hierarchical namespace (HNS) on the tree core ([tree mode](#hierarchical-namespaces-the-tree-mode)).
 With `--all-versions` a flat namespace lists every entry (versions, snapshots, soft-deleted blobs;
-`NewVersions`, below); a hierarchical one is refused; its tree listings send only the
-`--azure-fetch-*` flags' `include`. Namespace admission is required even for a public
+`NewVersions`, below); a hierarchical one is refused. The `--azure-fetch-*` flags fill a file's row in both
+modes and leave a tree-mode directory's row null ([rows](#hierarchical-namespaces-the-tree-mode)). Namespace admission is required even for a public
 container; `--azure-assume-flat` only overrides an unknown result, never an account reported as
 hierarchical.
 [Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
@@ -149,9 +149,11 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
 - **Listing.** A directory is one delimiter listing (`prefix=DIR/`, `delimiter=/`) with `ListInput.Tree`:
   the client merges blobs and `BlobPrefix` items by name and makes each prefix a directory entry
   (`Item.Dir`) with the properties HNS returns on it at version 2026-06-06 (`ResourceType` directory, Etag,
-  Last-Modified, Creation-Time, BlockBlob, the tier). `include=metadata` (`hdi_isfolder`) is not needed. The
-  byte-order adapter serves the names in byte order, one per `Expand` as for flat accounts; `Lookup` (a
-  candidate directory) is one `maxresults=1` listing of `DIR/NAME`.
+  Last-Modified, Creation-Time, BlockBlob, the tier). `include=metadata` (`hdi_isfolder`) is not needed to
+  tell a directory. The byte-order adapter serves the names in byte order, one per `Expand` as for flat
+  accounts, with the run's `include` (`provider.include`) on every page: first pages, segment and resolve
+  pages all hold rows (the seed and structure probes are off). `Lookup` (a candidate directory) is one
+  `maxresults=1` listing of `DIR/NAME` without `include`: its row is a directory's.
 - **Why Blob, not Data Lake `Path - List`.** List Blobs seeks by name (`startFrom`), so a large directory
   splits on the range engine; `Path - List` continues by token only. Both answer anonymously and with a
   container SAS (the spike's oracle walks with `Path - List`), but List Blobs returns the flat schema's
@@ -159,7 +161,12 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
   the adapter. `Path - List` returns POSIX owner, group and permissions, which the schema
   has no columns for (open).
 - **Rows.** A directory is a row keyed with its name plus `/` in `swath/azblob-objects/v1` (size 0, its Etag,
-  times, BlockBlob and tier as listed), followed by its subtree; a file is its blob name. No schema change:
+  times, BlockBlob and tier as listed), followed by its subtree; a file is its blob name. A file's row is
+  the flat provider's (`provider.object`): the fetch flags fill it, `{}` and false for none, and a refusal
+  of `include=tags` gains the permission hint (`tagsRefused`). A directory entry is the SDK's `BlobPrefix`,
+  name and properties only, so its `metadata`, `tags` and immutability columns stay null whatever is
+  asked: not read, as for a customer-provided-key blob's metadata, rather than `{}`, which would claim
+  none (a directory's metadata holds `hdi_isfolder`). No schema change:
   in a tree-mode dataset a key ending in `/` is a directory (an HNS path cannot end in `/`); in a flat
   account's dataset it may be a blob (a folder marker), so the report's `listing: tree` tells them apart.
   Directory rows count as objects in `du`. Flat-account output is unchanged.
@@ -173,14 +180,21 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
   [local trees](local.md)); `source.stats.pruned_dirs` counts prevented child traversals, absent when
   zero. Includes, metadata filters and directory-row rejection alone never prevent descent.
 - **Scope and options.** The prefix must name a directory (end in `/`); `--sequential` is refused; no
-  resume yet. Identity: the flat fields plus `listing` `tree` (absent for flat accounts, so neither journal
-  resumes as the other). Report: `listing` `tree`, the walk's `files`, `dirs`, `bytes` in the brief, the
-  engine's, client's, adapter's and the tree core's counters (`tree.*`).
+  resume yet. `--seed-from` is refused (exit 2) by the listing: `treeOpened` is not `source.Seeded`, as a
+  prior tiles a flat scope. Identity: the flat fields plus `listing` `tree` (absent for flat accounts, so
+  neither journal resumes as the other). Report: `listing` `tree`; the brief is the whole walk's: `files`,
+  `dirs`, `bytes` (the walker's), `requests` (`list_requests`: every listing request, first pages, segment
+  and resolve pages and lookups), `first_pages`, the segments' `splits`, the client's `retries`, `truncated`.
+  The counters are the engine's (whose `objects`, `bytes`, `pages` and `requests` count segment pages only),
+  the client's, the adapter's, `list_requests` and the tree core's (`tree.*`).
 - **Cost.** At least one request per directory: a Hive layout with one file per partition directory costs
   about one request per file, where a flat container costs one per 1,000.
 - **Tests.** `TestTreeListsHNS` (`azblobtest.TreeStore`: tree order, directory entries, UTF-16 siblings,
   non-ASCII Hive names, a 3,000-file directory with a directory candidate; 1/4/16 workers, pages 1 to
   1,000), `TestTreeScopedToDirectory`, `TestTreeCancelMidDirectory`, `TestTreeIdentityAndReport`,
+  `TestTreeFetchFlags` (the include on every row request, none on lookups; files filled as flat, directories
+  null), `TestTreeFetchTagsRefused`, `TestTreeReportBrief` (the brief's `requests` equals the store's request
+  log, one `bytes`), `TestTreeRecursiveExcludes`, `TestTreeResolutionRetry`, `TestTreeResolutionStops`,
   `TestTreeListedNamespace`, `TestTreeNotNewFlat`, `client` `TestTreeListing`; admission's HNS rows in
   `TestAdmissionFallback`. The replay server's `--azure-hns` still changes only Get Account Information.
 

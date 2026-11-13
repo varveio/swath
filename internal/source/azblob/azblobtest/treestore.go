@@ -24,8 +24,11 @@ import (
 // the query that issued them, and a prefix may end inside a name (the
 // entries of its directory that start with the rest). Every directory on a
 // path exists; a path ending in '/' is a directory, empty unless others
-// lie below it. It records every request. Fail, when set before the first
-// request, fails request n (from 0) with the error it returns.
+// lie below it. A file's metadata, tags and immutability (SetProps) are
+// listed only with the include that asks for them; a directory, a
+// BlobPrefix, carries none. It records every request. Fail, when set
+// before the first request, fails request n (from 0) with the error it
+// returns.
 type TreeStore struct {
 	Fail func(req int) error
 
@@ -97,6 +100,22 @@ func (s *TreeStore) Keys() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// SetProps gives the file at path the properties p, before the first
+// request.
+func (s *TreeStore) SetProps(path string, p client.Props) {
+	dir := path[:strings.LastIndexByte(path, '/')+1]
+	for i := range s.dirs[dir] {
+		if it := &s.dirs[dir][i]; it.Name == path {
+			if it.Dir {
+				panic("azblobtest: a directory carries no properties: " + path)
+			}
+			it.Props = p
+			return
+		}
+	}
+	panic("azblobtest: no file " + path)
 }
 
 // Log is every request so far.
@@ -175,7 +194,7 @@ func (s *TreeStore) list(ctx context.Context, n int, in *client.ListInput) (*cli
 			i = len(items)
 			break
 		}
-		out.Items = append(out.Items, items[i])
+		out.Items = append(out.Items, strip(items[i], in.Include))
 	}
 	if i < len(items) && strings.HasPrefix(items[i].Name[len(dir):], partial) {
 		out.NextMarker = fmt.Sprintf("t%d", len(s.markers)+1)

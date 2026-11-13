@@ -256,8 +256,9 @@ objects and neither hash for objects encrypted with customer-managed or customer
 live generation. There is no `is_latest`.
 
 Azure HNS tree listings use `swath/azblob-objects/v1` for files and directories. A directory row's
-key is its name plus `/`, with size 0 and the metadata returned by the listing; its descendants follow
-in byte order. A trailing `/` identifies a directory only for tree-mode output, not flat namespaces.
+key is its name plus `/`, with size 0 and the properties returned by the listing; its `metadata`, `tags`
+and immutability columns are null even when the run asks for them (the listing returns none for a
+directory). Its descendants follow in byte order. A trailing `/` identifies a directory only for tree-mode output, not flat namespaces.
 The source identity records `listing=tree`; [Azure tree mode](internals/providers/azblob.md#hierarchical-namespaces-the-tree-mode)
 owns the listing constraints.
 

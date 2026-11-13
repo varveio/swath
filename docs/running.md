@@ -314,7 +314,8 @@ identity; prefer the dataset. A cut file holds one key per line, ascending bytew
 inside the scope, optionally followed by a tab and the keys expected since the previous cut (on every line or
 none), at most 262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it
 replaces). An unsorted or repeated cut, a cut outside the scope, a cut file past those bounds, `--seed-from`
-on a local tree, and a prior that is the output directory are refused (exit 2).
+on a local tree or an Azure account with a hierarchical namespace (listed directory by directory, not in key
+ranges), and a prior that is the output directory are refused (exit 2).
 
 The prior changes only how the work is first divided, into ranges of about equal expected keys
 ([warm start](internals/range-engine.md)); the splits stay adaptive and the rows are the same. `swath resume` reads `--seed-from`
