@@ -93,6 +93,7 @@ class PolicyTests(unittest.TestCase):
             (['site/index.html'], set()),
             (['config/osv/osv-scanner.toml'], set()),
             (['scripts/provider-conformance/campaign.py'], set()),
+            (['scripts/benchmarks/replay/run_pair.py'], set()),
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):

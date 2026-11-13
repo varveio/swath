@@ -144,8 +144,9 @@ Those examples motivate explicit tiers, not a claim that deferring platform test
 ## Script self-tests
 
 `scripts` runs the self-tests of the Python scripts that no Go job exercises: the OSV image
-policy (`osv-image-policy.py --self-test`, which the nightly `osv-scan` relies on) and the
-provider-conformance tools under `scripts/provider-conformance/`. They are hermetic and take
+policy (`osv-image-policy.py --self-test`, which the nightly `osv-scan` relies on), the
+provider-conformance tools under `scripts/provider-conformance/` and the replay benchmark
+runners under `scripts/benchmarks/replay/`. They are hermetic and take
 seconds, so the job runs on every event without change detection.
 
 ## Go jobs

@@ -52,7 +52,8 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
             # Also read directly by the Azure client tests, outside the gated fixture tier.
             out['go'] = out['fixtures'] = True
         elif (path in ROOT_PROSE
-              or path.startswith(('docs/', 'site/', 'config/', 'scripts/provider-conformance/'))
+              or path.startswith(('docs/', 'site/', 'config/', 'scripts/provider-conformance/',
+                                  'scripts/benchmarks/'))
               or path in {'.gitignore', '.gitattributes', '.editorconfig'}):
             pass
         else:

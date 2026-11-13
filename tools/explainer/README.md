@@ -34,10 +34,13 @@ tools/explainer/
 The templates are real `.html` files rather than string literals in Python, so the CSS and
 canvas code are editable as themselves. `render.py` substitutes one placeholder into them.
 
-## Run it on any bucket
+## Run it on a Java trace
+
+The explainer reads the `--trace` JSONL of the Java tool: the v0.3.2 release, or a build of the
+tag `java-final`. The Go tool does not emit a trace yet; issue #193 tracks it.
 
 ```bash
-# 1. list a bucket with tracing on (any swath list/resume run accepts --trace)
+# 1. list a bucket with tracing on, using the Java tool (its list/resume runs accept --trace)
 swath list s3://your-bucket/ --region us-east-1 --format parquet -o out/ \
       --trace run.trace.jsonl
 
