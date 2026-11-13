@@ -1089,12 +1089,15 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 	}
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
+		// Warned at the first spill, not here: most runs never spill, and
+		// a usage error found later must come alone.
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
 			fix := "write the output to a disk"
 			if cfg.Output.Dir == "" && cfg.Output.Text != nil && cfg.Output.Text.Path == "" {
 				fix = "set TMPDIR to a disk"
 			}
-			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix))
+			msg := fmt.Sprintf("rows are spilling to %s, which is on %s: they are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix)
+			oopt.Spilling = func() { cfg.Warn(msg) }
 		}
 	}
 	return oopt, scratch, nil

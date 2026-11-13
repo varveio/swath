@@ -430,7 +430,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   stall: `TestInterruptedRunReportsStall`; the interval is closed after the final flush, so a last sink write that
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
-  at start); `progress.json` carries the same as live values with their peaks
+  at its first rows frame spilled, `order.Options.Spilling`; a run that never spills does not: `TestTmpfsSpillWarning`); `progress.json` carries the same as live values with their peaks
   under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin).
   The stage's `Stats` carry `SpillPeak` and `SpillRefused`, the report's `spill.peak_bytes` and `spill.refused`
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve

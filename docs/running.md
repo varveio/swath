@@ -72,7 +72,8 @@ process when memory cannot be reclaimed. A run holds:
   ([how](internals/run-lifecycle.md#encoder-sizing)).
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
-  report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
+  report names the filesystem (`resources.spill.fs_type`), and a run that spills there warns once, at its first
+  spill (one that never spills, most runs, says nothing).
 
 A count (`swath du`, `swath diag count`) holds only pages in flight and the ranges queued for a worker: it counts rows as they
 arrive and never orders, buffers or spills them (`resources.features.order` false, `max_buffered_bytes` 0, no `spill`).
