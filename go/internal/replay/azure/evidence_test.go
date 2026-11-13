@@ -44,8 +44,8 @@ import (
 // failure.
 //
 // It runs with SWATH_REPLAY_FIXTURES=ROOT. The corpus is ROOT's
-// fixtures/evidence-azure/capture (the Java-written DuckDB capture of the
-// manifest), sorted with a 4,096-byte key limit and checked row for row
+// fixtures/evidence-azure/capture (go/bench/replay/fixtures' capture of
+// the manifest), sorted with a 4,096-byte key limit and checked row for row
 // against the manifest; without that capture the corpus is built in
 // memory from the manifest. SWATH_REPLAY_PROVIDER_REPORT=DIR writes
 // DIR/azure-outcomes.json, the per-capture outcomes in the reference
@@ -326,7 +326,7 @@ func manifestObjects(t *testing.T, path string) []store.Object {
 	return out
 }
 
-// corpusStore serves the corpus sorted: the Java-written capture sorted by
+// corpusStore serves the corpus sorted: the fixture capture sorted by
 // sortfixture (names reach 2,010 bytes, so with a 4,096-byte key limit),
 // checked against the manifest, or the manifest in memory.
 func corpusStore(t *testing.T, root, dir string, objects []store.Object) (store.Store, string) {

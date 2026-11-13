@@ -101,9 +101,8 @@ request broader runtime checks for their affected modules. This is module-level 
 attempt to infer which individual assertions a source edit affects.
 
 Java retains the positive source/build/image/fixture list in the policy script. Ordinary prose and
-site layout do not select Java; its documentation assertions run with the next Java suite. Replay
-fixture generation retains its additional Java/build/evidence inputs without selecting unrelated Go
-modules. An absent/zero base or empty diff selects full validation; a failed diff is an error. Both
+site layout do not select Java; its documentation assertions run with the next Java suite. The provider
+evidence the replay fixtures are written from selects main and the fixture tier. An absent/zero base or empty diff selects full validation; a failed diff is an error. Both
 sides of renames are considered.
 
 Unaffected jobs succeed with skipped steps. Matrices use one `off` leg on ubuntu-latest when no work
@@ -192,7 +191,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes; the image build runs the Go license gate (`go/notices.sh`) |
 | `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch |
-| `go-fixtures` | the replay fixture tier on Java-written fixtures |
+| `go-fixtures` | the replay fixture tier on the fixtures `go/bench/replay/fixtures` writes |
 
 The nested modules have their own `go.mod`, so `./...` in `go/` never reaches them; each needs its
 own job or it is untested.

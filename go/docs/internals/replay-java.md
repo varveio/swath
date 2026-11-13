@@ -236,7 +236,7 @@ proxy properties only), as `bench/fault_replay.sh` leaves it, its window cache a
 rounds on 2026-11-07 from 19:17 to 19:52 UTC, both with `--serving-mode sorted --parquet-connections 8
 --max-concurrent-requests 1024`. Every figure is the median of the three runs, with the range of the three where a
 cell gives one. The `synthetic-1m/sorted-rolled` fixture was written by the Java `sort-fixture`
-(`bench/replay/make-fixtures.sh`); the `noaa-gk2a-pds` recording was made with the Java CLI on 2026-11-07
+([`make-fixtures.sh`](https://github.com/varveio/swath/blob/java-final/go/bench/replay/make-fixtures.sh), at tag `java-final`); the `noaa-gk2a-pds` recording was made with the Java CLI on 2026-11-07
 (18:30 to 18:33 UTC): 18,483,603 keys, 2 parts. Run-to-run spread on this host: a configuration's three
 throughputs lay within 0.6% to 25% of their median (range over median); Go 16 walks over the recording 25% and
 Java 24%, Go 64 walks over the synthetic fixture 20% (one slower first round), Java 64 walks over the recording
@@ -307,12 +307,14 @@ on both, and nothing in the Go server needed a change for them. `bench/replayloa
 ## CI and the scripts
 
 - The `go-build` job's image smokes need no Java: both fixtures are written in the job by Go tools.
-- The `go-fixtures` job builds the Java distribution (`./gradlew :swath-replay:installDist`), which is why the
-  Java `swath-replay`, `swath-core` and `swath-model` modules and the Gradle build are among its inputs:
-  `bench/replay/make-fixtures.sh` sorts the synthetic and evidence captures with the Java `sort-fixture`, and
-  the store's fixture tier (`TestJavaWrittenFixtures`) compares each fixture's identity with the Java server's.
-  The Azure evidence replay sorts the Java-written `evidence-azure/capture` itself.
-- `bench/replay/java-compare.sh OUT` is the comparison of #352 as one script: it builds the Java distribution,
+- The `go-fixtures` job needs no Java either: `bench/replay/fixtures` writes the synthetic and evidence
+  captures with parquet-go and sorts them with the Go `sort-fixture` into SeekParquet datasets. The store's
+  fixture tier (`TestGeneratedFixtures`) holds each sorted fixture's row count and key digest to those of the
+  Java server's walk of the Java-written fixture of the same inputs; the Java fixture identities are no longer
+  compared. Until #353 deletes it, the legacy reader (`internal/replay/legacy`) is tested only on fixtures its
+  unit tests write with `legacytest`, not on parts the Java tool wrote.
+- [`java-compare.sh`](https://github.com/varveio/swath/blob/java-final/go/bench/replay/java-compare.sh) (at tag `java-final`; removed with the Java fixture
+  generator) was the comparison of #352 as one script: it builds the Java distribution,
   the Go binaries and the footer-only converter (`bench/replay/adoptfixture`, archived at `cd453c59` on
   `archive/replay-adopt-fixture`, never merged: it imports the legacy reader), writes the make-fixtures fixtures,
   fetches the study's NARA, FourCast and blockchain Java-era fixtures (their digests checked), converts each
@@ -324,7 +326,7 @@ on both, and nothing in the Go server needed a change for them. `bench/replayloa
   to a 200 from `/healthz`, and RSS then; cache-uncontrolled, generally warm, Java before Go) with the Go list
   index on. It stops at the first unexplained difference, and passes only with every expected receipt present.
   The results are in [measurements.md](measurements.md) ("Go and Java replay servers on converted fixtures").
-  It goes with the Java server.
+  It runs from a checkout of that tag.
 - `scripts/ci/smoke-replay-container.sh IMAGE FIXTURE` without the third argument, or with `duckdb`, smokes the
   Java replay image; with `sorted` it smokes the Go image ([the user page](swath-replay.md#container-image)). A
   dataset the Java lister wrote without `--sort` is one the Go smoke sorts first.

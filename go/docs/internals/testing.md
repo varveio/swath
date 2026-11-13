@@ -27,7 +27,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Cross-OS default tier, macOS | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
 | Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest)`; `nightly.yml` `go-xos-windows` |
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
-| Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on fixtures the Java replay writes | PR: main/reader or external fixture inputs; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
+| Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
@@ -90,7 +90,7 @@ suites for changed modules and their dependants, not a guessed subset of individ
 | `go/objfile/**` | object-file module; main only if a local module dependency is added |
 | Other `go/**`, including generated-help docs, testdata and embeds | main |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
-| External replay fixture inputs | fixture tier; provider evidence also selects main because client tests read it directly |
+| Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
 | Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier |
 
 Dependency closure follows local module references, including test dependencies and replacements.
@@ -128,7 +128,7 @@ exact commit; a green PR or mere ancestry in main is insufficient.
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
 | `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest and windows-latest for escalated PRs, main and dispatch |
-| `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
+| `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../../.github/actions/setup-go/action.yml): the
 version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
@@ -387,7 +387,7 @@ only the two named.
 | Gate | Enables | Where | CI |
 |---|---|---|---|
 | `SWATH_HEAP_GATES=1` | the full arms of `TestWriterAdmissionCoversHeap` (four S3 writers and one, 24 pages each; four local writers at their declared widths); by default one S3 writer over six pages | `internal/listing` | `go-nonrace` |
-| `SWATH_REPLAY_FIXTURES=ROOT` | the Java-written fixture tier and the evidence replays; `TestRecordings` when recordings exist | `internal/replay/store`, `evidence`, `azure` | `go-fixtures` (not `TestRecordings`) |
+| `SWATH_REPLAY_FIXTURES=ROOT` | the replay fixture tier and the evidence replays; `TestRecordings` when recordings exist | `internal/replay/store`, `evidence`, `azure` | `go-fixtures` (not `TestRecordings`) |
 | `SWATH_PERF=1` | the full-scale arm of a law that holds at a small scale (`TestAdmissionFlat`: the million-key list) | `internal/source/keyrange` | never |
 | `SWATH_REPLAY_LOAD=1` | the replay server's load tests (`TestLoad*`) | `internal/replay/server` | never |
 | `SWATH_REPLAY_JAVA=PATH` | the differential tests against the Java replay server | `bench/replaydiff` | never |
@@ -591,17 +591,22 @@ python3 verify.py /tmp/go-ds                                         # the swath
   sorted serving mode validates the format-1 sort stamps and refuses a SeekParquet dataset; the results of
   that check in [measurements.md](measurements.md#output-identity-with-the-java-tool) predate that and are
   historical. SeekParquet acceptance is the downstream reader's, the conformance suite's and `verify.py`'s.
-- **Synthetic fixtures** are generated with DuckDB and sorted with `swath-replay sort-fixture --capture DIR
-  --output DIR`. A result from such a fixture is synthetic and names its generator. The 1M-key fixture of
-  [measurements.md](measurements.md#output-identity-with-the-java-tool) is generated by `bench/gen_fixture_1m.py`.
-- **Replay store fixtures:** the replay store's unit tests build every fixture in the test. Its Java-written
-  evidence tier (`go/internal/replay/store` `TestJavaWrittenFixtures`, `TestSortsTheAzureEvidenceCorpus`,
-  `TestStartupCost`, and `TestRecordings` when `recordings/BUCKET/dataset/data` exist) runs with
-  `SWATH_REPLAY_FIXTURES=ROOT` and skips without it. `bench/replay/make-fixtures.sh ROOT/fixtures` writes
-  that tree from this checkout with the Java replay distribution on `PATH` and `JAVA_HOME` set: DuckDB
-  captures (synthetic 10k and 1M rows, the GCS and Azure evidence corpora), sorted by the Java
-  `sort-fixture`. The script fixes every file's modification time, so the fixture identity the test
-  compares with the Java server's is reproducible. CI runs this tier, except `TestRecordings`, in the
+- **Synthetic fixtures** are a capture sorted with `swath-replay sort-fixture --capture DIR --output DIR`. A
+  result from such a fixture is synthetic and names its generator. The 1M-key fixture of
+  [measurements.md](measurements.md#output-identity-with-the-java-tool) is a DuckDB capture written by
+  `bench/gen_fixture_1m.py`; the replay fixture tier's synthetic captures are written with parquet-go by
+  `bench/replay/fixtures` (below).
+- **Replay store fixtures:** the replay store's unit tests build every fixture in the test. Its fixture
+  tier (`go/internal/replay/store` `TestGeneratedFixtures`, `TestSortsTheAzureEvidenceCorpus`,
+  `TestStartupCost`, `TestSortFixtureMemory`, and `TestRecordings` when `recordings/BUCKET/dataset/data`
+  exist) runs with `SWATH_REPLAY_FIXTURES=ROOT` and skips without it. `go run ./bench/replay/fixtures
+  ROOT/fixtures` (in `go/`) writes that tree: Parquet captures of the canonical 13-column schema (synthetic
+  10k and 1M rows, the GCS and Azure evidence corpora from the manifests in
+  `docs/replay-provider-evidence.tar.gz`), each sorted by `sortfixture` into a SeekParquet dataset except
+  the Azure capture, plus the 1M capture in 1 MiB parts (`synthetic-1m/sorted-rolled`).
+  `TestGeneratedFixtures` holds each sorted fixture's row count and key digest to the Java server's walk of
+  the Java-written fixture of the same inputs; `bench/replay/fixtures` `TestWritesTheFixtures` holds the 10k
+  and GCS fixtures to the same pins in every Go run. CI runs this tier, except `TestRecordings`, in the
   `go-fixtures` job ([swath-replay.md](swath-replay.md#continuous-integration)).
   The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
   [swath-replay.md](swath-replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses

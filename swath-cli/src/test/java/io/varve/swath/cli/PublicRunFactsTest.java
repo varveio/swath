@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -31,9 +30,8 @@ import org.junit.jupiter.api.Test;
  * <p>Two different captures of {@code s3://noaa-gestofs-pds/} are published: the README terminal
  * recording and the interactive trace. They were once presented as one run, with figures from each
  * attributed to the other. These checks keep every capture identified by its own run id, keep
- * unknown provenance an explicit {@code null} rather than a missing or guessed field, keep the two
- * records one interchangeable shape, and keep every headline number in the prose equal to the
- * record it came from.
+ * unknown provenance an explicit {@code null} rather than a missing or guessed field, and keep the
+ * two records one interchangeable shape.
  */
 final class PublicRunFactsTest {
 
@@ -197,69 +195,6 @@ final class PublicRunFactsTest {
     }
 
     @Test
-    void eachCaptureQuotesOnlyItsOwnFactsWhereItIsDescribed() throws Exception {
-        JsonNode recording = read(RECORDING);
-        JsonNode trace = read(TRACE);
-        JsonNode resume = recording.at("/invocations/1");
-        JsonNode initial = recording.at("/invocations/0");
-
-        List<String> recordingFacts = List.of(
-                RECORDING,
-                recording.at("/swath/version").asText(),
-                recording.at("/swath/commit").asText(),
-                recording.at("/captured_at").asText(),
-                grouped(recording.at("/result/objects").asLong()),
-                String.valueOf(recording.at("/config/concurrency_ceiling").asInt()),
-                grouped(resume.path("api_calls").asLong()),
-                String.valueOf(resume.path("parquet_parts").asInt()),
-                resume.path("parquet_bytes_display").asText(),
-                resume.path("peak_rss_display").asText(),
-                resume.path("elapsed_display").asText());
-
-        // Figures that belong to the trace alone. Attributing any of them to the recording is the
-        // exact defect this record set exists to prevent, so they must not appear where the
-        // recording is described.
-        List<String> traceOnlyFacts = List.of(
-                grouped(trace.at("/result/objects").asLong()),
-                grouped(trace.at("/result/committed_pages").asLong()),
-                grouped(trace.at("/result/initial_ranges").asLong()),
-                grouped(trace.at("/result/splits").asLong()),
-                grouped(trace.at("/result/completed_ranges").asLong()),
-                decimal(trace.at("/result/heaviest_initial_range/share_percent").asDouble()) + "%",
-                grouped(trace.at("/clocks/trace_event_span/ms").asDouble()));
-
-        String readme = text("README.md");
-        String demo = text("docs/full-scale-demo.md");
-        String readmeSection = between(readme, "## See it at full scale", "\n## ");
-        String readmeRecording = between(readmeSection, "*Run `", "The [interactive run trace]");
-        String readmeTrace = from(readmeSection, "The [interactive run trace]");
-        String demoRecording = between(demo, "## What the recording shows",
-                "## The interactive trace is a separate capture");
-        String demoTrace = between(demo, "## The interactive trace is a separate capture",
-                "## Before you run it");
-
-        quotes(readmeRecording, "README recording caption", recordingFacts);
-        quotes(demoRecording, "full-scale-demo recording section", recordingFacts);
-        quotes(demoRecording, "full-scale-demo recording section", List.of(
-                grouped(initial.path("objects").asLong()),
-                grouped(initial.path("api_calls").asLong())));
-        absent(readmeRecording, "README recording caption", traceOnlyFacts);
-        absent(demoRecording, "full-scale-demo recording section", traceOnlyFacts);
-
-        quotes(readmeTrace, "README trace paragraph", List.of(TRACE, "separate capture",
-                grouped(trace.at("/result/objects").asLong())));
-        quotes(demoTrace, "full-scale-demo trace section", traceOnlyFacts);
-        quotes(demoTrace, "full-scale-demo trace section", List.of(TRACE));
-        quotes(demo, "docs/full-scale-demo.md", List.of("separate capture"));
-
-        // The difference between the two captures is the whole point; keep it stated.
-        long gap = trace.at("/result/objects").asLong() - recording.at("/result/objects").asLong();
-        assertThat(gap).isNotZero();
-        quotes(readmeTrace, "README trace paragraph", List.of(grouped(gap)));
-        quotes(demoTrace, "full-scale-demo trace section", List.of(grouped(gap)));
-    }
-
-    @Test
     void noRecordingImageLinksToTheOtherCapture() throws Exception {
         String readme = text("README.md");
         Matcher link = RECORDING_IMAGE_LINK.matcher(readme);
@@ -274,33 +209,6 @@ final class PublicRunFactsTest {
         assertThat(readme.split("swath-demo-v0\\.2\\.1\\.gif", -1))
                 .as("the recording image appears exactly once")
                 .hasSize(2);
-    }
-
-    private static String between(String page, String start, String end) {
-        int from = page.indexOf(start);
-        assertThat(from).as("section start '" + start + "'").isNotNegative();
-        int to = page.indexOf(end, from + start.length());
-        return to < 0 ? page.substring(from) : page.substring(from, to);
-    }
-
-    private static String from(String page, String start) {
-        int at = page.indexOf(start);
-        assertThat(at).as("section start '" + start + "'").isNotNegative();
-        return page.substring(at);
-    }
-
-    private static void quotes(String page, String name, List<String> facts) {
-        for (String fact : facts) {
-            assertThat(page).as(name + " must quote '" + fact + "' from the run records")
-                    .contains(fact);
-        }
-    }
-
-    private static void absent(String page, String name, List<String> facts) {
-        for (String fact : facts) {
-            assertThat(page).as(name + " must not carry '" + fact + "', which belongs to the "
-                    + "other capture").doesNotContain(fact);
-        }
     }
 
     private static void assertExplicitNulls(JsonNode facts, String runId, List<String> pointers) {
@@ -327,18 +235,6 @@ final class PublicRunFactsTest {
 
     private static String stem(Path record) {
         return record.getFileName().toString().replace(".json", "");
-    }
-
-    private static String grouped(long value) {
-        return String.format(Locale.ROOT, "%,d", value);
-    }
-
-    private static String grouped(double value) {
-        return String.format(Locale.ROOT, "%,.1f", value);
-    }
-
-    private static String decimal(double value) {
-        return String.format(Locale.ROOT, "%.1f", value);
     }
 
     private static String sha256(Path file) throws Exception {

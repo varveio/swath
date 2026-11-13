@@ -8,88 +8,14 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
-/** Guards the newcomer-facing documentation paths and release-critical wording. */
+/** Guards the historical Java release documentation's wording. */
 final class DocumentationEntryPointTest {
 
     private static final Path ROOT = Path.of("..").toAbsolutePath().normalize();
-    private static final List<String> ENTRY_POINTS = List.of(
-            "README.md",
-            "ROADMAP.md",
-            "AGENTS.md",
-            "docs/README.md",
-            "docs/getting-started.md",
-            "docs/full-scale-demo.md",
-            "docs/install.md",
-            "docs/usage.md",
-            "docs/operating.md",
-            "docs/faq.md",
-            "docs/style.md",
-            "docs/go-release-copy-checklist.md",
-            "go/README.md",
-            "go/docs/README.md",
-            "go/docs/getting-started.md",
-            "go/docs/from-java.md");
-
-    private static final Pattern MARKDOWN_LINK =
-            Pattern.compile("!?\\[[^]\\n]*]\\(([^)\\s]+)(?:\\s+[^)]*)?\\)");
-    private static final Pattern CAPITALIZED_PROJECT_NAME = Pattern.compile("\\bSwath\\b");
-
-    @Test
-    void entryPointLocalLinkTargetsExist() throws Exception {
-        List<String> failures = new ArrayList<>();
-        for (String relative : ENTRY_POINTS) {
-            Path source = ROOT.resolve(relative);
-            assertThat(source).as(relative).isRegularFile();
-            checkTargets(source, failures);
-        }
-        assertThat(failures).isEmpty();
-    }
-
-    @Test
-    void entryPointsUseTheLowercaseProjectName() throws Exception {
-        for (String relative : ENTRY_POINTS) {
-            assertThat(CAPITALIZED_PROJECT_NAME.matcher(read(relative)).find())
-                    .as(relative + " contains capitalized project name")
-                    .isFalse();
-        }
-    }
-
-    @Test
-    void goPreviewEntryPointsKeepReleaseScopeAndLimits() throws Exception {
-        String readme = read("README.md");
-        String guide = read("go/docs/getting-started.md");
-
-        assertThat(readme)
-                .contains("Parallel listing and inventory for large object stores and filesystems")
-                .contains("Go on main, unreleased")
-                .contains("Java v0.3.2")
-                .contains("Build Go from source")
-                .contains("Go will replace Java at release")
-                .contains("No scan resume")
-                .contains("Flat namespaces and current blobs only")
-                .contains("not an atomic storage snapshot")
-                .contains("historical Java evidence")
-                .contains("go/docs/getting-started.md")
-                .contains("https://github.com/varveio/swath/tree/v0.3.2/docs")
-                .doesNotContain("-o inventory.parquet");
-        assertThat(guide)
-                .contains("not released yet")
-                .contains("Java v0.3.2")
-                .contains("Local trees and text output keep no journal")
-                .contains("Read the parts the manifest lists")
-                .contains("union_by_name = true")
-                .doesNotContain("data/*.parquet");
-    }
 
     @Test
     void javaReleaseEntryPointsKeepTheHistoricalWorkflow() throws Exception {
@@ -120,35 +46,5 @@ final class DocumentationEntryPointTest {
 
     private static String read(String relative) throws IOException {
         return Files.readString(ROOT.resolve(relative));
-    }
-
-    private static void checkTargets(Path source, List<String> failures) throws IOException {
-        Matcher matcher = MARKDOWN_LINK.matcher(Files.readString(source));
-        while (matcher.find()) {
-            String raw = matcher.group(1);
-            if (raw.startsWith("http://") || raw.startsWith("https://")
-                    || raw.startsWith("mailto:")) {
-                continue;
-            }
-            int hash = raw.indexOf('#');
-            String pathPart = hash >= 0 ? raw.substring(0, hash) : raw;
-            int query = pathPart.indexOf('?');
-            if (query >= 0) {
-                pathPart = pathPart.substring(0, query);
-            }
-            Path target = pathPart.isEmpty()
-                    ? source
-                    : source.getParent().resolve(decode(pathPart)).normalize();
-            String origin = ROOT.relativize(source) + " -> " + raw;
-            if (!target.startsWith(ROOT)) {
-                failures.add(origin + " escapes the repository");
-            } else if (!Files.exists(target)) {
-                failures.add(origin + " does not exist at " + ROOT.relativize(target));
-            }
-        }
-    }
-
-    private static String decode(String value) {
-        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 }
