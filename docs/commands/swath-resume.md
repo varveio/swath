@@ -32,7 +32,8 @@ $ swath resume logs-inventory
 logs-inventory is already complete: nothing to resume
 ```
 
-The `resume:` advice single-quotes a DIR the shell would split or expand (a path with a space), and spells
+The `resume:` advice quotes a DIR the shell would split or expand (a path with a space; single quotes, double
+quotes on Windows), and spells
 one that begins with `-` as `./-DIR`, so it can be pasted as printed. [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
 A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:

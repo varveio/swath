@@ -610,7 +610,7 @@ func TestShowRemoteWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	shown.Reset()
-	if err := show([]string{work}, &shown); err != nil || !strings.HasSuffix(shown.String(), "\ncommitted from the work directory "+work+", its cleanup unfinished (swath resume '"+work+"' finishes it)\n") {
+	if err := show([]string{work}, &shown); err != nil || !strings.HasSuffix(shown.String(), "\ncommitted from the work directory "+work+", its cleanup unfinished (swath resume "+shellQuote(work)+" finishes it)\n") {
 		t.Fatalf("show unfinalized: %v\n%s", err, shown.String())
 	}
 }

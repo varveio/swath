@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -420,8 +421,8 @@ func commitMarker(dir string) (*dataset.RemoteCommitRecord, error) {
 	return dataset.ReadCommitMarker(r)
 }
 
-// shellLine is args as one POSIX shell command line, each argument quoted
-// as shellQuote does: a printed command can be pasted as it is.
+// shellLine is args as one shell command line, each argument quoted as
+// shellQuote does: a printed command can be pasted as it is.
 func shellLine(args []string) string {
 	q := make([]string, len(args))
 	for i, a := range args {
@@ -430,15 +431,46 @@ func shellLine(args []string) string {
 	return strings.Join(q, " ")
 }
 
-// shellQuote is s as one POSIX shell word: as it is when it holds only
-// characters no shell treats specially, otherwise single-quoted (a path
-// with a space, an empty argument).
-func shellQuote(s string) string {
-	const plain = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,+@%"
-	if s != "" && strings.Trim(s, plain) == "" {
+// shellQuote is s as one word of this platform's shell (quoteFor).
+func shellQuote(s string) string { return quoteFor(runtime.GOOS, s) }
+
+// quoteFor is s as one shell word on goos: as it is when it holds only
+// characters no shell there treats specially and does not begin with '='
+// (zsh expands =cmd to its path), otherwise quoted: in POSIX single quotes,
+// or on Windows, where cmd and PowerShell take neither, in double quotes
+// (a Windows path holds no '"'; one in another argument is escaped as the
+// program's argument parser reads it).
+func quoteFor(goos, s string) string {
+	plain := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,+@%"
+	if goos == "windows" {
+		plain = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:\\"
+	}
+	if s != "" && !strings.HasPrefix(s, "=") && strings.Trim(s, plain) == "" {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	if goos != "windows" {
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	}
+	// The Windows argument rules (syscall.EscapeArg's): backslashes before
+	// a '"', or before the closing quote, are doubled, and the '"' escaped.
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			slashes++
+		case '"':
+			b.WriteString(strings.Repeat(`\`, slashes+1))
+			slashes = 0
+		default:
+			slashes = 0
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteString(strings.Repeat(`\`, slashes))
+	b.WriteByte('"')
+	return b.String()
 }
 
 // shellOperand is the path dir as a command's operand, quoted (shellQuote):
