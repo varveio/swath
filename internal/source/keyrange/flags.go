@@ -23,6 +23,7 @@ type Policy struct {
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
+	SeedTiles  int       // cap initial tiles before resume reuse (0: legacy defaults); diagnostic
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -40,7 +41,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, SeedTiles: p.SeedTiles}
 }
 
 // Group is the engine's flag group, which every provider on the engine
@@ -91,13 +92,24 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
 			Usage: "with --sequential, stop after N objects (marked incomplete)"})
-		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d; default the provider's)", PageKeys),
+		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: "ask for pages of N entries (default the provider's)",
+			Long: fmt.Sprintf("1 to %d, capped at the provider's maximum.", MaxPageFlag),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
-				if err != nil || n < 1 || n > PageKeys {
-					return fmt.Errorf("want 1 to %d", PageKeys)
+				if err != nil || n < 1 || n > MaxPageFlag {
+					return fmt.Errorf("want 1 to %d", MaxPageFlag)
 				}
 				p.PageSize = n
+				return nil
+			})})
+		source.Define(f, source.Flag{Name: "seed-tiles", Metavar: "N", Usage: "start with at most N tiles from the seed or --seed-from",
+			Long: "Includes the frontier and closing sentinel; reused resume certificates may subdivide tiles. By default the seed keeps up to 4 cuts per worker (at most 1,000); --seed-from uses that many tiles.",
+			Value: source.Func(func(v string) error {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1 || n > 100000 {
+					return fmt.Errorf("want 1 to 100000")
+				}
+				p.SeedTiles = n
 				return nil
 			})})
 	}

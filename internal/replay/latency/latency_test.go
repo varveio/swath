@@ -70,6 +70,41 @@ func TestDelayByShapeAndPerCommonPrefix(t *testing.T) {
 	}
 }
 
+func TestPerEntryTerm(t *testing.T) {
+	p := mustParse(t, "worker_page=16ms+0.05ms/entry,structure_probe=10ms+2ms/cp+0.1ms/entry,pivot=5ms", 0, 1)
+	if d := p.DelayEntries(WorkerPage, 0, 1000, 0); d != 66*time.Millisecond {
+		t.Errorf("worker page of 1,000 entries: %v", d)
+	}
+	if d := p.DelayEntries(WorkerPage, 0, 0, 0); d != 16*time.Millisecond {
+		t.Errorf("empty worker page: %v", d)
+	}
+	if d := p.Delay(WorkerPage, 0, 0); d != 16*time.Millisecond {
+		t.Errorf("Delay counts no entry: %v", d)
+	}
+	if d := p.DelayEntries(StructureProbe, 3, 10, 0); d != 17*time.Millisecond {
+		t.Errorf("structure probe of 3 prefixes in 10 entries: %v", d)
+	}
+	if d := p.DelayEntries(PivotProbe, 0, 1, 0); d != 5*time.Millisecond {
+		t.Errorf("pivot probe without a term: %v", d)
+	}
+	if d := mustParse(t, "worker_page=16ms+0.05ms/entry", 0, 10).DelayEntries(WorkerPage, 0, 1000, 0); d != 6600*time.Microsecond {
+		t.Errorf("scaled: %v", d)
+	}
+	// A number's own sign stays with it: only a + that starts a /cp or
+	// /entry term separates terms.
+	for spec, want := range map[string]time.Duration{"worker_page=1e+3ms": time.Second, "worker_page=+3ms": 3 * time.Millisecond,
+		"worker_page=1e+1ms+1e+0ms/entry": 20 * time.Millisecond} {
+		if d := mustParse(t, spec, 0, 1).DelayEntries(WorkerPage, 0, 10, 0); d != want {
+			t.Errorf("%s over 10 entries: %v, want %v", spec, d, want)
+		}
+	}
+	for _, spec := range []string{"worker_page=1ms+1ms/entry+1ms/entry", "worker_page=1ms+1ms/entry+1ms/cp", "worker_page=1ms+fast/entry", "worker_page=1ms+"} {
+		if _, err := Parse(spec, 0, 1); err == nil {
+			t.Errorf("Parse(%q) accepted", spec)
+		}
+	}
+}
+
 func TestScaleDividesEveryTerm(t *testing.T) {
 	p := mustParse(t, "prod-commoncrawl", 0, 50)
 	if d := p.Delay(StructureProbe, 121, 0); d != time.Duration(223_000_000/50+121*(55_000_000/50)) {

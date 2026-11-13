@@ -527,7 +527,12 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		fence.Span(llo, r.hi, r.open)
 	}
 	p.maybeProbe(pctx, st, r, c)
+	hint := PageHint{Hi: r.hi, Open: r.open, First: true, Rem: r.estimate(), Nominal: p.opt.PageSize}
 	for {
+		if p.opt.PageFor != nil {
+			hint.Cursor, hint.Keys = c, st.keys
+			in.Max = p.pageFor(hint)
+		}
 		t0 := time.Now()
 		out, err := p.list(ctx, in)
 		if err != nil {
@@ -633,6 +638,18 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 		}
 		overfetch := len(out.Rows) - kept
+		hint.First, hint.Asked, hint.Got = false, in.Max, kept
+		// Full allows one row short: a provider whose start bound is a
+		// listed key (Azure's startFrom after a split's cursor) may drop it
+		// and return the rest of one read as the page.
+		if kept+1 >= in.Max && truncated && !reached {
+			hint.Full++
+		} else {
+			hint.Full = 0
+		}
+		if !math.IsNaN(rem) {
+			hint.Rem = rem
+		}
 		if p.d.Groups {
 			p.c.Add(cGroupsOverfetchRows, int64(overfetch))
 		}
@@ -668,6 +685,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		switch h := st.held(); {
 		case h > 0 && !done:
 			held, st.rem = h, h
+			hint.Rem = h // the next request is sized from the remainder the gates read
 			p.c.Inc(cSeedFromHeld)
 		case st.prior > 0 && !done:
 			st.prior = 0
@@ -741,6 +759,23 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		in.Token = out.Token
 		p.maybeProbe(pctx, st, r, c)
 	}
+}
+
+// pageFor is a range request's page size under Options.PageFor, clamped
+// to 1..PageMax, and its counters.
+func (p *Engine[P]) pageFor(h PageHint) int {
+	n := min(max(p.opt.PageFor(h), 1), p.opt.PageMax)
+	p.c.Add(cPageAskedKeys, int64(n))
+	switch {
+	case n > p.opt.PageSize:
+		p.c.Inc(cPageGrown)
+	case n < p.opt.PageSize:
+		p.c.Inc(cPageTrimmed)
+	}
+	if h.Asked > p.opt.PageSize && n <= p.opt.PageSize {
+		p.c.Inc(cPageGrowthReset)
+	}
+	return n
 }
 
 func (p *Engine[P]) covered(lo, hi string, open bool) {
@@ -990,7 +1025,9 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		} else {
 			// Pages as this range's pages come: a provider may return fewer
 			// keys than asked for.
-			page := float64(len(g.page))
+			// A page grown past the nominal size (PageFor) is measured
+			// in nominal pages: the children start at that size.
+			page := float64(min(len(g.page), p.opt.PageSize))
 			lower, upper := pr.children(c, m, r.hi)
 			refuse := counters.ID(0) // the refusing gate; 0 (cObjects) for none
 			switch {

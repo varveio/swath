@@ -46,7 +46,21 @@ Diagnostics:
       --slow-split          split a range whose pages are slow without waiting for an idle worker
       --sequential          list with one continuation-token chain (no ranges; the reference)
       --max-keys N          with --sequential, stop after N objects (marked incomplete)
-      --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
+      --page-size N         ask for pages of N entries (default the provider's)
+                              1 to 5000, capped at the provider's maximum.
+      --seed-tiles N        start with at most N tiles from the seed or --seed-from
+                              Includes the frontier and closing sentinel; reused resume certificates
+                              may subdivide tiles. By default the seed keeps up to 4 cuts per worker
+                              (at most 1,000); --seed-from uses that many tiles.
+      --azure-page-policy fixed|one-read|grow|estimate
+                            experimental page policy (default one-read)
+                              fixed: pages of --page-size, read again to fill a page, as before one
+                              read per page became the default; one-read (the default) ends a page
+                              at its first read's last row instead of reading again for the rest;
+                              grow adds pages that double after full pages, up to 5,000, but to at
+                              most half the keys estimated left; estimate asks the finite remainder
+                              estimate plus two, from --page-size to 5,000. grow and estimate read
+                              once per page. The default is one-read.
 ```
 <!-- diag-list:end -->
 
@@ -56,17 +70,30 @@ Diagnostics:
 ```text
 Diagnostics:
       --adaptive-limit-slow-start
-                     start the limit at 4 in flight, doubling each second to --workers
-      --no-seed      start from one range, without the delimiter-listing seed
+                      start the limit at 4 in flight, doubling each second to --workers
+      --no-seed       start from one range, without the delimiter-listing seed
       --structure[=auto|on|off]
-                     probes whose folder boundaries splits pivot on (default auto)
-                       The bare flag is on, so a mode needs '='. auto probes on the open frontier
-                       while its cursor is in a folder, and in bounded ranges whose chain stays
-                       inside one folder; on probes every range in a folder.
-      --slow-split   split a range whose pages are slow without waiting for an idle worker
-      --sequential   list with one continuation-token chain (no ranges; the reference)
-      --max-keys N   with --sequential, stop after N objects (marked incomplete)
-      --page-size N  ask for pages of N entries (1 to 1000; default the provider's)
+                      probes whose folder boundaries splits pivot on (default auto)
+                        The bare flag is on, so a mode needs '='. auto probes on the open frontier
+                        while its cursor is in a folder, and in bounded ranges whose chain stays
+                        inside one folder; on probes every range in a folder.
+      --slow-split    split a range whose pages are slow without waiting for an idle worker
+      --sequential    list with one continuation-token chain (no ranges; the reference)
+      --max-keys N    with --sequential, stop after N objects (marked incomplete)
+      --page-size N   ask for pages of N entries (default the provider's)
+                        1 to 5000, capped at the provider's maximum.
+      --seed-tiles N  start with at most N tiles from the seed or --seed-from
+                        Includes the frontier and closing sentinel; reused resume certificates may
+                        subdivide tiles. By default the seed keeps up to 4 cuts per worker (at most
+                        1,000); --seed-from uses that many tiles.
+      --azure-page-policy fixed|one-read|grow|estimate
+                      experimental page policy (default one-read)
+                        fixed: pages of --page-size, read again to fill a page, as before one read
+                        per page became the default; one-read (the default) ends a page at its first
+                        read's last row instead of reading again for the rest; grow adds pages that
+                        double after full pages, up to 5,000, but to at most half the keys estimated
+                        left; estimate asks the finite remainder estimate plus two, from --page-size
+                        to 5,000. grow and estimate read once per page. The default is one-read.
 ```
 <!-- diag-count:end -->
 

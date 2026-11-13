@@ -47,10 +47,12 @@ type Query struct {
 	Through string
 	Bounded bool
 	// Token: the continuation token of the previous page. Every other
-	// field is the chain's and stays as on its first request; the
+	// field but Max is the chain's and stays as on its first request; the
 	// provider maps them onto its wire (S3 omits start-after with a token).
 	Token string
-	Max   int // page size
+	// Max is the page size: Options.PageSize, or with Options.PageFor
+	// chosen per request, so it may change within a chain.
+	Max int
 	// Probe: the page's objects are not emitted (the seed page and
 	// structure probes); a provider may leave optional fields out.
 	Probe bool
@@ -188,6 +190,16 @@ type Options struct {
 	Resume    *Resume       // continue after a journaled run's last published key
 	Prior     *source.Prior // parallel: tile the scope at a prior's cuts instead of the seed (SeedFrom)
 	PageSize  int           // the nominal page size: data and seed requests (0 = PageKeys)
+	// PageFor, when set (diagnostic), chooses each range request's page
+	// size (Query.Max) from what the range has seen (PageHint), clamped to
+	// 1..PageMax; nil asks every request for PageSize. The seed and the
+	// probes keep PageSize. A provider whose continuation does not depend
+	// on the page size may set it (Azure's markers do not).
+	PageFor func(PageHint) int
+	PageMax int // the most PageFor may ask (0: PageSize)
+	// SeedTiles is the most tiles a seed or a prior starts the run with
+	// before resume reuse subdivides them (diagnostic; 0: legacy defaults).
+	SeedTiles int
 	// PriorPageSize, when above PageSize, is the page size a counted prior
 	// (SeedFrom) sets instead: the provider's largest page, worth asking
 	// once the prior's tiles hold pages of keys each (Azure's 5,000).
@@ -203,6 +215,22 @@ type Options struct {
 	Trace     func(lo, hi string, open bool)
 }
 
+// PageHint is what Options.PageFor sees before a range's request: the
+// keys left, (Cursor, Hi] or (Cursor, ⊤) when Open, and the evidence of the
+// range's earlier pages. A range's children start afresh (First, no
+// evidence): a split resets growth.
+type PageHint struct {
+	Cursor, Hi string
+	Open       bool
+	First      bool    // the range's first request
+	Rem        float64 // the engine's estimate of the keys left: NaN unknown, +Inf on the frontier or a bound past the page's view
+	Asked      int     // the previous request's page size (0: none)
+	Got        int     // the rows it returned inside the range
+	Full       int     // the range's consecutive pages, up to the previous, that returned all they asked inside the range
+	Keys       int64   // rows the range emitted so far
+	Nominal    int     // Options.PageSize
+}
+
 // Resume restarts a listing after the last published key.
 type Resume struct {
 	After string // the last published key: every key <= After is in the dataset
@@ -210,6 +238,10 @@ type Resume struct {
 
 // PageKeys is the default nominal page size (Options.PageSize).
 const PageKeys = 1000
+
+// MaxPageFlag is the largest --page-size: Azure's List Blobs maximum. A
+// provider asks for at most its own maximum (S3 returns at most 1,000).
+const MaxPageFlag = 5000
 
 // Stats is what a listing did: the time-weighted mean of ranges in Expand
 // and the counter snapshot.
@@ -265,6 +297,9 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 	}
 	if opt.PageSize <= 0 {
 		opt.PageSize = PageKeys
+	}
+	if opt.PageMax < opt.PageSize {
+		opt.PageMax = opt.PageSize
 	}
 	now := time.Now()
 	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, start: now, areaAt: now}

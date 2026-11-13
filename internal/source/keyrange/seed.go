@@ -258,7 +258,11 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	cuts = slices.Compact(cuts)
 	p.lock()
 	publish()
-	if limit := Tiles(p.opt.Workers); len(cuts) > limit {
+	limit := p.tileLimit()
+	if p.opt.SeedTiles > 0 {
+		limit-- // the explicit tile budget includes the open frontier
+	}
+	if len(cuts) > limit {
 		picked := make([]string, 0, limit)
 		for i := range limit {
 			picked = append(picked, cuts[(i*len(cuts)+limit/2)/limit])
@@ -266,8 +270,6 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		cuts = picked
 		p.c.Set(cSeedSubsampled, 1)
 	}
-	p.c.Set(cSeedCuts, int64(len(cuts)))
-	cuts = detach(cuts) // they become the tiles' bounds: none may pin a seed page
 	// Closing sentinel: when the top level was listed whole and its last
 	// page ends with a prefix pk, bound the last tile at prefixCeil(pk) so it
 	// is not the open frontier (the bounded midpoint then applies to it).
@@ -289,6 +291,14 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 			p.c.Set(cSeedSentinel, 1)
 		}
 	}
+	if sentinel != "" && p.opt.SeedTiles > 0 && len(cuts)+2 > p.opt.SeedTiles {
+		// Keep the closing sentinel within the explicit total tile budget
+		// by merging its preceding tile. The unset policy keeps its old cuts.
+		cuts = cuts[:len(cuts)-1]
+		p.c.Set(cSeedSubsampled, 1)
+	}
+	p.c.Set(cSeedCuts, int64(len(cuts)))
+	cuts = detach(cuts) // they become the tiles' bounds: none may pin a seed page
 	tiles := make([]Range, 0, len(cuts)+2)
 	lo := after
 	for _, c := range cuts {

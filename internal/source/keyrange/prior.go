@@ -32,15 +32,25 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 	p.opt.Prior = pr
 	if pr.Counted && p.opt.PriorPageSize > p.opt.PageSize {
 		p.opt.PageSize = p.opt.PriorPageSize
+		p.opt.PageMax = max(p.opt.PageMax, p.opt.PageSize) // as New keeps it
 		p.c.Set(cSeedFromPageSize, int64(p.opt.PageSize))
 	}
 	return nil
 }
 
-// Tiles is the most tiles a seed or a prior starts a run with: 4 per
-// worker, so every worker starts with work and a few to spare, at most
-// maxSeeds.
+// Tiles is the default prior tile budget and seed folder-cut budget:
+// 4 per worker, at most maxSeeds. The seed also adds its frontier and,
+// when available, a closing sentinel.
 func Tiles(workers int) int { return min(maxSeeds, 4*max(workers, 1)) }
+
+// tileLimit is the explicit total tile budget, or the legacy default
+// (a folder-cut budget for the seed, a tile budget for a prior).
+func (p *Engine[P]) tileLimit() int {
+	if p.opt.SeedTiles > 0 {
+		return p.opt.SeedTiles
+	}
+	return Tiles(p.opt.Workers)
+}
 
 // priorTilesPerWorker is how many tiles a counted prior aims at per
 // worker: two, so every worker starts with a tile and the end of the run
@@ -106,7 +116,10 @@ func tilePrior(pr *source.Prior, k int, fill float64, after, scope string, safe 
 		cands = append(cands, cand{key, pending + w})
 		pending, last = 0, key
 	}
-	bounded := max(k-1, 1)
+	if k <= 1 {
+		return nil, unsafe // the open frontier alone covers the scope
+	}
+	bounded := k - 1
 	if fill > 0 {
 		acc := 0.0
 		for i, c := range cands {
@@ -173,7 +186,7 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 		fill = float64(q*p.opt.PageSize - 1)
 		p.c.Set(cSeedFromTilePages, int64(q))
 	}
-	tiles, unsafe := tilePrior(pr, Tiles(p.opt.Workers), fill, after, p.opt.Prefix, p.safe, p.safeStart)
+	tiles, unsafe := tilePrior(pr, p.tileLimit(), fill, after, p.opt.Prefix, p.safe, p.safeStart)
 	p.lock()
 	p.c.Set(cSeedFromParts, int64(pr.Parts))
 	p.c.Set(cSeedFromIndexed, int64(pr.IndexedParts))

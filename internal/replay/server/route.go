@@ -141,7 +141,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.logIfSlow(req, res, cost, shape)
 	prefixes := res.CommonPrefixes()
 	objects := len(res.Entries) - prefixes
-	delay := s.cfg.Latency.Delay(shape, int64(prefixes), req.LatencyKey())
+	delay := s.cfg.Latency.DelayEntries(shape, int64(prefixes), int64(len(res.Entries)), req.LatencyKey())
 
 	renderStart := time.Now()
 	out.SetFirstChunkHint(s3.EstimateSize(len(res.Entries)))

@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/counters"
@@ -164,7 +165,17 @@ type Adapter struct {
 
 	// trace, when set (tests), sees every span created.
 	trace func(span)
+	// twoReads: a page that holds rows reads again for its rest, as
+	// before #469 (OneReadPerPage(false), the experiment's fixed policy).
+	twoReads bool
+	Tally    Tally
 }
+
+// OneReadPerPage(false) lets a page that holds rows read again for its
+// rest, as the adapter did before #469 (experimental, #449: the fixed page
+// policy, kept to compare against); the default, true, ends every such
+// page at its first read's last member. Set before the first Fetch.
+func (a *Adapter) OneReadPerPage(on bool) { a.twoReads = !on }
 
 // New builds an adapter listing container through l. The counters of
 // CounterDefs are added to set from ID base (the provider's registration);
@@ -182,6 +193,31 @@ func (a *Adapter) Release() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	clear(a.chains)
+}
+
+// Tally is this adapter's own share of the counters (an Expand's range;
+// experiment tracing, #449).
+type Tally struct {
+	Responses, Items, Overlap atomic.Int64
+}
+
+// Buffered is the rows the registered chains hold read and not emitted:
+// at Release, what the range abandons (a split's parent chain).
+func (a *Adapter) Buffered() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, c := range a.chains {
+		for i := range c.stack {
+			n += len(c.stack[i].buf)
+		}
+	}
+	return n
+}
+
+func (a *Adapter) overlap(n int64) {
+	a.add(COverlapRows, n)
+	a.Tally.Overlap.Add(n)
 }
 
 func (a *Adapter) add(i int, n int64) { a.set.Add(a.base+counters.ID(i), n) }
@@ -387,7 +423,7 @@ func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) 
 				c.stack = c.stack[:len(c.stack)-1]
 				continue
 			}
-			if len(p.Items) > 0 {
+			if !a.twoReads && len(p.Items) > 0 {
 				a.add(CShortPages, 1)
 				a.add(CShortRows, int64(limit-len(p.Items)))
 				break
@@ -439,6 +475,8 @@ func (a *Adapter) read(ctx context.Context, c *chain, i, limit int) error {
 		return err
 	}
 	a.add(CResponses, 1)
+	a.Tally.Responses.Add(1)
+	a.Tally.Items.Add(int64(len(out.Items)))
 	if len(out.Items) == 0 && out.NextMarker != "" {
 		a.add(CEmptyPages, 1)
 	}
@@ -466,7 +504,7 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 		if !sp.contains(n, c.prefix) {
 			a.end(sp) // rule 3: past every member
 			if !a.transfer(c, i, items[k:], marker) {
-				a.add(COverlapRows, int64(len(items)-k))
+				a.overlap(int64(len(items) - k))
 			}
 			return
 		}
@@ -481,7 +519,7 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 			// grouped listing Through's own later entries follow it, so
 			// the span ends at the first item past them (rule 3).
 			a.end(sp)
-			a.add(COverlapRows, int64(len(items)-k-1))
+			a.overlap(int64(len(items) - k - 1))
 			return
 		}
 	}

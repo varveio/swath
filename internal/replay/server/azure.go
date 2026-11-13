@@ -270,7 +270,7 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	}
 	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "page").Record(time.Since(started))
 	shape := req.Shape()
-	delay := s.cfg.Latency.Delay(shape, int64(res.Prefixes), req.LatencyKey())
+	delay := s.cfg.Latency.DelayEntries(shape, int64(res.Prefixes), int64(len(res.Entries)), req.LatencyKey())
 	objects, prefixes := len(res.Entries)-res.Prefixes, res.Prefixes
 
 	renderStart := time.Now()
