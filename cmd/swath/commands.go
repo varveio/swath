@@ -304,6 +304,9 @@ func show(args []string, stdout io.Writer) error {
 		return usageError{err}
 	}
 	dir := p.operands[0]
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		return fmt.Errorf("%s holds neither a dataset nor an interrupted run", dir) // a file (a text listing, say)
+	}
 	if raw {
 		st, err := journal.Read(dir)
 		switch {
