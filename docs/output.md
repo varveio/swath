@@ -161,7 +161,7 @@ TSV puts the numbers first and the prefix last, as `du` prints a size and then i
 fields (`prefix_base64` for a prefix that is not valid UTF-8). Totals read from a saved dataset
 (`swath du --from-dataset`) add a last JSONL member, `dataset`: the directory (`path`), the listed `source`, the
 `schema_id`, `listing_started_at` and `listing_finished_at`, and the listing's coverage from its manifest
-(`complete`, `stop_reason`, `skipped_entries`, `filters`, `exclusions`; null where the manifest does not say),
+(`complete`, `stop_reason`, `unreadable`, `filters`, `exclusions`; null where the manifest does not say),
 so a stored row still says it was not a live listing and how complete it was. Both sort the rows by prefix in byte order, the
 total first and each parent before its children; the table puts the total last. Select the total by
 `depth`, not by its place: `jq 'select(.depth == 0) | .size'`. An object-store source has no `dirs` and
@@ -180,8 +180,7 @@ Read the totals with care:
   {"depth":0,"prefix":"","objects":4,"dirs":3,"size":0,"unsized":4,"last_modified":null}
   ```
 
-- **`--allocated` renames the field.** The bytes are then `allocated_size` (blocks on disk, as `du` reports by
-  default), not `size`; a script that reads `size` finds no such field:
+- **`--allocated` renames the field.** The bytes are then `allocated_size` (the files' blocks on disk), not `size`; a script that reads `size` finds no such field:
 
   ```text
   $ swath du /data/photos --allocated --format jsonl

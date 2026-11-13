@@ -185,7 +185,10 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
   resume yet. `--seed-from` is refused (exit 2) by the listing: `treeOpened` is not `source.Seeded`, as a
   prior tiles a flat scope. `diag list --trace` is refused (exit 2) the same way: `treeOpened` is not
   `source.Traced`, since a trace of the segment engine would leave out first pages and lookups
-  ([trace.md](../trace.md)). `du --from-dataset` reads a tree-mode dataset as a flat one's: the schema id
+  ([trace.md](../trace.md)). A scope directory the caller may not list fails the run with the service's
+  refusal (403, class access denied), never an empty complete dataset, as an unreadable local root is an
+  error; a refused directory below it fails the run too: List Blobs has no per-entry unreadable account,
+  so `coverage.unreadable` stays 0 (`TestTreeUnreadableRoot`). `du --from-dataset` reads a tree-mode dataset as a flat one's: the schema id
   is the same (`Factory.Schemas`), declares no containers, so directory rows count as objects there as
   in a live `du`. Identity: the flat fields plus `listing` `tree` (absent for flat accounts, so
   neither journal resumes as the other). Report: `listing` `tree`; the brief is the whole walk's: `files`,
@@ -201,7 +204,7 @@ Admission), so the check is no guard against a wrong assertion. Within one direc
   `TestTreeFetchFlags` (the include on every row request, none on lookups; files filled as flat, directories
   null), `TestTreeFetchTagsRefused`, `TestTreeReportBrief` (the brief's `requests` equals the store's request
   log, one `bytes`), `TestTreeDatasetTotals` (`du --from-dataset` of a tree-mode dataset equals a live `du`),
-  `TestTreeTraceRefused`, `TestTreeRecursiveExcludes`, `TestTreeResolutionRetry`, `TestTreeResolutionStops`,
+  `TestTreeTraceRefused`, `TestTreeUnreadableRoot`, `TestTreeRecursiveExcludes`, `TestTreeResolutionRetry`, `TestTreeResolutionStops`,
   `TestTreeListedNamespace`, `TestTreeNotNewFlat`, `client` `TestTreeListing`; admission's HNS rows in
   `TestAdmissionFallback`. The replay server's `--azure-hns` still changes only Get Account Information.
 

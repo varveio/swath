@@ -25,7 +25,7 @@ import (
 // committedReport checks a report of an invocation that found the dataset
 // m committed: the dataset's rows, part bytes and object bytes (want; nil:
 // absent) from the manifest, nothing of its own listed or emitted, and the
-// outcome completed, or incomplete with exit 1 when the manifest's coverage
+// outcome completed, or incomplete with exit 3 when the manifest's coverage
 // is partial.
 func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, want *int64) {
 	t.Helper()
@@ -49,7 +49,7 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 	}
 	class, code := listing.ClassCompleted, exitCompleted
 	if !m.Coverage.Complete {
-		class, code = listing.ClassIncomplete, exitFatal
+		class, code = listing.ClassIncomplete, exitIncomplete
 	}
 	if oc := rep.Outcome; oc.Status != listing.StatusCommitted || oc.Class != class || oc.ExitCode != code || oc.Complete != m.Coverage.Complete {
 		t.Fatalf("%s: outcome %+v", name, oc)
@@ -114,7 +114,7 @@ func TestResumeCompleteAccount(t *testing.T) {
 // run.json); swath resume WORK_DIR --report FILE finds the commit made and
 // finishes its aftermath, and both its report and the run.json it puts
 // beside the manifest account for the committed dataset from the manifest:
-// completed with exit 0 when it covers its scope, incomplete with exit 1
+// completed with exit 0 when it covers its scope, incomplete with exit 3
 // when a key limit left it partial, as --report says.
 func TestRemoteResumeFindsCommit(t *testing.T) {
 	datasettest.RequireJournal(t)
@@ -179,7 +179,7 @@ func TestRemoteResumeFindsCommit(t *testing.T) {
 			if err != nil {
 				code = exitCode(t, err)
 			}
-			if wantCode := map[bool]int{true: exitCompleted, false: exitFatal}[m.Coverage.Complete]; code != wantCode {
+			if wantCode := map[bool]int{true: exitCompleted, false: exitIncomplete}[m.Coverage.Complete]; code != wantCode {
 				t.Fatalf("resume: exit %d, want %d (%v)", code, wantCode, err)
 			}
 			b, err := os.ReadFile(report)

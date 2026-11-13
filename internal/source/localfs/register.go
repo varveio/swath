@@ -69,17 +69,25 @@ func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 		Usage: "what is read per entry (statx adds birth_time; Linux)"})
 	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind DIR)"})
 	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
-	source.Define(f, source.Flag{Name: "one-file-system", Familiar: []string{"one-filesystem"}, Value: source.Switch(&o.OneFilesystem),
+	source.Define(f, source.Flag{Name: "one-file-system", Familiar: []string{"one-filesystem", "x"}, Value: source.Switch(&o.OneFilesystem),
 		Usage: "do not walk into a mount point below the root, as du -x"})
 	return o
 }
 
 // checkTotals refuses totals the names tier cannot give
-// (registry.Factory.CheckTotals): the allocated bytes and the hard links
-// are read from each entry's stat.
-func checkTotals(options any, t totals.Options) error {
-	if o, ok := options.(*Options); ok && o.Fields == Names && (t.BytesColumn == totals.AllocatedBytes || t.LinksOnce) {
-		return errors.New("--allocated and --count-links-once read each entry's stat: not with --metadata names")
+// (registry.Factory.CheckTotals): the allocated bytes are read from each
+// entry's stat. The hard links are too, so the names tier, and a platform
+// whose stat has no link count (statLinks: Windows), count every name.
+func checkTotals(options any, t *totals.Options) error {
+	o, ok := options.(*Options)
+	if !ok {
+		return nil
+	}
+	if o.Fields == Names && t.BytesColumn == totals.AllocatedBytes {
+		return errors.New("--allocated reads each entry's stat: not with --metadata names")
+	}
+	if o.Fields == Names || !statLinks {
+		t.LinksOnce = false
 	}
 	return nil
 }
@@ -164,6 +172,9 @@ func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parque
 		return order.Stats{}, nil, err
 	}
 	o.p.SetPruneDirectories(prune)
+	if o.p.keyOut, err = env.Filter.KeyExcluded(); err != nil {
+		return order.Stats{}, nil, err
+	}
 	o.p.mu.Lock()
 	o.p.stats.Pruning = &plan
 	o.p.mu.Unlock()
@@ -304,12 +315,12 @@ func storedName(dir, name string) string {
 	return stored
 }
 
-// Report: an entry counts as skipped when an error kept it (or its subtree)
-// out; a link whose target could not be read is still listed, and an entry
-// that vanished is no longer part of the tree.
+// Report: an entry counts as unreadable when an error kept it (or its
+// subtree) out; a link whose target could not be read is still listed, and
+// an entry that vanished is no longer part of the tree.
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
-	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Skipped: st.Errors() - st.ReadlinkErrors - st.Vanished}
+	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Unreadable: st.Errors() - st.ReadlinkErrors - st.Vanished}
 	cov.Exclusions = slices.Sorted(maps.Keys(o.p.opt.Skip))
 	if o.p.opt.OneFilesystem {
 		// The tree is listed only as far as its filesystem reaches; the
@@ -321,7 +332,7 @@ func (o *opened) Report() source.Report {
 		// an application can tell.
 		cov.Filters = append(cov.Filters, noDirsFilter)
 	}
-	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov, Filesystem: o.p.filesystemSpace(),
+	return source.Report{Name: "local", Stats: &st, Fields: o.p.opt.Fields.String(), Coverage: cov, Filesystem: o.p.filesystemSpace(),
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}
 }
 

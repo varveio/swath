@@ -152,7 +152,7 @@ type Limits struct {
 	// RowBudget bounds the bytes of rows and scheduler metadata held
 	// between listing and encoding (reorder storage and the encoders'
 	// queues); 0 is the default, 1/16 of the least detected memory limit
-	// (physical, cgroup, GOMEMLIMIT), at least minRowBudget and at most
+	// (physical, cgroup, GOMEMLIMIT), at least MinRowBudget and at most
 	// 1 GiB (DefaultRowBudget when none is detected: rowBudgetFor). It is
 	// not a cap on resident memory.
 	RowBudget int64
@@ -325,9 +325,9 @@ const (
 	// DefaultPartInterval is the default part age bound: Java's rotation
 	// interval (30 s), its proven value.
 	DefaultPartInterval = 30 * time.Second
-	// minRowBudget is the smallest row budget accepted: below it a publish
-	// batch alone would fill the budget.
-	minRowBudget = 128 << 10
+	// MinRowBudget is the smallest row budget accepted (--sort-buffer):
+	// below it a publish batch alone would fill the budget.
+	MinRowBudget = 128 << 10
 )
 
 // resolve validates c and fills its defaults, once.
@@ -397,8 +397,8 @@ func (c *Config) resolve() error {
 	case l.Spill.Reserve < 0:
 		l.Spill.Reserve = 0
 	}
-	if l.RowBudget < minRowBudget {
-		return bad("sort buffer %d is below %d bytes", l.RowBudget, minRowBudget)
+	if l.RowBudget < MinRowBudget {
+		return bad("sort buffer %d is below %d bytes", l.RowBudget, MinRowBudget)
 	}
 	return nil
 }
@@ -748,7 +748,7 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 	if c.Prefix != "" {
 		m.Scope = dataset.Scope{Kind: "prefix", Prefix: c.Prefix}
 	}
-	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.SkippedEntries = c.Complete, c.StopReason, c.Skipped
+	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable = c.Complete, c.StopReason, c.Unreadable
 	m.Coverage.Exclusions, m.Coverage.Filters = c.Exclusions, c.Filters
 	return m
 }

@@ -235,6 +235,23 @@ func TestFileRoot(t *testing.T) {
 	}
 }
 
+// TestUnreadableRoot: a root directory that cannot be opened is refused as
+// one that does not exist, so no run commits an empty listing of it.
+func TestUnreadableRoot(t *testing.T) {
+	if !permissionBits || os.Geteuid() == 0 {
+		t.Skip("needs permission bits that bind the process")
+	}
+	root := filepath.Join(t.TempDir(), "locked")
+	mk(t, root, "f", false)
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+	if _, err := New(root, Options{}); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("New on an unreadable root: %v, want a permission error", err)
+	}
+}
+
 // TestFileRootAsListed: a file root's row is the row its directory's
 // listing gives the same entry, at every tier and with both engines: the
 // statx tier's birth time included, and a symbolic link as itself, with

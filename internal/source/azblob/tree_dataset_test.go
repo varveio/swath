@@ -20,6 +20,8 @@ import (
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
+	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
@@ -84,5 +86,28 @@ func TestTreeTraceRefused(t *testing.T) {
 	}
 	if n := len(store.Log()); n != 0 {
 		t.Fatalf("%d listing requests before the refusal", n)
+	}
+}
+
+// TestTreeUnreadableRoot: a scope directory the caller may not list is the
+// service's refusal, a failed run of class access denied, never an empty
+// complete dataset (as an unreadable local root is an error).
+func TestTreeUnreadableRoot(t *testing.T) {
+	store := azblobtest.NewTreeStore([]string{"d/a", "d/e/f"})
+	store.Fail = func(int) error {
+		return &client.Error{Status: 403, Code: "AuthorizationPermissionMismatch",
+			Message: "This request is not authorized to perform this operation using this permission."}
+	}
+	dir := filepath.Join(t.TempDir(), "ds")
+	_, err := listing.Run(context.Background(), listing.Config{
+		Source: listing.SourceConfig{URI: "az://acct/c/d/", Options: &Options{Client: store}},
+		Output: listing.OutputConfig{Dir: dir, NoJournal: true},
+	})
+	if objhttp.Classify(err) != objhttp.ClassAccessDenied {
+		t.Fatalf("%v (class %q)", err, objhttp.Classify(err))
+	}
+	if d, err := reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{}); err == nil {
+		d.Close()
+		t.Fatal("an unreadable root committed a dataset")
 	}
 }

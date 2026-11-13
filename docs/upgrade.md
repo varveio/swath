@@ -37,7 +37,8 @@ downstream reader are the acceptance gates ([Gates](#gates)).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
   Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
   and resume ([platform limits](running.md#known-limits)). The exit codes keep their meaning:
-  0, 1, 2, 74, 75, 124, 130 and 143.
+  0, 1, 2, 74, 75, 124, 130 and 143; 3 is new: the run finished, but entries could not be read or `--max-keys`
+  stopped the listing, which 0.3 exited 1 for ([exit codes](reference/exit-codes.md)).
 - **Controls.** `--max-duration`, `--request-rate`, `--report`, `--progress`, `--stats`, `-v` and `-q`.
 
 ## The command line: what behaves differently
@@ -85,7 +86,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; 0.3
 
 | 0.3 | Now |
 |---|---|
-| `schema_version` | `report_version` (6) |
+| `schema_version` | `report_version` (7) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.committed_object_bytes` (the committed dataset's object sizes); this attempt's are `output.object_bytes`, the dataset's own size `output.output_bytes` |
@@ -166,7 +167,7 @@ re-list it into a new directory.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is the commit, written after every part: in a local directory by an atomic rename and a directory sync, in a bucket by a create that succeeds only if no manifest is there |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 6: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 7: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -513,7 +514,7 @@ list` and `swath du` refuse every diagnostic flag with a message naming `swath d
 of the flags every object store has are gone, one shared flag serving S3, GCS and Azure Blob alike:
 `--gcs-endpoint` and `--azblob-endpoint` are `--endpoint-url`, `--gcs-request-timeout` and
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
-is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, include and exclude patterns and storage classes accumulate when repeated, and for each size or time bound the last value wins (`coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `swath du`'s `--count-links-once` is the default on a local tree (a hard-linked file counts once, as `du`), and `-l`, `--count-links` counts every name; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, include and exclude patterns and storage classes accumulate when repeated, and for each size or time bound the last value wins (`coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default. `SWATH_CPUPROFILE=FILE` profiles the listing and the drain's
 tail apart: FILE (and FILE.listing) is the listing phase, no longer the whole run, and FILE.tail the tail; `go
 tool pprof FILE.listing FILE.tail` merges them ([internals/diagnostics.md](internals/diagnostics.md#phase-profiles)).
@@ -523,9 +524,16 @@ exclude globs ending in a recursive `/**` segment. The retained rows have the sa
 the directory's own row is still eligible. The local report adds `source.stats.pruning` (configured-rule
 classification) and `source.stats.pruned_dirs` (child traversals prevented). Unvisited descendants are
 not counted in fetched or filtered rows. Errors below pruned directories are no longer observed, so
-`outcome.unreadable` and `coverage.skipped_entries` can decrease for the same command. Original rules
-stay in `coverage.filters`; pruning is not a skipped-entry error. Object-store exclusions and arbitrary
+`outcome.unreadable` and `coverage.unreadable` can decrease for the same command. Original rules
+stay in `coverage.filters`; pruning does not make an entry unreadable. Object-store exclusions and arbitrary
 regex exclusions keep their existing behavior. See [filters](filters.md#globs).
+
+**One name for unreadable entries: run report version 7.** The entries a listing could not read are
+`unreadable` everywhere: the manifest's `coverage.skipped_entries` is `coverage.unreadable` (`reader`:
+`Coverage.Unreadable`), `swath show` prints `unreadable=` where it printed `skipped=`, and the statistics line
+`unreadable N` where it printed `errors N`. In the run report (version 7) `outcome.unreadable` is that count, where
+it was a flag, and `outcome.entry_errors` is gone (`source.stats` keeps a local listing's error counters). A
+version 6 reader changes the type it reads `outcome.unreadable` as.
 
 **Run report: version 6.** Version 6 adds `output.committed_object_bytes`, the committed dataset's object
 bytes: every row's size summed as the writers wrote them, retained parts and rows replayed from spill included,
@@ -591,8 +599,8 @@ meaning is narrowed, a local tree's `output.object_bytes` (the last item):
   present only on a `swath du` run.
 - **`output.object_bytes` of a local tree** is the apparent bytes of the files the run accepted (after the
   filters): a directory's own size is no longer summed (it is no object's). On an unfiltered complete run it equals
-  the local counters' `bytes`, and `swath du`'s total of the same run without `--allocated` or
-  `--count-links-once`. Object stores are unchanged. The local provider's counters add `other_device_dirs`
+  the local counters' `bytes`, and `swath du`'s total of the same run with `--count-links` and without
+  `--allocated`. Object stores are unchanged. The local provider's counters add `other_device_dirs`
   (`--one-file-system`).
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
@@ -623,5 +631,5 @@ is the full schema and [reference/run-report.md](reference/run-report.md) its de
 
 **The dataset** changed against those builds: it is SeekParquet ([SeekParquet](#seekparquet)). Builds before
 2026-11-05 wrote format 1, as the Java tool does; those of 2026-11-05 to 2026-11-08 wrote format 2, whose Parquet
-schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
+schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the outcome classes, `progress.json` and `error.json`; the exit codes but one: `incomplete` (a key limit, which exited 1, and unreadable entries, which exited 0) exits 3. Spill files changed format (delta coding,
 zstd), but they are private to one run and never read across builds.

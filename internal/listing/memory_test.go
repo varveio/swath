@@ -177,7 +177,7 @@ func TestCountOnlyHoldsNothing(t *testing.T) {
 	base := liveHeap()
 	sum, err := Run(context.Background(), Config{
 		Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Anonymous: true}},
-		Limits: Limits{Workers: workers, RowBudget: minRowBudget}})
+		Limits: Limits{Workers: workers, RowBudget: MinRowBudget}})
 	close(stop)
 	created := <-seen
 	select {

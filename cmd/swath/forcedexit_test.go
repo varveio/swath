@@ -229,7 +229,7 @@ func TestForcedExitAfterCommit(t *testing.T) {
 // forced out. The commit and its account are one step, so the forced exit
 // takes the committed result: a complete dataset exits 0 with a complete
 // report and no error.json; one that does not cover its scope (--max-keys)
-// exits 1 as incomplete and never as successful. Before, the account came
+// exits 3 as incomplete and never as successful. Before, the account came
 // after the manifest's fault point: the forced exit found no result and
 // wrote a current-attempt deadline error.json (124) beside the complete
 // dataset (eighth review).
@@ -245,7 +245,7 @@ func TestForcedExitAtCommit(t *testing.T) {
 		complete bool
 	}{
 		{"complete", []string{"list"}, nil, exitCompleted, "completed", true},
-		{"partial", []string{"diag", "list"}, []string{"--sequential", "--max-keys", "10"}, exitFatal, "incomplete", false},
+		{"partial", []string{"diag", "list"}, []string{"--sequential", "--max-keys", "10"}, exitIncomplete, "incomplete", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -377,7 +377,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		class    string
 	}{
 		{"commit under way/complete", true, exitCompleted, listing.ClassCompleted},
-		{"commit under way/partial", false, exitFatal, listing.ClassIncomplete},
+		{"commit under way/partial", false, exitIncomplete, listing.ClassIncomplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, report := target()

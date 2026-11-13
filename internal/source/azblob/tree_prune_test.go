@@ -48,7 +48,7 @@ func TestTreeRecursiveExcludes(t *testing.T) {
 		if stats.PrunedDirs != 1 || stats.Pruning == nil || stats.Pruning.Reason != "recursive_excludes" || stats.Pruning.RecursiveGlobs != 1 {
 			t.Fatalf("pruning report: %+v", stats)
 		}
-		if !r.Coverage.Complete || r.Coverage.Skipped != 0 {
+		if !r.Coverage.Complete || r.Coverage.Unreadable != 0 {
 			t.Fatalf("pruning damaged coverage: %+v", r.Coverage)
 		}
 	}

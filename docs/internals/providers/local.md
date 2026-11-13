@@ -103,7 +103,12 @@ counts. Listings and count reports are unchanged by the move.
   (`tree.Stats.Omitted` maps to `skipped_outputs`, `tree.Stats.Pruned` only to `other_device_dirs`);
   `dirs_read`, `skipped_outputs` and `other_device_dirs` keep their existing meanings. No excluded
   descendant counts or bytes are estimated. Original filter descriptions stay in `coverage.filters`;
-  pruning adds neither skipped-entry errors nor output-directory exclusions.
+  pruning adds neither unreadable entries nor output-directory exclusions.
+- An entry whose stat fails is unreadable (`coverage.unreadable`, exit 3) unless the include and exclude rules
+  leave it out by its key alone (`filter.Spec.KeyExcluded`, which the row filter applies first; a size, time or
+  class filter cannot decide without the stat): a file's key excluded, or a directory's row excluded and its
+  descendants pruned, since an entry that is not statted is not walked; with its kind unknown (`DT_UNKNOWN`), both.
+  `filtered_stat_errors` counts those, which the listing drops as the filters would have.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
   admission prices it at that width, and a longer target stops the run with the typed `schema.ErrValueTooLong`, as
   a key over its cap does; a target within it is written byte for byte.

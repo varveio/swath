@@ -87,7 +87,7 @@ type Scope struct {
 }
 
 // Coverage records how much of the scope the listing reached: whether it
-// completed, why it stopped, how many entries it skipped, and the filters
+// completed, why it stopped, how many entries it could not read, and the filters
 // that limited it (a filesystem listing kept to one filesystem records
 // "one_filesystem"). Exclusions name what the listing left out by design
 // (an output directory inside a listed tree). A listing is not a
@@ -96,7 +96,7 @@ type Scope struct {
 type Coverage struct {
 	Complete          *bool      `json:"complete"`
 	StopReason        *string    `json:"stop_reason"`
-	SkippedEntries    *int64     `json:"skipped_entries"`
+	Unreadable        *int64     `json:"unreadable"`
 	Exclusions        []string   `json:"exclusions"`
 	Filters           []string   `json:"filters"`
 	Snapshot          *bool      `json:"snapshot"`

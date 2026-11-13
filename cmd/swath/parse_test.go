@@ -80,7 +80,8 @@ func TestGNUParsing(t *testing.T) {
 }
 
 // TestUsageErrors: an unknown flag names the nearest one (or the flag
-// another tool's spelling stands for) and the help to read; a value error
+// another tool's spelling stands for, or what swath du takes for a GNU du
+// spelling) and the help to read; a value error
 // names the flag and the accepted form; a non-positive count is refused.
 func TestUsageErrors(t *testing.T) {
 	for _, c := range []struct {
@@ -106,6 +107,12 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--one-filesystem"}, "unknown flag --one-filesystem (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--limiter=false"}, "unknown flag --limiter (did you mean --no-adaptive-limit?)"},
 		{[]string{"s3://b", "--concurrency", "8"}, "unknown flag --concurrency (did you mean --workers?)"},
+		{[]string{"/d", "--max-depth", "2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
+		{[]string{"/d", "--max-depth=2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
+		{[]string{"/d", "-s"}, "unknown flag -s (the total alone is the default: --depth 0)"},
+		{[]string{"/d", "--summarize"}, "unknown flag --summarize (the total alone is the default: --depth 0)"},
+		{[]string{"/d", "--apparent-size"}, "unknown flag --apparent-size (apparent sizes are the default; --allocated totals blocks)"},
+		{[]string{"/d", "-x"}, "unknown flag -x (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},
 		{[]string{"s3://b", "--workers", "0"}, `--workers "0": want a whole number of at least 1`},
@@ -124,6 +131,36 @@ func TestUsageErrors(t *testing.T) {
 		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), c.want) || !errors.As(err, &sh) || sh.see() != "See 'swath du --help'." {
 			t.Errorf("%q: %v, want %q and the help to read", c.args, err, c.want)
 		}
+	}
+}
+
+// TestMalformedSourceIsUsage: a SOURCE URL that does not parse, and a
+// --sort-buffer below the minimum, are usage errors (exit 2) found before
+// anything runs, naming what is wrong; they exited 1 when the run opened
+// the source or validated its configuration.
+func TestMalformedSourceIsUsage(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"s3://"}, `not an s3://bucket[/prefix] URL: "s3://"`},
+		{[]string{"s3:///x"}, `no bucket in "s3:///x"`},
+		{[]string{"gs://"}, `not a gs://bucket[/prefix] URL: "gs://"`},
+		{[]string{"az://acct"}, `no account or container in "az://acct": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+		{[]string{"s3://b", "--sort-buffer", "64K", "-o", "x"}, "--sort-buffer 64KiB: at least 128KiB"},
+	} {
+		for _, cmd := range []command{{}, {count: true, du: true}} {
+			if cmd.du && len(c.args) > 1 {
+				continue // swath du takes no --sort-buffer
+			}
+			_, _, err := parseList(c.args, io.Discard, cmd)
+			if exitOf(err) != exitUsage || err.Error() != c.want {
+				t.Errorf("swath %s %q: %v, want %q, exit 2", cmd.name(), c.args, err, c.want)
+			}
+		}
+	}
+	if _, _, err := parseList([]string{"s3://b", "--sort-buffer", "128K", "-o", "x"}, io.Discard, command{}); err != nil {
+		t.Errorf("--sort-buffer 128K: %v", err)
 	}
 }
 

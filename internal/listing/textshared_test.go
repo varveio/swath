@@ -44,7 +44,7 @@ func TestTextFormattersShareTheSpillingBudget(t *testing.T) {
 			Source:  SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{}}},
 			Output:  OutputConfig{Text: &textout.Config{Path: out, Format: textout.JSONL}},
 			Attempt: &Attempt{ID: "0123456789abcdef0123456789abcdef"},
-			Limits:  Limits{Workers: 16, Encoders: encoders, RowBudget: minRowBudget}})
+			Limits:  Limits{Workers: 16, Encoders: encoders, RowBudget: MinRowBudget}})
 	}
 	dir := t.TempDir()
 	one := filepath.Join(dir, "one.jsonl")

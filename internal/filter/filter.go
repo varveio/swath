@@ -196,6 +196,32 @@ func (s *Spec) Descriptions() []string {
 	return d
 }
 
+// KeyExcluded returns a predicate on keys: true when the include and exclude
+// rules leave out a row with that key, whatever its size, time or storage
+// class (which can only leave out more); nil without such rules. Compile's
+// predicate applies it first.
+func (s *Spec) KeyExcluded() (func(string) bool, error) {
+	if s.Empty() {
+		return nil, nil
+	}
+	if !s.compiled {
+		if err := s.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	incGlob, excGlob, incRe, excRe, base := s.incGlob, s.excGlob, s.incRe, s.excRe, s.Base
+	if incGlob == nil && excGlob == nil && incRe == nil && excRe == nil {
+		return nil, nil
+	}
+	return func(key string) bool {
+		rel, _ := strings.CutPrefix(key, base)
+		if (incGlob != nil || incRe != nil) && !(incGlob != nil && incGlob.MatchString(rel) || incRe != nil && incRe.MatchString(key)) {
+			return true
+		}
+		return excGlob != nil && excGlob.MatchString(rel) || excRe != nil && excRe.MatchString(key)
+	}, nil
+}
+
 // Compile binds the filters to a schema's columns (size and last_modified
 // by name, the storage class as the schema declares it). The predicate is called on the listing workers
 // for every row: it allocates nothing.
@@ -229,15 +255,11 @@ func Compile[P any](s *Spec, sc *schema.Schema[P]) (func(*schema.Row[P]) bool, e
 	case s.classes != nil && class == nil:
 		return nil, fmt.Errorf("--storage-class needs a storage class column; schema %s has none", sc.ID)
 	}
-	incGlob, excGlob, incRe, excRe, base := s.incGlob, s.excGlob, s.incRe, s.excRe, s.Base
+	keyOut, _ := s.KeyExcluded() // s is valid
 	minS, maxS, since, until, classes := s.minSize, s.maxSize, s.since, s.until, s.classes
 	hasSize, hasMtime := s.hasSize, s.hasMtime
 	return func(r *schema.Row[P]) bool {
-		rel, _ := strings.CutPrefix(r.Key, base)
-		if (incGlob != nil || incRe != nil) && !(incGlob != nil && incGlob.MatchString(rel) || incRe != nil && incRe.MatchString(r.Key)) {
-			return false
-		}
-		if excGlob != nil && excGlob.MatchString(rel) || excRe != nil && excRe.MatchString(r.Key) {
+		if keyOut != nil && keyOut(r.Key) {
 			return false
 		}
 		if hasSize {

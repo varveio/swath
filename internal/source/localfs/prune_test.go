@@ -157,7 +157,7 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 	}
 	report := src.(*opened).Report()
 	stats := *report.Stats.(*Stats)
-	if stats.Errors() != 0 || report.Coverage.Skipped != 0 || !report.Coverage.Complete {
+	if stats.Errors() != 0 || report.Coverage.Unreadable != 0 || !report.Coverage.Complete {
 		t.Fatalf("intentional pruning damaged coverage: %+v stats %+v", report.Coverage, stats)
 	}
 	return stats
@@ -520,8 +520,8 @@ func TestPruneUnreadableDescendant(t *testing.T) {
 			}
 			report := control.(*opened).Report()
 			stats := report.Stats.(*Stats)
-			if stats.OpenErrors != 1 || report.Coverage.Skipped != 1 {
-				t.Fatalf("control open errors=%d skipped=%d, want 1 each", stats.OpenErrors, report.Coverage.Skipped)
+			if stats.OpenErrors != 1 || report.Coverage.Unreadable != 1 {
+				t.Fatalf("control open errors=%d unreadable=%d, want 1 each", stats.OpenErrors, report.Coverage.Unreadable)
 			}
 			spec := filter.Spec{Exclude: []string{"dir/**"}}
 			want := pruneReference(t, root, opt, spec)

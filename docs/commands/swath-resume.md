@@ -69,11 +69,14 @@ Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in 
 
 A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
 exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys` sample) is a finalized
-partial sample: nothing continues it, and its resume exits 1 (class `incomplete`), saying so:
+partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
 
 ```text
 swath: sample holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed
 ```
+
+A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
+the count (`outcome.unreadable`).
  Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
 judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
 resumes, and a text file `rows.tsv` is refused as text output.
@@ -255,7 +258,8 @@ swath resume container-inventory --azure-sas-token "$SAS"
 
 The codes of [`swath list`](swath-list.md#exit-status). 2 also when the directory holds no interrupted run, or
 when the environment resolves another route than the run's (another region or endpoint): the directory is
-left as it was. 0 when the dataset is already complete; 1 when it is a finalized partial sample. See [reference/exit-codes.md](../reference/exit-codes.md).
+left as it was. 0 when the dataset is already complete; 3 when it is committed with partial coverage (a finalized
+partial sample, or entries that could not be read). See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment
 

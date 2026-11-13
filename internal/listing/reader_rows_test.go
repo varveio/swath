@@ -105,7 +105,7 @@ func TestReaderDecodesS3Objects(t *testing.T) {
 	}
 	if meta.SchemaID != reader.S3ObjectsV1 || !meta.Swath || meta.PublishedAt == nil || *meta.Source.Kind != "s3" || meta.Source.Container != nil ||
 		*meta.Scope.Kind != "whole" || meta.Scope.Prefix != nil || !*meta.Coverage.Complete || *meta.Coverage.StopReason != "completed" ||
-		*meta.Coverage.SkippedEntries != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 || *meta.Coverage.Snapshot {
+		*meta.Coverage.Unreadable != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 || *meta.Coverage.Snapshot {
 		t.Fatalf("metadata %+v", meta)
 	}
 }

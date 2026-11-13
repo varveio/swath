@@ -121,6 +121,12 @@ func NewWalker[D, S, P any](root Range[D, S], r Reader[D, S, P], opt Options[P])
 // goes through the ordinary row filter, independently of its descendants.
 func (w *Walker[D, S, P]) SetPruneDirectories(prune func(string) bool) { w.prune = prune }
 
+// Excludes reports whether the installed recursive-exclude predicate
+// (SetPruneDirectories) proves every descendant of the directory key
+// excluded: a reader that cannot read the directory leaves out nothing
+// selected then.
+func (w *Walker[D, S, P]) Excludes(key string) bool { return w.prune != nil && w.prune(key) }
+
 // Root is the root directory.
 func (w *Walker[D, S, P]) Root() Range[D, S] { return w.root }
 

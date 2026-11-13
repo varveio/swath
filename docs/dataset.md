@@ -157,7 +157,7 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
       "published_at": "2026-11-08T18:00:00.123456Z",
       "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
       "scope": {"kind": "prefix", "prefix": "logs/"},
-      "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
+      "coverage": {"complete": true, "stop_reason": "completed", "unreadable": 0,
                    "exclusions": [], "filters": [], "snapshot": false,
                    "listing_started_at": "…", "listing_finished_at": "…"},
       "committed_object_bytes": 12345678
@@ -192,7 +192,7 @@ module's. JSON readers must not depend on that order.
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | The listing reached the end of its scope | the application |
 | `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | the application |
-| `coverage.skipped_entries` | Entries the listing could not read | the application |
+| `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
 | `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-file-system`), `no_dirs` (`--no-dirs`) | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative |
@@ -203,7 +203,7 @@ module's. JSON readers must not depend on that order.
 Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
 `coverage.complete` is never read as `false`, and a missing `filters` is never read as empty), and an application
 that needs one decides what its absence means. A listing with `coverage.complete` true, `stop_reason`
-`completed`, no skipped entries and no filters covers its whole scope minus its `exclusions`, which are left out
+`completed`, no unreadable entries and no filters covers its whole scope minus its `exclusions`, which are left out
 by design. swath publishes the complete result of the live listing it performed; it is not a point-in-time
 snapshot of a source that changes during the run.
 

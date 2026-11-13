@@ -222,6 +222,9 @@ is not a directory: regular files, symbolic links, devices) and directories, eac
 `/`. swath walks the tree through the operating system, so a mounted share (NFS, SMB, a FUSE mount) lists as
 any directory does.
 
+A root directory that does not exist or cannot be opened (permissions) stops the run before anything is
+written, with exit 1 and one line on stderr (`swath: DIR: permission denied`).
+
 A SOURCE that is a file is read as the same entry in a listing of its parent: at the `--metadata` tier, and a
 symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never followed. Its key is its name.
 
@@ -233,7 +236,7 @@ symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never f
 | `--one-file-system` | do not walk into a directory on another device (a mount point), as `du -x` and `find -xdev`; its row is kept |
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole tree (`coverage.filters` holds `no_dirs`
-or `one_filesystem`). `--one-file-system`, `--allocated` and `--count-links-once` need each entry's stat:
+or `one_filesystem`). `--one-file-system` and `--allocated` need each entry's stat:
 they are refused with `--metadata names`.
 
 The output may not be the listed tree itself or contain it. A new or empty directory inside the tree is
@@ -245,9 +248,9 @@ beside it: the rows never list the run's own output, on a first run or a repeat.
 Recursive exclude globs can prevent descent into entire subtrees ([filters](filters.md#globs));
 other row filters do not stop directory traversal.
 
-Entries that cannot be read (permissions, entries removed during the walk) are left out: swath names up to
-five of them with their cause on stderr, counts the rest, and still exits 0; the report's
-`outcome.unreadable` is then true.
+Entries that cannot be read (permissions) are left out: swath names up to five of them with their cause on
+stderr and exits 3, its last line counting them; the report's `outcome.unreadable` and the dataset's
+`coverage.unreadable` hold the count ([troubleshooting.md](troubleshooting.md#entries-could-not-be-read)).
 
 A local listing keeps no journal: an interrupted one is run again. On a local tree `--workers` defaults to 4
 per CPU, at most 64.

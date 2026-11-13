@@ -63,7 +63,9 @@ sorting, chunking. The core imports no provider; a reader imports the core.
 
 Recursive excludes are installed before workers start with `Walker.SetPruneDirectories`, using the
 filter package's proof that every descendant is excluded. `Out.Rows` checks that predicate only for
-`Descend`: reader-owned `Omit` and `Prune` take precedence. A match retains the directory row for the
+`Descend`: reader-owned `Omit` and `Prune` take precedence. `Walker.Excludes` exposes the same predicate to
+the reader: localfs drops an entry whose stat failed when the key-only filters leave it out (a directory
+only when its subtree is proved excluded too), counted in `filtered_stat_errors` rather than as unreadable. A match retains the directory row for the
 ordinary row filter, emits no child, and increments `Stats.Excluded`, separately from reader-owned
 `Stats.Pruned`. It applies equally to whole directories and segments. localfs reports these as
 `pruned_dirs` and `other_device_dirs`. Azure HNS also installs the predicate in its registered
