@@ -401,6 +401,16 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
+	// A reader that closed the stream took what it wanted: exit 0, as
+	// documented for a closed stdout, the unreadable entry notwithstanding
+	// (it exited 3).
+	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--report", report}, failingWriter{syscall.EPIPE}); err != nil {
+		t.Fatalf("du into a closed pipe: %v", err)
+	}
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.ExitCode != exitCompleted || o.StopReason != listing.StopDownstreamClosed || o.Unreadable != 1 {
+		t.Fatalf("du into a closed pipe: outcome %+v", o)
+	}
 	// -q keeps the error line, -qq drops it; the exit code stays.
 	for q, want := range map[string]string{"-q": end, "-qq": ""} {
 		stderr.Reset()

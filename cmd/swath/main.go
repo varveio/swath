@@ -142,17 +142,18 @@ func main() {
 // classifyRun is the terminal classification of a run's result: output
 // that does not hold its scope (entries that could not be read, a key
 // limit) exits 3, never 0 (a supervisor must not take it as complete), and
-// the provider names the class of its errors.
+// the provider names the class of its errors. A reader that closed the
+// stream took what it wanted: exit 0, whatever was left out.
 func classifyRun(ctx context.Context, dir string, provider func(error) string, sum listing.Report, err error) (error, outcome) {
 	var pe *textout.ProjectionError
 	switch {
+	case err == nil && sum.Outcome.StopReason == listing.StopDownstreamClosed:
 	case err == nil && sum.Outcome.Unreadable > 0:
 		err = unreadableError(sum.Outcome.Unreadable)
 	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
-	case err == nil && !sum.Outcome.Complete && sum.Outcome.StopReason != listing.StopDownstreamClosed:
-		// Text rows or totals: a reader that closed the stream is not a
-		// partial listing.
+	case err == nil && !sum.Outcome.Complete:
+		// Text rows or totals.
 		err = &incompleteError{"the output is partial: the listing stopped before the end of its scope (" + sum.Outcome.StopReason + ")"}
 	case errors.Is(err, listing.ErrComplete):
 		err = finalizedSample(dir, err)
