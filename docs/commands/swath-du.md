@@ -43,8 +43,15 @@ blocks are in no total, so a tree's total is below `du -sB1`'s by them. `--alloc
 
 A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
 its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
-each such inode, up to `--max-inodes` (1,000,000 by default), past which the run fails (exit 1, cause
-`inode_limit`). `-l`, `--count-links` counts every name, as `du -l`. `--metadata names`, and Windows, read no link
+each such inode (only files with more than one link; about 100 MB a million), up to `--max-inodes` (1,000,000 by
+default). Past it the run fails rather than count some names twice: exit 1, cause `inode_limit`, no totals, and
+its last line says what to do:
+
+```text
+swath: the tree has more than 1,000,000 files with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)
+```
+
+`-l`, `--count-links` counts every name, as `du -l`. `--metadata names`, and Windows, read no link
 counts, so every name counts there.
 
 The [filters](../filters.md) apply before counting, to every row: on a local tree directories too, so

@@ -282,6 +282,25 @@ func TestDuMatchesLstat(t *testing.T) {
 	}
 }
 
+// TestDuInodeLimit: past --max-inodes hard-linked files (counted once by
+// default) swath du fails, exit 1, cause inode_limit, with no totals, and
+// its error line says what to do: -l, or a larger --max-inodes and what it
+// costs.
+func TestDuInodeLimit(t *testing.T) {
+	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	root := duTree(t)
+	var out bytes.Buffer
+	code := conclude(runDu(context.Background(), []string{root, "--max-inodes", "1", "--format=tsv", "--no-stats"}, &out))
+	const want = "swath: the tree has more than 1 file with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)\n"
+	if code != exitFatal || out.Len() != 0 || !strings.HasSuffix(stderr.String(), want) {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), stderr.String())
+	}
+	if err := runDu(context.Background(), []string{root, "--max-inodes", "1", "-l", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatalf("-l: %v", err)
+	}
+}
+
 // TestDuLocalRefusals: du's local flags need each entry's stat, and an
 // object store refuses them as it refuses the local provider's own flags;
 // --one-file-system is the local provider's.

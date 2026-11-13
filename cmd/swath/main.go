@@ -1133,7 +1133,9 @@ func explain(err error) error {
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
 	case errors.As(err, &le) && le.Inodes:
-		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every name with --count-links)", err)
+		// Counting each hard-linked file once is the default: its cap is
+		// one a user meets without asking for it.
+		return &restated{err, fmt.Sprintf("the tree has more than %s with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)", plural(le.Max, "1 file", count(int64(le.Max))+" files"))}
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	case errors.As(err, &ce) && ce.CredentialRefused():
