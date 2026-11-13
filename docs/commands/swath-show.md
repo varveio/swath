@@ -42,7 +42,9 @@ identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part
 1 part committed, 1000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
 ```
 
-The command is recorded in its canonical spelling, each option `--name=value`, then SOURCE.
+The command is recorded in its canonical spelling, each option `--name=value`, then SOURCE. It is printed as a
+POSIX shell line: an argument the shell would split or expand (a path with a space) is single-quoted, so the
+line can be pasted as it is.
 
 `swath show` reads no rows; to query a dataset, read the parts its manifest lists
 ([getting-started.md](../getting-started.md#6-query-it-with-duckdb)).

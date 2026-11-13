@@ -88,6 +88,37 @@ func TestShowDataset(t *testing.T) {
 	}
 }
 
+// TestPrintedCommandsQuoted: a command swath prints for the user to run
+// (the resume advice after a stop, the command an interrupted run
+// recorded) quotes an argument the shell would split or expand, so a
+// path with a space can be pasted as printed.
+func TestPrintedCommandsQuoted(t *testing.T) {
+	for in, want := range map[string]string{"/data/ds": "/data/ds", "--output=/data/ds": "--output=/data/ds", "s3://b/p": "s3://b/p",
+		"/data/my ds": "'/data/my ds'", "": "''", "it's": `'it'\''s'`, "a*": "'a*'", "~/ds": "'~/ds'", "$HOME": "'$HOME'"} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "my inventory")
+	r := &listing.Report{Outcome: listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
+	r.Invocation.Out = dir
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume '"+dir+"'" {
+		t.Fatalf("disposition %q", l[0])
+	}
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, []string{"list", "--output=" + dir, "s3://b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	var shown bytes.Buffer
+	if err := show([]string{dir}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if want := "\ncommand: swath list '--output=" + dir + "' s3://b\n"; !strings.Contains(shown.String(), want) {
+		t.Fatalf("show:\n%s\nwant %q", shown.String(), want)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	var b bytes.Buffer
 	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath ") {

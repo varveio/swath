@@ -155,7 +155,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			if env := secretEnv[name]; env != "" {
 				hint = " or set " + env
 			}
-			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, dir, name, hint)})
+			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, shellQuote(dir), name, hint)})
 		}
 	}
 	at := "--output=" + dir
@@ -307,7 +307,7 @@ func show(args []string, stdout io.Writer) error {
 		st, err := journal.Read(dir)
 		switch {
 		case errors.Is(err, journal.ErrNoJournal) && dataset.Committed(dir):
-			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, dir)
+			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, shellQuote(dir))
 		case errors.Is(err, journal.ErrNoJournal):
 			return fmt.Errorf("%s holds no journal: no interrupted run", dir)
 		case err != nil:
@@ -360,7 +360,7 @@ func show(args []string, stdout io.Writer) error {
 	}
 	h := st.Header
 	fmt.Fprintf(stdout, "interrupted run in %s (journal version %d, started %s)\n", dir, h.Version, h.Created.Format("2006-01-02T15:04:05Z"))
-	fmt.Fprintf(stdout, "command: swath %s\n", strings.Join(redactArgv(h.Argv), " "))
+	fmt.Fprintf(stdout, "command: swath %s\n", shellLine(redactArgv(h.Argv)))
 	id := h.Identity.Redacted()
 	fmt.Fprintf(stdout, "identity: provider %s, schema %s, writer %s, part size %d", id.Provider, id.SchemaID, id.Writer, id.PartSize)
 	for _, f := range id.Source {
@@ -387,6 +387,27 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
+}
+
+// shellLine is args as one POSIX shell command line, each argument quoted
+// as shellQuote does: a printed command can be pasted as it is.
+func shellLine(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = shellQuote(a)
+	}
+	return strings.Join(q, " ")
+}
+
+// shellQuote is s as one POSIX shell word: as it is when it holds only
+// characters no shell treats specially, otherwise single-quoted (a path
+// with a space, an empty argument).
+func shellQuote(s string) string {
+	const plain = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,+@%"
+	if s != "" && strings.Trim(s, plain) == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // isFile reports whether path is an existing non-directory.
