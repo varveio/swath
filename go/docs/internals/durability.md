@@ -304,7 +304,9 @@ person deletes them ([production.md](../production.md#writing-to-a-bucket)).
 and `finalized`, besides the listing's points, and requires the resume to commit the uninterrupted run's parts
 byte for byte with no orphan left and the run report in place; `TestRemoteRecoveryKilled` kills the resume in
 its verification and after it; `TestRemoteMultiChunk` drops a connection in a middle chunk of a multi-chunk
-upload and kills a run inside a later chunk. A failed upload, a cancellation, a lost manifest answer, a delayed
+upload and kills a run inside a later chunk; `TestRemoteResumeMovedWorkDir` resumes a run with durable spill
+from a copy of its work directory at another path, the original removed, and requires the certificates
+replayed and nothing created at the old path. A failed upload, a cancellation, a lost manifest answer, a delayed
 creation, a race of two work directories with different rows, retained objects replaced, deleted or altered,
 links in the work directory, a damaged header and a drifted endpoint have their own tests
 (`internal/listing/remote_test.go`, `remote_faults_test.go`). The tests of `remote_test.go`, and the lost-race
