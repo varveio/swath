@@ -49,6 +49,7 @@ func TestTreeDatasetTotals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer d.Close() // before TempDir's cleanup: Windows will not remove an open file
 	if id := string(d.Metadata().SchemaID); id != Schema.Info.ID {
 		t.Fatalf("schema %s, want %s", id, Schema.Info.ID)
 	}
