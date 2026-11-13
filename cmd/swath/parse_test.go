@@ -127,6 +127,36 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
+// TestMalformedSourceIsUsage: a SOURCE URL that does not parse, and a
+// --sort-buffer below the minimum, are usage errors (exit 2) found before
+// anything runs, naming what is wrong; they exited 1 when the run opened
+// the source or validated its configuration.
+func TestMalformedSourceIsUsage(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"s3://"}, `not an s3://bucket[/prefix] URL: "s3://"`},
+		{[]string{"s3:///x"}, `no bucket in "s3:///x"`},
+		{[]string{"gs://"}, `not a gs://bucket[/prefix] URL: "gs://"`},
+		{[]string{"az://acct"}, `no account or container in "az://acct": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+		{[]string{"s3://b", "--sort-buffer", "64K", "-o", "x"}, "--sort-buffer 64KiB: at least 128KiB"},
+	} {
+		for _, cmd := range []command{{}, {count: true, du: true}} {
+			if cmd.du && len(c.args) > 1 {
+				continue // swath du takes no --sort-buffer
+			}
+			_, _, err := parseList(c.args, io.Discard, cmd)
+			if exitOf(err) != exitUsage || err.Error() != c.want {
+				t.Errorf("swath %s %q: %v, want %q, exit 2", cmd.name(), c.args, err, c.want)
+			}
+		}
+	}
+	if _, _, err := parseList([]string{"s3://b", "--sort-buffer", "128K", "-o", "x"}, io.Discard, command{}); err != nil {
+		t.Errorf("--sort-buffer 128K: %v", err)
+	}
+}
+
 // TestDispatch: ls is list, swath help COMMAND is COMMAND --help, the
 // global flags come before the command word too, and an unknown command
 // gets the nearest one, or swath list for a source given without one.

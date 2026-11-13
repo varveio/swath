@@ -160,7 +160,7 @@ func TestCancellationLeavesNothing(t *testing.T) {
 	})
 	defer restore()
 	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out},
-		Limits: Limits{PartSize: 1, Workers: 1, RowBudget: minRowBudget}})
+		Limits: Limits{PartSize: 1, Workers: 1, RowBudget: MinRowBudget}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -249,7 +249,7 @@ func TestResourceAdmission(t *testing.T) {
 		{512 << 20, 4, 0, 16},                     // 512 MiB / 31.5 MiB
 		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
 		{512 << 20, 64, 100, 1},                   // the floor
-		{minRowBudget, 4, 0, 1},                   // the floor
+		{MinRowBudget, 4, 0, 1},                   // the floor
 	} {
 		if got := admitEncoders(tc.budget, s3Encoder, tc.workers, tc.fds); got != tc.want {
 			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)

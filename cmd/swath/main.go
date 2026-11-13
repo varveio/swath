@@ -793,7 +793,12 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 			return o, "", usageError{err}
 		}
 	}
-	o.filter.Base, _ = keyOrigin(root) // a root it cannot read is refused when the run opens it
+	if o.filter.Base, err = keyOrigin(root); err != nil {
+		return o, "", usageError{err} // a malformed URL: s3://, az://ACCOUNT
+	}
+	if f.Changed("sort-buffer") && o.rowBudget < listing.MinRowBudget {
+		return o, "", usageError{fmt.Errorf("--sort-buffer %s: at least %s", sizeText(int64(o.rowBudget)), sizeText(listing.MinRowBudget))}
+	}
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
 		return o, "", usageError{err}

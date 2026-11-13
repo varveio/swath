@@ -32,10 +32,10 @@ func TestRowBudgetFor(t *testing.T) {
 		{"cgroup above physical", 0, memoryLimits{physical: 2 * gib, cgroup: 8 * gib}, 128 * mib, BudgetShare, 2 * gib, MemoryPhysical},
 		{"GOMEMLIMIT least", 0, memoryLimits{physical: 64 * gib, cgroup: 8 * gib, goLimit: 512 * mib, goLimitSet: true}, 32 * mib, BudgetShare, 512 * mib, MemoryGoLimit},
 		{"GOMEMLIMIT above physical", 0, memoryLimits{physical: 2 * gib, goLimit: 64 * gib, goLimitSet: true}, 128 * mib, BudgetShare, 2 * gib, MemoryPhysical},
-		{"GOMEMLIMIT=0 is a limit, the tightest", 0, memoryLimits{physical: 32 * gib, goLimit: 0, goLimitSet: true}, minRowBudget, BudgetMinimum, 0, MemoryGoLimit},
+		{"GOMEMLIMIT=0 is a limit, the tightest", 0, memoryLimits{physical: 32 * gib, goLimit: 0, goLimitSet: true}, MinRowBudget, BudgetMinimum, 0, MemoryGoLimit},
 		{"GOMEMLIMIT alone", 0, memoryLimits{goLimit: 4 * gib, goLimitSet: true}, 256 * mib, BudgetShare, 4 * gib, MemoryGoLimit},
 		{"cgroup alone (physical unread)", 0, memoryLimits{cgroup: 4 * gib}, 256 * mib, BudgetShare, 4 * gib, MemoryCgroup},
-		{"tiny cgroup takes the minimum", 0, memoryLimits{physical: 64 * gib, cgroup: 1 * mib}, minRowBudget, BudgetMinimum, mib, MemoryCgroup},
+		{"tiny cgroup takes the minimum", 0, memoryLimits{physical: 64 * gib, cgroup: 1 * mib}, MinRowBudget, BudgetMinimum, mib, MemoryCgroup},
 		{"explicit wins, limits still recorded", 300 * mib, memoryLimits{physical: 64 * gib}, 300 * mib, BudgetExplicit, 64 * gib, MemoryPhysical},
 		{"explicit with memory unknown", 300 * mib, memoryLimits{}, 300 * mib, BudgetExplicit, 0, ""},
 		{"saturated physical", 0, memoryLimits{physical: math.MaxInt64}, gib, BudgetCap, math.MaxInt64, MemoryPhysical},
@@ -85,7 +85,7 @@ func TestResolveRowBudget(t *testing.T) {
 	if l := c.Limits; l.RowBudget != 2*mib || l.rowBudgetWhy.Reason != BudgetExplicit {
 		t.Fatalf("explicit: %d %+v", l.RowBudget, l.rowBudgetWhy)
 	}
-	c = Config{Source: SourceConfig{URI: "/tmp"}, Limits: Limits{RowBudget: minRowBudget - 1}}
+	c = Config{Source: SourceConfig{URI: "/tmp"}, Limits: Limits{RowBudget: MinRowBudget - 1}}
 	if err := c.resolve(); err == nil {
 		t.Fatal("an explicit budget below the minimum was accepted")
 	}
@@ -99,7 +99,7 @@ func TestReadMemoryLimitsHost(t *testing.T) {
 		t.Skip("physical memory is not read on this platform")
 	}
 	b, why := rowBudgetFor(0, m)
-	if why.Reason == BudgetUnknown || b < minRowBudget || b > maxAutoRowBudget {
+	if why.Reason == BudgetUnknown || b < MinRowBudget || b > maxAutoRowBudget {
 		t.Fatalf("host %+v: budget %d %+v", m, b, why)
 	}
 }

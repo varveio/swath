@@ -1260,7 +1260,7 @@ func tearAt(b []byte, k string) (cut, lo, hi int) {
 func TestDurableResumeSmallerBudget(t *testing.T) {
 	datasettest.RequireJournal(t)
 	smaller := func(cfg Config) Config {
-		cfg.Limits.RowBudget, cfg.Limits.Workers, cfg.Limits.Spill.Max = minRowBudget, 4, 16<<20
+		cfg.Limits.RowBudget, cfg.Limits.Workers, cfg.Limits.Spill.Max = MinRowBudget, 4, 16<<20
 		return cfg
 	}
 	handles := func(t *testing.T, sum Report) {
