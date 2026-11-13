@@ -48,10 +48,10 @@ Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azur
 prefix, endpoint and S3 region are fixed. A lost work directory loses the
 resume: the parts already uploaded are not reused. A new run at the same prefix is not refused (only a prefix
 holding a `manifest.json` is), but nothing removes the lost run's parts, so start it at a new prefix
-([production.md](../production.md#on-a-preemptible-or-spot-machine)).
+([Running swath in production](../production.md#on-a-preemptible-or-spot-machine)).
 
 Rows listed but not yet in a published part are listed again, except those a validated spill file still
-holds ([running.md](../running.md#stopping-and-resuming)).
+holds ([Running swath](../running.md#stopping-and-resuming)).
 
 The source, the route (endpoint, addressing, region), the filters, the schema and the part size are fixed for
 the run. Only the options below may be given again; the last value wins. A switch the run was started with is
@@ -259,11 +259,11 @@ swath resume container-inventory --azure-sas-token "$SAS"
 The codes of [`swath list`](swath-list.md#exit-status). 2 also when the directory holds no interrupted run, or
 when the environment resolves another route than the run's (another region or endpoint): the directory is
 left as it was. 0 when the dataset is already complete; 3 when it is committed with partial coverage (a finalized
-partial sample, or entries that could not be read). See [reference/exit-codes.md](../reference/exit-codes.md).
+partial sample, or entries that could not be read). See [Exit codes](../reference/exit-codes.md).
 
 ## Environment
 
-The provider's credential variables ([sources.md](../sources.md)); a resume reads them again.
+The provider's credential variables ([Sources](../sources.md)); a resume reads them again.
 
 ## Files
 
@@ -272,5 +272,5 @@ The provider's credential variables ([sources.md](../sources.md)); a resume read
 
 ## See also
 
-[swath-list](swath-list.md), [swath-show](swath-show.md), [running.md](../running.md#stopping-and-resuming),
-[reference/exit-codes.md](../reference/exit-codes.md)
+[swath list](swath-list.md), [swath show](swath-show.md), [Running swath](../running.md#stopping-and-resuming),
+[Exit codes](../reference/exit-codes.md)

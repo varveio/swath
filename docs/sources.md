@@ -10,7 +10,7 @@ swath list /data                                     # a local or mounted direct
 
 swath reads listings only: it needs permission to list, never to read or write objects. Each object-store
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS
-([running.md](running.md#cost)).
+([Running swath](running.md#cost)).
 
 ## Credentials on every object store
 
@@ -239,13 +239,13 @@ other row filters do not stop directory traversal.
 
 Entries that cannot be read (permissions) are left out: swath names up to five of them with their cause on
 stderr and exits 3, its last line counting them; the report's `outcome.unreadable` and the dataset's
-`coverage.unreadable` hold the count ([troubleshooting.md](troubleshooting.md#entries-could-not-be-read)).
+`coverage.unreadable` hold the count ([Troubleshooting](troubleshooting.md#entries-could-not-be-read)).
 
 A local listing keeps no journal: an interrupted one is run again. On a local tree `--workers` defaults to 4
 per CPU, at most 64.
 
 Names that are not valid UTF-8 are listed with their exact bytes: escaped in TSV and the table, as `key_base64`
-in JSONL ([output.md](output.md#text-rows)).
+in JSONL ([Output](output.md#text-rows)).
 
 ## Object-store requests
 
@@ -260,7 +260,7 @@ S3, GCS and Azure Blob share the request options:
 A failed request that can be retried (a throttle, a timeout, a 5xx, a cut connection) is tried up to nine
 times with exponential backoff (100 ms, at most 5 s apart); a listing page that still fails goes back to the
 queue and is tried again later. `--stall-timeout` and `--max-duration` bound a run that cannot make progress.
-Throttling and how to tune for it: [running.md](running.md#throttling).
+Throttling and how to tune for it: [Running swath](running.md#throttling).
 
 More on each provider, for contributors: [S3](internals/providers/s3.md), [GCS](internals/providers/gcs.md),
 [Azure Blob](internals/providers/azblob.md), [local trees](internals/providers/local.md).

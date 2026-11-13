@@ -18,7 +18,7 @@ swath du s3://bucket -d 1                    # totals per prefix
 | text rows on stdout | you read the rows, or pipe them to `head`, `grep`, `awk`, `jq` |
 | a `.tsv` or `.jsonl` file | another program reads the rows once, or you keep a small listing |
 | a dataset (`-o DIR`) | you query the listing with SQL or DataFrames, keep it, compare it with a later one, or list a large source: only a dataset run can be resumed, and it says whether it is complete |
-| a dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS, S3 or Azure Blob Storage: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [production.md](production.md#writing-to-a-bucket)) |
+| a dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS, S3 or Azure Blob Storage: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [Running swath in production](production.md#writing-to-a-bucket)) |
 | `swath du` | you want sizes and counts, not rows |
 
 A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `manifest.json` that commits them.
@@ -26,7 +26,7 @@ A bare local destination or bucket prefix whose final path element ends in `.par
 refused. Use a name without that suffix, or add a trailing separator to explicitly select a directory,
 such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-style directory).
 The same name rule applies to `swath resume DIR`.
-Querying one is shown in [running.md](running.md#reading-the-output).
+Querying one is shown in [Running swath](running.md#reading-the-output).
 
 A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,
 compare or schedule. A dataset is not a direct `rclone --files-from` input: a handoff must generate and test a
@@ -44,7 +44,7 @@ with everything the run writes beside it: the file itself (a previous run's, on 
 
 TSV and JSONL rows have the dataset's columns under the dataset's names, by default `key`, then `size`,
 `last_modified` and the rest of the source's schema, in the schema's order
-([dataset.md](dataset.md#schema-registry)). Columns after `last_modified` differ between sources: read them by
+([The swath dataset](dataset.md#schema-registry)). Columns after `last_modified` differ between sources: read them by
 name, not by position. `--columns size,key` prints only those columns, in that order. The table shows a few
 columns for people, with `key` last.
 
@@ -189,7 +189,7 @@ Read the totals with care:
 
 - **The bytes are object sizes as listed**: not storage consumed, compression, replicas or a bill. A local
   directory's own size is in no total.
-- **Filters apply first**, to every row, directories included ([filters.md](filters.md)).
+- **Filters apply first**, to every row, directories included ([Filters](filters.md)).
 
 The table rounds sizes to three significant digits in binary units, calls a local tree's objects `files` and
 its prefixes `path`, and shows times in local time:
