@@ -11,7 +11,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source"
@@ -369,5 +371,61 @@ func TestEmptyChainFrontier(t *testing.T) {
 	st := p.Stats()
 	if want := int64(EmptyChainLive + 1 + 10 + 1); advanced != want || chained != extra || st.Get(cEmptyChainPages) != extra {
 		t.Fatalf("frontier %d, empty_chain_pages %d; want %d, %d", advanced, chained, want, extra)
+	}
+}
+
+// TestCancelDuringRequeueBackoff: a stop (a signal, --max-duration, the
+// stall timeout) that lands while a worker waits out the backoff before a
+// requeued page is asked again ends the wait at once with the stop's
+// cause, in a range and in the sequential chain. The backoff is an hour,
+// so a wait that ignored the context (a plain sleep) would turn a graceful
+// stop into the command's forced exit; the test's own deadline catches it.
+func TestCancelDuringRequeueBackoff(t *testing.T) {
+	defer SetRequeueBackoff(time.Hour, time.Hour)()
+	exhausted := errors.New("503 SlowDown: the client's retries exhausted")
+	for _, mode := range []string{"range", "sequential"} {
+		t.Run(mode, func(t *testing.T) {
+			var fetches atomic.Int64
+			fetch := func(context.Context, *Query) (*Page[Object], error) {
+				fetches.Add(1)
+				return nil, exhausted
+			}
+			p, err := New(Options{Workers: 1, Sequential: mode == "sequential"},
+				Description[Object]{Target: "test", Listing: Listing, Requeue: func(err error) bool { return errors.Is(err, exhausted) }}, fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Range{open: true, id: 1}
+			if mode == "sequential" {
+				r = p.Root()
+			}
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			done := make(chan error, 1)
+			go func() { done <- p.Expand(ctx, r, &direct{&collect{}}) }()
+			// requeues is counted after the decision to wait and before the
+			// wait: once it is, the stop below lands in the backoff.
+			for p.Set().Load(cRequeues) == 0 {
+				select {
+				case err := <-done:
+					t.Fatalf("Expand returned before requeueing: %v", err)
+				default:
+					runtime.Gosched()
+				}
+			}
+			stop := errors.New("terminated")
+			cancel(stop)
+			select {
+			case err := <-done:
+				if !errors.Is(err, stop) {
+					t.Fatalf("Expand: %v, want the stop's cause", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("a stop during the requeue backoff did not end the wait")
+			}
+			if n := fetches.Load(); n != 1 {
+				t.Fatalf("%d requests, want 1: the page was asked again after the stop", n)
+			}
+		})
 	}
 }

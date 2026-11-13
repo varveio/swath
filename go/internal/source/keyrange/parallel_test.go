@@ -108,7 +108,22 @@ func checkTiling(t *testing.T, what string, leaves []span) {
 	t.Fatalf("%s: no open leaf: the frontier (.., ⊤] was not covered", what)
 }
 
-// T2: pivot properties.
+// addsOnlySafe: past the longest scalar prefix m shares with one of the
+// keys it was synthesized from, every scalar of m is in the pivot alphabet
+// (I12: a pivot copies a key's prefix and adds only safe scalars).
+func addsOnlySafe(m string, from ...string) bool {
+	cm, n := scalars(m), 0
+	for _, k := range from {
+		n = max(n, commonPrefix(cm, scalars(k)))
+	}
+	return Safe(encode(cm[n:]))
+}
+
+// T2: pivot properties: strictly between the keys (above the cursor on
+// the open frontier), valid UTF-8, at most 1,024 bytes, and every scalar
+// synthesized safe, with inputs that straddle C0, DEL, C1, '%', the
+// noncharacters and the surrogates (FuzzPropose checks the same through
+// propose, but plain go test runs only its seeds).
 func TestT2Pivots(t *testing.T) {
 	check := func(a, b string) {
 		t.Helper()
@@ -116,7 +131,7 @@ func TestT2Pivots(t *testing.T) {
 		if !ok {
 			return
 		}
-		if !(a < m && m < b) || !utf8.ValidString(m) || len(m) > maxKeyLen {
+		if !(a < m && m < b) || !utf8.ValidString(m) || len(m) > maxKeyLen || !addsOnlySafe(m, a, b) {
 			t.Fatalf("betweenFrom(%q, %q) = %q", a, b, m)
 		}
 	}
@@ -142,8 +157,15 @@ func TestT2Pivots(t *testing.T) {
 		{"", "b"}, {"a", "ab"}, {"a", "a b"}, {"a", "b"}, {"a\x1f", "a!"}, {"�", "\U00010000"}, {"퟿", ""},
 		{"\U0001F600", "\U0001F610"}, {strings.Repeat("x", 1023) + "a", strings.Repeat("x", 1023) + "c"},
 		{"A" + strings.Repeat("\x00", 1023), "B"},
+		// The midpoint of the first difference falls in C1 (U+008F), or
+		// beside DEL, the noncharacters and the surrogates: the scan
+		// outward must step over them.
+		{"a~", "a¡"}, {"ca~", "caé"}, {"a~", "a\u0080x"}, {"aﷀ", "aﷵ"}, {"a�", "a\U00010000"}, {"a퟾", "a"},
 	} {
 		check(c[0], c[1])
+	}
+	if m, _, _ := betweenFrom("a~", "a¡"); m != "a " {
+		t.Fatalf("betweenFrom across C1 = %q, want the first safe scalar above it", m)
 	}
 	for _, nilCase := range [][2]string{{"a", "a\x00"}, {"a", "a\x01"}} {
 		if m, _, ok := betweenFrom(nilCase[0], nilCase[1]); ok {
@@ -156,9 +178,20 @@ func TestT2Pivots(t *testing.T) {
 	for range 5000 {
 		lo := string(alphabet[rng.Intn(len(alphabet))]) + "x"
 		c := lo + string(rune('a'+rng.Intn(26)))
-		if m, ok := forwardReflect(lo, c); ok && (m <= c || !utf8.ValidString(m) || len(m) > maxKeyLen) {
+		if m, ok := forwardReflect(lo, c); ok && (m <= c || !utf8.ValidString(m) || len(m) > maxKeyLen || !addsOnlySafe(m, c)) {
 			t.Fatalf("forwardReflect(%q, %q) = %q", lo, c, m)
 		}
+	}
+	// From ⊥ the last scalar is reflected: '?' lands on DEL, scalars of
+	// C1 and of the noncharacters on unsafe ones; each is snapped up.
+	for _, r := range append(slices.Clone(alphabet), '?', '@', 0x50, 0xFDC0, 0xFFF0, 0x7FFF) {
+		c := "x" + string(r)
+		if m, ok := forwardReflect("", c); ok && (m <= c || !utf8.ValidString(m) || !addsOnlySafe(m, c)) {
+			t.Fatalf("forwardReflect(\"\", %q) = %q", c, m)
+		}
+	}
+	if m, _ := forwardReflect("", "x?"); m != "x " {
+		t.Fatalf("forwardReflect(\"\", \"x?\") = %q: DEL must snap up to the first safe scalar", m)
 	}
 	if u, ok := prefixCeil("ab\xff\xff"); !ok || u != "ac" {
 		t.Fatalf("prefixCeil = %q %v", u, ok)

@@ -13,7 +13,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,6 +116,84 @@ func TestClosedReaderExitsZero(t *testing.T) {
 	readJSON(t, report, &rep)
 	if rep.Outcome.Status != "stopped" || rep.Outcome.ExitCode != 0 || rep.Outcome.Complete || rep.Outcome.StopReason != "downstream_closed" || rep.Output.Text.Rows >= int64(len(keys)) {
 		t.Fatalf("report %+v", rep)
+	}
+}
+
+// TestPipedToHeadExitsZero: swath list ... | head -n 3 as a real process,
+// its stdout (fd 1) a pipe whose reader closes after three lines. The next
+// write fails with EPIPE, which the Go runtime turns into a fatal SIGPIPE
+// on fd 1 unless the process ignores the signal (main): the process exits
+// 0 with no stack trace, and its report says the reader closed the stream.
+// TestClosedReaderExitsZero runs the command in process, on a pipe that is
+// not fd 1, so it never meets the runtime's rule.
+func TestPipedToHeadExitsZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGPIPE is a Unix signal: a closed pipe on Windows is TestClosedReaderExitsZero's")
+	}
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	src, keys := textBucket(t, 20000) // about 2 MB of rows, past any pipe buffer
+	report := filepath.Join(t.TempDir(), "report.json")
+	cmd := exec.Command(bin, append(append([]string{"list"}, src...), "--report", report, "--workers", "2")...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(stdout)
+	for range 3 {
+		if _, err := br.ReadString('\n'); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stdout.Close() // head exits
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("swath list | head: %v (a SIGPIPE death is signal: broken pipe)\n%s", err, stderr.String())
+	}
+	if s := stderr.String(); strings.Contains(s, "goroutine ") || strings.Contains(s, "panic") {
+		t.Fatalf("stderr holds a stack trace:\n%s", s)
+	}
+	var rep struct {
+		Outcome struct {
+			Status     string
+			StopReason string `json:"stop_reason"`
+			ExitCode   int    `json:"exit_code"`
+		}
+		Output struct{ Text struct{ Rows int64 } }
+	}
+	readJSON(t, report, &rep)
+	if rep.Outcome.Status != "stopped" || rep.Outcome.ExitCode != 0 || rep.Outcome.StopReason != "downstream_closed" || rep.Output.Text.Rows >= int64(len(keys)) {
+		t.Fatalf("report %+v", rep)
+	}
+}
+
+// TestPercentRootIsLiteral: a '%' in an s3:// or gs:// root is a byte of
+// the prefix, never an escape: s3://bkt/web/https%3A%2F/ lists the keys
+// that begin with exactly those bytes, not the ones under the decoded
+// web/https:/ nor under a twice-encoded form.
+func TestPercentRootIsLiteral(t *testing.T) {
+	keys := []string{"web/https%3A%2F/a", "web/https%3A%2F/b%20c", "web/https%3A%2Fx", "web/https:/a", "web/https://b", "web/https%253A%252F/a"}
+	slices.Sort(keys)
+	const want = "key\nweb/https%3A%2F/a\nweb/https%3A%2F/b%20c\n"
+	for _, src := range [][]string{
+		{"s3://bkt/web/https%3A%2F/", "--anonymous", "--endpoint-url", s3test.Bucket(t, keys)},
+		{"gs://bkt/web/https%3A%2F/", "--anonymous", "--endpoint-url", gcstest.Bucket(t, keys, 0)},
+	} {
+		for _, workers := range []string{"1", "4"} {
+			var out bytes.Buffer
+			if err := run(context.Background(), append(slices.Clone(src), "--workers", workers, "--columns", "key"), &out, false); err != nil || out.String() != want {
+				t.Errorf("%s, %s workers: %v\n%s", src[0], workers, err, out.String())
+			}
+		}
 	}
 }
 

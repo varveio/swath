@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -353,6 +354,64 @@ func TestAlteredPartIsRefused(t *testing.T) {
 	}
 	if len(settled) != 1 || !errors.Is(settled[0], ErrPartAltered) {
 		t.Fatalf("the refused recovery was settled %v", settled)
+	}
+}
+
+// TestMissingPartIsRefused: a part the journal records that is gone from
+// data/ (a run killed while --overwrite removed the old data, a partial
+// copy of the directory) stops the resume before it deletes anything: an
+// earlier part or the last recorded one, which has no claimed copy to
+// publish from either.
+func TestMissingPartIsRefused(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	tree := func(out string) map[string]string {
+		m := map[string]string{}
+		err := filepath.WalkDir(out, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(p)
+			m[p] = string(b)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	for _, missing := range []int{0, 2} {
+		out := filepath.Join(t.TempDir(), "ds")
+		var n atomic.Int64
+		restore := faults.Set(func(p string) error {
+			if p == "renamed" && n.Add(1) == 3 { // parts 0, 1 and 2 recorded and published
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), crashConfig(url, out, false))
+		restore()
+		if !errors.Is(err, faults.ErrCrash) {
+			t.Fatal(err)
+		}
+		if st, err := journal.Read(out); err != nil || len(st.Records) != 3 {
+			t.Fatalf("journal: %v", err)
+		}
+		if err := os.Remove(filepath.Join(out, dataset.DataDir, dataset.PartName(missing))); err != nil {
+			t.Fatal(err)
+		}
+		// An entry recovery would remove as not the run's, had it gone on.
+		if err := os.WriteFile(filepath.Join(out, dataset.DataDir, "stray"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := tree(out)
+		_, err = Run(context.Background(), crashConfig(url, out, true))
+		if want := fmt.Sprintf("part %d is journaled but missing", missing); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("part %d missing: resume %v, want %q", missing, err, want)
+		}
+		if after := tree(out); !maps.Equal(before, after) {
+			t.Fatalf("part %d missing: the refused resume changed the output directory", missing)
+		}
 	}
 }
 

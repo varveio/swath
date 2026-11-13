@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -25,7 +26,9 @@ import (
 // fails with that error and publishes no manifest, the parts it published
 // stay as they were, and a resume completes the dataset of an
 // uninterrupted run byte for byte (before, faults were injected only
-// before a write: TestENOSPCOnJournalResumes; durability review).
+// before a write: TestENOSPCOnJournalResumes; durability review). The
+// same faults on the run report (run.json), written after the commit,
+// leave the run committed with a warning, and a resume finds it complete.
 func TestDiskFaultMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url := crashBucket(t)
@@ -82,5 +85,51 @@ func TestDiskFaultMatrix(t *testing.T) {
 				t.Fatalf("%s: no part was published before the fault", name)
 			}
 		}
+	}
+	// The run report follows the commit: its write failing (ENOSPC on the
+	// temporary file, EIO on its fsync) after manifest.json is installed
+	// is a warning, never the run's error. The dataset is committed and
+	// whole, no run.json is installed, and a resume finds the run complete.
+	for _, op := range []string{"write", "sync"} {
+		name := "run report " + op
+		want := map[string]error{"write": syscall.ENOSPC, "sync": syscall.EIO}[op]
+		out := filepath.Join(t.TempDir(), "ds")
+		var hit atomic.Int64
+		restore := faults.SetIO(func(o, file string, b []byte) (int, error) {
+			if o == op && dataset.TempOf(dataset.ReportName, filepath.Base(file)) && hit.Add(1) == 1 {
+				if _, err := os.Stat(filepath.Join(out, dataset.ManifestName)); err != nil {
+					t.Errorf("%s: the run report is written before the manifest: %v", name, err)
+				}
+				return len(b) / 2, want
+			}
+			return 0, nil
+		})
+		var mu sync.Mutex
+		var warned []string
+		cfg := crashConfig(url, out, false)
+		cfg.Warn = func(s string) {
+			mu.Lock()
+			defer mu.Unlock()
+			warned = append(warned, s)
+		}
+		sum, err := Run(context.Background(), cfg)
+		restore()
+		if hit.Load() != 1 || err != nil {
+			t.Fatalf("%s: injected %d times, run error %v", name, hit.Load(), err)
+		}
+		if sum.Outcome.Status != StatusCommitted {
+			t.Fatalf("%s: outcome %+v", name, sum.Outcome)
+		}
+		if len(warned) != 1 || !strings.Contains(warned[0], dataset.ReportName) || !strings.Contains(warned[0], want.Error()) {
+			t.Fatalf("%s: warnings %q", name, warned)
+		}
+		if _, err := os.Stat(filepath.Join(out, dataset.ReportName)); !os.IsNotExist(err) {
+			t.Fatalf("%s: a run report after its write failed: %v", name, err)
+		}
+		sameDataset(t, name, ref, out)
+		if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, ErrComplete) {
+			t.Fatalf("%s: resume: %v, want ErrComplete", name, err)
+		}
+		sameDataset(t, name+", resumed", ref, out)
 	}
 }
