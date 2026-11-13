@@ -346,6 +346,27 @@ func TestTextOutputInsideTree(t *testing.T) {
 			}
 		}
 	}
+	// To stdout with the temporary directory in the tree: the attempt's
+	// scratch there (its spill) is left out and removed after; the
+	// temporary directory itself is listed.
+	root, _ := depthTree(t)
+	var want, got bytes.Buffer
+	if err := run(context.Background(), []string{root, "--no-stats"}, &want, false); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(root, "c")
+	for _, v := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(v, tmp)
+	}
+	if err := run(context.Background(), []string{root, "--no-stats"}, &got, false); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keysOf("got.tsv", got.Bytes()), keysOf("want.tsv", want.Bytes())) {
+		t.Fatalf("stdout with TMPDIR in the tree: listed %q, want the tree's %q", keysOf("got.tsv", got.Bytes()), keysOf("want.tsv", want.Bytes()))
+	}
+	if ents, err := os.ReadDir(tmp); err != nil || len(ents) != 1 || ents[0].Name() != "h" {
+		t.Fatalf("TMPDIR after the run: %v %v", ents, err)
+	}
 }
 
 // TestNoProgressAmongRows: with stdout a terminal that carries rows, the

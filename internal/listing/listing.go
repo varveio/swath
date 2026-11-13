@@ -1076,20 +1076,22 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		// A text file spills beside itself, on the filesystem it is
 		// written to; a stream has no directory of its own and spills
 		// under the temporary directory ($TMPDIR), which the user points
-		// at a disk.
-		oopt.SpillDir = os.TempDir()
+		// at a disk. Either way in this attempt's own scratch directory,
+		// which a listed tree holding it leaves out.
+		dir, name := os.TempDir(), ""
 		if path := cfg.Output.Text.Path; path != "" {
-			if scratch, err = textScratch(path, cfg.Attempt); err != nil {
-				return oopt, "", err
-			}
-			oopt.SpillDir = filepath.Join(scratch, "spill")
+			dir, name = filepath.Dir(path), filepath.Base(path)
 		}
+		if scratch, err = textScratch(dir, name, cfg.Attempt); err != nil {
+			return oopt, "", err
+		}
+		oopt.SpillDir = filepath.Join(scratch, "spill")
 	}
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
 			fix := "write the output to a disk"
-			if scratch == "" && cfg.Output.Dir == "" {
+			if cfg.Output.Dir == "" && cfg.Output.Text != nil && cfg.Output.Text.Path == "" {
 				fix = "set TMPDIR to a disk"
 			}
 			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix))
@@ -1120,19 +1122,23 @@ func removeSpill(spill string, keep bool) error {
 	return errors.Join(errs...)
 }
 
-// textScratch makes the scratch directory of one attempt writing the text
-// file path: beside it, named for it and the attempt
+// textScratch makes the scratch directory of one attempt writing text: for
+// the file NAME, in its directory dir, named for it and the attempt
 // (.NAME.swath-ATTEMPT-RANDOM, created exclusively), so its spill is on
-// the output's filesystem, and two attempts writing sibling outputs, or
-// the same one, never share or remove each other's. Only the attempt that
-// made it removes it; a killed attempt leaves it (with its .NAME.*.tmp)
-// for the user to delete.
-func textScratch(path string, att *Attempt) (string, error) {
-	prefix := "." + filepath.Base(path) + ".swath-"
+// the output's filesystem; for the stream (name ""), in the temporary
+// directory dir (swath-ATTEMPT-RANDOM). Two attempts writing sibling
+// outputs, the same one, or streams never share or remove each other's.
+// Only the attempt that made it removes it; a killed attempt leaves it
+// (with a file's .NAME.*.tmp) for the user to delete.
+func textScratch(dir, name string, att *Attempt) (string, error) {
+	prefix := "swath-"
+	if name != "" {
+		prefix = "." + name + ".swath-"
+	}
 	if att != nil && len(att.ID) >= 8 {
 		prefix += att.ID[:8] + "-"
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(path), prefix+"*")
+	dir, err := os.MkdirTemp(dir, prefix+"*")
 	if err != nil {
 		return "", fmt.Errorf("text output: scratch directory: %w", err)
 	}
