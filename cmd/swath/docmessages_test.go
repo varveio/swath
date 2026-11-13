@@ -12,19 +12,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/journal"
 )
 
-// TestTroubleshootingMessages keeps the refusals docs/troubleshooting.md
+// TestDocsTroubleshootingMessages keeps the refusals docs/troubleshooting.md
 // quotes equal to what swath prints for them: each case runs the command
 // line the page describes, requires exit 2, and requires the page to hold
 // the first line swath prints on stderr verbatim.
-func TestTroubleshootingMessages(t *testing.T) {
+func TestDocsTroubleshootingMessages(t *testing.T) {
 	// Profiling side paths would be checked, and written, by the runs here.
 	t.Setenv("SWATH_CPUPROFILE", "")
 	t.Setenv("SWATH_MEMPROFILE", "")
 	t.Setenv("SWATH_MEMPROFILERATE", "")
-	doc, err := os.ReadFile("../../docs/troubleshooting.md")
+	doc, err := os.ReadFile(docs.Path(t, "troubleshooting.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,13 +101,13 @@ func TestTroubleshootingMessages(t *testing.T) {
 	}
 }
 
-// TestCLIDocPages keeps docs/commands/ in step with the command tree,
-// beside TestCLIDocFlags (the option lists): every command the root help
+// TestDocsCLIPages keeps docs/commands/ in step with the command tree,
+// beside TestDocsCLIFlags (the option lists): every command the root help
 // lists has a page and a row in swath.md's table, and each page's
 // synopsis is the usage lines its --help prints. UPDATE=1 rewrites the
 // synopsis blocks.
-func TestCLIDocPages(t *testing.T) {
-	table, err := os.ReadFile("../../docs/commands/swath.md")
+func TestDocsCLIPages(t *testing.T) {
+	table, err := os.ReadFile(docs.Path(t, "commands/swath.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestCLIDocPages(t *testing.T) {
 			if !strings.Contains(string(table), "`swath diag`") {
 				t.Errorf("docs/commands/swath.md does not mention swath diag")
 			}
-			continue // documented with the internals (TestCLIDocFlags' diag blocks)
+			continue // documented with the internals (TestDocsCLIFlags' diag blocks)
 		}
 		page := "swath-" + word + ".md"
 		if !strings.Contains(string(table), "[`swath "+word+"`]("+page+")") {
@@ -141,7 +142,7 @@ func TestCLIDocPages(t *testing.T) {
 		for _, l := range u {
 			b.WriteString("swath " + l + "\n")
 		}
-		docBlock(t, "../../docs/commands/"+page, "synopsis", "text", b.String())
+		docBlock(t, "commands/"+page, "synopsis", "text", b.String())
 	}
 	// swath show's one option, as its --help prints it.
 	var out bytes.Buffer
@@ -150,5 +151,5 @@ func TestCLIDocPages(t *testing.T) {
 	if !ok {
 		t.Fatalf("swath show --help has no options:\n%s", out.String())
 	}
-	docBlock(t, "../../docs/commands/swath-show.md", "flags", "text", opts)
+	docBlock(t, "commands/swath-show.md", "flags", "text", opts)
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
@@ -214,11 +215,11 @@ func TestSize(t *testing.T) {
 	}
 }
 
-// TestCLIDocFlags keeps each command page's option list (docs/commands/)
+// TestDocsCLIFlags keeps each command page's option list (docs/commands/)
 // and the diagnostic options (docs/internals/diagnostics.md) generated
 // from the flag set, as --help prints them: run with UPDATE=1 to rewrite
 // them.
-func TestCLIDocFlags(t *testing.T) {
+func TestDocsCLIFlags(t *testing.T) {
 	groups := func(diag bool, keep func(*pflag.Flag) bool) string {
 		var b strings.Builder
 		writeGroups(&b, newFlags(&options{}, diag), docStyle, keep)
@@ -245,15 +246,16 @@ func TestCLIDocFlags(t *testing.T) {
 		if strings.Contains(b.text, " \t") {
 			t.Fatalf("the usage has a space before a tab (git diff --check flags it in docs/%s)", b.path)
 		}
-		docBlock(t, "../../docs/"+b.path, b.marker, "text", b.text)
+		docBlock(t, b.path, b.marker, "text", b.text)
 	}
 }
 
-// docBlock keeps the block between path's "<!-- marker:begin -->" and
-// "<!-- marker:end -->" lines equal to text, fenced as lang: UPDATE=1
+// docBlock keeps the block between docs/name's "<!-- marker:begin -->"
+// and "<!-- marker:end -->" lines equal to text, fenced as lang: UPDATE=1
 // rewrites it, else a stale block fails the test.
-func docBlock(t *testing.T, path, marker, lang, text string) {
+func docBlock(t *testing.T, name, marker, lang, text string) {
 	t.Helper()
+	path := docs.Path(t, name)
 	begin, end := "<!-- "+marker+":begin -->\n", "<!-- "+marker+":end -->"
 	doc, err := os.ReadFile(path)
 	if err != nil {
@@ -262,7 +264,7 @@ func docBlock(t *testing.T, path, marker, lang, text string) {
 	s := string(doc)
 	i, j := strings.Index(s, begin), strings.Index(s, end)
 	if i < 0 || j < i {
-		t.Fatalf("%s lacks the %s markers", path, marker)
+		t.Fatalf("docs/%s lacks the %s markers", name, marker)
 	}
 	want := s[:i+len(begin)] + "```" + lang + "\n" + text + "```\n" + s[j:]
 	if want == s {
@@ -274,7 +276,7 @@ func docBlock(t *testing.T, path, marker, lang, text string) {
 		}
 		return
 	}
-	t.Errorf("%s: the %s block is stale; run UPDATE=1 go test ./cmd/swath", path, marker)
+	t.Errorf("docs/%s: the %s block is stale; run UPDATE=1 go test ./cmd/swath -run '^TestDocs'", name, marker)
 }
 
 // TestRefusedRunLeavesOwnerMetadata: a run refused because another process

@@ -33,6 +33,7 @@ jobs:
       fixtures: ${{ steps.changes.outputs.fixtures }}
       images: ${{ steps.changes.outputs.images }}
       platforms: ${{ steps.changes.outputs.platforms }}
+      docs: ${{ steps.changes.outputs.docs }}
       full: ${{ steps.changes.outputs.full }}
       go_shards: ${{ steps.shards.outputs.matrix }}
       go_xos: ${{ steps.xos.outputs.matrix }}
@@ -144,9 +145,10 @@ jobs:
         with:
           key: go-lint
 
-      # `go test ./docs` checks the relative links of every Markdown file in the repository, the
-      # root prose and site/README.md among them. A change to those selects no Go tier, so the
-      # check runs on every event; it builds no package outside the standard library.
+      # `go test ./docs` checks the relative links and anchors of every Markdown file in the
+      # repository, the root prose and site/README.md among them, and that every test reading
+      # docs/ goes through docs.Path (go-docs). A change to those selects no Go tier, so the check
+      # runs on every event; it builds no package outside the standard library.
       - name: Markdown links (go test ./docs)
         run: go test -count=1 ./docs
 
@@ -178,6 +180,28 @@ jobs:
       - name: Race shards cover every test once
         if: needs.changes.outputs.go == 'true'
         run: ./scripts/ci/go-race-shards.sh --check
+
+  # The docs tier: on a pull request that changes pages under docs/ and no main-module input, the
+  # tests that read pages (the generated CLI, log-event, report and counter blocks, the quoted
+  # messages), which the race shards run on every main-module selection. They are the TestDocs*
+  # tests of the packages whose tests import ./docs (docs.Path enforces the name); the script finds
+  # them and prints its command. Main, dispatch and full-scope PRs run it too, for go-full-gate.
+  go-docs:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Go (version from go.mod)
+        if: needs.changes.outputs.docs == 'true'
+        uses: ./.github/actions/setup-go
+        with:
+          key: go-docs
+
+      - name: Tests that read docs/ (TestDocs*)
+        if: needs.changes.outputs.docs == 'true'
+        run: ./scripts/ci/go-docs-tests.sh
 
   # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
   # table into this matrix, so the table is the one place a shard is added). A leg's name is its
@@ -603,7 +627,7 @@ jobs:
   # required check never reports a conclusion, and the pull request waits forever instead of
   # going red.
   ci-gate:
-    needs: [changes, scripts, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
+    needs: [changes, scripts, go-lint, go-docs, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -634,7 +658,7 @@ jobs:
   # Full-scope PRs exercise this gate too; release accepts only its main push
   # result at the exact SHA. Ordinary scoped PRs do not emit this qualification.
   go-full-gate:
-    needs: [changes, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
+    needs: [changes, go-lint, go-docs, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
     if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -652,7 +676,7 @@ jobs:
           jq -e --argjson shards "$shards" '
             (.full == "true") and (.go == "true") and (.reader == "true") and
             (.objfile == "true") and (.fixtures == "true") and (.images == "true") and
-            (.platforms == "true") and (.go_shards | fromjson == $shards) and
+            (.platforms == "true") and (.docs == "true") and (.go_shards | fromjson == $shards) and
             (.go_xos | fromjson |
               (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm", "windows-latest"] and
               all(.[]; .scope == "full" and .runner == .os))' <<<"$SELECTION"

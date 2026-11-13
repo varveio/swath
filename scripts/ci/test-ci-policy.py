@@ -78,10 +78,28 @@ class PolicyTests(unittest.TestCase):
             (['verify.py'], {'go', 'fixtures'}),
             (['dataset_schema.py'], {'go', 'fixtures'}),
             (['test_dataset_readers.py'], {'go', 'fixtures'}),
-            (['docs/getting-started.md'], {'go', 'fixtures'}),
-            (['docs/commands/swath-list.md'], {'go', 'fixtures'}),
-            (['docs/internals/testing.md'], {'go', 'fixtures'}),
+            # A page under docs/ selects only the docs tier, with light files or an
+            # independent module beside it; with any main-module input main runs as before.
+            (['docs/start-here.md'], {'docs'}),
+            (['docs/commands/swath-list.md'], {'docs'}),
+            (['docs/internals/testing.md', 'docs/internals/range-engine.md'], {'docs'}),
+            # The conformance matrix moved under docs/internals/: a page the scripts job reads.
+            (['docs/internals/replay-provider-conformance.md'], {'docs'}),
+            (['docs/troubleshooting.md', 'site/index.html', 'README.md', 'docs/ops/dev/CI.md'], {'docs'}),
+            (['docs/start-here.md', 'objfile/object.go'], {'docs', 'objfile'}),
+            (['docs/start-here.md', 'cmd/swath/main.go'], {'go', 'fixtures'}),
+            (['docs/commands/swath-list.md', 'cmd/swath/main_test.go'], {'go', 'fixtures'}),
+            (['docs/start-here.md', 'reader/read.go'], {'go', 'reader', 'fixtures'}),
+            (['docs/start-here.md', 'Dockerfile'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['docs/start-here.md', 'docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
+            # Other files under docs/ stay the main module's: the docs package, the provider
+            # evidence (a page there included) and a file type no rule names yet.
             (['docs/links_test.go'], {'go', 'fixtures'}),
+            (['docs/docs.go'], {'go', 'fixtures'}),
+            (['docs/replay-provider-conformance.md'], {'go', 'fixtures'}),
+            (['docs/replay-provider-ledger.json'], {'go', 'fixtures'}),
+            (['docs/internals/diagram.svg'], {'go', 'fixtures'}),
+            (['docs/reference/schema.json'], {'go', 'fixtures'}),
             (['reader/read_test.go'], {'go', 'reader', 'fixtures'}),
             (['reader/README.md'], {'go', 'reader', 'fixtures'}),
             (['objfile/object.go'], {'objfile'}),
@@ -106,6 +124,10 @@ class PolicyTests(unittest.TestCase):
             (['docs/style.md'], set()),
             (['docs/ops/dev/go-release-copy-checklist.md'], set()),
             (['docs/ops/dev/CI.md'], set()),
+            # The light directories select nothing whatever the file type: docs.Path refuses
+            # them and docs/readers_test.go refuses any other read of docs/.
+            (['docs/ops/dev/bench.json'], set()),
+            (['docs/assets/diagram.svg'], set()),
             (['README.md', 'SECURITY.md'], set()),
             (['AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md'], set()),
             (['site/data/runs/facts.json'], set()),
@@ -122,17 +144,28 @@ class PolicyTests(unittest.TestCase):
         # A Go file or module outside the known tree has no owner yet: everything runs.
         for paths in [['.github/workflows/ci.yml'], ['.github/actions/setup-go/action.yml'],
                       ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], [],
+                      ['docs/start-here.md', 'scripts/ci/go-docs-tests.sh'],
                       ['pkg/new.go'], ['tools/x/go.mod'], ['internal/new/go.mod']]:
             got = policy.select(paths, 'pull_request')
             self.assertTrue(all(got.values()), paths)
         for kwargs in [dict(force_full=True), dict(unknown=True), dict(toolchain=True)]:
-            got = policy.select(['README.md'], 'pull_request', **kwargs)
-            self.assertTrue(all(got.values()), kwargs)
+            for paths in [['README.md'], ['docs/start-here.md']]:
+                got = policy.select(paths, 'pull_request', **kwargs)
+                self.assertTrue(all(got.values()), (paths, kwargs))
         for event in ['push', 'workflow_dispatch']:
-            got = policy.select(['README.md'], event)
-            self.assertTrue(all(got.values()))
+            for paths in [['README.md'], ['docs/start-here.md']]:
+                got = policy.select(paths, event)
+                self.assertTrue(all(got.values()), (paths, event))
         self.assertTrue(policy.select(['internal/foo.go'], 'pull_request',
                                       build_tags=True)['platforms'])
+
+    def test_light_docs_are_the_pages_docs_path_refuses(self):
+        # The docs tier is skipped for LIGHT_DOCS, so no Go test may read them: docs.Unread
+        # in docs/docs.go is the same list, and docs.Path fails a test that reads one.
+        source = (ROOT / 'docs/docs.go').read_text()
+        unread = re.search(r'^var Unread = \[\]string\{(.*)\}$', source, re.M)[1]
+        self.assertEqual({'docs/' + name for name in re.findall(r'"([^"]+)"', unread)},
+                         set(policy.LIGHT_DOCS))
 
     def test_dependency_closure_uses_modules_not_cache_keys(self):
         manifests = {'go': 'module example/main\nrequire example/reader v1.0.0',
@@ -192,6 +225,15 @@ class PolicyTests(unittest.TestCase):
             subprocess.run(['git', 'add', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'remove constraint'], cwd=temp, check=True)
             self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
+            # A page quoting a build constraint or a go directive is still only a page.
+            (cwd / 'docs').mkdir()
+            (cwd / 'docs/page.md').write_text('```go\n//go:build linux\n```\n\ngo 1.27.0\ntoolchain go1.27.0\n')
+            subprocess.run(['git', 'add', 'docs/page.md'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'page'], cwd=temp, check=True)
+            page_base = subprocess.check_output(['git', 'rev-parse', 'HEAD~1'], cwd=temp, text=True).strip()
+            result, rows = run(BASE=page_base)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual({k for k, v in rows.items() if v == 'true'}, {'docs'})
             (cwd / 'go.mod').write_text('module example/go\ngo 1.27.0\n')
             subprocess.run(['git', 'add', 'go.mod'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'toolchain'], cwd=temp, check=True)
@@ -222,6 +264,49 @@ class PolicyTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(rows, {})
 
+    def test_docs_tier_script_fails_closed(self):
+        # go-docs-tests.sh against a stub go: MODE picks what go list and go test do.
+        stub = """#!/usr/bin/env bash
+if [ "$1 $2" = "list -m" ]; then echo example.com/m; exit 0; fi
+if [ "$1" = list ]; then
+  echo "example.com/m/a example.com/m/docs testing"
+  echo "example.com/m/b testing"
+  echo "example.com/m/docs example.com/m/docs testing"
+  [ "$MODE" = listfail ] && { echo "b.go: cannot find package" >&2; exit 1; }
+  [ "$MODE" = none ] && exit 0
+  exit 0
+fi
+if [ "$1" = test ]; then
+  echo "args: $*" >&2
+  case "$MODE" in
+    skip) echo "--- SKIP: TestDocsA (0.00s)" ;;
+    notests) echo "testing: warning: no tests to run" ;;
+    fail) echo "--- FAIL: TestDocsA (0.00s)"; exit 1 ;;
+    *) echo "--- PASS: TestDocsA (0.00s)" ;;
+  esac
+  echo "ok  example.com/m/a 0.01s"
+  exit 0
+fi
+exit 2
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'go').write_text(stub)
+            (Path(temp) / 'go').chmod(0o755)
+            for mode, ok in [('pass', True), ('listfail', False), ('skip', False),
+                             ('notests', False), ('fail', False)]:
+                run = subprocess.run([str(ROOT / 'scripts/ci/go-docs-tests.sh')], cwd=temp,
+                                     env=dict(os.environ, MODE=mode, PATH=temp + os.pathsep + os.environ['PATH']),
+                                     capture_output=True, text=True)
+                self.assertEqual(run.returncode == 0, ok, (mode, run.stdout, run.stderr))
+                if mode == 'pass':
+                    self.assertIn("-run ^TestDocs example.com/m/a\n", run.stderr)
+            # No package's tests import the docs package: nothing to run is an error too.
+            (Path(temp) / 'go').write_text(stub.replace('example.com/m/docs', 'example.com/m/other'))
+            run = subprocess.run([str(ROOT / 'scripts/ci/go-docs-tests.sh')], cwd=temp,
+                                 env=dict(os.environ, MODE='pass', PATH=temp + os.pathsep + os.environ['PATH']),
+                                 capture_output=True, text=True)
+            self.assertNotEqual(run.returncode, 0)
+
     def test_actual_xos_matrix(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'output'
@@ -242,7 +327,7 @@ class PolicyTests(unittest.TestCase):
                 self.assertEqual({row['scope'] for row in matrix}, {scope})
 
     def test_full_gate_refuses_partial_or_failed_validation(self):
-        flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms')
+        flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs')
         selection = dict.fromkeys(flags, 'true')
         selection['go_shards'] = subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
