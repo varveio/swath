@@ -78,10 +78,26 @@ class PolicyTests(unittest.TestCase):
             (['verify.py'], {'go', 'fixtures'}),
             (['dataset_schema.py'], {'go', 'fixtures'}),
             (['test_dataset_readers.py'], {'go', 'fixtures'}),
-            (['docs/getting-started.md'], {'go', 'fixtures'}),
-            (['docs/commands/swath-list.md'], {'go', 'fixtures'}),
-            (['docs/internals/testing.md'], {'go', 'fixtures'}),
+            # A page under docs/ selects only the docs tier, with light files or an
+            # independent module beside it; with any main-module input main runs as before.
+            (['docs/getting-started.md'], {'docs'}),
+            (['docs/commands/swath-list.md'], {'docs'}),
+            (['docs/internals/testing.md', 'docs/internals/range-engine.md'], {'docs'}),
+            (['docs/troubleshooting.md', 'site/index.html', 'README.md', 'docs/ops/dev/CI.md'], {'docs'}),
+            (['docs/getting-started.md', 'objfile/object.go'], {'docs', 'objfile'}),
+            (['docs/getting-started.md', 'cmd/swath/main.go'], {'go', 'fixtures'}),
+            (['docs/commands/swath-list.md', 'cmd/swath/main_test.go'], {'go', 'fixtures'}),
+            (['docs/getting-started.md', 'reader/read.go'], {'go', 'reader', 'fixtures'}),
+            (['docs/getting-started.md', 'Dockerfile'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['docs/getting-started.md', 'docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
+            # Other files under docs/ stay the main module's: the docs package, the provider
+            # evidence (its page included) and a file type no rule names yet.
             (['docs/links_test.go'], {'go', 'fixtures'}),
+            (['docs/docs.go'], {'go', 'fixtures'}),
+            (['docs/replay-provider-conformance.md'], {'go', 'fixtures'}),
+            (['docs/replay-provider-ledger.json'], {'go', 'fixtures'}),
+            (['docs/internals/diagram.svg'], {'go', 'fixtures'}),
+            (['docs/reference/schema.json'], {'go', 'fixtures'}),
             (['reader/read_test.go'], {'go', 'reader', 'fixtures'}),
             (['reader/README.md'], {'go', 'reader', 'fixtures'}),
             (['objfile/object.go'], {'objfile'}),
@@ -122,15 +138,18 @@ class PolicyTests(unittest.TestCase):
         # A Go file or module outside the known tree has no owner yet: everything runs.
         for paths in [['.github/workflows/ci.yml'], ['.github/actions/setup-go/action.yml'],
                       ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], [],
+                      ['docs/getting-started.md', 'scripts/ci/go-docs-tests.sh'],
                       ['pkg/new.go'], ['tools/x/go.mod'], ['internal/new/go.mod']]:
             got = policy.select(paths, 'pull_request')
             self.assertTrue(all(got.values()), paths)
         for kwargs in [dict(force_full=True), dict(unknown=True), dict(toolchain=True)]:
-            got = policy.select(['README.md'], 'pull_request', **kwargs)
-            self.assertTrue(all(got.values()), kwargs)
+            for paths in [['README.md'], ['docs/getting-started.md']]:
+                got = policy.select(paths, 'pull_request', **kwargs)
+                self.assertTrue(all(got.values()), (paths, kwargs))
         for event in ['push', 'workflow_dispatch']:
-            got = policy.select(['README.md'], event)
-            self.assertTrue(all(got.values()))
+            for paths in [['README.md'], ['docs/getting-started.md']]:
+                got = policy.select(paths, event)
+                self.assertTrue(all(got.values()), (paths, event))
         self.assertTrue(policy.select(['internal/foo.go'], 'pull_request',
                                       build_tags=True)['platforms'])
 
@@ -192,6 +211,15 @@ class PolicyTests(unittest.TestCase):
             subprocess.run(['git', 'add', 'internal/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'remove constraint'], cwd=temp, check=True)
             self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
+            # A page quoting a build constraint or a go directive is still only a page.
+            (cwd / 'docs').mkdir()
+            (cwd / 'docs/page.md').write_text('```go\n//go:build linux\n```\n\ngo 1.27.0\ntoolchain go1.27.0\n')
+            subprocess.run(['git', 'add', 'docs/page.md'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'page'], cwd=temp, check=True)
+            page_base = subprocess.check_output(['git', 'rev-parse', 'HEAD~1'], cwd=temp, text=True).strip()
+            result, rows = run(BASE=page_base)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual({k for k, v in rows.items() if v == 'true'}, {'docs'})
             (cwd / 'go.mod').write_text('module example/go\ngo 1.27.0\n')
             subprocess.run(['git', 'add', 'go.mod'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'toolchain'], cwd=temp, check=True)
@@ -242,7 +270,7 @@ class PolicyTests(unittest.TestCase):
                 self.assertEqual({row['scope'] for row in matrix}, {scope})
 
     def test_full_gate_refuses_partial_or_failed_validation(self):
-        flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms')
+        flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs')
         selection = dict.fromkeys(flags, 'true')
         selection['go_shards'] = subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
