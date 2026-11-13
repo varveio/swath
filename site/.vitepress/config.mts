@@ -128,10 +128,13 @@ export default defineConfig({
   description:
     'Parallel listing and inventory for large object stores and filesystems: S3, GCS, Azure Blob and local trees.',
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    ['meta', { name: 'theme-color', content: '#2B7A88' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'swath' }],
     ['meta', { property: 'og:image', content: `${ORIGIN}/card.png` }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: `${ORIGIN}/card.png` }],
   ],
   sitemap: { hostname: ORIGIN },
 
@@ -142,6 +145,8 @@ export default defineConfig({
 
   themeConfig: {
     siteTitle: 'swath',
+    // Varve's chevron mark, in its light and dark strokes; the name beside it is the text.
+    logo: { light: '/logo-light.svg', dark: '/logo-dark.svg', alt: '' },
     nav: [
       { text: 'Docs', link: '/docs/start-here', activeMatch: '^/docs/(?!commands/)' },
       { text: 'Commands', link: '/docs/commands/swath', activeMatch: '^/docs/commands/' },
@@ -156,7 +161,7 @@ export default defineConfig({
     },
     outline: { level: [2, 3] },
     footer: {
-      message: 'Released under the Apache-2.0 license.',
+      message: 'Released under the Apache-2.0 license · by <a href="https://varve.io">Varve</a>',
     },
     sidebar: {
       '/docs/': [
