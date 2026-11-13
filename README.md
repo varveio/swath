@@ -17,38 +17,11 @@ filesystems ([what each supports](https://swath.varve.io/docs/sources.html)).
 
 ## Install
 
-<<<<<<< HEAD
 swath 0.4.0 is in release candidates: download one from the
 [releases page](https://github.com/varveio/swath/releases) and verify it as
 [Install](https://swath.varve.io/docs/install.html) describes. The documentation describes `main`, which has
 more than the newest candidate, such as `swath du --from-dataset`. swath is pre-1.0, so flags and schemas can
 still change. To build `main` with Go 1.26 or later:
-=======
-These are single-run S3 observations, not expected times for every source or machine.
-The [measurements and setup](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07) keep the operations, conditions and
-other runs separate.
-
-## Supported sources
-
-| Source | Listing and summaries | Limits |
-| --- | --- | --- |
-| Local and mounted filesystems | Text or dataset listing; direct `du` summaries | No scan resume. Mounted shares use the OS filesystem, not a native NFS or SMB client. |
-| Amazon S3 | Text or dataset listing; prefix totals; eligible dataset resume | General-purpose buckets, not directory buckets. `--all-versions` lists versions and delete markers. Check S3-compatible endpoints separately. |
-| Google Cloud Storage | Native `gs://` listing; prefix totals; eligible dataset resume | `--all-versions` lists live and noncurrent generations. Their metadata differs from S3 versions. |
-| Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces only. `--all-versions` lists versions, snapshots and soft-deleted blobs. Hierarchical namespaces are unsupported. |
-
-Eligible journaled object-store dataset scans can resume. Local scans and text output
-cannot. Windows currently refuses journaled object-store dataset runs and recovery through resume
-because directory sync is unavailable; local scans work without resume. See
-[platform and recovery limits](docs/running.md#known-limits).
-
-<a id="quickstart"></a>
-
-## Quick start
-
-Download a [release candidate](docs/install.md#download-a-release-candidate), or **build from source**
-with Go 1.26 or later (the `go` line of [`go.mod`](go.mod)) and git:
->>>>>>> origin/main
 
 ```bash
 git clone https://github.com/varveio/swath.git && cd swath && ./build.sh -o swath
