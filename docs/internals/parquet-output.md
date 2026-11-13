@@ -234,7 +234,8 @@ The manifest's fields are in [../dataset.md](../dataset.md#the-swath-extension).
 
 Output safety: the source root is validated first; the output may not be the root or an ancestor of it (by path
 and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of
-this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk.
+this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk
+(`source.Excluder`), as a text file, its temporary and its scratch directory are.
 
 **`--overwrite` is a destructive replacement, not an atomic one.** Under the output lock, before anything is
 listed, the previous dataset's commit record (`manifest.json`, or an earlier layout's `_SUCCESS`) is removed

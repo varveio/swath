@@ -820,6 +820,20 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			return a.sum.failed(err)
 		}
 		text, env.Text = t, t
+		// A text file inside a local tree is left out of it, as a dataset
+		// directory is (owned): the file (a previous run's, until this one
+		// renames over it), its temporary and this attempt's scratch.
+		if ex, ok := src.(source.Excluder); ok {
+			for _, p := range append(t.Paths(), scratch) {
+				if p == "" {
+					continue
+				}
+				if err := ex.Exclude(p); err != nil {
+					t.Abort()
+					return a.sum.failed(err)
+				}
+			}
+		}
 	}
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes

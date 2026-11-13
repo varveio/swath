@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 
 	"github.com/spf13/pflag"
 
@@ -195,17 +197,49 @@ func (o *opened) Listed() int64 {
 	return o.p.stats.Files + o.p.stats.Dirs
 }
 
-// Exclude leaves out an output directory inside the root; it is called
-// before listing starts.
-func (o *opened) Exclude(out string) error {
-	rel, inside, err := dataset.LocateInside(o.p.root, out)
+// Exclude leaves out path, an output the run writes, when it lies inside
+// the root; it is called before listing starts. A directory (the dataset,
+// a text file's scratch) is located by identity, where the run writes into
+// it, and left out with its subtree; any other path (a text file, its
+// temporary) is left out by its name in its directory, which a commit
+// renames over, existing yet or not.
+func (o *opened) Exclude(path string) error {
+	key, err := o.locate(path)
 	if err != nil {
 		return fmt.Errorf("locate output: %w", err)
 	}
-	if inside {
-		o.p.opt.Skip = map[string]bool{rel + "/": true}
+	if key != "" {
+		if o.p.opt.Skip == nil {
+			o.p.opt.Skip = map[string]bool{}
+		}
+		o.p.opt.Skip[key] = true
 	}
 	return nil
+}
+
+// locate is path's key below the root ("a/b/" for a directory, "a/b"
+// otherwise), "" when it is not below it.
+func (o *opened) locate(path string) (string, error) {
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		rel, inside, err := dataset.LocateInside(o.p.root, path)
+		if !inside {
+			return "", err
+		}
+		return rel + "/", err
+	}
+	dir := filepath.Dir(path)
+	rfi, err := os.Stat(o.p.root)
+	if err != nil {
+		return "", err
+	}
+	if dfi, err := os.Stat(dir); err == nil && os.SameFile(dfi, rfi) {
+		return filepath.Base(path), nil // directly in the root
+	}
+	rel, inside, err := dataset.LocateInside(o.p.root, dir)
+	if !inside {
+		return "", err
+	}
+	return rel + "/" + filepath.Base(path), err
 }
 
 // Report: an entry counts as skipped when an error kept it (or its subtree)
@@ -214,9 +248,7 @@ func (o *opened) Exclude(out string) error {
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Skipped: st.Errors() - st.ReadlinkErrors - st.Vanished}
-	for k := range o.p.opt.Skip {
-		cov.Exclusions = append(cov.Exclusions, k)
-	}
+	cov.Exclusions = slices.Sorted(maps.Keys(o.p.opt.Skip))
 	if o.p.opt.OneFilesystem {
 		// The tree is listed only as far as its filesystem reaches; the
 		// manifest records it so an application can tell.
