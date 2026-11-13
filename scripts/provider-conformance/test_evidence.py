@@ -502,7 +502,7 @@ class EvidenceTest(unittest.TestCase):
     def test_checked_in_matrix_matches_machine_ledger(self):
         repo = pathlib.Path(__file__).resolve().parents[2]
         ledger = evidence.strict_json((repo / "docs/replay-provider-ledger.json").read_text())
-        matrix = (repo / "docs/replay-provider-conformance.md").read_text()
+        matrix = (repo / "docs/internals/replay-provider-conformance.md").read_text()
         evidence.validate_matrix(matrix, ledger)
         # Every archived capture is checked against its manifest. REPLAY_MATCH receipts also
         # bind a replay distribution, which `evidence.py validate --distribution` checks, and Go

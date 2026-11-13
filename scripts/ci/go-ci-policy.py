@@ -16,7 +16,7 @@ ROOT_PROSE = {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'CONTRIBUTING.md',
 MODULES = {'go': 'go.mod', 'reader': 'reader/go.mod', 'objfile': 'objfile/go.mod'}
 # Pages under docs/ that no Go test reads: the media, the style guide and the maintainers' pages.
 # Their links are checked by go-lint on every event, like the root prose.
-LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/go-release-copy-checklist.md', 'docs/ops/')
+LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
 # The Go tree: the nested modules' directories, and the main module's directories and root files.
 # docs/ is the main module's (its links test and the generated CLI and report blocks).
 NESTED = ('objfile/', 'reader/')

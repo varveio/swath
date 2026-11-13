@@ -4,17 +4,17 @@ Items here are intentions, not release commitments. Issues track actionable work
 
 ## Release transition
 
-The latest published release is the S3-focused Java v0.3.2. The Go implementation on
-`main` is unreleased and replaces Java at its release. The Java code is no longer on
-`main`; it is preserved at the tag `java-final`.
+The latest final release is the S3-focused Java v0.3.2. The Go implementation on `main` is
+published as release candidates for 0.4.0 (the newest is v0.4.0-rc.2) and replaces Java at the
+0.4.0 release. The Java code is no longer on `main`; it is preserved at the tag `java-final`.
 
 Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
 Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible
 object-store dataset resume, S3 versions and delete markers, and GCS generations.
-The [Go guide](docs/getting-started.md) and [command reference](docs/commands/swath.md) describe their limits.
+The [first inventory guide](docs/first-inventory.md) and [command reference](docs/commands/swath.md) describe their limits.
 These capabilities should not be listed as future backend work.
 
-The [publication checklist](docs/go-release-copy-checklist.md) keeps installation,
+The [publication checklist](docs/ops/dev/go-release-copy-checklist.md) keeps installation,
 repository metadata and documentation aligned with the release transition.
 
 ## Planned work

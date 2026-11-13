@@ -217,4 +217,4 @@ What each one means and what to do: [reference/exit-codes.md](../reference/exit-
 
 [swath-list](swath-list.md), [swath-du](swath-du.md), [swath-resume](swath-resume.md),
 [swath-show](swath-show.md), [swath-completion](swath-completion.md),
-[getting-started.md](../getting-started.md), [output.md](../output.md), [sources.md](../sources.md)
+[first-inventory.md](../first-inventory.md), [output.md](../output.md), [sources.md](../sources.md)

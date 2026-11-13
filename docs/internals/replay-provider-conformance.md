@@ -2,7 +2,7 @@
 
 This is the human-readable matrix for [issue #221](https://github.com/varveio/swath/issues/221)
 within [epic #220](https://github.com/varveio/swath/issues/220). The
-[machine-readable ledger](replay-provider-ledger.json) owns row IDs and evidence status;
+[machine-readable ledger](../replay-provider-ledger.json) owns row IDs and evidence status;
 the offline validator requires this matrix to match it.
 `UNMEASURED` means no published native-provider capture backs the row. `OBSERVED`
 requires a sanitized native capture and its SHA-256 checksum. `REPLAY_MATCH`
@@ -471,7 +471,7 @@ fails for manual review. Review the sanitized output for additional private data
 publishing it; the printed SHA-256 identifies those exact sanitized bytes.
 
 Run `evidence.py validate --ledger docs/replay-provider-ledger.json
---matrix docs/replay-provider-conformance.md --captures docs/replay-provider-evidence.tar.gz`
+--matrix docs/internals/replay-provider-conformance.md --captures docs/replay-provider-evidence.tar.gz`
 to check every row. `--captures` takes the archive or an evidence directory and reads its
 manifests unless `--manifest MANIFEST` is given. Promotion to OBSERVED requires the
 provider's manifest, a capture under the evidence root, exact probe request and expected
@@ -623,7 +623,7 @@ written at the merge commit, as described under [Go receipts](#go-receipts).
 `NativeEvidenceReplayTest.expectations` still applies two adjustments that served the
 archive before these pins. A pin that opens with the archived Azure BOM mismatch expects
 what the comparison found with the BOM restored, and an entry in
-[`replay-provider-expectations.json`](replay-provider-expectations.json) replaces the pin
+[`replay-provider-expectations.json`](../replay-provider-expectations.json) replaces the pin
 for its capture. The current archive has no BOM pin and the file has no entries, so neither
 changes an expectation. Removing them changes the test source, which every receipt binds,
 so that change needs new receipts written on a commit that contains it.
@@ -658,7 +658,7 @@ zlib: zlib-ng compresses the same tar to different bytes, so `build` refuses it 
 
    ```bash
    python3 scripts/provider-conformance/promotion.py promote \
-       --ledger docs/replay-provider-ledger.json --matrix docs/replay-provider-conformance.md \
+       --ledger docs/replay-provider-ledger.json --matrix docs/internals/replay-provider-conformance.md \
        --repo-root . --distribution REPLAY_JAR
    ```
 
