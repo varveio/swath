@@ -208,12 +208,12 @@ func (o *opened) Exclude(out string) error {
 	return nil
 }
 
-// Report: an entry counts as skipped when an error kept it (or its subtree)
-// out; a link whose target could not be read is still listed, and an entry
-// that vanished is no longer part of the tree.
+// Report: an entry counts as unreadable when an error kept it (or its
+// subtree) out; a link whose target could not be read is still listed, and
+// an entry that vanished is no longer part of the tree.
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
-	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Skipped: st.Errors() - st.ReadlinkErrors - st.Vanished}
+	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Unreadable: st.Errors() - st.ReadlinkErrors - st.Vanished}
 	for k := range o.p.opt.Skip {
 		cov.Exclusions = append(cov.Exclusions, k)
 	}
@@ -227,7 +227,7 @@ func (o *opened) Report() source.Report {
 		// an application can tell.
 		cov.Filters = append(cov.Filters, noDirsFilter)
 	}
-	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov, Filesystem: o.p.filesystemSpace(),
+	return source.Report{Name: "local", Stats: &st, Fields: o.p.opt.Fields.String(), Coverage: cov, Filesystem: o.p.filesystemSpace(),
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}
 }
 

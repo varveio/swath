@@ -359,7 +359,7 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
-	if !rep.Outcome.Unreadable || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
+	if rep.Outcome.Unreadable != 1 || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
 		t.Fatalf("report outcome %+v", rep.Outcome)
 	}
 	// A listing names them too.

@@ -285,14 +285,14 @@ type Scope struct {
 }
 
 // Coverage is how much of the scope the dataset holds. A dataset covers its
-// scope fully when complete is true, nothing was skipped and there are no
+// scope fully when complete is true, no entry was unreadable and there are no
 // filters; exclusions name what the listing left out by design (an output
 // directory inside a listed tree). A listing is not a point-in-time
 // snapshot: entries that changed while it ran may or may not be in it.
 type Coverage struct {
 	Complete          bool      `json:"complete"`    // the listing reached the end of the scope
 	StopReason        string    `json:"stop_reason"` // "completed", or why it stopped early
-	SkippedEntries    int64     `json:"skipped_entries"`
+	Unreadable        int64     `json:"unreadable"` // entries missing because they could not be read
 	Exclusions        []string  `json:"exclusions"`
 	Filters           []string  `json:"filters"`
 	Snapshot          bool      `json:"snapshot"` // always false

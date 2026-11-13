@@ -32,8 +32,10 @@ import (
 // hits, misses and evictions) and frame_bytes and frame_rows (the row
 // frames by size), and output.remote (a dataset written to a bucket: its
 // destination, uploads, retries, commit and orphan cleanup). 6:
-// output.committed_object_bytes (the committed dataset's object bytes).
-const ReportVersion = 6
+// output.committed_object_bytes (the committed dataset's object bytes). 7:
+// outcome.unreadable is the count of entries that could not be read (it
+// was a flag), and outcome.entry_errors is gone.
+const ReportVersion = 7
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -272,12 +274,10 @@ type Outcome struct {
 	// "+forced_exit" when it did not stop within the shutdown grace; empty
 	// for a run that ended on its own.
 	StopSource string `json:"stop_source,omitempty"`
-	// EntryErrors counts per-entry problems the provider counted (not fatal).
-	EntryErrors int64 `json:"entry_errors"`
-	// Unreadable says some entries could not be read (EntryErrors > 0):
-	// the rows and totals leave them out, although Complete may be true
-	// and the exit code 0.
-	Unreadable bool `json:"unreadable"`
+	// Unreadable counts the entries that could not be read: the rows and
+	// totals leave them out, although Complete may be true (the manifest's
+	// coverage.unreadable holds the same count).
+	Unreadable int64 `json:"unreadable"`
 	// Class, ExitCode and Resumable are the command's account of how the
 	// run ended (completed, fatal, stuck, deadline, interrupted,
 	// terminated); Cause is the provider's class of a failure.
@@ -601,9 +601,6 @@ type SourceStats struct {
 	Stats any    `json:"stats"`
 }
 
-// Errors is the listing's per-entry error count.
-func (r *Report) Errors() int64 { return r.Outcome.EntryErrors }
-
 // SourceReport is the source's own report (nil before the listing ends, or
 // for a source without one). Its Stats are the provider's own type.
 func (r *Report) SourceReport() *source.Report { return r.report }
@@ -611,7 +608,7 @@ func (r *Report) SourceReport() *source.Report { return r.report }
 func (r *Report) setSource(sr source.Report) {
 	r.report = &sr
 	r.Invocation.Fields = sr.Fields
-	r.Outcome.EntryErrors, r.Outcome.Unreadable = sr.Errors, sr.Errors > 0
+	r.Outcome.Unreadable = sr.Coverage.Unreadable
 	r.Outcome.Complete, r.Outcome.StopReason = sr.Coverage.Complete, sr.Coverage.StopReason
 	r.Source = &SourceStats{Name: sr.Name, Stats: sr.Stats}
 }

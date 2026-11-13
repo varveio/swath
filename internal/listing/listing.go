@@ -736,7 +736,7 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 	if c.Prefix != "" {
 		m.Scope = dataset.Scope{Kind: "prefix", Prefix: c.Prefix}
 	}
-	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.SkippedEntries = c.Complete, c.StopReason, c.Skipped
+	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable = c.Complete, c.StopReason, c.Unreadable
 	m.Coverage.Exclusions, m.Coverage.Filters = c.Exclusions, c.Filters
 	return m
 }

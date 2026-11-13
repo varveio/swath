@@ -590,8 +590,8 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 		lines = append(lines, fmt.Sprintf("%s %s%sin flight avg %.2f%speak %s",
 			count(n), plural(n, "API call", "API calls"), sep, avg, sep, count(q.InflightMax)))
 	}
-	if q.Throttles > 0 || q.Retries > 0 || o.EntryErrors > 0 {
-		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"errors "+count(o.EntryErrors))
+	if q.Throttles > 0 || q.Retries > 0 || o.Unreadable > 0 {
+		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"unreadable "+count(o.Unreadable))
 	}
 	if c := r.Cost; c != nil && c.CostUSD != nil && c.Basis != nil && r.Requests != nil && r.Requests.HTTPAttempts > 0 {
 		lines = append(lines, costText(*c.CostUSD, c.Basis.RatePer1kUSD))

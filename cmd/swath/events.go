@@ -518,7 +518,7 @@ type unreadableFields struct {
 // count, then up to unreadableShown of them with their cause (the
 // provider's samples) and the count of the rest.
 func reportUnreadable(r *listing.Report, du bool) {
-	n := r.Errors()
+	n := r.Outcome.Unreadable
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {
 		return

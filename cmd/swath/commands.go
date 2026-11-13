@@ -343,7 +343,7 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
 		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
-		fmt.Fprintf(stdout, "coverage complete=%v stop=%s skipped=%d filters=%d exclusions=%d\n", c.Complete, c.StopReason, c.SkippedEntries, len(c.Filters), len(c.Exclusions))
+		fmt.Fprintf(stdout, "coverage complete=%v stop=%s unreadable=%d filters=%d exclusions=%d\n", c.Complete, c.StopReason, c.Unreadable, len(c.Filters), len(c.Exclusions))
 		fmt.Fprintf(stdout, "%d %s, %d %s, %d %s", len(m.Parts), plural(len(m.Parts), "part", "parts"), rows, plural(rows, "row", "rows"), bytes, plural(bytes, "byte", "bytes"))
 		if n := len(m.Parts); n > 0 {
 			fmt.Fprintf(stdout, ", keys %q .. %q", string(m.Parts[0].MinKey), string(m.Parts[n-1].MaxKey))

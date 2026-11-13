@@ -80,7 +80,7 @@ swath show photos-inventory
 dataset photos-inventory: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
 key key unique=true, published 2026-11-10T12:50:07Z
 source /tmp/swath-docs-check/photos, scope whole ""
-coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
+coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 1 part, 7 rows, 3832 bytes, keys "2025/" .. "notes.txt"
 ```
 
@@ -98,23 +98,23 @@ holds 7 rows for 4 files.
 A program that needs the whole source reads the manifest's coverage first:
 
 ```bash
-duckdb -c "SELECT c.complete, c.stop_reason, c.skipped_entries AS skipped,
+duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
                   len(c.filters) AS filters, len(c.exclusions) AS exclusions
            FROM (SELECT extensions.swath.coverage AS c FROM read_json('photos-inventory/manifest.json'))"
 ```
 
 ```text
-┌──────────┬─────────────┬─────────┬─────────┬────────────┐
-│ complete │ stop_reason │ skipped │ filters │ exclusions │
-│ boolean  │   varchar   │  int64  │  int64  │   int64    │
-├──────────┼─────────────┼─────────┼─────────┼────────────┤
-│ true     │ completed   │       0 │       0 │          0 │
-└──────────┴─────────────┴─────────┴─────────┴────────────┘
+┌──────────┬─────────────┬────────────┬─────────┬────────────┐
+│ complete │ stop_reason │ unreadable │ filters │ exclusions │
+│ boolean  │   varchar   │   int64    │  int64  │   int64    │
+├──────────┼─────────────┼────────────┼─────────┼────────────┤
+│ true     │ completed   │          0 │       0 │          0 │
+└──────────┴─────────────┴────────────┴─────────┴────────────┘
 ```
 
-`complete` alone says only that the listing reached the end of its scope. Errors that kept entries out are
-counted in `skipped`, and a filtered run is complete over what its filters kept. When `complete` is true,
-`stop_reason` is `completed`, `skipped` is 0 and `filters` is empty, the dataset covers the recorded scope (the
+`complete` alone says only that the listing reached the end of its scope. Entries that could not be read are
+counted in `unreadable`, and a filtered run is complete over what its filters kept. When `complete` is true,
+`stop_reason` is `completed`, `unreadable` is 0 and `filters` is empty, the dataset covers the recorded scope (the
 manifest's `source` and `scope`) minus its `exclusions`, which name what was left out by design, such as an
 output directory inside the tree. A program that needs a whole-source inventory also checks that the source and
 scope are the ones it expects, accepts any exclusions explicitly, and treats a missing coverage field as unknown

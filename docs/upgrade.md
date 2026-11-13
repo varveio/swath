@@ -85,7 +85,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; 0.3
 
 | 0.3 | Now |
 |---|---|
-| `schema_version` | `report_version` (6) |
+| `schema_version` | `report_version` (7) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.committed_object_bytes` (the committed dataset's object sizes); this attempt's are `output.object_bytes`, the dataset's own size `output.output_bytes` |
@@ -164,7 +164,7 @@ re-list it into a new directory.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is the commit, written after every part: in a local directory by an atomic rename and a directory sync, in a bucket by a create that succeeds only if no manifest is there |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 6: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 7: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -521,9 +521,16 @@ exclude globs ending in a recursive `/**` segment. The retained rows have the sa
 the directory's own row is still eligible. The local report adds `source.stats.pruning` (configured-rule
 classification) and `source.stats.pruned_dirs` (child traversals prevented). Unvisited descendants are
 not counted in fetched or filtered rows. Errors below pruned directories are no longer observed, so
-`outcome.unreadable` and `coverage.skipped_entries` can decrease for the same command. Original rules
-stay in `coverage.filters`; pruning is not a skipped-entry error. Object-store exclusions and arbitrary
+`outcome.unreadable` and `coverage.unreadable` can decrease for the same command. Original rules
+stay in `coverage.filters`; pruning does not make an entry unreadable. Object-store exclusions and arbitrary
 regex exclusions keep their existing behavior. See [filters](filters.md#globs).
+
+**One name for unreadable entries: run report version 7.** The entries a listing could not read are
+`unreadable` everywhere: the manifest's `coverage.skipped_entries` is `coverage.unreadable` (`reader`:
+`Coverage.Unreadable`), `swath show` prints `unreadable=` where it printed `skipped=`, and the statistics line
+`unreadable N` where it printed `errors N`. In the run report (version 7) `outcome.unreadable` is that count, where
+it was a flag, and `outcome.entry_errors` is gone (`source.stats` keeps a local listing's error counters). A
+version 6 reader changes the type it reads `outcome.unreadable` as.
 
 **Run report: version 6.** Version 6 adds `output.committed_object_bytes`, the committed dataset's object
 bytes: every row's size summed as the writers wrote them, retained parts and rows replayed from spill included,
