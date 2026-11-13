@@ -548,10 +548,24 @@ func shownValue(fl *pflag.Flag, value string) string {
 	return value
 }
 
-// suggestFlag is the " (did you mean --x?)" of an unknown flag name: a
-// flag that names it as another tool's spelling (source.Flag.Familiar),
-// else the visible flag nearest it within two edits; "" for none.
+// duSpellings are GNU du's spellings that swath du takes another way: what
+// an unknown-flag error says in their place. A plain synonym is the
+// flag's source.Flag.Familiar instead.
+var duSpellings = map[string]string{
+	"max-depth":     "--depth N: it limits the breakdown, not the traversal",
+	"s":             "the total alone is the default: --depth 0",
+	"summarize":     "the total alone is the default: --depth 0",
+	"apparent-size": "apparent sizes are the default; --allocated totals blocks",
+}
+
+// suggestFlag is the " (did you mean --x?)" of an unknown flag name: what
+// swath du takes for a GNU du spelling (duSpellings), a flag that names it
+// as another tool's spelling (source.Flag.Familiar), else the visible flag
+// nearest it within two edits; "" for none.
 func suggestFlag(f *pflag.FlagSet, name string) string {
+	if s, ok := duSpellings[name]; ok {
+		return " (" + s + ")"
+	}
 	best, dist := "", 3
 	f.VisitAll(func(fl *pflag.Flag) {
 		if fl.Hidden {
@@ -564,7 +578,7 @@ func suggestFlag(f *pflag.FlagSet, name string) string {
 			best, dist = fl.Name, d
 		}
 	})
-	if best == "" || len(name) < 2 {
+	if best == "" || len(name) < 2 && dist >= 0 {
 		return ""
 	}
 	return " (did you mean --" + best + "?)"

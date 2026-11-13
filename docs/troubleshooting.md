@@ -76,8 +76,14 @@ See 'swath list --help'.
 ```
 
 Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gcs-credentials-file`,
-`--azure-sas-token`), and a long option takes two dashes. An option given for another provider's source is
-refused rather than ignored:
+`--azure-sas-token`), and a long option takes two dashes. A GNU `du` option says what `swath du` takes for
+it: `-x` is `--one-file-system`, `-s` and `--apparent-size` are the defaults, and
+
+```text
+swath: unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)
+```
+
+An option given for another provider's source is refused rather than ignored:
 
 ```text
 swath: --s3-profile applies to S3 sources, not to GCS sources

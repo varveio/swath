@@ -57,6 +57,7 @@ func TestTroubleshootingMessages(t *testing.T) {
 		rename [2]string
 	}{
 		{"unknown flag", []string{"list", src, "--region", "x"}, [2]string{}},
+		{"du spelling", []string{"du", src, "--max-depth", "1"}, [2]string{}},
 		{"provider option", []string{"list", "gs://bucket", "--s3-profile", "p"}, [2]string{}},
 		{"output not empty", []string{"list", src, "-o", "inventory"}, [2]string{}},
 		{"overwrite a stranger", []string{"list", src, "-o", "other", "--overwrite"}, [2]string{"other", "inventory"}},

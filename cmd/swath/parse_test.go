@@ -80,7 +80,8 @@ func TestGNUParsing(t *testing.T) {
 }
 
 // TestUsageErrors: an unknown flag names the nearest one (or the flag
-// another tool's spelling stands for) and the help to read; a value error
+// another tool's spelling stands for, or what swath du takes for a GNU du
+// spelling) and the help to read; a value error
 // names the flag and the accepted form; a non-positive count is refused.
 func TestUsageErrors(t *testing.T) {
 	for _, c := range []struct {
@@ -106,6 +107,12 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--one-filesystem"}, "unknown flag --one-filesystem (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--limiter=false"}, "unknown flag --limiter (did you mean --no-adaptive-limit?)"},
 		{[]string{"s3://b", "--concurrency", "8"}, "unknown flag --concurrency (did you mean --workers?)"},
+		{[]string{"/d", "--max-depth", "2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
+		{[]string{"/d", "--max-depth=2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
+		{[]string{"/d", "-s"}, "unknown flag -s (the total alone is the default: --depth 0)"},
+		{[]string{"/d", "--summarize"}, "unknown flag --summarize (the total alone is the default: --depth 0)"},
+		{[]string{"/d", "--apparent-size"}, "unknown flag --apparent-size (apparent sizes are the default; --allocated totals blocks)"},
+		{[]string{"/d", "-x"}, "unknown flag -x (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},
 		{[]string{"s3://b", "--workers", "0"}, `--workers "0": want a whole number of at least 1`},
