@@ -80,7 +80,7 @@ complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l s
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l part-size -x -d 'target size of a Parquet part'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l part-interval -x -d 'close a part with rows after this long, full or not'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l part-rotation-max-rows -x -d 'also close a part at N rows (0: by size and --part-interval only)'
-complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l seed-from -r -F -d 'start from a previous listing\'s key distribution, not the seed'
+complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l seed-from -r -F -d 'object stores: start from a previous listing\'s key distribution'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l max-duration -x -d 'stop the run after this long (exit 124); 0: no limit'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l stall-timeout -x -d 'stop as stuck after this long without progress (exit 75)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l report -r -F -d 'write the run report (JSON) to FILE, or - for stdout, at the end'

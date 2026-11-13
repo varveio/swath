@@ -166,7 +166,7 @@ Performance:
                                 (it bounds how long rows wait in an open part, not how much a resume
                                 repeats: a closed part still publishes in order); 0 for part
                                 boundaries independent of timing.
-      --seed-from PATH        start from a previous listing's key distribution, not the seed
+      --seed-from PATH        object stores: start from a previous listing's key distribution
                                 A committed dataset of the same source and scope, or a cut file (one
                                 key per line, ascending bytewise, optionally TAB and the keys
                                 expected since the previous cut); the engine still splits
