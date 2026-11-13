@@ -31,6 +31,18 @@ the `source` and `scope` on the line above it, minus its exclusions
 ([getting-started.md](../getting-started.md#5-check-that-it-is-complete),
 [dataset.md](../dataset.md#the-swath-extension)).
 
+For the work directory of a dataset written to a bucket (`-o s3://...`, `gs://...` or `az://...` with
+`--work-dir DIR`), it prints the same summary of the manifest the run committed there, under the destination
+its commit record (`DIR/commit.json`) names, and a last line saying the commit came from that work directory
+and whether its cleanup is finished (`finalized`) or a `swath resume DIR` still finishes it:
+
+```text
+$ swath show work
+dataset s3://out/inv/: SeekParquet format 0 draft 1, swath schema swath/s3-objects/v1, swath metadata version 1
+...
+committed from the work directory work (finalized)
+```
+
 For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts committed
 so far and where `swath resume` will continue:
 
@@ -80,7 +92,8 @@ on a committed dataset (which keeps no journal); 2 for a usage error.
 
 ## Files
 
-`DIR/manifest.json`, `DIR/.swath/journal`.
+`DIR/manifest.json`, `DIR/.swath/journal`; for a bucket dataset's work directory `DIR/commit.json` and the
+manifest it committed, under `DIR/.swath/`.
 
 ## See also
 

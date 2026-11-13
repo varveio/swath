@@ -319,7 +319,24 @@ func show(args []string, stdout io.Writer) error {
 	}
 	if dataset.Committed(dir) {
 		var m dataset.Manifest
+		name, commit := dir, ""
 		b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+		if errors.Is(err, os.ErrNotExist) {
+			// A bucket dataset's work directory: the dataset is the
+			// destination its commit marker names, its manifest the one
+			// the work directory committed there.
+			rec, merr := commitMarker(dir)
+			if merr != nil {
+				err = merr
+			} else if rec != nil {
+				b, err = dataset.CommittedCandidate(dir)
+				name = registry.Redact(rec.Destination)
+				commit = "committed from the work directory " + dir + " (finalized)"
+				if !rec.Finalized {
+					commit = "committed from the work directory " + dir + ", its cleanup unfinished (swath resume " + shellQuote(dir) + " finishes it)"
+				}
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -339,7 +356,7 @@ func show(args []string, stdout io.Writer) error {
 		if m.MetadataVersion > 0 {
 			metadata = "swath metadata version " + strconv.Itoa(m.MetadataVersion)
 		}
-		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", dir, format, m.SchemaID, metadata)
+		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", name, format, m.SchemaID, metadata)
 		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
 		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
@@ -349,6 +366,9 @@ func show(args []string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, ", keys %q .. %q", string(m.Parts[0].MinKey), string(m.Parts[n-1].MaxKey))
 		}
 		fmt.Fprintln(stdout)
+		if commit != "" {
+			fmt.Fprintln(stdout, commit)
+		}
 		return nil
 	}
 	st, err := journal.Read(dir)
@@ -387,6 +407,17 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
+}
+
+// commitMarker is the commit marker of dir, a bucket dataset's work
+// directory.
+func commitMarker(dir string) (*dataset.RemoteCommitRecord, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return dataset.ReadCommitMarker(r)
 }
 
 // shellLine is args as one POSIX shell command line, each argument quoted
