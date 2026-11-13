@@ -25,8 +25,11 @@ import (
 	"testing"
 	"time"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/objhttp"
@@ -83,6 +86,10 @@ func TestEventGolden(t *testing.T) {
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
+	src, complete, stop, skipped, listed := "s3://bucket/logs/", true, "completed", int64(0), at.Add(-50*time.Hour)
+	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
+		Complete: &complete, StopReason: &stop, SkippedEntries: &skipped, Filters: []string{}, Exclusions: []string{}}, at)
+	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
@@ -99,7 +106,7 @@ func TestEventGolden(t *testing.T) {
 		}
 		events[fmt.Sprint(e["event"])] = true
 	}
-	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evOutcome} {
+	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evDataset, evRead, evOutcome} {
 		if !events[e] {
 			t.Fatalf("no %s event in %s", e, got)
 		}

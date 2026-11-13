@@ -148,6 +148,11 @@ duckdb -c "
 names need not be UTF-8: `decode(key)` reads it as text. An object store's `key` is text. The columns of each
 source are in the [schema registry](dataset.md#schema-registry).
 
+Totals per prefix need no query: `swath du --from-dataset photos-inventory -d 1` prints what `swath du -d 1` of
+the tree printed when it was listed, from the dataset, without walking the tree again
+([swath du](commands/swath-du.md#totals-from-a-saved-dataset)). Stderr says when the dataset was listed and
+whether its listing was complete.
+
 ## 7. Interrupt and resume a run
 
 A dataset run of an object store keeps a journal in the output directory and publishes parts as it goes, so it

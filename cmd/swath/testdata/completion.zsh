@@ -87,6 +87,7 @@ _swath_du() {
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
+        '--from-dataset=[total the dataset saved in DIR (swath list -o DIR) instead of listing]:DIR:_files -/' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
