@@ -87,6 +87,9 @@ func TestPrepareNeverDeletesTheTree(t *testing.T) {
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
+		if strings.HasPrefix(name, "inside") && !errors.Is(err, ErrInsideRoot) {
+			t.Errorf("%s: err = %v, not %v: --overwrite would be refused", name, err, ErrInsideRoot)
+		}
 		exists(t, keep, filepath.Join(T, "foreign", "precious.txt"))
 	}
 	alias := filepath.Join(t.TempDir(), "alias")

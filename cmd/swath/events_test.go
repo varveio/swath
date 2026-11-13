@@ -289,7 +289,8 @@ func TestRequestPathRedacted(t *testing.T) {
 }
 
 // TestOneLineFailures (D1, D4): a refusal and a failure before any
-// listing request was answered print the error line alone on stderr,
+// listing request was answered print the error line alone on stderr
+// (an output inside the root advised without --overwrite, which it refuses),
 // with no statistics, INCOMPLETE, outcome line or internal prefix; -v adds
 // the outcome line, --log-format json prints only events. The report is
 // written either way.
@@ -300,6 +301,12 @@ func TestOneLineFailures(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644)
 	full := t.TempDir()
 	os.WriteFile(filepath.Join(full, "other"), nil, 0o644)
+	// An output inside the root: --overwrite is refused there too, so
+	// neither refusal advises it.
+	inTree := filepath.Join(src, "inv")
+	os.Mkdir(inTree, 0o755)
+	os.WriteFile(filepath.Join(inTree, "other"), nil, 0o644)
+	const inTreeAdvice = "cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)\n"
 	missing := filepath.Join(t.TempDir(), "nosuchdir")
 	nobucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"code":404,"message":"The specified bucket does not exist."}}`, http.StatusNotFound)
@@ -324,6 +331,8 @@ func TestOneLineFailures(t *testing.T) {
 		line string // the whole of stderr; "" checks one line
 	}{
 		{"not empty", dataset(src, "-o", full), "swath: " + full + ": output directory is not empty (use --overwrite to replace a previous dataset)\n"},
+		{"not empty, inside the root", dataset(src, "-o", inTree), "swath: -o: " + inTree + ": output directory is not empty, and " + inTreeAdvice},
+		{"overwrite inside the root", dataset(src, "-o", inTree, "--overwrite"), "swath: -o: " + inTree + ": " + inTreeAdvice},
 		{"no such directory", []string{"du", missing}, "swath: " + missing + ": " + notFound + "\n"},
 		{"no such directory, a dataset", dataset(missing, "-o", filepath.Join(t.TempDir(), "ds")), "swath: " + missing + ": " + notFound + "\n"},
 		{"no such bucket", dataset("gs://bkt", "--endpoint-url", nobucket.URL+gcstest.Path, "--anonymous", "-o", filepath.Join(t.TempDir(), "ds")), ""},

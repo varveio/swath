@@ -96,6 +96,13 @@ swath dataset there and nothing else; a directory holding other files stays refu
 swath: -o: inventory: output directory does not hold a previous swath dataset
 ```
 
+An output inside the local tree being listed (`swath list tree -o tree/inventory`) is refused when it is not empty, with or without `--overwrite`,
+which never replaces anything inside the listed tree. Write the dataset to a new directory outside it:
+
+```text
+swath: -o: tree/inventory: output directory is not empty, and cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)
+```
+
 A directory that holds an interrupted run is continued with `swath resume DIR`, or replaced with `--overwrite`:
 
 ```text

@@ -92,7 +92,8 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
 - **Output directory.** `-o DIR` must be empty or absent. A non-empty directory is refused (exit 2) unless
   `--overwrite`, which replaces only a previous dataset of this tool. For a local source the output may not be
   the listed root or contain it; a new or empty directory inside the root is accepted (the listing skips it),
-  but `--overwrite` of an output inside the root is refused.
+  but `--overwrite` of an output inside the root is refused, and a non-empty one is refused saying so: write
+  to a new directory outside the root.
 - **The outcome of record** is the exit code plus the report written to `--report FILE` when the attempt ends,
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when

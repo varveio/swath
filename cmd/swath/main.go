@@ -1095,9 +1095,13 @@ func explain(err error) error {
 		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
+	case errors.Is(err, dataset.ErrInsideRoot):
+		// Not empty, or --overwrite given: either way --overwrite cannot
+		// help here.
+		return fmt.Errorf("-o: %w (write the dataset to a new directory outside the listed root)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
-	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
+	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrNotDataset):
 		return fmt.Errorf("-o: %w", err)
 	case errors.As(err, &mm):
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
