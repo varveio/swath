@@ -190,7 +190,6 @@ _swath_diag_list() {
         '--no-journal[publish parts only at the end, without the journal resume needs]' \
         '--no-spill[wait on the sort buffer instead of spilling rows to disk]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
-        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -205,6 +204,7 @@ _swath_diag_list() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
@@ -272,7 +272,6 @@ _swath_diag_count() {
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
-        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -287,6 +286,7 @@ _swath_diag_count() {
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
@@ -339,7 +339,6 @@ _swath_resume() {
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
-        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
@@ -347,6 +346,7 @@ _swath_resume() {
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \
+        '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
         '--s3-profile=[the shared config profile to take credentials and region from]:NAME: ' \

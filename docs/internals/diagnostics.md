@@ -35,10 +35,6 @@ Diagnostics:
       --no-spill            wait on the sort buffer instead of spilling rows to disk
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
-      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
-                              S3, GCS and Azure Blob. Every range made, claimed, paged, split and
-                              ended, with its keys; tools/explainer reads it. Events the file cannot
-                              keep up with are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
       --no-seed             start from one range, without the delimiter-listing seed
@@ -50,6 +46,10 @@ Diagnostics:
       --slow-split          split a range whose pages are slow without waiting for an idle worker
       --sequential          list with one continuation-token chain (no ranges; the reference)
       --max-keys N          with --sequential, stop after N objects (marked incomplete)
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              Every range made, claimed, paged, split and ended, with its keys;
+                              tools/explainer reads it. Events the file cannot keep up with are
+                              dropped, never waited for (trace.dropped).
       --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- diag-list:end -->
@@ -59,10 +59,6 @@ Diagnostics:
 <!-- diag-count:begin -->
 ```text
 Diagnostics:
-      --trace FILE   write the range engine's run trace (JSON Lines) to FILE
-                       S3, GCS and Azure Blob. Every range made, claimed, paged, split and ended,
-                       with its keys; tools/explainer reads it. Events the file cannot keep up with
-                       are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                      start the limit at 4 in flight, doubling each second to --workers
       --no-seed      start from one range, without the delimiter-listing seed
@@ -74,6 +70,10 @@ Diagnostics:
       --slow-split   split a range whose pages are slow without waiting for an idle worker
       --sequential   list with one continuation-token chain (no ranges; the reference)
       --max-keys N   with --sequential, stop after N objects (marked incomplete)
+      --trace FILE   write the range engine's run trace (JSON Lines) to FILE
+                       Every range made, claimed, paged, split and ended, with its keys;
+                       tools/explainer reads it. Events the file cannot keep up with are dropped,
+                       never waited for (trace.dropped).
       --page-size N  ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- diag-count:end -->
@@ -88,12 +88,12 @@ Diagnostics:
       --spill-plain         write spill frames without delta coding (a comparison arm)
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
-      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
-                              S3, GCS and Azure Blob. Every range made, claimed, paged, split and
-                              ended, with its keys; tools/explainer reads it. Events the file cannot
-                              keep up with are dropped, never waited for (trace.dropped).
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
+      --trace FILE          write the range engine's run trace (JSON Lines) to FILE
+                              Every range made, claimed, paged, split and ended, with its keys;
+                              tools/explainer reads it. Events the file cannot keep up with are
+                              dropped, never waited for (trace.dropped).
       --spill-compress      undo a recorded --no-spill-compress
       --no-spill-plain      undo a recorded --spill-plain
       --no-adaptive-limit-slow-start

@@ -64,7 +64,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		return r
 	}
 	defaults := map[string]bool{"groups": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_split": false, "slow_start": false,
-		"seed": true, "seed_from": false, "split": true, "structure": true}
+		"seed": true, "seed_from": false, "split": true, "structure": true, "trace": false}
 	for name, src := range schemes {
 		r := runJSON(false, src...)
 		if r.Outcome.Status != "committed" || r.Output.RowsEmitted != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {

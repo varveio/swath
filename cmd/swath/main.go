@@ -571,7 +571,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "trace", "max-duration", "stall-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -797,6 +797,9 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	o.text = text
 	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
+	}
+	if fl := f.Lookup(source.TraceFlag); fl != nil {
+		o.trace = fl.Value.String() // the range engine's flag group's (keyrange.Flags)
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
