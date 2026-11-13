@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Start from the exit code and the last line on stderr. With `--report FILE`, the report's `outcome.class` and
-`outcome.cause` say the same in a form a program reads ([reference/exit-codes.md](reference/exit-codes.md)).
+`outcome.cause` say the same in a form a program reads ([Exit codes](reference/exit-codes.md)).
 
 | Exit | Start with |
 |---|---|
@@ -43,7 +43,7 @@ swath: could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultA
 
 Common causes: a key without its secret, a profile that does not exist, an expired SSO login (`aws sso login`),
 a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file, no Entra ID credential on a host outside Azure.
-Where each provider looks: [sources.md](sources.md). A credential lookup that failed only transiently, and
+Where each provider looks: [Sources](sources.md). A credential lookup that failed only transiently, and
 credentials the service refused ([access denied](#access-denied)), are not this failure: their errors are
 printed whole.
 
@@ -128,7 +128,7 @@ swath: inventory: output directory is not empty: it holds an interrupted run (sw
 swath: -o x.csv: swath does not write .csv files; -o takes a dataset directory (any other name, or one ending in /), a GCS, S3 or Azure Blob prefix with --work-dir, NAME.tsv or NAME.jsonl (optionally .gz or .zst), or - for stdout
 ```
 
-Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#reading-text-rows-in-duckdb)).
+Write `.tsv` and convert it, or read the TSV directly ([Output](output.md#reading-text-rows-in-duckdb)).
 
 ## The run was interrupted
 
@@ -171,10 +171,10 @@ never recorded.
 
 | Message or exit | Meaning | What to do |
 |---|---|---|
-| exit 2, `-o gs://...` (or `s3://...`, `az://...`)`: a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
+| exit 2, `-o gs://...` (or `s3://...`, `az://...`): `a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
 | exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination`, `a shared access signature ... is for an Azure destination` | a destination option of another provider | drop it, or give the one for the destination's provider |
 | exit 2, `the run in DIR was started with --output-azure-sas-token, which is never recorded` | the Azure destination's SAS is not in the journal | give `--output-azure-sas-token` to `swath resume DIR` again (a rotated one is fine) |
-| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([production.md](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
+| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([Running swath in production](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
 | `authorized requests are not permitted for non-TLS protected (https) endpoints` | Entra ID (no `--output-azure-sas-token`) on an `http://` endpoint, such as an emulator's | give the emulator a SAS |
 | `destination: remote: destination configuration: ...` | the S3 destination's AWS configuration does not load: a missing `--output-s3-profile`, an unreadable CA bundle | fix the profile or the shared config files |
 | exit 2, `the destination already holds a dataset` | the prefix has a `manifest.json`; datasets in a bucket are not replaced | write to another prefix |
@@ -186,7 +186,7 @@ never recorded.
 | exit 1, `cause` `candidate_mismatch` | the work directory's saved manifest names other parts than the resume recovered (its journal lost the final record) and may still be created | read the prefix's manifest once no request can still be pending: if there is none, start over at a new prefix |
 | exit 1, `cause` `unsafe_layout` | something in the work directory's `.swath/remote/` is a link or not what swath made | inspect the work directory; start over with a new one |
 | a warning that the commit's aftermath is not finished | the dataset is committed, but deleting this run's leftover parts or writing `run.json` failed | `swath resume DIR` finishes it and exits 0 |
-| `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([production.md](production.md#writing-to-a-bucket)) |
+| `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([Running swath in production](production.md#writing-to-a-bucket)) |
 
 Errors never quote a resumable upload's session URL (its query is a credential for the upload), an S3
 multipart upload's id, an Azure destination's SAS or its block ids: a URL in an error shows its scheme, host and
@@ -207,7 +207,7 @@ the report: a person needs to look. A service that is slow for minutes at a time
 
 `throttles` rises in `progress.json` and the request limit falls below `--workers`. For a quota shared with
 other clients, set `--request-rate N` below it. If the limit stays near 1 under sustained throttling, use
-`--no-adaptive-limit --request-rate N` ([running.md](running.md#throttling)).
+`--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
 
 ## A warning repeats about failing requests
 
@@ -242,7 +242,7 @@ connections that fail later are an outage instead: swath retries them until `--s
 
 A part, the journal or the manifest could not be written. Free space, or move the output directory to a
 larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almost every row once on the
-output's filesystem: size the disk as [production.md](production.md#disk-sizing) says, or cap spill with
+output's filesystem: size the disk as [Running swath in production](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
 A run that is far short of spill room does not exit 74: it keeps going at the output's pace, which on a very
@@ -257,13 +257,13 @@ larger `--spill-budget`.
 directories being read, the encoders, the tail after listing and the garbage collector come on top, and swath
 sets no total-memory limit. Read `resources.peak_rss_bytes` in the report of a representative run. To use less,
 lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without
-lowering the peak ([running.md](running.md#memory)).
+lowering the peak ([Running swath](running.md#memory)).
 
 ## `swath du` shows a size of 0, or `-`
 
 With `--metadata names` a local walk reads no sizes: `unsized` counts the files without one, and the table
 shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
-([output.md](output.md#du-rows)).
+([Output](output.md#du-rows)).
 
 ## Entries could not be read
 
@@ -283,10 +283,14 @@ cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the rep
 
 ## Reporting a problem
 
+Report a bug or a confusing message as a [GitHub issue](https://github.com/varveio/swath/issues/new). Attach
+the output of `swath --version` and the run report: rerun with `--report run.json`, or take `DIR/run.json`
+beside a dataset, or `DIR/error.json` when the run did not complete.
+
 Include `swath --version`, the command line, the provider and region, and the `--report` file (redact bucket
 names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`
 (or the temporary file the warning named), and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
 
 The internals of these records, `error.json`'s rules, the watchdog and the forced exit, are in
-[internals/run-lifecycle.md](internals/run-lifecycle.md); the workspace under `.swath/` in
-[internals/durability.md](internals/durability.md).
+[Run lifecycle (internals)](internals/run-lifecycle.md); the workspace under `.swath/` in
+[Durability and resume (internals)](internals/durability.md).

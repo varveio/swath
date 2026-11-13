@@ -30,7 +30,7 @@ prefix and a destination that overlaps a `gs://`, `s3://` or `az://` SOURCE are 
 
 TSV and JSONL rows carry the source's columns under the dataset's names, by default `key` first, then `size`,
 `last_modified` and the rest of the source's schema; `--columns` chooses them and their order, and the table
-puts `key` last ([output.md](../output.md#text-rows)). Every format and every source lists in ascending byte
+puts `key` last ([Output](../output.md#text-rows)). Every format and every source lists in ascending byte
 order of the key. A local tree lists its directories too (kind `DIR`, the key ending
 in `/`) unless `--no-dirs`. A local SOURCE that is a file lists as its one row, read as the same entry would be
 in a listing of its parent: at the `--metadata` tier, and a symbolic link as the link, not its target.
@@ -356,11 +356,11 @@ swath list s3://bucket/logs/ --all-versions -o logs-versions
 2 for a usage error or a refusal (a non-empty `-o` directory without `--overwrite`), 3 when the output is
 written but incomplete (entries could not be read; `swath diag list --max-keys`). A dataset run of an object
 store that stops early exits 74, 75, 124, 130 or 143 and can be resumed. See
-[reference/exit-codes.md](../reference/exit-codes.md).
+[Exit codes](../reference/exit-codes.md).
 
 ## Environment
 
-The provider's credential and endpoint variables ([sources.md](../sources.md)), and those of
+The provider's credential and endpoint variables ([Sources](../sources.md)), and those of
 [swath(1)](swath.md#environment).
 
 ## Files
@@ -380,11 +380,11 @@ A dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o a
 lock, the journal, spill, and `remote/`: the allocated names, the claim receipts, the candidate manifest),
 `DIR/error.json` and, once committed, `DIR/commit.json`.
 
-[dataset.md](../dataset.md) describes the parts and the manifest; [running.md](../running.md) the workspace
+[The swath dataset](../dataset.md) describes the parts and the manifest; [Running swath](../running.md) the workspace
 and its disk.
 
 ## See also
 
-[swath-du](swath-du.md), [swath-resume](swath-resume.md), [swath-show](swath-show.md),
-[output.md](../output.md), [filters.md](../filters.md), [sources.md](../sources.md),
-[reference/run-report.md](../reference/run-report.md)
+[swath du](swath-du.md), [swath resume](swath-resume.md), [swath show](swath-show.md),
+[Output](../output.md), [Filters](../filters.md), [Sources](../sources.md),
+[Run report and progress file](../reference/run-report.md)

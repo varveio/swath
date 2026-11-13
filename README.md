@@ -22,7 +22,7 @@ one 32-vCPU `n4-highcpu-32` VM with a 400 GB disk in GCP `us-east1`, listing ano
 across clouds from AWS `us-west-2`.
 
 These are single-run S3 observations, not expected times for every source or machine.
-The [measurements and setup](docs/internals/measurements.md) keep the operations, conditions and
+The [measurements and setup](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07) keep the operations, conditions and
 other runs separate.
 
 ## Supported sources
