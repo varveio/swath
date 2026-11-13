@@ -80,7 +80,7 @@ func (p *Engine[P]) traceTiles(tiles []Range) {
 			e = e.Bool("reused", true)
 		}
 		if t.prior && t.estOK {
-			e = e.Int("expected", int64(t.est))
+			e = estimate(e, "expected", t.est)
 		}
 		p.emitTrace(e)
 	}
@@ -146,16 +146,9 @@ func (p *Engine[P]) traceSplit(r Range, st *running, c string, pv pivot, lower, 
 	}
 	e = e.Int("lower", int64(lower.id)).Int("upper", int64(upper.id)).Str("mechanism", pv.src.String()).Str("reason", reason).
 		Int("hunger", int64(pv.hunger)).Int("rows", st.keys).Int("depth", lower.depth).Int("gen", int64(r.gen))
-	if finite(pv.rem) {
-		e = e.Int("remainder", int64(pv.rem))
-	}
+	e = estimate(e, "remainder", pv.rem)
 	if pv.estOK {
-		if finite(pv.lower) {
-			e = e.Int("est_lower", int64(pv.lower))
-		}
-		if finite(pv.upper) {
-			e = e.Int("est_upper", int64(pv.upper))
-		}
+		e = estimate(estimate(e, "est_lower", pv.lower), "est_upper", pv.upper)
 		e = e.Bool("held", pv.prior)
 	}
 	if pv.persistent {
@@ -181,4 +174,14 @@ func (p *Engine[P]) traceEnd(r Range, st *running, err error) {
 	}
 }
 
-func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+// estimate adds a key estimate as a count, or leaves it out where it is
+// none: NaN (unknown), infinite (a bound the page could not read), or
+// beyond what an int64 holds (a gauge's step over a long run of shared
+// bytes can estimate more keys than that), which would convert to a
+// meaningless negative.
+func estimate(e runtrace.Event, name string, v float64) runtrace.Event {
+	if math.IsNaN(v) || v < math.MinInt64 || v >= math.MaxInt64 {
+		return e
+	}
+	return e.Int(name, int64(v))
+}
