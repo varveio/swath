@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/textout"
 )
@@ -325,10 +326,14 @@ func TestDuLocalRefusals(t *testing.T) {
 	}
 }
 
-// TestDuWarnsOnUnreadable: an entry the listing could not read is not in
-// the totals; the run still exits 0, as a listing does, and says so on
-// stderr without --stats, but not with -q (no warnings).
-func TestDuWarnsOnUnreadable(t *testing.T) {
+// TestUnreadableIsIncomplete: an entry the listing could not read is not in
+// the totals, the text rows or the dataset; each run finishes with exit 3
+// (class incomplete), names the entry with its cause as a warning and ends
+// with the count as its error line, which -q keeps and -qq drops. The
+// committed dataset's coverage counts it (unreadable 1) beside complete
+// true, its listing having reached the end of the tree. Before, each exited
+// 0, and -q left no trace of the missing entry.
+func TestUnreadableIsIncomplete(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory of mode 000")
 	}
@@ -345,33 +350,52 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	const end = "swath: 1 entry could not be read and is missing from the output\n"
+	warning := "swath: warning: unreadable entries:\n  " + locked + ": permission denied\n"
 	var out bytes.Buffer
 	report := filepath.Join(t.TempDir(), "report.json")
-	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out); err != nil {
-		t.Fatal(err)
-	}
+	err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out)
 	// D7: the entry is named with its cause, and the report says the
 	// totals are short although the listing completed.
-	if !strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
-		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read: the totals leave them out\n  "+locked+": ") ||
-		!strings.Contains(stderr.String(), "permission denied") {
-		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
+	if code := conclude(err); code != exitIncomplete ||
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("du: exit %d, stdout %q stderr %q", code, out.String(), stderr.String())
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
-	if rep.Outcome.Unreadable != 1 || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
-		t.Fatalf("report outcome %+v", rep.Outcome)
+	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
+		t.Fatalf("report outcome %+v", o)
 	}
-	// A listing names them too.
+	// A listing, text or a dataset, ends the same way.
 	stderr.Reset()
-	if err := run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false); err != nil ||
-		!strings.Contains(stderr.String(), "1 entry could not be read: the output leaves them out\n  "+locked+": ") {
-		t.Fatalf("list: %v, stderr %q", err, stderr.String())
+	if code := conclude(run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false)); code != exitIncomplete ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("list: exit %d, stderr %q", code, stderr.String())
 	}
-	for _, q := range []string{"-q", "-qq"} {
+	stderr.Reset()
+	dir := filepath.Join(t.TempDir(), "ds")
+	if code := conclude(run(context.Background(), []string{root, "-o", dir, "--no-stats", "--no-progress"}, io.Discard, false)); code != exitIncomplete ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("list -o: exit %d, stderr %q", code, stderr.String())
+	}
+	var m dataset.Manifest
+	var o outcome
+	readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
+	readJSON(t, filepath.Join(dir, errorName), &o)
+	if c := m.Coverage; c.Unreadable != 1 || !c.Complete || c.StopReason != "completed" || o.Class != listing.ClassIncomplete || o.ExitCode != exitIncomplete {
+		t.Fatalf("dataset: coverage %+v, error.json %+v", c, o)
+	}
+	out.Reset()
+	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
+		t.Fatalf("show: %v %q", err, out.String())
+	}
+	// -q keeps the error line, -qq drops it; the exit code stays.
+	for q, want := range map[string]string{"-q": end, "-qq": ""} {
 		stderr.Reset()
-		if err := runDu(context.Background(), []string{root, "--format=tsv", q}, &out); err != nil || stderr.Len() != 0 {
-			t.Fatalf("%s: %v, stderr %q", q, err, stderr.String())
+		if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", q}, &out)); code != exitIncomplete || stderr.String() != want {
+			t.Fatalf("%s: exit %d, stderr %q", q, code, stderr.String())
 		}
 	}
 }
@@ -393,7 +417,7 @@ func (g *gatedWriter) Write(p []byte) (int, error) {
 
 // TestWarningOutlastsBacklog: with stderr full while a du run with an
 // unreadable entry ends, and drained once its report is written, the
-// "could not be read" warning and the outcome both arrive, in that order:
+// unreadable entries' warning and the outcome both arrive, in that order:
 // the outcome's priority drops the disposable lines only.
 func TestWarningOutlastsBacklog(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -426,7 +450,7 @@ func TestWarningOutlastsBacklog(t *testing.T) {
 	g.mu.Lock()
 	got := g.b.String()
 	g.mu.Unlock()
-	w, o := strings.Index(got, "could not be read"), strings.Index(got, `"event":"outcome"`)
+	w, o := strings.Index(got, `"msg":"unreadable entries"`), strings.Index(got, `"event":"outcome"`)
 	if w < 0 || o < 0 || w > o {
 		t.Fatalf("stderr %q", got)
 	}

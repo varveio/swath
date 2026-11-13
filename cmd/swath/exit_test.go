@@ -112,10 +112,10 @@ func TestExitCodes(t *testing.T) {
 	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "not_found" || !strings.Contains(o.Message, "404") || !strings.Contains(o.Message, "NoSuchBucket") {
 		t.Fatalf("fatal: %+v", o)
 	}
-	// 1: a committed dataset with partial coverage (a key limit) never exits 0.
+	// 3: a committed dataset with partial coverage (a key limit) never exits 0.
 	part := filepath.Join(t.TempDir(), "partial")
 	pargs := append([]string{"diag"}, s3args("bkt", part, "--sequential", "--max-keys", "10")...)
-	if c := code(exec.Command(bin, pargs...).Run()); c != exitFatal {
+	if c := code(exec.Command(bin, pargs...).Run()); c != exitIncomplete {
 		t.Fatalf("partial: exit %d", c)
 	}
 	if o := outcome(part); o.Class != "incomplete" || o.Resumable {
@@ -406,7 +406,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 }
 
 // TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
-// dataset whose coverage says incomplete, exits 1 with class incomplete
+// dataset whose coverage says incomplete, exits 3 with class incomplete
 // (not resumable), keeps no journal, and swath resume refuses it as
 // complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
 func TestGCSCappedRunIsIncomplete(t *testing.T) {
@@ -416,7 +416,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	ctx := context.Background()
 	err := run(ctx, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10",
 		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
-	if c := exitCode(t, err); c != exitFatal {
+	if c := exitCode(t, err); c != exitIncomplete {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
 	}
 	var o outcome
@@ -443,6 +443,21 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	}
 	if got := dirTree(t, dir); !maps.Equal(want, got) {
 		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)
+	}
+}
+
+// TestCappedTextRunIsIncomplete: text rows capped by --max-keys exit 3
+// (class incomplete) with an error line that says the output is partial,
+// as a capped dataset does; a reader that closes the stream early is not
+// a partial listing (TestPipedToHeadExitsZero). Before, they exited 0.
+func TestCappedTextRunIsIncomplete(t *testing.T) {
+	stderr := captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--format", "tsv", "--no-stats"}, &out, true)
+	if c := conclude(err); c != exitIncomplete || strings.Count(out.String(), "\n") != 11 ||
+		!strings.HasSuffix(stderr.String(), "swath: the output is partial: the listing stopped before the end of its scope (max_keys)\n") {
+		t.Fatalf("exit %d, %d lines, stderr %q", c, strings.Count(out.String(), "\n"), stderr.String())
 	}
 }
 

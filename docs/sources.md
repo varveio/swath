@@ -235,9 +235,9 @@ of an output inside the listed tree is refused (exit 2).
 Recursive exclude globs can prevent descent into entire subtrees ([filters](filters.md#globs));
 other row filters do not stop directory traversal.
 
-Entries that cannot be read (permissions, entries removed during the walk) are left out: swath names up to
-five of them with their cause on stderr, counts the rest, and still exits 0; the report's
-`outcome.unreadable` is then true.
+Entries that cannot be read (permissions) are left out: swath names up to five of them with their cause on
+stderr and exits 3, its last line counting them; the report's `outcome.unreadable` and the dataset's
+`coverage.unreadable` hold the count ([troubleshooting.md](troubleshooting.md#entries-could-not-be-read)).
 
 A local listing keeps no journal: an interrupted one is run again. On a local tree `--workers` defaults to 4
 per CPU, at most 64.

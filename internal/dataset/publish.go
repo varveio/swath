@@ -292,7 +292,7 @@ type Scope struct {
 type Coverage struct {
 	Complete          bool      `json:"complete"`    // the listing reached the end of the scope
 	StopReason        string    `json:"stop_reason"` // "completed", or why it stopped early
-	Unreadable        int64     `json:"unreadable"` // entries missing because they could not be read
+	Unreadable        int64     `json:"unreadable"`  // entries missing because they could not be read
 	Exclusions        []string  `json:"exclusions"`
 	Filters           []string  `json:"filters"`
 	Snapshot          bool      `json:"snapshot"` // always false

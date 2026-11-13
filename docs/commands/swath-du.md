@@ -50,8 +50,8 @@ The [filters](../filters.md) apply before counting, to every row: on a local tre
 Memory grows with the number of distinct prefixes, not objects. A run that would hold more than
 `--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
 
-Entries of a local tree that could not be read (permissions, entries removed during the walk) are not in the
-totals; the run still exits 0 and says so on stderr.
+Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
+the rest, names the entries on stderr and exits 3 ([exit codes](../reference/exit-codes.md)).
 
 ## Options
 
@@ -300,7 +300,8 @@ swath du s3://bucket --min-size 1GiB
 ## Exit status
 
 0 when the totals are printed, also when the reader closes stdout early. 1 when the listing failed or the
-prefixes passed `--max-prefixes`; 2 for a usage error. An interrupted `swath du` is run again: it keeps no
+prefixes passed `--max-prefixes`; 2 for a usage error; 3 when the totals are printed but entries could not be
+read. An interrupted `swath du` is run again: it keeps no
 journal. See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment

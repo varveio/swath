@@ -101,9 +101,11 @@ func (s *Stats) ErrorSamples() []string { return s.Samples }
 
 const maxSamples = 8
 
+// note counts an error; one that left the entry out (not a vanished entry,
+// nor a link whose target was not read: Report) is a sample too.
 func (s *Stats) note(counter *int64, path string, err error) {
 	*counter++
-	if len(s.Samples) < maxSamples {
+	if len(s.Samples) < maxSamples && counter != &s.Vanished && counter != &s.ReadlinkErrors {
 		s.Samples = append(s.Samples, path+": "+err.Error())
 	}
 }

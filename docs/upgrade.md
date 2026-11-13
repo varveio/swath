@@ -37,7 +37,8 @@ downstream reader are the acceptance gates ([Gates](#gates)).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
   Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
   and resume ([platform limits](running.md#known-limits)). The exit codes keep their meaning:
-  0, 1, 2, 74, 75, 124, 130 and 143.
+  0, 1, 2, 74, 75, 124, 130 and 143; 3 is new: the run finished, but entries could not be read or `--max-keys`
+  stopped the listing, which 0.3 exited 1 for ([exit codes](reference/exit-codes.md)).
 - **Controls.** `--max-duration`, `--request-rate`, `--report`, `--progress`, `--stats`, `-v` and `-q`.
 
 ## The command line: what behaves differently
@@ -628,5 +629,5 @@ is the full schema and [reference/run-report.md](reference/run-report.md) its de
 
 **The dataset** changed against those builds: it is SeekParquet ([SeekParquet](#seekparquet)). Builds before
 2026-11-05 wrote format 1, as the Java tool does; those of 2026-11-05 to 2026-11-08 wrote format 2, whose Parquet
-schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
+schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the outcome classes, `progress.json` and `error.json`; the exit codes but one: `incomplete` (a key limit, which exited 1, and unreadable entries, which exited 0) exits 3. Spill files changed format (delta coding,
 zstd), but they are private to one run and never read across builds.

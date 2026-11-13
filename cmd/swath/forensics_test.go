@@ -146,7 +146,7 @@ func TestForcedExitCode(t *testing.T) {
 
 // TestOneTerminalAccount: run.json, the external report (--report) and
 // error.json carry the same outcome. A committed dataset with partial
-// coverage (a key limit) is "incomplete", exit 1, in all three (run.json
+// coverage (a key limit) is "incomplete", exit 3, in all three (run.json
 // said "completed", exit 0, before the command classified it); a run that
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
@@ -170,7 +170,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		report := filepath.Join(t.TempDir(), "report.json")
 		err := run(ctx, []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--sequential", "--max-keys", "10",
 			"--report", report, "-o", dir}, io.Discard, true)
-		if c := exitCode(t, err); c != exitFatal {
+		if c := exitCode(t, err); c != exitIncomplete {
 			t.Fatalf("exit %d (%v)", c, err)
 		}
 		var rep, rj listing.Report
@@ -178,7 +178,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
 		var o outcome
 		readJSON(t, filepath.Join(dir, errorName), &o)
-		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitFatal {
+		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitIncomplete {
 			t.Fatalf("report outcome %+v", rep.Outcome)
 		}
 		same(t, "run.json", rj.Outcome, rep.Outcome)

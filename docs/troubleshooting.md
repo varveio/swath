@@ -7,10 +7,10 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 |---|---|
 | 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
+| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](concepts.md#coverage) says which |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
-| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
 
 The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
 and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their
@@ -218,11 +218,18 @@ shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
 
 ## Entries could not be read
 
-A local walk that cannot read some entries (permissions, entries removed during the walk, a link target it
-cannot read) names up to five on stderr with their cause, counts the rest, and still exits 0. Local entry errors
-can leave rows out or metadata unavailable: a symbolic link whose target cannot be read keeps its row.
-`outcome.unreadable` in the report and the dataset's `coverage.unreadable` count the entries left out: not
-entries found missing during stat or failed link-target reads, but failed directory opens.
+```text
+swath: warning: unreadable entries:
+  /data/locked: permission denied
+swath: 1 entry could not be read and is missing from the output
+```
+
+A local walk that cannot read some entries (permissions, a directory replaced while the walk ran) leaves them
+out, names up to five on stderr with their cause, and exits 3 (class `incomplete`); the last line counts them, and
+`-q` keeps it. The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
+its row, and an entry removed during the walk is no longer part of the tree: neither counts. A root directory that
+cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
+`coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
 
 ## Reporting a problem
 

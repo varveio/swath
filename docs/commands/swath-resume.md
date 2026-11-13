@@ -247,7 +247,7 @@ swath resume container-inventory --azure-sas-token "$SAS"
 
 The codes of [`swath list`](swath-list.md#exit-status). 2 also when the directory holds no interrupted run, or
 when the environment resolves another route than the run's (another region or endpoint): the directory is
-left as it was. 0 when the dataset is already complete. See [reference/exit-codes.md](../reference/exit-codes.md).
+left as it was. 0 when the dataset is already complete, 3 when it is committed with partial coverage. See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment
 

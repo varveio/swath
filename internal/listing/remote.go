@@ -378,13 +378,13 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 
 // committedOutcome is the outcome of finding a dataset committed with the
 // coverage c, as the command classifies the same manifest: completed with
-// exit 0 when it covers its scope, else incomplete with exit 1, never
+// exit 0 when it covers its scope, else incomplete with exit 3, never
 // completed with 0.
 func committedOutcome(o *Outcome, c dataset.Coverage) {
 	o.Complete, o.StopReason = c.Complete, c.StopReason
 	o.Class, o.ExitCode = ClassCompleted, 0
-	if !c.Complete {
-		o.Class, o.ExitCode = ClassIncomplete, 1
+	if !c.Complete || c.Unreadable > 0 {
+		o.Class, o.ExitCode = ClassIncomplete, 3
 	}
 }
 
