@@ -4,7 +4,7 @@
 
 `gs://bucket[/prefix]` uses the native JSON API for current objects, or live and noncurrent
 generations with `--all-versions`. Soft-deleted objects are outside its listing scope.
-[Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
+[Shared object-store controls](../../sources/README.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
 An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a
@@ -109,7 +109,7 @@ a comparison needs a hash from elsewhere
 (`--gcs-billing-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
 supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume. A journal from a
 build that recorded the resolved route instead of the endpoint is refused (`endpoint` not recorded;
-[upgrade.md](../../upgrade.md), "Changes between Go builds"; `TestOldJournalRefused`).
+[upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md), "Changes between Go builds"; `TestOldJournalRefused`).
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).

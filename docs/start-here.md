@@ -4,7 +4,7 @@ swath lists what an object store or a filesystem holds, and reports what it foun
 only: names, sizes, times and storage fields. It never reads, changes or deletes the contents.
 
 A source is a local or mounted directory, `s3://bucket/prefix`, `gs://bucket/prefix` or
-`az://account/container/prefix` ([sources](sources.md)).
+`az://account/container/prefix` ([sources](sources/README.md)).
 
 ## Pick a job
 
