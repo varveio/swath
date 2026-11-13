@@ -138,7 +138,7 @@ sentences and link to that owner.
 | First successful workflow | `docs/first-inventory.md`; what a result means: `docs/results.md` |
 | Go commands and options | `docs/commands/` (options generated from the flag table) and installed Go CLI help |
 | Go output formats and filters | `docs/output.md`, `docs/filters.md` |
-| Go sources, credentials and endpoints | `docs/sources.md` |
+| Go sources, credentials and endpoints | `docs/sources/` (one page per source) |
 | Go exit codes, run report and log events | `docs/reference/` |
 | Go operations and recovery | `docs/running.md` |
 | Go schemas and dataset layout | `docs/dataset.md` |

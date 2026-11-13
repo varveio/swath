@@ -113,5 +113,5 @@ whether the listing was complete ([swath du](commands/swath-du.md#totals-from-a-
 ## Next
 
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
-- [Sources](sources.md): list an S3, GCS or Azure Blob bucket the same way.
+- [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
 - [Run large listings](running.md): size, watch, stop and resume a long run.

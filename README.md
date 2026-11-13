@@ -11,7 +11,7 @@ directory or prefix (`du`) and write sorted Parquet inventories.
 > **Release candidates available.** Download v0.4.0-rc.2 from the
 > [releases page](https://github.com/varveio/swath/releases) ([install and verify](docs/install.md)),
 > or build from source below. These are candidates for the first Go release. The earlier S3-only
-> Java v0.3.2 has another command line and dataset format ([migrating from 0.3](docs/upgrade.md)).
+> Java v0.3.2 has another command line and dataset format ([changelog](CHANGELOG.md)).
 
 ## Measured scale
 
@@ -124,14 +124,14 @@ The documentation is published at [swath.varve.io](https://swath.varve.io/), bui
 
 - **Start:** [start here](docs/start-here.md), [install](docs/install.md),
   [your first inventory](docs/first-inventory.md), [understand your results](docs/results.md).
-- **Use:** [command reference](docs/commands/swath.md), [sources](docs/sources.md),
+- **Use:** [command reference](docs/commands/swath.md), [sources](docs/sources/README.md),
   [output](docs/output.md), [running guide](docs/running.md),
   [production checklist](docs/production.md), [troubleshooting](docs/troubleshooting.md).
 - **Read the output:** [swath dataset profile](docs/dataset.md); from Go, the
   [`reader`](reader/README.md) module.
 - **Understand:** [architecture](docs/internals/architecture.md), [contracts](docs/internals/contracts.md),
   [providers](docs/internals/providers.md), [measurements](docs/internals/measurements.md).
-- **Migrate from 0.3:** [migration guide](docs/upgrade.md); the
+- **Coming from 0.3:** the [changelog](CHANGELOG.md); the
   [v0.3.2 documentation](https://github.com/varveio/swath/tree/v0.3.2/docs).
 - **Contribute:** [contribution guide](CONTRIBUTING.md), [tests](docs/internals/testing.md),
   [roadmap](ROADMAP.md).

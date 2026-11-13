@@ -87,16 +87,16 @@ swath list gs://bucket/prefix/ -o inventory      # a sorted Parquet inventory
 ```
 
 Listing a bucket makes billable API requests and reads metadata, not object contents; credentials come from
-the provider's usual chain ([sources](../docs/sources.md)). An interrupted bucket inventory continues where it
+the provider's usual chain ([sources](../docs/sources/README.md)). An interrupted bucket inventory continues where it
 stopped with [`swath resume DIR`](../docs/commands/swath-resume.md).
 
 Sources: Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local or mounted
-filesystems. [What each supports](../docs/sources.md)
+filesystems. [What each supports](../docs/sources/README.md)
 
 ## Documentation
 
 - [Start here](../docs/start-here.md): pick a job, and when swath fits.
-- [Sources](../docs/sources.md): URLs, credentials and what each source supports.
+- [Sources](../docs/sources/README.md): URLs, credentials and what each source supports.
 - [Run large listings](../docs/running.md): size, watch, stop and resume a long run.
 - [Commands](../docs/commands/swath.md): every command and option.
 - [Troubleshooting](../docs/troubleshooting.md): by symptom and exit code.

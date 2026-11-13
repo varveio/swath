@@ -202,7 +202,7 @@ timeout and latency brakes, and counters.
 - `--request-rate N` adds an aggregate rate cap for a quota shared across a fleet. Reservations
   are spaced; scheduling delays can bunch actual sends.
 - Exhausted engine listing calls requeue while the run lives; admission failures are described
-  under [object-store requests](sources.md#object-store-requests). A stall watchdog or deadline can stop
+  under [object-store requests](sources/README.md#object-store-requests). A stall watchdog or deadline can stop
   a run that keeps failing. An endpoint that has never answered, every connection refused or its host not
   found, with nothing in the run answered, stops it as stuck after 30 s instead (exit 75, cause `unreachable`;
   [troubleshooting](troubleshooting.md#the-endpoint-cannot-be-reached)).
@@ -359,7 +359,7 @@ DIR/
 ```
 
 By default, object-store datasets list current objects only; `--all-versions` selects S3 versions, GCS
-generations or every Azure Blob entry (below). The 0.3 release's reader does not open these datasets ([Migrating from 0.3](upgrade.md)).
+generations or every Azure Blob entry (below).
 
 ### Verify a dataset
 

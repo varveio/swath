@@ -25,7 +25,7 @@ const ORIGIN = 'https://swath.varve.io'
 
 // Pages under docs/ that are not user documentation: published on GitHub only.
 // A trailing slash names a directory.
-const UNPUBLISHED_DOCS = ['docs/internals/', 'docs/ops/', 'docs/style.md', 'docs/upgrade.md']
+const UNPUBLISHED_DOCS = ['docs/internals/', 'docs/ops/', 'docs/style.md']
 
 // Only docs/ and the site's own pages are published: every other top-level entry is
 // excluded by name, so a new directory of Markdown is never published by accident.
@@ -197,6 +197,7 @@ export default defineConfig({
   rewrites: {
     'site/index.md': 'index.md',
     'docs/README.md': 'docs/index.md',
+    'docs/sources/README.md': 'docs/sources/index.md',
   },
   cleanUrls: true,
   outDir: '.vitepress/dist',
@@ -300,12 +301,11 @@ export default defineConfig({
         {
           text: 'Sources',
           items: [
-            { text: 'Overview', link: '/docs/sources' },
-            { text: 'Amazon S3', link: '/docs/sources#amazon-s3' },
-            { text: 'S3-compatible stores', link: '/docs/sources#s3-compatible-stores' },
-            { text: 'Google Cloud Storage', link: '/docs/sources#google-cloud-storage' },
-            { text: 'Azure Blob Storage', link: '/docs/sources#azure-blob-storage' },
-            { text: 'Local and mounted filesystems', link: '/docs/sources#local-and-mounted-trees' },
+            { text: 'Choose a source', link: '/docs/sources/' },
+            { text: 'Local and mounted filesystems', link: '/docs/sources/local' },
+            { text: 'Amazon S3 and S3-compatible', link: '/docs/sources/s3' },
+            { text: 'Google Cloud Storage', link: '/docs/sources/gcs' },
+            { text: 'Azure Blob Storage', link: '/docs/sources/azure' },
           ],
         },
         {

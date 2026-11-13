@@ -43,7 +43,7 @@ swath: could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultA
 
 Common causes: a key without its secret, a profile that does not exist, an expired SSO login (`aws sso login`),
 a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file, no Entra ID credential on a host outside Azure.
-Where each provider looks: [Sources](sources.md). A credential lookup that failed only transiently, and
+Where each provider looks: [Sources](sources/README.md). A credential lookup that failed only transiently, and
 credentials the service refused ([access denied](#access-denied)), are not this failure: their errors are
 printed whole.
 

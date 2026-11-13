@@ -360,7 +360,7 @@ store that stops early exits 74, 75, 124, 130 or 143 and can be resumed. See
 
 ## Environment
 
-The provider's credential and endpoint variables ([Sources](../sources.md)), and those of
+The provider's credential and endpoint variables ([Sources](../sources/README.md)), and those of
 [swath(1)](swath.md#environment).
 
 ## Files
@@ -386,5 +386,5 @@ and its disk.
 ## See also
 
 [swath du](swath-du.md), [swath resume](swath-resume.md), [swath show](swath-show.md),
-[Output](../output.md), [Filters](../filters.md), [Sources](../sources.md),
+[Output](../output.md), [Filters](../filters.md), [Sources](../sources/README.md),
 [Run report and progress file](../reference/run-report.md)

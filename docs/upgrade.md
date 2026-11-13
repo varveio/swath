@@ -77,7 +77,7 @@ The flags kept, renamed and removed are in [internals/cli-inventory.md](internal
 name, `--profile` and `--region` are `--s3-profile` and `--s3-region`, `--parquet-part-size` is `--part-size` (64 MiB by default, 0.3's was 256 MB), and
 `--format parquet --sort -o DIR` is simply `-o DIR`. Object stores share `--anonymous`,
 `--endpoint-url` and `--request-timeout`; provider-specific credentials and limits are described in
-[sources.md](sources.md).
+[sources.md](sources/README.md).
 
 ## The run report at a glance
 
@@ -359,7 +359,7 @@ the list below is the earlier history of the unreleased builds.
   unknown flag). A source with no usable credentials, an empty AWS chain, no Application Default Credentials,
   or an Entra ID chain that finds none, stops the run before listing. Credential failures have
   cause `auth`, during Azure namespace admission too (a SAS the service refuses there: `auth` or
-  `access_denied`) ([credentials](sources.md#credentials-on-every-object-store)). Give `--anonymous` for a public bucket or container
+  `access_denied`) ([credentials](sources/README.md#credentials-on-every-object-store)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error is one
   line: the credential source, the cause's first line and, when swath was searching for credentials on its

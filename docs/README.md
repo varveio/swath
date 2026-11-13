@@ -15,7 +15,7 @@ are published on the [releases page](https://github.com/varveio/swath/releases) 
 
 **Use**
 
-- [Sources](sources.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local
+- [Sources](sources/README.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local
   and mounted filesystems: URLs, credentials, permissions, endpoints, requests.
 - [Output](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
   a dataset.

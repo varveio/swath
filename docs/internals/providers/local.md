@@ -2,7 +2,7 @@
 
 A local or mounted directory supports dataset output and direct `du` summaries. A local
 `list` prints text rows or writes a dataset; local scans do not resume. Mounted shares use the operating system's
-filesystem API. [Object-store request controls](../../sources.md#object-store-requests) do not
+filesystem API. [Object-store request controls](../../sources/README.md#object-store-requests) do not
 apply to this provider; metadata and platform limits are described below.
 
 A range is a directory. Its entries are sorted by key, where a directory's key is `prefix/name/` and anything
