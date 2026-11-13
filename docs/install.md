@@ -95,7 +95,21 @@ cd swath
 ```
 
 `./build.sh` builds a static binary stamped with the checkout's commit; its version reads `devel`. Set
-`GOOS` and `GOARCH` to cross-compile. `go install github.com/varveio/swath/cmd/swath@VERSION` is not
+`GOOS` and `GOARCH` to cross-compile. `-o` names the binary's path relative to the clone, where
+`build.sh` runs. A path that is an existing directory, such as `-o ../swath` from inside a clone named
+`swath`, puts the binary inside that directory instead.
+
+Go builds in a work directory under `TMPDIR` (`/tmp` by default), and this module's dependencies need more
+room than a small tmpfs `/tmp` holds: the build then fails with "no space left on device". Point the work
+directory and the build cache at a disk with a few GB free:
+
+```bash
+TMPDIR=/path/on/disk GOCACHE=/path/on/disk/.gocache ./build.sh -o swath
+```
+
+On one tester's machine that build took under 4 minutes and the cache grew to about 850 MB.
+
+`go install github.com/varveio/swath/cmd/swath@VERSION` is not
 supported yet: the module points its nested `reader` and `objfile` modules at local directories, which
 `go install` refuses. Build from a checkout instead.
 
