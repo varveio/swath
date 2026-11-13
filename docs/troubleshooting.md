@@ -103,6 +103,13 @@ which never replaces anything inside the listed tree. Write the dataset to a new
 swath: -o: tree/inventory: output directory is not empty, and cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)
 ```
 
+When that directory holds an interrupted run (of another source), `swath resume DIR` still continues it; it is
+never replaced there:
+
+```text
+swath: -o: tree/inventory: output directory is not empty, and cannot replace an output inside the listed root: it holds an interrupted run (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)
+```
+
 A directory that holds an interrupted run is continued with `swath resume DIR`, or replaced with `--overwrite`:
 
 ```text

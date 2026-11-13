@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -307,6 +308,13 @@ func TestOneLineFailures(t *testing.T) {
 	os.Mkdir(inTree, 0o755)
 	os.WriteFile(filepath.Join(inTree, "other"), nil, 0o644)
 	const inTreeAdvice = "cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)\n"
+	// An interrupted run inside the root: resumed, never --overwrite.
+	inTreeRun := filepath.Join(src, "run")
+	if j, err := journal.Create(inTreeRun, journal.Identity{Tool: "swath"}, nil); err != nil {
+		t.Fatal(err)
+	} else {
+		j.Close()
+	}
 	missing := filepath.Join(t.TempDir(), "nosuchdir")
 	nobucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"code":404,"message":"The specified bucket does not exist."}}`, http.StatusNotFound)
@@ -333,6 +341,7 @@ func TestOneLineFailures(t *testing.T) {
 		{"not empty", dataset(src, "-o", full), "swath: " + full + ": output directory is not empty (use --overwrite to replace a previous dataset)\n"},
 		{"not empty, inside the root", dataset(src, "-o", inTree), "swath: -o: " + inTree + ": output directory is not empty, and " + inTreeAdvice},
 		{"overwrite inside the root", dataset(src, "-o", inTree, "--overwrite"), "swath: -o: " + inTree + ": " + inTreeAdvice},
+		{"interrupted run inside the root", dataset(src, "-o", inTreeRun), "swath: -o: " + inTreeRun + ": output directory is not empty, and cannot replace an output inside the listed root: it holds an interrupted run (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)\n"},
 		{"no such directory", []string{"du", missing}, "swath: " + missing + ": " + notFound + "\n"},
 		{"no such directory, a dataset", dataset(missing, "-o", filepath.Join(t.TempDir(), "ds")), "swath: " + missing + ": " + notFound + "\n"},
 		{"no such bucket", dataset("gs://bkt", "--endpoint-url", nobucket.URL+gcstest.Path, "--anonymous", "-o", filepath.Join(t.TempDir(), "ds")), ""},
@@ -374,7 +383,9 @@ func TestOneLineFailures(t *testing.T) {
 				}
 			}
 			for _, bad := range []string{"prepare output", "root: ", "0 entries", "peak RSS"} {
-				if strings.Contains(s, bad) {
+				// "the listed root: it holds an interrupted run" is the refusal's
+				// own wording, not an internal prefix.
+				if strings.Contains(strings.ReplaceAll(s, "listed root: ", ""), bad) {
 					t.Fatalf("%s %s: %q on stderr: %q", c.name, mode, bad, s)
 				}
 			}

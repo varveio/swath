@@ -60,6 +60,11 @@ func TestTroubleshootingMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Close()
+	// "tree/stopped" holds one inside the tree.
+	if j, err = journal.Create(filepath.Join("tree", "stopped"), journal.Identity{Tool: "swath"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
 	for _, c := range []struct {
 		name string
 		args []string
@@ -71,6 +76,7 @@ func TestTroubleshootingMessages(t *testing.T) {
 		{"output not empty", []string{"list", src, "-o", "inventory"}, [2]string{}},
 		{"overwrite a stranger", []string{"list", src, "-o", "other", "--overwrite"}, [2]string{"other", "inventory"}},
 		{"output inside the tree", []string{"list", "tree", "-o", filepath.Join("tree", "inventory")}, [2]string{filepath.Join("tree", "inventory"), "tree/inventory"}},
+		{"interrupted run inside the tree", []string{"list", "tree", "-o", filepath.Join("tree", "stopped")}, [2]string{filepath.Join("tree", "stopped"), "tree/inventory"}},
 		{"csv output", []string{"list", src, "-o", "x.csv"}, [2]string{}},
 		{"interrupted run", []string{"list", src, "-o", "stopped"}, [2]string{"stopped", "inventory"}},
 	} {
