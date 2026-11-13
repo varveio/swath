@@ -63,7 +63,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 One schema (`report_version` 7) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
-[upgrade.md](../upgrade.md#run-report-and-counters). It accounts for this invocation (rows it fetched
+the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
 and emitted, requests it made) separately from the dataset (rows retained from an interrupted run, durable,
 committed). Durations are integers with the unit in the name; a measurement that was not taken is absent,
 never zero.

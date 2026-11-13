@@ -5,6 +5,13 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Changes from 0.3: 0.4 is a different tool. The Go implementation replaces the Java 0.3 releases with
+  another command line (`swath list`, `du`, `show`, `resume`; renamed and removed options), more sources
+  (local and mounted filesystems, Google Cloud Storage, Azure Blob Storage beside S3), and another dataset
+  format: SeekParquet with the swath dataset profile ([docs/dataset.md](docs/dataset.md)), which 0.3 readers do
+  not open. 0.4 does not read 0.3 datasets or resume 0.3 runs. The 0.3 documentation is at the
+  [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs).
+
 - Go port: a run in which nothing has answered, every connection refused or its host not found, stops as
   stuck after 30 s (at most half `--stall-timeout`), exit 75, cause `unreachable`, naming the endpoint, and
   resumable as its journal allows (it waited out the whole `--stall-timeout`); once anything has answered,
