@@ -6,7 +6,7 @@ Every algorithm path counts its engagements. A provider declares its counters on
 meaning: the provider reads it out as one immutable `counters.Snapshot` (code reads `Get(id)`), and the run
 report renders the snapshot by iterating the table (`run.json` →
 `source.stats.counters`: `features` and `values`, flat stable names), and the table below is
-generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc`). One
+generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestDocsCounters`). One
 adapter sits beside it: the HTTP client's counters (`objhttp.Counters`, the limiter's and the rate cap's) are
 kept in the client, which a provider may share or replace, and copied into the table when the provider
 snapshots, each by its named ID (`objhttp.ClientCounter`, end sentinel `NumCounters`; `Counts.Store`), so

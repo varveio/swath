@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/docs"
 )
 
 // reportPaths is every JSON path of the run report's own schema, from its
@@ -85,10 +87,10 @@ func TestReportSchemaGolden(t *testing.T) {
 	}
 }
 
-// TestReportSchemaDoc: docs/reference/run-report.md's run report section names every field
+// TestDocsReportSchema: docs/reference/run-report.md's run report section names every field
 // of the report's schema (by its last path element).
-func TestReportSchemaDoc(t *testing.T) {
-	b, err := os.ReadFile("../../docs/reference/run-report.md")
+func TestDocsReportSchema(t *testing.T) {
+	b, err := os.ReadFile(docs.Path(t, "reference/run-report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

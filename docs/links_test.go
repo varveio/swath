@@ -1,8 +1,6 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package docs holds no code: its test checks the Markdown under the
-// module's root.
 package docs_test
 
 import (
