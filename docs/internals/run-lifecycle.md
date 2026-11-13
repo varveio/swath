@@ -136,7 +136,9 @@ beside `data/`, a `schemaId` manifest) and other tools' manifests are not. The `
 `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files, and the profiles' phase files beside them (`FILE.listing`,
 `FILE.tail`, `FILE.exit`), are checked the same way and may not be symbolic links (a profile is opened, never
 through a link; the report replaces its name by a rename, which replaces a link there rather than writing its
-target).
+target). Nor may they be in the output directory, even as an ordinary name: they are opened before the run,
+which would then find the directory it is to create or fill not empty and refuse it; only `--report`, written
+after the run, may go there.
 
 ## The part limit
 

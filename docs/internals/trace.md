@@ -23,7 +23,8 @@ writer) and `trace.dropped` (feature `trace`, off without `--trace`). A trace wi
 ranges' lifecycles need not balance.
 
 FILE is checked as `--report` is, before the source is opened ([side paths](run-lifecycle.md#side-paths)), and,
-like a profile, is never written through a symbolic link. It is replaced, not appended to. `swath resume` of a
+like a profile, is never written through a symbolic link nor in the output directory (it is opened before the
+run, which needs that directory empty). It is replaced, not appended to. `swath resume` of a
 traced run traces again, to the recorded FILE unless `--trace` names another.
 
 A trace holds keys, seed cuts and pivots verbatim: it is as sensitive as the listing itself.

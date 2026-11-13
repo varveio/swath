@@ -73,6 +73,7 @@ func TestTraceFlag(t *testing.T) {
 	}
 
 	x := func() string { return filepath.Join(t.TempDir(), "x") }
+	empty := t.TempDir()
 	s3 := []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}
 	for _, refused := range []struct {
 		args []string
@@ -82,9 +83,15 @@ func TestTraceFlag(t *testing.T) {
 		{[]string{t.TempDir(), "--trace", filepath.Join(dir, "local.jsonl"), "-o", x()}, true, "--trace applies to"},
 		{append(s3, "--trace", filepath.Join(dir, "list.jsonl"), "-o", x()), false, "swath diag"},
 		{append(s3, "-o", out, "--overwrite", "--trace", filepath.Join(out, "manifest.json")), true, "--trace"},
+		// Opened before the run, in an empty output directory the run would
+		// then refuse as not empty: refused up front, as a profile is.
+		{append(s3, "-o", empty, "--trace", filepath.Join(empty, "run.trace.jsonl")), true, "is in the output directory"},
 	} {
 		if err := run(ctx, refused.args, io.Discard, refused.diag); err == nil || !strings.Contains(err.Error(), refused.want) {
 			t.Fatalf("%v: %v, want a refusal naming %q", refused.args, err, refused.want)
 		}
+	}
+	if ents, _ := os.ReadDir(empty); len(ents) != 0 {
+		t.Fatalf("the refused trace left %d entries in the output directory", len(ents))
 	}
 }
