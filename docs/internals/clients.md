@@ -31,6 +31,23 @@ clients are described in [providers.md](providers.md) and the page of each provi
   call with a stored transient signal is requeued. Provider admission runs before the engine exists and
   can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
   requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
+- **A run in which nothing answers stops early.** The command arms one fail-fast for the run
+  (`source.ArmUnreachable`, process-wide like the watch). While nothing in the run has answered, an attempt whose
+  connection failed deterministically (`source.Unreachable`: refused, the host not found, no route to the network
+  or host) is retried as any transport failure until `source.UnreachableGrace` (30 s, at most half an explicit
+  `--stall-timeout`) has passed since the run's first such failure; then the failure is final, class
+  `unreachable` (`source.ErrUnreachable`), naming the endpoint's scheme and host and the cause, and the command
+  stops the run as stuck early: exit 75, cause `unreachable`, resumable as the journal allows. Any answer, from
+  any client, turns it off for the rest of the run: the Guard records it as soon as a response's headers arrive,
+  whatever the status and however slowly the body follows, and also a failure that is not deterministic (a
+  timeout, a cut connection). A client first used later (a destination, a token endpoint) is then retried to the
+  stall timeout as before, and so is an endpoint that answered once and then refuses. A credential failure never
+  counts: its endpoint is not the one listed. The state is one atomic: an answer and the expiry both move it by
+  compare-and-swap, so no caller stops the run once an answer is recorded, and once off it costs one atomic load.
+  A refused certificate needs no grace: it is never retried. The counters `unreachable.attempts` and
+  `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`, `TestUnreachableResumes`,
+  `TestUnreachableGraceRecovers`, `TestUnreachableAfterAnswer`, `TestUnreachableRunWide`,
+  `TestUnreachableSlowAnswer`, `TestUnreachableAnswerRace`, `TestUnreachableStates`).
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's
   deadline (all waiters sharing one outstanding call, `tokensource.Shared`), before an attempt is counted: a
   credential failure is a `*objhttp.CredentialError` (class `auth`, or retried when transient) and no request is
@@ -102,7 +119,7 @@ cause that has passed the provider's redaction boundary. The shared vocabulary l
 engine's requeue consume that value; exhaustion wraps it, and `errors.Is` still reaches the cancellation and
 invalid-page sentinels. The report's diagnostic labels are `auth`, `access_denied`, `not_found` (the bucket or container
 only: S3 `NoSuchBucket`, GCS's 404 `notFound` to objects.list, Azure `ContainerNotFound`), `region_redirect` (S3 named the bucket's region in a redirect), `throttle`, `timeout`,
-`parse` and `unsupported`, the ones [the run report](../reference/run-report.md) documents; other errors keep their status and code
+`parse`, `unsupported` and `unreachable` (the fail-fast above), the ones [the run report](../reference/run-report.md) documents; other errors keep their status and code
 without a label. Each provider's `Failure` method in its `classify.go` produces the signals from status and code,
 held by the shared contract `objhttptest.Contract` that every client passes (`TestRetryContract`).
 

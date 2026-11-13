@@ -248,7 +248,7 @@ Performance:
                               also close a part at N rows (0: by size and --part-interval only)
                                 Set it when readers want parts of a bounded row count; it is fixed
                                 for the run.
-      --seed-from PATH        start from a previous listing's key distribution, not the seed
+      --seed-from PATH        object stores: start from a previous listing's key distribution
                                 A committed dataset of the same source and scope, or a cut file (one
                                 key per line, ascending bytewise, optionally TAB and the keys
                                 expected since the previous cut); the engine still splits

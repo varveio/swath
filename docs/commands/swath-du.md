@@ -265,7 +265,7 @@ Performance:
                                 Raise it (128, 256) for a large listing the service does not
                                 throttle: listing waits on round trips, not the CPU; lower it when
                                 it throttles at the default.
-      --seed-from PATH        start from a previous listing's key distribution, not the seed
+      --seed-from PATH        object stores: start from a previous listing's key distribution
                                 A committed dataset of the same source and scope, or a cut file (one
                                 key per line, ascending bytewise, optionally TAB and the keys
                                 expected since the previous cut); the engine still splits

@@ -109,6 +109,7 @@ type spiller[P any] struct {
 	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
 	wake     func()       // rouses the run's waiters (credit returned); nil in tests
 	verify   func() error // Options.SpillVerify; nil in tests
+	spilling func()       // Options.Spilling; nil in tests
 	g        *Gauges      // live bytes and open readers (nil in tests)
 	seq      atomic.Uint64
 	enc      sync.Pool // *zstd.Encoder
@@ -633,10 +634,13 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 	}
 	if len(rows) > 0 {
 		s.rows.Add(int64(len(rows)))
-		s.frames.Add(1)
+		first := s.frames.Add(1) == 1
 		s.logical.Add(logical)
 		s.frameBytes.add(framed)
 		s.frameRows.add(int64(len(rows)))
+		if first && s.spilling != nil {
+			s.spilling()
+		}
 	}
 	s.bytes.Add(n)
 	return nil

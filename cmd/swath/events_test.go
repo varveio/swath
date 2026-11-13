@@ -77,7 +77,7 @@ func TestEventGolden(t *testing.T) {
 	l.start(startFields{"s3://bucket/logs/", modeRows, "stdout"})
 	l.progress(listing.ProgressSnapshot{Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
 		StartedAt: at.Add(-time.Minute), AsOf: at, DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
-	w := newFailureWatch("S3")
+	w := newFailureWatch("S3", 10*time.Minute)
 	refused := source.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
 	for i := range 14 {
 		w.exchange(refused, at.Add(time.Duration(i)*time.Second))
@@ -122,7 +122,7 @@ func TestEventGolden(t *testing.T) {
 func TestFailureWatch(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	setLog(termOptions{logFormat: logText}, "")
-	w := newFailureWatch("S3")
+	w := newFailureWatch("S3", 10*time.Minute)
 	at := time.Unix(1_000_000, 0)
 	u := &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/b"}
 	refused := source.Exchange{Method: http.MethodGet, URL: u, Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", errConnRefused)}}
@@ -134,7 +134,7 @@ func TestFailureWatch(t *testing.T) {
 		t.Fatalf("warned before %s, or no cause outstanding with nothing answered: %q", persistFor, stderr.String())
 	}
 	fail(persistFor)
-	if want := "swath: warning: S3 127.0.0.1:9: connection refused (retrying; 11 attempts)\n"; stderr.String() != want {
+	if want := "swath: warning: S3 127.0.0.1:9: connection refused (retrying; 11 attempts; the run stops as stuck after 10m0s without progress)\n"; stderr.String() != want {
 		t.Fatalf("stderr %q, want %q", stderr.String(), want)
 	}
 	for d := persistFor; d < persistFor+persistEvery; d += time.Second {
@@ -167,7 +167,7 @@ func TestFailureWatch(t *testing.T) {
 	for d := time.Duration(0); d <= persistFor; d += time.Second {
 		w.exchange(source.Exchange{URL: u, Status: http.StatusServiceUnavailable}, end.Add(d))
 	}
-	if w.warnings.Load() != 3 || !strings.HasSuffix(stderr.String(), "S3 127.0.0.1:9: 503 Service Unavailable (retrying; 12 attempts)\n") {
+	if w.warnings.Load() != 3 || !strings.HasSuffix(stderr.String(), "S3 127.0.0.1:9: 503 Service Unavailable (retrying; 12 attempts; the run stops as stuck after 10m0s without progress)\n") {
 		t.Fatalf("a new failure after an answer: %q", stderr.String())
 	}
 	// -q: no warnings.
@@ -181,20 +181,19 @@ func TestFailureWatch(t *testing.T) {
 	}
 }
 
-// TestPersistentFailureRun (D2): a GCS endpoint that refuses connections
-// warns without -v while the run retries, the run ends stuck with its
-// statistics, its error naming the cause, and the report counts the
-// warnings.
+// TestPersistentFailureRun (D2): a GCS endpoint that cuts every
+// connection warns without -v while the run retries, the run ends stuck
+// with its statistics, its error naming the cause, and the report counts
+// the warnings. (A cut connection is not a wrong address: the unreachable
+// fail-fast does not apply; TestUnreachableEndpoint has refused ones.)
 func TestPersistentFailureRun(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	persistFor = 300 * time.Millisecond
 	t.Cleanup(func() { persistFor = 10 * time.Second })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	host := ln.Addr().String()
-	ln.Close() // connections to it are refused
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }))
+	t.Cleanup(srv.Close)
+	host := srv.Listener.Addr().String()
+	var err error
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
@@ -202,8 +201,8 @@ func TestPersistentFailureRun(t *testing.T) {
 	if exitCode(t, err) != exitStuck {
 		t.Fatalf("exit %v", err)
 	}
-	// The cause in the platform's words (connection refused).
-	warning := regexp.MustCompile(`(?m)^swath: warning: GCS ` + regexp.QuoteMeta(host) + `: ([^(]+) \(retrying; \d+ attempts\)$`)
+	// The cause in the platform's words (EOF, a reset).
+	warning := regexp.MustCompile(`(?m)^swath: warning: GCS ` + regexp.QuoteMeta(host) + `: ([^(]+) \(retrying; \d+ attempts; the run stops as stuck after 2s without progress\)$`)
 	s := stderr.String()
 	m := warning.FindAllStringSubmatch(s, -1)
 	if len(m) != 1 || !strings.Contains(s, "INCOMPLETE (stuck)") {

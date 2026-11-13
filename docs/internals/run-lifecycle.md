@@ -110,12 +110,17 @@ own 250 ms; past it the warnings left are dropped, counted, and the outcome gets
 
 **Forensics.** At a stall, before the run is canceled, and at a forced exit, every goroutine's stack and the
 progress counts are written whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each
-time) while the run owns the output, else, or when that write fails or blocks for 2 s, to stderr, cut at
-1 MiB.
+time) while the run owns the output, else to a new `swath-stacks-stuck-*.txt` or `swath-stacks-forced-exit-*.txt`
+in the temporary directory (`$TMPDIR`), and stderr gets one warning naming the file. The stacks are forensics,
+not output: they go to stderr as well only with `-v`, or instead when no file could be written within 2 s, cut
+at 1 MiB. Under `--log-format json` a run without an output directory writes no file and keeps them in the
+warning event's `stacks` field, where a supervisor collecting the log finds them (`TestStacksWholeAndBounded`).
 
 **The persistent-failure warning.** Without `-v`, when requests have failed with one transport or service
 cause (a connection refused, a 503) for 10 s with none answered, one warning names the provider, the endpoint
-host and the cause, and again at most once a minute while it lasts; a run that then ends stuck or at its
+host and the cause and says how long retrying lasts (until the stall timeout, or for a connection that
+nothing in the run has answered, the run's 30 s fail-fast grace, exit 75 cause `unreachable`:
+[clients](clients.md#what-swath-keeps)), and again at most once a minute while it lasts; a run that then ends stuck or at its
 deadline names the cause in its final error line, the outcome's `message` and the report's `outcome.error`
 (and so does one that ends so with no request ever answered, however short it was);
 `requests.failure_warnings` counts the warnings.

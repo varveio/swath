@@ -941,7 +941,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
-	fw := newFailureWatch(pf.Title)
+	fw := newFailureWatch(pf.Title, o.stall)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
 	// One terminal result (terminal): the classification is applied to the
@@ -988,6 +988,8 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		tt.saveHint = savedInventory(given, o)
 	}
 	defer watchRequests(fw)() // removed before stderr is restored
+	_, disarm := source.ArmUnreachable(o.stall)
+	defer disarm()
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)
 	defer statusNow.Store(nil)
@@ -1072,7 +1074,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	settled, unrecorded := end.settled, end.unrecorded
 	brief := oneLine(sum, out, end.started)
 	failing := ""
-	if err != nil && end.failing != "" && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
+	if err != nil && end.failing != "" && out.Cause != source.CauseUnreachable && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
 		// The report's error and the outcome's message name the cause
 		// too, not only the error line.
 		failing = "; every request was failing: " + end.failing

@@ -171,6 +171,12 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "remote_altered"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitIncomplete, false
+	case errors.Is(err, source.ErrUnreachable):
+		// Nothing in the run answered and every connection failed
+		// deterministically for the grace (objhttp's fail-fast): no
+		// progress and nothing reachable, the stall reached early.
+		// Resumable as the journal says, once the endpoint answers.
+		o.Class, o.ExitCode, o.Cause = listing.ClassStuck, exitStuck, source.CauseUnreachable
 	case errors.Is(cause, errStuck):
 		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
 		var st *stuckError
@@ -594,46 +600,85 @@ const stacksMax = 1 << 20
 const stacksWait = 2 * time.Second
 
 // dumpStacks writes every goroutine's stack with the progress counts, for
-// a run stopped as stuck or forced to exit: whole to
-// DIR/.swath/stacks-WHY.txt while the run owns the output, else (no
-// output, not owned, or a write that fails or blocks past stacksWait) to
-// stderr, cut at stacksMax bytes. The stacks are taken on entry, as the
-// goroutines are then. It returns where the dump went.
+// a run stopped as stuck or forced to exit. They are forensics, not the
+// run's output: whole to DIR/.swath/stacks-WHY.txt while the run owns the
+// output, else to a new file in the temporary directory, and stderr gets
+// one line naming the file. The stacks go to stderr as well only with -v,
+// or instead when no file could be written within stacksWait, cut at
+// stacksMax bytes. Under --log-format json a run without an output
+// directory writes no file: its warning event carries them (stacks), for
+// the supervisor that collects the log. The stacks are taken on entry, as
+// the goroutines are then. It returns where the dump went: the file, or
+// "stderr".
 func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.ProgressSnapshot) string {
 	var stacks bytes.Buffer
 	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
 	buf := stacks.Bytes()
 	sj, _ := json.Marshal(s)
 	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
-	if dir != "" {
-		path := filepath.Join(dir, dataset.Workspace, "stacks-"+why+".txt")
-		done := make(chan bool, 1)
-		go func() {
-			ok := false
+	l := elog()
+	done := make(chan string, 1)
+	go func() {
+		path := ""
+		if dir != "" {
+			p, ok := filepath.Join(dir, dataset.Workspace, "stacks-"+why+".txt"), false
 			pr.Owned(func() {
-				ok = os.MkdirAll(filepath.Dir(path), 0o755) == nil &&
-					os.WriteFile(path, append([]byte(head), buf...), 0o644) == nil
+				ok = os.MkdirAll(filepath.Dir(p), 0o755) == nil &&
+					os.WriteFile(p, append([]byte(head), buf...), 0o644) == nil
 			})
-			done <- ok
-		}()
-		select {
-		case ok := <-done:
 			if ok {
-				elog().warn("goroutine dump written to " + path)
-				return path
+				path = p
 			}
-		case <-time.After(stacksWait):
+		}
+		if path == "" && !l.json {
+			path = tempStacks(why, head, buf)
+		}
+		done <- path
+	}()
+	path := ""
+	select {
+	case path = <-done:
+	case <-time.After(stacksWait):
+	}
+	if path != "" {
+		l.warn("goroutine dump written to " + path)
+		if !l.shows(lvInfo) {
+			return path
 		}
 	}
 	if len(buf) > stacksMax {
 		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
 	}
-	if l := elog(); l.json {
+	if l.json {
 		l.print(lvWarn, evWarning, "goroutine dump: "+why+" ("+detail+")", stacksFields{string(buf)})
 	} else {
 		note(errOut, head+string(buf)+"\n")
 	}
+	if path != "" {
+		return path
+	}
 	return "stderr"
+}
+
+// tempStacks writes a goroutine dump to a new file in the temporary
+// directory and returns its path ("" when it could not).
+func tempStacks(why, head string, buf []byte) string {
+	f, err := os.CreateTemp("", "swath-stacks-"+why+"-*.txt")
+	if err != nil {
+		return ""
+	}
+	_, err = f.WriteString(head)
+	if err == nil {
+		_, err = f.Write(buf)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return ""
+	}
+	return f.Name()
 }
 
 // stacksFields are a goroutine dump's event under --log-format json.

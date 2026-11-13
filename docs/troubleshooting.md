@@ -198,7 +198,8 @@ error body quotes back as `[redacted]`.
 Nothing progressed for `--stall-timeout` (10 minutes). The `cause` says what kept rising: `stuck_throttle`
 (the service throttled), `stuck_timeouts` (requests ran past `--request-timeout`), `stuck_empty_chain` (the
 service answered only empty pages), `stuck_no_rows` (requests failed or hung). swath wrote every goroutine's
-stack to `DIR/.swath/stacks-stuck.txt`. Resume once; if it happens again on the same output, keep that file and
+stack to `DIR/.swath/stacks-stuck.txt` (without an output directory, to the file in the temporary directory
+that its warning names; `-v` prints the stacks on stderr too). Resume once; if it happens again on the same output, keep that file and
 the report: a person needs to look. A service that is slow for minutes at a time needs a larger
 `--stall-timeout`.
 
@@ -211,16 +212,31 @@ other clients, set `--request-rate N` below it. If the limit stays near 1 under 
 ## A warning repeats about failing requests
 
 ```text
-swath: warning: S3 127.0.0.1:9: connection refused (retrying; 14 attempts)
+swath: warning: S3 127.0.0.1:9: 503 Service Unavailable (retrying; 14 attempts; the run stops as stuck after 10m0s without progress)
 ```
 
 Every request has failed with one cause for 10 seconds. swath keeps retrying until `--stall-timeout` or
-`--max-duration`; check the endpoint, the network and `--endpoint-url`. A run that ends without any request
+`--max-duration`, as the warning says; check the endpoint, the network and `--endpoint-url`. A connection that
+nothing has ever answered at is the next section's. A run that ends without any request
 answered names the cause in its final error:
 
 ```text
 swath: deadline: --max-duration reached; every request was failing: S3 127.0.0.1:1: connection refused (30 attempts)
 ```
+
+## The endpoint cannot be reached
+
+```text
+swath: warning: S3 127.0.0.1:9000: connection refused (retrying; 25 attempts; nothing has answered: the run stops as unreachable 30s after the first attempt)
+swath: list s3://bucket/: endpoint http://127.0.0.1:9000 cannot be reached (connection refused): nothing has answered in 30.4s; check the endpoint address, and that the service is running
+```
+
+Exit 75, cause `unreachable`: the run is stuck, found early. Nothing in the run has been answered, and for 30
+seconds (at most half `--stall-timeout`) every connection was refused, its host was not found, or no route led
+to it: a mistyped `--endpoint-url` (or `AWS_ENDPOINT_URL`, `STORAGE_EMULATOR_HOST`), or an emulator (MinIO,
+Azurite, the GCS emulator) that is not running yet. A dataset run of an object store keeps its journal: once
+the endpoint answers, `swath resume DIR` continues it; other runs are run again. Once anything has answered,
+connections that fail later are an outage instead: swath retries them until `--stall-timeout`.
 
 ## The disk filled (exit 74)
 
@@ -268,8 +284,8 @@ cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the rep
 ## Reporting a problem
 
 Include `swath --version`, the command line, the provider and region, and the `--report` file (redact bucket
-names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`,
-and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
+names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`
+(or the temporary file the warning named), and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
 
 The internals of these records, `error.json`'s rules, the watchdog and the forced exit, are in
 [internals/run-lifecycle.md](internals/run-lifecycle.md); the workspace under `.swath/` in
