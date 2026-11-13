@@ -96,9 +96,9 @@ func main() {
 				// classification on a disk that does not return, a full
 				// stderr pipe nobody drains), the process exits within
 				// forcedAllowance, with the code chosen so far.
-				var exit atomic.Int64
-				exit.Store(int64(code))
-				time.AfterFunc(forcedAllowance, func() { os.Exit(int(exit.Load())) })
+				var chosen atomic.Int64
+				chosen.Store(int64(code))
+				time.AfterFunc(forcedAllowance, func() { exit(int(chosen.Load())) })
 				f := forensics.Load()
 				if f == nil {
 					f = &forensicTarget{}
@@ -106,9 +106,9 @@ func main() {
 				// One snapshot for the exit code and every file written;
 				// one that comes late (a commit that was under way) still
 				// sets the code the run's own accounts carry.
-				s, ok := forcedSnapshot(f, code, why, func(s snapshot) { exit.Store(int64(s.out.ExitCode)) })
+				s, ok := forcedSnapshot(f, code, why, func(s snapshot) { chosen.Store(int64(s.out.ExitCode)) })
 				if ok {
-					exit.Store(int64(s.out.ExitCode)) // the run's classification stands
+					chosen.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
 				elog().warn(fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
 				if ok {
@@ -117,7 +117,7 @@ func main() {
 					elog().warn("the run's result could not be read in time; no outcome is written")
 				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
-				os.Exit(int(exit.Load()))
+				exit(int(chosen.Load()))
 			}
 		}()
 	}
@@ -136,19 +136,26 @@ func main() {
 	statusOnSignal()
 	testHooks()
 	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitCompleted {
-		os.Exit(code)
+		exit(code)
 	}
 }
 
-// classifyRun is the terminal classification of a run's result: a
-// committed dataset that does not cover its scope (a key limit) never
-// exits 0 (a supervisor must not take it as complete), and the provider
-// names the class of its errors.
+// classifyRun is the terminal classification of a run's result: output
+// that does not hold its scope (entries that could not be read, a key
+// limit) exits 3, never 0 (a supervisor must not take it as complete), and
+// the provider names the class of its errors. A reader that closed the
+// stream took what it wanted: exit 0, whatever was left out.
 func classifyRun(ctx context.Context, dir string, provider func(error) string, sum listing.Report, err error) (error, outcome) {
 	var pe *textout.ProjectionError
 	switch {
+	case err == nil && sum.Outcome.StopReason == listing.StopDownstreamClosed:
+	case err == nil && sum.Outcome.Unreadable > 0:
+		err = unreadableError(sum.Outcome.Unreadable)
 	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
+	case err == nil && !sum.Outcome.Complete:
+		// Text rows or totals.
+		err = &incompleteError{"the output is partial: the listing stopped before the end of its scope (" + sum.Outcome.StopReason + ")"}
 	case errors.Is(err, listing.ErrComplete):
 		err = finalizedSample(dir, err)
 	case errors.As(err, &pe):
@@ -532,10 +539,10 @@ type options struct {
 	partMaxRows            int64
 	seedFrom               string
 	// swath du's per-prefix totals: --depth, --max-prefixes, and the
-	// local --allocated, --count-links-once and --max-inodes; totals is
-	// their output, resolved.
+	// local --allocated, --count-links and --max-inodes; totals is their
+	// output, resolved.
 	depth, maxPrefixes, maxInodes int
-	allocated, linksOnce          bool
+	allocated, countLinks         bool
 	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
 	// swath du --from-dataset DIR [PREFIX]: the dataset directory, and the
@@ -799,7 +806,12 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 			return o, "", usageError{err}
 		}
 	}
-	o.filter.Base, _ = keyOrigin(root) // a root it cannot read is refused when the run opens it
+	if o.filter.Base, err = keyOrigin(root); err != nil {
+		return o, "", usageError{err} // a malformed URL: s3://, az://ACCOUNT
+	}
+	if f.Changed("sort-buffer") && o.rowBudget < listing.MinRowBudget {
+		return o, "", usageError{fmt.Errorf("--sort-buffer %s: at least %s", sizeText(int64(o.rowBudget)), sizeText(listing.MinRowBudget))}
+	}
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
 		return o, "", usageError{err}
@@ -1098,30 +1110,38 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	}
 	// Entries left out say so, whatever the statistics' gating.
-	reportUnreadable(&sum, o.du)
+	reportUnreadable(&sum)
+	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
+		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
+	}
 	switch {
 	case err != nil:
 		err = explain(err)
+		if out.Class == listing.ClassDeadline {
+			err = deadlineAdvice(err, out.Resumable, dir)
+		}
 		if failing != "" {
 			err = fmt.Errorf("%w%s", err, failing)
 		}
 		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
 	case rerr != nil:
 		return reportFailed(nil, rerr)
-	case o.report == "-":
-		return nil // stdout carries the report
-	case !o.countOnly || o.du:
-		return nil // stdout carries the rows (swath du's: Deliver), or nothing: the data went to -o; --stats prints the account on stderr
 	}
+	// stdout carries the report (--report -), the rows (swath du's:
+	// Deliver), swath diag count's line, or nothing: the data went to -o;
+	// --stats prints the account on stderr.
+	return nil
+}
+
+// countLine is swath diag count's output: its one line of counts.
+func countLine(stdout io.Writer, sum listing.Report) {
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
 	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
 		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
 		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
-	// swath diag count's output is its one line of counts.
 	fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
-	return nil
 }
 
 // measured formats a measurement divided by unit, or "-" where the
@@ -1170,7 +1190,9 @@ func explain(err error) error {
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
 	case errors.As(err, &le) && le.Inodes:
-		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every link without --count-links-once)", err)
+		// Counting each hard-linked file once is the default: its cap is
+		// one a user meets without asking for it.
+		return &restated{err, fmt.Sprintf("the tree has more than %s with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)", plural(le.Max, "1 file", count(int64(le.Max))+" files"))}
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	case errors.As(err, &ce) && ce.CredentialRefused():
@@ -1180,6 +1202,16 @@ func explain(err error) error {
 		return &credentialRefusal{error: err, line: line}
 	}
 	return err
+}
+
+// deadlineAdvice says what follows a run --max-duration stopped: a resume,
+// which replays the recorded --max-duration unless given another, or, for a
+// run without a journal (text, swath du, a local tree), a new run.
+func deadlineAdvice(err error, resumable bool, dir string) error {
+	if resumable {
+		return fmt.Errorf("%w (swath resume %s --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)", err, shellOperand(dir))
+	}
+	return fmt.Errorf("%w (it cannot be resumed: run it again with a longer --max-duration, or without one)", err)
 }
 
 // credentialRefusal is a credential failure that will not pass, shown as

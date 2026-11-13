@@ -113,7 +113,7 @@ def main(out, reference=None):
     check(list(m.get("extensions", {})) == ["swath"], "extensions holds the swath namespace only")
     cov = ext.get("coverage", {})
     check(cov.get("snapshot") is False and isinstance(cov.get("exclusions"), list) and isinstance(cov.get("filters"), list),
-          f"coverage complete={cov.get('complete')} skipped={cov.get('skipped_entries')} scope={ext.get('scope')}")
+          f"coverage complete={cov.get('complete')} unreadable={cov.get('unreadable')} scope={ext.get('scope')}")
     for gone in ("_SUCCESS", "symlink.txt"):
         check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
     try:

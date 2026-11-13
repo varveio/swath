@@ -30,6 +30,9 @@ func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
 	return nil
 }
 
+// statLinks: a stat tier reads each entry's link count, device and inode.
+const statLinks = true
+
 // fillSys fills the stat fields an os.FileInfo carries on darwin, birth
 // time included, as statEntry does.
 func fillSys(r *Entry, fi fs.FileInfo) {

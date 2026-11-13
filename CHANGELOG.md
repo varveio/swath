@@ -16,7 +16,8 @@ Notable changes per release. The full human summary for the current release is i
   instead of listing the source again: the same rows, depths, orders, formats and filters as `swath du` of the
   source, read in one parallel pass over the key and the columns the totals need, seeking to PREFIX when one is
   given. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
-  `dataset` member; a dataset whose listing did not complete prints its totals and exits 1 (`incomplete`).
+  `dataset` member; a dataset whose listing did not complete, or left out entries it could not read, prints its totals and exits 3
+  (`incomplete`).
   Options that shape a listing, a dataset in a bucket and an interrupted run are refused. Plain `swath du DIR`
   still totals DIR's files (#392).
 

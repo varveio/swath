@@ -98,7 +98,7 @@ decision to add it later).
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](../running.md#stopping-and-resuming) replaces the earlier prefix-only description |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
-| Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |
+| Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 3, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |
 | Java checkpoint files | not read | removed | no migration of Java checkpoint files, 2026-11-05 |
 | `dump-run` (hidden staging inspector) | `swath show [--journal] DIR` (manifest summary or journal dump) | renamed | staging not ported, 2026-11-05 |
 
@@ -154,7 +154,7 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | 0: success, empty result, already-complete resume, closed stdout | 0 `completed`, an already-complete resume included | kept | – |
-| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
+| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable); a full disk is 74 | kept | partial coverage (a key limit, unreadable entries) is 3 `incomplete`, 2026-11-13: finished, the output usable but partial; Java exited 1 for a key limit and 0 with unreadable entries |
 | 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `309e562`) |
 | 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
 | 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows`, `stuck_empty_chain` | kept (causes renamed) | `stuck_empty_chain` added 2026-11-06 (review R3): Java rejects a continuing empty page at once; Go follows them, bounded |

@@ -37,7 +37,7 @@ func checkCommandPruning(t *testing.T, path string, pruned, fetched, filtered, e
 		stats.Pruning.RecursiveGlobs != 1 || stats.Pruning.RowOnlyGlobs != 1 || stats.Pruning.RegexRules != 1 {
 		t.Fatalf("source %q stats %+v pruning %+v", report.Source.Name, stats, stats.Pruning)
 	}
-	if stats.Errors() != 0 || report.Outcome.EntryErrors != 0 || report.Outcome.Unreadable {
+	if stats.Errors() != 0 || report.Outcome.Unreadable != 0 {
 		t.Fatalf("intentional pruning counted as unreadable: %+v", report)
 	}
 	return report
@@ -62,7 +62,7 @@ func TestPruneCommandParquet(t *testing.T) {
 			}
 			manifest := readManifest(t, dir)
 			filters := []string{"exclude=a/**", "exclude=x", "exclude_regex=^never$"}
-			if !slices.Equal(manifest.Coverage.Filters, filters) || manifest.Coverage.SkippedEntries != 0 ||
+			if !slices.Equal(manifest.Coverage.Filters, filters) || manifest.Coverage.Unreadable != 0 ||
 				!manifest.Coverage.Complete || manifest.Coverage.StopReason != "completed" {
 				t.Fatalf("coverage %+v, want original filters %q and complete coverage", manifest.Coverage, filters)
 			}

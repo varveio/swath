@@ -78,7 +78,7 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	}
 	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}}
 	if runtime.GOOS != "windows" { // Windows reads no allocated bytes, link count or inode
-		extras = append(extras, []string{"--allocated"}, []string{"--count-links-once"})
+		extras = append(extras, []string{"--allocated"}, []string{"-l"})
 	}
 	for _, extra := range extras {
 		for depth := range 4 {
@@ -176,7 +176,7 @@ func TestDuFromDatasetObjectStore(t *testing.T) {
 		{[]string{"--from-dataset", logs, "other/"}, `PREFIX "other/" is not inside the dataset's scope`},
 		{[]string{"--from-dataset", logs, "lo"}, `PREFIX "lo" is not inside the dataset's scope`},
 		{[]string{"--from-dataset", ds, "--allocated"}, "--allocated: the dataset's schema swath/s3-objects/v1 has no allocated_bytes column"},
-		{[]string{"--from-dataset", ds, "--count-links-once"}, "--count-links-once: the dataset's schema swath/s3-objects/v1 has no nlink column"},
+		{[]string{"--from-dataset", ds, "--count-links"}, "--count-links: the dataset's schema swath/s3-objects/v1 has no nlink column"},
 	} {
 		out, err := duRun(t, tc.args...)
 		if u := (usageError{}); !errors.As(err, &u) || !strings.Contains(err.Error(), tc.want) || out != "" {
@@ -247,20 +247,21 @@ func TestDuFromDatasetRefusals(t *testing.T) {
 
 // TestDuFromDatasetIncomplete: a dataset whose listing did not complete (a
 // key limit) prints its totals, says INCOMPLETE on stderr and in the JSONL
-// rows, and exits 1 (incomplete), as the run that wrote it; one that
-// skipped entries exits 0 and warns.
+// rows, and exits 3 (incomplete), as the run that wrote it; so does one
+// whose listing left out entries it could not read (it exited 0 and
+// warned).
 func TestDuFromDatasetIncomplete(t *testing.T) {
 	stderr := captureStderr(t)
 	end := s3test.Bucket(t, s3test.Keys(30, 3))
 	ds := filepath.Join(t.TempDir(), "ds")
 	err := run(context.Background(), []string{"s3://bkt", "--endpoint-url", end, "--anonymous", "--sequential", "--max-keys", "10", "-o", ds, "--no-stats"}, io.Discard, true)
-	if c := exitCode(t, err); c != exitFatal {
+	if c := exitCode(t, err); c != exitIncomplete {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
 	}
 	stderr.Reset()
 	got, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
 	var ee *exitError
-	if !errors.As(err, &ee) || ee.code != exitFatal || ee.out.Class != listing.ClassIncomplete || !strings.Contains(err.Error(), "the dataset is a partial listing: its listing did not complete (max_keys)") {
+	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete || !strings.Contains(err.Error(), "the dataset is a partial listing: its listing did not complete (max_keys)") {
 		t.Fatalf("exit: %v", err)
 	}
 	if !strings.HasPrefix(got, "depth\tobjects\tsize\tlast_modified\tprefix\n0\t10\t") {
@@ -277,7 +278,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 		t.Fatalf("JSONL: %s", got)
 	}
 
-	// Skipped entries, as the manifest records them.
+	// Unreadable entries, as the manifest records them.
 	root, _ := depthTree(t)
 	local := filepath.Join(t.TempDir(), "local")
 	if err := run(context.Background(), []string{root, "-o", local, "--no-stats"}, io.Discard, false); err != nil {
@@ -286,7 +287,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	path := filepath.Join(local, dataset.ManifestName)
 	var m map[string]any
 	readJSON(t, path, &m)
-	m["extensions"].(map[string]any)["swath"].(map[string]any)["coverage"].(map[string]any)["skipped_entries"] = 2
+	m["extensions"].(map[string]any)["swath"].(map[string]any)["coverage"].(map[string]any)["unreadable"] = 2
 	b, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
@@ -295,12 +296,17 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	stderr.Reset()
-	if _, err := duRun(t, "--from-dataset", local); err != nil {
-		t.Fatal(err)
+	got, err = duRun(t, "--from-dataset", local, "--format", "tsv")
+	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete ||
+		err.Error() != "2 entries could not be read when the dataset was listed: the totals leave them out" || !strings.HasPrefix(got, "depth\t") {
+		t.Fatalf("unreadable: %v, stdout %q", err, got)
 	}
-	if s := stderr.String(); !strings.Contains(s, "; complete, 2 entries skipped") ||
-		!strings.Contains(s, "swath: warning: 2 entries could not be read when the dataset was listed: the totals leave them out\n") {
+	if s := stderr.String(); !strings.Contains(s, "; complete, 2 unreadable") {
 		t.Fatalf("stderr: %s", s)
+	}
+	got, _ = duRun(t, "--from-dataset", local, "--format", "jsonl")
+	if json.Unmarshal([]byte(strings.SplitN(got, "\n", 2)[0]), &row) != nil || row.Dataset.Unreadable == nil || *row.Dataset.Unreadable != 2 {
+		t.Fatalf("JSONL: %s", got)
 	}
 }
 
@@ -366,7 +372,7 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 	rows := &parquetRows{rows: []parquet.Row{s.Deconstruct(nil, &noKindRow{Key: []byte("dir/"), Size: &size, LastModified: &at})}}
 	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
 		"source": map[string]any{"kind": "local-fs", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
-		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "skipped_entries": 0, "exclusions": []string{}, "filters": []string{}}}})
+		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

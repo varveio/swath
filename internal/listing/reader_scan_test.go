@@ -38,7 +38,7 @@ func openDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []s
 	m := d.Metadata()
 	if !m.Swath || m.PublishedAt == nil || *m.Source.Kind != kind || *m.Source.URI != "fixture://"+filepath.Base(dir) ||
 		*m.Scope.Kind != "whole" || !*m.Coverage.Complete || *m.Coverage.StopReason != "completed" ||
-		*m.Coverage.SkippedEntries != 0 || m.Coverage.Filters == nil || len(m.Coverage.Filters) != 0 {
+		*m.Coverage.Unreadable != 0 || m.Coverage.Filters == nil || len(m.Coverage.Filters) != 0 {
 		t.Fatalf("%s: metadata %+v, coverage %+v", s.ID, m, m.Coverage)
 	}
 	return d

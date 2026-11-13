@@ -119,7 +119,7 @@ func TestCountRefusesOutputFlags(t *testing.T) {
 	if err := runCount(context.Background(), []string{src, "--format=tsv"}, &buf); exitOf(err) != exitUsage {
 		t.Errorf("swath diag count --format: exit %d (%v)", exitOf(err), err)
 	}
-	for _, fl := range []string{"--depth=1", "-d=1", "--max-prefixes=5", "--allocated", "--count-links-once", "--max-inodes=5"} {
+	for _, fl := range []string{"--depth=1", "-d=1", "--max-prefixes=5", "--allocated", "--count-links", "-l", "--max-inodes=5"} {
 		for name, run := range map[string]func() error{
 			"list":       func() error { return run(context.Background(), []string{src, fl}, &buf, false) },
 			"diag count": func() error { return runCount(context.Background(), []string{src, fl}, &buf) },

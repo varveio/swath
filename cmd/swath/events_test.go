@@ -86,9 +86,9 @@ func TestEventGolden(t *testing.T) {
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
-	src, complete, stop, skipped, listed := "s3://bucket/logs/", true, "completed", int64(0), at.Add(-50*time.Hour)
+	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "completed", int64(0), at.Add(-50*time.Hour)
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
-		Complete: &complete, StopReason: &stop, SkippedEntries: &skipped, Filters: []string{}, Exclusions: []string{}}, at)
+		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []string{}, Exclusions: []string{}}, at)
 	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {

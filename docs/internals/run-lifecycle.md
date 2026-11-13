@@ -19,7 +19,7 @@ full disk; and the same `attempt`); it never needs stderr.
 The command classifies the outcome once, before any account is written, and that classification is frozen:
 `DIR/run.json` (a committed dataset), `error.json`, the report, the exit code and a forced exit's outcome agree
 on `class`, `exit_code`, `resumable` and `cause`, also when a stop cause (the deadline, a signal) arrives after
-the run settled (a dataset committed with partial coverage is `incomplete`, exit 1, in all of them). A
+the run settled (a dataset committed with partial coverage is `incomplete`, exit 3, in all of them). A
 protocol violation (`cause` `protocol`, which the journal records, so `swath resume` refuses the run), the part
 limit (`part_limit`) and an output layout swath did not make (a linked `data/`, workspace, journal or part,
 `unsafe_layout`) outrank a stop cause; the refused paths are left as they were.

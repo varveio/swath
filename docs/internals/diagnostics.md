@@ -112,7 +112,8 @@ Diagnostics:
   ([range-engine.md](range-engine.md)). `--no-seed` starts from one range instead
   ([measurements](measurements.md) has the seed's effect on split depth).
 - **`--sequential`** is the one-chain oracle, and the only mode where `--max-keys` stops early (the dataset is
-  then marked incomplete; such a run keeps no journal and cannot be resumed).
+  then marked incomplete, exit 3, unless the cap was reached on a page the store says is the last, emitted whole;
+  such a run keeps no journal and cannot be resumed).
 - **`--structure`**, **`--slow-split`** and **`--page-size`** change how ranges are probed and split, and the
   page size asked for ([range-engine.md](range-engine.md)).
 - **`--adaptive-limit-slow-start`** starts the request limit at 4 in flight and doubles it each second up to

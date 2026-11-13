@@ -539,11 +539,12 @@ type unreadableFields struct {
 	Samples    []string `json:"samples,omitempty"`
 }
 
-// reportUnreadable warns of the entries a listing could not read: their
-// count, then up to unreadableShown of them with their cause (the
-// provider's samples) and the count of the rest.
-func reportUnreadable(r *listing.Report, du bool) {
-	n := r.Errors()
+// reportUnreadable names the entries a listing could not read: up to
+// unreadableShown of them with their cause (the provider's samples), then
+// the count of the rest. Their count is the run's error line (exit 3,
+// unreadableError), which -q keeps.
+func reportUnreadable(r *listing.Report) {
+	n := r.Outcome.Unreadable
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {
 		return
@@ -555,22 +556,15 @@ func reportUnreadable(r *listing.Report, du bool) {
 		}
 	}
 	samples = samples[:min(len(samples), unreadableShown)]
-	what, out := "entries", "the output leaves them out"
-	if n == 1 {
-		what = "entry"
-	}
-	if du {
-		out = "the totals leave them out"
-	}
-	msg := fmt.Sprintf("%s %s could not be read: %s", count(n), what, out)
-	if len(samples) == 0 {
-		msg += " (the report's source counters say why)"
-	}
+	const msg = "unreadable entries"
 	if l.json {
 		l.print(lvWarn, evWarning, msg, unreadableFields{n, samples})
 		return
 	}
-	l.warn(msg)
+	if len(samples) == 0 {
+		return // the error line counts them; the report's source counters say why
+	}
+	l.warn(msg + ":")
 	for _, s := range samples {
 		noteKept(errOut, indent+s+"\n")
 	}

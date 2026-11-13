@@ -81,6 +81,9 @@ func fillStatx(r *Entry, s *unix.Statx_t) {
 	}
 }
 
+// statLinks: a stat tier reads each entry's link count, device and inode.
+const statLinks = true
+
 // fillSys adds what os.FileInfo hides behind Sys() (portable engine).
 func fillSys(r *Entry, fi fs.FileInfo) {
 	s, ok := fi.Sys().(*syscall.Stat_t)

@@ -10,6 +10,9 @@ import (
 	"syscall"
 )
 
+// statLinks: no tier reads a link count, device or inode here.
+const statLinks = false
+
 // fillSys: CreationTime is a birth time (Windows has no POSIX ctime through
 // FileInfo) and LastAccessTime is atime. uid, gid, inode, dev, nlink and
 // blocks stay null.

@@ -33,6 +33,7 @@ const (
 	exitCompleted   = 0   // the dataset is committed (or a dry run finished)
 	exitFatal       = 1   // a cause that a resume will not fix
 	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
+	exitIncomplete  = 3   // finished, but the output is incomplete: unreadable entries, or a key limit
 	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
 	exitStuck       = 75  // no progress for the stall timeout, or a bucket commit unresolved; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
@@ -47,6 +48,21 @@ var (
 	// errIncomplete: the dataset is committed, but its coverage is partial.
 	errIncomplete = errors.New("the dataset is committed with partial coverage (see the manifest's coverage)")
 )
+
+// incompleteError is a run that finished with an output that does not hold
+// its whole scope (exit 3): the message says why.
+type incompleteError struct{ msg string }
+
+func (e *incompleteError) Error() string        { return e.msg }
+func (e *incompleteError) Is(target error) bool { return target == errIncomplete }
+
+// unreadableError is a run that left out n entries it could not read.
+func unreadableError(n int64) error {
+	if n == 1 {
+		return &incompleteError{"1 entry could not be read and is missing from the output"}
+	}
+	return &incompleteError{count(n) + " entries could not be read and are missing from the output"}
+}
 
 // Stuck causes (error.json and the report's outcome cause on 75): what
 // rose while the run's liveness (listing.ProgressSnapshot.Liveness) did
@@ -154,7 +170,7 @@ func classify(err, cause error, dir string) outcome {
 	case errors.Is(err, dataset.ErrRemoteAltered):
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "remote_altered"
 	case errors.Is(err, errIncomplete):
-		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
+		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitIncomplete, false
 	case errors.Is(cause, errStuck):
 		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
 		var st *stuckError
@@ -172,10 +188,10 @@ func classify(err, cause error, dir string) outcome {
 		// idempotent, exit 0, as Java's, when the dataset covers its
 		// scope; one committed with partial coverage stays incomplete.
 		o.Resumable = false
-		if m, ok := committedManifest(dir); ok && m.Coverage.Complete {
+		if m, ok := committedManifest(dir); ok && m.Coverage.Complete && m.Coverage.Unreadable == 0 {
 			o.Class, o.ExitCode = listing.ClassCompleted, exitCompleted
 		} else {
-			o.Class, o.ExitCode = listing.ClassIncomplete, exitFatal
+			o.Class, o.ExitCode = listing.ClassIncomplete, exitIncomplete
 		}
 	case errors.Is(err, syscall.ENOSPC):
 		// A full disk stops the run (a part, a journal append, spill or
@@ -269,7 +285,7 @@ func account(r *listing.Outcome, o outcome) {
 func committedAccount(dir string, r *listing.Report) {
 	r.Outcome.Status = listing.StatusCommitted
 	if m, ok := committedManifest(dir); ok {
-		r.Outcome.Complete, r.Outcome.StopReason = m.Coverage.Complete, m.Coverage.StopReason
+		r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Unreadable = m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable
 		r.Output.Committed(m)
 	}
 }
@@ -277,10 +293,18 @@ func committedAccount(dir string, r *listing.Report) {
 // finalizedSample is err, a resume's listing.ErrComplete, as the user reads
 // it for dir: a dataset committed with partial coverage (a --max-keys
 // sample) is a finalized partial sample, which nothing continues, not a
-// complete one. It still is ErrComplete to classify: incomplete, exit 1.
+// complete one; so is one that left out entries it could not read. It
+// still is ErrComplete to classify: incomplete, exit 3.
 func finalizedSample(dir string, err error) error {
-	if m, ok := committedManifest(dir); ok && !m.Coverage.Complete {
+	m, ok := committedManifest(dir)
+	switch {
+	case !ok:
+	case !m.Coverage.Complete:
 		return &restated{err, fmt.Sprintf("%s holds a finalized partial sample (coverage complete=false stop=%s): it cannot be resumed", dir, m.Coverage.StopReason)}
+	case m.Coverage.Unreadable > 0:
+		n := m.Coverage.Unreadable
+		return &restated{err, fmt.Sprintf("%s left out %s it could not read (coverage unreadable=%d): it cannot be resumed; list the tree again once %s can be read",
+			dir, plural(n, "an entry", count(n)+" entries"), n, plural(n, "it", "they"))}
 	}
 	return err
 }
