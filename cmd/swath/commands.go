@@ -81,7 +81,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dataset.Committed(dir) && !dataset.Unfinalized(dir) {
 		// A bucket dataset's work directory committed but not finalized goes
 		// on: the run finishes the commit's aftermath, then reports complete.
-		return stop(listing.ErrComplete)
+		return stop(finalizedSample(dir, listing.ErrComplete))
 	}
 	st, err := journal.Read(dir)
 	if errors.Is(err, journal.ErrNoJournal) {

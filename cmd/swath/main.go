@@ -148,6 +148,8 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 	switch {
 	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
+	case errors.Is(err, listing.ErrComplete):
+		err = finalizedSample(dir, err)
 	case errors.As(err, &pe):
 		// Found when the schema is bound, before the listing's first
 		// request: a usage error, as at parse time.
