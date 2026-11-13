@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -36,9 +37,9 @@ func closedPort(t *testing.T) string {
 
 // shortGrace shortens the clients' fail-fast grace for one test.
 func shortGrace(t *testing.T, d time.Duration) {
-	g := objhttp.UnreachableGrace
-	objhttp.UnreachableGrace = d
-	t.Cleanup(func() { objhttp.UnreachableGrace = g })
+	g := source.UnreachableGrace
+	source.UnreachableGrace = d
+	t.Cleanup(func() { source.UnreachableGrace = g })
 }
 
 // unreachableReport is the part of the report these tests read.

@@ -3,7 +3,7 @@
 
 //go:build !windows
 
-package objhttp
+package source
 
 import "syscall"
 

@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package objhttp
+package source
 
 import "golang.org/x/sys/windows"
 

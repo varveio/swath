@@ -32,8 +32,8 @@ clients are described in [providers.md](providers.md) and the page of each provi
   can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
   requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
 - **An endpoint that never answered fails fast.** While nothing has answered a client, an attempt whose
-  connection failed deterministically (`objhttp.Unreachable`: refused, the host not found, no route to the network
-  or host) is retried as any transport failure for `objhttp.UnreachableGrace` (15 s) from the first; past it the
+  connection failed deterministically (`source.Unreachable`: refused, the host not found, no route to the network
+  or host) is retried as any transport failure for `source.UnreachableGrace` (15 s) from the first; past it the
   failure is final, class `unreachable`, naming the endpoint's scheme and host and the cause, and the run ends
   fatal instead of requeueing until `--stall-timeout`. Any other outcome (an answer of any status, a timeout, a cut
   connection) disarms it for the client's life, so an endpoint that answered once and then refuses is an outage,

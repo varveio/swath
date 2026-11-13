@@ -380,7 +380,7 @@ type Counts struct {
 	ParseFailures int64 `json:"parse_failures"`
 	// Unreachable counts attempts that failed to connect deterministically
 	// (Unreachable) before the endpoint had answered; UnreachableStops the
-	// calls the fail-fast ended after UnreachableGrace (unreachable.go).
+	// calls the fail-fast ended after source.UnreachableGrace (unreachable.go).
 	Unreachable      int64 `json:"unreachable"`
 	UnreachableStops int64 `json:"unreachable_stops"`
 	// InflightMax is the most attempts in flight at once (admitted, from
@@ -582,7 +582,7 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past -request-timeout, retried or not"}
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
 	d[CUnreachable] = counters.Def{Key: "unreachable.attempts", Kind: counters.Count, Unit: "requests", Help: "attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while the endpoint had never answered"}
-	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls failed as unreachable: nothing had answered and every attempt failed so for " + UnreachableGrace.String() + " (the run ends fatal, cause unreachable)"}
+	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls failed as unreachable: nothing had answered and every attempt failed so for " + source.UnreachableGrace.String() + " (the run ends fatal, cause unreachable)"}
 	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
 	for id, q := range map[ClientCounter]string{CInflightP50: "50", CInflightP90: "90", CInflightP99: "99"} {
