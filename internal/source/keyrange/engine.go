@@ -558,7 +558,9 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}
-		if stop {
+		if stop && (n < len(out.Rows) || out.Truncated) {
+			// The cap left rows out, or may have: a page the store says
+			// is the last, emitted whole, is the end of the scope.
 			p.c.Set(cTruncated, 1)
 		}
 		if stop || !out.Truncated {
