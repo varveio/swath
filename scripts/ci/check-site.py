@@ -22,12 +22,9 @@ Six checks, each independently runnable with `--only`:
                equal the record they came from
   a11y         landmark, skip-link, duplicate-id, and text-alternative smoke tests
 
-Scope boundary with the Java tests: `PublicRunFactsTest` guards the run figures
-quoted in README.md and docs/full-scale-demo.md and the internal shape of the
-records (explicit nulls, one interchangeable key set, numeric fields never strings).
-This script guards the same records where the *site* quotes them. The only overlap
-is deliberate: the schema version and the run id are re-checked here as this
-consumer's own preconditions, since every page assertion below reads through them.
+The run-facts check guards the records where the *site* quotes them. It checks the
+schema version and the run id as its own preconditions, since every page assertion
+below reads through them.
 
 Usage:
     python3 scripts/ci/check-site.py
@@ -72,7 +69,7 @@ TERMINOLOGY_RULES: list[tuple[str, re.Pattern[str], str]] = [
     (
         "replay-doc-path",
         re.compile(r"docs/swath-replay-server\.md"),
-        "the replay guide is `docs/swath-replay.md`",
+        "the replay guide is `go/docs/internals/swath-replay.md`",
     ),
     (
         "us-english",
@@ -100,8 +97,8 @@ TERMINOLOGY_RULES: list[tuple[str, re.Pattern[str], str]] = [
     (
         # Two shapes: a sub-cent figure, which is only ever a per-request rate, and any
         # price quoted per thousand. A run's own estimated total ("~$0.208") is evidence
-        # and stays; docs/operating.md's "current provider price per 1,000 LIST requests"
-        # survives because it names no figure.
+        # and stays; "current provider price per 1,000 LIST requests" survives because it
+        # names no figure.
         "evergreen-pricing",
         re.compile(r"\$\s?0\.00\d+|"
                    r"\$\s?\d+(?:\.\d+)?\s*(?:/|per\s+|for\s+every\s+)\s*1[,.]?(?:000|k)\b",

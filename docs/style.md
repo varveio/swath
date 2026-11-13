@@ -126,8 +126,7 @@ When provenance is incomplete, say so rather than inferring it.
 ## Information ownership
 
 Give each detailed fact one canonical owner. Other pages may summarize it in one or two
-sentences and link to that owner. The root `docs/` usage and engine owners below are for
-Java; Go has separate owners because its implementation and dataset contract differ.
+sentences and link to that owner.
 
 | Fact | Owner |
 | --- | --- |
@@ -141,16 +140,7 @@ Java; Go has separate owners because its implementation and dataset contract dif
 | Go schemas and dataset layout | `go/docs/dataset.md` |
 | Go engine and providers | `go/docs/internals/` |
 | Go dated measurements | `go/docs/internals/measurements.md` |
-| Java first successful workflow | `docs/getting-started.md` |
-| Output and resume choices | `docs/usage.md` |
-| Credentials, IAM, endpoints, and cost | `docs/operating.md` |
-| Supported flag names | `docs/cli.md` |
 | Option syntax, accepted values, and defaults | installed CLI help |
-| Expert and diagnostic controls | `docs/configuration.md` |
-| Performance interpretation | `docs/performance.md` |
-| Metrics and report fields | `docs/metrics-and-observability.md` |
-| Current engine behavior | `docs/internals/algorithms.md` |
-| Invariants and schemas | `docs/internals/contracts.md` |
 | Dated raw evidence | `docs/ops/dev/field-investigations.md` |
 
 Do not copy a detailed table into several pages. Summarize and link.

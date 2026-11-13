@@ -1,9 +1,8 @@
 # Testing
 
 This page maps the test methods of the Go port to what it proves, where it lives, how to run it, and when
-CI runs it. The invariants the tests hold are in [contracts.md](contracts.md). The Java
-tiers are owned by [docs/ops/dev/TESTING.md](../../../docs/ops/dev/TESTING.md) and appear here only in the
-summary. The reasoning behind CI's shape is in [docs/ops/dev/CI.md](../../../docs/ops/dev/CI.md).
+CI runs it. The invariants the tests hold are in [contracts.md](contracts.md). The reasoning behind CI's
+shape is in [docs/ops/dev/CI.md](../../../docs/ops/dev/CI.md).
 
 ## Summary
 
@@ -31,11 +30,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
-| Java fast tier | unit, property and concurrency tests, instrumentation drift, license gate | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `fast-tests` |
-| Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `integration-tests` |
-| Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf` |
-| Java perf tier | PERF-1, PERF-2, SORT-PERF | nightly; dispatch `jobs=all` or `deep-and-perf` | ubuntu-latest | `nightly.yml` `deep-and-perf` |
-| Java image check | both Java images build for 2 architectures and start offline; nothing is pushed | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `docker-check` |
+| Script self-tests | the OSV image policy's self-test and the provider-conformance tools' tests | PR, main, dispatch | ubuntu-latest | `ci.yml` `scripts` |
 | OSV scan | the Go images (`Dockerfile.go`): the Go version and modules linked into each binary, and the lister base's packages, against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
 | Release guards | tag SHA and ancestry, the version's form and the release notes (`source`); the exact asset set, archives, signatures and attestations (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
@@ -109,13 +104,11 @@ Every push to **main** and every manual **dispatch** selects all Go modules, pla
 images, even for a documentation-only change. PRs use `git diff --no-renames` against the base:
 renames select both old and new owners, and deletions select the former owner. Missing/zero base or
 an empty diff runs full validation; an unreadable git diff fails instead of silently skipping work.
-Java retains its positive source/build/fixture filter ([CI architecture](../../../docs/ops/dev/CI.md#change-detection)).
 
 Each job still runs, but an unaffected job skips its work and succeeds. `ci-gate` rejects failed,
 cancelled **and skipped jobs on every event**. Matrix jobs emit a single cheap `off` leg when no
 work is selected. Full-scope PRs and main/dispatch additionally emit **`go-full-gate`** only after every Go job passes, all Go
-selections are true, and both expanded matrices match full validation. This Go-specific gate
-does not depend on the Java jobs. Release requires that qualification from the main push run of its
+selections are true, and both expanded matrices match full validation. Release requires that qualification from the main push run of its
 exact commit; a green PR or mere ancestry in main is insufficient.
 
 ### Go jobs per push
@@ -159,7 +152,7 @@ and removes CodeQL PR dependency copies, preserving scanning and main's shared c
 Deletion uses a deduplicated snapshot and creation order, so overlapping main runs cannot delete
 a newer cache just because it belongs to another commit. `ci-gate` does not need housekeeping.
 See [CI architecture](../../../docs/ops/dev/CI.md#caching) for the policy and trust boundary.
-The Java build's DuckDB download retries five times; the Go image smoke's and `release.yml`'s do not.
+The DuckDB downloads of the Go image smoke and `release.yml` do not retry.
 SeekParquet conformance's `pip install` retries ten times.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 when main is selected and on
@@ -258,7 +251,7 @@ still run on Windows. Application publication/durability behavior is unchanged.
 
 `nightly.yml` runs at 07:00 UTC on `main` with no path filter, so it also backstops the change detection.
 A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`: `all` (the default),
-`deep-and-perf`, `osv-scan`, `go-race-nightly`, `go-xos-macos`, `go-xos-windows` or `go-shapes`.
+`osv-scan`, `go-race-nightly`, `go-xos-macos`, `go-xos-windows` or `go-shapes`.
 
 | Job | Runs | On dispatch |
 |---|---|---|
@@ -267,7 +260,6 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | `go-xos-windows` | on windows-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `osv-scan` | builds both `Dockerfile.go` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
-| `deep-and-perf` | the Java tiers ([docs/ops/dev/TESTING.md](../../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, `deep-and-perf` |
 
 The four Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
 cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on the matching platform
@@ -276,7 +268,7 @@ cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on 
 `osv-scan` is the Go dependency scan: osv-scanner reads the Go version and module list embedded in each image's
 binary (the archives carry the same binaries), so it covers the standard library and every linked module, and
 no test-only one. The image policy (`scripts/ci/osv-image-policy.py`) fails on any advisory that is not an
-Ubuntu package's or an argued exception in `config/osv/osv-scanner.toml` (Java findings, and Go module advisories against a package the binaries do not link).
+Ubuntu package's or an argued exception in `config/osv/osv-scanner.toml` (Go module advisories against a package the binaries do not link).
 There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in CI.
 
 ### License gate
@@ -284,8 +276,7 @@ There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in C
 [`go/notices.sh`](../../notices.sh) runs
 [go-licenses](https://github.com/google/go-licenses) (version pinned in the script) over `./cmd/swath` and
 `./cmd/swath-replay` for linux, darwin and windows. It fails when a linked module's license is not recognized
-or is not on its allow-list (the Java build's `config/license/allowed-licenses.json` as SPDX identifiers:
-Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
+or is not on its allow-list (SPDX identifiers: Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
 targets link different modules. It then writes `THIRD_PARTY_NOTICES`: the module inventory, each module's
 license text, and the Go distribution's license. `go-build` runs it directly whenever main is selected
 and packaging is deferred; otherwise `Dockerfile.go`'s build stage runs it. This includes source/import
@@ -544,11 +535,12 @@ curl -LO https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25
 sha256sum OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz   # 68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb
 tar xzf OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz && export JAVA_HOME=~/jdk25/jdk-25.0.5+8 PATH=~/jdk25/jdk-25.0.5+8/bin:$PATH
 
-# 2. Build the Java CLI and replay server from this repository (about 75 s with a warm cache).
-cd "$(git rev-parse --show-toplevel)"
-./gradlew --max-workers=2 -Porg.gradle.java.installations.paths=$JAVA_HOME \
-  -Porg.gradle.java.installations.auto-download=false :swath-replay:installDist :swath-cli:installDist
-export PATH=$PWD/swath-replay/build/install/swath-replay/bin:$PWD/swath-cli/build/install/swath/bin:$PATH
+# 2. Build the Java CLI and replay server at the java-final tag (about 75 s with a warm cache).
+cd "$(git rev-parse --show-toplevel)" && git worktree add ../swath-java-final java-final
+(cd ../swath-java-final && ./gradlew --max-workers=2 -Porg.gradle.java.installations.paths=$JAVA_HOME \
+  -Porg.gradle.java.installations.auto-download=false :swath-replay:installDist :swath-cli:installDist)
+J=$PWD/../swath-java-final
+export PATH=$J/swath-replay/build/install/swath-replay/bin:$J/swath-cli/build/install/swath/bin:$PATH
 
 # 3. Record a bucket with Java (sorted Parquet; anonymous for public buckets).
 swath list s3://noaa-normals-pds --s3-region us-east-1 --no-sign-request --concurrency 64 \

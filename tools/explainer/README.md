@@ -144,7 +144,7 @@ every run. What varies with the data is every number, every figure, and which fi
 
 ## Sensitivity
 
-A trace carries real key names on nearly every event ([`metrics-internals.md`](../../docs/internals/metrics-internals.md)
+A trace carries real key names on nearly every event ([`metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md)
 §7) — the same sensitivity class as the listing output itself. The report inherits that: seed
 bounds and split pivots are shown verbatim, because they are most of the value. `--anonymize`
 withholds all of them and emits positions and counts only.
@@ -157,6 +157,6 @@ withholds all of them and emits positions and counts only.
 - **Owner-split confetti** — a stack of hairline rectangles in one keyspace region.
 
 The trace format itself is specified in
-[`docs/internals/metrics-internals.md`](../../docs/internals/metrics-internals.md) §7. A consumer
+[`docs/internals/metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md) §7. A consumer
 is required to tolerate a torn final line after a hard kill and to ignore event kinds it does not
 know; this tool does both.

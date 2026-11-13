@@ -7,7 +7,7 @@ DecisionTraceGoldenTest}.java`, goldens under
 [`TESTING.md`](TESTING.md) for the wider test-tiering picture. The seam principle
 this recorder exists to check — decision logic is a deterministic state machine over
 observed events, and execution is everything touching time, threads, sockets, and
-SQLite — is stated in [`contracts.md`](../../internals/contracts.md) §2.1.
+SQLite — is stated in [`contracts.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/contracts.md) §2.1.
 
 ## What it is
 

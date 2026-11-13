@@ -142,7 +142,7 @@ and run reports.
 The recordings below were captured with the earlier Java releases. They do not show the
 current commands, dataset format or recovery model.
 
-[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](docs/full-scale-demo.md)
+[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://github.com/varveio/swath/blob/java-final/docs/full-scale-demo.md)
 
 *Run `noaa-gestofs-pds-2026-08-03-505ae26`. The embedded recording was captured on
 2026-08-03 with swath v0.2.1 (`505ae26e6019`) against the full public
@@ -154,7 +154,7 @@ itself. swath prints an elapsed time per invocation, and no clock for the whole 
 was recorded. The bucket and the current release can produce different figures; the
 [run facts](site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json) record what is known
 about this capture and what is not. Read the
-[full-scale demonstration](docs/full-scale-demo.md) before reproducing it.*
+[full-scale demonstration](https://github.com/varveio/swath/blob/java-final/docs/full-scale-demo.md) before reproducing it.*
 
 The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/) visualizes a
 separate capture of the same bucket, not this recording: run
@@ -176,5 +176,4 @@ The evidence behind the published large-scale runs is in the
 
 [Apache-2.0](LICENSE). The Go release archives and images carry `THIRD_PARTY_NOTICES`, the
 licenses of every module linked into the binaries, generated at release by
-[`go/notices.sh`](go/notices.sh). The Java build's bundled dependencies are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[`go/notices.sh`](go/notices.sh).

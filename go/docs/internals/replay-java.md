@@ -1,7 +1,7 @@
 # The Go replay server and the Java one
 
 This page holds every comparison between the Go `swath-replay` ([the user page](swath-replay.md)) and the Java
-`swath-replay serve` it was ported from ([`../../../docs/swath-replay.md`](../../../docs/swath-replay.md)): what
+`swath-replay serve` it was ported from ([`docs/swath-replay.md`](https://github.com/varveio/swath/blob/java-final/docs/swath-replay.md)): what
 is the same, what the Java server has that this one does not, where the two answer differently and why, how the
 differential driver holds the Go server to the Java one, and the Java side of the measurements. The user page
 describes the Go server in its own terms; this page goes with the Java server, and when the Java server is
@@ -64,7 +64,7 @@ metrics endpoint and the same bytes on the wire for the S3 route, apart from the
 ## The meters, side by side
 
 The Java server's meters are documented in
-[`../../../docs/swath-replay.md`](../../../docs/swath-replay.md#metrics-and-tuning). A scrape after the same
+[`docs/swath-replay.md`](https://github.com/varveio/swath/blob/java-final/docs/swath-replay.md#metrics-and-tuning). A scrape after the same
 requests lists the same meters with the same types and tags on either server, apart from the rows below
 (`server` `TestMeterSetMatchesTheContract` compares the Go set with a Java scrape after the same mix,
 `testdata/meters.txt`). Every meter of the user page's table not named here is the same on both.

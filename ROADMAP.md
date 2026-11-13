@@ -5,8 +5,8 @@ Items here are intentions, not release commitments. Issues track actionable work
 ## Release transition
 
 The latest published release is the S3-focused Java v0.3.2. The Go implementation on
-`main` is unreleased. Go will replace Java, and the Java code will be removed at that
-release. A copy change does not itself make that release or remove Java.
+`main` is unreleased and replaces Java at its release. The Java code is no longer on
+`main`; it is preserved at the tag `java-final`.
 
 Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
 Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible

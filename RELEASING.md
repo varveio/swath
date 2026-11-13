@@ -6,8 +6,8 @@ scheme and the per-release steps. The heavy lifting is automated by
 human side of it.
 
 A release ships the Go implementation (`go/`): the `swath` lister and the `swath-replay`
-server. The Java implementation still builds and tests in `ci.yml` until it is removed, but
-no release publishes it; v0.3.2 was its last.
+server. The Java implementation's last release was v0.3.2; it is no longer on `main` and is
+preserved at the tag `java-final`.
 
 ## Versioning
 
@@ -69,8 +69,7 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 The `source` job verifies tag SHA and main ancestry, then independently requires a successful
 **`go-full-gate`** from that exact commit's `ci.yml` main push run. This gate certifies all Go modules,
-race shards, non-race checks, platforms, cross-builds, images and replay fixtures; it is independent
-of the legacy Java jobs. Being on main or
+race shards, non-race checks, platforms, cross-builds, images and replay fixtures. Being on main or
 having a green PR is insufficient. The verifier selects the newest run and its current attempt;
 it rejects skipped/failed gates and does not accept a PR or manual dispatch in place of main.
 
@@ -88,7 +87,7 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
 - `build`: the static builds for all five targets and their `--version` stamp, and the
   license gate: `go/notices.sh` fails on a linked module whose license go-licenses does not
-  recognize or that is not on its allow-list (the Java build's, as SPDX identifiers), or when
+  recognize or that is not on its allow-list (SPDX identifiers), or when
   the targets link different modules
   ([license gate](go/docs/internals/testing.md#license-gate));
 - `publish`, before any tag exists: both images' `--version` against the pushed digests,
