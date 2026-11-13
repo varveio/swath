@@ -211,8 +211,13 @@ func TestStatsBlock(t *testing.T) {
 		t.Fatalf("one part %q", l)
 	}
 	one.Output.Text = &listing.TextOutput{Destination: "out.tsv", Bytes: 2048}
+	one.Outcome.Status = listing.StatusWritten
 	if l := statsLines(&one, false, store); l[len(l)-1] != "1 file · 2.00 KiB written · peak RSS 191 MiB" {
 		t.Fatalf("a text file %q", l)
+	}
+	one.Outcome.Status = listing.StatusStopped // the file is discarded
+	if l := statsLines(&one, false, store); l[len(l)-1] != "no file written · peak RSS 191 MiB" {
+		t.Fatalf("a discarded text file %q", l)
 	}
 	r.Outcome = listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}
 	r.Invocation.Out = "/data/ds"

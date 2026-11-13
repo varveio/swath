@@ -7,10 +7,10 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 |---|---|
 | 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
+| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](concepts.md#coverage) says which |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
-| 0, but rows are missing | [entries could not be read](#entries-could-not-be-read), and the dataset's [coverage](concepts.md#coverage) |
 
 The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
 and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their
@@ -76,8 +76,14 @@ See 'swath list --help'.
 ```
 
 Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gcs-credentials-file`,
-`--azure-sas-token`), and a long option takes two dashes. An option given for another provider's source is
-refused rather than ignored:
+`--azure-sas-token`), and a long option takes two dashes. A GNU `du` option says what `swath du` takes for
+it: `-x` is `--one-file-system`, `-s` and `--apparent-size` are the defaults, and
+
+```text
+swath: unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)
+```
+
+An option given for another provider's source is refused rather than ignored:
 
 ```text
 swath: --s3-profile applies to S3 sources, not to GCS sources
@@ -129,6 +135,13 @@ Write `.tsv` and convert it, or read the TSV directly ([output.md](output.md#rea
 A dataset run of an object store stopped by a signal (130, 143), `--max-duration` (124), `--stall-timeout`
 (75) or a full disk (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
+A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
+statistics say `no file written`. After `--max-duration` the last line says which applies:
+
+```text
+swath: deadline: --max-duration reached (swath resume inv --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
+swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)
+```
 
 On Windows, journaled dataset runs of S3, GCS and Azure Blob sources are refused for both local and
 bucket destinations: a bucket destination still keeps its journal in a local `--work-dir`, whose
@@ -238,11 +251,19 @@ shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
 
 ## Entries could not be read
 
-A local walk that cannot read some entries (permissions, entries removed during the walk, a link target it
-cannot read) names up to five on stderr with their cause, counts the rest, and still exits 0. Local entry errors
-can leave rows out or metadata unavailable: a symbolic link whose target cannot be read keeps its row.
-`outcome.unreadable` in the report reflects entry errors; `coverage.skipped_entries` excludes entries found missing
-during stat and failed link-target reads, but includes failed directory opens.
+```text
+swath: warning: unreadable entries:
+  /data/locked: permission denied
+swath: 1 entry could not be read and is missing from the output
+```
+
+A local walk that cannot read some entries (permissions, a directory replaced while the walk ran) leaves them
+out, names up to five on stderr with their cause, and exits 3 (class `incomplete`); the last line counts them, and
+`-q` keeps it. The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
+its row, an entry removed during the walk is no longer part of the tree, and one the include and exclude rules
+leave out by its name is not selected: none of them counts. A root directory that
+cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
+`coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
 
 ## Reporting a problem
 

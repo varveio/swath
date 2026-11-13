@@ -1,4 +1,4 @@
-report_version 6
+report_version 7
 args_hash string
 attempt.id string
 attempt.started time
@@ -45,14 +45,13 @@ invocation.workers int
 outcome.cause string
 outcome.class string
 outcome.complete bool
-outcome.entry_errors int64
 outcome.error string
 outcome.exit_code int
 outcome.resumable bool
 outcome.status string
 outcome.stop_reason string
 outcome.stop_source string
-outcome.unreadable bool
+outcome.unreadable int64
 outcome.unrecorded string
 output.committed_object_bytes int64
 output.delete_markers int64

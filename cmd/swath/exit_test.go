@@ -68,14 +68,8 @@ func TestExitCodes(t *testing.T) {
 			"--part-size", "4KiB", "-o", out}, extra...)
 	}
 	code := func(err error) int {
-		if err == nil {
-			return 0
-		}
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode()
-		}
-		t.Fatal(err)
-		return -1
+		c, _ := exitStatus(t, err)
+		return c
 	}
 	outcome := func(dir string) outcome {
 		var o outcome
@@ -112,10 +106,10 @@ func TestExitCodes(t *testing.T) {
 	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "not_found" || !strings.Contains(o.Message, "404") || !strings.Contains(o.Message, "NoSuchBucket") {
 		t.Fatalf("fatal: %+v", o)
 	}
-	// 1: a committed dataset with partial coverage (a key limit) never exits 0.
+	// 3: a committed dataset with partial coverage (a key limit) never exits 0.
 	part := filepath.Join(t.TempDir(), "partial")
 	pargs := append([]string{"diag"}, s3args("bkt", part, "--sequential", "--max-keys", "10")...)
-	if c := code(exec.Command(bin, pargs...).Run()); c != exitFatal {
+	if c := code(exec.Command(bin, pargs...).Run()); c != exitIncomplete {
 		t.Fatalf("partial: exit %d", c)
 	}
 	if o := outcome(part); o.Class != "incomplete" || o.Resumable {
@@ -135,8 +129,10 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143 and 130: signals, graceful, resumable. The interrupted run is
-	// traced: its trace parses and ends in run_end with the outcome.
+	// 143 and 130: signals, graceful, resumable. The process dies by the
+	// signal once it has cleaned up (a shell sees 128+n), so a calling
+	// shell loop stops; before, it exited with the code. The interrupted
+	// run is traced: its trace parses and ends in run_end with the outcome.
 	slow.Store(true)
 	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted} {
 		dir := filepath.Join(t.TempDir(), "sig")
@@ -151,8 +147,8 @@ func TestExitCodes(t *testing.T) {
 		}
 		time.Sleep(700 * time.Millisecond)
 		cmd.Process.Signal(sig)
-		if c := code(cmd.Wait()); c != want {
-			t.Fatalf("%v: exit %d, want %d", sig, c, want)
+		if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
+			t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
 		}
 		if o := outcome(dir); o.ExitCode != want || !o.Resumable {
 			t.Fatalf("%v: %+v", sig, o)
@@ -190,6 +186,23 @@ func TestExitCodes(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"mutex_max_hold_ms"`)) {
 		t.Fatalf("progress file: %v %s", err, b)
 	}
+}
+
+// exitStatus is a finished process's exit code, as a shell reports it: 128
+// plus the signal's number for a process that died by one (signaled).
+func exitStatus(t *testing.T, err error) (code int, signaled bool) {
+	t.Helper()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, false
+	case !errors.As(err, &ee):
+		t.Fatal(err)
+	}
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), true
+	}
+	return ee.ExitCode(), false
 }
 
 // TestGCSOutageThenResume: a GCS bucket that starts answering 503 to
@@ -431,7 +444,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 }
 
 // TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
-// dataset whose coverage says incomplete, exits 1 with class incomplete
+// dataset whose coverage says incomplete, exits 3 with class incomplete
 // (not resumable), keeps no journal, and swath resume refuses it as
 // complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
 func TestGCSCappedRunIsIncomplete(t *testing.T) {
@@ -441,7 +454,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	ctx := context.Background()
 	err := run(ctx, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10",
 		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
-	if c := exitCode(t, err); c != exitFatal {
+	if c := exitCode(t, err); c != exitIncomplete {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
 	}
 	var o outcome
@@ -464,12 +477,12 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	}
 	want := dirTree(t, dir)
 	// Refused as a finalized partial sample, not as complete: still exit
-	// 1, class incomplete, not resumable.
+	// 3, class incomplete, not resumable.
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
 	if msg := dir + " holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
-		exitCode(t, err) != exitFatal || err.Error() != msg {
-		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitFatal, msg)
+		exitCode(t, err) != exitIncomplete || err.Error() != msg {
+		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
@@ -478,6 +491,33 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	}
 	if got := dirTree(t, dir); !maps.Equal(want, got) {
 		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)
+	}
+}
+
+// TestCappedTextRunIsIncomplete: text rows capped by --max-keys exit 3
+// (class incomplete) with an error line that says the output is partial,
+// as a capped dataset does; a reader that closes the stream early is not
+// a partial listing (TestPipedToHeadExitsZero). Before, they exited 0.
+func TestCappedTextRunIsIncomplete(t *testing.T) {
+	stderr := captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--format", "tsv", "--no-stats"}, &out, true)
+	if c := conclude(err); c != exitIncomplete || strings.Count(out.String(), "\n") != 11 ||
+		!strings.HasSuffix(stderr.String(), "swath: the output is partial: the listing stopped before the end of its scope (max_keys)\n") {
+		t.Fatalf("exit %d, %d lines, stderr %q", c, strings.Count(out.String(), "\n"), stderr.String())
+	}
+}
+
+// TestCappedCountPrintsCounts: swath diag count capped by --max-keys prints
+// its partial counts, then exits 3; it printed nothing.
+func TestCappedCountPrintsCounts(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := runCount(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--no-stats"}, &out)
+	if c := exitCode(t, err); c != exitIncomplete || !strings.Contains(out.String(), " rows=10 object_bytes=") {
+		t.Fatalf("exit %d (%v), stdout %q", c, err, out.String())
 	}
 }
 

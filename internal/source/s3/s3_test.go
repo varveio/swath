@@ -186,6 +186,36 @@ func TestObjectFields(t *testing.T) {
 	}
 }
 
+// TestMaxKeysCoverage: --max-keys marks the listing truncated (incomplete)
+// only when the cap left rows out or may have: a cap equal to the objects,
+// reached on a page the store says is the last, is complete; reached on a
+// full page the store says is truncated, it stays incomplete (the store may
+// hold more); below the objects, incomplete. Before, reaching the cap was
+// truncation, whatever remained. --max-keys is sequential only: the
+// parallel engine refuses it (TestListFakeBucket).
+func TestMaxKeysCoverage(t *testing.T) {
+	two := &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}}}
+	empty := &client.Page{}
+	for _, c := range []struct {
+		name      string
+		pages     []*client.Page
+		max       int64
+		rows      int
+		truncated bool
+	}{
+		{"cap equals the objects, last page", []*client.Page{two}, 2, 2, false},
+		{"cap above the objects", []*client.Page{two}, 3, 2, false},
+		{"cap equals the objects, page full and truncated", []*client.Page{two, empty}, 2, 2, true},
+		{"cap below the objects", []*client.Page{two}, 1, 1, true},
+		{"cap below the objects, next page", []*client.Page{two, {Contents: []client.Object{{Key: "c"}, {Key: "d"}}}}, 3, 3, true},
+	} {
+		rows, st := list(t, Options{Bucket: "x", Client: &stub{pages: c.pages}, Policy: keyrange.Policy{Sequential: true, MaxKeys: c.max}}, 1)
+		if len(rows) != c.rows || (st.Counters.Value("truncated_at_max_keys") != 0) != c.truncated {
+			t.Errorf("%s: %d rows, truncated_at_max_keys %d; want %d rows, truncated %v", c.name, len(rows), st.Counters.Value("truncated_at_max_keys"), c.rows, c.truncated)
+		}
+	}
+}
+
 func TestOutOfOrderListingFails(t *testing.T) {
 	pages := []*client.Page{
 		{Contents: []client.Object{{Key: "b"}}},

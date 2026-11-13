@@ -37,13 +37,23 @@ The bytes are the objects' sizes as listed: not the storage consumed, replicas o
 directories are counted in `dirs`, never as objects, and their own size is in no total. With `--all-versions`
 every version is an object; an S3 delete marker adds its prefixes but no object, bytes or time.
 
-On a local tree, `--allocated` totals the files' allocated blocks (`st_blocks` × 512, what `du` reports by
-default; a sparse file counts its blocks, not its length) instead of their apparent size, and the field is then
-`allocated_size`. `--count-links-once` counts a file with several hard links once, as `du` does (swath's
-default counts each name, as `du -l`): its object and bytes go to the prefixes of its first name in byte order,
-so the totals do not depend on which name the walk reached first. It remembers each such inode, up to
-`--max-inodes` (1,000,000 by default), past which the run fails (exit 1, cause `inode_limit`). Both need each
-entry's stat, so `--metadata names` refuses them.
+On a local tree, `--allocated` totals the files' allocated blocks (`st_blocks` × 512; a sparse file counts its
+blocks, not its length) instead of their apparent size, and the field is then `allocated_size`. A directory's own
+blocks are in no total, so a tree's total is below `du -sB1`'s by them. `--allocated` needs each entry's stat, so
+`--metadata names` refuses it.
+
+A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
+its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
+each such inode (only files with more than one link; about 100 MB a million), up to `--max-inodes` (1,000,000 by
+default). Past it the run fails rather than count some names twice: exit 1, cause `inode_limit`, no totals, and
+its last line says what to do:
+
+```text
+swath: the tree has more than 1,000,000 files with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)
+```
+
+`-l`, `--count-links` counts every name, as `du -l`. `--metadata names`, and Windows, read no link
+counts, so every name counts there.
 
 The [filters](../filters.md) apply before counting, to every row: on a local tree directories too, so
 `--min-size 1M` keeps the large files and drops the directories, whose own size is small.
@@ -51,8 +61,8 @@ The [filters](../filters.md) apply before counting, to every row: on a local tre
 Memory grows with the number of distinct prefixes, not objects. A run that would hold more than
 `--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
 
-Entries of a local tree that could not be read (permissions, entries removed during the walk) are not in the
-totals; the run still exits 0 and says so on stderr.
+Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
+the rest, names the entries on stderr and exits 3 ([exit codes](../reference/exit-codes.md)).
 
 ### Totals from a saved dataset
 
@@ -82,17 +92,19 @@ its last `/`. The read seeks to the prefix rather than scanning the dataset. A P
 is refused, since the dataset cannot total it.
 
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
-and how far the listing reached (`complete`, `INCOMPLETE` with the reason, entries skipped, the listing's filters
-and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with the same facts
-([output.md](../output.md#du-rows)). A dataset whose listing did not complete, such as a `--max-keys` sample,
-prints its totals and exits 1 (`incomplete`), as the run that wrote it did. Entries the listing skipped are
-reported in a warning; the exit code stays 0, as for a live `swath du`.
+and how far the listing reached (`complete`, `INCOMPLETE` with the reason, the entries it could not read, the
+listing's filters and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with
+the same facts ([output.md](../output.md#du-rows)). A dataset whose listing did not complete, such as a
+`--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
+exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
+counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
+`-l` counts every name.
 
 `--from-dataset` reads a committed local dataset directory. A dataset in a bucket is refused as not supported
 yet. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
 handle it. The options that shape a listing are refused by name: provider, credential, performance, limit and
 report options, and `--all-versions`, since the dataset's schema decides that. So are `--allocated`,
-`--count-links-once` and `--storage-class` when the dataset's schema has no column for them. The filters, the
+`--count-links` and `--storage-class` when the dataset's schema has no column for them. The filters, the
 totals options, `--format` and the terminal options `-v`, `-q`, `--color`, `--log-format`, `--no-progress`
 and `--no-stats` apply. A duration in `--modified-since` counts back from now, not from the listing.
 
@@ -107,9 +119,12 @@ Totals:
   -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
                                 A prefix ends at a '/'; each includes what is below it, as du.
       --allocated             local: total the files' allocated bytes instead of their apparent size
-                                st_blocks x 512, as du; a directory's own blocks are not counted.
-      --count-links-once      local: count a file with several hard links once, as du does
-                                Under the first of its names in byte order.
+                                The files' st_blocks x 512. A directory's own blocks are not
+                                counted, so a tree's total is below du's by them.
+  -l, --count-links           local: count a file with several hard links under each of its names
+                                By default such a file counts once, as du counts it, under the first
+                                of its names in byte order. The names metadata tier, and Windows,
+                                read no links: every name counts there.
       --sort name|size        order prefixes by name, or by size, largest first (default name)
                                 By size the prefixes below each parent are ordered, each still above
                                 its own; the total keeps its place (last in the table, first in TSV
@@ -119,8 +134,8 @@ Totals:
                                 (about 150 bytes a prefix); it bounds memory, never the objects
                                 counted.
       --max-inodes N          local: the most hard-linked files to remember (default 1000000)
-                                With --count-links-once. Raise it for a tree of more hard-linked
-                                files when memory allows (about 100 bytes each).
+                                Unless --count-links. Raise it for a tree of more hard-linked files
+                                when memory allows (about 100 bytes each).
       --from-dataset DIR      total the dataset saved in DIR (swath list -o DIR) instead of listing
                                 Then PREFIX, not SOURCE: an optional key prefix as the dataset's
                                 keys hold it, sought rather than scanned. DIR is a local dataset
@@ -334,10 +349,10 @@ Read the totals of a bucket's first two levels as JSONL:
 swath du gs://bucket -d 2 --format jsonl
 ```
 
-Total what a local tree takes on disk, counting hard links once, without crossing into other filesystems:
+Total what a local tree's files take on disk, without crossing into other filesystems:
 
 ```bash
-swath du /home --allocated --count-links-once --one-file-system
+swath du /home --allocated --one-file-system
 ```
 
 Total the objects larger than 1 GiB:
@@ -358,9 +373,10 @@ swath du --from-dataset bucket-inventory logs/2026/ -d 3
 ## Exit status
 
 0 when the totals are printed, also when the reader closes stdout early. 1 when the listing failed or the
-prefixes passed `--max-prefixes`, and with `--from-dataset` when the dataset could not be read or its listing
-did not complete (`incomplete`, after the totals are printed); 2 for a usage error. An interrupted `swath du`
-is run again: it keeps no journal. See [reference/exit-codes.md](../reference/exit-codes.md).
+prefixes passed `--max-prefixes`, and with `--from-dataset` when the dataset could not be read; 2 for a usage
+error; 3 when the totals are printed but are incomplete: entries could not be read, or with `--from-dataset` the
+dataset's listing did not cover its scope. An interrupted `swath du` is run again: it keeps no journal. See
+[reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment
 

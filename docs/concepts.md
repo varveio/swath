@@ -68,13 +68,13 @@ The manifest's **coverage** says how much of the recorded scope the dataset hold
 
 - `complete`: the listing reached the end of its scope;
 - `stop_reason`: why it stopped (`completed` for a finished run);
-- `skipped_entries`: errors that kept entries or subtrees out of the result. Entries found missing during stat and
-  failed symbolic-link target reads are excluded; a failed target read retains the symlink row. A directory that
-  disappears before it can be opened still contributes an open error;
+- `unreadable`: entries that could not be read, which errors kept out of the result with their subtrees. Entries
+  found missing during stat and failed symbolic-link target reads are not counted; a failed target read retains
+  the symlink row. A directory that disappears before it can be opened still counts;
 - `filters`: the filters that left rows out ([filters.md](filters.md));
 - `exclusions`: what was left out by design, such as an output directory inside the listed tree.
 
-When `complete` is true, `stop_reason` is `completed`, `skipped_entries` is 0 and `filters` is empty, the dataset
+When `complete` is true, `stop_reason` is `completed`, `unreadable` is 0 and `filters` is empty, the dataset
 covers the recorded scope (the `source` and `scope` beside the coverage), minus its exclusions. A program that
 needs a whole-source inventory must also check that the source and scope are the ones it expects, accept any
 exclusions explicitly, and treat a missing coverage field as unknown, not as zero or empty

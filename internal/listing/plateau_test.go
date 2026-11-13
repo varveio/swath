@@ -139,7 +139,7 @@ func TestDelayedFrontierPlateaus(t *testing.T) {
 		}
 	}()
 	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "frontier://x"}, Output: OutputConfig{Dir: out},
-		Limits: Limits{RowBudget: minRowBudget, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}, Progress: pr})
+		Limits: Limits{RowBudget: MinRowBudget, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}, Progress: pr})
 	close(stop)
 	<-sampled
 	if err != nil {

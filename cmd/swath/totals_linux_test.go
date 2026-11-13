@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/textout"
 )
@@ -158,10 +159,13 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 	return sums
 }
 
-// TestDuMatchesLstat: swath du over a real tree, with each combination of
-// --allocated and --count-links-once, at several depths, equals the
+// TestDuMatchesLstat: swath du over a real tree, with and without
+// --allocated, counting a hard-linked file once (the default, as du) or
+// under every name (-l, --count-links), at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
-// in JSONL (a name that is not UTF-8 as prefix_base64).
+// in JSONL (a name that is not UTF-8 as prefix_base64). Before, every name
+// counted by default. With --metadata names, which
+// reads no links, every name counts.
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
@@ -172,8 +176,8 @@ func TestDuMatchesLstat(t *testing.T) {
 					if allocated {
 						args = append(args, "--allocated")
 					}
-					if once {
-						args = append(args, "--count-links-once")
+					if !once {
+						args = append(args, []string{"--count-links", "-l"}[depth%2])
 					}
 					want := duOracle(t, root, depth, allocated, once)
 					size := "size"
@@ -258,6 +262,13 @@ func TestDuMatchesLstat(t *testing.T) {
 			}
 		}
 	}
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{root, "--metadata", "names", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if w := duOracle(t, root, 0, false, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\n0\t%d\t%d\t0\t%d\t", w.objects, w.dirs, w.objects)) {
+		t.Fatalf("--metadata names: %q, want every name of %+v", out.String(), w)
+	}
 	// The sparse file is where the two byte counts part.
 	var app, alloc bytes.Buffer
 	if err := runDu(context.Background(), []string{filepath.Join(root, "s"), "--format=tsv", "--no-stats"}, &app); err != nil {
@@ -268,6 +279,25 @@ func TestDuMatchesLstat(t *testing.T) {
 	}
 	if !strings.Contains(app.String(), "\t1\t0\t8388612\t") || strings.Contains(alloc.String(), "\t1\t0\t8388612\t") {
 		t.Fatalf("sparse: apparent %q, allocated %q", app.String(), alloc.String())
+	}
+}
+
+// TestDuInodeLimit: past --max-inodes hard-linked files (counted once by
+// default) swath du fails, exit 1, cause inode_limit, with no totals, and
+// its error line says what to do: -l, or a larger --max-inodes and what it
+// costs.
+func TestDuInodeLimit(t *testing.T) {
+	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	root := duTree(t)
+	var out bytes.Buffer
+	code := conclude(runDu(context.Background(), []string{root, "--max-inodes", "1", "--format=tsv", "--no-stats"}, &out))
+	const want = "swath: the tree has more than 1 file with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)\n"
+	if code != exitFatal || out.Len() != 0 || !strings.HasSuffix(stderr.String(), want) {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), stderr.String())
+	}
+	if err := runDu(context.Background(), []string{root, "--max-inodes", "1", "-l", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatalf("-l: %v", err)
 	}
 }
 
@@ -282,12 +312,12 @@ func TestDuLocalRefusals(t *testing.T) {
 		want string
 	}{
 		{true, []string{"s3://bkt", "--allocated"}, "--allocated applies to Local sources, not to S3 sources"},
-		{true, []string{"gs://bkt", "--count-links-once", "--depth", "1"}, "--count-links-once applies to Local sources, not to GCS sources"},
+		{true, []string{"gs://bkt", "--count-links", "--depth", "1"}, "--count-links applies to Local sources, not to GCS sources"},
 		{true, []string{"az://acct/ctr", "--max-inodes", "5"}, "--max-inodes applies to Local sources, not to Azure Blob sources"},
 		{true, []string{"s3://bkt", "--one-file-system"}, "--one-file-system applies to Local sources, not to S3 sources"},
 		{false, []string{"az://acct/ctr", "--one-file-system"}, "--one-file-system applies to Local sources, not to Azure Blob sources"},
 		{false, []string{root, "--allocated"}, "--allocated has no meaning for swath list"},
-		{false, []string{root, "--count-links-once"}, "--count-links-once has no meaning for swath list"},
+		{false, []string{root, "-l"}, "--count-links has no meaning for swath list"},
 		{true, []string{root, "--allocated", "--metadata", "names"}, "not with --metadata names"},
 		{true, []string{root, "--one-file-system", "--metadata", "names"}, "names metadata tier"},
 	} {
@@ -306,7 +336,7 @@ func TestDuLocalRefusals(t *testing.T) {
 	// listing stopped there.
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--allocated", "--one-file-system", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t8\t9\t") || strings.Count(out.String(), "\n") != 2 { // hard links once
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
@@ -325,10 +355,14 @@ func TestDuLocalRefusals(t *testing.T) {
 	}
 }
 
-// TestDuWarnsOnUnreadable: an entry the listing could not read is not in
-// the totals; the run still exits 0, as a listing does, and says so on
-// stderr without --stats, but not with -q (no warnings).
-func TestDuWarnsOnUnreadable(t *testing.T) {
+// TestUnreadableIsIncomplete: an entry the listing could not read is not in
+// the totals, the text rows or the dataset; each run finishes with exit 3
+// (class incomplete), names the entry with its cause as a warning and ends
+// with the count as its error line, which -q keeps and -qq drops. The
+// committed dataset's coverage counts it (unreadable 1) beside complete
+// true, its listing having reached the end of the tree. Before, each exited
+// 0, and -q left no trace of the missing entry.
+func TestUnreadableIsIncomplete(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory of mode 000")
 	}
@@ -345,33 +379,83 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	const end = "swath: 1 entry could not be read and is missing from the output\n"
+	warning := "swath: warning: unreadable entries:\n  " + locked + ": permission denied\n"
 	var out bytes.Buffer
 	report := filepath.Join(t.TempDir(), "report.json")
-	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out); err != nil {
-		t.Fatal(err)
-	}
+	err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out)
 	// D7: the entry is named with its cause, and the report says the
 	// totals are short although the listing completed.
-	if !strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
-		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read: the totals leave them out\n  "+locked+": ") ||
-		!strings.Contains(stderr.String(), "permission denied") {
-		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
+	if code := conclude(err); code != exitIncomplete ||
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("du: exit %d, stdout %q stderr %q", code, out.String(), stderr.String())
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
-	if !rep.Outcome.Unreadable || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
-		t.Fatalf("report outcome %+v", rep.Outcome)
+	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
+		t.Fatalf("report outcome %+v", o)
 	}
-	// A listing names them too.
+	// A listing, text or a dataset, ends the same way.
 	stderr.Reset()
-	if err := run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false); err != nil ||
-		!strings.Contains(stderr.String(), "1 entry could not be read: the output leaves them out\n  "+locked+": ") {
-		t.Fatalf("list: %v, stderr %q", err, stderr.String())
+	if code := conclude(run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false)); code != exitIncomplete ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("list: exit %d, stderr %q", code, stderr.String())
 	}
-	for _, q := range []string{"-q", "-qq"} {
+	stderr.Reset()
+	dir := filepath.Join(t.TempDir(), "ds")
+	if code := conclude(run(context.Background(), []string{root, "-o", dir, "--no-stats", "--no-progress"}, io.Discard, false)); code != exitIncomplete ||
+		!strings.HasSuffix(stderr.String(), warning+end) {
+		t.Fatalf("list -o: exit %d, stderr %q", code, stderr.String())
+	}
+	var m dataset.Manifest
+	var o outcome
+	readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
+	readJSON(t, filepath.Join(dir, errorName), &o)
+	if c := m.Coverage; c.Unreadable != 1 || !c.Complete || c.StopReason != "completed" || o.Class != listing.ClassIncomplete || o.ExitCode != exitIncomplete {
+		t.Fatalf("dataset: coverage %+v, error.json %+v", c, o)
+	}
+	out.Reset()
+	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
+		t.Fatalf("show: %v %q", err, out.String())
+	}
+	// swath resume of it exits 3, and its report keeps the count and says
+	// why (it said unreadable 0 and "already complete").
+	stderr.Reset()
+	resumed := filepath.Join(t.TempDir(), "resume.json")
+	err = resume(context.Background(), []string{dir, "--report", resumed}, io.Discard)
+	want := dir + " left out an entry it could not read (coverage unreadable=1): it cannot be resumed; list the tree again once it can be read"
+	if code := conclude(err); code != exitIncomplete || err.Error() != want {
+		t.Fatalf("resume: exit %d (%v)", code, err)
+	}
+	readJSON(t, resumed, &rep)
+	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.StopReason != "completed" || o.ExitCode != exitIncomplete || o.Error != want {
+		t.Fatalf("resume report outcome %+v", o)
+	}
+	// swath diag count prints its partial counts, then exits 3 (it printed
+	// nothing).
+	stderr.Reset()
+	out.Reset()
+	if code := conclude(runCount(context.Background(), []string{root, "--no-stats"}, &out)); code != exitIncomplete ||
+		!strings.Contains(out.String(), " rows=") || !strings.HasSuffix(stderr.String(), end) {
+		t.Fatalf("diag count: exit %d, stdout %q, stderr %q", code, out.String(), stderr.String())
+	}
+	// A reader that closed the stream took what it wanted: exit 0, as
+	// documented for a closed stdout, the unreadable entry notwithstanding
+	// (it exited 3).
+	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--report", report}, failingWriter{syscall.EPIPE}); err != nil {
+		t.Fatalf("du into a closed pipe: %v", err)
+	}
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.ExitCode != exitCompleted || o.StopReason != listing.StopDownstreamClosed || o.Unreadable != 1 {
+		t.Fatalf("du into a closed pipe: outcome %+v", o)
+	}
+	// -q keeps the error line, -qq drops it; the exit code stays.
+	for q, want := range map[string]string{"-q": end, "-qq": ""} {
 		stderr.Reset()
-		if err := runDu(context.Background(), []string{root, "--format=tsv", q}, &out); err != nil || stderr.Len() != 0 {
-			t.Fatalf("%s: %v, stderr %q", q, err, stderr.String())
+		if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", q}, &out)); code != exitIncomplete || stderr.String() != want {
+			t.Fatalf("%s: exit %d, stderr %q", q, code, stderr.String())
 		}
 	}
 }
@@ -393,7 +477,7 @@ func (g *gatedWriter) Write(p []byte) (int, error) {
 
 // TestWarningOutlastsBacklog: with stderr full while a du run with an
 // unreadable entry ends, and drained once its report is written, the
-// "could not be read" warning and the outcome both arrive, in that order:
+// unreadable entries' warning and the outcome both arrive, in that order:
 // the outcome's priority drops the disposable lines only.
 func TestWarningOutlastsBacklog(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -426,7 +510,7 @@ func TestWarningOutlastsBacklog(t *testing.T) {
 	g.mu.Lock()
 	got := g.b.String()
 	g.mu.Unlock()
-	w, o := strings.Index(got, "could not be read"), strings.Index(got, `"event":"outcome"`)
+	w, o := strings.Index(got, `"msg":"unreadable entries"`), strings.Index(got, `"event":"outcome"`)
 	if w < 0 || o < 0 || w > o {
 		t.Fatalf("stderr %q", got)
 	}

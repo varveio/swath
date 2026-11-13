@@ -184,7 +184,7 @@ func hotVersionsConfig(api *hotVersions, out string, resume bool) Config {
 	}
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: true, Policy: keyrange.Policy{PageSize: 7}}},
 		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()},
-		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: minRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
+		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: MinRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
 }
 
 // versionCert is a sealed certificate's interval (cs, ce].

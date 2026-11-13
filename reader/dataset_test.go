@@ -74,7 +74,7 @@ func swathExtension() map[string]any {
 		"published_at": "2026-11-09T10:00:00Z",
 		"source":       map[string]any{"kind": "s3", "uri": "s3://b", "container": "b"},
 		"scope":        map[string]any{"kind": "whole"},
-		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "skipped_entries": 0,
+		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0,
 			"exclusions": []string{"out/"}, "filters": []string{}, "snapshot": false},
 	}
 }
@@ -162,7 +162,7 @@ func TestOpenRecordsCoverage(t *testing.T) {
 	delete(ext, "published_at")
 	ext["source"] = map[string]any{"kind": "local-fs", "uri": "/data"}
 	ext["scope"] = map[string]any{"kind": "prefix", "prefix": "d/"}
-	ext["coverage"] = map[string]any{"complete": false, "stop_reason": "max_keys", "skipped_entries": 3,
+	ext["coverage"] = map[string]any{"complete": false, "stop_reason": "max_keys", "unreadable": 3,
 		"exclusions": []string{}, "filters": []string{"one_filesystem"}, "snapshot": false}
 	s := spec{id: LocalV1, key: s3Spec().key, ext: ext}
 	rows := make([]localRow, len(localTree))
@@ -189,7 +189,7 @@ func TestOpenRecordsCoverage(t *testing.T) {
 	m := d.Metadata()
 	c := m.Coverage
 	if !m.Swath || m.PublishedAt != nil || *m.Source.Kind != "local-fs" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "d/" ||
-		*c.Complete || *c.StopReason != "max_keys" || *c.SkippedEntries != 3 || !reflect.DeepEqual(c.Filters, []string{"one_filesystem"}) ||
+		*c.Complete || *c.StopReason != "max_keys" || *c.Unreadable != 3 || !reflect.DeepEqual(c.Filters, []string{"one_filesystem"}) ||
 		len(m.Manifest.Parts) != 2 {
 		t.Fatalf("metadata %+v, coverage %+v", m, c)
 	}

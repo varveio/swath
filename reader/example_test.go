@@ -27,7 +27,7 @@ func wholeSource(m reader.Metadata, want string) bool {
 		sc != nil && sc.Kind != nil && *sc.Kind == "whole" &&
 		c != nil && c.Complete != nil && *c.Complete &&
 		c.StopReason != nil && *c.StopReason == "completed" &&
-		c.SkippedEntries != nil && *c.SkippedEntries == 0 &&
+		c.Unreadable != nil && *c.Unreadable == 0 &&
 		c.Filters != nil && len(c.Filters) == 0 &&
 		c.Exclusions != nil && len(c.Exclusions) == 0
 }

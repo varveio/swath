@@ -25,7 +25,7 @@ func TestParseMetadata(t *testing.T) {
 	full := manifestWith(`{"swath": {"version": 1, "published_at": "2026-11-08T18:00:00.123456Z",
 		"source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
 		"scope": {"kind": "prefix", "prefix": "logs/"},
-		"coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0, "exclusions": [], "filters": [], "snapshot": false,
+		"coverage": {"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": [], "filters": [], "snapshot": false,
 			"listing_started_at": "2026-11-08T17:00:00Z", "listing_finished_at": "2026-11-08T17:59:00Z"},
 		"committed_object_bytes": 81234,
 		"filesystem": {"total_bytes": 994662584320, "free_bytes": 462012616704, "available_bytes": 430573547520, "measured_at": "2026-11-08T17:59:01Z"},
@@ -37,7 +37,7 @@ func TestParseMetadata(t *testing.T) {
 	c := m.Coverage
 	if m.SchemaID != S3ObjectsV1 || !m.Swath || !m.PublishedAt.Equal(time.Date(2026, 11, 8, 18, 0, 0, 123456000, time.UTC)) ||
 		*m.Source.Kind != "s3" || *m.Source.URI != "s3://bucket/logs/" || *m.Source.Container != "bucket" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "logs/" ||
-		!*c.Complete || *c.StopReason != "completed" || *c.SkippedEntries != 0 || c.Exclusions == nil || c.Filters == nil || len(c.Filters) != 0 || *c.Snapshot ||
+		!*c.Complete || *c.StopReason != "completed" || *c.Unreadable != 0 || c.Exclusions == nil || c.Filters == nil || len(c.Filters) != 0 || *c.Snapshot ||
 		c.ListingStartedAt.Hour() != 17 || c.ListingFinishedAt.Minute() != 59 || m.CommittedObjectBytes == nil || *m.CommittedObjectBytes != 81234 {
 		t.Fatalf("parsed %+v", m)
 	}
@@ -70,12 +70,12 @@ func TestParseMetadata(t *testing.T) {
 
 	// Absent members are nil, present zero values are not.
 	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "source": {"kind": "local-fs", "uri": "/data"}, "scope": {"kind": "whole"},
-		"coverage": {"complete": false, "skipped_entries": 0}}}`))
+		"coverage": {"complete": false, "unreadable": 0}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	c = m.Coverage
-	if m.PublishedAt != nil || m.Source.Container != nil || m.Scope.Prefix != nil || c.Complete == nil || *c.Complete || c.SkippedEntries == nil ||
+	if m.PublishedAt != nil || m.Source.Container != nil || m.Scope.Prefix != nil || c.Complete == nil || *c.Complete || c.Unreadable == nil ||
 		c.StopReason != nil || c.Filters != nil || c.Exclusions != nil || c.Snapshot != nil || c.ListingStartedAt != nil || m.CommittedObjectBytes != nil {
 		t.Fatalf("partial %+v %+v", m, *c)
 	}
@@ -89,7 +89,7 @@ func TestParseMetadata(t *testing.T) {
 
 	for _, ext := range []string{
 		`{"swath": {"version": 1, "coverage": {"complete": "yes"}}}`,
-		`{"swath": {"version": 1, "coverage": {"skipped_entries": 1.5}}}`,
+		`{"swath": {"version": 1, "coverage": {"unreadable": 1.5}}}`,
 		`{"swath": {"version": 1, "coverage": {"filters": "none"}}}`,
 		`{"swath": {"version": 1, "published_at": "yesterday"}}`,
 		`{"swath": {"version": 1, "committed_object_bytes": "81234"}}`,

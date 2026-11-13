@@ -199,7 +199,6 @@ type Report struct {
 	Name   string // the summary key its Stats go under ("s3", "listing")
 	Stats  any    // marshalled as JSON
 	Brief  string // one line of text for the plain-text summary
-	Errors int64  // per-entry problems counted (not fatal)
 	Fields string // the metadata tier collected, if the provider has tiers
 	// Coverage is what the dataset covers; it goes into the manifest,
 	// where applications read it.
@@ -227,7 +226,7 @@ type Coverage struct {
 	Prefix     string   // the scope: "" for the whole source, else the listed prefix
 	Filters    []string // the row filters applied (listing.Config.Filter), as descriptions
 	Exclusions []string // left out by design (an output directory inside a listed tree)
-	Skipped    int64    // entries not listed (unreadable, invalid names)
+	Unreadable int64    // entries missing from the listing because they could not be read
 	Complete   bool     // false if the listing stopped early (a key limit)
 	StopReason string   // "completed", or why it stopped
 }
