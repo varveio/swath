@@ -558,7 +558,7 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	case o.ExitCode != exitCompleted || o.Class == "incomplete":
 		d := "INCOMPLETE (" + o.Class + ")"
 		if o.Resumable && resumableStops[o.Class] && r.Invocation.Out != "" {
-			d += " — resume: swath resume " + shellQuote(r.Invocation.Out)
+			d += " — resume: swath resume " + shellOperand(r.Invocation.Out)
 		}
 		lines = append(lines, d)
 		if o.Class == "refused" || o.Class == "usage" {

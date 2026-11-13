@@ -155,7 +155,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			if env := secretEnv[name]; env != "" {
 				hint = " or set " + env
 			}
-			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, shellQuote(dir), name, hint)})
+			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, shellOperand(dir), name, hint)})
 		}
 	}
 	at := "--output=" + dir
@@ -307,7 +307,7 @@ func show(args []string, stdout io.Writer) error {
 		st, err := journal.Read(dir)
 		switch {
 		case errors.Is(err, journal.ErrNoJournal) && dataset.Committed(dir):
-			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, shellQuote(dir))
+			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, shellOperand(dir))
 		case errors.Is(err, journal.ErrNoJournal):
 			return fmt.Errorf("%s holds no journal: no interrupted run", dir)
 		case err != nil:
@@ -333,7 +333,7 @@ func show(args []string, stdout io.Writer) error {
 				name = registry.Redact(rec.Destination)
 				commit = "committed from the work directory " + dir + " (finalized)"
 				if !rec.Finalized {
-					commit = "committed from the work directory " + dir + ", its cleanup unfinished (swath resume " + shellQuote(dir) + " finishes it)"
+					commit = "committed from the work directory " + dir + ", its cleanup unfinished (swath resume " + shellOperand(dir) + " finishes it)"
 				}
 			}
 		}
@@ -439,6 +439,16 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellOperand is the path dir as a command's operand, quoted (shellQuote):
+// one that begins with '-' is spelled ./-dir, which no parser takes for a
+// flag.
+func shellOperand(dir string) string {
+	if strings.HasPrefix(dir, "-") {
+		dir = "./" + dir
+	}
+	return shellQuote(dir)
 }
 
 // isFile reports whether path is an existing non-directory.

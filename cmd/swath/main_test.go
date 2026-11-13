@@ -105,6 +105,14 @@ func TestPrintedCommandsQuoted(t *testing.T) {
 	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume '"+dir+"'" {
 		t.Fatalf("disposition %q", l[0])
 	}
+	// A directory named like a flag is an operand only as ./-inv.
+	r.Invocation.Out = "-inv"
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume ./-inv" {
+		t.Fatalf("disposition %q", l[0])
+	}
+	if got := shellOperand("-my inv"); got != "'./-my inv'" {
+		t.Fatalf("shellOperand(-my inv) = %s", got)
+	}
 	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, []string{"list", "--output=" + dir, "s3://b"})
 	if err != nil {
 		t.Fatal(err)
