@@ -182,7 +182,7 @@ run's metadata.
   `http://127.0.0.1:10000`) is `https://ACCOUNT.blob.core.windows.net` by default, is never taken from the
   environment, and is fixed for the run, as are the account and container.
 - **Azure staged blocks need no rule:** a part larger than 8 MiB is staged in blocks and created by its block
-  list. Blocks an aborted, failed or killed upload staged are uncommitted: never a blob, never visible, and the
+  list. Blocks staged by an aborted, failed or killed upload are uncommitted: never a blob, never visible, and the
   service discards them a week after the last was staged (or when a blob is created at the name), so no
   lifecycle rule is needed for them. The orphans swath deletes are not always gone: with blob soft delete on,
   each is kept as a soft-deleted blob until the account's retention period expires; with blob versioning on,
@@ -190,7 +190,7 @@ run's metadata.
   its bytes can stay billed indefinitely. In a versioned account, add a lifecycle rule that deletes previous
   versions under the dataset prefixes (`daysAfterCreationGreaterThan` on `version`).
 - **S3 multipart uploads and the lifecycle rule (required):** a part larger than 8 MiB is a multipart upload.
-  A failed or cancelled upload is aborted and the abort confirmed, but one a killed process leaves is not (its
+  A failed or cancelled upload is aborted and the abort confirmed, but one that a killed process leaves is not (its
   id dies with it), nor one whose abort the bucket refused or did not confirm (the report's
   `aborts_unconfirmed`), and S3 keeps an incomplete upload's parts, billed and invisible to listings, until it
   is aborted. Set a lifecycle

@@ -171,7 +171,7 @@ never recorded.
 
 | Message or exit | Meaning | What to do |
 |---|---|---|
-| exit 2, `-o gs://...` (or `s3://...`, `az://...`)`: a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
+| exit 2, `-o gs://...` (or `s3://...`, `az://...`): `a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
 | exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination`, `a shared access signature ... is for an Azure destination` | a destination option of another provider | drop it, or give the one for the destination's provider |
 | exit 2, `the run in DIR was started with --output-azure-sas-token, which is never recorded` | the Azure destination's SAS is not in the journal | give `--output-azure-sas-token` to `swath resume DIR` again (a rotated one is fine) |
 | an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([Running swath in production](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
@@ -282,6 +282,10 @@ cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the rep
 `coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
 
 ## Reporting a problem
+
+Report a bug or a confusing message as a [GitHub issue](https://github.com/varveio/swath/issues/new). Attach
+the output of `swath --version` and the run report: rerun with `--report run.json`, or take `DIR/run.json`
+beside a dataset, or `DIR/error.json` when the run did not complete.
 
 Include `swath --version`, the command line, the provider and region, and the `--report` file (redact bucket
 names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`
