@@ -1,8 +1,8 @@
 # Java CLI inventory
 
 Every option, output mode, exit code, report field class and documented guarantee of the Java `swath` CLI
-(`swath-cli`, [docs/cli.md](../../../docs/cli.md), [docs/usage.md](../../../docs/usage.md),
-[docs/metrics-and-observability.md](../../../docs/metrics-and-observability.md)) against this tool
+(`swath-cli`, [docs/cli.md](https://github.com/varveio/swath/blob/java-final/docs/cli.md), [docs/usage.md](https://github.com/varveio/swath/blob/java-final/docs/usage.md),
+[docs/metrics-and-observability.md](https://github.com/varveio/swath/blob/java-final/docs/metrics-and-observability.md)) against this tool
 ([../commands/swath.md](../commands/swath.md), [../upgrade.md](../upgrade.md)). Dates are owner decisions.
 
 Legend (the Decision column records implementation dates and reasons for omitting Java features): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),

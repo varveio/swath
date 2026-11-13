@@ -22,7 +22,7 @@ body:
       label: Steps to reproduce
       description: The exact command line and, if possible, the bucket shape or a minimal fixture.
       placeholder: |
-        swath ls s3://… --format parquet …
+        swath list s3://… -o …
       render: shell
     validations:
       required: true

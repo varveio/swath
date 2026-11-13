@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- The Java implementation, its Gradle build, Java images and Java CI jobs are removed from the
+  repository; the last Java release is v0.3.2, and the final tree is preserved at the tag
+  `java-final` (#73).
+
 - Go port: `go/reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
   `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `7264a9f88420`).

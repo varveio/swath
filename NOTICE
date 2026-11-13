@@ -8,9 +8,6 @@ Licensed under the Apache License, Version 2.0 (see the LICENSE file).
 This distribution bundles third-party dependencies under their own licenses.
 Those dependencies and their licenses are inventoried in a generated notices file,
 which — not this file — is the authoritative attribution record for bundled
-third-party code:
-
-- the release archives and container images carry THIRD_PARTY_NOTICES, generated
-  from the Go modules linked into swath and swath-replay (go/notices.sh);
-- the Java build's THIRD_PARTY_NOTICES.md is regenerated from its resolved runtime
-  classpath (see that file).
+third-party code. The release archives and container images carry
+THIRD_PARTY_NOTICES, generated from the Go modules linked into swath and
+swath-replay (go/notices.sh).

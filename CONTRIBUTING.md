@@ -28,24 +28,9 @@ reference definitions, HTML `href`) and their anchors in the Markdown under `go/
 external URLs, and the library modules' examples (`go/objfile`, `go/reader`) are `Example`
 tests. Prefer an `Example` test to a Markdown code block for library code, so that it compiles and runs.
 
-The 0.3 release's Java distribution, still in this repository, is a multi-module Gradle build and requires **JDK 25**.
-The wrapper supplies Gradle, but JDK 25 must be available to it.
-
-```bash
-./gradlew build -PnoIntegration  # Docker-free per-commit gate
-./gradlew build                  # full integration gate (Docker/LocalStack)
-./gradlew :swath-cli:test         # CLI tests
-./gradlew spotlessApply          # format sources and add SPDX headers
-```
-
-Deep, performance, kill-9 resume, replay-conformance, and other opt-in tiers are not all
-part of a plain build. The canonical tier map is in
-[`docs/ops/dev/TESTING.md`](docs/ops/dev/TESTING.md).
-
 ## License headers
 
-Every source file carries an SPDX license header. Spotless applies and checks it. Run
-`./gradlew spotlessApply` after adding a source file; the build rejects a missing header.
+Every Go source file carries an SPDX license header; add one to a new file.
 
 ## Developer Certificate of Origin
 
@@ -78,8 +63,6 @@ By contributing, you agree that your contribution is licensed under the
 2. Keep the change focused and add tests for behavior that could regress.
 3. Update the canonical documentation owner rather than adding a second detailed copy.
 4. For `go/`, run the tests of the packages you changed (`go vet ./... && go test -race` on
-   them); CI runs the rest. For the Java build, run `./gradlew build -PnoIntegration`, and the
-   full integration gate when the change touches S3 behavior, packaging, or an integration
-   boundary.
+   them); CI runs the rest.
 5. Open a pull request explaining the user-visible change, technical rationale, and the
    checks you ran.

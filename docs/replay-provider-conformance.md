@@ -604,9 +604,9 @@ It leaves out two things:
   entry carries no receipt, and a row that names both versions stays `OBSERVED` until
   replay is also run and matched at `2026-10-06`.
 
-The normal build reads the archive directly. `NativeEvidenceReplayTest` extracts it into
-a temporary directory and replays every capture against replay serving the same corpus;
-each outcome must equal its pinned expectation. The Python tests validate the ledger and
+The Java build read the archive directly: `NativeEvidenceReplayTest` (at the tag
+`java-final`) extracted it into a temporary directory and replayed every capture against
+replay serving the same corpus; each outcome had to equal its pinned expectation. The Python tests validate the ledger and
 this matrix against the archive and check that it rebuilds byte for byte.
 
 Each capture's pin in `<provider>/replay-expectations.json` is `match` or the start of the
@@ -643,17 +643,8 @@ zlib: zlib-ng compresses the same tar to different bytes, so `build` refuses it 
    python3 scripts/provider-conformance/evidence_archive.py check
    ```
 
-2. On that clean commit, write receipts for the captures replay matches into the evidence
-   directory. Keep the jar: it records the commit, and the receipts name its checksum.
-   Each receipt requires a clean working tree, so `EVIDENCE_DIR` must be outside the
-   repository or under a gitignored path.
-
-   ```bash
-   ./gradlew :swath-replay:jar
-   ./gradlew :swath-replay:test --tests '*NativeEvidenceReplayTest' \
-       -PproviderReceipts=EVIDENCE_DIR -PproviderDistribution=REPLAY_JAR
-   ```
-
+2. Java receipts were written by `NativeEvidenceReplayTest`, which left `main` with the Java
+   implementation (tag `java-final`), so `main` writes no new Java receipt.
    On a merge commit on `main`, with the evidence fixtures, write the Go receipts into
    the evidence directory (an archive extracted into it, for the Java receipts already
    archived):

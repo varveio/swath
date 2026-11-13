@@ -1,8 +1,7 @@
 <!--
 Thanks for contributing to swath! A few reminders before you open this PR:
   - Every commit must be signed off (DCO): `git commit -s`. See CONTRIBUTING.md.
-  - Run `./gradlew build` and confirm it is green.
-  - New source files need the SPDX header: `./gradlew spotlessApply`.
+  - Run the tests you changed; CI runs the full gate (see AGENTS.md, "The Go tree").
 -->
 
 ## What & why
@@ -11,11 +10,11 @@ Thanks for contributing to swath! A few reminders before you open this PR:
 
 ## How it was tested
 
-<!-- Commands run, tiers exercised (fast / -Pdeep / -Pperf / integration), new tests added. -->
+<!-- Commands run, new tests added. -->
 
 ## Checklist
 
 - [ ] Commits are signed off (`git commit -s`, DCO)
-- [ ] `./gradlew build` passes
+- [ ] CI is green
 - [ ] Added or updated tests where it makes sense
 - [ ] Updated docs if behavior or the CLI changed

@@ -1,37 +1,29 @@
 name: Nightly deep verification
 
-# What the per-commit gate cannot see, checked on a schedule: the tiers too slow or too
+# What the per-commit gate cannot see, checked on a schedule: the tests too slow or too
 # timing-sensitive to run per commit, and the supply-chain scan, which goes red because time
 # passed rather than because the commit changed.
-#
-# The deep + perf tiers are the tests demoted off the per-commit fast gate:
-#   - `deep`: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle
-#             timing tests (also run on every main-merge via ci.yml's deep-tests job).
-#   - `perf`: the heavy scale/throughput tier (100k–1M-key mock-driven PERF-1/PERF-2/SORT-PERF),
-#             which is opt-in (-Pperf) and never runs per-commit.
-# The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
-# this workflow is the exhaustive/timing-realistic backstop.
 #
 # go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos
 # and go-xos-windows run the Go default tier on macOS and Windows, which ci.yml runs on main
 # and dispatch but not on pull requests.
 #
-# ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
-# outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
-# wire that to wherever the owner actually watches (a follow-up, not yet done).
+# ALERTING: a failure here means an invariant broke outside the per-commit gate — GitHub
+# emails the default recipients on a failed scheduled run; wire that to wherever the owner
+# actually watches (a follow-up, not yet done).
 
 on:
   schedule:
     # 07:00 UTC daily (~midnight US Pacific). Cron runs on the default branch only.
     - cron: "0 7 * * *"
-  # Manual trigger for on-demand deep/perf runs from any branch; `jobs`
+  # Manual trigger for on-demand runs from any branch; `jobs`
   # picks one job (go-shapes: the Go shape suite alone, which is how its
   # baseline is regenerated on a branch; go-race-nightly: the unsharded amd64
   # race run alone; go-xos-macos: the macOS default tier alone).
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos, go-xos-windows or go-shapes"
+        description: "Jobs to run: all, osv-scan, go-race-nightly, go-xos-macos, go-xos-windows or go-shapes"
         required: false
         default: all
 
@@ -43,85 +35,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deep-and-perf:
-    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'deep-and-perf'
-    runs-on: ubuntu-latest
-    # The perf tier (1M-key SORT-PERF, 100k PERF-1/2) is the long pole; deep is ~minutes.
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c  # v6.4.1
-
-      # Deep tier serially (-PtestMaxParallelForks=1) so probe budgets are asserted without
-      # cross-fork CPU contention, exactly as the main-merge deep-tests job runs them.
-      - name: Deep tier (serial)
-        run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
-
-      # What this job is FOR is re-executing the tier, so the count is the result that
-      # matters: a tag filter that matches nothing, or a reused task result, would otherwise
-      # report green in 2 minutes. See the script header.
-      - name: Deep tier executed tests
-        run: ./scripts/ci/report-test-counts.sh "deep tier"
-
-      # The real `kill -9` -> `--resume` exactly-once path -- see ci.yml's
-      # deep-tests job for the same step (this one is the schedule-driven backstop, matching
-      # the deep tier's own "runs on every main-merge (ci.yml) + nightly" pattern above).
-      - name: Real kill -9 -> --resume exactly-once
-        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
-
-      - name: Kill -9 IT executed tests
-        run: ./scripts/ci/report-test-counts.sh "kill -9 exactly-once IT" swath-cli
-
-      # Parametric external-kill matrix (schedule-driven backstop, mirrors ci.yml's deep-tests).
-      - name: Real kill -9 matrix -> --resume identical-to-clean
-        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
-
-      - name: Kill -9 matrix executed tests
-        run: ./scripts/ci/report-test-counts.sh "kill -9 matrix IT" swath-cli
-
-      # Perf tier ONLY (-PonlyPerf runs just the @Tag("perf") classes — not the whole fast+
-      # integration suite — and the convention plugin bumps the test-worker heap to 2g for the
-      # GB-scale memory corridors these assert against). No DuckDB needed: the perf classes are
-      # mock-driven (the DuckDB-backed INT-6 is an integration test, not perf).
-      - name: Perf tier
-        run: ./gradlew test -PonlyPerf --no-daemon --stacktrace
-
-      - name: Perf tier executed tests
-        run: ./scripts/ci/report-test-counts.sh "perf tier"
-
-      # TODO: add a gated real-AWS public-bucket differential
-      # (`aws s3api --no-sign-request` vs swath) once the public-bucket harness lands — the
-      # independent-implementation wire-fidelity anchor that supersedes LocalStack.
-
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: test-reports-nightly
-          path: "*/build/reports/tests/"
-          if-no-files-found: ignore
-          retention-days: 30
-
   # Supply-chain scan of the artifacts a user actually receives: the two release images, built
   # from Dockerfile.go. osv-scanner reads the Go version and module list embedded in each static
   # binary, so this covers the Go standard library and every module linked into swath and
   # swath-replay (the archives carry the same binaries), plus the few Debian packages of the
   # lister's distroless base; the replay image is `scratch` and holds only its binary. Nightly
   # rather than per-commit because it is time, not the commit, that turns a green image red: an
-  # advisory published against a module that has not moved. That is also why it belongs beside
-  # the deep tier: both are backstops against drift the per-commit gate cannot see.
+  # advisory published against a module that has not moved.
   #
   # The checked-in image policy fails every advisory that is neither an Ubuntu package's
-  # (the images have none) nor an argued exception in config/osv/osv-scanner.toml, which lists
-  # Java and Go findings. See scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
+  # (the images have none) nor an argued exception in config/osv/osv-scanner.toml. See
+  # scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
   osv-scan:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'osv-scan'
     runs-on: ubuntu-latest

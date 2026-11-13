@@ -34,10 +34,13 @@ tools/explainer/
 The templates are real `.html` files rather than string literals in Python, so the CSS and
 canvas code are editable as themselves. `render.py` substitutes one placeholder into them.
 
-## Run it on any bucket
+## Run it on a Java trace
+
+The explainer reads the `--trace` JSONL of the Java tool: the v0.3.2 release, or a build of the
+tag `java-final`. The Go tool does not emit a trace yet; issue #193 tracks it.
 
 ```bash
-# 1. list a bucket with tracing on (any swath list/resume run accepts --trace)
+# 1. list a bucket with tracing on, using the Java tool (its list/resume runs accept --trace)
 swath list s3://your-bucket/ --region us-east-1 --format parquet -o out/ \
       --trace run.trace.jsonl
 
@@ -144,7 +147,7 @@ every run. What varies with the data is every number, every figure, and which fi
 
 ## Sensitivity
 
-A trace carries real key names on nearly every event ([`metrics-internals.md`](../../docs/internals/metrics-internals.md)
+A trace carries real key names on nearly every event ([`metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md)
 §7) — the same sensitivity class as the listing output itself. The report inherits that: seed
 bounds and split pivots are shown verbatim, because they are most of the value. `--anonymize`
 withholds all of them and emits positions and counts only.
@@ -157,6 +160,6 @@ withholds all of them and emits positions and counts only.
 - **Owner-split confetti** — a stack of hairline rectangles in one keyspace region.
 
 The trace format itself is specified in
-[`docs/internals/metrics-internals.md`](../../docs/internals/metrics-internals.md) §7. A consumer
+[`docs/internals/metrics-internals.md`](https://github.com/varveio/swath/blob/java-final/docs/internals/metrics-internals.md) §7. A consumer
 is required to tolerate a torn final line after a hard kill and to ignore event kinds it does not
 know; this tool does both.

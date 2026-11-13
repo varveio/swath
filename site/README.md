@@ -60,8 +60,8 @@ Keep their revision, date, source, machine, regions, workers and output modes at
 review those measurements whenever changing the headline numbers.
 
 For a generated trace report or recorded capture, add its record under `data/runs/<run-id>.json` first; the pages quote the record, not the
-other way round. `swath-cli`'s `PublicRunFactsTest` guards the copies in `README.md` and
-`docs/full-scale-demo.md`, and `scripts/ci/check-site.py` guards the copies here.
+other way round. `scripts/ci/check-site.py` guards the copies here; nothing checks the copy in
+`README.md`.
 Capturing a run and regenerating its report end to end is issue #193.
 
 ## Replacing a video

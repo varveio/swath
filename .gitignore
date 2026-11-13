@@ -1,8 +1,5 @@
-# Java / Gradle
-.gradle/
+# Build output
 build/
-!gradle/wrapper/gradle-wrapper.jar
-*.class
 bin/
 out/
 
@@ -13,9 +10,6 @@ out/
 .project
 .classpath
 .settings/
-
-# Test artifacts
-.jqwik-database
 
 # OS / scratch
 .DS_Store
