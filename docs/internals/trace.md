@@ -18,6 +18,11 @@ full the event is dropped and counted, never waited for: a slow disk can lose ev
 listing. A run without `--trace` pays a nil check at each event site. The writer flushes whenever no event
 waits, so a killed run leaves the trace up to its last quiet moment, at most with a torn last line.
 
+Nor can the file hold up the run's end. The trace is closed after the dataset, `run.json` and `--report` are
+written, and its close waits at most 2 seconds for the file to take what the trace holds and `run_end`. A file
+that takes nothing for that long (a pipe nobody reads, a hung mount) is abandoned: the run ends as it would
+have, with a warning that counts the events not written, and the trace has no `run_end`.
+
 The drops are in the trace's `run_end` and in the run report's source counters, `trace.events` (handed to the
 writer) and `trace.dropped` (feature `trace`, off without `--trace`). A trace with drops is incomplete: its
 ranges' lifecycles need not balance.
@@ -57,7 +62,7 @@ order stage's goroutines; at most `--workers` plus one, the drainer, listing a r
 | `split` | a range split at its cursor | `id`, `worker`, `cursor`, `pivot`, `hi` or `open` (the range's), `lower` and `upper` (the children's ids: `(cursor, pivot]` and `(pivot, hi]`), `mechanism` (`reflect`, `midpoint`, `density` or `structure`: [range-engine.md](range-engine.md)), `reason` (`demand`: idle workers; `slow`: a latency outlier, `--slow-split`), `hunger` (idle workers, the demand), `rows` (the range listed), `depth` (the children's), `gen` (the range's gallop generation); `remainder` (the estimate of `(cursor, hi]`, when the page gave one), `est_lower`, `est_upper` (the children's estimates), `held` (they share a prior's count), `persistent: true` (admitted after refused admissions) |
 | `completed` | a range listed through its bound | `id`, `worker`, `rows` |
 | `failed` | a range stopped by an error, cancellation included | `id`, `worker`, `rows`, `error` |
-| `run_end` | the trace closes, after the run | `status` (the report's `outcome.status`), `events` (written before it), `dropped` |
+| `run_end` | the trace closes, after the run | `status` (the report's `outcome.status`), `class` (`outcome.class`: `completed`, `interrupted`, `stuck`, …), `events` (handed to the writer before it), `dropped` |
 
 A split ends its range: the range listed `(lo, cursor]`, and its children list the rest. So in a complete trace
 of a run that ended well (`run_end` with `dropped` 0), every range made (`seeded` and not `reused`, or a split's

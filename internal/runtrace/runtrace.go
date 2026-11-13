@@ -11,12 +11,14 @@
 // goroutine and handed through a bounded buffer to the writer's goroutine,
 // and when the buffer is full it is dropped and counted (Dropped, the
 // run_end event, the engine's trace.dropped counter). A slow disk can
-// lose events; it cannot slow the listing.
+// lose events; it cannot slow the listing. Nor can it hold up the run's
+// end: Close waits for the file a bounded time, then abandons it.
 package runtrace
 
 import (
 	"bufio"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -41,7 +43,8 @@ type Writer struct {
 	closing atomic.Bool
 	sent    atomic.Int64
 	dropped atomic.Int64
-	err     error // the first write error: the writer goroutine's until done is closed
+	flushed atomic.Int64 // lines the file has taken (flushed), run_end included
+	err     error        // the first write error: the writer goroutine's until done is closed
 }
 
 // New starts a trace written to out; ts_ns counts from now.
@@ -57,19 +60,28 @@ func New(out io.Writer) *Writer {
 func (w *Writer) run() {
 	defer close(w.done)
 	b := bufio.NewWriterSize(w.out, 64<<10)
+	var pending int64 // lines in b, not yet flushed
+	flush := func() {
+		if w.err = b.Flush(); w.err == nil {
+			w.flushed.Add(pending)
+			pending = 0
+		}
+	}
 	for line := range w.lines {
 		if line == nil {
 			break
 		}
 		if w.err == nil {
-			_, w.err = b.Write(line)
+			if _, w.err = b.Write(line); w.err == nil {
+				pending++
+			}
 		}
 		if len(w.lines) == 0 && w.err == nil {
-			w.err = b.Flush()
+			flush()
 		}
 	}
 	if w.err == nil {
-		w.err = b.Flush()
+		flush()
 	}
 }
 
@@ -81,22 +93,58 @@ func (w *Writer) Start() time.Time { return w.start }
 func (w *Writer) Sent() int64    { return w.sent.Load() }
 func (w *Writer) Dropped() int64 { return w.dropped.Load() }
 
-// Close writes the events still buffered and the run_end event with the
-// run's status, the events written and those dropped, and returns the
-// first write error. Events emitted after it are dropped; a second Close
-// does nothing.
-func (w *Writer) Close(status string) error {
+// Stalled is Close's error when the file took nothing for its whole
+// wait: the writer was abandoned, and the events it had not written
+// (Unwritten, now counted in Dropped) and run_end are not in the trace.
+type Stalled struct {
+	Wait      time.Duration
+	Unwritten int64
+}
+
+func (s *Stalled) Error() string {
+	return fmt.Sprintf("the file took no write for %s: abandoned, with %d events and run_end not written", s.Wait, s.Unwritten)
+}
+
+// Close hands the writer the run_end event (the run's status and outcome
+// class, "" for none, the events handed to the writer and those dropped)
+// and waits at most wait for it to write what it holds, so a file that
+// stops taking writes (a pipe nobody reads, a hung mount) cannot hold up
+// the run's end. Past wait it abandons the writer, counts the events not
+// written as dropped and returns a *Stalled; the caller must not wait on
+// the file either (closing it may block where a write is stuck). It
+// returns the first write error otherwise. Events emitted after Close are
+// dropped; a second Close does nothing.
+func (w *Writer) Close(wait time.Duration, status, class string) error {
 	if !w.closing.CompareAndSwap(false, true) {
 		return nil
 	}
-	w.lines <- nil
-	<-w.done
-	if w.err != nil {
-		return w.err
+	end := w.Event("run_end").Str("status", status)
+	if class != "" {
+		end = end.Str("class", class)
 	}
-	end := w.Event("run_end").Str("status", status).Int("events", w.Sent()).Int("dropped", w.Dropped())
-	_, err := w.out.Write(append(end.b, '}', '\n'))
-	return err
+	end = end.Int("events", w.Sent()).Int("dropped", w.Dropped())
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	for _, line := range [][]byte{append(end.b, '}', '\n'), nil} {
+		select {
+		case w.lines <- line:
+		case <-deadline.C:
+			return w.abandon(wait)
+		}
+	}
+	select {
+	case <-w.done:
+		return w.err
+	case <-deadline.C:
+		return w.abandon(wait)
+	}
+}
+
+// abandon counts the events the file has not taken as dropped.
+func (w *Writer) abandon(wait time.Duration) error {
+	n := max(0, w.Sent()-w.flushed.Load())
+	w.dropped.Add(n)
+	return &Stalled{Wait: wait, Unwritten: n}
 }
 
 // Event is one event being encoded; Emit hands it to the writer.

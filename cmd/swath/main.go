@@ -883,13 +883,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if prof != nil {
 		cfg.ListingDone = prof.listingDone
 	}
+	var traceFile *os.File
 	if o.trace != "" {
-		f, err := createNoFollow(o.trace)
-		if err != nil {
+		if traceFile, err = createNoFollow(o.trace); err != nil {
 			return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
 		}
-		defer f.Close()
-		cfg.Trace = runtrace.New(f)
+		cfg.Trace = runtrace.New(traceFile)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -963,11 +962,6 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
-	if cfg.Trace != nil {
-		if terr := cfg.Trace.Close(sum.Outcome.Status); terr != nil {
-			elog().warn("--trace " + o.trace + ": " + terr.Error())
-		}
-	}
 	tt.disp.stop()
 	if prof != nil {
 		prof.stop()
@@ -975,7 +969,33 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
-	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+	if cfg.Trace != nil {
+		// After the dataset, run.json and --report: the run's accounts
+		// never wait on the trace file, and its end waits at most
+		// traceCloseWait.
+		closeTrace(cfg.Trace, traceFile, o.trace, sum.Outcome.Status, out.Class)
+	}
+	return err
+}
+
+// traceCloseWait is how long the end of a run waits for the trace file to
+// take what the trace holds (runtrace.Writer.Close).
+var traceCloseWait = 2 * time.Second
+
+// closeTrace closes the run trace with the run's outcome, warning when it
+// could not be written. A file that stopped taking writes is abandoned,
+// not closed in line: closing a file with a write stuck in it can block.
+func closeTrace(w *runtrace.Writer, f *os.File, path, status, class string) {
+	err := w.Close(traceCloseWait, status, class)
+	if stalled := (*runtrace.Stalled)(nil); errors.As(err, &stalled) {
+		go f.Close()
+	} else if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		elog().warn("--trace " + path + ": " + err.Error())
+	}
 }
 
 // versions says --all-versions is on: the run lists every version.

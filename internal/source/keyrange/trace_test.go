@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/runtrace"
@@ -96,7 +97,7 @@ func traced(t *testing.T, api lister, opt Options, workers int) ([]string, Stats
 	var buf bytes.Buffer
 	w := runtrace.New(&buf)
 	keys, st := runTraced(t, api, opt, workers, w)
-	if err := w.Close("ok"); err != nil {
+	if err := w.Close(time.Second, "ok", ""); err != nil {
 		t.Fatal(err)
 	}
 	return keys, st, decode(t, buf.Bytes())
@@ -369,7 +370,7 @@ func TestTraceDrops(t *testing.T) {
 		t.Fatalf("%d keys listed, want %d", len(got), len(keys))
 	}
 	close(file.release)
-	if err := w.Close("ok"); err != nil {
+	if err := w.Close(time.Second, "ok", ""); err != nil {
 		t.Fatal(err)
 	}
 	dropped, events := st.Get(cTraceDropped), st.Get(cTraceEvents)

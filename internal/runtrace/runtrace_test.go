@@ -7,9 +7,11 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // lines decodes a trace, each line a JSON object.
@@ -34,7 +36,7 @@ func TestEncoding(t *testing.T) {
 	var buf bytes.Buffer
 	w := New(&buf)
 	w.Event("e").Int("n", -7).Bool("b", true).Key("k", "a\"b\\c\x01\n/é").Key("raw", "a\xffb").Str("s", "x\xfey").Emit()
-	if err := w.Close("ok"); err != nil {
+	if err := w.Close(time.Second, "ok", ""); err != nil {
 		t.Fatal(err)
 	}
 	got := lines(t, buf.Bytes())
@@ -55,7 +57,7 @@ func TestEncoding(t *testing.T) {
 	if end["event"] != "run_end" || end["status"] != "ok" || end["events"] != 1.0 || end["dropped"] != 0.0 {
 		t.Fatalf("run_end %v", end)
 	}
-	if err := w.Close("again"); err != nil || strings.Count(buf.String(), "run_end") != 1 {
+	if err := w.Close(time.Second, "again", ""); err != nil || strings.Count(buf.String(), "run_end") != 1 {
 		t.Fatalf("a second Close wrote again or failed: %v", err)
 	}
 }
@@ -85,7 +87,7 @@ func TestDropsWhenFull(t *testing.T) {
 		t.Fatalf("sent %d dropped %d, want drops and %d in all", w.Sent(), w.Dropped(), n)
 	}
 	close(g.open)
-	if err := w.Close("ok"); err != nil {
+	if err := w.Close(time.Second, "ok", ""); err != nil {
 		t.Fatal(err)
 	}
 	got := lines(t, g.buf.Bytes())
@@ -108,7 +110,37 @@ func (failing) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
 func TestWriteError(t *testing.T) {
 	w := New(failing{})
 	w.Event("e").Emit()
-	if err := w.Close("ok"); err == nil {
+	if err := w.Close(time.Second, "ok", ""); err == nil {
 		t.Fatal("Close succeeded on a failing file")
+	}
+}
+
+// TestCloseAbandonsStalledFile: a file that never takes a write (a pipe
+// nobody reads) holds up Close only for its wait. Close then abandons the
+// writer, counts the events not written as dropped and says so; events
+// after it are dropped too.
+func TestCloseAbandonsStalledFile(t *testing.T) {
+	g := &gate{open: make(chan struct{})}
+	t.Cleanup(func() { close(g.open) }) // let the abandoned writer finish
+	w := New(g)
+	const n = 10
+	for i := range n {
+		w.Event("e").Int("i", int64(i)).Emit()
+	}
+	start := time.Now()
+	err := w.Close(100*time.Millisecond, "committed", "completed")
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Close took %s on a stalled file", took)
+	}
+	var st *Stalled
+	if !errors.As(err, &st) || st.Unwritten != n || w.Dropped() != n {
+		t.Fatalf("Close: %v, dropped %d; want %d abandoned", err, w.Dropped(), n)
+	}
+	if !strings.Contains(err.Error(), "10 events") {
+		t.Fatalf("the warning does not count the events: %q", err)
+	}
+	w.Event("late").Emit()
+	if w.Dropped() != n+1 {
+		t.Fatalf("an event after Close was not dropped: %d", w.Dropped())
 	}
 }
