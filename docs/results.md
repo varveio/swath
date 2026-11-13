@@ -9,7 +9,7 @@ A run covers its source and nothing else: the tree below a local directory, or t
 container that start with the prefix you named. An object-store prefix is a string prefix, not a directory:
 `s3://bucket/logs` covers `logs/` and `logs-old/`, while `s3://bucket/logs/` covers only `logs/`.
 
-On a local tree swath does not follow symbolic links; it lists each link as an entry of kind `SYMLINK` with its
+In a directory, swath does not follow symbolic links; it lists each link as an entry of kind `SYMLINK` with its
 target. A mounted filesystem below the source is walked like any directory unless you pass
 `--one-file-system`. Filters such as `--include` or `--min-size` narrow the rows further. A dataset records
 both the scope and the filters, so you can tell later what it was meant to hold ([sources](sources.md),

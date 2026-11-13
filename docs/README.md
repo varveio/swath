@@ -1,7 +1,7 @@
 # swath documentation
 
-swath lists local and mounted filesystems, S3, Google Cloud Storage and Azure Blob Storage flat namespaces in
-parallel, prints size totals and text rows, and writes sorted Parquet inventories. Release candidates for 0.4.0
+swath lists object stores and filesystems in parallel, prints size totals and text rows, and writes sorted
+Parquet inventories. Release candidates for 0.4.0
 are published on the [releases page](https://github.com/varveio/swath/releases) ([Install](install.md)).
 
 **Start**
@@ -15,8 +15,8 @@ are published on the [releases page](https://github.com/varveio/swath/releases) 
 
 **Use**
 
-- [Sources](sources.md): S3 and S3-compatible stores, GCS, Azure Blob and local trees: URLs, credentials,
-  permissions, endpoints, requests.
+- [Sources](sources.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local
+  and mounted filesystems: URLs, credentials, permissions, endpoints, requests.
 - [Output](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
   a dataset.
 - [Filters](filters.md): globs, regular expressions, sizes, times and storage classes.
