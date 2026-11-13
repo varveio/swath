@@ -104,7 +104,16 @@ type Info struct {
 	// (Azure Blob's access tier), the one --storage-class filters on; ""
 	// for a schema without one.
 	StorageClass string
+	// Containers, if set, marks the rows that name a container of other
+	// rows (a local directory), not an object: those whose string column
+	// Containers.Column holds Containers.Value. Bind derives Container
+	// from it, so a listing's rows and a dataset's (swath du
+	// --from-dataset) are read by one rule.
+	Containers Match
 }
+
+// Match selects the rows whose string column Column holds Value.
+type Match struct{ Column, Value string }
 
 // Schema is a producer's row schema: the key column, then Columns in
 // order, each read from the payload P.
@@ -123,7 +132,8 @@ type Schema[P any] struct {
 	Codec Codec[P]
 	// Container, if set, tells a row that names a container of other rows
 	// (a local directory), not an object: swath du's per-prefix totals
-	// list its prefixes and count nothing for it (package totals).
+	// list its prefixes and count nothing for it (package totals). Bind
+	// sets it from Info.Containers.
 	Container func(p *P) bool
 }
 
@@ -176,6 +186,7 @@ type DeltaCodec[P any] interface {
 // Bind returns s as the schema id's: its ID, key type, key cap, grouping
 // and version roles, and its columns' names, types and nullability are the reader
 // module's spec of id, so producers and readers share one description.
+// Container is derived from Info.Containers.
 // s.Columns are the spec's columns in order, each with the accessor its
 // type takes (Str for strings and binary, Int for integers and times, Bool)
 // and the producer's own encoding settings (Delta, MaxBytes). Bind panics
@@ -209,6 +220,17 @@ func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
 	}
 	if s.StorageClass != "" && !slices.ContainsFunc(s.Columns, func(c Column[P]) bool { return c.Name == s.StorageClass && c.Str != nil }) {
 		panic(fmt.Sprintf("schema %s: no string column %s holds the storage class", id, s.StorageClass))
+	}
+	if s.Container != nil {
+		panic(fmt.Sprintf("schema %s: Container is derived from Info.Containers, not set", id))
+	}
+	if m := s.Containers; m != (Match{}) {
+		i := slices.IndexFunc(s.Columns, func(c Column[P]) bool { return c.Name == m.Column && c.Str != nil })
+		if i < 0 {
+			panic(fmt.Sprintf("schema %s: no string column %s marks the containers", id, m.Column))
+		}
+		get := s.Columns[i].Str
+		s.Container = func(p *P) bool { v, ok := get(p); return ok && v == m.Value }
 	}
 	return s
 }

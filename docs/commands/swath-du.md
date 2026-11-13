@@ -7,6 +7,7 @@ swath du totals SOURCE's objects (a local tree's files), bytes and newest time, 
 <!-- synopsis:begin -->
 ```text
 swath du SOURCE [OPTIONS]
+swath du --from-dataset DIR [PREFIX] [OPTIONS]
 ```
 <!-- synopsis:end -->
 
@@ -53,6 +54,48 @@ Memory grows with the number of distinct prefixes, not objects. A run that would
 Entries of a local tree that could not be read (permissions, entries removed during the walk) are not in the
 totals; the run still exits 0 and says so on stderr.
 
+### Totals from a saved dataset
+
+Each `swath du SOURCE` lists SOURCE again. To look at a large source at several depths, or with other filters,
+list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead (a live `swath du` that listed
+a million entries or more says so on a terminal: its statistics end with `hint:` lines giving both commands
+for its SOURCE):
+
+```text
+$ swath du --from-dataset photos-inventory -d 1 --sort size
+swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12T10:00:03Z (3 hours ago); complete
+    size  files  dirs  last_modified (local)  path
+ 410 KiB      2     1  2026-03-01 10:00:00    2025/
+48.8 KiB      1     0  2026-11-02 09:30:00    2026/
+ 459 KiB      4     3  2026-11-02 09:30:00    (total)
+```
+
+The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
+formats and filters. They are read from the dataset's Parquet parts: the key and only the columns the totals
+and filters need, in one parallel pass, once every part's columns are checked against the dataset's schema (a
+dataset that breaks it is refused, exit 1). Depth counts from the dataset's scope, as it would from the source.
+Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold.
+
+An optional PREFIX after the directory restricts the totals to the keys under it, as the dataset holds them (a
+local tree's keys are relative to its root, an object store's are whole keys), and depth counts from PREFIX up to
+its last `/`. The read seeks to the prefix rather than scanning the dataset. A PREFIX outside the dataset's scope
+is refused, since the dataset cannot total it.
+
+The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
+and how far the listing reached (`complete`, `INCOMPLETE` with the reason, entries skipped, the listing's filters
+and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with the same facts
+([output.md](../output.md#du-rows)). A dataset whose listing did not complete, such as a `--max-keys` sample,
+prints its totals and exits 1 (`incomplete`), as the run that wrote it did. Entries the listing skipped are
+reported in a warning; the exit code stays 0, as for a live `swath du`.
+
+`--from-dataset` reads a committed local dataset directory. A dataset in a bucket is refused as not supported
+yet. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
+handle it. The options that shape a listing are refused by name: provider, credential, performance, limit and
+report options, and `--all-versions`, since the dataset's schema decides that. So are `--allocated`,
+`--count-links-once` and `--storage-class` when the dataset's schema has no column for them. The filters, the
+totals options, `--format` and the terminal options `-v`, `-q`, `--color`, `--log-format`, `--no-progress`
+and `--no-stats` apply. A duration in `--modified-since` counts back from now, not from the listing.
+
 ## Options
 
 `swath du` refuses `swath list`'s output options (`-o`, `--overwrite`, `--columns` and the part and budget
@@ -78,6 +121,12 @@ Totals:
       --max-inodes N          local: the most hard-linked files to remember (default 1000000)
                                 With --count-links-once. Raise it for a tree of more hard-linked
                                 files when memory allows (about 100 bytes each).
+      --from-dataset DIR      total the dataset saved in DIR (swath list -o DIR) instead of listing
+                                Then PREFIX, not SOURCE: an optional key prefix as the dataset's
+                                keys hold it, sought rather than scanned. DIR is a local dataset
+                                directory; without this option swath du DIR totals DIR's own files.
+                                Options that shape a listing are refused. Stderr names the dataset's
+                                source, when it was listed and what its listing covered.
 
 Output:
       --format auto|table|tsv|jsonl
@@ -297,11 +346,21 @@ Total the objects larger than 1 GiB:
 swath du s3://bucket --min-size 1GiB
 ```
 
+List a bucket once, then total its saved dataset at two depths, and one prefix of it deeper, without listing
+the bucket again:
+
+```bash
+swath list s3://bucket -o bucket-inventory
+swath du --from-dataset bucket-inventory -d 2 --sort size
+swath du --from-dataset bucket-inventory logs/2026/ -d 3
+```
+
 ## Exit status
 
 0 when the totals are printed, also when the reader closes stdout early. 1 when the listing failed or the
-prefixes passed `--max-prefixes`; 2 for a usage error. An interrupted `swath du` is run again: it keeps no
-journal. See [reference/exit-codes.md](../reference/exit-codes.md).
+prefixes passed `--max-prefixes`, and with `--from-dataset` when the dataset could not be read or its listing
+did not complete (`incomplete`, after the totals are printed); 2 for a usage error. An interrupted `swath du`
+is run again: it keeps no journal. See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## Environment
 
@@ -310,5 +369,5 @@ journal. See [reference/exit-codes.md](../reference/exit-codes.md).
 
 ## See also
 
-[swath-list](swath-list.md), [output.md](../output.md#du-rows), [filters.md](../filters.md),
-[sources.md](../sources.md)
+[swath-list](swath-list.md), [swath-show](swath-show.md), [output.md](../output.md#du-rows),
+[filters.md](../filters.md), [sources.md](../sources.md)

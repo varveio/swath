@@ -124,6 +124,7 @@ complete -c swath -n '__swath_cmd "du"' -l count-links-once -d 'local: count a f
 complete -c swath -n '__swath_cmd "du"' -l sort -x -a 'name size' -d 'order prefixes by name, or by size, largest first'
 complete -c swath -n '__swath_cmd "du"' -l max-prefixes -x -d 'fail rather than hold more than N distinct prefixes'
 complete -c swath -n '__swath_cmd "du"' -l max-inodes -x -d 'local: the most hard-linked files to remember'
+complete -c swath -n '__swath_cmd "du"' -l from-dataset -r -a '(__fish_complete_directories)' -d 'total the dataset saved in DIR (swath list -o DIR) instead of listing'
 complete -c swath -n '__swath_cmd "diag list" "resume"' -l no-spill-compress -d 'write spill frames uncompressed (not zstd level 1)'
 complete -c swath -n '__swath_cmd "diag list" "resume"' -l spill-plain -d 'write spill frames without delta coding (a comparison arm)'
 complete -c swath -n '__swath_cmd "diag list"' -l no-journal -d 'publish parts only at the end, without the journal resume needs'
