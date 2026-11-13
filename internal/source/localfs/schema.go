@@ -89,7 +89,7 @@ func (e *Entry) Has(p Presence) bool { return e.Present&p == p }
 // returned them. Identifiers (mode, uid, gid, nlink, inode, dev) are
 // unsigned; allocated_bytes is st_blocks × 512; metadata_changed_at is ctime.
 var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
-	Info: schema.Info{Name: "swath_listing"},
+	Info: schema.Info{Name: "swath_listing", Containers: schema.Match{Column: "kind", Value: KindDir.String()}}, // a directory names other rows
 	Columns: []schema.Column[Entry]{
 		intCol(HasSize, func(e *Entry) int64 { return e.Size }),
 		intCol(HasMtime, func(e *Entry) int64 { return e.Mtime }),
@@ -106,10 +106,9 @@ var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
 		intCol(HasBtime, func(e *Entry) int64 { return e.Btime }),
 		{Spec: schema.Spec{MaxBytes: pathMax}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
 	},
-	Bytes:     entryBytes,
-	Heap:      func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
-	Codec:     entryCodec{},
-	Container: func(e *Entry) bool { return e.Kind == KindDir },
+	Bytes: entryBytes,
+	Heap:  func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
+	Codec: entryCodec{},
 })
 
 // pathMax is the longest link target (Linux PATH_MAX).

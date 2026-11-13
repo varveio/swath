@@ -193,6 +193,9 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 				p.lock()
 				publish()
 				p.unlock()
+				if p.tr != nil {
+					p.traceSeed(began, &b, levels, 0, stop, firstKeys)
+				}
 				return nil
 			}
 		} else {
@@ -315,6 +318,10 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	p.queued += p.queue(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.unlock()
+	if p.tr != nil {
+		p.traceSeed(began, &b, levels, len(cuts), stop, 0)
+		p.traceTiles(tiles)
+	}
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {
 			return err

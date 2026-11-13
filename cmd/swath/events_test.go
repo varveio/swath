@@ -25,7 +25,11 @@ import (
 	"testing"
 	"time"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/objhttp"
@@ -82,6 +86,10 @@ func TestEventGolden(t *testing.T) {
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
+	src, complete, stop, skipped, listed := "s3://bucket/logs/", true, "completed", int64(0), at.Add(-50*time.Hour)
+	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
+		Complete: &complete, StopReason: &stop, SkippedEntries: &skipped, Filters: []string{}, Exclusions: []string{}}, at)
+	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
@@ -98,7 +106,7 @@ func TestEventGolden(t *testing.T) {
 		}
 		events[fmt.Sprint(e["event"])] = true
 	}
-	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evOutcome} {
+	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evDataset, evRead, evOutcome} {
 		if !events[e] {
 			t.Fatalf("no %s event in %s", e, got)
 		}
@@ -289,7 +297,8 @@ func TestRequestPathRedacted(t *testing.T) {
 }
 
 // TestOneLineFailures (D1, D4): a refusal and a failure before any
-// listing request was answered print the error line alone on stderr,
+// listing request was answered print the error line alone on stderr
+// (an output inside the root advised without --overwrite, which it refuses),
 // with no statistics, INCOMPLETE, outcome line or internal prefix; -v adds
 // the outcome line, --log-format json prints only events. The report is
 // written either way.
@@ -300,6 +309,19 @@ func TestOneLineFailures(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644)
 	full := t.TempDir()
 	os.WriteFile(filepath.Join(full, "other"), nil, 0o644)
+	// An output inside the root: --overwrite is refused there too, so
+	// neither refusal advises it.
+	inTree := filepath.Join(src, "inv")
+	os.Mkdir(inTree, 0o755)
+	os.WriteFile(filepath.Join(inTree, "other"), nil, 0o644)
+	const inTreeAdvice = "cannot replace an output inside the listed root (write the dataset to a new directory outside the listed root)\n"
+	// An interrupted run inside the root: resumed, never --overwrite.
+	inTreeRun := filepath.Join(src, "run")
+	if j, err := journal.Create(inTreeRun, journal.Identity{Tool: "swath"}, nil); err != nil {
+		t.Fatal(err)
+	} else {
+		j.Close()
+	}
 	missing := filepath.Join(t.TempDir(), "nosuchdir")
 	nobucket := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"code":404,"message":"The specified bucket does not exist."}}`, http.StatusNotFound)
@@ -324,6 +346,9 @@ func TestOneLineFailures(t *testing.T) {
 		line string // the whole of stderr; "" checks one line
 	}{
 		{"not empty", dataset(src, "-o", full), "swath: " + full + ": output directory is not empty (use --overwrite to replace a previous dataset)\n"},
+		{"not empty, inside the root", dataset(src, "-o", inTree), "swath: -o: " + inTree + ": output directory is not empty, and " + inTreeAdvice},
+		{"overwrite inside the root", dataset(src, "-o", inTree, "--overwrite"), "swath: -o: " + inTree + ": " + inTreeAdvice},
+		{"interrupted run inside the root", dataset(src, "-o", inTreeRun), "swath: -o: " + inTreeRun + ": output directory is not empty, and cannot replace an output inside the listed root: it holds an interrupted run (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)\n"},
 		{"no such directory", []string{"du", missing}, "swath: " + missing + ": " + notFound + "\n"},
 		{"no such directory, a dataset", dataset(missing, "-o", filepath.Join(t.TempDir(), "ds")), "swath: " + missing + ": " + notFound + "\n"},
 		{"no such bucket", dataset("gs://bkt", "--endpoint-url", nobucket.URL+gcstest.Path, "--anonymous", "-o", filepath.Join(t.TempDir(), "ds")), ""},
@@ -365,7 +390,9 @@ func TestOneLineFailures(t *testing.T) {
 				}
 			}
 			for _, bad := range []string{"prepare output", "root: ", "0 entries", "peak RSS"} {
-				if strings.Contains(s, bad) {
+				// "the listed root: it holds an interrupted run" is the refusal's
+				// own wording, not an internal prefix.
+				if strings.Contains(strings.ReplaceAll(s, "listed root: ", ""), bad) {
 					t.Fatalf("%s %s: %q on stderr: %q", c.name, mode, bad, s)
 				}
 			}

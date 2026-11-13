@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,7 +82,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dataset.Committed(dir) && !dataset.Unfinalized(dir) {
 		// A bucket dataset's work directory committed but not finalized goes
 		// on: the run finishes the commit's aftermath, then reports complete.
-		return stop(listing.ErrComplete)
+		return stop(finalizedSample(dir, listing.ErrComplete))
 	}
 	st, err := journal.Read(dir)
 	if errors.Is(err, journal.ErrNoJournal) {
@@ -155,7 +156,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			if env := secretEnv[name]; env != "" {
 				hint = " or set " + env
 			}
-			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, dir, name, hint)})
+			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, shellOperand(dir), name, hint)})
 		}
 	}
 	at := "--output=" + dir
@@ -307,7 +308,7 @@ func show(args []string, stdout io.Writer) error {
 		st, err := journal.Read(dir)
 		switch {
 		case errors.Is(err, journal.ErrNoJournal) && dataset.Committed(dir):
-			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, dir)
+			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, shellOperand(dir))
 		case errors.Is(err, journal.ErrNoJournal):
 			return fmt.Errorf("%s holds no journal: no interrupted run", dir)
 		case err != nil:
@@ -319,7 +320,24 @@ func show(args []string, stdout io.Writer) error {
 	}
 	if dataset.Committed(dir) {
 		var m dataset.Manifest
+		name, commit := dir, ""
 		b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+		if errors.Is(err, os.ErrNotExist) {
+			// A bucket dataset's work directory: the dataset is the
+			// destination its commit marker names, its manifest the one
+			// the work directory committed there.
+			rec, merr := commitMarker(dir)
+			if merr != nil {
+				err = merr
+			} else if rec != nil {
+				b, err = dataset.CommittedCandidate(dir)
+				name = registry.Redact(rec.Destination)
+				commit = "committed from the work directory " + dir + " (finalized)"
+				if !rec.Finalized {
+					commit = "committed from the work directory " + dir + ", its cleanup unfinished (swath resume " + shellOperand(dir) + " finishes it)"
+				}
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -339,7 +357,7 @@ func show(args []string, stdout io.Writer) error {
 		if m.MetadataVersion > 0 {
 			metadata = "swath metadata version " + strconv.Itoa(m.MetadataVersion)
 		}
-		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", dir, format, m.SchemaID, metadata)
+		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", name, format, m.SchemaID, metadata)
 		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
 		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
@@ -349,6 +367,9 @@ func show(args []string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, ", keys %q .. %q", string(m.Parts[0].MinKey), string(m.Parts[n-1].MaxKey))
 		}
 		fmt.Fprintln(stdout)
+		if commit != "" {
+			fmt.Fprintln(stdout, commit)
+		}
 		return nil
 	}
 	st, err := journal.Read(dir)
@@ -360,7 +381,7 @@ func show(args []string, stdout io.Writer) error {
 	}
 	h := st.Header
 	fmt.Fprintf(stdout, "interrupted run in %s (journal version %d, started %s)\n", dir, h.Version, h.Created.Format("2006-01-02T15:04:05Z"))
-	fmt.Fprintf(stdout, "command: swath %s\n", strings.Join(redactArgv(h.Argv), " "))
+	fmt.Fprintf(stdout, "command: swath %s\n", shellLine(redactArgv(h.Argv)))
 	id := h.Identity.Redacted()
 	fmt.Fprintf(stdout, "identity: provider %s, schema %s, writer %s, part size %d", id.Provider, id.SchemaID, id.Writer, id.PartSize)
 	for _, f := range id.Source {
@@ -387,6 +408,79 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
+}
+
+// commitMarker is the commit marker of dir, a bucket dataset's work
+// directory.
+func commitMarker(dir string) (*dataset.RemoteCommitRecord, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return dataset.ReadCommitMarker(r)
+}
+
+// shellLine is args as one shell command line, each argument quoted as
+// shellQuote does: a printed command can be pasted as it is.
+func shellLine(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = shellQuote(a)
+	}
+	return strings.Join(q, " ")
+}
+
+// shellQuote is s as one word of this platform's shell (quoteFor).
+func shellQuote(s string) string { return quoteFor(runtime.GOOS, s) }
+
+// quoteFor is s as one shell word on goos: as it is when it holds only
+// characters no shell there treats specially and does not begin with '='
+// (zsh expands =cmd to its path), otherwise quoted: in POSIX single quotes,
+// or on Windows, where cmd and PowerShell take neither, in double quotes
+// (a Windows path holds no '"'; one in another argument is escaped as the
+// program's argument parser reads it).
+func quoteFor(goos, s string) string {
+	plain := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,+@%"
+	if goos == "windows" {
+		plain = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:\\"
+	}
+	if s != "" && !strings.HasPrefix(s, "=") && strings.Trim(s, plain) == "" {
+		return s
+	}
+	if goos != "windows" {
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	}
+	// The Windows argument rules (syscall.EscapeArg's): backslashes before
+	// a '"', or before the closing quote, are doubled, and the '"' escaped.
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			slashes++
+		case '"':
+			b.WriteString(strings.Repeat(`\`, slashes+1))
+			slashes = 0
+		default:
+			slashes = 0
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteString(strings.Repeat(`\`, slashes))
+	b.WriteByte('"')
+	return b.String()
+}
+
+// shellOperand is the path dir as a command's operand, quoted (shellQuote):
+// one that begins with '-' is spelled ./-dir, which no parser takes for a
+// flag.
+func shellOperand(dir string) string {
+	if strings.HasPrefix(dir, "-") {
+		dir = "./" + dir
+	}
+	return shellQuote(dir)
 }
 
 // isFile reports whether path is an existing non-directory.

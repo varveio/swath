@@ -42,7 +42,7 @@
   "use strict";
   var M = /*__MODEL__*/null; if(!M) return;
   var meta=M.meta, F=M.findings, stream=M.stream;
-  var K_PAGE=2,K_SPLIT=3,K_OWNER=4,K_CLAIM=1,K_DONE=5,K_FAIL=6,K_STEAL=7;
+  var K_PAGE=2,K_SPLIT=3;   // the stream's records: model.py
   var LIN=["#E4826A","#56C9B1","#6FBBD0","#BCC076","#7FA8CE"], REST="#5E6B65";
   function lin(r){ var s=M.lineage[r]; return s===undefined?REST:LIN[s]; }
   function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
@@ -70,23 +70,26 @@
   });
 
   // ---- acts, derived from the run's own findings -------------------------
-  var D=meta.durationMs, firstSteal=F.firstStealMs===null?D*0.35:F.firstStealMs;
+  var D=meta.durationMs, turn=F.firstSplitMs===null?D*0.35:F.firstSplitMs;
   var ACTS=[
-    {at:0, n:"one request", t:"swath asks S3 where the directories are — <b>once</b> — and turns "+
-      "the answer into <b>"+fmt(F.seedCount)+" ranges</b> to scan in parallel."},
-    {at:Math.min(D*0.08,4000), n:"all hands", t:"Every one of <b>"+fmt(meta.workers)+
-      " workers</b> gets its own slice of the keyspace. Nothing to coordinate. Nothing to steal."},
-    {at:firstSteal*0.55, n:"draining", t:"A directory name says nothing about how many objects "+
+    {at:0, n:"the seed", t: F.seedRequests!==null
+      ? "swath asks the store where the folders are — <b>"+fmt(F.seedRequests)+" request"+
+        (F.seedRequests===1?"":"s")+"</b> — and cuts the keyspace into <b>"+fmt(F.seedCount)+
+        " ranges</b> to list in parallel."
+      : "swath starts from <b>"+fmt(F.seedCount)+" range"+(F.seedCount===1?"":"s")+"</b>."},
+    {at:Math.min(D*0.08,4000), n:"all hands", t:"Each of <b>"+fmt(meta.workers)+
+      " workers</b> takes a range of its own. Nothing to coordinate."},
+    {at:turn*0.55, n:"draining", t:"A folder name says nothing about how many objects "+
       "are behind it. The engine is finding out the only way there is — by listing."},
-    {at:firstSteal, n:"the guesses run out", t:"The well-guessed ranges finish. One did not: "+
+    {at:turn, n:"the guesses run out", t:"A worker runs out of work while others still list. "+
       "<i>"+F.topShare+"% of the whole bucket</i> sat behind a single guess."},
-    {at:firstSteal+(D-firstSteal)*0.25, n:"stealing", t:"Idle workers carve the survivor apart at "+
-      "boundaries they invent — <b>keys that do not exist</b> are still valid fences."},
-    {at:firstSteal+(D-firstSteal)*0.62, n:"converging", t:"<b>"+fmt(F.topSplits)+" splits</b> into "+
-      "that one range. All <b>"+fmt(F.topWorkers)+"</b> workers end up inside it."},
+    {at:turn+(D-turn)*0.25, n:"splitting", t:"A busy range stops at its cursor and hands the rest "+
+      "on as two ranges, cut at a key it invents — <b>keys that do not exist</b> are still valid fences."},
+    {at:turn+(D-turn)*0.62, n:"converging", t:"<b>"+fmt(F.topSplits)+" splits</b> inside "+
+      "that one guess. <b>"+fmt(F.topWorkers)+"</b> workers end up inside it."},
     {at:D*0.985, n:"done", t:"<b>"+fmt(meta.totalKeys)+" objects</b> in "+secs(D)+
-      (F.reqPer1k===null ? "" : ", at <b>"+F.reqPer1k.toFixed(2)+"</b> requests per thousand")+
-      ". No gaps. No overlaps."}
+      (F.reqPer1k===null ? "" : ", at <b>"+F.reqPer1k.toFixed(2)+"</b> pages per thousand")+
+      (F.tiled && F.ledgerOk ? ". No gaps. No overlaps." : ".")}
   ];
 
   // ---- accumulating keyspace x time map ---------------------------------
@@ -95,12 +98,12 @@
   function sx(p){ return ML+p*IW; } function sy(t){ return MT+(t/Math.max(1,D))*IH; }
 
   var stats=document.getElementById("stats"), dds=[];
-  [["objects"],["requests"],["live ranges"],["splits"]].forEach(function(l){
+  [["objects"],["pages"],["live ranges"],["splits"]].forEach(function(l){
     var d=document.createElement("div"), dt=document.createElement("dt"), dd=document.createElement("dd");
     dt.textContent=l[0]; dd.textContent="0"; d.appendChild(dt); d.appendChild(dd);
     stats.appendChild(d); dds.push(dd); });
   document.getElementById("foot").textContent =
-    "Generated from this run's own --trace event log by tools/explainer/explainer.py. "+
+    "Generated from this run's own trace (swath diag list --trace) by tools/explainer/explainer.py. "+
     "Horizontal = keyspace weighted by objects, so equal width is equal objects. "+
     "Vertical = time. Color = which original guess the work descends from.";
 
@@ -118,8 +121,8 @@
     for(i=0;i<stream.length;i++){
       var e=stream[i]; if(e[0]>t) break;
       if(e[1]===K_PAGE){ keys+=e[5]; pages+=(e[6]||1); }
-      else if(e[1]===K_SPLIT||e[1]===K_OWNER){ splits++;
-        g.beginPath(); g.arc(sx(e[5]),sy(e[0]),e[1]===K_OWNER?2.4:1.9,0,6.284);
+      else if(e[1]===K_SPLIT){ splits++;
+        g.beginPath(); g.arc(sx(e[7]),sy(e[0]),2.1,0,6.284);
         g.fillStyle="#E0AC55"; g.globalAlpha=.8; g.fill(); g.globalAlpha=1; }
     }
     g.strokeStyle="#56C9B1"; g.lineWidth=2; g.globalAlpha=.9;

@@ -11,8 +11,8 @@ by its subtree, before the next sibling, is global order. A directory with more 
 chunk ranges of 2048 sorted names that share one reference-counted directory fd, so several workers stat it.
 The walk is the [tree core](../tree-sources.md)'s: `tree.Walker` is the `source.Provider`, the provider is its
 `Reader` (its engines below read, sort and stat a directory; `emit` is the walk decision per row: a
-directory is walked, pruned by `--one-file-system` or omitted as the excluded output), chunks are the
-walker's segments, and `files`, `dirs`, `bytes`, `skipped_dirs` and `other_device_dirs` are the walker's
+directory is walked, pruned by `--one-file-system` or omitted as the run's own output, as is a file the run writes), chunks are the
+walker's segments, and `files`, `dirs`, `bytes`, `skipped_outputs` and `other_device_dirs` are the walker's
 counts. Listings and count reports are unchanged by the move.
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
@@ -85,15 +85,23 @@ counts. Listings and count reports are unchanged by the move.
   core, which retains the directory row for the ordinary row filter but submits no child for a matching
   directory; this applies to ordered listings,
   counts, native chunks/slabs and the portable engine. Includes, metadata filters, directory-row-only
-  exclusions and regexes do not themselves stop descent. Automatic output-directory `Skip` exclusions
-  still drop both the row and traversal.
+  exclusions and regexes do not themselves stop descent. The run's own output (`Options.Skip`, set by
+  `opened.Exclude` for each path the pipeline names: a dataset directory, or a text file, its temporary and
+  its scratch directory) is dropped in `emit` before anything else: its row, and for a directory its
+  traversal. A directory is located by identity, a file by its name in its directory as the system resolves
+  the path, never cleaned first on POSIX (`link/..` is the parent of `link`'s target; Windows removes `..` by
+  its spelling, `GetFullPathName`, and the path is taken so there), located by identity (the file
+  may not exist yet, and a commit renames over the name). An existing file is left out under the spelling the
+  directory stores (`storedName`): where it ignores case, the one entry equal without case that is the same
+  file by identity, never another hard link or a name merely equal without case. `skipped_outputs` counts the entries dropped and
+  `coverage.exclusions` lists their keys, sorted.
   The report's `pruning` classifies configured rules: `reason` is `no_excludes`, `row_filters_only`, or
   `recursive_excludes`; `recursive_globs`, `row_only_globs` and `regex_rules` count the rules in each
   class, as given (repeated rules count separately). `pruned_dirs` counts child traversals prevented,
   once per directory even when rules overlap (`tree.Stats.Excluded`);
-  reader decisions take precedence: `Omit` for output directories, then `Prune` for another device
-  (`tree.Stats.Pruned` maps only to `other_device_dirs`);
-  `dirs_read`, `skipped_dirs` and `other_device_dirs` keep their existing meanings. No excluded
+  reader decisions take precedence: `Omit` for the run's own output, then `Prune` for another device
+  (`tree.Stats.Omitted` maps to `skipped_outputs`, `tree.Stats.Pruned` only to `other_device_dirs`);
+  `dirs_read`, `skipped_outputs` and `other_device_dirs` keep their existing meanings. No excluded
   descendant counts or bytes are estimated. Original filter descriptions stay in `coverage.filters`;
   pruning adds neither skipped-entry errors nor output-directory exclusions.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's

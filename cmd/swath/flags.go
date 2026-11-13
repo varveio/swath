@@ -84,6 +84,11 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "max-inodes", Value: source.Count(&o.maxInodes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxInodes),
 		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
 		Long: "With --count-links-once. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
+	def(source.Flag{Name: "from-dataset", Value: source.Text(&o.fromDataset), Metavar: "DIR", Shown: source.ShownURL, Group: source.GroupTotals, Commands: []string{cmdDu},
+		Usage: "total the dataset saved in DIR (swath list -o DIR) instead of listing",
+		Long: "Then PREFIX, not SOURCE: an optional key prefix as the dataset's keys hold it, sought rather than scanned. DIR is a local dataset directory; " +
+			"without this option swath du DIR totals DIR's own files. Options that shape a listing are refused. Stderr names the dataset's source, " +
+			"when it was listed and what its listing covered."})
 
 	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",

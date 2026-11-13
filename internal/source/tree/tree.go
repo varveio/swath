@@ -46,7 +46,7 @@ const (
 	Leaf    Walk = iota // not a directory: the row only
 	Descend             // a directory: its row, then its subtree
 	Prune               // a directory listed but not walked (another device)
-	Omit                // a directory neither listed nor walked (an exclusion)
+	Omit                // an entry neither listed nor, for a directory, walked (the run's own output)
 )
 
 // Reader is the provider half of a tree source: it reads one range and
@@ -79,7 +79,7 @@ type Stats struct {
 	Bytes    int64 // Size over leaf rows
 	Pruned   int64 // directories stopped by the reader (Walk Prune)
 	Excluded int64 // directories stopped by the recursive-exclude predicate
-	Omitted  int64 // directories neither listed nor walked
+	Omitted  int64 // entries neither listed nor walked (Walk Omit)
 	Segments int64 // segments readers handed out
 }
 

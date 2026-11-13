@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 
 	"github.com/spf13/pflag"
 
@@ -19,13 +22,14 @@ import (
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/totals"
 )
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals, CheckFilter: checkFilter,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info}, Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals, CheckFilter: checkFilter,
 		Title: "Local", Example: "/data", Usage: "a local directory or file"})
 }
 
@@ -194,17 +198,110 @@ func (o *opened) Listed() int64 {
 	return w.Files + w.Dirs
 }
 
-// Exclude leaves out an output directory inside the root; it is called
-// before listing starts.
-func (o *opened) Exclude(out string) error {
-	rel, inside, err := dataset.LocateInside(o.p.root, out)
+// Exclude leaves out path, an output the run writes, when it lies inside
+// the root; it is called before listing starts. A directory (the dataset,
+// a text file's scratch) is located by identity, where the run writes into
+// it, and left out with its subtree; any other path (a text file, its
+// temporary) is left out by its name in its directory, which a commit
+// renames over, existing yet or not.
+func (o *opened) Exclude(path string) error {
+	key, err := o.locate(path)
 	if err != nil {
 		return fmt.Errorf("locate output: %w", err)
 	}
-	if inside {
-		o.p.opt.Skip = map[string]bool{rel + "/": true}
+	if key != "" {
+		if o.p.opt.Skip == nil {
+			o.p.opt.Skip = map[string]bool{}
+		}
+		o.p.opt.Skip[key] = true
 	}
 	return nil
+}
+
+// locate is path's key below the root ("a/b/" for a directory, "a/b"
+// otherwise), "" when it is not below it.
+func (o *opened) locate(path string) (string, error) {
+	if runtime.GOOS == "windows" {
+		// Windows removes "." and ".." from a path by its spelling
+		// (GetFullPathName, which Abs calls) before it follows any link:
+		// link\.. is the directory holding link there, unlike POSIX.
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		rel, inside, err := dataset.LocateInside(o.p.root, path)
+		if !inside {
+			return "", err
+		}
+		return rel + "/", err
+	}
+	dir, name := splitParent(path)
+	name = storedName(dir, name)
+	rfi, err := os.Stat(o.p.root)
+	if err != nil {
+		return "", err
+	}
+	if dfi, err := os.Stat(dir); err == nil && os.SameFile(dfi, rfi) {
+		return name, nil // directly in the root
+	}
+	rel, inside, err := dataset.LocateInside(o.p.root, dir)
+	if !inside {
+		return "", err
+	}
+	return rel + "/" + name, err
+}
+
+// splitParent splits path after its last separator into the directory as
+// spelled, which the system resolves (not lexically cleaned: on POSIX
+// link/.. is the parent of link's target, not the directory holding
+// link; locate has spelled a Windows path as Windows resolves it), and
+// the name in it: dir+name is path, and dir+n names n there.
+func splitParent(path string) (dir, name string) {
+	i := len(path) - 1
+	for i >= len(filepath.VolumeName(path)) && !os.IsPathSeparator(path[i]) {
+		i--
+	}
+	dir, name = path[:i+1], path[i+1:]
+	if dir == "" {
+		dir = "." + string(os.PathSeparator)
+	}
+	return dir, name
+}
+
+// storedName is the spelling under which dir holds an existing entry
+// named name, which the listing emits: name itself, unless the directory
+// ignores case (macOS's default APFS, NTFS) and holds no entry spelled
+// name but exactly one spelled otherwise that equals it without case and
+// is the same entry by identity. A hard link to the file under another
+// name, or a name only equal without case, is never taken for it.
+func storedName(dir, name string) string {
+	fi, err := os.Lstat(dir + name)
+	if err != nil {
+		return name // nothing there yet: the commit creates name
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return name
+	}
+	stored := ""
+	for _, e := range ents {
+		switch {
+		case e.Name() == name:
+			return name
+		case strings.EqualFold(e.Name(), name):
+			if efi, err := os.Lstat(dir + e.Name()); err == nil && os.SameFile(fi, efi) {
+				if stored != "" {
+					return name // two candidates: neither is taken
+				}
+				stored = e.Name()
+			}
+		}
+	}
+	if stored == "" {
+		return name
+	}
+	return stored
 }
 
 // Report: an entry counts as skipped when an error kept it (or its subtree)
@@ -213,9 +310,7 @@ func (o *opened) Exclude(out string) error {
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Skipped: st.Errors() - st.ReadlinkErrors - st.Vanished}
-	for k := range o.p.opt.Skip {
-		cov.Exclusions = append(cov.Exclusions, k)
-	}
+	cov.Exclusions = slices.Sorted(maps.Keys(o.p.opt.Skip))
 	if o.p.opt.OneFilesystem {
 		// The tree is listed only as far as its filesystem reaches; the
 		// manifest records it so an application can tell.

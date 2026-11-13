@@ -16,6 +16,7 @@ import (
 
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/objhttp"
@@ -24,7 +25,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{
-		EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label,
+		EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionsSchema.Info}, Classify: objhttp.Label,
 		Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "s3-bearer-token-command"}},
@@ -273,7 +274,7 @@ func (o *opened[P]) Report() source.Report {
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
-// The registered source's whole method set (keyrange.Registered: the ten
+// The registered source's whole method set (keyrange.Registered: the eleven
 // optional interfaces a range-engine provider gives the pipeline); a
 // capability whose method went missing would silently be off.
 var (

@@ -55,7 +55,7 @@ type Options struct {
 	Fields     Fields
 	NoDirs     bool            // omit kind=DIR rows (directories are still walked)
 	LinkTarget bool            // read symlink targets (stat tiers)
-	Skip       map[string]bool // directory keys ("a/b/") neither emitted nor walked
+	Skip       map[string]bool // the run's own output: keys neither emitted nor, for a directory ("a/b/"), walked
 	Portable   bool            // use the portable engine even where a native one exists
 	// OneFilesystem lists a directory on another device than the root
 	// (a mount point) but does not walk it, as du -x and find -xdev.
@@ -74,7 +74,7 @@ type Stats struct {
 	Vanished         int64    `json:"vanished"` // gone between listing and stat
 	Changed          int64    `json:"changed"`  // type changed between listing and stat; dropped
 	ReadlinkErrors   int64    `json:"readlink_errors"`
-	Skipped          int64    `json:"skipped_dirs"`
+	Skipped          int64    `json:"skipped_outputs"`             // entries left out as the run's own output (Options.Skip)
 	Unsafe           int64    `json:"unsafe_dirs"`                 // a directory replaced by a symlink before open
 	Chunks           int64    `json:"chunks"`                      // large-directory chunks statted in parallel
 	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
@@ -248,16 +248,17 @@ func (rd walkReader) Read(ctx context.Context, r Range, out *Out) error {
 }
 
 // emit hands a directory's sorted rows to out, which splices each
-// subdirectory in as a child range right after its DIR row. Skipped
-// directories are dropped (tree.Omit); a directory on another device is
-// listed and not walked (tree.Prune).
+// subdirectory in as a child range right after its DIR row. The run's own
+// output (Skip) is dropped, a directory with its subtree, an entry of any
+// other kind alone (tree.Omit); a directory on another device is listed
+// and not walked (tree.Prune).
 func (p *Provider) emit(r Range, rows []Row, out *Out) error {
 	return out.Rows(rows, func(row *Row) (string, tree.Walk) {
 		switch {
-		case row.Data.Kind != KindDir:
-			return "", tree.Leaf
 		case len(p.opt.Skip) > 0 && p.opt.Skip[row.Key]:
 			return "", tree.Omit
+		case row.Data.Kind != KindDir:
+			return "", tree.Leaf
 		case p.otherDevice(row):
 			return "", tree.Prune
 		}

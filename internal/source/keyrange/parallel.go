@@ -154,6 +154,7 @@ type running struct {
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
 	groupOpen    bool           // group mode: its last emitted key's group may continue, or it emitted none yet (no split, unranked)
 	prior        float64        // a counted prior's expected keys in the range (Range.prior; 0: none)
+	lane         int            // the run trace's worker lane (TraceTo; lane)
 }
 
 // held is the prior's count of keys still to list in st, its expected
@@ -389,6 +390,9 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.c.Set(cResumedRanges, int64(len(tiles)))
 	p.unlock()
+	if p.tr != nil {
+		p.traceTiles(tiles)
+	}
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {
 			return err
@@ -438,6 +442,9 @@ func (p *Engine[P]) enter(r Range) *running {
 		st.prior = r.est
 	}
 	p.running[r.id] = st
+	if p.tr != nil {
+		st.lane = p.lane()
+	}
 	if r.slow {
 		p.slowQueued--
 	}
@@ -445,11 +452,17 @@ func (p *Engine[P]) enter(r Range) *running {
 	return st
 }
 
-func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
+func (p *Engine[P]) leave(r Range, st *running, start time.Time, err error) {
+	if p.tr != nil {
+		p.traceEnd(r, st, err)
+	}
 	p.lock()
 	defer p.unlock()
 	p.account(time.Now())
 	delete(p.running, r.id)
+	if p.tr != nil {
+		p.lanes[st.lane] = false
+	}
 	p.c.Add(cBusyNs, int64(time.Since(start)))
 	if r.tile > 0 {
 		p.tiles[r.tile-1].keys += st.keys
@@ -491,10 +504,13 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
 
 // expandRange lists (lo, hi]: the first page starts after lo, later pages
 // follow continuation tokens; keys past hi are trimmed and end the range.
-func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[Range, P]) error {
+func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[Range, P]) (err error) {
 	start := time.Now()
 	st := p.enter(r)
-	defer p.leave(r, st, start)
+	defer func() { p.leave(r, st, start, err) }()
+	if p.tr != nil {
+		p.traceClaim(r, st)
+	}
 	// A structure probe still in flight when the range ends is cancelled
 	// (its result could only serve this range's next split) and awaited,
 	// so no request outlives the range.
@@ -534,6 +550,10 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	}
 	p.maybeProbe(pctx, st, r, c)
 	for {
+		var before string // the cursor before the page, for the trace
+		if p.tr != nil {
+			before = c
+		}
 		t0 := time.Now()
 		out, err := p.list(ctx, in)
 		if err != nil {
@@ -699,6 +719,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
 		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		p.unlock()
+		if p.tr != nil {
+			p.tracePage(r, st, before, c, n, pageNs, done)
+		}
 		if done {
 			p.covered(r.lo, r.hi, r.open)
 			return faults.At("range-done")
@@ -1031,6 +1054,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			switch {
 			case refuse != 0 && st.refused >= admitRefusals:
 				p.c.Inc(cSplitAdmittedPersistent)
+				pv.persistent = true
 			case refuse != 0:
 				p.c.Inc(refuse)
 				st.refused++
@@ -1039,6 +1063,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		}
 	}
 	st.refused = 0
+	pv.hunger, pv.rem = hunger, pr.rem
 	if pr.gauge != nil {
 		pv.lower, pv.upper = pr.children(c, m, r.hi)
 		pv.estOK, pv.prior = true, pr.held
@@ -1064,6 +1089,12 @@ type pivot struct {
 	estOK        bool
 	prior        bool // lower and upper share a prior's count (Range.prior)
 	slow         bool // a slow-range split, taken without an idle worker
+	// What decide saw, for the run trace: the idle demand, the remainder
+	// estimate of (c, hi] (NaN: none) and whether the split was admitted
+	// after admitRefusals refusals in a row.
+	hunger     int
+	rem        float64
+	persistent bool
 }
 
 // commit accepts a decided split: the two children and the counters.
@@ -1117,6 +1148,9 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 		upper.after = r.after
 	}
 	p.unlock()
+	if p.tr != nil {
+		p.traceSplit(r, st, c, pv, lower, upper)
+	}
 	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d src=%s depth=%d g=%d anchor=%q\n",
 			r.id, r.lo, c, m, r.hi, r.open, st.keys, pv.src, depth, r.gen, pv.chain)

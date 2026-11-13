@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -282,6 +283,45 @@ func TestSkipDirectory(t *testing.T) {
 		}
 		if !slices.Equal(keys, []string{"a/", "a/1", "b"}) || st.Skipped != 1 {
 			t.Fatalf("portable=%v: keys %q skipped %d", portable, keys, st.Skipped)
+		}
+	}
+}
+
+// TestSkipOutputs: the run's own output is left out by its key whatever
+// its kind, on both engines and in a chunked directory: a directory with
+// its subtree, a file (the text output and its temporary) alone, with or
+// without directory rows; every other entry is listed.
+func TestSkipOutputs(t *testing.T) {
+	root := t.TempDir()
+	files := []string{"a/1", "a/out/data/x", "a/rows.tsv", "b", "rows.tsv.tmp"}
+	for i := range 5000 { // past chunkThreshold: big/ is cut into chunks (getdents)
+		files = append(files, fmt.Sprintf("big/f%05d", i))
+	}
+	for _, f := range files {
+		mk(t, root, f, false)
+	}
+	skip := map[string]bool{"a/out/": true, "a/rows.tsv": true, "rows.tsv.tmp": true, "big/f02055": true}
+	for _, portable := range []bool{false, true} {
+		for _, noDirs := range []bool{false, true} {
+			rows, st := list(t, root, Options{Skip: skip, Portable: portable, NoDirs: noDirs}, 4, 100)
+			var want []string
+			for _, f := range append(files, "a/", "big/") {
+				if skip[f] || strings.HasPrefix(f, "a/out/") || noDirs && strings.HasSuffix(f, "/") {
+					continue
+				}
+				want = append(want, f)
+			}
+			slices.Sort(want)
+			var keys []string
+			for _, r := range rows {
+				keys = append(keys, r.Key)
+			}
+			if !portable && runtime.GOOS == "linux" && st.Chunks == 0 {
+				t.Fatal("big/ was not chunked: the chunk path went untested")
+			}
+			if !slices.Equal(keys, want) || st.Skipped != int64(len(skip)) {
+				t.Fatalf("portable=%v noDirs=%v: %d keys (want %d), skipped %d", portable, noDirs, len(keys), len(want), st.Skipped)
+			}
 		}
 	}
 }

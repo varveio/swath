@@ -5,12 +5,10 @@ import json
 import sys
 from pathlib import Path
 
-from .trace import load_events
+from .trace import TRACE_VERSION, NotATrace, load_events, run_start
 from .model import build_model
 from .render import render_report, render_video
 from .selftest import self_test
-
-SCHEMA_VERSION = 1
 
 
 def fmt_int(n):
@@ -20,8 +18,8 @@ def fmt_int(n):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="explainer.py",
-        description="Turn a swath --trace JSONL run into a self-contained HTML explainer.")
-    parser.add_argument("trace", nargs="?", type=Path, help="the --trace JSONL file to render")
+        description="Turn a swath run trace (swath diag list --trace) into a self-contained HTML explainer.")
+    parser.add_argument("trace", nargs="?", type=Path, help="the run trace to render (swath diag list --trace FILE)")
     parser.add_argument("-o", "--out", type=Path,
                         help="output HTML path (default: alongside the trace, .html)")
     parser.add_argument("--title", help="page heading (default: the trace file's stem)")
@@ -32,7 +30,7 @@ def main(argv=None):
                              "drive it via window.__seek(ms) and encode the frames")
     parser.add_argument("--video-style", choices=("strip", "map"), default="strip",
                         help="strip (default): the algorithm as it happens — seed cuts, parallel "
-                             "drains, stealing. map: the space-time carving diagram, denser and "
+                             "drains, splits. map: the space-time carving diagram, denser and "
                              "more diagnostic")
     parser.add_argument("--run-facts", type=Path,
                         help="path to a swath-public-run-v1 JSON provenance record for this "
@@ -55,10 +53,14 @@ def main(argv=None):
         print("explainer: %s held no parseable trace events" % args.trace, file=sys.stderr)
         return 1
 
-    unknown = {e.get("v") for e in events if "v" in e} - {SCHEMA_VERSION}
-    if unknown:
-        print("explainer: warning: unrecognized schema version(s) %s — this reader understands "
-              "v%d; fields may be missing" % (sorted(unknown), SCHEMA_VERSION), file=sys.stderr)
+    try:
+        start = run_start(events)
+    except NotATrace as err:
+        print("explainer: %s: %s" % (args.trace, err), file=sys.stderr)
+        return 1
+    if start.get("trace_version") != TRACE_VERSION:
+        print("explainer: warning: trace_version %r — this reader understands %d; fields may be "
+              "missing" % (start.get("trace_version"), TRACE_VERSION), file=sys.stderr)
 
     facts = None
     if args.run_facts and not args.video:
@@ -74,11 +76,16 @@ def main(argv=None):
     print("  %s events · %s objects · %s pages · %d workers · %.1fs"
           % (fmt_int(meta["events"]), fmt_int(meta["totalKeys"]), fmt_int(meta["pagesSeen"]),
              meta["workers"], meta["durationMs"] / 1000.0), file=sys.stderr)
-    print("  headline: heaviest of %s seed ranges held %.1f%% of the objects; %s splits, %s "
-          "owner-side" % (fmt_int(F["seedCount"]), F["topShare"], fmt_int(F["totalSplits"]),
-                          fmt_int(F["ownerSplits"])), file=sys.stderr)
+    print("  headline: heaviest of %s seed ranges held %.1f%% of the objects; %s splits"
+          % (fmt_int(F["seedCount"]), F["topShare"], fmt_int(F["totalSplits"])), file=sys.stderr)
+    if F["dropped"]:
+        print("  note: the trace dropped %s events (its writer fell behind)" % fmt_int(F["dropped"]),
+              file=sys.stderr)
     if not F["ledgerOk"]:
-        print("  note: range ledger does not balance (partial or interrupted run)", file=sys.stderr)
+        print("  note: range ledger does not balance (partial, interrupted or lossy trace)",
+              file=sys.stderr)
+    elif not F["tiled"]:
+        print("  note: the listed ranges do not tile the scope", file=sys.stderr)
     if skipped:
         print("  %d unparseable line(s) skipped" % skipped, file=sys.stderr)
     if meta["keepEvery"] > 1:

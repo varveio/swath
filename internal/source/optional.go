@@ -3,7 +3,11 @@
 
 package source
 
-import "time"
+import (
+	"time"
+
+	"github.com/varveio/swath/internal/runtrace"
+)
 
 // Locator says what a source lists, for the dataset's metadata.
 type Locator struct {
@@ -42,6 +46,15 @@ type Resumable interface {
 	// Restart is called before Root: every row the source emits must sort
 	// after key after.
 	Restart(after string) error
+}
+
+// Traced sources write a run trace (swath diag list --trace,
+// docs/internals/trace.md): the range engine's.
+type Traced interface {
+	// TraceTo is called before Root, after Restart: the source writes its
+	// run_start and every later event to w. The caller closes w after the
+	// run.
+	TraceTo(w *runtrace.Writer)
 }
 
 // Capable sources say which optional behaviours this instance supports;
@@ -102,10 +115,14 @@ func (c Capabilities) RangeEngine() bool {
 	return !c.RankOracle && c.Seek == SeekFabricable && c.Order == OrderBytes
 }
 
-// Excluder sources can contain the output directory (a local tree); after
-// the output is prepared, the pipeline asks them to leave it out.
+// Excluder sources can contain the run's own output (a local tree): after
+// the output is prepared, and before listing starts, the pipeline asks
+// them to leave out each path it writes there, one call each: the dataset
+// directory, or the text file, its temporary and its scratch directory.
+// A directory is left out with everything below it; a path that does not
+// exist yet is left out by its name.
 type Excluder interface {
-	Exclude(out string) error
+	Exclude(path string) error
 }
 
 // Live sources count the requests their service answered usably, pages

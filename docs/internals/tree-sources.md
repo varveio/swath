@@ -49,7 +49,7 @@ func (o *Out[D, S, P]) Rows(rows []schema.Row[P], walk func(*schema.Row[P]) (D, 
 func (o *Out[D, S, P]) Seg(s S) error
 
 // Walk is what the walker does after a row: Leaf, Descend (its subtree follows), Prune (listed, not
-// walked: another device), Omit (neither: an excluded output directory).
+// walked: another device), Omit (neither: the run's own output, a file or a directory with its subtree).
 ```
 
 `Walker[D, S, P]` implements `source.Provider[Range[D, S], P]` and `source.Disposer`. `Expand` checks the
