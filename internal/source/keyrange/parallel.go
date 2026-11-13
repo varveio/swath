@@ -685,6 +685,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		switch h := st.held(); {
 		case h > 0 && !done:
 			held, st.rem = h, h
+			hint.Rem = h // the next request is sized from the remainder the gates read
 			p.c.Inc(cSeedFromHeld)
 		case st.prior > 0 && !done:
 			st.prior = 0

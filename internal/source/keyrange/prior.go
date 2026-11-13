@@ -32,6 +32,7 @@ func (p *Engine[P]) SeedFrom(pr *source.Prior) error {
 	p.opt.Prior = pr
 	if pr.Counted && p.opt.PriorPageSize > p.opt.PageSize {
 		p.opt.PageSize = p.opt.PriorPageSize
+		p.opt.PageMax = max(p.opt.PageMax, p.opt.PageSize) // as New keeps it
 		p.c.Set(cSeedFromPageSize, int64(p.opt.PageSize))
 	}
 	return nil
