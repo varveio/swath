@@ -260,7 +260,8 @@ swath: 1 entry could not be read and is missing from the output
 A local walk that cannot read some entries (permissions, a directory replaced while the walk ran) leaves them
 out, names up to five on stderr with their cause, and exits 3 (class `incomplete`); the last line counts them, and
 `-q` keeps it. The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
-its row, and an entry removed during the walk is no longer part of the tree: neither counts. A root directory that
+its row, an entry removed during the walk is no longer part of the tree, and one the include and exclude rules
+leave out by its name is not selected: none of them counts. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
 `coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
 

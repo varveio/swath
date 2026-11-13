@@ -171,6 +171,9 @@ func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parque
 		return order.Stats{}, nil, err
 	}
 	o.p.prune = prune
+	if o.p.keyOut, err = env.Filter.KeyExcluded(); err != nil {
+		return order.Stats{}, nil, err
+	}
 	o.p.mu.Lock()
 	o.p.stats.Pruning = &plan
 	o.p.mu.Unlock()

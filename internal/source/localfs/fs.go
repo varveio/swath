@@ -85,9 +85,12 @@ type Stats struct {
 	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
-	OtherDevice int64           `json:"other_device_dirs"`
-	PrunedDirs  int64           `json:"pruned_dirs"`
-	Pruning     *filter.Pruning `json:"pruning,omitempty"`
+	OtherDevice int64 `json:"other_device_dirs"`
+	PrunedDirs  int64 `json:"pruned_dirs"`
+	// FilteredStatErrors counts entries whose stat failed that the filters
+	// leave out by their key alone (Provider.leftOut): not unreadable.
+	FilteredStatErrors int64           `json:"filtered_stat_errors"`
+	Pruning            *filter.Pruning `json:"pruning,omitempty"`
 }
 
 // Errors is the sum of the error counters.
@@ -131,6 +134,7 @@ func (s *Stats) add(o *Stats) {
 	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice
 	s.PrunedDirs += o.PrunedDirs
+	s.FilteredStatErrors += o.FilteredStatErrors
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -152,6 +156,7 @@ type Provider struct {
 	native bool
 	dev    int64             // the root's device (OneFilesystem)
 	prune  func(string) bool // immutable directory predicate, set before workers start
+	keyOut func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -373,6 +378,10 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 			row.Data.Kind = kindOf(d.Type())
 		} else {
 			if err := statEntry(f, d, &row.Data); err != nil {
+				if p.leftOut(row.Key, d.IsDir(), true) {
+					st.FilteredStatErrors++
+					continue
+				}
 				if errors.Is(err, fs.ErrNotExist) {
 					st.note(&st.Vanished, path, err)
 				} else {
@@ -399,6 +408,27 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		sortRows(rows)
 	}
 	return p.emit(r, rows, e, st)
+}
+
+// leftOut says the filters leave out the entry at key (its name below the
+// root, without a directory's trailing /; a directory if dir,
+// either kind unless known) by its key alone, so that its failed stat
+// leaves out nothing selected: a file's row excluded, or a directory's row
+// excluded and every descendant pruned (an entry that is not statted is
+// not walked either).
+func (p *Provider) leftOut(key string, dir, known bool) bool {
+	if p.keyOut == nil {
+		return false
+	}
+	asFile := p.keyOut(key)
+	asDir := p.keyOut(key+"/") && p.prune != nil && p.prune(key+"/")
+	switch {
+	case !known:
+		return asFile && asDir
+	case dir:
+		return asDir
+	}
+	return asFile
 }
 
 // openChecked opens a directory by path. Below the root it then checks that

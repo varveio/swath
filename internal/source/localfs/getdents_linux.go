@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -539,6 +540,11 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names, key
 		}
 		name := nameOf(names, e)
 		if err := statAt(fd, name, p.opt.Fields, &r.Data); err != nil {
+			if p.leftOut(strings.TrimSuffix(r.Key, "/"), e.typ == unix.DT_DIR, e.typ != unix.DT_UNKNOWN) { // a directory's key ends in /
+				st.FilteredStatErrors++
+				*r = Row{}
+				continue
+			}
 			full := path + string(os.PathSeparator) + name
 			if errors.Is(err, unix.ENOENT) {
 				st.note(&st.Vanished, full, err)
