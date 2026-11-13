@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -450,6 +451,50 @@ func TestManifestObjectBytes(t *testing.T) {
 		}
 		if tot := back.Totals(); tot.Rows != 2 || tot.Bytes != 9 || (tot.CommittedObjectBytes == nil) != (want == nil) {
 			t.Fatalf("totals %+v", tot)
+		}
+		again, err := json.Marshal(back)
+		if err != nil || !bytes.Equal(again, b) {
+			t.Fatalf("rewritten: %v\n%s\n%s", err, again, b)
+		}
+	}
+}
+
+// TestManifestFilesystem: extensions.swath.filesystem is written when the
+// source measured it, zero free space included, and left out otherwise; it
+// reads back as written, and a manifest read and written again keeps it
+// byte for byte.
+func TestManifestFilesystem(t *testing.T) {
+	at := time.Date(2026, 11, 13, 10, 0, 0, 123456000, time.UTC)
+	for _, want := range []*FilesystemSpace{nil, {TotalBytes: 1 << 40, FreeBytes: 0, AvailableBytes: 0, MeasuredAt: at}, {TotalBytes: 100, FreeBytes: 500, AvailableBytes: 80, MeasuredAt: at}} {
+		meta := Meta{SchemaID: id, Source: Source{Kind: "local-fs", URI: "/data"}, Scope: Scope{Kind: "whole"},
+			Coverage: Coverage{Complete: true, StopReason: "completed"}, Filesystem: want}
+		m := newManifest(meta, nil, func(int, Part) string { return "" })
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw struct {
+			Extensions map[string]map[string]json.RawMessage `json:"extensions"`
+		}
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, has := raw.Extensions["swath"]["filesystem"]
+		if has != (want != nil) {
+			t.Fatalf("%+v: filesystem %s (present %v)", want, got, has)
+		}
+		if want != nil {
+			wantJSON := fmt.Sprintf(`{"total_bytes":%d,"free_bytes":%d,"available_bytes":%d,"measured_at":"2026-11-13T10:00:00.123456Z"}`, want.TotalBytes, want.FreeBytes, want.AvailableBytes)
+			if string(got) != wantJSON {
+				t.Fatalf("filesystem %s, want %s", got, wantJSON)
+			}
+		}
+		var back Manifest
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		if (back.Filesystem == nil) != (want == nil) || want != nil && *back.Filesystem != *want {
+			t.Fatalf("%+v: read back %+v", want, back.Filesystem)
 		}
 		again, err := json.Marshal(back)
 		if err != nil || !bytes.Equal(again, b) {

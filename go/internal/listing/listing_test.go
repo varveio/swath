@@ -76,6 +76,18 @@ func TestEndToEnd(t *testing.T) {
 		!m.Coverage.Complete || m.Coverage.SkippedEntries != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
 		t.Fatalf("manifest %+v", m)
 	}
+	// The source's filesystem space, measured when the listing ended, on
+	// the platforms that measure it.
+	switch fs := m.Filesystem; runtime.GOOS {
+	case "linux", "darwin", "windows":
+		if fs == nil || fs.TotalBytes <= 0 || fs.AvailableBytes > fs.TotalBytes || fs.MeasuredAt.Before(m.Coverage.ListingStartedAt) {
+			t.Fatalf("filesystem %+v", fs)
+		}
+	default:
+		if fs != nil {
+			t.Fatalf("filesystem %+v on %s", fs, runtime.GOOS)
+		}
+	}
 }
 
 // Keys are bytes: a name that is not UTF-8 is listed, and the manifest

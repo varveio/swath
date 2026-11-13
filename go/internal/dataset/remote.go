@@ -269,7 +269,7 @@ type ClaimReceipt struct {
 func newManifest(meta Meta, parts []Part, path func(i int, p Part) string) Manifest {
 	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
 		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, CommittedObjectBytes: meta.CommittedObjectBytes,
-		Parts: []ManifestPart{}}
+		Filesystem: meta.Filesystem, Parts: []ManifestPart{}}
 	if m.Coverage.Exclusions == nil {
 		m.Coverage.Exclusions = []string{}
 	}

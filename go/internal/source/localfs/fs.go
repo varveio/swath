@@ -155,6 +155,10 @@ type Provider struct {
 	// nil outside a run. warnMu serialises the workers' calls.
 	warn   func(string)
 	warnMu sync.Mutex
+	// space is the root's filesystem space, measured once (spaceOnce):
+	// nil when the measurement failed or the platform has none.
+	spaceOnce sync.Once
+	space     *source.FilesystemSpace
 }
 
 // warnf passes a warning to the user, if the run takes them.

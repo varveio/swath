@@ -44,6 +44,33 @@ type Metadata struct {
 	// written before the member existed or resumed from parts that predate
 	// it): never read as 0, which is a real total.
 	CommittedObjectBytes *int64
+	// Filesystem is extensions.swath.filesystem: the space of the
+	// filesystem that holds a local source's root, as its operating system
+	// reported it when the listing ended. Nil for a remote source, and when
+	// the listing did not measure it (a platform without a measurement, a
+	// failed call, a filesystem that reports no size).
+	Filesystem *FilesystemSpace
+}
+
+// FilesystemSpace is a filesystem's space as its operating system reported
+// it: what the filesystem says of itself, not a physical disk's capacity
+// or a promise of writable bytes. Volumes that share a pool (an APFS
+// container, a ZFS pool) each report the pool's free space, so it is not
+// summed across datasets; nor is the dataset's size total minus free (the
+// listing's scope, hard links, shared blocks, snapshots and the
+// filesystem's own overhead all differ).
+type FilesystemSpace struct {
+	// TotalBytes is the filesystem's size; on Windows, within the caller's
+	// quota.
+	TotalBytes *int64 `json:"total_bytes"`
+	// FreeBytes is its free space, including space reserved for the
+	// superuser; on Windows, the volume's, which can exceed a quota's
+	// TotalBytes.
+	FreeBytes *int64 `json:"free_bytes"`
+	// AvailableBytes is the free space an unprivileged writer may use; on
+	// Windows, within the caller's quota.
+	AvailableBytes *int64     `json:"available_bytes"`
+	MeasuredAt     *time.Time `json:"measured_at"`
 }
 
 // SourceInfo is what was listed.
@@ -102,15 +129,17 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 		return Metadata{}, semantic(KindSchema, "", nil, "unsupported swath metadata version: extensions.swath.version %s, this reader reads %d", got, MetadataVersion)
 	}
 	var x struct {
-		PublishedAt          *time.Time  `json:"published_at"`
-		Source               *SourceInfo `json:"source"`
-		Scope                *Scope      `json:"scope"`
-		Coverage             *Coverage   `json:"coverage"`
-		CommittedObjectBytes *int64      `json:"committed_object_bytes"`
+		PublishedAt          *time.Time       `json:"published_at"`
+		Source               *SourceInfo      `json:"source"`
+		Scope                *Scope           `json:"scope"`
+		Coverage             *Coverage        `json:"coverage"`
+		CommittedObjectBytes *int64           `json:"committed_object_bytes"`
+		Filesystem           *FilesystemSpace `json:"filesystem"`
 	}
 	if err := json.Unmarshal(raw, &x); err != nil {
 		return Metadata{}, &SemanticError{Kind: KindMetadata, Err: err}
 	}
 	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage, out.CommittedObjectBytes = true, x.PublishedAt, x.Source, x.Scope, x.Coverage, x.CommittedObjectBytes
+	out.Filesystem = x.Filesystem
 	return out, nil
 }

@@ -729,6 +729,9 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 		m.Coverage.StopReason = "unreported" // a source without a report claims nothing
 		return m
 	}
+	if f := rep.Filesystem; f != nil {
+		m.Filesystem = &dataset.FilesystemSpace{TotalBytes: f.TotalBytes, FreeBytes: f.FreeBytes, AvailableBytes: f.AvailableBytes, MeasuredAt: f.MeasuredAt}
+	}
 	c := rep.Coverage
 	if c.Prefix != "" {
 		m.Scope = dataset.Scope{Kind: "prefix", Prefix: c.Prefix}
