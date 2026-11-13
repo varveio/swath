@@ -83,6 +83,28 @@ def self_test():
             e["last"] = {"hex": b"big/part-0001.csv\xff".hex()}
     check("a key that is not UTF-8 reads", build_model(raw, 0, "x", False)["meta"]["totalKeys"], FIXTURE_KEYS)
 
+    # The tiling is rebuilt from the trace and checked against the scope: a failed
+    # range is a gap, at the scope's start as anywhere else.
+    def synthetic(ends):
+        out = [{"event": "run_start", "ts_ns": 0, "trace_version": 1, "workers": 2, "page_size": 10}]
+        bounds = [("", "m"), ("m", "t"), ("t", None)]
+        for i, (lo, hi) in enumerate(bounds):
+            tile = {"id": i + 1, "lo": lo, "hi": hi} if hi else {"id": i + 1, "lo": lo, "open": True}
+            out.append(dict(tile, event="seeded", ts_ns=1))
+            out.append(dict(tile, event="claimed", ts_ns=2 + i, worker=i))
+            out.append({"event": "page", "ts_ns": 10 + i, "id": i + 1, "worker": i, "after": lo,
+                        "last": lo + "k", "rows": 5, "dur_ns": 1, "done": ends[i] == "completed"})
+            out.append({"event": ends[i], "ts_ns": 20 + i, "id": i + 1, "worker": i, "rows": 5})
+        out.append({"event": "run_end", "ts_ns": 30, "status": "committed", "events": len(out), "dropped": 0})
+        return out
+
+    whole = build_model(synthetic(["completed"] * 3), 0, "x", False)["findings"]
+    check("three completed ranges tile the scope", (whole["tiled"], whole["ledgerOk"]), (True, True))
+    for at, ends in (("the start", ["failed", "completed", "completed"]),
+                     ("the middle", ["completed", "failed", "completed"])):
+        F2 = build_model(synthetic(ends), 0, "x", False)["findings"]
+        check("a failed range at %s is a gap" % at, (F2["tiled"], F2["ledgerOk"]), (False, False))
+
     try:
         build_model([e for e in events if e["event"] != "run_start"], 0, "x", False)
         check("a trace without run_start is refused", False, True)

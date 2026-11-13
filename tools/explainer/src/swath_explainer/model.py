@@ -23,12 +23,17 @@ K_SEED, K_CLAIM, K_PAGE, K_SPLIT, K_DONE, K_FAIL = range(6)
 UNIFORM = ("midpoint",)
 
 
-def tiles_scope(leaves):
-    """Whether intervals ``(lo, hi]`` (hi None: open, ⊤) tile one span: sorted by lo,
-    each starts where the one before it ended, and only the last is open."""
+def tiles_scope(leaves, start=b""):
+    """Whether intervals ``(lo, hi]`` (hi None: open, ⊤) tile the scope after ``start``
+    (b"", ⊥, on a fresh run; a resume's key, whose first range may start at a prefix
+    of it): sorted by lo, the first starts at or below start, each starts where the
+    one before it ended, and only the last is open, so it reaches ⊤. A failed range
+    is not a leaf, so it leaves a gap."""
     if not leaves:
         return False
     leaves = sorted(leaves, key=lambda l: l[0])
+    if leaves[0][0] > start:
+        return False
     for i, (lo, hi) in enumerate(leaves):
         if i and lo != leaves[i - 1][1]:
             return False
@@ -286,7 +291,7 @@ def build_model(events, skipped, title, anonymize):
         "dropped": dropped,
         "ledgerOk": (seeds_made + 2 * splits == claimed == completed + splits
                      and failed == 0 and dropped == 0),
-        "tiled": tiles_scope(leaves),
+        "tiled": tiles_scope(leaves, key_bytes(start.get("resume_after")) or b""),
         "reqPer1k": round(1000.0 * pages_seen / total_keys, 3) if total_keys else None,
         "busySec": round(busy_ms / 1000.0, 1),
         "idealSec": round(ideal_ms / 1000.0, 1),
