@@ -81,7 +81,7 @@ func listGCS(t testing.TB, dir string) string {
 func listLocal(t testing.TB, dir string) string {
 	t.Helper()
 	tree := filepath.Join(dir, "tree")
-	files := map[string]string{"a/b/x": "x", "a/b/y.txt": "yy", "a/z": "zzz", "docs/readme.md": "hello", "docs/sub/deep.txt": "deep!!", "top.txt": "t", "café.bin": "1234"}
+	files := map[string]string{"a/b/x": "x", "a/b/y.txt": "yy", "a/z": "zzz", "guide/readme.md": "hello", "guide/sub/deep.txt": "deep!!", "top.txt": "t", "café.bin": "1234"}
 	for name, body := range files {
 		path := filepath.Join(tree, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
