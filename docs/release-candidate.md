@@ -37,12 +37,16 @@ rc.2 release binary and a build of the code these pages describe.
 | Text output inside the listed tree, `-o TREE/rows.tsv` | the listing includes its own temporary file and scratch directory | they are left out |
 | `swath diag list --max-keys N` stops before the end | text rows exit 0; a dataset exits 1 | exit 3 (`incomplete`) for both |
 | A malformed source URL (`s3://`) or a `--sort-buffer` below 128 KiB | exit 1 | exit 2, as a usage error |
+| An endpoint nothing answers on (a mistyped `--endpoint-url`) | retries for the whole `--stall-timeout`, 10 minutes by default (still retrying after 2 minutes here) | stops after about 30 seconds, exit 75 (cause `unreachable`), naming the endpoint and the cause |
+| The spill directory is on tmpfs (`TMPDIR=/dev/shm`) | warns at the start of every run that could spill | warns only when a run first spills |
+| `swath show FILE` on a file that is not a dataset | `journal: open FILE: not a directory` | `FILE holds neither a dataset nor an interrupted run` |
 | `--max-duration` ends a text-file run | the statistics count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |
 
-These pages also describe two changes not checked here by running rc.2: a `swath du` of a million rows or more
-on a terminal ends with a hint to save an inventory and total it with `--from-dataset`, and a run stopped by
+These pages also describe three changes not checked here by running rc.2: a `swath du` of a million rows or
+more on a terminal ends with a hint to save an inventory and total it with `--from-dataset`; a run stopped by
 Ctrl-C or `SIGTERM` now ends by that signal (the shell still reports 130 or 143), where rc.2 exited with the
-code.
+code; and a stuck run without an output directory writes its goroutine dump to a file in the temporary
+directory and names it, where rc.2 printed the dump on stderr.
 
 The full list is the Unreleased section of the [changelog](../CHANGELOG.md). Install rc.2 from
 [Install](install.md).
