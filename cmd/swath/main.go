@@ -1148,10 +1148,11 @@ func explain(err error) error {
 }
 
 // deadlineAdvice says what follows a run --max-duration stopped: a resume,
-// or, for a run without a journal (text, swath du, a local tree), a new run.
+// which replays the recorded --max-duration unless given another, or, for a
+// run without a journal (text, swath du, a local tree), a new run.
 func deadlineAdvice(err error, resumable bool, dir string) error {
 	if resumable {
-		return fmt.Errorf("%w (swath resume %s continues it)", err, dir)
+		return fmt.Errorf("%w (swath resume %s --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)", err, shellOperand(dir))
 	}
 	return fmt.Errorf("%w (it cannot be resumed: run it again with a longer --max-duration, or without one)", err)
 }

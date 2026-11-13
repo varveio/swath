@@ -125,7 +125,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	// a shared CI runner took 1.2 s for them) before over twice the stall
 	// timeout of empty pages.
 	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "6s", "--report", report), io.Discard, false)
-	if c := exitCode(t, err); c != exitDeadline || !strings.HasSuffix(err.Error(), "--max-duration reached (swath resume "+dir+" continues it)") {
+	if c := exitCode(t, err); c != exitDeadline || !strings.HasSuffix(err.Error(), "--max-duration reached (swath resume "+shellOperand(dir)+" --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)") {
 		t.Fatalf("exit %d (%v), want %d naming swath resume", c, err, exitDeadline)
 	}
 	if d := time.Duration(s.latestNs.Load() - s.firstNs.Load()); d < 2*stall || s.fresh.Load() < 100 {
@@ -151,7 +151,8 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 		before[p], _ = os.ReadFile(p)
 	}
 	s.set("healthy")
-	if err := resume(ctx, []string{dir}, io.Discard); err != nil {
+	// As the advice says: --max-duration 0 lifts the recorded deadline.
+	if err := resume(ctx, []string{dir, "--max-duration", "0"}, io.Discard); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	sameParts(t, "resume", ref, dir)

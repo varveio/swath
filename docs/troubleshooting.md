@@ -139,7 +139,7 @@ A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped
 statistics say `no file written`. After `--max-duration` the last line says which applies:
 
 ```text
-swath: deadline: --max-duration reached (swath resume inv continues it)
+swath: deadline: --max-duration reached (swath resume inv --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
 swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)
 ```
 
