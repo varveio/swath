@@ -72,14 +72,17 @@ func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 
 // checkTotals refuses totals the names tier cannot give
 // (registry.Factory.CheckTotals): the allocated bytes are read from each
-// entry's stat. The hard links are too, so the names tier counts every name.
+// entry's stat. The hard links are too, so the names tier, and a platform
+// whose stat has no link count (statLinks: Windows), count every name.
 func checkTotals(options any, t *totals.Options) error {
 	o, ok := options.(*Options)
-	switch {
-	case !ok || o.Fields != Names:
-	case t.BytesColumn == totals.AllocatedBytes:
+	if !ok {
+		return nil
+	}
+	if o.Fields == Names && t.BytesColumn == totals.AllocatedBytes {
 		return errors.New("--allocated reads each entry's stat: not with --metadata names")
-	default:
+	}
+	if o.Fields == Names || !statLinks {
 		t.LinksOnce = false
 	}
 	return nil

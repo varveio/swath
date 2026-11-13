@@ -44,8 +44,8 @@ blocks are in no total, so a tree's total is below `du -sB1`'s by them. `--alloc
 A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
 its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
 each such inode, up to `--max-inodes` (1,000,000 by default), past which the run fails (exit 1, cause
-`inode_limit`). `-l`, `--count-links` counts every name, as `du -l`. `--metadata names` reads no link counts, so
-every name counts there.
+`inode_limit`). `-l`, `--count-links` counts every name, as `du -l`. `--metadata names`, and Windows, read no link
+counts, so every name counts there.
 
 The [filters](../filters.md) apply before counting, to every row: on a local tree directories too, so
 `--min-size 1M` keeps the large files and drops the directories, whose own size is small.
@@ -71,8 +71,8 @@ Totals:
                                 counted, so a tree's total is below du's by them.
   -l, --count-links           local: count a file with several hard links under each of its names
                                 By default such a file counts once, as du counts it, under the first
-                                of its names in byte order. The names metadata tier reads no links:
-                                every name counts there.
+                                of its names in byte order. The names metadata tier, and Windows,
+                                read no links: every name counts there.
       --sort name|size        order prefixes by name, or by size, largest first (default name)
                                 By size the prefixes below each parent are ordered, each still above
                                 its own; the total keeps its place (last in the table, first in TSV

@@ -73,7 +73,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "The files' st_blocks x 512. A directory's own blocks are not counted, so a tree's total is below du's by them."})
 	def(source.Flag{Name: "count-links", Short: "l", Value: source.Switch(&o.countLinks), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",
-		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier reads no links: every name counts there."})
+		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there."})
 	o.sortBy = sortName
 	def(source.Flag{Name: "sort", Value: source.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "order prefixes by name, or by size, largest first",
