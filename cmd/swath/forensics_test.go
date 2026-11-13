@@ -79,9 +79,9 @@ func TestStuckCause(t *testing.T) {
 }
 
 // TestForcedExitCode: a run whose journal sync never returns cannot stop
-// gracefully after a signal; shutdownGrace later the process exits with
-// the signal's own code (143 after SIGTERM, 130 after SIGINT; it was 130
-// for both), writes the goroutine dump to DIR/.swath, and records the
+// gracefully after a signal; shutdownGrace later the process dies by that
+// signal (a shell sees 143 after SIGTERM, 130 after SIGINT; it was 130 for
+// both, then the code without the signal), writes the goroutine dump to DIR/.swath, and records the
 // outcome in error.json and the report (it wrote neither). The graceful
 // codes are TestExitCodes'.
 func TestForcedExitCode(t *testing.T) {
@@ -121,9 +121,8 @@ func TestForcedExitCode(t *testing.T) {
 				<-done
 				t.Fatalf("still running after the grace: %s", stderr.String())
 			}
-			ee, ok := err.(*exec.ExitError)
-			if !ok || ee.ExitCode() != want {
-				t.Fatalf("exit %v, want %d: %s", err, want, stderr.String())
+			if c, signaled := exitStatus(t, err); c != want || !signaled {
+				t.Fatalf("exit %v, want %d by the signal: %s", err, want, stderr.String())
 			}
 			if d := time.Since(start); d < shutdownGrace || !strings.Contains(stderr.String(), "still stopping") {
 				t.Fatalf("exited after %s without the forced exit: %s", d, stderr.String())
@@ -146,7 +145,7 @@ func TestForcedExitCode(t *testing.T) {
 
 // TestOneTerminalAccount: run.json, the external report (--report) and
 // error.json carry the same outcome. A committed dataset with partial
-// coverage (a key limit) is "incomplete", exit 1, in all three (run.json
+// coverage (a key limit) is "incomplete", exit 3, in all three (run.json
 // said "completed", exit 0, before the command classified it); a run that
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
@@ -170,7 +169,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		report := filepath.Join(t.TempDir(), "report.json")
 		err := run(ctx, []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--sequential", "--max-keys", "10",
 			"--report", report, "-o", dir}, io.Discard, true)
-		if c := exitCode(t, err); c != exitFatal {
+		if c := exitCode(t, err); c != exitIncomplete {
 			t.Fatalf("exit %d (%v)", c, err)
 		}
 		var rep, rj listing.Report
@@ -178,7 +177,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
 		var o outcome
 		readJSON(t, filepath.Join(dir, errorName), &o)
-		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitFatal {
+		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitIncomplete {
 			t.Fatalf("report outcome %+v", rep.Outcome)
 		}
 		same(t, "run.json", rj.Outcome, rep.Outcome)

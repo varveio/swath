@@ -353,7 +353,8 @@ swath list s3://bucket/logs/ --all-versions -o logs-versions
 ## Exit status
 
 0 when the listing completed, or the reader closed stdout. 1 when it failed (access denied, no such bucket),
-2 for a usage error or a refusal (a non-empty `-o` directory without `--overwrite`). A dataset run of an object
+2 for a usage error or a refusal (a non-empty `-o` directory without `--overwrite`), 3 when the output is
+written but incomplete (entries could not be read; `swath diag list --max-keys`). A dataset run of an object
 store that stops early exits 74, 75, 124, 130 or 143 and can be resumed. See
 [reference/exit-codes.md](../reference/exit-codes.md).
 

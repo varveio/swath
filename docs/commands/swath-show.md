@@ -20,13 +20,13 @@ $ swath show inv
 dataset inv: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
 key key unique=true, published 2026-11-10T12:40:24Z
 source /tmp/swath-docs-check/photos, scope whole ""
-coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
+coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
 1 part, 7 rows, 3832 bytes, keys "2025/" .. "notes.txt"
 ```
 
-`complete=true` says the listing reached the end of its scope, not that it holds every entry: `skipped` counts
-errors that kept entries out, `filters` the rules that left rows out, `exclusions` what was left out by design
-(an output directory inside the tree). With `complete=true stop=completed skipped=0 filters=0` the dataset covers
+`complete=true` says the listing reached the end of its scope, not that it holds every entry: `unreadable` counts
+entries that could not be read and are missing, `filters` the rules that left rows out, `exclusions` what was left out by design
+(an output directory inside the tree). With `complete=true stop=completed unreadable=0 filters=0` the dataset covers
 the `source` and `scope` on the line above it, minus its exclusions
 ([results.md](../results.md#coverage-and-unreadable-entries),
 [dataset.md](../dataset.md#the-swath-extension)).

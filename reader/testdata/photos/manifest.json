@@ -27,7 +27,7 @@
       "coverage": {
         "complete": true,
         "stop_reason": "completed",
-        "skipped_entries": 0,
+        "unreadable": 0,
         "exclusions": [],
         "filters": [],
         "snapshot": false,

@@ -60,9 +60,9 @@ cd swath
 ```
 
 Replace `/data` with a directory to inspect. This prints counts and apparent sizes by
-directory, two levels below the root, without writing an inventory. Local
-`--allocated` and `--count-links-once` options select allocated bytes and count hard-linked
-files once where platform metadata supports them. These are size summaries, not a bill.
+directory, two levels below the root, without writing an inventory. A local
+file with several hard links counts once, and `--allocated` selects allocated bytes, where platform
+metadata supports them. These are size summaries, not a bill.
 
 ### Print an object-store listing
 

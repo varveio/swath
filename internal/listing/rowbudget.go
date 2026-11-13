@@ -10,7 +10,7 @@ import (
 
 // The default row budget is a share of the least memory limit detected
 // (physical memory, the cgroup's limit, GOMEMLIMIT; not free memory),
-// between minRowBudget and maxAutoRowBudget; DefaultRowBudget when none
+// between MinRowBudget and maxAutoRowBudget; DefaultRowBudget when none
 // is detected.
 const (
 	// rowBudgetShare is the share of memory the default row budget takes
@@ -29,7 +29,7 @@ const (
 	BudgetExplicit = "explicit"          // --sort-buffer (Limits.RowBudget) was given
 	BudgetShare    = "capacity_fraction" // 1/16 of memory
 	BudgetCap      = "cap"               // 1/16 of memory was past maxAutoRowBudget
-	BudgetMinimum  = "minimum"           // 1/16 of memory was below minRowBudget
+	BudgetMinimum  = "minimum"           // 1/16 of memory was below MinRowBudget
 	BudgetUnknown  = "unknown_fallback"  // no memory limit was found: DefaultRowBudget
 )
 
@@ -99,8 +99,8 @@ func rowBudgetFor(explicit int64, m memoryLimits) (int64, RowBudget) {
 		why.Reason, b = BudgetUnknown, DefaultRowBudget
 	case b > maxAutoRowBudget:
 		why.Reason, b = BudgetCap, maxAutoRowBudget
-	case b < minRowBudget:
-		why.Reason, b = BudgetMinimum, minRowBudget
+	case b < MinRowBudget:
+		why.Reason, b = BudgetMinimum, MinRowBudget
 	default:
 		why.Reason = BudgetShare
 	}

@@ -15,7 +15,7 @@ The fields most runs need:
 | Field | What it says |
 |---|---|
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([exit-codes.md](exit-codes.md)) |
-| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.skipped_entries` and `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
+| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.unreadable` and `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
 | `attempt.id` | this attempt; `error.json` carries the same |
 | `output.rows_committed`, `output.committed_object_bytes` | the committed dataset's rows and the sizes of its objects, after a resume too |
 | `output.object_bytes` | the bytes of the objects this attempt listed |
@@ -60,7 +60,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 6) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 7) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 [upgrade.md](../upgrade.md#run-report-and-counters). It accounts for this invocation (rows it fetched
@@ -70,11 +70,11 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 6 |
+| `report_version` | 7 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
-| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `unreadable` (some entries could not be read: the rows and totals leave them out, exit 0), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` ([exit-codes.md](exit-codes.md)) |
+| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `unreadable` (the count of entries that could not be read: the rows and totals leave them out; the manifest's `coverage.unreadable`), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` ([exit-codes.md](exit-codes.md)) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential |
 
 **Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
@@ -125,7 +125,7 @@ touched). `totals` is a
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
 `objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
 markers), `unsized` (objects without a value in the bytes column: the sizes are then unknown), `links_once`
-(`--count-links-once`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
+(a local tree's hard-linked files counted once: without `--count-links` and `--metadata names`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
 them, each counted once) and `max_inodes` (their cap).
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's

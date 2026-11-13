@@ -36,7 +36,7 @@ import (
 // totals', the output's, the filters' and the terminal's that rows already
 // listed can answer. Every other flag shapes a listing (a provider's, a
 // limit, the run report) and is refused, never ignored.
-var datasetFlags = []string{"from-dataset", "depth", "sort", "max-prefixes", "allocated", "count-links-once", "max-inodes", "format",
+var datasetFlags = []string{"from-dataset", "depth", "sort", "max-prefixes", "allocated", "count-links", "max-inodes", "format",
 	"include", "exclude", "include-regex", "exclude-regex", "min-size", "max-size", "modified-since", "modified-until", "storage-class",
 	"verbose", "quiet", "color", "log-format", "no-progress", "no-stats"}
 
@@ -101,8 +101,10 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 // dataset's rows under PREFIX, as swath du of its source would print them,
 // with depth counted from PREFIX (or the dataset's scope) up to its last
 // '/'. Stderr says what the dataset is (eventLog.dataset); a dataset whose
-// listing did not complete prints its totals and exits 1 (incomplete), as
-// the run that wrote it did.
+// listing did not complete, or left out entries it could not read, prints
+// its totals and exits 3 (incomplete), as the run that wrote it did. A
+// file with several hard links counts once where the schema records links
+// (a local tree's), unless --count-links.
 func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	fail := func(err error) error {
 		cause := context.Cause(ctx) // a signal: interrupted, as a listing
@@ -131,8 +133,8 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	switch {
 	case o.allocated && !hasAllocated:
 		return refuse("allocated", totals.AllocatedBytes)
-	case o.linksOnce && !hasNlink:
-		return refuse("count-links-once", "nlink")
+	case o.countLinks && !hasNlink:
+		return refuse("count-links", "nlink")
 	case len(o.filter.StorageClasses) > 0 && info.StorageClass == "":
 		return refuse("storage-class", "storage class")
 	}
@@ -148,7 +150,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		return usageError{fmt.Errorf("PREFIX %q is not inside the dataset's scope: it holds the keys under %q", prefix, scope)}
 	}
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: o.linksOnce}
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !o.countLinks}
 	if o.allocated {
 		opt.BytesColumn = totals.AllocatedBytes
 	}
@@ -186,12 +188,19 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		if c.StopReason != nil {
 			why += " (" + *c.StopReason + ")"
 		}
-		msg := "the dataset is a partial listing: " + why + "; the totals count only the rows it holds"
-		return &exitError{error: errors.New(msg), code: exitFatal, out: outcome{Class: listing.ClassIncomplete, ExitCode: exitFatal, Message: msg}}
-	case c.SkippedEntries != nil && *c.SkippedEntries > 0:
-		l.warn(fmt.Sprintf("%s entries could not be read when the dataset was listed: the totals leave them out", count(*c.SkippedEntries)))
+		return datasetIncomplete("the dataset is a partial listing: " + why + "; the totals count only the rows it holds")
+	case c.Unreadable != nil && *c.Unreadable > 0:
+		n := *c.Unreadable
+		return datasetIncomplete(fmt.Sprintf("%s could not be read when the dataset was listed: the totals leave %s out",
+			plural(n, "1 entry", count(n)+" entries"), plural(n, "it", "them")))
 	}
 	return nil
+}
+
+// datasetIncomplete is totals of a dataset that does not hold its whole
+// scope: printed, then exit 3 (incomplete), as a live swath du's.
+func datasetIncomplete(msg string) error {
+	return &exitError{error: errors.New(msg), code: exitIncomplete, out: outcome{Class: listing.ClassIncomplete, ExitCode: exitIncomplete, Message: msg}}
 }
 
 // provenance is where totals read from a dataset came from: the dataset
@@ -206,7 +215,7 @@ type provenance struct {
 	ListingFinishedAt *time.Time `json:"listing_finished_at"`
 	Complete          *bool      `json:"complete"`
 	StopReason        *string    `json:"stop_reason"`
-	SkippedEntries    *int64     `json:"skipped_entries"`
+	Unreadable        *int64     `json:"unreadable"`
 	Filters           []string   `json:"filters"`
 	Exclusions        []string   `json:"exclusions"`
 }
@@ -218,7 +227,7 @@ func provenanceOf(dir string, m reader.Metadata) provenance {
 		p.Source = &uri
 	}
 	if c := m.Coverage; c != nil {
-		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.SkippedEntries = c.ListingStartedAt, c.ListingFinishedAt, c.Complete, c.StopReason, c.SkippedEntries
+		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.Unreadable = c.ListingStartedAt, c.ListingFinishedAt, c.Complete, c.StopReason, c.Unreadable
 		p.Filters, p.Exclusions = c.Filters, c.Exclusions
 	}
 	return p
@@ -278,8 +287,8 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 			msg += " (" + *p.StopReason + ")"
 		}
 	}
-	if p.SkippedEntries != nil && *p.SkippedEntries > 0 {
-		msg += ", " + count(*p.SkippedEntries) + " entries skipped"
+	if p.Unreadable != nil && *p.Unreadable > 0 {
+		msg += ", " + count(*p.Unreadable) + " unreadable"
 	}
 	if len(p.Filters) > 0 {
 		msg += "; filtered: " + strings.Join(p.Filters, ", ")
