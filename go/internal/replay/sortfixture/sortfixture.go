@@ -27,12 +27,14 @@
 //   - per other row (COMMON_PREFIX, DELETE_MARKER), a 16-byte string header
 //     plus its key, kept only for the duplicate rule.
 //
-// Measured with go/bench/replay/make-fixtures.sh's synthetic 1M-row capture
-// (44-byte keys, a 32-byte etag and a storage class per row; linux/amd64,
+// Measured with the replay fixtures' synthetic 1M-row capture (44-byte
+// keys, a 32-byte etag and a storage class per row; linux/amd64,
 // GOMAXPROCS 4, 4 vCPU): 309 MiB peak resident, about 300 bytes per row,
 // 3 s; TestSortFixtureMemory repeats it and an all-COMMON_PREFIX capture of
-// as many rows. A few million rows is the intended scope. The Go lister writes sorted datasets directly; this
-// command exists for captures recorded before it.
+// as many rows. A few million rows is the intended scope. The Go lister
+// writes sorted datasets directly; this command exists for captures
+// recorded before it and for the replay fixtures go/bench/replay/fixtures
+// writes.
 package sortfixture
 
 import (
@@ -74,8 +76,8 @@ const DefaultKeyLimit = 1024
 // MaxKeyLimit is the largest Options.KeyLimit.
 const MaxKeyLimit = 4096
 
-// partSize is the encoded target per part.
-const partSize = 128 << 20
+// DefaultPartSize is the encoded target per part without Options.PartSize.
+const DefaultPartSize = 128 << 20
 
 // Options configures Run.
 type Options struct {
@@ -86,6 +88,9 @@ type Options struct {
 	// KeyLimit, when positive (at most MaxKeyLimit), is the key cap in
 	// bytes; zero is DefaultKeyLimit.
 	KeyLimit int
+	// PartSize, when positive, is the encoded target per part in bytes;
+	// zero is DefaultPartSize.
+	PartSize int64
 }
 
 // Stats summarises a run.
@@ -260,7 +265,7 @@ func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Sc
 		return nil, fmt.Errorf("sort-fixture: %w", err)
 	}
 	router, err := parquetout.NewRouter(parquetout.Options{
-		Out: opts.Output, PartSize: partSize, Encoders: 1,
+		Out: opts.Output, PartSize: cmp.Or(opts.PartSize, DefaultPartSize), Encoders: 1,
 		Verify: lock.Verify,
 		Open: func(path string) (*os.File, error) {
 			rel, err := filepath.Rel(opts.Output, path)

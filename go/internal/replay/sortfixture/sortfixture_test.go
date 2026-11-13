@@ -95,6 +95,9 @@ func TestSortsTwoPartsIntoASeekParquetDataset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, dataset.Workspace, dataset.PartsDir)); !os.IsNotExist(err) {
 		t.Fatal("unpublished parts must not remain")
 	}
+	if stats, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "small"), PartSize: 1}, nil); err != nil || stats.Parts != 4 {
+		t.Fatalf("a one-byte part size cuts a part per object: %+v %v", stats, err)
+	}
 }
 
 func TestRefusesDuplicateKeys(t *testing.T) {
