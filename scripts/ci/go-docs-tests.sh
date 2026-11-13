@@ -15,7 +15,8 @@ helper="$module/docs"
 pattern='^TestDocs'
 # Captured first, so a failing go list fails the script instead of selecting fewer packages.
 imports=$(go list -f '{{.ImportPath}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./...)
-selected=$(awk -v helper="$helper" '{ for (i = 2; i <= NF; i++) if ($i == helper) { print $1; next } }' <<<"$imports")
+# The docs package's own tests import it too; they run in go-lint, and none is named TestDocs.
+selected=$(awk -v helper="$helper" '$1 != helper { for (i = 2; i <= NF; i++) if ($i == helper) { print $1; next } }' <<<"$imports")
 packages=()
 if [ -n "$selected" ]; then
   mapfile -t packages <<<"$selected"

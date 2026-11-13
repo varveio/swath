@@ -271,6 +271,7 @@ if [ "$1 $2" = "list -m" ]; then echo example.com/m; exit 0; fi
 if [ "$1" = list ]; then
   echo "example.com/m/a example.com/m/docs testing"
   echo "example.com/m/b testing"
+  echo "example.com/m/docs example.com/m/docs testing"
   [ "$MODE" = listfail ] && { echo "b.go: cannot find package" >&2; exit 1; }
   [ "$MODE" = none ] && exit 0
   exit 0
