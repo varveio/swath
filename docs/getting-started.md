@@ -158,7 +158,7 @@ so that there is time to):
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous -o stofs-inventory --request-rate 5
 ```
 
-swath stops gracefully, keeps what it published and the journal, exits with code 130, and says how to
+swath stops gracefully, keeps what it published and the journal, exits by the signal (the shell reports 130), and says how to
 continue. From a run on a test bucket:
 
 ```text

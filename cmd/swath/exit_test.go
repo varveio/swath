@@ -68,14 +68,8 @@ func TestExitCodes(t *testing.T) {
 			"--part-size", "4KiB", "-o", out}, extra...)
 	}
 	code := func(err error) int {
-		if err == nil {
-			return 0
-		}
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode()
-		}
-		t.Fatal(err)
-		return -1
+		c, _ := exitStatus(t, err)
+		return c
 	}
 	outcome := func(dir string) outcome {
 		var o outcome
@@ -135,7 +129,9 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143 and 130: signals, graceful, resumable.
+	// 143 and 130: signals, graceful, resumable. The process dies by the
+	// signal once it has cleaned up (a shell sees 128+n), so a calling
+	// shell loop stops; before, it exited with the code.
 	slow.Store(true)
 	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted} {
 		dir := filepath.Join(t.TempDir(), "sig")
@@ -145,8 +141,8 @@ func TestExitCodes(t *testing.T) {
 		}
 		time.Sleep(700 * time.Millisecond)
 		cmd.Process.Signal(sig)
-		if c := code(cmd.Wait()); c != want {
-			t.Fatalf("%v: exit %d, want %d", sig, c, want)
+		if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
+			t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
 		}
 		if o := outcome(dir); o.ExitCode != want || !o.Resumable {
 			t.Fatalf("%v: %+v", sig, o)
@@ -165,6 +161,23 @@ func TestExitCodes(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"mutex_max_hold_ms"`)) {
 		t.Fatalf("progress file: %v %s", err, b)
 	}
+}
+
+// exitStatus is a finished process's exit code, as a shell reports it: 128
+// plus the signal's number for a process that died by one (signaled).
+func exitStatus(t *testing.T, err error) (code int, signaled bool) {
+	t.Helper()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, false
+	case !errors.As(err, &ee):
+		t.Fatal(err)
+	}
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), true
+	}
+	return ee.ExitCode(), false
 }
 
 // TestGCSOutageThenResume: a GCS bucket that starts answering 503 to

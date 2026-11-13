@@ -95,9 +95,9 @@ func main() {
 				// classification on a disk that does not return, a full
 				// stderr pipe nobody drains), the process exits within
 				// forcedAllowance, with the code chosen so far.
-				var exit atomic.Int64
-				exit.Store(int64(code))
-				time.AfterFunc(forcedAllowance, func() { os.Exit(int(exit.Load())) })
+				var chosen atomic.Int64
+				chosen.Store(int64(code))
+				time.AfterFunc(forcedAllowance, func() { exit(int(chosen.Load())) })
 				f := forensics.Load()
 				if f == nil {
 					f = &forensicTarget{}
@@ -105,9 +105,9 @@ func main() {
 				// One snapshot for the exit code and every file written;
 				// one that comes late (a commit that was under way) still
 				// sets the code the run's own accounts carry.
-				s, ok := forcedSnapshot(f, code, why, func(s snapshot) { exit.Store(int64(s.out.ExitCode)) })
+				s, ok := forcedSnapshot(f, code, why, func(s snapshot) { chosen.Store(int64(s.out.ExitCode)) })
 				if ok {
-					exit.Store(int64(s.out.ExitCode)) // the run's classification stands
+					chosen.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
 				elog().warn(fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
 				if ok {
@@ -116,7 +116,7 @@ func main() {
 					elog().warn("the run's result could not be read in time; no outcome is written")
 				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
-				os.Exit(int(exit.Load()))
+				exit(int(chosen.Load()))
 			}
 		}()
 	}
@@ -135,7 +135,7 @@ func main() {
 	statusOnSignal()
 	testHooks()
 	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitCompleted {
-		os.Exit(code)
+		exit(code)
 	}
 }
 

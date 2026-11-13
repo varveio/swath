@@ -18,6 +18,11 @@ directory, `error.json` carry the same code with its class and cause.
 "Resumable" means a dataset run of an object store, whose journal is intact: `swath resume DIR` continues it.
 A local tree, text output and `swath du` keep no journal and are run again.
 
+After SIGINT or SIGTERM swath stops and records its outcome, then on Linux and macOS dies by that signal, as
+any command a signal stops: a shell reports 130 or 143 and a shell loop around swath stops too, while a program
+that waits for it sees the signal (Python's `returncode` is -2 or -15). The report and `error.json` say 130 or 143.
+On Windows the process exits with the code. A forced exit after a signal (below) ends the same way.
+
 The `cause` of exit 75 says what rose while nothing progressed:
 
 | Cause | What it means |
