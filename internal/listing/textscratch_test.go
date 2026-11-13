@@ -142,11 +142,11 @@ func TestTextScratchPerAttempt(t *testing.T) {
 	s3test.NoCredentials(t)
 	dir := t.TempDir()
 	att := &Attempt{ID: "0123456789abcdef0123456789abcdef"}
-	a, err := textScratch(filepath.Join(dir, "a.tsv"), att)
+	a, err := textScratch(dir, "a.tsv", att)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := textScratch(filepath.Join(dir, "a.tsv"), att)
+	b, err := textScratch(dir, "a.tsv", att)
 	if err != nil {
 		t.Fatal(err)
 	}
