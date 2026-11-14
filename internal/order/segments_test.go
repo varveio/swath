@@ -1379,13 +1379,19 @@ func newCertResume(t *testing.T) *certResume {
 }
 
 // run resumes into s, its drainer held until listing is done
-// (hookBeforeDrain): every certificate above K is the segments'.
+// (hookBeforeDrain, until the "listing-done" event, which follows the
+// stage's own record of it): every certificate above K is the segments'.
 func (cr *certResume) run(t *testing.T, s *partSink) (Stats, error) {
 	t.Helper()
 	withProcs(t, 5)
 	anyShare(t)
 	listed := make(chan struct{})
 	var once sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "listing-done" {
+			once.Do(func() { close(listed) })
+		}
+	})()
 	hookBeforeDrain = func() {
 		select {
 		case <-listed:
@@ -1398,8 +1404,7 @@ func (cr *certResume) run(t *testing.T, s *partSink) (Stats, error) {
 	defer cancel()
 	k := cr.k
 	p := &tiled{rows: cr.rows, spans: cr.c.Spans(), k: k}
-	return Run[tz, tp](ctx, p, s, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: cr.c, After: &k,
-		ListingDone: func() { once.Do(func() { close(listed) }) }})
+	return Run[tz, tp](ctx, p, s, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: cr.c, After: &k})
 }
 
 // certified is the oracle's rows above K inside spans, and every row above K.

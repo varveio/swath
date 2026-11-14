@@ -13,7 +13,8 @@ Notable changes per release. The full human summary for the current release is i
   certificates the drainer has not reached by then are replayed by the segments, read by offset after one scan
   of their files. The parts are the uninterrupted run's. The run report (`report_version` 10) adds
   `drain.segments.certificates_read`, `certified_rows` and `certificate_scan_ns`, and
-  `spill.durable.resume.replayed_certificates` (#288).
+  `spill.durable.resume.replayed_certificates`; `progress.json` counts the bytes the scans read
+  (`scanned_bytes`, in `advance`), so a long scan is not stopped as stuck (#288).
 - Go port: a durable spill certificate slot is 64 KiB of the spill cap, not 1 MiB, up to the metadata ceiling
   (262,144 certificates, 512 MiB of their metadata), which a 16 GiB cap reaches (`limited_by` `metadata`). Listings
   of 200 to 600 million keys at 2,048 workers ran out of slots at one per MiB (16 of 28 in a kill-and-resume

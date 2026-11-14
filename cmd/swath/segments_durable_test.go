@@ -48,6 +48,7 @@ type segReport struct {
 				DurableBoundaries int    `json:"durable_boundaries"`
 				CertificatesRead  int64  `json:"certificates_read"`
 				CertifiedRows     int64  `json:"certified_rows"`
+				CertificateScanNs int64  `json:"certificate_scan_ns"`
 			} `json:"segments"`
 		} `json:"drain"`
 	} `json:"resources"`
@@ -142,7 +143,8 @@ func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Requ
 // segments, not replayed by the drainer while the gaps are listed. Resumes
 // are killed in their segment tail too (faults.SegmentPoints, the
 // certificates' scan at spill-replay, a certified frame a segment reads at
-// spill-replay-frame) and resumed again. A segment that could not read a
+// spill-replay-frame) and resumed again, and a resume whose certificate
+// scans outlast the stall timeout is not stopped as stuck. A segment that could not read a
 // durable file fails the run (the offset reader opens it through the output
 // root and checks its version-2 CRC); nothing falls back to the serial
 // drain silently.
@@ -296,4 +298,23 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		reconciled(at, resume(at+" again", out, ""))
 		same(at, ref, out)
 	}
+	// A slow scan is progress: each certificate's scan held 400 ms at its
+	// start (SWATH_TEST_SLOW_AT) keeps the scans, which hand no row on, past
+	// a 1 s stall timeout: twelve ledger syncs, one seal each
+	// (SWATH_TEST_SERIAL_SEALS), leave eleven certificates or more, scanned
+	// at most three at once (GOMAXPROCS 4). The bytes they read keep the
+	// watchdog's liveness rising (progress scanned_bytes), so the resume is
+	// not stopped as stuck.
+	at = "slow scan"
+	out = filepath.Join(t.TempDir(), "ds")
+	run(at, exec.Command(bin, args(out)...), "spill-ledger-sync:12", "SWATH_TEST_SERIAL_SEALS=1")
+	rep := filepath.Join(t.TempDir(), "slow.json")
+	run(at+" resume", exec.Command(bin, append(append([]string{"resume", "--report", rep, "--stall-timeout", "1s"}, runtime...), out)...), "",
+		"SWATH_TEST_DRAIN_AFTER_LISTING=1", "SWATH_TEST_SLOW_AT=spill-replay:400ms")
+	r = readSegReport(t, at, rep)
+	engaged(at, r)
+	if d := time.Duration(r.Resources.Drain.Segments.CertificateScanNs); d < 1200*time.Millisecond {
+		t.Fatalf("%s: the scans took %s, not past the stall timeout", at, d)
+	}
+	same(at, ref, out)
 }

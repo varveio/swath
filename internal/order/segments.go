@@ -283,10 +283,15 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			o.mu.Lock()
 			return false, err
 		}
-		all := make([]unit[P], 0, len(units)+len(certs))
+		n := len(units)
+		for _, s := range scans {
+			n += len(s.units)
+		}
+		all := make([]unit[P], 0, n)
 		at := 0
 		for j, c := range certs {
 			all = append(append(all, units[at:c.at]...), scans[j].units...)
+			scans[j].units = nil // one copy is kept: the merged units
 			at = c.at
 			certRows += scans[j].emitted
 		}

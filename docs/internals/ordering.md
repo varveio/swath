@@ -608,7 +608,16 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   holding a row above `max(cs, K)` becomes a unit with its offset and size, the rows above, their logical
   bytes, the frame's budget bytes and the rows to skip at its head (the frame that holds K). The cut needs
   those rows and logical bytes, and neither the file nor its ledger record has them by frame, so the scan
-  reads the certified rows once more than the drainer would. A segment reads such a frame by its offset,
+  reads the certified rows once more than the drainer would. Each scan holds one frame at a time and reserves
+  it first, as a segment worker reserves a unit (`segReserve`; `scanHold`: its 64 KiB read buffer, three times
+  the largest storage a frame of the file declared, and its rows' headers), so the scans stay within the budget
+  beside the tree. The bytes they read are the run's progress (`progress.json` `scanned_bytes`, in `advance`):
+  a scan of a large certified tail hands no row on, and is not stopped as stuck for it. Only the merged units
+  are kept, 104 bytes per certified frame above K, uncharged, until the tail ends: 2 to 4.5 MB per GiB of
+  certified spill at 25 to 55 bytes a row and about 1,000 rows a frame. A fresh run's tail holds a unit as
+  well per spilled frame, but its frames are bounded by the 88-byte markers the budget admits; a certified
+  tail is bounded by the spill cap, so past about Budget/88 frames (300 to 650 GiB of certified spill at a
+  1 GiB `--sort-buffer`) a resume holds more than a fresh run would. A segment reads such a frame by its offset,
   checks its CRC again, accepts any rows frame type (an earlier attempt may have spilled with other flags),
   and checks its rows against the scan's. Accounting is the drainer's replay's: the rows are received and
   replayed (`listed - filtered + replayed = received = rows`), and the cache counts `replayed_rows`,

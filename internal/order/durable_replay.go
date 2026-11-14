@@ -12,6 +12,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -322,8 +323,18 @@ func (o *run[R, P]) scanCert(i int) (*certScan[P], error) {
 		return nil, fmt.Errorf("durable spill: replay %s: %w", d.name, err)
 	}
 	defer sp.h.release(h)
+	// One frame at a time is held, within the row budget beside the tree
+	// as a segment worker's frames are (segReserve): the scans run before
+	// the segments, up to eight at once.
+	hold := o.scanHold(d)
+	if _, err := o.segReserve(hold, true, &segTimes{}); err != nil {
+		sp.h.retire(f, evictRetired)
+		return nil, err
+	}
+	defer o.segRelease(hold, 0)
 	s := &certScan[P]{f: f}
-	s.emitted, s.skipped, err = o.walkCert(d, bufio.NewReaderSize(&atReader{fh: h.fh}, 1<<16), nil, func(off, size int64, rows []schema.Row[P], skip int) error {
+	r := &scanReader{r: &atReader{fh: h.fh}, n: &o.g.scanned}
+	s.emitted, s.skipped, err = o.walkCert(d, bufio.NewReaderSize(r, 1<<16), nil, func(off, size int64, rows []schema.Row[P], skip int) error {
 		if o.stopped.Load() {
 			return context.Cause(o.ctx)
 		}
@@ -340,6 +351,31 @@ func (o *run[R, P]) scanCert(i int) (*certScan[P], error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// scanHold is the most a certificate's scan holds at once, in budget
+// units: its read buffer and one frame, whose payload, decoded body and
+// rows' storage are each within the largest storage a frame of the file
+// declared (validation's owned), and the headers of its rows (at most
+// validation's most). Rows, when the budget counts them.
+func (o *run[R, P]) scanHold(d *Cert) int64 {
+	if countRows {
+		return d.most
+	}
+	return 1<<16 + 3*d.owned + d.most*int64(unsafe.Sizeof(schema.Row[P]{}))
+}
+
+// scanReader counts the bytes a certificate's scan reads (Gauges: the
+// run's liveness while the scan hands nothing on).
+type scanReader struct {
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (r *scanReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n.Add(int64(n))
+	return n, err
 }
 
 // scanCerts scans the certificates certs (scanCert), at most n at once,

@@ -227,6 +227,18 @@ type Gauges struct {
 	// spillReserve are the spill cap and reserve in effect (0: none).
 	pressure               pressure
 	spillMax, spillReserve atomic.Int64
+	// scanned is the bytes of reused certificates the segments' plan has
+	// read (scanCert): the run's progress while it hands nothing on.
+	scanned atomic.Int64
+}
+
+// CertScanned is the bytes of reused certificates the segments' plan has
+// read so far (0 for nil).
+func (g *Gauges) CertScanned() int64 {
+	if g == nil {
+		return 0
+	}
+	return g.scanned.Load()
 }
 
 // clock is the time spill pressure is recorded and read at (tests set it).

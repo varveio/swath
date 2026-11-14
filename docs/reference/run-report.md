@@ -43,6 +43,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
 | `parts` | parts published |
 | `verified_bytes` | a resume's bytes of retained parts checked so far |
+| `scanned_bytes` | a resume's bytes of reused certificates its segments have read before their cut ([ordering.md](../internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | `advance` | the sum of the above; rises in every phase |
 | `answered` | requests the service answered usably (a sign the service is up, not progress) |
 | `frontier` | the listing's pages: those that held an entry or ended a chain, and empty continuing pages within the first 1,024 of their run (the watchdog's liveness with `advance`) |
