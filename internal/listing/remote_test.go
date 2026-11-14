@@ -453,6 +453,59 @@ func crashRemote(t *testing.T, url, ws string, out *RemoteOutput, resume bool, p
 	}
 }
 
+// TestRemoteCutsSlowIndex: a resume whose retained parts' key page index
+// cannot be read in time (every read of a part hangs once the manifest is
+// created) still cleans its orphans and writes its run report: the cut
+// file comes after them, within a bound of its own, and the run commits
+// without it, warning once.
+func TestRemoteCutsSlowIndex(t *testing.T) {
+	eachProvider(t, func(t *testing.T, p provider) {
+		datasettest.RequireJournal(t)
+		url := crashBucket(t)
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		var slow atomic.Bool
+		var hung atomic.Int64
+		d := newDestination(t, p, func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if slow.Load() && r.Method == http.MethodGet && strings.Contains(r.URL.Path, "part-") {
+					hung.Add(1)
+					<-r.Context().Done()
+					return
+				}
+				h.ServeHTTP(w, r)
+			})
+		})
+		ws := filepath.Join(t.TempDir(), "work")
+		crashRemote(t, url, ws, d.output("slow"), false, "journal-append", 4)
+		out := d.output("slow")
+		out.FinalizeTimeout = time.Second
+		cfg := remoteConfig(url, ws, true, out)
+		var w warnings
+		cfg.Warn = w.warn
+		defer faults.Set(func(p string) error {
+			if p == "manifest" {
+				slow.Store(true)
+			}
+			return nil
+		})()
+		sum, err := Run(context.Background(), cfg)
+		if err != nil || sum.Outcome.Status != StatusCommitted || sum.Output.PartsRetained == 0 {
+			t.Fatalf("%v, %+v, %d parts retained", err, sum.Outcome, sum.Output.PartsRetained)
+		}
+		if _, ok := d.Object("slow/" + dataset.ReportName); !ok {
+			t.Fatal("no run report")
+		}
+		d.sameAsLocal(t, "slow", ref, "slow", true)
+		_, cuts := d.Object("slow/" + dataset.CutsName)
+		if got := w.about(dataset.CutsName); hung.Load() == 0 || cuts || len(got) != 1 {
+			t.Fatalf("%d reads hung, cut file written %v, warnings %q", hung.Load(), cuts, w.got)
+		}
+	})
+}
+
 // TestRemoteRetainedChecked: a resume reads every retained object whole
 // through its recorded generation; one replaced (even by the same bytes:
 // another generation), deleted, or altered is refused before anything is

@@ -179,9 +179,10 @@ private workspace, which readers ignore). The full tree and the publication orde
 
 `cuts.txt` is the dataset's key distribution for the next listing of the same source and scope. It is
 advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
-without it is whole. A committed run writes it after the manifest and before `run.json`; one it cannot write is
-a warning, and the dataset stands. A run killed between its commit and the cut file leaves none (its resume finds
-the dataset complete), and a dataset of no rows has none.
+without it is whole. A committed run writes it last, after the manifest and `run.json` (in a bucket, after the
+orphan cleanup too, within a time bound of its own); one it cannot write, or not in time, is a warning, and the
+dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the
+dataset complete), and a dataset of no rows has none.
 
 It is a [cut file](running.md#seeding-a-refresh-from-the-previous-dataset): one line per cut, the key, a tab, and
 the rows after the previous cut through that key; the counts sum to the manifest's rows and the last line is the
@@ -194,7 +195,8 @@ double R sooner. A key holding a line feed cannot be a line: its rows count towa
 last key holds one has no cut file).
 
 `--seed-from DIR` reads it as the prior when it is the dataset's own: every line counted, the cuts ascending from
-the first part's first key, the last cut the dataset's last key, the counts summing to the manifest's rows.
+the first part's first key, the last cut the dataset's last key, each count positive and the counts summing to
+the manifest's rows, and every cut a key the run could list (valid UTF-8, within the provider's key length).
 Otherwise (or when it is absent) the run reads the parts' key page index, warns once when the file was there
 and refused, and the run report's `invocation.prior.cuts_file` says which (`read`, `absent`, `refused` with
 `cuts_refused`). A dataset in a bucket carries it too (`PREFIX/cuts.txt`); `--seed-from` reads a local path,

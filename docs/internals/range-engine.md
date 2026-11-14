@@ -124,9 +124,10 @@ nothing itself, no delimiter request is sent (`seed.requests` 0, the `seed` feat
 in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/listing/prior.go`):
 - *a committed dataset directory* (SeekParquet): its cut file (`cuts.txt`, written at its commit,
   [dataset.md](../dataset.md#the-cut-file)) when it is the dataset's own (`datasetCuts`: counted, ascending from
-  the first part's first key, ending at the last key, its counts summing to the manifest's rows), read whole as a
-  counted cut file and planned as one (`invocation.prior.cuts_file` `read`; one that is not is refused with a
-  warning, `refused` and `cuts_refused`). Without it, the manifest's parts give exact bounds and row counts; the key
+  the first part's first key, ending at the last key, each count positive and the counts summing to the manifest's
+  rows) and its cuts pass the engine's checks (`Prior.Check`), read whole as a counted cut file and planned as one
+  (`invocation.prior.cuts_file` `read`; one that is not is refused with a warning, `refused` and `cuts_refused`, and
+  the page index read instead). Without it, the manifest's parts give exact bounds and row counts; the key
   column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
   reads the footer and those two index sections, never a data page, through `seekparquet.InspectKeyPages`, which
   checks its footer and stamps first) gives cuts a thousand times finer. A run that orders its rows reads every

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -1544,29 +1545,26 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 			return *sum, err
 		}
 	} else {
-		a.writeCuts(parts, localPageEnds, func(b []byte) error {
-			return dataset.Replace(filepath.Join(cfg.Output.Dir, dataset.CutsName), b, dataset.Durable)
-		})
 		if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
 			cfg.Warn(err.Error())
 		}
+		a.writeCuts(a.ctx, parts, localPageEnds, func(_ context.Context, b []byte) error {
+			return dataset.Replace(filepath.Join(cfg.Output.Dir, dataset.CutsName), b, dataset.Durable)
+		})
 	}
 	return *sum, nil
 }
 
 // writeCuts writes the committed dataset's cut file (dataset.CutsName)
-// with put: the cuts the router collected of the parts this run wrote,
-// after those of the parts it retained, read from their key page index
-// (ends). It is advisory: a failure is a warning, and the dataset stands.
-func (a *attempt) writeCuts(parts []dataset.Part, ends func(dataset.Part) ([]dataset.PageEnd, error), put func([]byte) error) {
+// with put, last, once the run report is written: the cuts the router
+// collected of the parts this run wrote, after those of the parts it
+// retained, read from their key page index (ends, retainedCuts) within
+// ctx. It is advisory: a failure is a warning, and the dataset stands.
+func (a *attempt) writeCuts(ctx context.Context, parts []dataset.Part, ends func(context.Context, dataset.Part) ([]dataset.PageEnd, error), put func(context.Context, []byte) error) {
 	err := faults.At("cuts") // tests: the cut file is not written
 	c := dataset.NewCuts(0)
-	for i := 0; err == nil && i < a.sum.Output.PartsRetained; i++ {
-		var e []dataset.PageEnd
-		if e, err = ends(parts[i]); err != nil {
-			err = fmt.Errorf("retained part %d: %w", i, err)
-		}
-		c.Part(e)
+	if err == nil {
+		err = retainedCuts(ctx, c, parts[:a.sum.Output.PartsRetained], ends)
 	}
 	if err == nil {
 		err = c.Join(a.router.Cuts())
@@ -1576,15 +1574,67 @@ func (a *attempt) writeCuts(parts []dataset.Part, ends func(dataset.Part) ([]dat
 		b, err = c.File()
 	}
 	if err == nil && b != nil {
-		err = put(b)
+		err = put(ctx, b)
 	}
 	if err != nil && a.cfg.Warn != nil {
 		a.cfg.Warn(fmt.Sprintf("the dataset is committed; its cut file (%s, for a later --seed-from) is not written: %v", dataset.CutsName, err))
 	}
 }
 
+// cutsReaders is how many retained parts' key page indexes retainedCuts
+// reads at once: each is a footer and two index sections, a few reads.
+const cutsReaders = 8
+
+// retainedCuts adds the page ends of a resume's retained parts to c, in
+// order, read by ends with at most cutsReaders parts in flight or read
+// ahead of the one c takes next; it stops when ctx is done.
+func retainedCuts(ctx context.Context, c *dataset.Cuts, parts []dataset.Part, ends func(context.Context, dataset.Part) ([]dataset.PageEnd, error)) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	type read struct {
+		ends []dataset.PageEnd
+		err  error
+	}
+	out := make([]chan read, len(parts))
+	for i := range out {
+		out[i] = make(chan read, 1)
+	}
+	slots := make(chan struct{}, cutsReaders)
+	wg.Go(func() {
+		for i, p := range parts {
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			wg.Go(func() {
+				e, err := ends(ctx, p)
+				out[i] <- read{e, err}
+			})
+		}
+	})
+	for i := range parts {
+		select {
+		case r := <-out[i]:
+			<-slots
+			if r.err != nil {
+				return fmt.Errorf("retained part %d: %w", i, r.err)
+			}
+			c.Part(r.ends)
+		case <-ctx.Done():
+			return fmt.Errorf("retained part %d: %w", i, context.Cause(ctx))
+		}
+	}
+	return nil
+}
+
 // localPageEnds are a local part's page ends, from its key page index.
-func localPageEnds(p dataset.Part) ([]dataset.PageEnd, error) {
+func localPageEnds(ctx context.Context, p dataset.Part) ([]dataset.PageEnd, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	pages, err := parquetout.KeyPages(p.Path)
 	if err != nil {
 		return nil, err

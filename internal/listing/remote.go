@@ -688,7 +688,8 @@ func (a *attempt) commitRemote(meta dataset.Meta, parts []dataset.Part, commit f
 
 // finalizeRemote is the committing run's aftermath (finalize), within its
 // time bound: a failure is a warning, the dataset stands, and a resume of
-// the work directory finishes it.
+// the work directory finishes it. The cut file follows, within a bound of
+// its own and cut short by a stop; nothing finishes it later.
 func (a *attempt) finalizeRemote(parts []dataset.Part, rep *Report) error {
 	cfg, rs := a.cfg, a.jr.remote
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(a.ctx), orDefault(rs.cfg.FinalizeTimeout, DefaultFinalizeTimeout))
@@ -697,18 +698,23 @@ func (a *attempt) finalizeRemote(parts []dataset.Part, rep *Report) error {
 	for _, p := range parts {
 		keep[p.Path] = true
 	}
-	a.writeCuts(parts, func(p dataset.Part) ([]dataset.PageEnd, error) { return rs.pageEnds(ctx, p) }, func(b []byte) error {
-		_, err := rs.d.Writer.PutIfAbsent(ctx, dataset.CutsName, b)
-		return err
-	})
 	rec := dataset.RemoteCommitRecord{Destination: rs.d.URI(), ManifestIdentity: rs.commit.Identity, ManifestSHA256: rs.commit.SHA256}
 	err := rs.finalize(ctx, cfg, a.jr.root, rec, keep, rep)
+	cancel()
 	if errors.Is(err, faults.ErrCrash) {
 		return err // tests: killed in the aftermath
 	}
 	if err != nil && cfg.Warn != nil {
 		cfg.Warn("the dataset is committed; its aftermath (orphan cleanup, run report) is not finished, and swath resume of the work directory finishes it: " + err.Error())
 	}
+	// The cut file comes last, within a bound of its own: reading the
+	// retained parts' key page index never takes the aftermath's time.
+	ctx, cancel = context.WithTimeout(a.ctx, orDefault(rs.cfg.FinalizeTimeout, DefaultFinalizeTimeout))
+	defer cancel()
+	a.writeCuts(ctx, parts, rs.pageEnds, func(ctx context.Context, b []byte) error {
+		_, err := rs.d.Writer.PutIfAbsent(ctx, dataset.CutsName, b)
+		return err
+	})
 	return nil
 }
 
