@@ -687,8 +687,10 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 - **Reused certificates.** On a resume a reused certificate is a replay range, which no worker lists, so it
   does not count toward the end of listing: listing ends when the gaps around the certificates are listed
   (`timings.listing_done_at`, and the encoders admitted after listing with it). Before that the drainer
-  replays a certificate it reaches as always. The certificates it has not reached by the time the segments
-  are planned are the segments' (#288): `flatten` notes their replay ranges in drain order, and the plan
+  replays a certificate it reaches as always, and so it does after listing until the segments are planned,
+  which needs the router's cut rule: a resume whose interrupted run published no part has no frozen part
+  limit and states its rule only once its own part 0 has closed by size. The certificates it has not reached
+  by the time the segments are planned are the segments' (#288): `flatten` notes their replay ranges in drain order, and the plan
   reads their files before the cut (`scanCert`, at most one per spare processor and eight at once, on the
   descriptors of the drainer's readers, closed first). The scan reads each file once, sequentially, and
   checks it as the drainer's replay does (each frame's CRC; every key in `(cs, ce]` and ascending, or in

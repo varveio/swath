@@ -17,12 +17,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
-// segReport is what TestSegmentsReplayDurableFiles reads of a run report.
+// segReport is what TestSegmentsReplayDurableFiles reads of a run report,
+// and of a resume the part limit its journal held (limit: 0 when the
+// interrupted run published no part).
 type segReport struct {
+	limit  int64
 	Output struct {
 		RowsFetched  int64 `json:"rows_fetched"`
 		RowsFiltered int64 `json:"rows_filtered"`
@@ -140,7 +144,11 @@ func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Requ
 // emitted), and the dataset is the clean run's, byte for byte. Every
 // resume's drainer starts only once listing is done
 // (SWATH_TEST_DRAIN_AFTER_LISTING), so the certificates are left to the
-// segments, not replayed by the drainer while the gaps are listed. Resumes
+// segments, not replayed by the drainer while the gaps are listed. The
+// segments are planned once the router can state its cut rule, which a
+// resume whose interrupted run published no part (no part limit in its
+// journal) can only once its own part 0 has closed by size: a certificate
+// the drainer reaches before then is the drainer's. Resumes
 // are killed in their segment tail too (faults.SegmentPoints, the
 // certificates' scan at spill-replay, a certified frame a segment reads at
 // spill-replay-frame) and resumed again, and a resume whose certificate
@@ -216,17 +224,29 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		}
 	}
 	// engaged requires reconciled rows and segments over durable files,
-	// and on a resume that reuses certificates, segments that replay them.
+	// and on a resume that reuses certificates, segments that replay them,
+	// or, when its journal held no part limit, a drainer that replayed them
+	// in the rows it handed on before the segments.
 	engaged := func(at string, r segReport) {
 		t.Helper()
 		reconciled(at, r)
-		sg := r.Resources.Drain.Segments
+		sg, o := r.Resources.Drain.Segments, r.Output
 		if sg.Reason != "engaged" || sg.Workers < 2 || sg.Rows == 0 || sg.DurableFilesRead < 1 {
 			t.Fatalf("%s: the segments did not replay durable files: %+v", at, *sg)
 		}
-		if res := r.Resources.Spill.Durable.Resume; res != nil && (sg.CertificatesRead < 1 || sg.CertifiedRows < 1 || sg.CertificatesRead > res.ReplayedCertificates) {
-			t.Fatalf("%s: segments %+v: want them to replay certificates (%d replayed, %d accepted)", at, *sg, res.ReplayedCertificates, res.Accepted)
+		res := r.Resources.Spill.Durable.Resume
+		if res == nil {
+			return
 		}
+		drainer := res.ReplayedCertificates - sg.CertificatesRead
+		switch {
+		case drainer < 0:
+		case sg.CertificatesRead >= 1 && sg.CertifiedRows >= 1:
+			return
+		case r.limit == 0 && drainer >= 1 && res.ReplayedRows-sg.CertifiedRows <= o.RowsEmitted-sg.Rows:
+			return
+		}
+		t.Fatalf("%s: segments %+v: want them to replay certificates (%d replayed, %d accepted, part limit %d)", at, *sg, res.ReplayedCertificates, res.Accepted, r.limit)
 	}
 	same := func(at, ref, out string) {
 		t.Helper()
@@ -251,12 +271,20 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	resume := func(at, out, kill string, extra ...string) segReport {
 		t.Helper()
 		rep := filepath.Join(t.TempDir(), "resume.json")
+		st, err := journal.Read(out)
+		if err != nil {
+			t.Fatalf("%s: journal: %v", at, err)
+		}
 		extra = append(extra, "SWATH_TEST_DRAIN_AFTER_LISTING=1")
 		run(at+" resume", exec.Command(bin, append(append([]string{"resume", "--report", rep}, runtime...), out)...), kill, extra...)
 		if kill != "" {
 			return segReport{}
 		}
-		return readSegReport(t, at+" resume", rep)
+		r := readSegReport(t, at+" resume", rep)
+		if last := st.Last(); last != nil {
+			r.limit = last.Limit
+		}
+		return r
 	}
 	// Each kill leaves the first certificate durable by construction:
 	// under SWATH_TEST_SERIAL_SEALS seal n waits for the (n-1)-th
