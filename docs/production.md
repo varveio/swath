@@ -69,17 +69,20 @@ per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still lis
 64-worker ideal (`stale4`, 2026-11-07). The prior must be the same bucket and prefix, or the run is refused
 (exit 2). The output is the same with or without a prior.
 
-A prior with counts (a previous dataset, or a cut file with counts) also changes what is listed ahead of the
-output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
+A prior with counts (a previous dataset, or a cut file whose every line carries a count) also changes what is
+listed ahead of the output: a sorted run lists front to back, taking the prior's tiles in key order only while the rows listed and not
 yet written stay within a window of 8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold less
 ([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
 near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
 no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
 range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
 after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
-the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. Rows still leave
-through one part writer while listing, so such a run can be bound by that writer rather than by listing. A cut
-file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
+the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. With thousands
+of workers and a cap of a few hundred MB or less, a seeded run can still slow sharply: the window admits no tile
+while live spill is past half the cap, and the workers wait at it (a list of 145 million keys at 2,048 workers took
+219 s with a 57 MB cap against 78 s uncapped, [measurements](internals/measurements.md#the-seeded-frontier-window)).
+Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
+listing. A cut file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
 the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
 
 ## A healthy run report
@@ -115,8 +118,10 @@ on stderr, an error, and again every 30 minutes while it lasts: how long listing
 cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
 alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
 instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
-filesystem has the room. The cap is fixed when the run starts, so enlarging the disk under a running process
-does not raise it: stop the run and resume with the new value, `swath resume DIR --spill-budget 200GiB`.
+filesystem has the room. The cap is fixed when a run starts, so enlarging the disk under a running process
+does not raise it: stop the run and resume it, `swath resume DIR --spill-budget 200GiB`; with the default cap a
+plain `swath resume DIR` takes half the free space it finds (the certified spill the stopped run kept counted as
+free). A repeat listing avoids most of this by seeding from the previous dataset ([warm start](#warm-start-for-repeat-listings)).
 
 **A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `rows`
 rises while `encoded` and `parts` stay flat and `part_age_ms` grows. One range at the front of the output is
@@ -144,10 +149,12 @@ directory listing keeps no journal and starts over.
   it finishes; the number of certificates scales with the spill cap (one per 64 KiB of it, at most 262,144,
   reached at 16 GiB), so a listing with fewer ranges than that certifies every finished range unless its
   spill turns over more than about twice (`no_slot`, `history_exhausted` and `metadata_exhausted` in
-  `resources.spill.durable` count the ranges that were not). The ranges unfinished at the stop are listed again.
-- **Listed again:** the keys after the last published key that no certified file holds. The report's
-  `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
-  [Running swath](running.md#stopping-and-resuming) owns the rules.
+  `resources.spill.durable` count the ranges that were not). Certified files stay in the work directory, so
+  resume on the same disk, or on a persistent disk moved to another machine ([below](#on-a-preemptible-or-spot-machine)).
+- **Listed again:** the keys after the last published key that no certified file holds: the ranges that were
+  still listing at the stop, and any not certified. Once they are listed, the rest is written by the parallel
+  tail as on a fresh run, the certified rows included. The report's `resources.spill.durable.resume` says what was reused
+  (`replayed_rows`, `gaps`, `requests_saved_est`); [Running swath](running.md#stopping-and-resuming) owns the rules.
 
 The resume replays the recorded command. Only the resource, reporting and request options may change
 ([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
@@ -255,10 +262,16 @@ machine:
   dataset's own size. On listings of a billion objects and more it reaches it: 96 to 99 % of the rows were
   ahead of the output at the peak, at 18 to 22 bytes per row
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
-- **Peak spill** ≈ 0.7 × rows × spill bytes per row; above a billion objects plan for every row, rows × spill
-  bytes per row. The default spill budget is half of (free space at the
-  start − the 1 GiB reserve), so the free space needed is about the dataset plus twice the peak spill plus
-  1 GiB.
+- **Peak spill** of a first listing (no prior, or a cut file without counts) ≈ 0.7 × rows × spill bytes per
+  row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget is half
+  of (free space at the start − the 1 GiB reserve), so the free space needed is about the dataset plus twice
+  the peak spill plus 1 GiB.
+- **A relist seeded from the previous dataset** (or a counted cut file) keeps the rows ahead of the output near
+  its frontier window of at most 8 million rows instead of the bucket ([warm start](#warm-start-for-repeat-listings)),
+  so its spill is a small fraction of a first listing's. The window is not a storage bound: a region that grew
+  since the prior, keys added past its last key and certified files awaiting retirement still spill. Size the
+  disk for the dataset and that growth, and take the spill a seeded run needs from its report's
+  `resources.spill.peak_bytes`.
 - **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing of
   a bucket is the one that can outgrow its disk. Give it room to spare, bound it with `--max-duration`, and
   size later runs from its manifest's row count.
@@ -273,4 +286,5 @@ machine:
   so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
   disk frames are refused and listing slows to the output's pace (the first bad
   pattern above): a run a little short of disk still completes, and a run far short of it may not finish in
-  any useful time. Set `--spill-budget` explicitly when you know the room.
+  any useful time; it says so after 2 minutes (`spill_pressure`), and `--spill-wait-timeout` stops it,
+  resumable. Set `--spill-budget` explicitly when you know the room.
