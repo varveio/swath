@@ -279,7 +279,9 @@ func TestWindowGrowthGuard(t *testing.T) {
 	var once sync.Once
 	var admitted int
 	hookWait = func(site string) {
-		if site == waitWindow {
+		// The grown tile listed through and its worker refused for it
+		// (every other tile is held): release the rest.
+		if site == waitWindow && p.finished.Load() == 1 {
 			once.Do(func() { admitted = p.admitted(); close(release) })
 		}
 	}
