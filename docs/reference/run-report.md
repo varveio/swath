@@ -184,8 +184,8 @@ handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `limit_bytes` (the spill both derive from, one slot per
-MiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
-262,144-certificate ceiling, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
+64 KiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
+262,144-certificate ceiling, from 16 GiB, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exhausted` (seals not certified at the
 metadata bound), `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`

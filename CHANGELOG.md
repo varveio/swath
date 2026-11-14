@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a durable spill certificate slot is 64 KiB of the spill cap, not 1 MiB, up to the metadata ceiling
+  (262,144 certificates, 512 MiB of their metadata), which a 16 GiB cap reaches (`limited_by` `metadata`). Listings
+  of 200 to 600 million keys at 2,048 workers ran out of slots at one per MiB (16 of 28 in a kill-and-resume
+  sweep, whose resumes replayed 35 to 46 % of the keys against 93 to 97 % for the rest); every one of their ranges
+  now has a slot (#513).
+
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
   without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted

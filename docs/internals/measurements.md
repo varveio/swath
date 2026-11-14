@@ -2310,6 +2310,24 @@ What a certificate costs, for the limits that scale with the spill cap ([orderin
   with 99-byte keys, 3,534 against 4,016 with 1 KiB keys, 9,677 against 10,928 with 3 KiB keys (2,000
   certificates each, the range bounds and first key no longer kept).
 
+## Durable spill slots (2026-11-15)
+
+A kill-and-resume sweep on main `bd2c0509` (one slot per MiB of the spill cap): 28 production key lists of 160 to
+593 million keys through the fake S3 at 50 ms a page, `--workers 2048`, sorted Parquet to a 150 GB local disk with
+the default spill cap (37,000 to 67,000 slots, `limited_by` `spill_cap`), SIGKILL at 25 s and at 50 s, then
+`swath resume`. All 56 resumes completed with the uninterrupted run's keys; no ledger cut, no corrupt, overlap or
+missing rejection.
+
+- Lists with `no_slot` 0 at the 50 s kill replayed 93 to 97 % of their keys from certificates and listed 1.4 to
+  5 % again.
+- 16 of 28 had `no_slot` above 0, and replayed far less: bhl-open-data (461 million keys) 58,376 accepted (its
+  slots), `no_slot` 145,522, 35 % replayed; cellpainting-gallery (523 million) 36,870 slots, `no_slot` 133,345,
+  45 %; gnss-ro-data (305 million) 54,175 slots, `no_slot` 80,715, 46 %; ops-explorer-public (212 million) 56,347
+  slots, `no_slot` 70,116, 40 %.
+- Their spill cap per spilled range (slots times 1 MiB over slots plus `no_slot`) was 220 to 450 KiB. Since
+  then a slot is 64 KiB of the cap, up to the metadata ceiling ([ordering.md](ordering.md#durable-spill)): every
+  one of these lists' ranges has a slot. Not yet measured again.
+
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 
 Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
