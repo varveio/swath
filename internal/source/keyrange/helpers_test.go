@@ -92,5 +92,6 @@ func (p *Engine[P]) decidePage(st *running, r Range, page []string, c string) (p
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	p.unlock()
 	ceil, bounded := p.ceiling(r)
-	return p.decide(st, r, c, propose(r, page, page[0], c, ceil, bounded, hunger))
+	pv, ok, _ := p.decide(st, r, c, propose(r, page, page[0], c, ceil, bounded, hunger))
+	return pv, ok
 }

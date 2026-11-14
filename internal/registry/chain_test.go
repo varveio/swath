@@ -12,12 +12,15 @@ import (
 	"github.com/varveio/swath/internal/source"
 )
 
-// fencingProvider declares a span and a fence on its emitter and reports
-// a replay range; it records what reached it.
+// fencingProvider asks its emitter whether the drain is at its range,
+// declares a span and a fence on it and reports a replay range.
 type fencingProvider struct{}
 
 func (fencingProvider) Root() any { return 0 }
 func (fencingProvider) Expand(_ context.Context, _ any, e source.Emitter[any, retPayload]) error {
+	if a, ok := e.(source.Awaiter); ok {
+		a.Awaited()
+	}
 	f, ok := e.(source.Fencer)
 	if !ok {
 		return nil
@@ -29,18 +32,20 @@ func (fencingProvider) Expand(_ context.Context, _ any, e source.Emitter[any, re
 func (fencingProvider) Fences() bool             { return true }
 func (fencingProvider) Replay(r any) (int, bool) { return 7, true }
 
-// fenceSink is an emitter that records the fences it is handed.
-type fenceSink struct{ spans, fences int }
+// fenceSink is an emitter that records the fences it is handed and the
+// questions whether the drain is at its range.
+type fenceSink struct{ spans, fences, awaited int }
 
 func (*fenceSink) Rows([]schema.Row[retPayload]) error { return nil }
 func (*fenceSink) Child(any) error                     { return nil }
 func (s *fenceSink) Span(string, string, bool)         { s.spans++ }
 func (s *fenceSink) Fence(string, bool)                { s.fences++ }
+func (s *fenceSink) Awaited() bool                     { s.awaited++; return true }
 
 // TestWrappersForwardDurableSpill: every provider wrapper between a
 // provider and the order stage (the filters, the object sizes) forwards
 // what durable spill needs: Fences, Replay, and the emitter's Span and
-// Fence. The sizes wrapper of the 0.4 CLI did not, and durable spill
+// Fence; and the emitter's Awaited, the split account's. The sizes wrapper of the 0.4 CLI did not, and durable spill
 // silently captured nothing (no fence reached the order stage).
 func TestWrappersForwardDurableSpill(t *testing.T) {
 	var n atomic.Int64
@@ -62,8 +67,8 @@ func TestWrappersForwardDurableSpill(t *testing.T) {
 		if err := p.Expand(context.Background(), p.Root(), &s); err != nil {
 			t.Fatal(err)
 		}
-		if s.spans != 1 || s.fences != 1 {
-			t.Errorf("%s: %d spans and %d fences reached the emitter, want 1 and 1", name, s.spans, s.fences)
+		if s.spans != 1 || s.fences != 1 || s.awaited != 1 {
+			t.Errorf("%s: %d spans, %d fences and %d awaited questions reached the emitter, want 1 each", name, s.spans, s.fences, s.awaited)
 		}
 	}
 }

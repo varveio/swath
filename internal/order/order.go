@@ -1021,6 +1021,11 @@ func (e *emitter[R, P]) Fence(x string, top bool) {
 	e.fenced = true
 }
 
+// Awaited reports whether the drainer is at this range: its current node, or
+// the node it waits for or expands itself (source.Awaiter). Read for the
+// provider's account only.
+func (e *emitter[R, P]) Awaited() bool { return e.n.onPath.Load() || e.n.awaited.Load() }
+
 const publishRows = 1024
 
 func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
@@ -1622,9 +1627,7 @@ func (o *run[R, P]) awaitFrontier(n *node[R, P]) error {
 	o.release()
 	n.awaited.Store(true)
 	o.drain.Broadcast() // its emitter may be blocked on the budget
-	t := time.Now()
-	o.waitAt(o.drain, waitFrontier)
-	o.frontier += time.Since(t)
+	o.frontier += o.waitAt(o.drain, waitFrontier)
 	n.awaited.Store(false)
 	return nil
 }

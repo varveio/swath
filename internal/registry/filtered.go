@@ -79,6 +79,12 @@ func (e filterEmitter[P]) Fence(x string, top bool) {
 	}
 }
 
+// Awaited forwards an Awaiter emitter's (false without one).
+func (e filterEmitter[P]) Awaited() bool {
+	a, ok := e.Emitter.(source.Awaiter)
+	return ok && a.Awaited()
+}
+
 // Rows keeps the rows the filters accept; a page with none emits nothing.
 //
 // Downstream memory accounting (schema.RowsBytes) charges only the rows

@@ -55,7 +55,10 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 `split.leaves`; the work a frontier split hands out is `split.frontier_handout_keys` /
 `split.accepted_frontier`; the `split.pivot.*` counters sum to the accepted splits, and the
 `child_empty.by.*` counters (and separately `child_empty.hi.pivot` + `child_empty.hi.bound`) to
-`child_empty.lower` + `child_empty.upper`.
+`child_empty.lower` + `child_empty.upper`. The `awaited.*` counters (sorted output only: the order stage's
+emitter says whether the drain is at the range, `source.Awaiter`) take the split decision after each continuing
+page of a range the output waits for; every one but `awaited.open_pages` sums to `awaited.pages`. They are read
+for the report only: no decision reads whether a range is awaited.
 
 ## Order stage and encoders (run summary, top level)
 
@@ -219,6 +222,22 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.unsplittable` | count | ranges | split | ranges proven unsplittable: no pivot exists above a safe cursor (no_pivot); an unsafe cursor declines one page only |
 | `split.unsplittable_keys` | count | keys | split | keys listed by ranges after they became unsplittable (drained by one worker) |
 | `idle_demand_ns` | count | ns | split | worker time idle with demand: max(0, workers - active - queued) integrated while a range is in Expand |
+| `awaited.pages` | count | pages | split | continuing pages of a range the drain was at (the output waiting for its rows; sorted output only), each counted once below by its split decision |
+| `awaited.open_pages` | count | pages | split | of awaited.pages, those of the open frontier (the range ranked first) |
+| `awaited.split` | count | pages | split | awaited pages after which the range split |
+| `awaited.skipped.no_demand` | count | pages | split | awaited pages not split: no idle worker (hunger <= 0; a worker waiting in the order stage still counts as active) |
+| `awaited.skipped.outranked` | count | pages | split | awaited pages not split: larger ranges took the demand |
+| `awaited.unsplittable` | count | pages | split | awaited pages not split: the range was proven unsplittable |
+| `awaited.skipped.group_open` | count | pages | groups | awaited pages not split: a hot key's group open, or no complete key yet |
+| `awaited.rejected.cursor` | count | pages | split | awaited pages not split, guard: pivot not above the cursor |
+| `awaited.rejected.bound` | count | pages | split | awaited pages not split, guard: pivot not below hi (or the scope ceiling) |
+| `awaited.rejected.no_pivot` | count | pages | split | awaited pages not split, guard: no safe pivot exists |
+| `awaited.rejected.unsafe_cursor` | count | pages | split | awaited pages not split, guard: the cursor is not a usable start-after |
+| `awaited.rejected.unsafe_pivot` | count | pages | split | awaited pages not split, guard: the provider vetoes the pivot as a bound |
+| `awaited.sliver_refused` | count | pages | split | awaited pages not split: the only pivot was a sliver just above the cursor |
+| `awaited.skipped.remainder` | count | pages | split | awaited pages not split: the bounded remainder is under 2 pages |
+| `awaited.skipped.lower_tiny` | count | pages | split | awaited pages not split: the lower child would be under 1 page |
+| `awaited.skipped.upper_tiny` | count | pages | split | awaited pages not split: the upper child would be under 1 page |
 | `child_empty.lower` | count | ranges | split | lower split children that listed no key |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
 | `child_empty.by.reflect.lower` | count | ranges | split | empty lower children of a reflect pivot |

@@ -68,6 +68,12 @@ func (t typed[R, P]) Fence(x string, top bool) {
 	}
 }
 
+// Awaited forwards an Awaiter emitter's (false without one).
+func (t typed[R, P]) Awaited() bool {
+	a, ok := t.e.(Awaiter)
+	return ok && a.Awaited()
+}
+
 // Empty is a source position with nothing left to list: a resume whose
 // final part is already durable.
 type Empty[P any] struct{}
