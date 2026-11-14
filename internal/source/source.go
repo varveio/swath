@@ -125,8 +125,8 @@ type Planner[R any] interface {
 	Next(admit func(rows int64) bool) (r R, ok, done bool, err error)
 	// RowBytes is the prior's stored bytes per row (0: unknown).
 	RowBytes() float64
-	// Bound tells the plan whether the window binds (it has refused a
-	// tile, until the plan ends): idle workers are then not demand for
+	// Bound tells the plan that the window binds (it has refused a tile;
+	// for the rest of the run): idle workers are then not demand for
 	// slicing the tiles admitted.
 	Bound(on bool)
 }
