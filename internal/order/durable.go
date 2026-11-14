@@ -65,17 +65,25 @@ const (
 	// fixedCertificates is the cap when the spill an attempt may hold is
 	// unknown (no spill cap, and the free space not measurable).
 	fixedCertificates = 10_000
-	// certificateMetadata is the memory one certificate is charged: its
-	// Cert and file name, recovery's ledger entry and map slot, and its
-	// keys. Measured at about 0.9 KiB with 99-byte keys (measurements.md,
-	// "Durable spill limits"), so 2 KiB holds keys of up to about 300 bytes.
-	certificateMetadata = 2 << 10
-	// maxCertificateMetadata bounds the certificates' metadata whatever the
-	// spill: 512 MiB, maxCertificates (262,144) certificates, which hold
-	// 590 to 720 GiB of spill at the 2.3 to 2.8 MiB per range measured.
-	// Recovery inventories within it (and H at it), whatever the attempt.
+	// maxCertificateMetadata bounds the memory the certificates' metadata
+	// takes, whatever the spill: 512 MiB, each certificate charged what it
+	// holds (certMetadata) from its seal (or recovery's reading of its
+	// record) to its retirement. A seal past it is not certified
+	// (metadata_exhausted); recovery cuts the ledger before a record past
+	// it (ledger_cut).
 	maxCertificateMetadata = 512 << 20
-	maxCertificates        = maxCertificateMetadata / certificateMetadata
+	// certificateOverhead is what certMetadata charges a certificate
+	// besides its keys: its Cert, file name and slot in the accepted list,
+	// recovery's ledger entry and map slot (about 440 bytes measured,
+	// TestDurableMetadataCharge).
+	certificateOverhead = 512
+	// certificateMetadata is the charge of a certificate whose three keys
+	// are about 300 bytes each: the slots' ceiling, maxCertificates
+	// (262,144), is the metadata bound at that charge, and holds 590 to
+	// 720 GiB of spill at the 2.3 to 2.8 MiB per range measured. With
+	// longer keys the bytes bind first.
+	certificateMetadata = 2 << 10
+	maxCertificates     = maxCertificateMetadata / certificateMetadata
 	// The history cap H bounds the ledger's retained durable prefix plus
 	// the records reserved and not yet written (a seal and a retirement per
 	// certificate): the ledger is never compacted, so H bounds its size and
@@ -133,6 +141,24 @@ const (
 	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000
 )
 
+// metadataBound is maxCertificateMetadata (tests lower it).
+var metadataBound int64 = maxCertificateMetadata
+
+// certMetadata is the memory a certificate of keys cs, ce and last is
+// charged: certificateOverhead and each key's allocation (its bytes, the
+// allocator's rounding of at most an eighth, and 16 bytes for the
+// smallest size classes). A sealed or recovered Cert holds no other key:
+// its range bounds and first key are dropped once written.
+func certMetadata(cs, ce, last string) int64 {
+	n := int64(certificateOverhead)
+	for _, k := range []string{cs, ce, last} {
+		if k != "" {
+			n += int64(len(k) + len(k)/8 + 16)
+		}
+	}
+	return n
+}
+
 // recoveryLimits are recovery's bounds, whatever the attempt: the largest
 // slots and H any attempt has, so no attempt's ledger is cut (Start then
 // applies the attempt's own limits: rejected.budget).
@@ -182,6 +208,7 @@ type Cert struct {
 	reused      bool   // accepted by recovery
 	most, owned int64  // recovery: the largest frame's rows and declared storage (replay's decode bounds)
 	charged     int64  // bytes charged to the live spill budget (returned at unlink)
+	meta        int64  // its certMetadata charged to the cache (returned at retirement)
 	drained     bool   // its reader closed
 	retiring    bool   // queued for retirement or unlink
 	codec       string // recovery: the header's row codec ID
@@ -224,6 +251,7 @@ type Cache struct {
 	lim       DurableLimits // the attempt's slots and H (Start)
 	slots     int           // slots held: capturing, sealed and reused certificates
 	hist      int           // ledger records in the prefix and written since, plus reservations
+	meta      int64         // certMetadata of the certificates sealed or accepted and not retired
 	stopping  bool
 	failed    bool // the ledger failed: no new slot, records dropped, unlinks continue
 	fatal     error
@@ -262,6 +290,7 @@ type durableStats struct {
 	CapturePendingDropped atomic.Int64
 	NoSlot                atomic.Int64
 	HistoryExhausted      atomic.Int64
+	MetadataExhausted     atomic.Int64
 	AbandonedAwaited      atomic.Int64
 	AbandonedRefused      atomic.Int64
 	AbandonedUnfenced     atomic.Int64
@@ -311,6 +340,7 @@ type DurableReport struct {
 	CapturePendingDropped int64            `json:"capture_pending_dropped"`
 	NoSlot                int64            `json:"no_slot"`
 	HistoryExhausted      int64            `json:"history_exhausted"`
+	MetadataExhausted     int64            `json:"metadata_exhausted"` // seals not certified: the metadata bound was reached
 	Abandoned             map[string]int64 `json:"abandoned"`
 	SealedFiles           int64            `json:"sealed_files"`
 	SealedDurable         int64            `json:"sealed_durable"`
@@ -350,7 +380,7 @@ func (c *Cache) Report() *DurableReport {
 	r := &DurableReport{Slots: lim.Certificates, History: hist, HistoryCap: lim.History, LimitBytes: lim.Bytes, LimitedBy: lim.By,
 		CapturedRanges:        s.CapturedRanges.Load(),
 		CaptureAt:             map[string]int64{"range_start": s.CaptureAtStart.Load(), "fence": s.CaptureAtFence.Load()},
-		CapturePendingDropped: s.CapturePendingDropped.Load(), NoSlot: s.NoSlot.Load(), HistoryExhausted: s.HistoryExhausted.Load(),
+		CapturePendingDropped: s.CapturePendingDropped.Load(), NoSlot: s.NoSlot.Load(), HistoryExhausted: s.HistoryExhausted.Load(), MetadataExhausted: s.MetadataExhausted.Load(),
 		Abandoned: map[string]int64{"awaited": s.AbandonedAwaited.Load(), "refused": s.AbandonedRefused.Load(), "unfenced": s.AbandonedUnfenced.Load(),
 			"stopping": s.AbandonedStopping.Load(), "empty": s.AbandonedEmpty.Load()},
 		SealedFiles: s.SealedFiles.Load(), SealedDurable: s.SealedDurable.Load(), FlushNs: s.FlushNs.Load(), FlushCycles: s.FlushCycles.Load(),
@@ -521,9 +551,31 @@ func (c *Cache) sealable() bool {
 
 // sealed hands a sealed file's record to the flusher (its file and data
 // are synced); the node never waits for the ledger.
+//
+// A seal whose metadata would pass the metadata bound is not certified:
+// the file serves the live run only (its slot and history go back, no
+// record names it, so a recovery unlinks it as an orphan).
 func (c *Cache) sealed(d *Cert) {
+	m := certMetadata(d.cs, d.ce, d.last)
 	c.mu.Lock()
-	d.certified = true
+	if c.meta+m > metadataBound {
+		d.certified = false
+		if d.slot {
+			d.slot = false
+			c.slots--
+			c.hist -= 2
+		}
+		c.st.MetadataExhausted.Add(1)
+		c.mu.Unlock()
+		return
+	}
+	d.certified, d.meta = true, m
+	// Only its own key bytes stay (a fence's key may share a page's
+	// storage), and no key certMetadata does not charge: the bounds and
+	// first key were written.
+	d.cs, d.ce = strings.Clone(d.cs), strings.Clone(d.ce)
+	d.lo, d.hi, d.first = "", "", ""
+	c.meta += m
 	c.queue = append(c.queue, ledgerRec{cert: d})
 	c.st.SealedFiles.Add(1)
 	c.mu.Unlock()
@@ -594,6 +646,8 @@ func (c *Cache) retireLocked(d *Cert, why string) {
 		d.slot = false
 		c.slots--
 	}
+	c.meta -= d.meta
+	d.meta = 0
 	if !c.failed {
 		c.queue = append(c.queue, ledgerRec{cert: d, retire: why})
 	}

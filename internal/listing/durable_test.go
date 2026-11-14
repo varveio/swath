@@ -1334,12 +1334,13 @@ func TestDurableResumeSmallerBudget(t *testing.T) {
 // by the certified files it kept. Shaped as 100 GiB free when the killed
 // run started and 40 GiB retained: without counting them the resumed cap
 // is 30 GiB and Start rejects a quarter of the retained bytes'
-// certificates (rejected.budget); counting them as free (spillMax) the cap
-// is the killed run's, 50 GiB, and every certificate that fit it is
-// accepted. Here the retained bytes are the crashed fixture's (40 units
-// of them); the slots are the fixture's 64 MiB cap's, so only the byte
-// budget is under test. Recovery itself is bounded by the format, never by
-// the free space it finds (order.TestDurableRecoveryBounds).
+// certificates (rejected.budget); orderOptions counts them as free, so the
+// cap is the killed run's, 50 GiB, and every certificate that fit it is
+// accepted. The retained bytes are the crashed fixture's (40 units of
+// them) and the free space the resume finds is set (freeBytes); the slots
+// are the fixture's 64 MiB cap's, so only the byte budget is under test.
+// Recovery itself is bounded by the format, never by the free space it
+// finds (order.TestDurableRecoveryBounds).
 func TestDurableSameDiskDefaultCap(t *testing.T) {
 	datasettest.RequireJournal(t)
 	_, _, _, out := durableFixture(t)
@@ -1352,6 +1353,11 @@ func TestDurableSameDiskDefaultCap(t *testing.T) {
 		kk := string(st.Records[n-1].Part.MaxKey)
 		k = &kk
 	}
+	lock, err := journal.TakeLock(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
 	root, _ := os.OpenRoot(out)
 	defer root.Close()
 	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k)
@@ -1365,14 +1371,25 @@ func TestDurableSameDiskDefaultCap(t *testing.T) {
 	}
 	unit := (retained + 39) / 40
 	free := 100*unit - retained // the free space the resume finds
-	if old := halfFree(free, 0); old >= retained {
-		t.Fatalf("shape: the uncounted cap %d holds the %d retained bytes", old, retained)
+	old := freeBytes
+	t.Cleanup(func() { freeBytes = old })
+	freeBytes = func(string) int64 { return free }
+	if uncounted := halfFree(free, 0); uncounted >= retained {
+		t.Fatalf("shape: the uncounted cap %d holds the %d retained bytes", uncounted, retained)
 	}
-	capped := halfFree(free+retained, 0)
-	if err := c.Start(order.Limits(64<<20, 0), capped, nil); err != nil {
+	cfg := durableConfig("s3://unused", out, true)
+	cfg.Limits.Spill = SpillLimits{}
+	oopt, _, err := orderOptions(cfg, &runJournal{lock: lock, cache: c}, 1<<20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := halfFree(free+retained, 0); oopt.SpillMax != want {
+		t.Fatalf("resumed cap %d, want %d (free %d, retained %d)", oopt.SpillMax, want, free, retained)
+	}
+	if err := c.Start(order.Limits(64<<20, 0), oopt.SpillMax, nil); err != nil {
 		t.Fatal(err)
 	}
 	if d := c.Report(); d.Resume.Rejected["budget"] != 0 || c.Reused() != accepted {
-		t.Fatalf("cap %d for %d retained bytes: kept %d of %d, rejected %v", capped, retained, c.Reused(), accepted, d.Resume.Rejected)
+		t.Fatalf("cap %d for %d retained bytes: kept %d of %d, rejected %v", oopt.SpillMax, retained, c.Reused(), accepted, d.Resume.Rejected)
 	}
 }

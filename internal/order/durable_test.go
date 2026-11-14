@@ -1302,25 +1302,38 @@ func TestDurableCodecRejected(t *testing.T) {
 // of more than H records is cut at H: the scan reads at most H records,
 // the inventory holds at most the ceiling, the ledger is truncated there
 // (ledger_cut, ledger_dropped_bytes), and the files named after the cut
-// are orphans. A ledger past the old fixed bounds (10,000 live, 40,000
-// records) is read whole.
+// are orphans; so is one whose live certificates' metadata (certMetadata,
+// here of 1 KiB keys) passes the metadata bound. A ledger past the old
+// fixed bounds (10,000 live, 40,000 records) is read whole.
 func TestDurableRecoveryBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		sealed, extra int // sealed records, then retirements of unknown files
+		keyLen        int // the records' key length (0: seven bytes)
+		bound         int64
 		cut           bool
 	}{
-		{"live", maxCertificates + 64, 0, true},
-		{"history", 10, maxHistory + 64, true},
-		{"past-fixed", fixedCertificates + 64, minHistory, false},
+		{"live", maxCertificates + 64, 0, 0, maxCertificateMetadata, true},
+		{"history", 10, maxHistory + 64, 0, maxCertificateMetadata, true},
+		{"past-fixed", fixedCertificates + 64, minHistory, 0, maxCertificateMetadata, false},
+		// The metadata bound, lowered to 4 MiB: 1 KiB keys reach it first.
+		{"metadata", 2_000, 0, 1024, 4 << 20, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			defer func(b int64) { metadataBound = b }(metadataBound)
+			metadataBound = tc.bound
+			key := func(i int) string {
+				if tc.keyLen == 0 {
+					return fmt.Sprintf("k%06d", i)
+				}
+				return fmt.Sprintf("k%06d%s", i, strings.Repeat("x", tc.keyLen-7))
+			}
 			c, root, dir := newDurable(t)
 			c.Close()
 			var buf []byte
 			var named [][16]byte
 			for i := range tc.sealed {
-				d := &Cert{id: randomID(), cs: fmt.Sprintf("k%06d", 2*i), ce: fmt.Sprintf("k%06d", 2*i+1), captured: 1, last: fmt.Sprintf("k%06d", 2*i+1), bytes: 1}
+				d := &Cert{id: randomID(), cs: key(2 * i), ce: key(2*i + 1), captured: 1, last: key(2*i + 1), bytes: 1}
 				buf = appendLedgerFrame(buf, ledgerRec{cert: d})
 				named = append(named, d.id)
 			}
@@ -1348,8 +1361,12 @@ func TestDurableRecoveryBounds(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.ledger.Close()
-			if len(entries) > r.lim.Certificates || r.hist > r.lim.History {
-				t.Fatalf("%d entries (bound %d), %d records scanned (bound %d)", len(entries), r.lim.Certificates, r.hist, r.lim.History)
+			var meta int64
+			for _, e := range entries {
+				meta += certMetadata(e.cs, e.ce, e.last)
+			}
+			if len(entries) > r.lim.Certificates || r.hist > r.lim.History || meta > tc.bound {
+				t.Fatalf("%d entries (bound %d) of %d metadata bytes (bound %d), %d records scanned (bound %d)", len(entries), r.lim.Certificates, meta, tc.bound, r.hist, r.lim.History)
 			}
 			if !tc.cut {
 				if r.st.LedgerCut.Load() != 0 || len(entries) != tc.sealed || r.hist != tc.sealed+tc.extra {
@@ -1665,6 +1682,9 @@ func TestDurableLimits(t *testing.T) {
 	if n := unsafe.Sizeof(Cert{}); n > 256 {
 		t.Errorf("a Cert is %d bytes, over the stated 256", n)
 	}
+	if n := certMetadata(strings.Repeat("k", 1024), strings.Repeat("k", 1024), strings.Repeat("k", 1024)); n != 4016 {
+		t.Errorf("1 KiB keys charged %d bytes", n)
+	}
 	for _, l := range []int{0, 100, 1024, 3072} {
 		key := strings.Repeat("k", l)
 		d := &Cert{id: randomID(), cs: key, ce: key, last: key, captured: 1<<63 - 1, bytes: 1<<63 - 1}
@@ -1674,5 +1694,93 @@ func TestDurableLimits(t *testing.T) {
 		if n := len(appendLedgerFrame(nil, ledgerRec{cert: d, retire: retirePublished})); n != 26 {
 			t.Errorf("a retirement record is %d bytes", n)
 		}
+	}
+}
+
+// TestDurableMetadataCharge: certMetadata covers what recovery holds per
+// certificate, measured: its ledger entry, the map slot and the three
+// keys readLedger clones, and the Cert classify builds on them (its file
+// name, its place in the accepted list), at key lengths from 7 bytes to
+// Azure's 3 KiB. So the metadata bound bounds recovery's memory.
+func TestDurableMetadataCharge(t *testing.T) {
+	for _, l := range []int{7, 99, 1024, 3072} {
+		c, root, dir := newDurable(t)
+		c.Close()
+		key := func(i int) string { return fmt.Sprintf("k%06d%s", i, strings.Repeat("x", l-7)) }
+		const n = 2_000
+		var buf []byte
+		var charge int64
+		for i := range n {
+			d := &Cert{id: randomID(), cs: key(2 * i), ce: key(2*i + 1), captured: 1, last: key(2*i + 1), bytes: 1}
+			buf = appendLedgerFrame(buf, ledgerRec{cert: d})
+			charge += certMetadata(d.cs, d.ce, d.last)
+		}
+		lf, err := os.OpenFile(filepath.Join(dir, DurableDir, ledgerName), os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lf.Write(buf)
+		lf.Close()
+		buf = nil
+		r, err := newCache(root, nil, testUUID, "ident", "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.lim = recoveryLimits
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		entries, err := r.readLedger()
+		if err != nil {
+			t.Fatal(err)
+		}
+		certs := make([]*Cert, 0, len(entries))
+		for _, e := range entries {
+			certs = append(certs, &Cert{id: e.id, name: fileName(e.id), cs: e.cs, ce: e.ce, ceOpen: e.ceOpen, captured: e.rows, last: e.last, bytes: e.bytes, crc: e.crc, certified: true, reused: true})
+		}
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		held := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		runtime.KeepAlive(entries)
+		runtime.KeepAlive(certs)
+		r.ledger.Close()
+		if len(certs) != n || held > charge {
+			t.Errorf("%d-byte keys: %d certificates hold %d bytes, charged %d", l, len(certs), held, charge)
+		}
+		t.Logf("%d-byte keys: %d bytes a certificate, charged %d", l, held/n, charge/n)
+	}
+}
+
+// TestDurableMetadataBound: a running attempt charges each seal its
+// metadata; past the bound (lowered here to five certificates' worth) a
+// seal is not certified (metadata_exhausted), its slot and history go
+// back, and the run completes with every row. A recovery then accepts
+// exactly the certificates sealed within the bound and unlinks the rest as
+// orphans.
+func TestDurableMetadataBound(t *testing.T) {
+	defer func(b int64) { metadataBound = b }(metadataBound)
+	f := &fencedTree{ranges: 40, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
+	metadataBound = 5 * certMetadata(f.key(0, 0, 0), f.key(0, 0, 0), f.key(0, 0, 0))
+	c, root, _ := newDurable(t)
+	c.Start(slots(1000), 0, nil)
+	sink := &collect{}
+	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
+		t.Fatal(err)
+	}
+	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
+		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
+	}
+	c.Close()
+	sealed := c.st.SealedFiles.Load()
+	if c.st.MetadataExhausted.Load() == 0 || sealed == 0 || c.meta > metadataBound || c.slots != int(sealed) {
+		t.Fatalf("metadata_exhausted %d, sealed %d, metadata %d of %d, slots %d", c.st.MetadataExhausted.Load(), sealed, c.meta, metadataBound, c.slots)
+	}
+	r := recoverAll(t, c, root, nil)
+	defer r.Close()
+	if err := r.Start(slots(1000), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.st.Accepted.Load(); got != sealed || r.meta > metadataBound {
+		t.Fatalf("%d accepted of %d sealed, metadata %d of %d", got, sealed, r.meta, metadataBound)
 	}
 }

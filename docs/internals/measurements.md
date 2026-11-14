@@ -2305,7 +2305,10 @@ What a certificate costs, for the limits that scale with the spill cap ([orderin
 - **Memory.** A `Cert` is 232 bytes on linux/amd64, a recovery ledger entry 104, each besides its keys. With
   99-byte keys recovery's heap grew 483 bytes per live entry read (the entry, its map slot, three keys) and
   408 per certificate built from them (the `Cert`, its file name, one more key): about 0.9 KiB a certificate,
-  against the 2 KiB the metadata ceiling charges.
+  against the 2 KiB the slots' ceiling assumes. `TestDurableMetadataCharge` measures what recovery holds per
+  certificate against the charge (`certMetadata`): 490 bytes against 581 with 7-byte keys, 798 against 893
+  with 99-byte keys, 3,534 against 4,016 with 1 KiB keys, 9,677 against 10,928 with 3 KiB keys (2,000
+  certificates each, the range bounds and first key no longer kept).
 
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 

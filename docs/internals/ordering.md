@@ -667,11 +667,18 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   admits every range, and H every range's seal and retirement twice over. A listing whose ranges spill less
   than 1 MiB each on average, or whose spill turns over more than about twice within one ledger (the ledger
   is never compacted), still runs out (`no_slot`, `history_exhausted`) and relists those ranges after a
-  crash. The bounds, per MiB of the spill the limits derive from: in memory one `Cert` (at most 256 bytes;
-  `TestDurableLimits`) with its file name and four keys per live certificate, and whatever the spill at
-  most 512 MiB of certificate metadata, charged at 2 KiB a certificate (measured at about 0.9 KiB with 99-byte
-  keys, recovery's ledger entry included), so 262,144 certificates, which hold 590 to 720 GiB of spill at 2.3
-  to 2.8 MiB per range (a `--spill-budget none` run on a 4 TiB disk stops there); on disk at most two
+  crash. The bounds, per MiB of the spill the limits derive from: in memory one live certificate; and
+  whatever the spill at most 512 MiB of certificate metadata. Each certificate is charged what it holds
+  (`certMetadata`: 512 bytes for its `Cert`, file name and recovery's ledger entry and map slot, plus its three
+  keys with the allocator's rounding; 893 bytes with 99-byte keys, 4,016 with 1 KiB keys, measured above what
+  recovery holds by `TestDurableMetadataCharge`) from its seal, or recovery's reading of its record, to its
+  retirement. A seal past the bound is not certified (`metadata_exhausted`: the file serves the live run,
+  its slot and history go back; `TestDurableMetadataBound`), and recovery cuts the ledger before a record
+  past it (`ledger_cut`). A sealed or recovered certificate keeps no other key: its range bounds and first
+  key are dropped once written, and its keys are its own copies. The slots stop at 262,144, the bound at a
+  2 KiB charge (keys of about 300 bytes), which holds 590 to 720 GiB of spill at 2.3 to 2.8 MiB per range (a
+  `--spill-budget none` run on a 4 TiB disk stops there, `limited_by` `metadata`); with longer keys the bytes
+  bind first. On disk at most two
   certificates' records, a seal of at most 56 bytes plus its three keys and a 26-byte retirement each
   (about 0.07 % of the spill with 100-byte keys, 0.6 % with 1 KiB keys); and a recovery scan of the ledger
   that read 100,000 records of 100-byte keys in about 40 ms from the page cache
@@ -727,7 +734,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
-  trusting the writer, within the largest limits any attempt has (262,144 certificates, H = 1,048,576), never
+  trusting the writer, within the largest limits any attempt has (262,144 certificates, 512 MiB of their
+  metadata, H = 1,048,576), never
   the resuming attempt's, which depend on the free space it finds: the scan stops where the records kept plus one retirement owed per live certificate
   (written by recovery, or reserved for an accepted one) would pass that H (`TestDurableRecoveryHistory`), and before a sealed record that would make more
   certificates live than that; the ledger is truncated there like a damaged
@@ -755,7 +763,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
   `objects`, `pages`, `requests` or the filters' counts.
 - **Report.** `resources.spill.durable`: `slots`, `history`, `history_cap`, `limit_bytes`, `limited_by`, `captured_ranges`, `capture_at.{range_start,fence}`,
-  `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
+  `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
   resume `resume.{ledger_dropped_bytes, ledger_cut, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},

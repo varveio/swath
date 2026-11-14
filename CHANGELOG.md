@@ -7,7 +7,8 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
-  without one), at most 262,144 (512 MiB of certificate metadata), and a ledger history of four records per
+  without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted
+  (`metadata_exhausted`), and a ledger history of four records per
   slot, at least 40,000; a resume reads the ledger within the largest limits, whatever free space it finds. A
   billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every finished range now
   fits, so a resume relists the ranges unfinished at the stop. With the default spill cap a resume counts the

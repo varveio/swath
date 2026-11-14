@@ -151,7 +151,8 @@ type entry struct {
 	last   string
 	bytes  int64
 	crc    uint32
-	order  int // the record's position (ties)
+	order  int   // the record's position (ties)
+	meta   int64 // its certMetadata
 }
 
 // RecoverDurable is a resume's recovery of its durable spill, single
@@ -256,6 +257,7 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	}
 	entries := map[[16]byte]*entry{}
 	records := 0
+	var meta int64 // the live entries' certMetadata
 	// History: every record kept, plus the retirement each live entry will
 	// still write (recovery's, or the reservation of an accepted
 	// certificate), stays within H; a record that would pass it is where
@@ -273,7 +275,7 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 			off = at
 			break
 		}
-		_, live := entries[e.id]
+		was, live := entries[e.id]
 		grow := 1 // the record
 		switch {
 		case typ == ledgerRetired && live:
@@ -281,18 +283,26 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		case typ == ledgerSealed && !live:
 			grow = 2 // the seal and its retirement to come
 		}
-		if records+len(entries)+grow > c.lim.History || (typ == ledgerSealed && !live && len(entries) >= c.lim.Certificates) {
-			off = at // past the largest H, or more live certificates than any cap: cut here
+		sealing := typ == ledgerSealed && !live
+		if sealing {
+			e.meta = certMetadata(e.cs, e.ce, e.last)
+		}
+		if records+len(entries)+grow > c.lim.History || (sealing && (len(entries) >= c.lim.Certificates || meta+e.meta > metadataBound)) {
+			off = at // past the largest H, more live certificates than any cap, or past the metadata bound: cut here
 			c.st.LedgerCut.Add(1)
 			break
 		}
 		records++
 		switch {
 		case typ == ledgerRetired:
+			if live {
+				meta -= was.meta
+			}
 			delete(entries, e.id)
 		case !live:
 			e.order = records
 			entries[e.id] = e
+			meta += e.meta
 		} // a second seal of one file: the first stands
 	}
 	if dropped := size - off; dropped > 0 {
@@ -591,7 +601,8 @@ func (c *Cache) Start(lim DurableLimits, max int64, cancel func(error)) error {
 	c.slots = len(c.reused)
 	c.hist += len(c.reused) // each one's retirement
 	for _, d := range c.reused {
-		d.slot = true
+		d.slot, d.meta = true, certMetadata(d.cs, d.ce, d.last)
+		c.meta += d.meta
 		c.charge(d, d.bytes)
 		c.st.Accepted.Add(1)
 		c.st.AcceptedBytes.Add(d.bytes)
@@ -755,7 +766,7 @@ func (v *validator) run() rejection {
 				t.rows != rows || t.captured != captured || t.captured != d.captured || t.cs != d.cs || t.ce != d.ce || t.open != d.ceOpen || t.last != d.last {
 				return rejectCorrupt
 			}
-			d.rows, d.first = rows, t.first
+			d.rows = rows
 			var tl [tailSize]byte
 			if _, err := io.ReadFull(v.r, tl[:]); err != nil || int64(binary.LittleEndian.Uint64(tl[:8])) != start || string(tl[8:]) != durableMagic {
 				return rejectCorrupt
@@ -780,10 +791,11 @@ func (v *validator) header(body []byte) rejection {
 		return rejectForeign
 	}
 	dd := schema.NewDecoder(b[32:])
-	ident, codec := dd.Str(), strings.Clone(dd.Str())
+	ident, codec := dd.Str(), dd.Str()
 	codecVer := dd.Uvarint()
 	maxRows, maxDecode := dd.Uvarint(), dd.Uvarint()
-	lo, hi := strings.Clone(dd.Str()), strings.Clone(dd.Str())
+	dd.Str() // the range's bounds: a recovered certificate keeps none (certMetadata)
+	dd.Str()
 	open := dd.Byte()
 	if dd.Err() != nil || dd.Len() != 0 || open > 1 {
 		return rejectCorrupt
@@ -802,8 +814,8 @@ func (v *validator) header(body []byte) rejection {
 		return rejectCorrupt // a limit above the hard one rejects the file
 	}
 	v.maxRows, v.maxDecode = maxRows, min(maxDecode, maxSpillDecoded)
-	v.d.lo, v.d.hi, v.d.open = lo, hi, open == 1
-	v.d.codec, v.d.codecVer = codec, codecVer
+	v.d.open = open == 1
+	v.d.codec, v.d.codecVer = v.c.codec, codecVer
 	return accepted
 }
 

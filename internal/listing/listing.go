@@ -280,12 +280,15 @@ func spillMax(l SpillLimits, dir string, retained int64) int64 {
 	case l.Max < 0:
 		return 0
 	}
-	free := order.FreeBytes(existing(dir))
+	free := freeBytes(existing(dir))
 	if free == order.Unlimited {
 		return 0
 	}
 	return halfFree(free+retained, l.Reserve)
 }
+
+// freeBytes is order.FreeBytes (tests replace it).
+var freeBytes = order.FreeBytes
 
 // halfFree is the default spill cap with free bytes free: half of them
 // after the reserve, at least one byte.
@@ -297,7 +300,7 @@ func halfFree(free, reserve int64) int64 { return max(1, (free-reserve)/2) }
 func durableLimits(max int64, dir string, retained int64) order.DurableLimits {
 	free := int64(order.Unlimited)
 	if max == 0 {
-		if free = order.FreeBytes(existing(dir)); free != order.Unlimited {
+		if free = freeBytes(existing(dir)); free != order.Unlimited {
 			free += retained
 		}
 	}
