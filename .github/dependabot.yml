@@ -45,50 +45,29 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # The Go modules are separate (no go.work), so each directory needs its own entry.
+  # The Go modules are one dependency graph: the root module replaces `objfile` and `reader` by
+  # local path and there is no go.work, so the root's go.mod must require at least what the nested
+  # modules require, or every `go` command at the root fails with "updates to go.mod needed". A pull
+  # request that bumps one module alone is therefore red by construction (#541 bumped
+  # cloud.google.com/go/auth in /objfile only). All three directories are one `directories` entry,
+  # so a group is one pull request across them, and `allow: all` lets the root and `reader` follow
+  # a dependency that is direct in one module and indirect in another.
+  #
   # The Azure SDK changes swath's wire requests in minor releases, so its modules are reviewed
   # in a pull request of their own, against the client's wire snapshot.
   - package-ecosystem: gomod
-    directory: /
+    directories: ["/", "/objfile", "/reader"]
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    allow:
+      - dependency-type: all
     groups:
       go-azure:
         patterns: ["github.com/Azure/azure-sdk-for-go/*"]
         update-types: [minor, patch]
       go:
-        patterns: ["*"]
-        exclude-patterns: ["github.com/Azure/azure-sdk-for-go/*"]
-        update-types: [minor, patch]
-    commit-message:
-      prefix: "deps"
-
-  - package-ecosystem: gomod
-    directory: /reader
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 2
-    groups:
-      go-reader:
-        patterns: ["*"]
-        update-types: [minor, patch]
-    commit-message:
-      prefix: "deps"
-
-  - package-ecosystem: gomod
-    directory: /objfile
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 2
-    groups:
-      go-objfile-azure:
-        patterns: ["github.com/Azure/azure-sdk-for-go/*"]
-        update-types: [minor, patch]
-      go-objfile:
         patterns: ["*"]
         exclude-patterns: ["github.com/Azure/azure-sdk-for-go/*"]
         update-types: [minor, patch]
