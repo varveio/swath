@@ -953,12 +953,12 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	hunger, held := p.demand(st)
 	if p.opt.SplitCoin == nil {
 		switch {
+		case held: // idle workers, but the window binds and the range holds under two tiles
+			return pivot{}, false, cSplitSkippedWindow
 		case !pr.ready: // the demand rose after the page's snapshot
 			return pivot{}, false, cSplitSkippedNoDemand
 		case hunger <= 0 && p.slowSplitWanted(st, r):
 			pv.slow = true // a latency outlier: split without an idle worker, unranked
-		case hunger <= 0 && held:
-			return pivot{}, false, cSplitSkippedWindow
 		case hunger <= 0:
 			return pivot{}, false, cSplitSkippedNoDemand
 		}
@@ -1090,20 +1090,19 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 }
 
 // demand is the idle workers a split of st could feed (hunger: workers -
-// active - queued), mu held. In a planned run the workers the frontier
-// window holds back (Waiting) are demand only for a range whose remainder
-// would give each child a tile's keys or more (a coarse cut's tile, a grown
-// one, the open frontier): the window admits tiles, so slicing an admitted
-// tile further for them only adds requests and overfetch, the output
-// being bound by the window. held reports that they were all the demand
-// there was.
+// active - queued), mu held. In a planned run, once the frontier window
+// binds (Bound), idle workers are demand only for a range whose
+// remainder would give each child a tile's keys or more (a coarse cut's
+// tile, a grown one, the open frontier): the window admits tiles, so
+// slicing an admitted tile further for them only adds requests and
+// overfetch, the output being bound by the window. held reports that the
+// window took the demand there was.
 func (p *Engine[P]) demand(st *running) (hunger int, held bool) {
 	hunger = p.opt.Workers - len(p.running) - p.queued
-	w := int(p.windowHeld.Load())
-	if w <= 0 || hunger <= 0 || p.plan == nil || st.remainder() >= 2*p.plan.tileKeys {
+	if hunger <= 0 || p.plan == nil || !p.windowBound.Load() || st.remainder() >= 2*p.plan.tileKeys {
 		return hunger, false
 	}
-	return hunger - min(w, hunger), hunger <= w
+	return 0, true
 }
 
 // pivot is a decided split's pivot m and the synthesis that made it;

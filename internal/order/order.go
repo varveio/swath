@@ -529,17 +529,11 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()
 	}
-	if site == waitWindow { // held back: not split demand (source.Planner)
-		o.win.plan.Waiting(int(o.g.windowWait.n.Load()))
-	}
 	c.Wait()
 	d := time.Since(t)
 	if g != nil {
 		g.add(-1)
 		*sum += d
-	}
-	if site == waitWindow {
-		o.win.plan.Waiting(int(o.g.windowWait.n.Load()))
 	}
 	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()

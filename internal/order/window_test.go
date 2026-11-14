@@ -50,7 +50,7 @@ func newPlanned(tiles, rows, page int) *planned {
 func (p *planned) Planner() source.Planner[int] { return p }
 func (p *planned) Root() int                    { return -1 }
 func (p *planned) RowBytes() float64            { return 0 }
-func (p *planned) Waiting(int)                  {}
+func (p *planned) Bound(bool)                   {}
 
 func (p *planned) Start(_ context.Context, wake func()) func() {
 	p.mu.Lock()
