@@ -1,4 +1,4 @@
-report_version 8
+report_version 9
 args_hash string
 attempt.id string
 attempt.started time
@@ -212,6 +212,9 @@ resources.spill.durable.history int
 resources.spill.durable.history_cap int
 resources.spill.durable.history_exhausted int64
 resources.spill.durable.ledger_failed bool
+resources.spill.durable.limit_bytes int64
+resources.spill.durable.limited_by string
+resources.spill.durable.metadata_exhausted int64
 resources.spill.durable.no_slot int64
 resources.spill.durable.peak_retained_bytes int64
 resources.spill.durable.resume.accepted int64
