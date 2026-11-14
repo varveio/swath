@@ -441,6 +441,35 @@ func TestSegmentWorkersCap(t *testing.T) {
 	}
 }
 
+// TestSegmentWorkersAsked: Options.SegmentWorkersAsked replaces the
+// processors rule, above it too, and the encoders and the descriptor cap
+// still bound it; 0 leaves the rule's choice.
+func TestSegmentWorkersAsked(t *testing.T) {
+	withProcs(t, 9)
+	for _, c := range []struct {
+		asked, cap, want int
+		by               string
+	}{
+		{0, 0, 8, WorkersByProcessors},
+		{11, 0, 11, WorkersByFlag},
+		{3, 0, 3, WorkersByFlag},
+		{20, 0, 12, WorkersByEncoders},
+		{11, 5, 5, WorkersByDescriptors},
+	} {
+		f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+		f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+		f.left.Store(int64(f.siblings))
+		s := &partSink{limit: 3000, encoders: 12}
+		st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30, SegmentWorkers: c.cap, SegmentWorkersAsked: c.asked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Segments.Reason != SegmentEngaged || st.Segments.Workers != c.want || st.Segments.WorkersBy != c.by {
+			t.Fatalf("asked %d, cap %d: segments %+v, want %d workers by %s", c.asked, c.cap, st.Segments, c.want, c.by)
+		}
+	}
+}
+
 // TestSegmenterCalledUnlocked: the drainer calls its Segmenter without
 // the stage's lock. Holding it there deadlocked: the router's interval cut
 // holds the router's lock while part 0's encoder, accounting its bytes,
