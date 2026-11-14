@@ -224,8 +224,17 @@ over the budget bytes per row the emitters measured; nothing before the first ro
 alone; with spill uncapped, no limit. The drainer, having drained and handed on every admitted tile, admits the
 next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
 stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
-admitted, so the workers the window holds back are idle demand, and the tiles admitted split for them as any
-range does (`keyrange` `TestPlanSplitsBehindTheWindow`).
+admitted. The workers the window holds back are idle, but demand only for a range whose remainder holds two
+tiles or more (a coarse cut's tile, a grown one, the open frontier), which splits for them as any range does
+(`keyrange` `TestPlanSplitsBehindTheWindow`); a tile-sized range is not sliced for them (`split.skipped.window`):
+while the window binds, the output, not the listing, sets the pace, and slicing would only add requests and
+overfetch. Measured on a production list of 85.9M keys at 2,048 workers under a 10 % spill cap before this
+rule: the held workers sliced the admitted tiles below a page (48,190 bounded splits, 27,447 empty upper children,
+47 % of the keys overfetched, 1.39 requests per 1,000 keys against 1.08 uncapped) (`TestPlanManyWorkersFewTiles`:
+256 workers, a window of a few tiles, the requests of one worker). The workers at the window wait on a condition
+of their own and are woken as room comes back, one per tile released, one when the tile refused fits, the next
+after each admission, one per child queued, and all at a stop or the plan's end, not at every step of the
+drainer.
 
 **The plan.** The range engine reads the prior lazily (a dataset's page index part by part, at most two parts
 ahead of the plan, from the first part ending after a resume key; a cut file from memory), checks every cut as
@@ -263,7 +272,8 @@ too), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); 
 ## The waits
 
 Every wait is on one of two condition variables under the stage's mutex, and every event that can make a
-waiter eligible broadcasts to both; each waiter rechecks its own condition. Each wait is driven to its wait
+waiter eligible broadcasts to both; each waiter rechecks its own condition. The one exception is the frontier
+window's, which has a third, woken one waiter at a time (below). Each wait is driven to its wait
 and released by one event in a test with a deterministic barrier (`hookWait`):
 
 | Wait | Who | Released by | Test |
@@ -275,7 +285,7 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
-| window (`work`) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | a tile released, the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, spill credit, a stop | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit; all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
 | plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are

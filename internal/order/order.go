@@ -387,6 +387,7 @@ type run[R, P any] struct {
 	opt      Options
 	mu       sync.Mutex
 	work     *sync.Cond // workers: stack empty or budget used
+	winCond  *sync.Cond // workers waiting at the frontier window (window.go)
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R, P]
 	buffered int64
@@ -528,11 +529,17 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()
 	}
+	if site == waitWindow { // held back: not split demand (source.Planner)
+		o.win.plan.Waiting(int(o.g.windowWait.n.Load()))
+	}
 	c.Wait()
 	d := time.Since(t)
 	if g != nil {
 		g.add(-1)
 		*sum += d
+	}
+	if site == waitWindow {
+		o.win.plan.Waiting(int(o.g.windowWait.n.Load()))
 	}
 	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()
@@ -757,6 +764,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	o.mu.Lock()
 	o.finished = true
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	o.mu.Unlock()
 	if err != nil {
@@ -827,6 +835,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.seg = &segState[P]{sg: sg, waitRows: -1}
 	}
 	o.work = sync.NewCond(&o.mu)
+	o.winCond = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	o.g = opt.Gauges
 	if o.g == nil {
@@ -845,6 +854,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.mu.Lock()
 		o.work.Broadcast()
 		o.drain.Broadcast()
+		o.winCond.Signal()
 		o.mu.Unlock()
 	}
 	if opt.SpillDir != "" {
@@ -928,6 +938,9 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		o.stopped.Store(true)
 		wake()
+		o.mu.Lock()
+		o.winCond.Broadcast()
+		o.mu.Unlock()
 	})
 	return o, func() {
 		stop()
@@ -970,6 +983,7 @@ func (o *run[R, P]) worker() {
 					// admits it (window.go).
 					switch st, err := o.admitTile(false); st {
 					case admitted:
+						o.winCond.Signal() // the next waiter tries the next tile
 						continue
 					case admitFailed:
 						o.planFailed(err)
@@ -994,7 +1008,7 @@ func (o *run[R, P]) worker() {
 				if refused {
 					o.win.st.Waits[o.win.why]++
 					t := time.Now()
-					o.waitAt(o.work, waitWindow)
+					o.waitAt(o.winCond, waitWindow)
 					o.idle(t)
 					continue
 				}
@@ -1114,6 +1128,11 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	}
 	if len(n.pending) > 0 {
 		o.work.Broadcast()
+		if o.win != nil {
+			for range n.pending { // workers at the window take children too
+				o.winCond.Signal()
+			}
+		}
 	}
 	n.pending = nil
 	if n.onPath.Load() {

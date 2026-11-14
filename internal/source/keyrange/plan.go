@@ -46,7 +46,7 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 		if stream == nil {
 			stream = &cutSlice{cuts: pr.Cuts}
 		}
-		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), after: p.resumeKey(), first: true}
+		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), tileKeys: float64(q * p.opt.PageSize), after: p.resumeKey(), first: true}
 		p.plan.lo, p.plan.last = p.plan.after, p.plan.after
 		p.c.Set(cSeedFromTilePages, int64(q))
 		p.c.Set(cSeedFromParts, int64(pr.Parts))
@@ -65,10 +65,11 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 // as it is made (cutReuse, one state across tiles). Only the order stage
 // calls Next, under its lock; the engine's state is changed under p.mu.
 type plan[P any] struct {
-	p      *Engine[P]
-	stream source.CutStream
-	fill   float64
-	after  string // the resume key ("" none)
+	p        *Engine[P]
+	stream   source.CutStream
+	fill     float64
+	tileKeys float64 // a tile's keys: its pages at the page size
+	after    string  // the resume key ("" none)
 
 	read    int        // cuts read
 	prev    string     // the last cut read
@@ -97,6 +98,10 @@ type plan[P any] struct {
 func (pl *plan[P]) Start(ctx context.Context, wake func()) func() {
 	return pl.stream.Start(ctx, pl.after, wake)
 }
+
+// Waiting records the workers the frontier window holds back
+// (source.Planner): the demand a split counts (Engine.demand).
+func (pl *plan[P]) Waiting(n int) { pl.p.windowHeld.Store(int64(n)) }
 
 // RowBytes is the prior's stored bytes per row (source.Planner).
 func (pl *plan[P]) RowBytes() float64 {

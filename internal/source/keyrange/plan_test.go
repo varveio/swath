@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 
@@ -464,5 +465,46 @@ func TestPlanAccountsStayBounded(t *testing.T) {
 	counted := st.Get(cSeedFromErrWithin) + st.Get(cSeedFromErrGrown) + st.Get(cSeedFromErrShrunk)
 	if tiles != 3000 || counted != tiles || len(p.tiles) != 0 || api.most > 4*workers {
 		t.Fatalf("%d tiles, %d classified, %d accounts left, at most %d held at once", tiles, counted, len(p.tiles), api.most)
+	}
+}
+
+// counting is a lister that counts its requests.
+type counting struct {
+	*sorted
+	n atomic.Int64
+}
+
+func (c *counting) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	c.n.Add(1)
+	return c.sorted.List(ctx, in)
+}
+
+// TestPlanManyWorkersFewTiles: far more workers than the frontier window's
+// tiles can use (256 workers, a window of a few tiles of three pages): the
+// workers held at the window are not demand for slicing the tiles admitted
+// (split.skipped.window), so the run sends about the requests one worker
+// does, with few empty children, and lists every key once, in order. Before,
+// each admitted tile was split into slivers below a page for them.
+func TestPlanManyWorkersFewTiles(t *testing.T) {
+	var keys []string
+	for i := range 40000 {
+		keys = append(keys, fmt.Sprintf("k%06d", i))
+	}
+	run := func(workers int) (int64, Stats) {
+		api := &counting{sorted: newSorted(keys, true, 1)}
+		got, st, leaves := runBudget(t, api, Options{Prior: priorOf(keys, 100), PageSize: 100, PriorPageSize: 100, TilePages: 4}, workers, 200)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("w%d: %d keys, want %d", workers, len(got), len(keys))
+		}
+		checkTiling(t, fmt.Sprintf("w%d", workers), leaves)
+		return api.n.Load(), st
+	}
+	one, _ := run(1)
+	many, st := run(256)
+	empty := st.Get(cChildEmptyLower) + st.Get(cChildEmptyUpper)
+	t.Logf("requests: 1 worker %d, 256 workers %d; splits %d, empty children %d, skipped for the window %d", one, many,
+		st.Get(cSplitAcceptedBounded), empty, st.Get(cSplitSkippedWindow))
+	if float64(many) > 1.05*float64(one) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
+		t.Fatalf("256 workers: %d requests against %d, %d empty children, %d splits skipped for the window", many, one, empty, st.Get(cSplitSkippedWindow))
 	}
 }

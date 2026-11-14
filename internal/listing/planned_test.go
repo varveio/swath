@@ -35,7 +35,7 @@ func plannedConfig(url, out, prior string, w int) Config {
 // TestPlannedRunIsTheUnseededRun: a run planned from a counted prior (its
 // predecessor's dataset, read as it goes, or a counted cut file whose cuts
 // are each several tiles' worth, so the engine splits inside them) writes
-// the unseeded run's parts byte for byte at 1, 4 and 64 workers with the
+// the unseeded run's parts byte for byte at 1, 4, 64 and 256 workers with the
 // part interval off, with a filter as well; under a spill cap at a fifth of
 // the unseeded run's spill peak the frontier window keeps every frame
 // admitted (none refused), and the parts are the same. A dry run seeded
@@ -58,7 +58,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, prior := range []string{ref, cuts} {
-		for _, w := range []int{1, 4, 64} {
+		for _, w := range []int{1, 4, 64, 256} {
 			name := fmt.Sprintf("%s/w%d", filepath.Base(prior), w)
 			out := filepath.Join(dir, strings.ReplaceAll(name, "/", "-"))
 			sum, err := Run(context.Background(), plannedConfig(url, out, prior, w))

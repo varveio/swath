@@ -734,7 +734,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Max(cSlowMaxRangeLatency, int64(st.lat))
 			p.c.Set(cSlowRunLatency, int64(p.runLatency()))
 		}
-		hunger := p.opt.Workers - len(p.running) - p.queued
+		hunger, _ := p.demand(st)
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
 		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		unsplittable := st.unsplittable
@@ -950,13 +950,15 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			return
 		}
 	}
-	hunger := p.opt.Workers - len(p.running) - p.queued
+	hunger, held := p.demand(st)
 	if p.opt.SplitCoin == nil {
 		switch {
 		case !pr.ready: // the demand rose after the page's snapshot
 			return pivot{}, false, cSplitSkippedNoDemand
 		case hunger <= 0 && p.slowSplitWanted(st, r):
 			pv.slow = true // a latency outlier: split without an idle worker, unranked
+		case hunger <= 0 && held:
+			return pivot{}, false, cSplitSkippedWindow
 		case hunger <= 0:
 			return pivot{}, false, cSplitSkippedNoDemand
 		}
@@ -1085,6 +1087,23 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		p.slowQueued += 2
 	}
 	return pv, true, 0
+}
+
+// demand is the idle workers a split of st could feed (hunger: workers -
+// active - queued), mu held. In a planned run the workers the frontier
+// window holds back (Waiting) are demand only for a range whose remainder
+// would give each child a tile's keys or more (a coarse cut's tile, a grown
+// one, the open frontier): the window admits tiles, so slicing an admitted
+// tile further for them only adds requests and overfetch, the output
+// being bound by the window. held reports that they were all the demand
+// there was.
+func (p *Engine[P]) demand(st *running) (hunger int, held bool) {
+	hunger = p.opt.Workers - len(p.running) - p.queued
+	w := int(p.windowHeld.Load())
+	if w <= 0 || hunger <= 0 || p.plan == nil || st.remainder() >= 2*p.plan.tileKeys {
+		return hunger, false
+	}
+	return hunger - min(w, hunger), hunger <= w
 }
 
 // pivot is a decided split's pivot m and the synthesis that made it;

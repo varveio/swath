@@ -125,6 +125,9 @@ type Planner[R any] interface {
 	Next(admit func(rows int64) bool) (r R, ok, done bool, err error)
 	// RowBytes is the prior's stored bytes per row (0: unknown).
 	RowBytes() float64
+	// Waiting tells the plan how many workers the window holds back now:
+	// idle, but not demand for slicing the tiles admitted.
+	Waiting(n int)
 }
 
 // Planning is a provider whose root may be a plan: Planner, called before

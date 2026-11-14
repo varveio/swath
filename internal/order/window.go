@@ -74,6 +74,13 @@ type WindowStats struct {
 	PeakTiles, PeakCreditRows, PeakRetainedBytes int64
 }
 
+// The waiters at the window wait on their own condition (run.winCond),
+// woken one at a time as room comes back: a tile released wakes one per
+// tile, the refused tile fitting one, a worker that admits a tile the next
+// (so waking follows the room, not every step of the drainer), children
+// queued one per child, spill credit one; a stop, the plan's end or
+// failure all of them.
+
 // tileCredit is an admitted tile's account.
 type tileCredit struct {
 	est    int64
@@ -250,7 +257,9 @@ func (o *run[R, P]) settle() {
 	}
 	if n > 0 {
 		w.tiles = w.tiles[n:]
-		o.work.Broadcast()
+		for range n { // a waiter per tile's room
+			o.winCond.Signal()
+		}
 		return
 	}
 	o.roomCheck()
@@ -265,7 +274,7 @@ func (o *run[R, P]) roomCheck() {
 	if w.need > 0 && o.g.windowWait.n.Load() > 0 {
 		if rows, _ := o.windowRows(); float64(w.est+w.excess.Load()+w.need) <= rows {
 			w.need = 0
-			o.work.Broadcast()
+			o.winCond.Signal()
 		}
 	}
 }
@@ -278,7 +287,7 @@ func (o *run[R, P]) measured(units int64, rows int) {
 	w.units.Add(units)
 	if w.rows.Add(int64(rows)) == int64(rows) {
 		o.mu.Lock()
-		o.work.Broadcast()
+		o.winCond.Signal()
 		o.mu.Unlock()
 	}
 }
@@ -290,6 +299,7 @@ func (o *run[R, P]) endPlan() bool {
 	o.win.done = true
 	o.win.root.state = done
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	if o.open.Add(-1) == 0 && !o.stopped.Load() {
 		o.listedAt = time.Now()
@@ -304,6 +314,7 @@ func (o *run[R, P]) planFailed(err error) error {
 	o.cancel(err)
 	o.stopped.Store(true)
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	return err
 }
@@ -331,6 +342,7 @@ func (o *run[R, P]) awaitPlan() error {
 	switch st, err := o.admitTile(true); st {
 	case admitted:
 		o.work.Signal()
+		o.winCond.Signal() // a worker at the window may take it
 		return nil
 	case admitDone:
 		if o.endPlan() {
