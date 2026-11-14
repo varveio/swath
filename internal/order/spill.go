@@ -359,7 +359,8 @@ type spillFile struct {
 	// and lastLogical its rows and their logical bytes (owner only): its
 	// marker records them, so the frame can be read, and the stream cut
 	// into parts, on its own. trailerAt is where the trailer starts, once
-	// written (0 before).
+	// written (0 before): 0 too for a run-private file whose every rows
+	// frame the disk budget refused, its trailer its only frame.
 	lastOff, lastSize, lastRows, lastLogical, trailerAt int64
 	// most is the row count of the largest frame written, and mostOwned
 	// the largest storage a delta frame written declared: a frame read
@@ -925,13 +926,15 @@ func frameOK(f *spillFile, hdr [8]byte, payload []byte) bool {
 }
 
 // trailerRows reads f's trailer on a lease of its read handle (any goroutine,
-// once the file is complete): the row count its owner wrote.
+// once the file is complete): the row count its owner wrote. A run-private
+// file's trailer may start at 0 (no rows frame before it): the frame read
+// there is checked, not its offset.
 func (s *spiller[P]) trailerRows(f *spillFile) (int64, error) {
 	if f.d != nil {
 		return s.durableTrailerRows(f)
 	}
 	size := f.size - f.trailerAt
-	if f.trailerAt <= 0 || size <= 9 || size > 32 {
+	if size <= 9 || size > 32 {
 		return 0, errSpillFrame
 	}
 	h, err := s.lease(f)
