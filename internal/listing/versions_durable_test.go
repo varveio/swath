@@ -431,7 +431,8 @@ func TestVersionsTailSeamsAtKeyChanges(t *testing.T) {
 // boundaries fall inside hot keys' 40 versions: the planner moves each to
 // the next key change, as the router defers its own cut
 // (drain.segments.deferred_rows), no key spans two parts, and the dataset
-// is byte-identical to the serial tail's (one encoder: no segments).
+// is byte-identical to the serial tail's (one encoder: no segments), its
+// cut file too (the segments' parts' cuts joined in ordinal order).
 // order's TestSegmentsCutAtKeyChanges covers a spilled tail.
 func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
@@ -469,6 +470,7 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 		t.Fatalf("spill %+v segments %+v: want engaged, boundaries deferred to key changes", *sum.Resources.Spill, *sg)
 	}
 	t.Logf("segments: %d of %d rows, %d deferred", sg.Segments, sg.Rows, sg.DeferredRows)
+	requireCuts(t, "segments", out)
 	sameDataset(t, "segments", ref, out)
 	// The segments' rows are classified and their keys counted as the
 	// serial drain's are.
@@ -488,7 +490,8 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 // one that leaves room for several workers (at the minimum budget the
 // planner allows one). The dataset is byte-identical to a serial run held
 // in memory, and no key spans a seam; so is a resume's whose segments
-// replay its reused certificates.
+// replay its reused certificates, its cut file too (the parts written from
+// certificates collected in publication order like any other).
 func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
 	datasettest.RequireJournal(t)
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
@@ -535,6 +538,7 @@ func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
 			}
 		}
 	}
+	requireCuts(t, "segments", out)
 	seams("segments", out)
 	// A resume that reuses certificates replays them in the segments
 	// (#288). The run is killed at its third ledger sync with the frontier
@@ -577,5 +581,6 @@ func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
 	}
 	t.Logf("resume: %d certificates accepted, %d replayed by the segments (%d rows, %d skipped), %d segments over %d workers, %d rows deferred",
 		d.Resume.Accepted, sg.CertificatesRead, sg.CertifiedRows, d.Resume.ReplaySkippedRows, sg.Segments, sg.Workers, sg.DeferredRows)
+	requireCuts(t, "resume", out)
 	seams("resume", out)
 }

@@ -73,7 +73,7 @@ func (c *step) Now() time.Time                  { c.t = c.t.Add(1001 * time.Mill
 func (c *step) Since(t time.Time) time.Duration { return c.t.Sub(t) }
 
 // sameDataset compares parts byte for byte and manifests apart from their
-// creation time.
+// creation time, and the cut file when got holds one (sameCuts).
 func sameDataset(t *testing.T, name, ref, got string) {
 	t.Helper()
 	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
@@ -99,4 +99,5 @@ func sameDataset(t *testing.T, name, ref, got string) {
 	if strip(ref) != strip(got) {
 		t.Fatalf("%s: manifests differ", name)
 	}
+	sameCuts(t, name, ref, got)
 }

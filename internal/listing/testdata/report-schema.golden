@@ -29,6 +29,8 @@ invocation.out string
 invocation.part_size_bytes int64
 invocation.prior.counted bool
 invocation.prior.cuts int
+invocation.prior.cuts_file string
+invocation.prior.cuts_refused string
 invocation.prior.path string
 invocation.prior.source string
 invocation.resume bool

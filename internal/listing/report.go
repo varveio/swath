@@ -45,10 +45,11 @@ import (
 // certified_rows and certificate_scan_ns (a resume's certificates the
 // segments replayed), and resources.spill.durable.resume.
 // replayed_certificates. 11 adds resources.window, the frontier window of
-// a run planned from a counted --seed-from (#535). 12 is the cut points'
-// side file's (#557). 13 adds fields only (#535): resources.window.
-// spill_rows, peak_behind_bytes and evicted (the spill gate's window and
-// the certificates behind the output it evicted).
+// a run planned from a counted --seed-from (#535). 12 adds
+// invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
+// 13 adds fields only (#535): resources.window.spill_rows,
+// peak_behind_bytes and evicted (the spill gate's window and the
+// certificates behind the output it evicted).
 const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and

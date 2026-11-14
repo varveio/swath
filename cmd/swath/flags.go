@@ -170,7 +170,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
 	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
 		Usage: "object stores: start from a previous listing's key distribution",
-		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected since the previous cut); the engine still splits adaptively."})
+		Long:  "A committed dataset of the same source and scope (its cuts.txt, else its parts' key page index), or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected since the previous cut; a bucket dataset's cuts.txt is one); the engine still splits adaptively."})
 
 	def(source.Flag{Name: "max-duration", Value: source.Duration(&o.maxDuration), Metavar: "DURATION", Group: source.GroupLimits,
 		Usage: "stop the run after this long (exit 124); 0: no limit",

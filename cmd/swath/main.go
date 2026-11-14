@@ -534,10 +534,12 @@ func lastRangeFile(path string) func(string) {
 
 // drainAfterListing is SWATH_TEST_DRAIN_AFTER_LISTING: the drainer starts
 // ("drain-start", on its goroutine) only once every range is listed
-// ("listing-done"), so a resume's reused certificates are all left to the
+// ("listing-done"), so a resume's reused certificates are left to the
 // segments, none replayed by the drainer while the gaps are listed
-// (cmd/swath's TestSegmentsReplayDurableFiles). A wait over 30 s gives up:
-// the test then finds the certificates replayed serially and fails.
+// (cmd/swath's TestSegmentsReplayDurableFiles), except those it reaches
+// before the router can state its cut rule (a resume whose interrupted run
+// published no part: until its own part 0 has closed by size). A wait over
+// 30 s gives up.
 func drainAfterListing() func(string) {
 	listed := make(chan struct{})
 	var once sync.Once
