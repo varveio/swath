@@ -265,7 +265,7 @@ machine:
 - **Peak spill** of a first listing (no prior, or a cut file without counts) ≈ 0.7 × rows × spill bytes per
   row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget is half
   of (free space at the start − the 1 GiB reserve), so the free space needed is about the dataset plus twice
-  the peak spill plus 1 GiB.
+  the peak spill plus the reserve (`resources.spill.reserve_bytes`: one part per encoder, at least 1 GiB).
 - **A relist seeded from the previous dataset** (or a counted cut file) keeps the rows ahead of the output near
   its frontier window of at most 8 million rows instead of the bucket ([warm start](#warm-start-for-repeat-listings)),
   so its spill is a small fraction of a first listing's. The window is not a storage bound: a region that grew
@@ -286,5 +286,5 @@ machine:
   so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
   disk frames are refused and listing slows to the output's pace (the first bad
   pattern above): a run a little short of disk still completes, and a run far short of it may not finish in
-  any useful time; it says so after 2 minutes (`spill_pressure`), and `--spill-wait-timeout` stops it,
-  resumable. Set `--spill-budget` explicitly when you know the room.
+  any useful time; it says so after 2 minutes (`spill_pressure`), and `--spill-wait-timeout` stops it
+  (resumable for a run with a journal; text output and a local tree run again). Set `--spill-budget` explicitly when you know the room.

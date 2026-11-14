@@ -33,7 +33,7 @@ Notable changes per release. The full human summary for the current release is i
   A billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits, and in a kill-and-resume
   sweep of 28 lists of 160 to 593 million keys at 2,048 workers, 16 ran out of slots even at one per MiB and
   their resumes replayed as little as 35 % of the keys from certificates, against 93 to 97 % for the rest; those
-  lists' ranges now all have a slot, so a resume relists only the ranges unfinished at the stop. With the default
+  lists' ranges now all have a slot, so a resume relists little more than the ranges unfinished at the stop. With the default
   spill cap a resume counts the certified files it kept as free space, so on the same disk it no longer rejects
   those that fit the stopped run's cap. The run report says what the limits derive from:
   `resources.spill.durable.limit_bytes` and `limited_by` (#513).

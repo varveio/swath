@@ -176,7 +176,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | Signal | Healthy | Act when |
 |---|---|---|
 | `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
-| `order.spill_live_bytes` | on an unseeded sorted run of a large list, most of the rows listed: it spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)); seeded from a counted prior, about the frontier window's rows (`resources.window`) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
+| `order.spill_live_bytes` | the spill held now: on an unseeded sorted run of a large list it grows toward most of the rows listed, since such a run spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)); seeded from a counted prior, it stays near the frontier window's rows (`resources.window`) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
 | `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--sort-buffer`; a count holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
 | `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
@@ -262,8 +262,8 @@ the gaps between them: the ranges still listing at the stop, and those not certi
 ([Ordering (internals)](internals/ordering.md#durable-spill)). Once the gaps are listed, the parallel tail
 writes the rest, certified rows included, as on a fresh run. The certificates must fit the resume's spill cap:
 a recorded or given `--spill-budget`, else half the free space the resume finds, the certified files it kept
-counted as free, so a resume on the same disk keeps the stopped run's cap; those that do not fit are listed
-again (`rejected.budget`). The report says what it reused: `resources.spill.durable.resume` (`accepted`,
+counted as free (on the same disk the stopped run's cap, less half of what was written there since); those
+that do not fit are listed again (`rejected.budget`). The report says what it reused: `resources.spill.durable.resume` (`accepted`,
 `replayed_rows`, `gaps`, `requests_saved_est`, `rejected` by reason).
 
 **Retained observation.** A replayed certificate serves its rows as the interrupted attempt listed them: a key
