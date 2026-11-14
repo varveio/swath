@@ -161,19 +161,20 @@ type entry struct {
 // the files no record in it names, validates every recorded file and
 // classifies it: accepted (a replay range), or retired (covered by K,
 // missing, corrupt, foreign, overlapping), writing its retirements and
-// unlinks before it returns; Start applies the new caps. lim is the
-// attempt's limits: the ledger is read within them, and never within less
-// than the fixed ones. A missing directory or ledger, or a foreign ledger
-// header, starts afresh (every spill file is unlinked). An error is the
-// output's replacement or an unsafe layout (a run failure), or
+// unlinks before it returns; Start applies the attempt's limits. The
+// ledger is read within recoveryLimits, the largest any attempt has, never
+// within the resuming attempt's own: those depend on the free space as it
+// starts. A missing directory or ledger, or a foreign ledger header,
+// starts afresh (every spill file is unlinked). An error is the output's
+// replacement or an unsafe layout (a run failure), or
 // ErrDurableUnavailable (the run goes on without durable spill and
 // relists).
-func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string, lim DurableLimits) (*Cache, error) {
+func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string) (*Cache, error) {
 	c, err := newCache(root, verify, uuid, ident, codec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
-	c.resumed, c.lim = true, lim.recovery()
+	c.resumed, c.lim = true, recoveryLimits
 	if k != nil {
 		c.k, c.hasK = *k, true
 	}
@@ -208,14 +209,14 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 // appended). A missing, foreign or unreadable header starts a new ledger,
 // and every file becomes an orphan (nil entries).
 //
-// The prefix is also cut where the history this attempt's limits (c.lim,
-// RecoverDurable's bound) do not admit begins: where its records plus one
-// retirement per live entry would pass H (a writer reserves both within
-// its H), and at a sealed record that would make more certificates live at
-// once than its cap. The scan and the inventory are bounded by those
-// limits, not by trusting the writer's admission; what is cut is dropped
-// like a damaged tail (its files are orphans, their intervals relisted),
-// which is always safe (ledger_cut).
+// The prefix is also cut where the history no writer could have made
+// begins: where its records plus one retirement per live entry would pass
+// the largest H (a writer reserves both within its H), and at a sealed
+// record that would make more certificates live at once than the largest
+// cap any attempt has (c.lim, recoveryLimits). The scan and the inventory
+// are bounded by the persisted format, not by trusting the writer's
+// admission; what is cut is dropped like a damaged tail (its files are
+// orphans, their intervals relisted), which is always safe (ledger_cut).
 func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	fi, err := dataset.NeedIn(c.root, c.rel(ledgerName), false, true)
 	if err != nil {
@@ -281,7 +282,7 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 			grow = 2 // the seal and its retirement to come
 		}
 		if records+len(entries)+grow > c.lim.History || (typ == ledgerSealed && !live && len(entries) >= c.lim.Certificates) {
-			off = at // past H, or more live certificates than the bound: cut here
+			off = at // past the largest H, or more live certificates than any cap: cut here
 			c.st.LedgerCut.Add(1)
 			break
 		}
@@ -607,6 +608,19 @@ func (c *Cache) Gaps(n int) {
 	if c != nil {
 		c.st.Gaps.Store(int64(n))
 	}
+}
+
+// AcceptedBytes is the bytes of the certificates recovery accepted (before
+// Start applies the attempt's limits); 0 for nil or a fresh run.
+func (c *Cache) AcceptedBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	var n int64
+	for _, d := range c.reused {
+		n += d.bytes
+	}
+	return n
 }
 
 // Reused is the number of accepted certificates.

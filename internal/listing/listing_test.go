@@ -292,15 +292,20 @@ func TestResourceAdmission(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	if got := spillMax(SpillLimits{Max: 5}, dir); got != 5 {
+	if got := spillMax(SpillLimits{Max: 5}, dir, 0); got != 5 {
 		t.Errorf("explicit cap: %d", got)
 	}
-	if got := spillMax(SpillLimits{Max: -1}, dir); got != 0 {
+	if got := spillMax(SpillLimits{Max: -1}, dir, 0); got != 0 {
 		t.Errorf("no cap: %d", got)
 	}
 	free := order.FreeBytes(dir)
-	if got := spillMax(SpillLimits{Reserve: 1 << 20}, filepath.Join(dir, "not", "yet")); free != order.Unlimited && got != (free-(1<<20))/2 && got > free/2 {
+	if got := spillMax(SpillLimits{Reserve: 1 << 20}, filepath.Join(dir, "not", "yet"), 0); free != order.Unlimited && got != (free-(1<<20))/2 && got > free/2 {
 		t.Errorf("derived cap %d, free %d", got, free)
+	}
+	// Retained certified spill counts as free: half of it more.
+	const retained = 40 << 30
+	if got := spillMax(SpillLimits{Reserve: 1 << 20}, dir, retained); free != order.Unlimited && (got < (free+retained-(1<<20))/2-(64<<20) || got > (free+retained)/2) {
+		t.Errorf("derived cap %d with %d retained, free %d", got, retained, free)
 	}
 }
 

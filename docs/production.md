@@ -129,7 +129,7 @@ directory listing keeps no journal and starts over.
   minutes.
 - **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
   the output), read back from `DIR/.swath/spill/durable/` instead of listed again. A range is certified when
-  it finishes; the number of certificates scales with the spill cap (one per MiB of it), so a listing whose
+  it finishes; the number of certificates scales with the spill cap (one per MiB of it, at most 262,144), so a listing whose
   ranges spill at least 1 MiB each on average certifies every finished range unless its spill turns over more
   than about twice (`no_slot` and `history_exhausted` in `resources.spill.durable` count the ranges that were
   not). The ranges unfinished at the stop are listed again.
@@ -223,7 +223,9 @@ machine:
   `--s3-bearer-token-command`): give them again, or the resume is refused. The source's `--azure-sas-token`
   may come from `AZURE_STORAGE_SAS_TOKEN` instead; `--output-azure-sas-token` has no such variable.
 - **The spill cap** is a positive `--spill-budget` the run recorded or the resume gives; without one (or with
-  0) it is half the free space on the new disk, after the reserve, when the resume starts. Certified spill files that do not fit under it are
+  0) it is half the free space on the new disk, after the reserve, when the resume starts, the certified spill
+  files the resume keeps counted as free (on the same disk the cap is then the stopped run's, less half of
+  what parts took meanwhile). Certified spill files that do not fit under it are
   listed again (`rejected.budget` in `resources.spill.durable.resume`).
 - **Verification:** before listing continues, the resume reads every part the journal records back from the
   bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):

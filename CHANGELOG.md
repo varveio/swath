@@ -7,11 +7,13 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
-  without one) and a ledger history of four records per slot, at least 40,000; a resume reads the ledger within
-  its own limits. A billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every
-  finished range now fits, so a resume relists the ranges unfinished at the stop. The run report
-  (`report_version` 9) says what the limits derive from: `resources.spill.durable.limit_bytes` and `limited_by`
-  (#513).
+  without one), at most 262,144 (512 MiB of certificate metadata), and a ledger history of four records per
+  slot, at least 40,000; a resume reads the ledger within the largest limits, whatever free space it finds. A
+  billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every finished range now
+  fits, so a resume relists the ranges unfinished at the stop. With the default spill cap a resume counts the
+  certified files it kept as free space, so on the same disk it no longer rejects those that fit the stopped
+  run's cap. The run report (`report_version` 9) says what the limits derive from:
+  `resources.spill.durable.limit_bytes` and `limited_by` (#513).
 
 - Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
   `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`

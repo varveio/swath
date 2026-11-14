@@ -181,8 +181,9 @@ handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
-`history` and `history_cap` (ledger records against H), `limit_bytes` and `limited_by` (the spill both derive
-from, one slot per MiB: `spill_cap`, `free_space` without a cap, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
+`history` and `history_cap` (ledger records against H), `limit_bytes` (the spill both derive from, one slot per
+MiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
+262,144-certificate ceiling, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,

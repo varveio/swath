@@ -230,7 +230,7 @@ func slots(n int) DurableLimits {
 func recoverAll(t *testing.T, c *Cache, root *os.Root, k *string) *Cache {
 	t.Helper()
 	c.Close()
-	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", k, DurableLimits{})
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestDurableReplayAboveK(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	probe.Start(slots(64), 0, nil)
 	spans := probe.Spans()
 	probe.Close()
@@ -351,7 +351,7 @@ func TestDurableReplayAboveK(t *testing.T) {
 	// K: a key inside the first certificate.
 	inside := f.keys(inSpans(spans[:1], ""))
 	k := inside[len(inside)/2]
-	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", &k, DurableLimits{})
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", &k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,7 +865,7 @@ func TestDurableLedgerPrefix(t *testing.T) {
 			os.WriteFile(path, b, 0o644)
 			var classes []string
 			for attempt := range 2 {
-				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -951,7 +951,7 @@ func TestDurableCorruption(t *testing.T) {
 			}
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+			r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 			runtime.ReadMemStats(&after)
 			if err != nil {
 				t.Fatal(err)
@@ -1007,24 +1007,25 @@ func sealedSpill(t *testing.T, ranges int) (*os.Root, *fencedTree) {
 }
 
 // TestDurableReducedCap: a resume with a smaller cap (or spill cap) retires
-// the highest-keyed certificates first (rejected_budget) and keeps the rest.
+// the highest-keyed certificates first (rejected_budget) and keeps the rest;
+// recovery, bounded by the format, not by the attempt, cuts none.
 func TestDurableReducedCap(t *testing.T) {
 	root, _ := sealedSpill(t, 12)
-	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	probe.Start(slots(1000), 0, nil)
 	all := probe.Spans()
 	probe.Close()
 	if len(all) < 4 {
 		t.Fatalf("%d certificates", len(all))
 	}
-	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Start(slots(len(all)/2), 0, nil)
 	defer r.Close()
 	kept := r.Spans()
-	if len(kept) != len(all)/2 || r.st.RejectedBudget.Load() != int64(len(all)-len(all)/2) || !slices.Equal(kept, all[:len(kept)]) {
+	if len(kept) != len(all)/2 || r.st.RejectedBudget.Load() != int64(len(all)-len(all)/2) || !slices.Equal(kept, all[:len(kept)]) || r.st.LedgerCut.Load() != 0 {
 		t.Fatalf("kept %d of %d (rejected %d): not the lowest-keyed", len(kept), len(all), r.st.RejectedBudget.Load())
 	}
 }
@@ -1045,7 +1046,7 @@ func TestDurableHistoryAcrossAttempts(t *testing.T) {
 	}
 	lf.Write(buf)
 	lf.Close()
-	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1168,7 +1169,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 				return nil
 			})()
 			top := "~" // K above every certificate: recovery retires them all
-			_, err := RecoverDurable(root, verify, testUUID, "ident", "test", &top, DurableLimits{})
+			_, err := RecoverDurable(root, verify, testUUID, "ident", "test", &top)
 			if !errors.Is(err, replaced) {
 				t.Fatalf("recovery after the replacement: %v", err)
 			}
@@ -1198,7 +1199,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 			}
 			return nil
 		})()
-		_, err := RecoverDurable(root, verify, testUUID, "ident", "test", nil, DurableLimits{})
+		_, err := RecoverDurable(root, verify, testUUID, "ident", "test", nil)
 		if !errors.Is(err, replaced) {
 			t.Fatalf("recovery after the replacement: %v", err)
 		}
@@ -1268,7 +1269,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 // accepted into the reuse plan, so replay never meets them.
 func TestDurableCodecRejected(t *testing.T) {
 	root, _ := sealedSpill(t, 6)
-	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1278,7 +1279,7 @@ func TestDurableCodecRejected(t *testing.T) {
 	if n == 0 {
 		t.Fatal("nothing sealed")
 	}
-	r, err := RecoverDurable(root, nil, testUUID, "ident", "test-v2", nil, DurableLimits{})
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test-v2", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1294,27 +1295,24 @@ func TestDurableCodecRejected(t *testing.T) {
 }
 
 // TestDurableRecoveryBounds: recovery bounds its scan and its inventory by
-// the resuming attempt's limits (never less than the fixed 10,000
-// certificates and H 40,000), whatever a checksum-valid ledger holds. A
-// ledger of more live sealed records than the bound is cut before the
-// first record past it, and one of more than H records is cut at H: the
-// scan reads at most H records, the inventory holds at most the bound, the
-// ledger is truncated there (ledger_cut, ledger_dropped_bytes), and the
-// files named after the cut are orphans. Limits scaled with a 25,000 MiB
-// spill cap read a ledger past the fixed bounds whole.
+// the largest limits any attempt has (recoveryLimits: the metadata
+// ceiling's 262,144 certificates and H), never by the resuming attempt's,
+// whatever a checksum-valid ledger holds. A ledger of more live sealed
+// records than the ceiling is cut before the first record past it, and one
+// of more than H records is cut at H: the scan reads at most H records,
+// the inventory holds at most the ceiling, the ledger is truncated there
+// (ledger_cut, ledger_dropped_bytes), and the files named after the cut
+// are orphans. A ledger past the old fixed bounds (10,000 live, 40,000
+// records) is read whole.
 func TestDurableRecoveryBounds(t *testing.T) {
-	scaled := Limits(25_000*certificateBytes, 0)
 	for _, tc := range []struct {
 		name          string
-		lim           DurableLimits
 		sealed, extra int // sealed records, then retirements of unknown files
 		cut           bool
 	}{
-		{"live", DurableLimits{}, fixedCertificates + 64, 0, true},
-		{"history", DurableLimits{}, 10, minHistory + 64, true},
-		{"scaled/live", scaled, scaled.Certificates + 64, 0, true},
-		{"scaled/history", scaled, 10, scaled.History + 64, true},
-		{"scaled/past-fixed", scaled, fixedCertificates + 64, minHistory, false},
+		{"live", maxCertificates + 64, 0, true},
+		{"history", 10, maxHistory + 64, true},
+		{"past-fixed", fixedCertificates + 64, minHistory, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, root, dir := newDurable(t)
@@ -1326,8 +1324,9 @@ func TestDurableRecoveryBounds(t *testing.T) {
 				buf = appendLedgerFrame(buf, ledgerRec{cert: d})
 				named = append(named, d.id)
 			}
+			unknown := &Cert{id: randomID()}
 			for range tc.extra {
-				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+				buf = appendLedgerFrame(buf, ledgerRec{cert: unknown, retire: retireRecovery})
 			}
 			path := filepath.Join(dir, DurableDir, ledgerName)
 			lf, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
@@ -1343,7 +1342,7 @@ func TestDurableRecoveryBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.lim = tc.lim.recovery()
+			r.lim = recoveryLimits
 			entries, err := r.readLedger()
 			if err != nil {
 				t.Fatal(err)
@@ -1428,7 +1427,7 @@ func ledgerRecords(t *testing.T, root *os.Root) int {
 }
 
 // TestDurableRecoveryHistory: a checksum-valid ledger whose records fill
-// H with certificates still live passes the scan, but recovery and Start
+// the largest H (recovery's) with certificates still live passes the scan, but recovery and Start
 // then owe one retirement per live certificate (written now, or reserved
 // for an accepted one). The prefix is cut so that the records kept plus
 // those owed stay within H: through complete recovery and Start, with
@@ -1443,8 +1442,9 @@ func TestDurableRecoveryHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			var buf []byte
-			for range minHistory - ledgerRecords(t, root) - 1 { // the scan alone would keep them all
-				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+			unknown := &Cert{id: randomID()}
+			for range maxHistory - ledgerRecords(t, root) - 1 { // the scan alone would keep them all
+				buf = appendLedgerFrame(buf, ledgerRec{cert: unknown, retire: retireRecovery})
 			}
 			lf.Write(buf)
 			lf.Close()
@@ -1456,7 +1456,7 @@ func TestDurableRecoveryHistory(t *testing.T) {
 				}
 			}
 			for attempt := range 2 {
-				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, DurableLimits{})
+				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1465,8 +1465,8 @@ func TestDurableRecoveryHistory(t *testing.T) {
 				}
 				hist, reused := r.hist, r.Reused()
 				r.Close()
-				if n := ledgerRecords(t, root); hist > minHistory || n > minHistory || n+reused > minHistory {
-					t.Fatalf("attempt %d: history %d, ledger %d records plus %d reserved (H %d)", attempt, hist, n, reused, minHistory)
+				if n := ledgerRecords(t, root); hist > maxHistory || n > maxHistory || n+reused > maxHistory {
+					t.Fatalf("attempt %d: history %d, ledger %d records plus %d reserved (H %d)", attempt, hist, n, reused, maxHistory)
 				}
 				if attempt == 0 && !missing && reused == 0 {
 					t.Fatal("nothing accepted")
@@ -1541,15 +1541,22 @@ func plantCertificates(t *testing.T, f *fencedTree, lim DurableLimits, skip func
 	return root, planted
 }
 
-// TestDurableBeyondFixedLimits: a run killed with more live certificates
-// than the fixed 10,000 and a ledger past the fixed H of 40,000 records
-// (its own seals plus 25,000 retirements an earlier attempt left) resumes
-// under limits scaled from a 16 GiB spill cap: recovery cuts nothing,
-// Start keeps every certificate, and the resume lists only the ranges that
-// had none. Killed mid replay and resumed again, it accepts every one
-// again. Each resume's output is the uninterrupted run's, every certified
-// row replayed, and the history stays within H.
-func TestDurableBeyondFixedLimits(t *testing.T) {
+// TestDurableRecoveryPastFixedLimits: recovery, Start and recovery replay
+// at counts past the old fixed bounds (10,000 live certificates, H 40,000
+// records), where those bounds cut the ledger. The state is planted
+// (plantCertificates: files certified through the spiller without the
+// seal's fsync, records appended by the flusher): 10,090 live
+// certificates, and a ledger of 35,090 records (their seals plus 25,000
+// retirements an earlier attempt left), which with one retirement owed per
+// live certificate passes 40,000. Under limits of a 16 GiB spill cap
+// recovery cuts nothing and Start keeps every certificate; the provider
+// lists only the ranges that had none; a kill mid replay (an injected
+// crash at spill-replay-frame) and a second resume accept every one again;
+// the output is every row once, in order, every certified row replayed,
+// and the history within H. K stays ⊥ (no part is published) and the sink
+// collects keys: the production seal and K's retirement are the listing
+// kill matrices' (at fixture scale).
+func TestDurableRecoveryPastFixedLimits(t *testing.T) {
 	f := &fencedTree{ranges: fixedCertificates + 100, pages: 1, rows: func(int, int) int { return 2 }}
 	lim := Limits(16<<30, 0)
 	gap := func(i int) bool { return i%1000 == 999 }
@@ -1571,7 +1578,7 @@ func TestDurableBeyondFixedLimits(t *testing.T) {
 	}
 	want := f.keys(nil)
 	for attempt, kill := range []bool{true, false} {
-		r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil, lim)
+		r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1619,7 +1626,9 @@ func TestDurableBeyondFixedLimits(t *testing.T) {
 }
 
 // TestDurableLimits: the slots and H scale with the spill an attempt may
-// hold (one slot per MiB, H four records per slot and at least 40,000),
+// hold (one slot per MiB, H four records per slot and at least 40,000), up
+// to the metadata ceiling (512 MiB at 2 KiB a certificate: 262,144 slots,
+// also recovery's bound; limited_by metadata),
 // the billion-key listing that bound the fixed limits (73,081 spilled
 // ranges in 167 GiB of spill) fits them, and the metadata stays within
 // the bounds the limits state: a live certificate's Cert at most 256 bytes
@@ -1634,9 +1643,11 @@ func TestDurableLimits(t *testing.T) {
 		{16 << 20, 0, DurableLimits{Certificates: 16, History: minHistory, Bytes: 16 << 20, By: limitSpillCap}},
 		{10_000 << 20, 0, DurableLimits{Certificates: 10_000, History: minHistory, Bytes: 10_000 << 20, By: limitSpillCap}},
 		{167 << 30, 0, DurableLimits{Certificates: 171_008, History: 684_032, Bytes: 167 << 30, By: limitSpillCap}},
-		{0, 1 << 40, DurableLimits{Certificates: 1 << 20, History: 4 << 20, Bytes: 1 << 40, By: limitFreeSpace}},
+		{0, 200 << 30, DurableLimits{Certificates: 204_800, History: 819_200, Bytes: 200 << 30, By: limitFreeSpace}},
 		{0, 8 << 20, DurableLimits{Bytes: 8 << 20, By: limitFreeSpace}},
 		{0, Unlimited, DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}},
+		{1 << 40, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 1 << 40, By: limitMetadata}},
+		{0, 4 << 40, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 4 << 40, By: limitMetadata}},
 	} {
 		if got := Limits(tc.spillCap, tc.free); got != tc.want {
 			t.Errorf("Limits(%d, %d) = %+v, want %+v", tc.spillCap, tc.free, got, tc.want)
@@ -1644,6 +1655,12 @@ func TestDurableLimits(t *testing.T) {
 	}
 	if l := Limits(167<<30, 0); l.Certificates < 73_081 || l.History < 2*73_081 {
 		t.Errorf("%+v: 73,081 spilled ranges do not fit", l)
+	}
+	if maxCertificates*certificateMetadata != 512<<20 || recoveryLimits != (DurableLimits{Certificates: maxCertificates, History: maxHistory}) {
+		t.Errorf("the metadata ceiling is %d certificates of %d bytes, recovery's bound %+v", maxCertificates, certificateMetadata, recoveryLimits)
+	}
+	if n := unsafe.Sizeof(Cert{}) + unsafe.Sizeof(entry{}); n > certificateMetadata/4 {
+		t.Errorf("a Cert and an entry are %d bytes, over a quarter of the %d charged", n, certificateMetadata)
 	}
 	if n := unsafe.Sizeof(Cert{}); n > 256 {
 		t.Errorf("a Cert is %d bytes, over the stated 256", n)

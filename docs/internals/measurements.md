@@ -2302,7 +2302,10 @@ What a certificate costs, for the limits that scale with the spill cap ([orderin
   that rate five million certificates (ten million records, about 1.8 GB) scan in about four seconds plus the
   disk read. Recovery then reads every accepted file whole (validation), which costs the retained spill's
   bytes, not the records.
-- **Memory.** A `Cert` is 232 bytes on linux/amd64, a recovery ledger entry 104, each besides its keys.
+- **Memory.** A `Cert` is 232 bytes on linux/amd64, a recovery ledger entry 104, each besides its keys. With
+  99-byte keys recovery's heap grew 483 bytes per live entry read (the entry, its map slot, three keys) and
+  408 per certificate built from them (the `Cert`, its file name, one more key): about 0.9 KiB a certificate,
+  against the 2 KiB the metadata ceiling charges.
 
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 

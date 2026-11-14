@@ -63,9 +63,19 @@ const (
 	// spill is off (sixteen is the fewest worth a ledger).
 	minCertificates = 16
 	// fixedCertificates is the cap when the spill an attempt may hold is
-	// unknown (no spill cap, and the free space not measurable), and the
-	// least recovery inventories, whatever its attempt's cap.
+	// unknown (no spill cap, and the free space not measurable).
 	fixedCertificates = 10_000
+	// certificateMetadata is the memory one certificate is charged: its
+	// Cert and file name, recovery's ledger entry and map slot, and its
+	// keys. Measured at about 0.9 KiB with 99-byte keys (measurements.md,
+	// "Durable spill limits"), so 2 KiB holds keys of up to about 300 bytes.
+	certificateMetadata = 2 << 10
+	// maxCertificateMetadata bounds the certificates' metadata whatever the
+	// spill: 512 MiB, maxCertificates (262,144) certificates, which hold
+	// 590 to 720 GiB of spill at the 2.3 to 2.8 MiB per range measured.
+	// Recovery inventories within it (and H at it), whatever the attempt.
+	maxCertificateMetadata = 512 << 20
+	maxCertificates        = maxCertificateMetadata / certificateMetadata
 	// The history cap H bounds the ledger's retained durable prefix plus
 	// the records reserved and not yet written (a seal and a retirement per
 	// certificate): the ledger is never compacted, so H bounds its size and
@@ -75,6 +85,7 @@ const (
 	// truncation dropped is refunded.
 	historyPerCertificate = 4
 	minHistory            = 40_000
+	maxHistory            = historyPerCertificate * maxCertificates
 	// flushInterval is the flusher's shortest cycle: seals and
 	// retirements are batched into one directory sync, one ledger append
 	// and one ledger sync per cycle at most every 100 ms (contract §7.6,
@@ -102,29 +113,36 @@ const ledgerName = "ledger"
 
 // DurableLimits are an attempt's durable spill limits: the certificate
 // slots (live certificates), the history cap H (ledger records), and the
-// spill they derive from. Both scale with that spill, so a listing whose
-// ranges spill at least 1 MiB each on average has a slot for every range
-// it holds; per MiB of that spill the cache holds at most one live
-// certificate's metadata and the ledger at most four records.
+// spill they derive from. Both scale with that spill up to the metadata
+// ceiling, so a listing whose ranges spill at least 1 MiB each on average
+// has a slot for every range it holds; per MiB of that spill the cache
+// holds at most one live certificate's metadata and the ledger at most
+// four records.
 type DurableLimits struct {
 	Certificates int
 	History      int
 	Bytes        int64  // the spill the attempt may hold (0: unknown)
-	By           string // what Bytes is: limitSpillCap, limitFreeSpace or limitFixed
+	By           string // what bounds the slots: limitSpillCap, limitFreeSpace, limitMetadata or limitFixed
 }
 
 // What bounds an attempt's durable spill limits (DurableReport.LimitedBy).
 const (
 	limitSpillCap  = "spill_cap"  // the spill cap (--spill-budget, or half the free space)
 	limitFreeSpace = "free_space" // no spill cap: the spill filesystem's free space
+	limitMetadata  = "metadata"   // the spill would allow more: the metadata ceiling, 262,144 slots
 	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000
 )
+
+// recoveryLimits are recovery's bounds, whatever the attempt: the largest
+// slots and H any attempt has, so no attempt's ledger is cut (Start then
+// applies the attempt's own limits: rejected.budget).
+var recoveryLimits = DurableLimits{Certificates: maxCertificates, History: maxHistory}
 
 // Limits is the durable spill's limits for a spill cap of spillCap bytes
 // (0: none) on a filesystem with free bytes free (Unlimited: not known):
 // one certificate slot per MiB of the cap, or without one of the free
-// space, and H four records per slot, at least 40,000. Below 16 MiB the
-// cap is 0 (durable spill off).
+// space, at most 262,144 (the metadata ceiling), and H four records per
+// slot, at least 40,000. Below 16 MiB the cap is 0 (durable spill off).
 func Limits(spillCap, free int64) DurableLimits {
 	l := DurableLimits{Bytes: spillCap, By: limitSpillCap}
 	switch {
@@ -137,16 +155,12 @@ func Limits(spillCap, free int64) DurableLimits {
 	if l.Bytes < minCertificates*certificateBytes {
 		return l
 	}
-	n := int(l.Bytes / certificateBytes)
-	l.Certificates, l.History = n, max(minHistory, historyPerCertificate*n)
+	n := l.Bytes / certificateBytes
+	if n > maxCertificates {
+		n, l.By = maxCertificates, limitMetadata
+	}
+	l.Certificates, l.History = int(n), max(minHistory, historyPerCertificate*int(n))
 	return l
-}
-
-// recovery is the bound recovery reads a ledger within for an attempt of
-// limits l: its own, never less than the fixed ones (Start then applies
-// the attempt's cap: rejected.budget).
-func (l DurableLimits) recovery() DurableLimits {
-	return DurableLimits{Certificates: max(l.Certificates, fixedCertificates), History: max(l.History, minHistory)}
 }
 
 // Cert is one durable file and, once sealed, its certificate (cs, ce].
@@ -291,7 +305,7 @@ type DurableReport struct {
 	History               int              `json:"history"`     // ledger records retained and reserved at the end
 	HistoryCap            int              `json:"history_cap"` // H
 	LimitBytes            int64            `json:"limit_bytes"` // the spill slots and H derive from (one slot per MiB)
-	LimitedBy             string           `json:"limited_by"`  // what LimitBytes is: spill_cap, free_space, or fixed
+	LimitedBy             string           `json:"limited_by"`  // what bounds the slots: spill_cap, free_space, metadata, or fixed
 	CapturedRanges        int64            `json:"captured_ranges"`
 	CaptureAt             map[string]int64 `json:"capture_at"`
 	CapturePendingDropped int64            `json:"capture_pending_dropped"`

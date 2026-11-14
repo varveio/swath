@@ -625,7 +625,7 @@ func TestDurableChangedSource(t *testing.T) {
 	}
 	root, _ := os.OpenRoot(cp)
 	defer root.Close()
-	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k, order.DurableLimits{})
+	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1327,4 +1327,52 @@ func TestDurableResumeSmallerBudget(t *testing.T) {
 		sameDataset(t, "resume", ref, out)
 		handles(t, sum)
 	})
+}
+
+// TestDurableSameDiskDefaultCap: with the default spill cap (half the free
+// space after the reserve) a same-disk resume finds the free space short
+// by the certified files it kept. Shaped as 100 GiB free when the killed
+// run started and 40 GiB retained: without counting them the resumed cap
+// is 30 GiB and Start rejects a quarter of the retained bytes'
+// certificates (rejected.budget); counting them as free (spillMax) the cap
+// is the killed run's, 50 GiB, and every certificate that fit it is
+// accepted. Here the retained bytes are the crashed fixture's (40 units
+// of them); the slots are the fixture's 64 MiB cap's, so only the byte
+// budget is under test. Recovery itself is bounded by the format, never by
+// the free space it finds (order.TestDurableRecoveryBounds).
+func TestDurableSameDiskDefaultCap(t *testing.T) {
+	datasettest.RequireJournal(t)
+	_, _, _, out := durableFixture(t)
+	st, err := journal.Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var k *string
+	if n := len(st.Records); n > 0 {
+		kk := string(st.Records[n-1].Part.MaxKey)
+		k = &kk
+	}
+	root, _ := os.OpenRoot(out)
+	defer root.Close()
+	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	retained, accepted := c.AcceptedBytes(), c.Reused()
+	if accepted == 0 {
+		t.Fatal("no certificate to keep")
+	}
+	unit := (retained + 39) / 40
+	free := 100*unit - retained // the free space the resume finds
+	if old := halfFree(free, 0); old >= retained {
+		t.Fatalf("shape: the uncounted cap %d holds the %d retained bytes", old, retained)
+	}
+	capped := halfFree(free+retained, 0)
+	if err := c.Start(order.Limits(64<<20, 0), capped, nil); err != nil {
+		t.Fatal(err)
+	}
+	if d := c.Report(); d.Resume.Rejected["budget"] != 0 || c.Reused() != accepted {
+		t.Fatalf("cap %d for %d retained bytes: kept %d of %d, rejected %v", capped, retained, c.Reused(), accepted, d.Resume.Rejected)
+	}
 }

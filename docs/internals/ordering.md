@@ -653,11 +653,13 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   seal and its retirement); without either the range spills disposably, as before (`no_slot`,
   `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). Both limits scale
   with the spill the attempt may hold (`order.Limits`): one slot per MiB of the spill cap, or without a cap
-  of the spill filesystem's free space when the run starts (10,000 when neither is known; below 16 MiB
+  of the spill filesystem's free space when the run starts (on a resume the certified files it kept count as
+  free in both), at most 262,144 slots, the metadata ceiling (10,000 when neither is known; below 16 MiB
   durable spill is off, `durable_off`), and a history cap H of four records per slot, at least 40,000. H
   bounds the ledger's retained prefix plus outstanding reservations; on a resume the prefix's record count is
   what counts, so history a truncation dropped is refunded (`TestDurableHistoryRace`: racing captures never
-  pass H). The report says what the limits derive from (`limit_bytes`, `limited_by`).
+  pass H). The report says what the limits derive from and what bound the slots (`limit_bytes`;
+  `limited_by`: `spill_cap`, `free_space`, `metadata` or `fixed`).
 
   The limits were fixed at 10,000 slots and H = 40,000 until they bound billion-key listings, which spill
   nearly every range ahead of the output at once ([measurements](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)):
@@ -666,7 +668,10 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   than 1 MiB each on average, or whose spill turns over more than about twice within one ledger (the ledger
   is never compacted), still runs out (`no_slot`, `history_exhausted`) and relists those ranges after a
   crash. The bounds, per MiB of the spill the limits derive from: in memory one `Cert` (at most 256 bytes;
-  `TestDurableLimits`) with its file name and four keys per live certificate; on disk at most two
+  `TestDurableLimits`) with its file name and four keys per live certificate, and whatever the spill at
+  most 512 MiB of certificate metadata, charged at 2 KiB a certificate (measured at about 0.9 KiB with 99-byte
+  keys, recovery's ledger entry included), so 262,144 certificates, which hold 590 to 720 GiB of spill at 2.3
+  to 2.8 MiB per range (a `--spill-budget none` run on a 4 TiB disk stops there); on disk at most two
   certificates' records, a seal of at most 56 bytes plus its three keys and a 26-byte retirement each
   (about 0.07 % of the spill with 100-byte keys, 0.6 % with 1 KiB keys); and a recovery scan of the ledger
   that read 100,000 records of 100-byte keys in about 40 ms from the page cache
@@ -722,13 +727,13 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
-  trusting the writer, within the resuming attempt's limits (from its spill cap as the resume starts, and never
-  less than 10,000 certificates and H = 40,000): the scan stops where the records kept plus one retirement owed per live certificate
-  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more
-  certificates live than the slots; the ledger is truncated there like a damaged
-  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`; a resume past
-  the fixed bounds, killed mid replay and resumed again, accepts and replays every certificate:
-  `TestDurableBeyondFixedLimits`);
+  trusting the writer, within the largest limits any attempt has (262,144 certificates, H = 1,048,576), never
+  the resuming attempt's, which depend on the free space it finds: the scan stops where the records kept plus one retirement owed per live certificate
+  (written by recovery, or reserved for an accepted one) would pass that H (`TestDurableRecoveryHistory`), and before a sealed record that would make more
+  certificates live than that; the ledger is truncated there like a damaged
+  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`;
+  `TestDurableRecoveryPastFixedLimits` recovers, starts and replays a planted state past the old fixed bounds,
+  killed mid replay and recovered again);
   the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
   CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
   `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the

@@ -270,7 +270,10 @@ type Spill struct {
 // spillMax is the live spill cap for spill under dir: the configured one,
 // none for a negative one, else half the space free on dir's filesystem
 // (its nearest existing ancestor) when the run starts, after the reserve.
-func spillMax(l SpillLimits, dir string) int64 {
+// retained is the bytes of the certified spill a resume recovered there:
+// they count as free, being spill the cap already holds (their bytes are
+// charged to it), so a same-disk resume has the cap its killed run had.
+func spillMax(l SpillLimits, dir string, retained int64) int64 {
 	switch {
 	case l.Max > 0:
 		return l.Max
@@ -281,15 +284,22 @@ func spillMax(l SpillLimits, dir string) int64 {
 	if free == order.Unlimited {
 		return 0
 	}
-	return max(1, (free-l.Reserve)/2)
+	return halfFree(free+retained, l.Reserve)
 }
 
+// halfFree is the default spill cap with free bytes free: half of them
+// after the reserve, at least one byte.
+func halfFree(free, reserve int64) int64 { return max(1, (free-reserve)/2) }
+
 // durableLimits is the durable spill's limits for a spill cap of max bytes
-// in dir (0: none, so the free space there bounds them).
-func durableLimits(max int64, dir string) order.DurableLimits {
+// in dir (0: none, so the free space there, the retained certified spill
+// counted as free, bounds them).
+func durableLimits(max int64, dir string, retained int64) order.DurableLimits {
 	free := int64(order.Unlimited)
 	if max == 0 {
-		free = order.FreeBytes(existing(dir))
+		if free = order.FreeBytes(existing(dir)); free != order.Unlimited {
+			free += retained
+		}
 	}
 	return order.Limits(max, free)
 }
@@ -1115,7 +1125,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		oopt.SpillDir = filepath.Join(scratch, "spill")
 	}
 	if oopt.SpillDir != "" {
-		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
+		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir, jr.cacheOf().AcceptedBytes())
 		// Warned at the first spill, not here: most runs never spill, and
 		// a usage error found later must come alone.
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
@@ -1228,7 +1238,7 @@ func (a *attempt) startCache(oopt *order.Options, src registry.Source, cancel co
 	}
 	f, fences := src.(source.Fencing)
 	ru, reusing := src.(source.Reusing)
-	lim := durableLimits(oopt.SpillMax, oopt.SpillDir)
+	lim := durableLimits(oopt.SpillMax, oopt.SpillDir, c.AcceptedBytes())
 	switch {
 	case oopt.SpillDir == "":
 		lim = order.DurableLimits{}
