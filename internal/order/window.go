@@ -42,6 +42,8 @@ const (
 	WindowSpillCap  = "spill_cap" // half the spill cap over a spilled row's bytes, with what the budget holds
 	WindowBudget    = "budget"    // spill off: what the budget holds
 	WindowUnbounded = "unbounded" // spill without a cap: no limit
+	WindowRun       = "run"       // the run's own bound, under the others: a tile per worker and four parts
+	WindowSet       = "set"       // the plan's set rows (swath diag list --seed-from-window-rows), under the others
 	WindowRows      = "rows"      // a refusal: the charges and the tile past the window's rows
 	WindowSpill     = "spill"     // a refusal: live spill past half its cap, or a frame refused
 	WindowGrowth    = "growth"    // a refusal: a held tile grown past growthFactor
@@ -96,9 +98,9 @@ type tileCredit struct {
 
 // window is the run's frontier window (nil without a plan).
 type window[R, P any] struct {
-	plan     source.Planner[R]
-	root     *node[R, P]
-	rowBytes float64 // the prior's bytes per row (0: unknown)
+	plan  source.Planner[R]
+	root  *node[R, P]
+	sizes source.PlanSizes
 	// tiles are the admitted tiles not yet released, in key order; est
 	// their expected rows (mu); excess the rows held past their
 	// expectations, grown how many are grown (atomic: emitters charge
@@ -164,8 +166,29 @@ const (
 	admitFailed
 )
 
-// windowRows is the window's rows and the term that set it (mu held).
+// windowParts is the parts' worth of rows the run's own bound gives the
+// writers ahead of the output (with a tile per worker).
+const windowParts = 4
+
+// windowRows is the window's rows and the term that set it (mu held): the
+// run's own bound (a tile per worker and windowParts parts of the prior's,
+// or the plan's set rows) where it is under what the spill cap and the
+// budget give, so a small disk still binds first.
 func (o *run[R, P]) windowRows() (float64, string) {
+	rows, by := o.storageRows()
+	run, rby := float64(o.win.sizes.WindowRows), WindowSet
+	if run == 0 {
+		run, rby = float64(o.opt.Workers)*o.win.sizes.TileRows+windowParts*o.win.sizes.PartRows, WindowRun
+	}
+	if run > 0 && run < rows {
+		return run, rby
+	}
+	return rows, by
+}
+
+// storageRows is what the spill cap and the row budget give the window, and
+// the term that set it (mu held).
+func (o *run[R, P]) storageRows() (float64, string) {
 	w := o.win
 	mem := 0.0
 	if u := w.units.Load(); u > 0 {
@@ -177,7 +200,7 @@ func (o *run[R, P]) windowRows() (float64, string) {
 	case o.sp.max <= 0:
 		return math.Inf(1), WindowUnbounded
 	}
-	beta := w.rowBytes
+	beta := w.sizes.RowBytes
 	if n := o.sp.rows.Load(); n > 0 {
 		beta = float64(o.sp.bytes.Load()) / float64(n)
 	}

@@ -13,10 +13,18 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
-  order through a frontier window sized from `--spill-budget` and `--sort-buffer`, so rows listed ahead of the
+  order through a frontier window (a tile per worker and a few parts' rows, smaller when `--spill-budget` and
+  `--sort-buffer` hold less), so rows listed ahead of the
   output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
   The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
-  `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) (#535).
+  `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and `--seed-from-window-rows` the window's
+  rows (#535).
+- Go port: a durable spill certificate slot is 64 KiB of the spill cap, not 1 MiB, up to the metadata ceiling
+  (262,144 certificates, 512 MiB of their metadata), which a 16 GiB cap reaches (`limited_by` `metadata`). Listings
+  of 200 to 600 million keys at 2,048 workers ran out of slots at one per MiB (16 of 28 in a kill-and-resume
+  sweep, whose resumes replayed 35 to 46 % of the keys against 93 to 97 % for the rest); every one of their ranges
+  now has a slot (#513).
+
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
   without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted
@@ -70,7 +78,7 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: `reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
-  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `8ceebf48d986`).
+  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `41e43191bc40`).
   The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
   `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
   and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.

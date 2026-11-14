@@ -184,8 +184,8 @@ handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `limit_bytes` (the spill both derive from, one slot per
-MiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
-262,144-certificate ceiling, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
+64 KiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
+262,144-certificate ceiling, from 16 GiB, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exhausted` (seals not certified at the
 metadata bound), `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
@@ -213,7 +213,7 @@ and `not_engaged` by reason, [internals/ordering.md](../internals/ordering.md#ro
 `--seed-from`; absent otherwise) is the frontier window
 ([internals/ordering.md](../internals/ordering.md#the-frontier-window)): `tiles` admitted, `forced` of them by the
 drainer past a refusal, `grown` (tiles whose rows reached 4 times the prior's), `rows` (the window's rows when last
-evaluated) and `bound_by` (`spill_cap`, `budget` or `unbounded`), `waits` (workers' waits at the window by the
+evaluated) and `bound_by` (`run`, `set`, `spill_cap`, `budget` or `unbounded`), `waits` (workers' waits at the window by the
 refusal that held them: `rows`, `spill`, `growth`), `wait_ns` and `peak_waiters`, `plan_wait_ns` (the drainer
 waiting for the prior to be read), `peak_tiles`, `peak_credit_rows` (the rows charged to the tiles held) and
 `peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission). In `timings`, `listing_done_at` is when the provider finished (every range expanded).

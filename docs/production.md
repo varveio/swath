@@ -71,7 +71,8 @@ per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still lis
 
 A prior with counts (a previous dataset, or a cut file with counts) also changes what is listed ahead of the
 output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
-yet written stay within a window sized from `--spill-budget` and `--sort-buffer`
+yet written stay within a window: a tile per worker and a few parts' rows, smaller still when `--spill-budget`
+and `--sort-buffer` hold less
 ([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
 near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
 no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
@@ -141,10 +142,10 @@ directory listing keeps no journal and starts over.
   minutes.
 - **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
   the output), read back from `DIR/.swath/spill/durable/` instead of listed again. A range is certified when
-  it finishes; the number of certificates scales with the spill cap (one per MiB of it, at most 262,144), so a listing whose
-  ranges spill at least 1 MiB each on average certifies every finished range unless its spill turns over more
-  than about twice (`no_slot` and `history_exhausted` in `resources.spill.durable` count the ranges that were
-  not). The ranges unfinished at the stop are listed again.
+  it finishes; the number of certificates scales with the spill cap (one per 64 KiB of it, at most 262,144,
+  reached at 16 GiB), so a listing with fewer ranges than that certifies every finished range unless its
+  spill turns over more than about twice (`no_slot`, `history_exhausted` and `metadata_exhausted` in
+  `resources.spill.durable` count the ranges that were not). The ranges unfinished at the stop are listed again.
 - **Listed again:** the keys after the last published key that no certified file holds. The report's
   `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
   [Running swath](running.md#stopping-and-resuming) owns the rules.

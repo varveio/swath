@@ -56,12 +56,16 @@ const (
 	// and GCS) and fixed fields.
 	maxLedgerFrame = 64 << 10
 	// certificateBytes is the spill an attempt may hold per certificate
-	// slot: one slot per MiB (DurableLimits). Billion-key listings spilled
-	// 2.3 to 2.8 MiB per range (measurements.md, "Spill at billion scale").
-	certificateBytes = 1 << 20
-	// minCertificates is the smallest cap: below 16 MiB of spill durable
-	// spill is off (sixteen is the fewest worth a ledger).
-	minCertificates = 16
+	// slot below the metadata ceiling: one slot per 64 KiB (DurableLimits),
+	// so the ceiling binds from a 16 GiB spill cap. Listings of 200 to 600
+	// million keys at 2,048 workers that ran out of slots at one per MiB
+	// spilled a range per 220 to 450 KiB of their cap (measurements.md,
+	// "Durable spill slots"). It keeps the ledger proportional to the
+	// spill below the ceiling: H is four records per slot.
+	certificateBytes = 64 << 10
+	// minDurableSpill is the least spill durable spill runs with: below 16
+	// MiB it is off.
+	minDurableSpill = 16 << 20
 	// fixedCertificates is the cap when the spill an attempt may hold is
 	// unknown (no spill cap, and the free space not measurable).
 	fixedCertificates = 10_000
@@ -121,11 +125,12 @@ const ledgerName = "ledger"
 
 // DurableLimits are an attempt's durable spill limits: the certificate
 // slots (live certificates), the history cap H (ledger records), and the
-// spill they derive from. Both scale with that spill up to the metadata
-// ceiling, so a listing whose ranges spill at least 1 MiB each on average
-// has a slot for every range it holds; per MiB of that spill the cache
-// holds at most one live certificate's metadata and the ledger at most
-// four records.
+// spill they derive from. Below the metadata ceiling (a spill cap under 16
+// GiB) both scale with that spill, so a listing whose ranges spill at
+// least 64 KiB each on average has a slot for every range it holds; per 64
+// KiB of that spill the cache holds at most one live certificate's
+// metadata and the ledger at most four records. From 16 GiB the metadata
+// ceiling binds: 262,144 slots, H 1,048,576.
 type DurableLimits struct {
 	Certificates int
 	History      int
@@ -137,7 +142,7 @@ type DurableLimits struct {
 const (
 	limitSpillCap  = "spill_cap"  // the spill cap (--spill-budget, or half the free space)
 	limitFreeSpace = "free_space" // no spill cap: the spill filesystem's free space
-	limitMetadata  = "metadata"   // the spill would allow more: the metadata ceiling, 262,144 slots
+	limitMetadata  = "metadata"   // the spill would allow more (16 GiB or more): the metadata ceiling, 262,144 slots
 	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000
 )
 
@@ -166,7 +171,7 @@ var recoveryLimits = DurableLimits{Certificates: maxCertificates, History: maxHi
 
 // Limits is the durable spill's limits for a spill cap of spillCap bytes
 // (0: none) on a filesystem with free bytes free (Unlimited: not known):
-// one certificate slot per MiB of the cap, or without one of the free
+// one certificate slot per 64 KiB of the cap, or without one of the free
 // space, at most 262,144 (the metadata ceiling), and H four records per
 // slot, at least 40,000. Below 16 MiB the cap is 0 (durable spill off).
 func Limits(spillCap, free int64) DurableLimits {
@@ -178,7 +183,7 @@ func Limits(spillCap, free int64) DurableLimits {
 	default:
 		return DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}
 	}
-	if l.Bytes < minCertificates*certificateBytes {
+	if l.Bytes < minDurableSpill {
 		return l
 	}
 	n := l.Bytes / certificateBytes
@@ -333,7 +338,7 @@ type DurableReport struct {
 	Slots                 int              `json:"slots"`       // the certificate cap
 	History               int              `json:"history"`     // ledger records retained and reserved at the end
 	HistoryCap            int              `json:"history_cap"` // H
-	LimitBytes            int64            `json:"limit_bytes"` // the spill slots and H derive from (one slot per MiB)
+	LimitBytes            int64            `json:"limit_bytes"` // the spill slots and H derive from (one slot per 64 KiB)
 	LimitedBy             string           `json:"limited_by"`  // what bounds the slots: spill_cap, free_space, metadata, or fixed
 	CapturedRanges        int64            `json:"captured_ranges"`
 	CaptureAt             map[string]int64 `json:"capture_at"`

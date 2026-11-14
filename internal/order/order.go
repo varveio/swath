@@ -725,7 +725,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		// The plan root is never claimed: it stays open, counted, until the
 		// plan ends, its tiles admitted as its children (window.go).
 		root.state = expanding
-		o.win = &window[R, P]{plan: plan, root: root, rowBytes: plan.RowBytes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
+		o.win = &window[R, P]{plan: plan, root: root, sizes: plan.Sizes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
 		defer plan.Start(ctx, func() {
 			o.mu.Lock()
 			o.work.Broadcast()

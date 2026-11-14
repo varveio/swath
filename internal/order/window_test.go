@@ -30,6 +30,7 @@ type planned struct {
 	failAt      int
 	failErr     error
 	hold        map[int]chan struct{}
+	sizes       source.PlanSizes
 
 	mu       sync.Mutex
 	next     int
@@ -50,7 +51,7 @@ func newPlanned(tiles, rows, page int) *planned {
 
 func (p *planned) Planner() source.Planner[int] { return p }
 func (p *planned) Root() int                    { return -1 }
-func (p *planned) RowBytes() float64            { return 0 }
+func (p *planned) Sizes() source.PlanSizes      { return p.sizes }
 func (p *planned) Bound(bool)                   {}
 
 func (p *planned) Start(_ context.Context, wake func()) func() {
@@ -325,5 +326,34 @@ func TestWindowSpillCapHeld(t *testing.T) {
 	w := st.Window
 	if w == nil || w.BoundBy != WindowSpillCap || w.Waits[WindowRows]+w.Waits[WindowSpill] == 0 || st.SpillRows == 0 || st.SpillRefused != 0 {
 		t.Fatalf("window %+v, spilled %d rows, refused %d frames", w, st.SpillRows, st.SpillRefused)
+	}
+}
+
+// TestWindowRunBound: with a disk and a budget that hold far more, the
+// window still binds at the run's own bound (a tile per worker and four of
+// the prior's parts: bound_by run), or at the rows the plan sets (the diag
+// knob: bound_by set), whichever is under what the storage gives; the
+// tiles held never charge more, and the run completes.
+func TestWindowRunBound(t *testing.T) {
+	for _, tc := range []struct {
+		sizes source.PlanSizes
+		by    string
+		rows  int64
+	}{
+		{source.PlanSizes{TileRows: 100, PartRows: 200}, WindowRun, 4*100 + 4*200},
+		{source.PlanSizes{TileRows: 100, PartRows: 200, WindowRows: 500}, WindowSet, 500},
+	} {
+		p := newPlanned(40, 100, 50)
+		p.sizes = tc.sizes
+		st, got, err := runPlanned(t, p, Options{Workers: 4, Budget: 1 << 20, SpillDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, p.keys()) {
+			t.Fatalf("%s: %d keys, want %d", tc.by, len(got), len(p.keys()))
+		}
+		if w := st.Window; w == nil || w.BoundBy != tc.by || w.Rows != tc.rows || w.PeakCreditRows > tc.rows {
+			t.Fatalf("%s: window %+v, want %d rows", tc.by, w, tc.rows)
+		}
 	}
 }
