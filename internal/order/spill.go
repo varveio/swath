@@ -776,7 +776,8 @@ func (s *spiller[P]) unrefuse() {
 }
 
 // press records spill pressure (Gauges.pressure) as it is now: spill
-// refused while an emitter waits in publish. Called where either changes.
+// refused while a worker waits on it, in publish or at admission. Called
+// where either changes.
 func (s *spiller[P]) press() {
 	s.refusal.mu.Lock()
 	s.pressLocked()
@@ -786,7 +787,7 @@ func (s *spiller[P]) press() {
 // pressLocked is press with the refusal mutex held.
 func (s *spiller[P]) pressLocked() {
 	if g := s.g; g != nil {
-		g.pressure.set(s.full.Load() && g.publishWait.n.Load() > 0, clock().UnixNano())
+		g.pressure.set(s.full.Load() && g.publishWait.n.Load()+g.admissionWait.n.Load() > 0, clock().UnixNano())
 	}
 }
 

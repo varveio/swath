@@ -86,10 +86,12 @@ window is not detected, and is bounded as above.
 
 A sorted run whose spill cap is far too small for the rows listed ahead of the output is not stuck: it moves
 at the output's pace, which on a very large bucket can be close to a stall. The watchdog watches for it too:
-once spill has stood refused while an emitter waits in publish for 2 minutes (`order.spill_pressure_since` in
-the progress file; a gap under 30 s does not end the wait), it prints the error event `spill_pressure`, and
-again every 30 minutes while the wait lasts. With `--spill-wait-timeout` it stops the run at that length:
-exit 74, `cause` `spill_budget`, resumable as a full disk is, with more disk or a larger `--spill-budget`.
+once spill has stood refused while workers wait on it (in publish or at admission) for 2 minutes
+(`order.spill_pressure_since` in the progress file; a wait that comes back within 30 s keeps its start), it
+prints the error event `spill_pressure`, and again every 30 minutes while the wait lasts. With
+`--spill-wait-timeout` it stops the run at that length: exit 74, `cause` `spill_budget`, resumable as a full
+disk is, with more disk or a larger `--spill-budget`. Both act only while workers wait at that moment: a run
+that recovered, or whose listing is done (the segment tail, the commit), is neither told nor stopped.
 
 A finite `--max-duration` belongs on every unattended attempt (the default, 0, has no limit): the watchdog
 stops a service that answers forever with empty pages, but not one that keeps returning rows or pages forever,

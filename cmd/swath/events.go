@@ -421,10 +421,11 @@ func (w *failureWatch) outstanding(now time.Time) string {
 const spillPressureFor, spillPressureEvery = 2 * time.Minute, 30 * time.Minute
 
 // spillWatch watches listing wait on a full spill cap
-// (order.GaugeSnapshot.SpillPressureSince) for a run writing to dir: an
-// error event once the wait has lasted spillPressureFor, again every
-// spillPressureEvery while it lasts, and with wait (--spill-wait-timeout)
-// the run's stop once it has lasted that long.
+// (order.GaugeSnapshot.SpillPressureSince, present only while a worker
+// waits on it) for a run writing to dir: an error event once the wait has
+// lasted spillPressureFor, again every spillPressureEvery while it lasts,
+// and with wait (--spill-wait-timeout) the run's stop once it has lasted
+// that long; each only while the wait holds at that moment.
 type spillWatch struct {
 	dir   string
 	wait  time.Duration
@@ -452,8 +453,7 @@ func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
 		return nil
 	}
 	if s.Order == nil || s.Order.SpillPressureSince == nil {
-		w.since = time.Time{}
-		return nil
+		return nil // not waiting now (or listing done): nothing is due; a spell that comes back keeps its count
 	}
 	g := s.Order
 	if since := *g.SpillPressureSince; !since.Equal(w.since) {

@@ -113,6 +113,60 @@ func TestSpillWatch(t *testing.T) {
 	}
 }
 
+// TestSpillWatchRecovered: the event and the stop come only while listing
+// waits at that moment (the progress snapshot's spill_pressure_since,
+// absent once the wait ends). A second of refusal and then a long healthy
+// tail neither stops a run with --spill-wait-timeout 20s nor tells; nor
+// does a wait that ends just short of spillPressureFor. A wait that comes
+// back with its start kept (within the order stage's gap) is told, once,
+// and stopped, once it holds again past the length.
+func TestSpillWatchRecovered(t *testing.T) {
+	stderr := captureSyncStderr(t)
+	setLog(termOptions{logFormat: logText}, "")
+	t0 := time.Unix(1_000_000, 0)
+	feed := func(w *spillWatch, from, to time.Duration, since time.Time) error {
+		t.Helper()
+		for d := from; d <= to; d += 2 * time.Second {
+			if err := w.check(pressured(since, 0), t0.Add(d)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	w := &spillWatch{wait: 20 * time.Second}
+	if err := feed(w, 0, time.Second, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed(w, 2*time.Second, time.Hour, time.Time{}); err != nil || stderr.String() != "" {
+		t.Fatalf("a recovered run: %v, stderr %q", err, stderr)
+	}
+	w = &spillWatch{}
+	if err := feed(w, 0, spillPressureFor-10*time.Second, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed(w, spillPressureFor-8*time.Second, time.Hour, time.Time{}); err != nil || stderr.String() != "" {
+		t.Fatalf("a wait that ended before %s: %v, stderr %q", spillPressureFor, err, stderr)
+	}
+	// The spell comes back with its start kept.
+	w = &spillWatch{wait: spillPressureFor + time.Minute}
+	if err := feed(w, 0, spillPressureFor-10*time.Second, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed(w, spillPressureFor-8*time.Second, spillPressureFor+10*time.Second, time.Time{}); err != nil || stderr.String() != "" {
+		t.Fatalf("told while not waiting: %v, stderr %q", err, stderr)
+	}
+	if err := feed(w, spillPressureFor+12*time.Second, spillPressureFor+12*time.Second, t0); err != nil || strings.Count(stderr.String(), "\n") != 1 {
+		t.Fatalf("the spell back: %v, stderr %q", err, stderr)
+	}
+	if err := feed(w, spillPressureFor+14*time.Second, spillPressureFor+2*time.Minute, time.Time{}); err != nil {
+		t.Fatalf("stopped while not waiting: %v", err)
+	}
+	if err := feed(w, spillPressureFor+2*time.Minute+2*time.Second, spillPressureFor+2*time.Minute+2*time.Second, t0); !errors.Is(err, errSpillWait) ||
+		strings.Count(stderr.String(), "\n") != 1 {
+		t.Fatalf("the spell back past --spill-wait-timeout: %v, stderr %q", err, stderr)
+	}
+}
+
 // TestSpillWaitTimeoutResumes: a sorted run whose output waits on the
 // range at the front of the key space (held) while the rest is listed
 // fills a small spill cap, and --spill-wait-timeout stops it: exit 74,

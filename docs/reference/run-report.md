@@ -56,7 +56,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
 | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
 | `order.publish_waiters`, `order.admission_waiters`, `order.idle_workers` | the order stage's waiters now, each with a `peak_` twin: emitters waiting in publish on a full budget (a worker still listing its range), workers waiting to claim a queued range (budget and spill used), workers with nothing queued to list |
-| `order.spill_pressure_since` | when listing began to wait on a full spill cap: spill refused while an emitter waits in publish, through gaps under 30 s (absent while it does not); at 2 minutes the `spill_pressure` event says so ([log events](log-events.md)) |
+| `order.spill_pressure_since` | when listing began to wait on a full spill cap: spill refused while workers wait on it, in publish or at admission (present only while they do, and not after listing is done; a wait that comes back within 30 s keeps its start); at 2 minutes of it the `spill_pressure` event says so ([log events](log-events.md)) |
 | `order.spill_max_bytes`, `order.spill_reserve_bytes` | the spill cap in effect, and the free space spill leaves on its filesystem (0: none) |
 | `started_at`, `as_of`, `duration_ms` | timing |
 

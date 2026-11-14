@@ -225,17 +225,23 @@ type Gauges struct {
 // clock is the time spill pressure is recorded and read at (tests set it).
 var clock = time.Now
 
-// pressureGap is the gap in spill pressure that ends its spell: a shorter
-// one is credit returned and taken again, not the output catching up.
+// pressureGap is the longest gap in spill pressure that its spell
+// continues across: a shorter one is credit returned and taken again, not
+// the output catching up.
 const pressureGap = 30 * time.Second
 
-// pressure is spill pressure: spill refused while an emitter waits in
-// publish, the listing held at the output's pace. since is when its spell
-// began and off when its condition last went false (0: it holds), in unix
-// nanoseconds; a spell outlives a gap shorter than pressureGap. Written
-// under the spiller's refusal mutex, read without it (Snapshot): since is
-// stored before off, and read after it.
-type pressure struct{ since, off atomic.Int64 }
+// pressure is spill pressure: spill refused while a worker waits on it, in
+// publish or at admission, the listing held at the output's pace. since is
+// when its spell began and off when its condition last went false (0: it
+// holds), in unix nanoseconds: the condition coming back within
+// pressureGap continues the spell, later it begins another. It reads as
+// none (at) while the condition is off, and for good once listing is done
+// (listed). Written under the spiller's refusal mutex, read without it
+// (Snapshot): since is stored before off, and read after it.
+type pressure struct {
+	since, off atomic.Int64
+	listed     atomic.Bool
+}
 
 // set records the condition, on or not, at t.
 func (p *pressure) set(on bool, t int64) {
@@ -251,11 +257,11 @@ func (p *pressure) set(on bool, t int64) {
 	}
 }
 
-// at is when the spell holding at t began (0: none).
-func (p *pressure) at(t int64) int64 {
+// at is when the spell holding now began (0: none, the condition off).
+func (p *pressure) at() int64 {
 	off := p.off.Load()
 	since := p.since.Load()
-	if since == 0 || (off != 0 && t-off >= int64(pressureGap)) {
+	if since == 0 || off != 0 || p.listed.Load() {
 		return 0
 	}
 	return since
@@ -300,10 +306,11 @@ type GaugeSnapshot struct {
 	PeakAdmissionWaiters int64 `json:"peak_admission_waiters"`
 	IdleWorkers          int64 `json:"idle_workers"`
 	PeakIdleWorkers      int64 `json:"peak_idle_workers"`
-	// SpillPressureSince is when spill pressure began, absent while there
-	// is none: spill refused while an emitter waits in publish, through
-	// gaps under 30 s. SpillMaxBytes and SpillReserveBytes are the spill
-	// cap and the free space spill leaves on its filesystem (0: none).
+	// SpillPressureSince is when spill pressure began, present only while
+	// it holds (listing not done): spill refused while a worker waits on
+	// it, in publish or at admission; a gap under 30 s keeps the start.
+	// SpillMaxBytes and SpillReserveBytes are the spill cap and the free
+	// space spill leaves on its filesystem (0: none).
 	SpillPressureSince *time.Time `json:"spill_pressure_since,omitempty"`
 	SpillMaxBytes      int64      `json:"spill_max_bytes"`
 	SpillReserveBytes  int64      `json:"spill_reserve_bytes"`
@@ -321,7 +328,7 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 		AdmissionWaiters: g.admissionWait.n.Load(), PeakAdmissionWaiters: g.admissionWait.peak.Load(),
 		IdleWorkers: g.idleWait.n.Load(), PeakIdleWorkers: g.idleWait.peak.Load(),
 		SpillMaxBytes: g.spillMax.Load(), SpillReserveBytes: g.spillReserve.Load()}
-	if t := g.pressure.at(clock().UnixNano()); t != 0 {
+	if t := g.pressure.at(); t != 0 {
 		since := time.Unix(0, t).UTC()
 		s.SpillPressureSince = &since
 	}
@@ -501,7 +508,7 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 	if g != nil {
 		g.add(1)
 	}
-	if site == waitPublish && o.sp != nil {
+	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()
 	}
 	c.Wait()
@@ -510,7 +517,7 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 		g.add(-1)
 		*sum += d
 	}
-	if site == waitPublish && o.sp != nil {
+	if (site == waitPublish || site == waitAdmission) && o.sp != nil {
 		o.sp.press()
 	}
 	return d
@@ -1010,6 +1017,7 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	case 0:
 		if err == nil && !o.stopped.Load() {
 			o.listedAt, listed = time.Now(), true
+			o.g.pressure.listed.Store(true)
 		}
 	case 1:
 		event("one-range-open") // tests: every range but one is done

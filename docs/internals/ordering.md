@@ -433,9 +433,9 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   at its first rows frame spilled, `order.Options.Spilling`; a run that never spills does not: `TestTmpfsSpillWarning`); `progress.json` carries the same as live values with their peaks
   under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin),
   with `spill_max_bytes`, `spill_reserve_bytes` and `spill_pressure_since`: since when spill has stood refused
-  (the spiller's `full`) while an emitter waits in publish, recorded where either changes under the spiller's
-  refusal mutex and held through gaps under 30 s, since `full` clears at every credit return
-  (`TestSpillPressure`). The command's watchdog reads it (`spillWatch`): the `spill_pressure` event at 2
+  (the spiller's `full`) while workers wait on it, in publish or at admission, recorded where either changes
+  under the spiller's refusal mutex. It is present only while that holds and listing is not done; since `full`
+  clears at every credit return, a wait that comes back within 30 s keeps its start (`TestSpillPressure`). The command's watchdog reads it (`spillWatch`): the `spill_pressure` event at 2
   minutes, and `--spill-wait-timeout`.
   The stage's `Stats` carry `SpillPeak` and `SpillRefused`, the report's `spill.peak_bytes` and `spill.refused`
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve

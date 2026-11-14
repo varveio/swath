@@ -411,11 +411,14 @@ func TestWaitCensus(t *testing.T) {
 	}
 }
 
-// TestSpillPressure: spill pressure is a spell of spill refused while an
-// emitter waits in publish, read at the clock. An emitter waiting on a full
-// budget with spill off, or spilling without a cap, is none. A refused one
-// begins a spell; returned credit leaves it held for pressureGap, a refusal
-// within the gap continues it, and one after the gap begins another.
+// TestSpillPressure: spill pressure is a spell of spill refused while a
+// worker waits on it, in publish or at admission, read at the clock; it
+// reads as none whenever the condition is off. An emitter waiting on a
+// full budget with spill off, or spilling without a cap, is none. A refused
+// one begins a spell; returned credit ends the reading at once, a refusal
+// within pressureGap continues the spell (its start kept), and one after
+// the gap begins another. A worker at admission on a refused spill, with no
+// emitter waiting, is pressure too; once listing is done there is none.
 func TestSpillPressure(t *testing.T) {
 	var now atomic.Int64
 	now.Store(time.Unix(1_000_000, 0).UnixNano())
@@ -472,26 +475,44 @@ func TestSpillPressure(t *testing.T) {
 	}
 	advance(10 * time.Minute)
 	credit(done)
-	advance(pressureGap / 2)
+	if s := since(o); s != nil {
+		t.Fatalf("after credit: pressure since %v", s)
+	}
+	advance(pressureGap - 1)
 	done = refused("b") // within the gap: the same spell
 	if s := since(o); s == nil || !s.Equal(t0) {
 		t.Fatalf("refused again within the gap: pressure since %v, want %v", s, t0)
 	}
 	credit(done)
-	advance(pressureGap - 1)
-	if s := since(o); s == nil || !s.Equal(t0) {
-		t.Fatalf("within the gap: pressure since %v, want %v", s, t0)
-	}
-	advance(1)
-	if s := since(o); s != nil {
-		t.Fatalf("after the gap: pressure since %v", s)
-	}
-	t1 := advance(time.Minute)
-	done = refused("c")
+	t1 := advance(pressureGap)
+	done = refused("c") // past the gap: another spell
 	if s := since(o); s == nil || !s.Equal(t1) {
 		t.Fatalf("a new spell: pressure since %v, want %v", s, t1)
 	}
 	credit(done)
+
+	// No emitter waiting: a worker held at admission by the refused spill
+	// and the full budget is pressure, until credit comes back.
+	o.mu.Lock()
+	o.sp.max = 1
+	o.mu.Unlock()
+	o.sp.refuse()
+	if s := since(o); s != nil {
+		t.Fatalf("refused, nobody waiting: pressure since %v", s)
+	}
+	t2 := advance(time.Hour)
+	o.mu.Lock()
+	o.stack = []*node[string, tp]{{r: "y", state: queued}}
+	o.mu.Unlock()
+	bg(o, o.worker)
+	expectWait(t, ws, waitAdmission)
+	if s := since(o); s == nil || !s.Equal(t2) || o.g.publishWait.n.Load() != 0 {
+		t.Fatalf("at admission: pressure since %v, want %v (%d in publish)", s, t2, o.g.publishWait.n.Load())
+	}
+	o.g.pressure.listed.Store(true) // as listing done stores it
+	if s := since(o); s != nil {
+		t.Fatalf("listing done: pressure since %v", s)
+	}
 }
 
 // TestFrontierWaitWakes: the drainer waits for the range it needs while a
