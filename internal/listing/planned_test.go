@@ -183,6 +183,11 @@ func TestDurableResumePlannedAcrossTiles(t *testing.T) {
 	if d := sum.Resources.Spill.Durable; d == nil || d.Resume == nil || d.Resume.Accepted == 0 || sum.Resources.Window == nil {
 		t.Fatalf("nothing reused, or not planned: %+v, window %+v", d, sum.Resources.Window)
 	}
+	// The replay ranges are never listed: listing ends once every gap is,
+	// so the tail can take the certificates left (#288).
+	if sum.Timings.ListingDoneAt.IsZero() || sum.Resources.Drain.Segments == nil || sum.Resources.Drain.Segments.Reason == "listing_active" {
+		t.Fatalf("listing never done: listing_done_at %v, segments %+v", sum.Timings.ListingDoneAt, sum.Resources.Drain.Segments)
+	}
 	m := manifestOf(t, out)
 	k := string(m.Parts[sum.Output.PartsRetained-1].MaxKey)
 	var certs, listed []span

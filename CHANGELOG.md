@@ -10,15 +10,24 @@ Notable changes per release. The full human summary for the current release is i
   order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold
   less), so rows listed ahead of the
   output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
-  The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
+  The run report (`report_version` 11) adds `resources.window`; the range engine counts `seed.from.merged` and
   `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and `--seed-from-window-rows` the window's
   rows (#535).
+- Go port: a resume that reuses durable-spill certificates writes its tail with the parallel segments. Before,
+  such a resume never finished listing: its replay ranges were counted as ranges still to list, so the segments
+  never engaged (`drain.segments.reason` `listing_active`), the encoders reserved for after listing were never
+  admitted, and every replayed row went through the one drainer. A resume took a median 2.16 times as long as a
+  fresh run on 28 production key lists. Listing now ends with the gaps around the certificates, and the
+  certificates the drainer has not reached by then are replayed by the segments, read by offset after one scan
+  of their files. The parts are the uninterrupted run's. The run report (`report_version` 10) adds
+  `drain.segments.certificates_read`, `certified_rows` and `certificate_scan_ns`, and
+  `spill.durable.resume.replayed_certificates`; `progress.json` counts the bytes the scans read
+  (`scanned_bytes`, in `advance`), so a long scan is not stopped as stuck (#288).
 - Go port: a durable spill certificate slot is 64 KiB of the spill cap, not 1 MiB, up to the metadata ceiling
   (262,144 certificates, 512 MiB of their metadata), which a 16 GiB cap reaches (`limited_by` `metadata`). Listings
   of 200 to 600 million keys at 2,048 workers ran out of slots at one per MiB (16 of 28 in a kill-and-resume
   sweep, whose resumes replayed 35 to 46 % of the keys against 93 to 97 % for the rest); every one of their ranges
   now has a slot (#513).
-
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
   without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted

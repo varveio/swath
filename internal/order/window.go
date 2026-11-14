@@ -275,7 +275,9 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 	o.buffered += u
 	o.max = max(o.max, o.buffered)
 	o.g.nodes.add(1)
-	o.open.Add(1)
+	if _, ok := o.replayOf(n); !ok { // a replay range is never listed (open)
+		o.open.Add(1)
+	}
 	o.stack = append(o.stack, n)
 	w.st.PeakTiles = max(w.st.PeakTiles, int64(len(w.tiles)))
 	w.st.PeakCreditRows = max(w.st.PeakCreditRows, w.est+w.excess.Load())
@@ -372,6 +374,7 @@ func (o *run[R, P]) notifyListed() {
 		o.opt.ListingDone()
 	}
 	o.listedNotified.Store(true)
+	event("listing-done") // tests: every range is listed
 }
 
 // awaitPlan is the drainer at the plan root with every admitted tile

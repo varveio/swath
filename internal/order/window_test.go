@@ -199,29 +199,32 @@ func TestWindowSmallerThanATile(t *testing.T) {
 }
 
 // TestPlanWaitWakes: the drainer, every admitted tile drained and the
-// plan's next tile not yet read, waits at the plan; the reader's wake
-// releases it, and the run completes.
+// plan's next tile not yet read, waits at the plan, and listing is not done
+// (the plan root stays open until the plan ends, though every range
+// admitted is); the reader's wake releases it, and the run completes, its
+// listing done once.
 func TestPlanWaitWakes(t *testing.T) {
 	p := newPlanned(6, 300, 100)
 	p.ready = 2
 	ch := waits(t)
 	done := make(chan error, 1)
 	var got []string
+	var listed atomic.Int64
 	go func() {
 		var err error
-		_, got, err = runPlanned(t, p, Options{Workers: 2, Budget: 1 << 20})
+		_, got, err = runPlanned(t, p, Options{Workers: 2, Budget: 1 << 20, ListingDone: func() { listed.Add(1) }})
 		done <- err
 	}()
 	expectWait(t, ch, waitPlan)
-	if p.admitted() != 2 {
-		t.Fatalf("%d tiles admitted before the plan read on, want 2", p.admitted())
+	if p.admitted() != 2 || p.finished.Load() != 2 || listed.Load() != 0 {
+		t.Fatalf("at the plan's wait: %d tiles admitted, %d listed (want 2 each), listing done %d times (want none)", p.admitted(), p.finished.Load(), listed.Load())
 	}
 	p.setReady(-1)
 	if err := expect(t, done, "plan"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got, p.keys()) {
-		t.Fatalf("%d keys, want %d", len(got), len(p.keys()))
+	if !slices.Equal(got, p.keys()) || listed.Load() != 1 {
+		t.Fatalf("%d keys, want %d; listing done %d times", len(got), len(p.keys()), listed.Load())
 	}
 }
 
