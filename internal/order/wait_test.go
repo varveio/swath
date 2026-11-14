@@ -351,7 +351,8 @@ func TestRefusedSpillWakesOnCredit(t *testing.T) {
 // (at publish), then the worker at admission once a range is queued. The
 // gauges read each site's waiters now and at peak, the times sum per site
 // (publish and admission make up the budget wait), and the refused
-// interval ends, timed and counted once, when spill credit returns.
+// interval ends, counted once, when spill credit returns. Durations are not
+// asserted positive: a coarse clock (Windows) reads a short wait as 0.
 func TestWaitCensus(t *testing.T) {
 	ws := waits(t)
 	p := newCtl()
@@ -370,8 +371,11 @@ func TestWaitCensus(t *testing.T) {
 	n := &node[string, tp]{r: "x", state: expanding}
 	done := publishing(o, n, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "k"}}, units: 1}}, 1)
 	expectWait(t, ws, waitPublish)
-	if g := now(); g.PublishWaiters != 1 || g.IdleWorkers != 1 || o.sp.refused.Load() != 1 || o.sp.refusedAt.Load() == 0 {
+	if g := now(); g.PublishWaiters != 1 || g.IdleWorkers != 1 || o.sp.refused.Load() != 1 {
 		t.Fatalf("refused publish: %+v, %d refused", g, o.sp.refused.Load())
+	}
+	if _, spells, open := o.sp.refusedTime(); spells != 0 || !open {
+		t.Fatalf("refused publish: %d spells, open %v", spells, open)
 	}
 	o.mu.Lock()
 	o.stack = []*node[string, tp]{{r: "y"}}
@@ -398,11 +402,11 @@ func TestWaitCensus(t *testing.T) {
 	if g.PublishWaiters != 0 || g.AdmissionWaiters != 0 || g.PeakPublishWaiters != 1 || g.PeakAdmissionWaiters != 1 {
 		t.Fatalf("after: %+v", g)
 	}
-	if o.publishWait <= 0 || o.admissionWait <= 0 || o.idleWait <= 0 || o.budget != o.publishWait+o.admissionWait {
+	if o.budget != o.publishWait+o.admissionWait {
 		t.Fatalf("publish %v + admission %v != budget %v; idle %v", o.publishWait, o.admissionWait, o.budget, o.idleWait)
 	}
-	if o.sp.refusedSpells.Load() != 1 || o.sp.refusedAt.Load() != 0 || o.sp.refusedTime() <= 0 {
-		t.Fatalf("refused: %d spells, open at %d, %v", o.sp.refusedSpells.Load(), o.sp.refusedAt.Load(), o.sp.refusedTime())
+	if d, spells, open := o.sp.refusedTime(); spells != 1 || open || d < 0 {
+		t.Fatalf("refused: %d spells, open %v, %v", spells, open, d)
 	}
 }
 

@@ -120,10 +120,16 @@ type spiller[P any] struct {
 	// plain frame's rows view its buffers, so each gets fresh ones.
 	rbuf, zbuf []byte
 
-	// refusedAt is when the current refused interval began (monotonic,
-	// 0: none); refusedNs sums the ended intervals, refusedSpells counts them
-	// (refuse, unrefuse). Accounting only: nothing decides on them.
-	refusedAt, refusedNs, refusedSpells atomic.Int64
+	// refusal times the intervals spill stands refused (refuse,
+	// unrefuse): full and the interval change together under its mu, so
+	// credit returned while a refusal is recorded cannot leave an interval
+	// open with full cleared. Accounting only: nothing decides on it.
+	refusal struct {
+		mu     sync.Mutex
+		at     time.Time // the current interval's start (zero: none)
+		total  time.Duration
+		spells int64 // the intervals that ended
+	}
 
 	mu   sync.Mutex
 	open map[*spillFile]struct{} // files with an open reader, closed by close
@@ -743,39 +749,40 @@ func (s *spiller[P]) release(f *spillFile) {
 // (full) until credit returns (unrefuse).
 func (s *spiller[P]) refuse() {
 	s.refused.Add(1)
+	r := &s.refusal
+	r.mu.Lock()
 	s.full.Store(true)
-	if s.refusedAt.Load() == 0 {
-		s.refusedAt.CompareAndSwap(0, monotonic())
+	if r.at.IsZero() {
+		r.at = time.Now()
 	}
+	r.mu.Unlock()
 }
 
 // unrefuse clears full (credit returned), ending a refused interval.
 func (s *spiller[P]) unrefuse() {
+	r := &s.refusal
+	r.mu.Lock()
 	s.full.Store(false)
-	if s.refusedAt.Load() == 0 {
-		return
+	if !r.at.IsZero() {
+		r.total += time.Since(r.at)
+		r.spells++
+		r.at = time.Time{}
 	}
-	if at := s.refusedAt.Swap(0); at != 0 {
-		s.refusedNs.Add(monotonic() - at)
-		s.refusedSpells.Add(1)
-	}
+	r.mu.Unlock()
 }
 
 // refusedTime is the time spill stood refused, an interval still open
-// included.
-func (s *spiller[P]) refusedTime() time.Duration {
-	ns := s.refusedNs.Load()
-	if at := s.refusedAt.Load(); at != 0 {
-		ns += monotonic() - at
+// included, the intervals that ended, and whether one is open.
+func (s *spiller[P]) refusedTime() (d time.Duration, spells int64, open bool) {
+	r := &s.refusal
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, open = r.total, !r.at.IsZero()
+	if open {
+		d += time.Since(r.at)
 	}
-	return time.Duration(ns)
+	return d, r.spells, open
 }
-
-// clockBase anchors monotonic.
-var clockBase = time.Now()
-
-// monotonic is a monotonic clock reading in nanoseconds, never 0.
-func monotonic() int64 { return int64(time.Since(clockBase)) + 1 }
 
 var errSpillFrame = errors.New("spill: corrupt frame")
 

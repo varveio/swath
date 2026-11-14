@@ -195,10 +195,13 @@ type Router[P any] struct {
 
 	// The encoders' account (WriterStats): their time on batches and part
 	// closes, less the time in the parts' files or uploads (encodeNs), and
-	// that time (outputNs); the parts published and their rows. listed is
-	// the account when listing ended (ListingDone).
-	encodeNs, outputNs, published, publishedRows atomic.Int64
-	listed                                       atomic.Pointer[WriterStats]
+	// that time (outputNs); the parts published and their rows, counted
+	// together under pubMu. listed is the account when listing ended
+	// (ListingDone).
+	encodeNs, outputNs       atomic.Int64
+	pubMu                    sync.Mutex
+	published, publishedRows int64
+	listed                   atomic.Pointer[WriterStats]
 }
 
 // WriterStats is the encoders' account: parts published and their rows,
@@ -213,7 +216,10 @@ type WriterStats struct {
 
 // ListingDone records the account when listing ended, once (AtListingDone).
 func (r *Router[P]) ListingDone() {
-	w := WriterStats{Parts: r.published.Load(), Rows: r.publishedRows.Load(), EncodeNs: r.encodeNs.Load(), OutputNs: r.outputNs.Load()}
+	r.pubMu.Lock()
+	w := WriterStats{Parts: r.published, Rows: r.publishedRows}
+	r.pubMu.Unlock()
+	w.EncodeNs, w.OutputNs = r.encodeNs.Load(), r.outputNs.Load()
 	r.listed.CompareAndSwap(nil, &w)
 }
 
@@ -693,8 +699,10 @@ func (r *Router[P]) encode(p *part[P]) {
 			r.fail(p.err)
 			return
 		}
-		r.published.Add(1)
-		r.publishedRows.Add(p.info.Rows)
+		r.pubMu.Lock()
+		r.published++
+		r.publishedRows += p.info.Rows
+		r.pubMu.Unlock()
 		if p.segment {
 			if p.err = faults.At("segment-published"); p.err != nil { // tests: killed with later segments open
 				r.fail(p.err)

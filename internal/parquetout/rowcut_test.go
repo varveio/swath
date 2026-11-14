@@ -75,7 +75,8 @@ func TestMaxRowsRotation(t *testing.T) {
 // TestWriterAccountAtListingDone: the writer's account recorded when
 // listing ends holds the parts published by then and their rows, and the
 // encoders' time split into encoding and output (the part files' writes,
-// syncs and closes); later parts do not change it. Listing ends here while
+// syncs and closes; not asserted positive, as a coarse clock (Windows)
+// reads a short write as 0); later parts do not change it. Listing ends here while
 // the last part publishes: parts 0 and 1 are published, in order, before.
 func TestWriterAccountAtListingDone(t *testing.T) {
 	out := t.TempDir()
@@ -104,7 +105,7 @@ func TestWriterAccountAtListingDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, ok := r.AtListingDone()
-	if len(parts) != 3 || !ok || w.Parts != 2 || w.Rows != 6000 || w.EncodeNs <= 0 || w.OutputNs <= 0 {
+	if len(parts) != 3 || !ok || w.Parts != 2 || w.Rows != 6000 || w.EncodeNs < 0 || w.OutputNs < 0 {
 		t.Fatalf("%d parts; at listing done (%v): %+v", len(parts), ok, w)
 	}
 }

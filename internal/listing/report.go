@@ -34,8 +34,12 @@ import (
 // destination, uploads, retries, commit and orphan cleanup). 6:
 // output.committed_object_bytes (the committed dataset's object bytes). 7:
 // outcome.unreadable is the count of entries that could not be read (it
-// was a flag), and outcome.entry_errors is gone.
-const ReportVersion = 7
+// was a flag), and outcome.entry_errors is gone. 8 adds fields only (#535):
+// the order stage's waits by site (resources.publish_wait_ns,
+// admission_wait_ns, idle_wait_ns and their peak_* twins),
+// resources.spill.refused_ns and refused_spells, and
+// resources.drain.writer_before_listing_done.
+const ReportVersion = 8
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
