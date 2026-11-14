@@ -5,7 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the run report is at `report_version` 11. The report fields the entries below name are new in it.
+- Go port: the run report is at `report_version` 12. The report fields the entries below name are new in it.
+- Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
+  file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
+  the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
+  SeekParquet format and written last, after the run report; a run that cannot write it (in a bucket, within a
+  time bound of its own) warns and stays committed. `--seed-from DATASET` makes its
+  tiles from it instead of the parts' page index when it matches the manifest; a bucket dataset's can be copied
+  and passed as a cut file. The run report adds `invocation.prior.cuts_file` and `cuts_refused`.
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold

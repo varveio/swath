@@ -45,8 +45,9 @@ import (
 // certified_rows and certificate_scan_ns (a resume's certificates the
 // segments replayed), and resources.spill.durable.resume.
 // replayed_certificates. 11 adds resources.window, the frontier window of
-// a run planned from a counted --seed-from (#535).
-const ReportVersion = 11
+// a run planned from a counted --seed-from (#535). 12 adds
+// invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
+const ReportVersion = 12
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

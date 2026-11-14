@@ -39,8 +39,9 @@ import (
 // the footer's; its bounds are its first and last key, exact bytes; keys
 // rise strictly within and across parts; every footer carries exactly the
 // seekparquet.* stamps (format version, draft revision, schema id, key
-// column, key uniqueness), and sorting_columns says key ascending. It
-// returns every key in order.
+// column, key uniqueness), and sorting_columns says key ascending; its cut
+// file, if it holds one, is its own (checkCuts). It returns every key in
+// order.
 func checkContract(t testing.TB, out string) []string {
 	t.Helper()
 	var m dataset.Manifest
@@ -118,6 +119,7 @@ func checkContract(t testing.TB, out string) []string {
 			t.Fatalf("keys not strictly ascending at %d: %q, %q", i, keys[i-1], keys[i])
 		}
 	}
+	checkCuts(t, out, keys)
 	return keys
 }
 

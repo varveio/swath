@@ -109,7 +109,7 @@ runs on one path.
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 11); `--report -`
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 12); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
 [../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is
@@ -216,8 +216,25 @@ Order is checked at three places, each before the step it protects:
 Then: parts (written in `.swath/parts/`, fsynced on close) are renamed
 into `data/` in ordinal order, `data/` is fsynced, and `manifest.json` is written to a temporary name, fsynced,
 renamed and its directory fsynced. That rename is the commit: without a manifest there is no dataset. The
-run reports follow; a report that cannot be written is a warning, and the dataset stands. A failure or
+run reports follow, then the cut file; one that cannot be written is a warning, and the dataset stands. A failure or
 cancellation removes the unpublished parts and writes no manifest.
+
+**The cut file** ([dataset.md](../dataset.md#the-cut-file)). Each writer keeps its part's page ends
+(`dataset.PageEnd`: the last key of every page it hands the module, owned, and the part's rows through it,
+dropping one when the next page starts with its key), at most one key per 1,024 rows of the part being written:
+about 1/1,024 of its keys' bytes plus 24 bytes a page, a few hundred KiB for a 64 MiB part, held per open part.
+As each part is published, in ordinal order (segments' included), the router adds them to the cut set
+(`dataset.Cuts`), which keeps the cuts at the current R and doubles R in place as soon as they exceed the file's
+bounds (the cuts at 2R are those at R where the rows reach a multiple of 2R since the previous cut), so it holds
+at most 262,144 cuts and 16 MiB of lines. After the commit and the run report the parts a resume retained are
+read back from their key page index (`parquetout.PageEnds`: a page end at every multiple of 1,024 rows and the
+part's last row, the module's shorter pages inside a writer's page skipped; a bucket dataset's parts through the
+object version their records name), eight parts at a time and taken in order, at most eight parts' page ends
+held (`retainedCuts`), and the run's cuts joined after theirs, so a resumed dataset's file is an uninterrupted
+run's. The reads stop when the run is stopped; a bucket's also when their own bound runs out (the aftermath's
+length, `FinalizeTimeout`, after the orphan cleanup and `run.json`), and the run commits without the file,
+warning once. A local file is replaced durably beside the manifest; a bucket's is created only if absent. The
+manifest and the parts do not depend on it.
 
 ```text
 out/
@@ -225,6 +242,7 @@ out/
                                 order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 SeekParquet: version, schema id, key, ordered parts with exact bounds; swath's
                                 source, scope and coverage under extensions.swath; each part's sha256 (the commit)
+  cuts.txt                      the cut file, for the next --seed-from (advisory, written last)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json

@@ -158,6 +158,11 @@ type writer[P any] struct {
 	size    func(*P) (int64, bool)
 	objects int64
 	closed  bool
+	// ends are the part's page ends for its dataset's cut file
+	// (dataset.PageEnd), each key owned; rows the rows of the pages
+	// written.
+	ends []dataset.PageEnd
+	rows int64
 }
 
 // partFile is a local part's file as the module writes it: its writes and
@@ -251,11 +256,17 @@ func (w *writer[P]) write(rows []schema.Row[P]) error {
 }
 
 // flushPage hands the buffered page to the module, which encodes it
-// before it returns; the page is reused after.
+// before it returns; the page is reused after. Its end is a page end, and
+// the previous page's is not when this page starts with its key.
 func (w *writer[P]) flushPage() error {
 	if len(w.page) == 0 {
 		return nil
 	}
+	if n := len(w.ends); n > 0 && w.ends[n-1].Key == w.page[0].Key {
+		w.ends = w.ends[:n-1]
+	}
+	w.rows += int64(len(w.page))
+	w.ends = append(w.ends, dataset.PageEnd{Key: strings.Clone(w.page[len(w.page)-1].Key), Rows: w.rows})
 	err := w.part.WritePage(len(w.page), w.fill)
 	clear(w.page) // drop the rows' strings: the provider's arenas
 	w.page = w.page[:0]
