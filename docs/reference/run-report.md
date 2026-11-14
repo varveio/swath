@@ -204,8 +204,10 @@ encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
 `per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`; the
 counts include `rolling`, the stretches a seeded run wrote while listing went on, absent without a plan:
-`stretches`, `segments`, `rows`, `time_ns` (the drainer inside them), `open_wait_ns` (segments opening their parts)
-and `not_engaged` by reason, [internals/ordering.md](../internals/ordering.md#rolling-segments-during-listing)); and `encoders_at_start`, `encoders_after_listing`,
+`stretches`, `segments`, `rows`, `time_ns` (the drainer inside them) split into `plan_ns`, `write_ns` and
+`handoff_ns`, `open_wait_ns` (segments opening their parts), `writers_ns` and `peak_writers` (segments written at
+once: `writers_ns` over `write_ns` is the mean), `gap_ns` and `max_gap_ns` (between stretches) and `not_engaged`
+by reason, [internals/ordering.md](../internals/ordering.md#rolling-segments-during-listing)); and `encoders_at_start`, `encoders_after_listing`,
 `encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
 `--sort-buffer` says), `encoder_writer_bytes` and `encoder_upload_bytes` (one encoder's prices), and
 `encoders_at_start_bound_by` and `encoders_after_listing_bound_by` (`memory`, `cpu`, `descriptors`, `minimum`,

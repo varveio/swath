@@ -46,6 +46,10 @@ type Segmenter[P any] interface {
 	BeginSegments() (dataset.SegmentPlan, bool)
 	// AbandonSegments undoes BeginSegments: Sink.Write goes on.
 	AbandonSegments()
+	// PlanChanges is a count that moves whenever Plan's answer may have
+	// changed: a drainer refused asks again once it has moved (an atomic
+	// read, called under the stage's lock).
+	PlanChanges() int64
 	// OpenSegment opens the next segment's part, in order: the open part
 	// when continueOpen, else a new one.
 	OpenSegment(ctx context.Context, continueOpen bool) (SegmentSink[P], error)
@@ -115,22 +119,31 @@ type SegmentStats struct {
 
 // RollingStats describe the stretches written as segments before listing
 // ended: Stretches of them, their Segments and Rows; Time the drainer's
-// time inside them (planning, writing, retiring their spill), OpenWait the
-// workers' time opening their parts (an encoder slot). NotEngaged counts,
-// by reason (Roll*, Segment*), the looks at the listed tiles ahead that did
-// not write a stretch.
+// time inside them, split into Plan (from the look to the first segment:
+// flattening, trailers, cutting), Write (the segments running, open to the
+// last close) and HandOff (keeping the last part, retiring the spill, the
+// drainer's walk moved past it); OpenWait the workers' time opening their
+// parts (an encoder slot). Writers is the segments' time summed (each open
+// to close): over Write, the mean segments written at once; PeakWriters the
+// most open at once. Gap sums the drainer's time between the end of one
+// stretch and the start of the next (MaxGap the longest): the encoders the
+// stretches leave idle unless the serial drain uses them. NotEngaged counts,
+// by reason (Roll*, Segment*), the decisions that wrote no stretch.
 type RollingStats struct {
-	Stretches, Segments int64
-	Rows                int64
-	Time, OpenWait      time.Duration
-	NotEngaged          map[string]int64
+	Stretches, Segments           int64
+	Rows                          int64
+	Time, OpenWait                time.Duration
+	Plan, Write, HandOff, Writers time.Duration
+	PeakWriters                   int
+	Gap, MaxGap                   time.Duration
+	NotEngaged                    map[string]int64
 }
 
 // Why a look at the listed tiles ahead wrote no stretch (beside the
 // Segment* reasons: not_planned, single_part, row_budget, one_encoder).
 const (
 	RollFrontierListing = "frontier_listing" // the drainer's tile is still listing
-	RollBelowTwoParts   = "below_two_parts"  // the listed rows ahead hold fewer than two parts
+	RollBelowPart       = "below_one_part"   // the listed rows ahead hold less than a part
 )
 
 // What set the segment workers' count (SegmentStats.WorkersBy).
@@ -191,13 +204,18 @@ type segState[P any] struct {
 	// when one is planned.
 	uses []atomic.Int32
 	// Rolling (with a plan): seen is the window's listed tiles at the last
-	// look, partRows the rows a part holds (estimated from the plan's open
-	// part, then from each stretch); off stops rolling until listing ends
-	// (one encoder admitted before then).
+	// look; waitPlan that the sink could not state its rule then, planAt
+	// its PlanChanges before it was asked (the drainer asks again once a
+	// tile is listed or that has moved); partRows the rows a part holds
+	// (estimated from the plan's open part, then from each stretch); off
+	// stops rolling until listing ends (one encoder admitted before then);
+	// ended when the last stretch ended (RollingStats.Gap).
 	seen     int64
-	rollWait int64 // asked when the rule could not be stated: again past this many rows handed on
+	waitPlan bool
+	planAt   int64
 	partRows int64
 	off      bool
+	ended    time.Time
 	// unwoken: tree bytes the workers released since they last woke the
 	// listing workers (segRelease; mu).
 	unwoken int64
@@ -225,7 +243,8 @@ type segment struct {
 
 // segmentsDue reports whether the drainer should look at the segments
 // now: listing is done, or (rolling) more tiles are listed than at its
-// last look. Without mu (drainer only).
+// last look, or the sink that could not state its rule then may now.
+// Without mu (drainer only).
 func (o *run[R, P]) segmentsDue() bool {
 	if o.seg == nil || o.seg.tried {
 		return false
@@ -233,24 +252,25 @@ func (o *run[R, P]) segmentsDue() bool {
 	if o.listedNotified.Load() {
 		return o.handed() > o.seg.waitRows
 	}
-	return o.win != nil && !o.seg.off && o.win.listed.Load() != o.seg.seen && o.handed() > o.seg.rollWait
+	return o.win != nil && !o.seg.off && (o.win.listed.Load() != o.seg.seen || o.seg.waitPlan && o.seg.sg.PlanChanges() != o.seg.planAt)
 }
 
 // stretchDue reports whether a stretch is worth planning now (mu held,
 // after segmentsDue): listing is done (the tail), or the listed tiles from
-// the drainer's own hold at least two parts. Every look that finds less is
-// counted (RollingStats.NotEngaged).
+// the drainer's own hold at least a part (cut then decides: two segments
+// holding rows at least). Every look that finds less is counted
+// (RollingStats.NotEngaged).
 func (o *run[R, P]) stretchDue() bool {
 	if o.listedNotified.Load() {
 		return true
 	}
 	o.seg.seen = o.win.listed.Load()
-	rows, ok := o.listedAhead(2 * o.seg.partRows)
+	rows, ok := o.listedAhead(o.seg.partRows)
 	switch {
 	case !ok:
 		o.seg.notEngaged(RollFrontierListing)
-	case rows < 2*o.seg.partRows:
-		o.seg.notEngaged(RollBelowTwoParts)
+	case rows < o.seg.partRows:
+		o.seg.notEngaged(RollBelowPart)
 	default:
 		return true
 	}
@@ -307,21 +327,22 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	// The sink is called without the stage's lock: the router's lock is
 	// held by its interval cut while part 0's encoder, accounting its
 	// bytes, wakes the stage (Shared.Add takes o.mu).
+	planAt := sg.PlanChanges() // before Plan: a change after it is seen
 	o.mu.Unlock()
 	if hookSegmenter != nil {
 		hookSegmenter(&o.mu)
 	}
 	pl, ok := sg.Plan()
 	o.mu.Lock()
+	o.seg.waitPlan = false
 	if !ok {
 		if listed {
 			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
 		} else {
-			// Asked again once more rows are handed on, whether or not
-			// another tile is listed by then; the tail's wait (waitRows)
-			// is left alone.
+			// Asked again once a tile is listed or the sink's rule may
+			// have changed (PlanChanges); the tail's wait is left alone.
 			o.seg.notEngaged(SegmentNotPlanned)
-			o.seg.seen, o.seg.rollWait = -1, o.handed()
+			o.seg.waitPlan, o.seg.planAt = true, planAt
 		}
 		return false, nil
 	}
@@ -423,7 +444,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
 			why = SegmentNotPlanned
 		case !began:
-			why, o.seg.seen, o.seg.rollWait = SegmentNotPlanned, -1, o.handed()
+			why, o.seg.waitPlan, o.seg.planAt = SegmentNotPlanned, true, planAt
 		case tight:
 			why = SegmentRowBudget
 			if end.final {
@@ -487,9 +508,11 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	o.stalled()
 	err = faults.At("segments-begun") // tests: killed with the segments planned, none opened
 	var rows int64
+	tw0 := time.Now()
 	if err == nil {
 		rows, err = o.runSegments(units, segs, workers, tail)
 	}
+	tw1 := time.Now()
 	if err == nil && end.final {
 		err = faults.At("segments-written") // tests: killed with every row handed on, the last part held
 	}
@@ -525,10 +548,20 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	err = faults.At("stretch-kept") // tests: killed with a stretch written during listing, its last part kept open
 	o.mu.Lock()
 	r := &o.seg.roll
+	end2 := time.Now()
 	r.Stretches++
 	r.Segments += int64(len(segs))
 	r.Rows += rows
-	r.Time += time.Since(t)
+	r.Time += end2.Sub(t)
+	r.Plan += tw0.Sub(t)
+	r.Write += tw1.Sub(tw0)
+	r.HandOff += end2.Sub(tw1)
+	if !o.seg.ended.IsZero() {
+		gap := t.Sub(o.seg.ended)
+		r.Gap += gap
+		r.MaxGap = max(r.MaxGap, gap)
+	}
+	o.seg.ended = end2
 	o.seg.partRows = max(1, rows/int64(real))
 	return false, err
 }
@@ -888,6 +921,9 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int, tail dat
 	var wg sync.WaitGroup
 	var failed atomic.Bool
 	var opening atomic.Int64 // the workers' time in OpenSegment
+	// The segments open now (between OpenSegment and their close), the
+	// most at once, and their time open summed (RollingStats.Writers).
+	var writing, peak, writers atomic.Int64
 	fail := func(err error) {
 		if failed.CompareAndSwap(false, true) {
 			o.cancel(err)
@@ -906,11 +942,14 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int, tail dat
 				next++
 				t := time.Now()
 				out, err := o.seg.sg.OpenSegment(o.ctx, segs[j].cont)
-				opening.Add(int64(time.Since(t)))
+				opened := time.Now()
+				opening.Add(int64(opened.Sub(t)))
 				mu.Unlock()
 				if err != nil {
 					fail(err)
 					return
+				}
+				for w, p := writing.Add(1), peak.Load(); w > p && !peak.CompareAndSwap(p, w); p = peak.Load() {
 				}
 				n, d, f, l, ok, err := o.segment(units, segs[j], j == 0, out, &parts[j])
 				if err != nil {
@@ -928,6 +967,8 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int, tail dat
 				default:
 					out.Close(o.ctx, segs[j].rowCut)
 				}
+				writing.Add(-1)
+				writers.Add(int64(time.Since(opened)))
 				first[j], last[j], has[j], counts[j], keys[j], times[j] = f, l, ok, n, d, time.Since(t)
 			}
 		})
@@ -937,8 +978,10 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int, tail dat
 		return 0, context.Cause(o.ctx)
 	}
 	st := &o.seg.st
-	if !segs[len(segs)-1].final {
-		o.seg.roll.OpenWait += time.Duration(opening.Load())
+	if r := &o.seg.roll; !segs[len(segs)-1].final {
+		r.OpenWait += time.Duration(opening.Load())
+		r.Writers += time.Duration(writers.Load())
+		r.PeakWriters = max(r.PeakWriters, int(peak.Load()))
 	}
 	prev, havePrev := o.last, o.hasLast
 	var distinct, rows int64

@@ -58,6 +58,12 @@ func (r *Router[P]) plan() (dataset.SegmentPlan, bool) {
 	return pl, true
 }
 
+// PlanChanges is a count that moves whenever Plan's answer may have
+// changed (a part closed, which may freeze the ratio; a part opened, which
+// may pass a recovered boundary; segments abandoned): a caller refused
+// asks again once it has moved. An atomic read, safe under any lock.
+func (r *Router[P]) PlanChanges() int64 { return r.planChanges.Load() }
+
 // BeginSegments ends Write: the rest of the stream goes to segments. The
 // interval cut stops first, and the rule is stated in the same step, so no
 // cut can close the open part after the caller has planned against it.
@@ -87,6 +93,7 @@ func (r *Router[P]) AbandonSegments() {
 	if r.segmented && !r.closed {
 		r.segmented = false
 		r.startTick()
+		r.planChanges.Add(1)
 	}
 }
 

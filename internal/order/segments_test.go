@@ -121,6 +121,13 @@ func (s *partSink) BeginSegments() (dataset.SegmentPlan, bool) {
 	return pl, ok
 }
 
+// PlanChanges moves with the parts: the plan is stated from the second.
+func (s *partSink) PlanChanges() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return int64(len(s.parts))
+}
+
 func (s *partSink) AbandonSegments() {
 	s.mu.Lock()
 	s.segmented = false

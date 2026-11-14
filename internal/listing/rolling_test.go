@@ -33,8 +33,12 @@ import (
 // drainer writes the listed tiles as segments. A hold not released within
 // a minute is a failure of the fixture (late), not a release by time.
 type rollHolds struct {
-	a, a2, ahead, b  string
-	seenA, seenB     atomic.Int64
+	a, a2, ahead, b string
+	seenA, seenB    atomic.Int64
+	// afterA, if set, releases the first hold once that many other
+	// requests have been answered since it began (a window too small to
+	// list as far as ahead), instead of at ahead.
+	afterA, sinceA   int64
 	answered, kept   chan struct{}
 	answeredO, keptO sync.Once
 	late             atomic.Bool
@@ -67,6 +71,7 @@ func (h *rollHolds) before(ctx context.Context, start string) error {
 		wait = h.kept
 	case start >= h.a && start < h.a2 && h.seenA.Add(1) == 1:
 		wait = h.answered
+		atomic.StoreInt64(&h.sinceA, 0)
 	default:
 		return nil
 	}
@@ -85,7 +90,12 @@ func (h *rollHolds) release() { h.keptO.Do(func() { close(h.kept) }) }
 
 // after is called with a request's start key once it is answered.
 func (h *rollHolds) after(start string) {
-	if start >= h.ahead {
+	switch {
+	case h.afterA > 0:
+		if h.seenA.Load() > 0 && atomic.AddInt64(&h.sinceA, 1) >= h.afterA {
+			h.answeredO.Do(func() { close(h.answered) })
+		}
+	case start >= h.ahead:
 		h.answeredO.Do(func() { close(h.answered) })
 	}
 }
@@ -124,6 +134,10 @@ func (v heldVersions) ListObjectVersions(ctx context.Context, in *client.Version
 	v.h.after(in.KeyMarker)
 	return p, err
 }
+
+// unboundWindow is a frontier window's rows past any the tests' storage
+// gives (--seed-from-window-rows): the spill cap and the row budget bind.
+const unboundWindow = 1 << 40
 
 // rollBudget is the row budget of a rolling identity run: with spill off,
 // every tile ahead held in memory (the window admits them all); with spill
@@ -170,9 +184,11 @@ func newRollServer(t *testing.T, backend *s3mem.Backend) *rollServer {
 }
 
 // rollConfig is a run over url with four encoders, seeded from prior (""
-// none), at w workers.
+// none), at w workers, its frontier window as large as its storage allows
+// (the holds let listing run far ahead of a held frontier).
 func rollConfig(url, out, prior string, w int, spill bool) Config {
 	cfg := plannedConfig(url, out, prior, w)
+	cfg.Source.Options.(*S3Config).Policy.WindowRows = unboundWindow
 	cfg.Limits.Encoders = 4
 	cfg.Limits.Spill.Off = !spill
 	cfg.Limits.RowBudget = rollBudget(spill)
@@ -213,6 +229,7 @@ func TestRollingIsTheSerialRun(t *testing.T) {
 		}
 		cfg.Source.SeedFrom = prior
 		cfg.Source.Options.(*S3Config).Policy.TilePages = 4
+		cfg.Source.Options.(*S3Config).Policy.WindowRows = unboundWindow
 		cfg.Limits.Workers, cfg.Limits.Encoders = w, 4
 		cfg.Limits.Spill = SpillLimits{Off: !spill}
 		cfg.Limits.RowBudget = rollBudget(spill)
@@ -270,5 +287,46 @@ func TestRollingIsTheSerialRun(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestRollingInASmallWindow: a seeded run whose frontier window holds about
+// three parts (--seed-from-window-rows) writes stretches while listing
+// goes on, at one part's worth of listed tiles ahead of its drainer: the
+// frontier is held until a few more requests are answered (all the window
+// lets list ahead of it), the last range until a stretch is kept. Two or
+// more segments are written at once, and the parts are the one-encoder
+// unseeded run's, byte for byte.
+func TestRollingInASmallWindow(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
+	backend := rollBackend(t)
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref")
+	cfg := rollConfig(newRollServer(t, backend).url, ref, "", 8, false)
+	cfg.Limits.Encoders = 1
+	sum, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partRows := sum.Output.RowsEmitted / int64(len(manifestOf(t, ref).Parts))
+	for _, spill := range []bool{false, true} {
+		name := fmt.Sprintf("spill=%v", spill)
+		srv := newRollServer(t, backend)
+		h := newPlainHolds(t)
+		h.afterA = 4 // two tiles of two pages past the held one
+		srv.holds.Store(h)
+		out := filepath.Join(dir, name)
+		cfg := rollConfig(srv.url, out, ref, 64, spill)
+		cfg.Source.Options.(*S3Config).Policy.WindowRows = 3 * partRows
+		sum, err := Run(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		sameDataset(t, name, ref, out)
+		rl := sum.Resources.Drain.Segments.Rolling
+		if rl == nil || rl.Stretches == 0 || rl.PeakWriters < 2 || sum.Resources.Window == nil {
+			t.Fatalf("%s: rolling %+v, window %+v", name, rl, sum.Resources.Window)
+		}
+		t.Logf("%s: %d rows a part, window %d rows: rolling %+v", name, partRows, sum.Resources.Window.Rows, *rl)
 	}
 }

@@ -674,9 +674,22 @@ type Rolling struct {
 	// their parts, an encoder slot's wait included.
 	TimeNs     int64 `json:"time_ns"`
 	OpenWaitNs int64 `json:"open_wait_ns"`
-	// NotEngaged counts the looks at the listed tiles ahead that wrote no
+	// TimeNs split: PlanNs from the look to the first segment, WriteNs the
+	// segments running, HandOffNs after them (the last part kept, the
+	// spill retired). WritersNs is the segments' time open summed: over
+	// WriteNs, the mean written at once; PeakWriters the most at once.
+	// GapNs is the drainer's time between one stretch's end and the next's
+	// start, MaxGapNs the longest.
+	PlanNs      int64 `json:"plan_ns"`
+	WriteNs     int64 `json:"write_ns"`
+	HandOffNs   int64 `json:"handoff_ns"`
+	WritersNs   int64 `json:"writers_ns"`
+	PeakWriters int   `json:"peak_writers"`
+	GapNs       int64 `json:"gap_ns"`
+	MaxGapNs    int64 `json:"max_gap_ns"`
+	// NotEngaged counts the decisions (a tile listed, or the rule changed) that wrote no
 	// stretch, by reason: frontier_listing (the drainer's tile still
-	// listing), below_two_parts, not_planned, single_part, row_budget,
+	// listing), below_one_part, not_planned, single_part, row_budget,
 	// one_encoder (after which it stops looking until listing ends).
 	NotEngaged map[string]int64 `json:"not_engaged"`
 }

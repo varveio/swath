@@ -704,9 +704,11 @@ of listing there: such a run of tiles is written as segments, a *stretch*, by th
   stretch holds whole spill files. A reused certificate's replay range is done only once the drainer has
   replayed it, so its tile is never listed before: the stretches stop there, and the drainer replays it serially.
 - **When.** The drainer looks when another tile has been listed since its last look (`window.listed`), and plans a
-  stretch only when the listed tiles from its own hold at least two parts (rows per part estimated from the
-  router's open part, then from each stretch). Before part 0 has frozen the ratio, or while a recovered boundary
-  lies ahead, the router states no rule, and the drainer asks again once it has handed more rows on. The rest is
+  stretch only when the listed tiles from its own hold at least a part (rows per part estimated from the router's
+  open part, then from each stretch): the window (8M rows by default) holds a few parts at most, and a stretch of
+  one part beyond the open one still writes two at once. Before part 0 has frozen the ratio, or while a recovered
+  boundary lies ahead, the router states no rule; the drainer asks again only once a tile is listed or the
+  router's answer may have changed (`PlanChanges`: a part closed or opened), so the counters count decisions. The rest is
   the tail's: two encoders and two spare processors, the workers sized to the row budget, at least two segments
   holding rows. One encoder admitted before listing ends (more come at `ListingDone`) stops the looks until then.
   Unseeded runs, uncounted cut files and runs without a dataset have no plan: their tail is as before.

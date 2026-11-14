@@ -345,7 +345,7 @@ func TestRollingEngagesDuringListing(t *testing.T) {
 		t.Fatal("rows differ")
 	}
 	rl := st.Segments.Rolling
-	if rl == nil || rl.Stretches == 0 || rl.Segments < 2 || rl.Rows == 0 || len(rl.NotEngaged) == 0 || s.maxWriting < 2 || closedAtListed == 0 {
+	if rl == nil || rl.Stretches == 0 || rl.Segments < 2 || rl.Rows == 0 || len(rl.NotEngaged) == 0 || s.maxWriting < 2 || rl.PeakWriters < 2 || closedAtListed == 0 {
 		t.Fatalf("rolling %+v, %d segments at once, %d closed when listing ended", rl, s.maxWriting, closedAtListed)
 	}
 	t.Logf("rolling %+v; %d parts, %d closed by segments before listing ended", *rl, len(s.parts), closedAtListed)

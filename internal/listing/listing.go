@@ -1375,7 +1375,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred}
 		if r := s.Rolling; r != nil {
 			d.Segments.Rolling = &Rolling{Stretches: r.Stretches, Segments: r.Segments, Rows: r.Rows, TimeNs: int64(r.Time),
-				OpenWaitNs: int64(r.OpenWait), NotEngaged: r.NotEngaged}
+				OpenWaitNs: int64(r.OpenWait), NotEngaged: r.NotEngaged, PlanNs: int64(r.Plan), WriteNs: int64(r.Write), HandOffNs: int64(r.HandOff),
+				WritersNs: int64(r.Writers), PeakWriters: r.PeakWriters, GapNs: int64(r.Gap), MaxGapNs: int64(r.MaxGap)}
 		}
 		if w, ok := a.router.AtListingDone(); ok {
 			d.WriterBeforeListingDone = &ListingWriter{Parts: w.Parts, Rows: w.Rows, EncodeNs: w.EncodeNs, OutputNs: w.OutputNs}
