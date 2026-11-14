@@ -50,7 +50,7 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 	moved := map[string]string{
 		"--no-seed": "s3", "--structure=off": "s3", "--sequential": "s3", "--max-keys=5": "s3",
 		"--adaptive-limit-slow-start": "s3", "--spill-plain": "", "--no-spill-compress": "", "--spill-reserve=1GiB": "",
-		"--no-spill": "", "--no-journal": "",
+		"--no-spill": "", "--no-journal": "", "--segment-workers=4": "",
 	}
 	for fl, scheme := range moved {
 		root := src
@@ -129,7 +129,7 @@ func TestCountRefusesOutputFlags(t *testing.T) {
 			}
 		}
 	}
-	for _, fl := range []string{"--no-spill-compress", "--spill-plain", "--spill-reserve=1GiB", "--no-spill", "--no-journal", "--part-interval=1s"} {
+	for _, fl := range []string{"--no-spill-compress", "--spill-plain", "--spill-reserve=1GiB", "--no-spill", "--no-journal", "--segment-workers=4", "--part-interval=1s"} {
 		var buf bytes.Buffer
 		err := runCount(context.Background(), []string{src, fl}, &buf)
 		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath") || strings.Contains(err.Error(), "count takes it") {

@@ -35,6 +35,9 @@ Diagnostics:
       --no-spill            wait on the sort buffer instead of spilling rows to disk
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
+      --segment-workers N   workers writing the tail (0: one per two CPUs, at least 8)
+                              Replaces the processors rule only: the encoders admitted after listing
+                              (--encoders), the row budget and the descriptor limit still bound it.
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
       --no-seed             start from one range, without the delimiter-listing seed
@@ -92,6 +95,9 @@ Diagnostics:
       --spill-plain         write spill frames without delta coding (a comparison arm)
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
+      --segment-workers N   workers writing the tail (0: one per two CPUs, at least 8)
+                              Replaces the processors rule only: the encoders admitted after listing
+                              (--encoders), the row budget and the descriptor limit still bound it.
       --adaptive-limit-slow-start
                             start the limit at 4 in flight, doubling each second to --workers
       --trace FILE          write the range engine's run trace (JSON Lines) to FILE
@@ -122,6 +128,9 @@ Diagnostics:
   page size asked for ([range-engine.md](range-engine.md)).
 - **`--adaptive-limit-slow-start`** starts the request limit at 4 in flight and doubles it each second up to
   `--workers` ([clients.md](clients.md#request-admission)).
+- **`--segment-workers`** replaces the processors rule for the workers writing the tail's parts; the encoders
+  admitted after listing, the row budget and the descriptor limit still bound it
+  (`resources.drain.segments.workers_by` is `flag` when it set the count; [ordering.md](ordering.md#segments-parts-written-in-parallel-after-listing)).
 - **Spill.** `--no-spill` turns spill off (listing waits on the sort buffer instead); `--spill-reserve` sets the
   free space spill leaves on its filesystem (derived by default: one part per encoder at full size, at least
   1 GiB); `--no-spill-compress` writes the frames uncompressed (by default zstd level 1 runs over the

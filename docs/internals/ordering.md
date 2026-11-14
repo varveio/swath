@@ -569,7 +569,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
-  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too; `swath diag list --segment-workers N` replaces that last rule for a measurement, the other bounds standing. And the row budget, at plan time:
   each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
   gathers, the batch its encoder writes and its part's queue (`dataset.SegmentPlan.Queue`, two batches; the open part
   the first continues has the serial part's 16-batch queue, and the router holds that segment to two queued
