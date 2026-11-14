@@ -305,7 +305,7 @@ func TestReportContinuity(t *testing.T) {
 // TestStopSource: the outcome names what stopped a run.
 func TestStopSource(t *testing.T) {
 	err := errors.New("stopped")
-	for cause, want := range map[error]string{errDeadline: "timebox", &stuckError{stuckNoRows}: "liveness_watchdog",
+	for cause, want := range map[error]string{errDeadline: "timebox", &stuckError{stuckNoRows}: "liveness_watchdog", &spillWaitError{"spill cap too small"}: "spill_wait",
 		&signalError{syscall.SIGTERM}: "sigterm", &signalError{os.Interrupt}: "sigint"} {
 		if got := classify(err, cause, "").StopSource; got != want {
 			t.Errorf("%v: %q, want %q", cause, got, want)

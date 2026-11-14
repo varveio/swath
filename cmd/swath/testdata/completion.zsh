@@ -36,6 +36,7 @@ _swath_list() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -176,6 +177,7 @@ _swath_diag_list() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -263,6 +265,7 @@ _swath_diag_count() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -327,6 +330,7 @@ _swath_resume() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \

@@ -265,6 +265,13 @@ Limits:
                                 0: never. Raise it for a service that is slow to answer for minutes
                                 at a time. Only a dataset run of an object store (one with a
                                 journal) resumes where it stopped.
+      --spill-wait-timeout DURATION
+                              stop after waiting this long on a full spill cap (exit 74); 0: wait
+                                Listing waits on the output while spill is refused, which on a large
+                                bucket can be close to a stall; after 2 minutes swath says so. Set
+                                it on an unattended run to stop instead (cause spill_budget), then
+                                resume with more disk or a larger --spill-budget. Only a dataset run
+                                of an object store (one with a journal) resumes where it stopped.
       --request-timeout DURATION
                               per-request timeout; a request over it is retried (default 30s)
                                 Raise it for a slow endpoint or emulator whose pages take longer to
