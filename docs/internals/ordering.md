@@ -494,7 +494,8 @@ while an earlier one encodes would hold a whole part's rows in memory (a median 
 is done, the order stage cuts the rest of the stream into parts itself and writes several at once
 (`order/segments.go`, `parquetout/segments.go`):
 
-- **When.** Listing is done (every range finished, so the rest is immutable), the sink states its cut rule
+- **When.** Listing is done (every range finished, so the rest is immutable; a resume's reused certificates
+  are not listed, so listing ends with the gaps around them), the sink states its cut rule
   (`order.Segmenter`: the Parquet router once part 0 has frozen its size ratio, and no recovered boundary,
   `parquetout.Options.Cut`, lies ahead), at least two encoders are admitted and two processors are spare
   beside the drainer's. With two processors or one nothing changes.
@@ -595,14 +596,45 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
   covers it). The report counts what the segments read: `durable_files_read` and `durable_boundaries`.
-- **Known limitation: a resume that reuses certificates.** A reused certificate is a replay range that only
-  the drainer expands, when it reaches it in key order. Listing is therefore not done, and the segments cannot
-  begin (they need the rest of the stream immutable and known), until the drainer has passed the last
-  certificate. When the certificates lie near the end of the keyspace, such a resume's tail stays serial and
-  the report says so (`reason` `listing_active`; `TestSegmentsReplayDurableFiles`). The output is the same
-  either way; only the tail's speed differs. Follow-up ([#288](https://github.com/varveio/swath/issues/288)): let the segments take a reused certificate's frames
-  as units of the rest (its file's rows are already on disk and certified), so they can begin before the
-  drainer reaches it.
+- **Reused certificates.** On a resume a reused certificate is a replay range, which no worker lists, so it
+  does not count toward the end of listing: listing ends when the gaps around the certificates are listed
+  (`timings.listing_done_at`, and the encoders admitted after listing with it). Before that the drainer
+  replays a certificate it reaches as always. The certificates it has not reached by the time the segments
+  are planned are the segments' (#288): `flatten` notes their replay ranges in drain order, and the plan
+  reads their files before the cut (`scanCert`, at most one per spare processor and eight at once, on the
+  descriptors of the drainer's readers, closed first). The scan reads each file once, sequentially, and
+  checks it as the drainer's replay does (each frame's CRC; every key in `(cs, ce]` and ascending, or in
+  group mode repeating the one before; the trailer's captured count). It keeps no row: each captured frame
+  holding a row above `max(cs, K)` becomes a unit with its offset and size, the rows above, their logical
+  bytes, the frame's budget bytes and the rows to skip at its head (the frame that holds K). The cut needs
+  those rows and logical bytes, and neither the file nor its ledger record has them by frame, so the scan
+  reads the certified rows once more than the drainer would. Each scan holds one frame at a time and reserves
+  it first, as a segment worker reserves a unit (`segReserve`; `scanHold`: its 64 KiB read buffer, three times
+  the largest storage a frame of the file declared, and its rows' headers), so the scans stay within the budget
+  beside the tree. The bytes they read are the run's progress (`progress.json` `scanned_bytes`, in `advance`):
+  a scan of a large certified tail hands no row on, and is not stopped as stuck for it. Only the merged units
+  are kept, 104 bytes per certified frame above K, uncharged, until the tail ends: 2 to 4.5 MB per GiB of
+  certified spill at 25 to 55 bytes a row and about 1,000 rows a frame. A fresh run's tail holds a unit as
+  well per spilled frame, but its frames are bounded by the 88-byte markers the budget admits; a certified
+  tail is bounded by the spill cap, so past about Budget/88 frames (300 to 650 GiB of certified spill at a
+  1 GiB `--sort-buffer`) a resume holds more than a fresh run would. A segment reads such a frame by its offset,
+  checks its CRC again, accepts any rows frame type (an earlier attempt may have spilled with other flags),
+  and checks its rows against the scan's. Accounting is the drainer's replay's: the rows are received and
+  replayed (`listed - filtered + replayed = received = rows`), and the cache counts `replayed_rows`,
+  `replay_skipped_rows`, the certificate and its requests saved once the segments are written.
+  The segments hand a certificate back (`drained`, then `drainedFile`) only after every segment is written,
+  so while one may still read it, it is undrained: neither K, whatever the published segment parts advance it
+  to, nor eviction (of drained files only) retires it. A crash anywhere in the tail leaves the file and its
+  record, and the next resume replays from `max(cs, K)`. A certificate whose scan fails stops the run before
+  `BeginSegments`, so no segment is opened; the resume validates the file again (a damaged frame is
+  `rejected.corrupt` and its interval listed). `spill-replay` is reached at each certificate's scan and
+  `spill-replay-frame` before each certified frame a segment reads, so the recovery points keep their meaning
+  on either path. `TestSegmentsReplayCertificates` (a certificate straddling K, part and segment boundaries in
+  certified frames, no certificate drained or retired while K moves at every part; the uninterrupted run's
+  parts), `TestSegmentsCertificateScanFails`, `cmd/swath` `TestSegmentsReplayDurableFiles` (resumes engaged
+  and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `listing`
+  `TestVersionsSegmentsReadDurableFiles` (a versions resume) cover it. The report counts the segments' share:
+  `certificates_read`, `certified_rows` and `certificate_scan_ns`, beside the resume's `replayed_certificates`.
 
 ## Payload delta codec
 
@@ -768,10 +800,13 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery replay.** The accepted certificates become replay ranges: the engine's resume tiling
   (`keyrange.aroundReuse`, seed or not) emits one at each certificate's position and tiles only the gaps
   between them, their edges as bounds (`TestReuseTilesAroundSpans`: the gaps and the replays tile (K, ⊤],
-  and no data request starts inside a certificate). The drainer alone expands a replay range, directly:
-  sequential, never split or spilled; it skips the pre-capture frames, emits the captured keys above
-  max(cs, K) only (`TestDurableReplayAboveK`), rechecks every key's order and membership in (cs, ce]
-  (`InvariantError`), and hands the file back for retirement. Live replay of this run's durable files still
+  and no data request starts inside a certificate). No worker lists a replay range, and it does not count
+  toward the end of listing. The drainer expands one it reaches, directly: sequential, never split or
+  spilled; it skips the pre-capture frames, emits the captured keys above max(cs, K) only
+  (`TestDurableReplayAboveK`), rechecks every key's order and membership in (cs, ce] (`InvariantError`),
+  and hands the file back for retirement. The ones it has not reached when the segments are planned, after
+  listing, the segments replay with the same checks and the same rows ([Reused
+  certificates](#segments-parts-written-in-parallel-after-listing)). Live replay of this run's durable files still
   consumes every rows frame, pre-capture included. Replayed rows reach the order stage without the
   provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
   `objects`, `pages`, `requests` or the filters' counts.
@@ -780,7 +815,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
   resume `resume.{ledger_dropped_bytes, ledger_cut, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},
-  orphans, replayed_rows, replay_skipped_rows, gaps, requests_saved_est}` (requests saved at the engine's
+  orphans, replayed_rows, replay_skipped_rows, replayed_certificates, gaps, requests_saved_est}` (requests saved at the engine's
   1,000-key page). `spill.durable_off` says why durable spill was off when it could have run. The engine's
   counters add `reuse.ranges`, `reuse.gaps` and `reuse.boundary_overfetch_keys` (keys a gap listed past its
   end, a certificate's start).

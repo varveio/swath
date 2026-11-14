@@ -40,8 +40,12 @@ import (
 // resources.spill.refused_ns and refused_spells, and
 // resources.drain.writer_before_listing_done. 9 adds fields only (#513):
 // resources.spill.durable.limit_bytes and limited_by (the spill the
-// certificate slots and the ledger history cap derive from).
-const ReportVersion = 9
+// certificate slots and the ledger history cap derive from). 10 adds
+// fields only (#288): resources.drain.segments.certificates_read,
+// certified_rows and certificate_scan_ns (a resume's certificates the
+// segments replayed), and resources.spill.durable.resume.
+// replayed_certificates.
+const ReportVersion = 10
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -625,6 +629,13 @@ type Segments struct {
 	// DeferredRows is the rows a planned boundary moved past because they
 	// continued the group of the key before it (versions schemas).
 	DeferredRows int64 `json:"deferred_rows"`
+	// CertificatesRead is the reused certificates (a resume's durable
+	// spill) the segments replayed, CertifiedRows their rows (in rows), and
+	// CertificateScanNs the plan's time reading them before the cut (in
+	// plan_ns). Durable_files_read counts their files too.
+	CertificatesRead  int   `json:"certificates_read"`
+	CertifiedRows     int64 `json:"certified_rows"`
+	CertificateScanNs int64 `json:"certificate_scan_ns"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").
