@@ -375,24 +375,26 @@ func TestSeedFromDatasetCuts(t *testing.T) {
 	lines := strings.SplitAfter(string(good), "\n")
 	recount := strings.Replace(string(good), "\t1024\n", "\t1023\n", 1)
 	for name, tc := range map[string]struct {
-		body []byte
-		mode os.FileMode
+		body []byte // nil: a directory in its place
 		why  string
 	}{
-		"recounted":  {[]byte(recount), 0o644, "sum to"},
-		"truncated":  {[]byte(strings.Join(lines[:len(lines)-2], "")), 0o644, "ends at"},
-		"another":    {other, 0o644, "ends at"},
-		"uncounted":  {[]byte("logs/00/\nlogs/16/obj-05998\n"), 0o644, "no counts"},
-		"unreadable": {good, 0o000, "permission"},
+		"recounted":  {[]byte(recount), "sum to"},
+		"truncated":  {[]byte(strings.Join(lines[:len(lines)-2], "")), "ends at"},
+		"another":    {other, "ends at"},
+		"uncounted":  {[]byte("logs/00/\nlogs/16/obj-05998\n"), "no counts"},
+		"unreadable": {nil, ""},
 	} {
-		if name == "unreadable" && os.Geteuid() == 0 {
-			continue
-		}
 		prior := filepath.Join(dir, "prior-"+name)
 		if err := os.CopyFS(prior, os.DirFS(index)); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(prior, dataset.CutsName), tc.body, tc.mode); err != nil {
+		path := filepath.Join(prior, dataset.CutsName)
+		if tc.body == nil {
+			err = os.Mkdir(path, 0o755)
+		} else {
+			err = os.WriteFile(path, tc.body, 0o644)
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		out := filepath.Join(dir, "out-"+name)
@@ -404,7 +406,7 @@ func TestSeedFromDatasetCuts(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		p, c := sum.Invocation.Prior, s3Stats(sum).Counters
-		if p == nil || p.CutsFile != "refused" || !strings.Contains(p.CutsRefused, tc.why) || c.Value("seed.from.indexed_parts") == 0 {
+		if p == nil || p.CutsFile != "refused" || p.CutsRefused == "" || !strings.Contains(p.CutsRefused, tc.why) || c.Value("seed.from.indexed_parts") == 0 {
 			t.Fatalf("%s: prior %+v, counters %v", name, p, c)
 		}
 		if got := w.about(dataset.CutsName); len(got) != 1 {
