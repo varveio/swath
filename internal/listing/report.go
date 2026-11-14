@@ -497,8 +497,8 @@ type Resources struct {
 // Window is the frontier window's account (order.WindowStats): the tiles
 // admitted (forced: by the drainer past a refusal, having drained every
 // other; grown: held rows past 4 times the prior's), the window's rows when
-// last evaluated and the term that set them (bound_by: run, set, spill_cap, budget or
-// unbounded), the workers' waits at the window by the refusal that held
+// last evaluated and the term that set them (bound_by: rows, set, spill_cap
+// or budget), the workers' waits at the window by the refusal that held
 // them (rows, spill, growth) with their time and peak, the drainer's wait
 // for the plan to read ahead, and the peaks of the tiles held, the rows
 // charged to them and the bytes the order stage held (memory and live

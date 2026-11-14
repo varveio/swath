@@ -328,19 +328,19 @@ func TestWindowSpillCapHeld(t *testing.T) {
 	}
 }
 
-// TestWindowRunBound: with a disk and a budget that hold far more, the
-// window still binds at the run's own bound (a tile per worker and four of
-// the prior's parts: bound_by run), or at the rows the plan sets (the diag
-// knob: bound_by set), whichever is under what the storage gives; the
-// tiles held never charge more, and the run completes.
-func TestWindowRunBound(t *testing.T) {
+// TestWindowTarget: with a disk and a budget that hold far more, the
+// window is its target (windowTarget: bound_by rows), or the rows the plan
+// sets (the diag knob: bound_by set), the tiles held never charging more;
+// under a small spill cap the cap's bound applies first; the run
+// completes.
+func TestWindowTarget(t *testing.T) {
 	for _, tc := range []struct {
 		sizes source.PlanSizes
 		by    string
 		rows  int64
 	}{
-		{source.PlanSizes{TileRows: 100, PartRows: 200}, WindowRun, 4*100 + 4*200},
-		{source.PlanSizes{TileRows: 100, PartRows: 200, WindowRows: 500}, WindowSet, 500},
+		{source.PlanSizes{}, WindowTarget, windowTarget},
+		{source.PlanSizes{WindowRows: 500}, WindowSet, 500},
 	} {
 		p := newPlanned(40, 100, 50)
 		p.sizes = tc.sizes
@@ -354,5 +354,11 @@ func TestWindowRunBound(t *testing.T) {
 		if w := st.Window; w == nil || w.BoundBy != tc.by || w.Rows != tc.rows || w.PeakCreditRows > tc.rows {
 			t.Fatalf("%s: window %+v, want %d rows", tc.by, w, tc.rows)
 		}
+	}
+	p := newPlanned(40, 100, 50)
+	p.sizes = source.PlanSizes{WindowRows: 1 << 30}
+	st, _, err := runPlanned(t, p, Options{Workers: 4, Budget: 1 << 20, SpillDir: t.TempDir(), SpillMax: 4 << 10})
+	if err != nil || st.Window.BoundBy != WindowSpillCap {
+		t.Fatalf("a small cap under a large target: %v, window %+v", err, st.Window)
 	}
 }

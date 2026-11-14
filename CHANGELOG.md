@@ -7,8 +7,8 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
-  order through a frontier window (a tile per worker and a few parts' rows, smaller when `--spill-budget` and
-  `--sort-buffer` hold less), so rows listed ahead of the
+  order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold
+  less), so rows listed ahead of the
   output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
   The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
   `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and `--seed-from-window-rows` the window's
