@@ -101,8 +101,11 @@ four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-
 `idle_wait_ns`, with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say
 why the range the output waited for was or was not split
 ([counters](internals/counters.md#order-stage-and-encoders-run-summary-top-level)).
-The run does not fail and does not stop by itself: watch `progress.json`, or bound the run with
-`--max-duration`. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
+The run does not fail by itself. Once spill has stood refused with workers waiting on it for 2 minutes, swath says so
+on stderr, an error, and again every 30 minutes while it lasts: how long listing has waited, spill and its
+cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
+alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
+instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
 filesystem has the room. The cap is fixed when the run starts, so enlarging the disk under a running process
 does not raise it: stop the run and resume with the new value, `swath resume DIR --spill-budget 200GiB`.
 

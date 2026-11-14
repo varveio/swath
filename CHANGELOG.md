@@ -15,6 +15,12 @@ Notable changes per release. The full human summary for the current release is i
   certified files it kept as free space, so on the same disk it no longer rejects those that fit the stopped
   run's cap. The run report (`report_version` 9) says what the limits derive from:
   `resources.spill.durable.limit_bytes` and `limited_by` (#513).
+- Go port: a sorted run whose spill cap is far too small, so that listing waits on the output, says so: once
+  spill has stood refused with workers waiting for 2 minutes, the error event `spill_pressure` names the wait,
+  spill and its cap, the output's rate and the remedy, and repeats every 30 minutes while it lasts
+  (`order.spill_pressure_since` in `progress.json`). `--spill-wait-timeout DURATION` (default 0: wait) stops
+  such a run instead: exit 74, `cause` `spill_budget`, `stop_source` `spill_wait`, resumable with more disk or
+  a larger `--spill-budget` (#535).
 
 - Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
   `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`

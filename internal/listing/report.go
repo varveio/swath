@@ -276,9 +276,10 @@ type Outcome struct {
 	Complete   bool   `json:"complete"`              // the listing reached the end of its scope
 	StopReason string `json:"stop_reason,omitempty"` // "completed", or why it stopped early
 	// StopSource is what stopped a run that was stopped: sigint, sigterm,
-	// liveness_watchdog (--stall-timeout), timebox (--max-duration), with
-	// "+forced_exit" when it did not stop within the shutdown grace; empty
-	// for a run that ended on its own.
+	// liveness_watchdog (--stall-timeout), timebox (--max-duration),
+	// spill_wait (--spill-wait-timeout), with "+forced_exit" when it did
+	// not stop within the shutdown grace; empty for a run that ended on its
+	// own.
 	StopSource string `json:"stop_source,omitempty"`
 	// Unreadable counts the entries that could not be read: the rows and
 	// totals leave them out, although Complete may be true (the manifest's
