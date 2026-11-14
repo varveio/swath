@@ -540,8 +540,8 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   exactly a seam, into a sink with no adjacency check, is the stage's check alone). Every spill file's trailer is checked
   against the rows the drainer and the segments replay from it before any segment opens
   (`TestSegmentsTrailerFailureClosesNoPart`), including the file of a range whose every frame the disk
-  budget refused, which holds its trailer alone (`TestSegmentsRangeWithEveryFrameRefused`), and the last segment does not close its part: it hands it
-  back as the router's open part, which the router's `Close` marks final once the stage's conservation
+  budget refused, which holds its trailer alone (`TestSegmentsRangeWithEveryFrameRefused`), and the last
+  segment does not close its part: it hands it back as the router's open part, which the router's `Close` marks final once the stage's conservation
   check and the pipeline's reconciliation have passed, as on the serial path. A resume therefore never
   finds a final record from a run that failed its checks.
 - **Locks.** The drainer calls the router without the stage's lock: the router's interval cut holds the
