@@ -178,6 +178,9 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "stall-timeout", Value: source.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: source.GroupLimits,
 		Usage: "stop as stuck after this long without progress (exit 75)",
 		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
+	def(source.Flag{Name: "spill-wait-timeout", Value: source.Duration(&o.spillWait), Metavar: "DURATION", Group: source.GroupLimits, Commands: writing,
+		Usage: "stop after waiting this long on a full spill cap (exit 74); 0: wait",
+		Long:  "Listing waits on the output while spill is refused, which on a large bucket can be close to a stall; after 2 minutes swath says so. Set it on an unattended run to stop instead (cause spill_budget), then resume with more disk or a larger --spill-budget. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 
 	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",

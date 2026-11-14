@@ -84,13 +84,22 @@ a slow source (S3 requeues a page after its retries). With the watchdog off (`--
 tokens (an invalid page: exit 1, `cause` `protocol`, the run marked unresumable); a cycle longer than that
 window is not detected, and is bounded as above.
 
+A sorted run whose spill cap is far too small for the rows listed ahead of the output is not stuck: it moves
+at the output's pace, which on a very large bucket can be close to a stall. The watchdog watches for it too:
+once spill has stood refused while workers wait on it (in publish or at admission) for 2 minutes
+(`order.spill_pressure_since` in the progress file; a wait that comes back within 30 s keeps its start), it
+prints the error event `spill_pressure`, and again every 30 minutes while the wait lasts. With
+`--spill-wait-timeout` it stops the run at that length: exit 74, `cause` `spill_budget`, resumable as a full
+disk is, with more disk or a larger `--spill-budget`. Both act only while workers wait at that moment: a run
+that recovered, or whose listing is done (the segment tail, the commit), is neither told nor stopped.
+
 A finite `--max-duration` belongs on every unattended attempt (the default, 0, has no limit): the watchdog
 stops a service that answers forever with empty pages, but not one that keeps returning rows or pages forever,
 nor anything with `--stall-timeout 0`.
 
 ## Stopping and the forced exit
 
-A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful: published parts and the journal stay, and
+A stop (a signal, `--max-duration`, `--stall-timeout`, `--spill-wait-timeout`) is graceful: published parts and the journal stay, and
 `error.json` and the report are written. Only the first signal counts. The process exits with its code 15 s
 later if the run has not stopped by then (I/O that does not return, say), first writing (bounded at 2 s, as
 the dump below) the same outcome the graceful stop would have to `error.json` and a minimal report without the

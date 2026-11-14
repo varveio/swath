@@ -90,6 +90,16 @@ func TestDocsLogEvents(t *testing.T) {
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
 		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []string{}, Exclusions: []string{}}, at)
 	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
+	t.Chdir(t.TempDir())
+	j, err := journal.Create("inventory", journal.Identity{Tool: "swath"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	sw, since := &spillWatch{dir: "inventory"}, at.Add(-spillPressureFor)
+	if sw.check(pressured(since, 0), since) != nil || sw.check(pressured(since, 9800*120), at) != nil {
+		t.Fatal("the spill watch stopped the run")
+	}
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
@@ -106,7 +116,7 @@ func TestDocsLogEvents(t *testing.T) {
 		}
 		events[fmt.Sprint(e["event"])] = true
 	}
-	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evDataset, evRead, evOutcome} {
+	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evDataset, evRead, evSpillPressure, evOutcome} {
 		if !events[e] {
 			t.Fatalf("no %s event in %s", e, got)
 		}

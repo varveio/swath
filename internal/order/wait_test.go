@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -407,6 +408,110 @@ func TestWaitCensus(t *testing.T) {
 	}
 	if d, spells, open := o.sp.refusedTime(); spells != 1 || open || d < 0 {
 		t.Fatalf("refused: %d spells, open %v, %v", spells, open, d)
+	}
+}
+
+// TestSpillPressure: spill pressure is a spell of spill refused while a
+// worker waits on it, in publish or at admission, read at the clock; it
+// reads as none whenever the condition is off. An emitter waiting on a
+// full budget with spill off, or spilling without a cap, is none. A refused
+// one begins a spell; returned credit ends the reading at once, a refusal
+// within pressureGap continues the spell (its start kept), and one after
+// the gap begins another. A worker at admission on a refused spill, with no
+// emitter waiting, is pressure too; once listing is done there is none.
+func TestSpillPressure(t *testing.T) {
+	var now atomic.Int64
+	now.Store(time.Unix(1_000_000, 0).UnixNano())
+	clock = func() time.Time { return time.Unix(0, now.Load()) }
+	t.Cleanup(func() { clock = time.Now })
+	advance := func(d time.Duration) time.Time { return time.Unix(0, now.Add(int64(d))) }
+	ws := waits(t)
+	since := func(o *run[string, tp]) *time.Time {
+		o.mu.Lock() // a waiter that told hookWait holds mu until it waits
+		defer o.mu.Unlock()
+		return o.g.Snapshot().SpillPressureSince
+	}
+	rows := func(k string) []item[string, tp] {
+		return []item[string, tp]{{rows: []schema.Row[tp]{{Key: k}}, units: 1}}
+	}
+	off := testRun(t, newCtl(), Options{Budget: 1})
+	off.buffered = 1
+	publishing(off, &node[string, tp]{r: "x", state: expanding}, rows("k"), 1)
+	expectWait(t, ws, waitPublish)
+	if s := since(off); s != nil || off.g.publishWait.n.Load() != 1 {
+		t.Fatalf("spill off: pressure since %v, %d waiting", s, off.g.publishWait.n.Load())
+	}
+	uncapped := testRun(t, newCtl(), Options{Budget: 1, SpillDir: t.TempDir()})
+	uncapped.buffered = 1
+	if err := expect(t, publishing(uncapped, &node[string, tp]{r: "x", state: expanding}, rows("k"), 1), "uncapped spill"); err != nil || since(uncapped) != nil {
+		t.Fatalf("uncapped spill: %v, pressure since %v", err, since(uncapped))
+	}
+
+	o := testRun(t, newCtl(), Options{Budget: 1, SpillDir: t.TempDir(), SpillMax: 1})
+	o.buffered = 1
+	refused := func(r string) chan error {
+		t.Helper()
+		o.mu.Lock()
+		o.sp.max = 1
+		o.mu.Unlock()
+		done := publishing(o, &node[string, tp]{r: r, state: expanding}, rows(r), 1)
+		expectWait(t, ws, waitPublish)
+		return done
+	}
+	credit := func(done chan error) {
+		t.Helper()
+		o.mu.Lock()
+		o.sp.max = 1 << 30
+		o.mu.Unlock()
+		o.sp.release(&spillFile{})
+		if err := expect(t, done, "spill credit"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t0 := advance(0)
+	done := refused("a")
+	if s := since(o); s == nil || !s.Equal(t0) || o.g.Snapshot().SpillMaxBytes != 1 {
+		t.Fatalf("refused: pressure since %v, want %v", s, t0)
+	}
+	advance(10 * time.Minute)
+	credit(done)
+	if s := since(o); s != nil {
+		t.Fatalf("after credit: pressure since %v", s)
+	}
+	advance(pressureGap - 1)
+	done = refused("b") // within the gap: the same spell
+	if s := since(o); s == nil || !s.Equal(t0) {
+		t.Fatalf("refused again within the gap: pressure since %v, want %v", s, t0)
+	}
+	credit(done)
+	t1 := advance(pressureGap)
+	done = refused("c") // past the gap: another spell
+	if s := since(o); s == nil || !s.Equal(t1) {
+		t.Fatalf("a new spell: pressure since %v, want %v", s, t1)
+	}
+	credit(done)
+
+	// No emitter waiting: a worker held at admission by the refused spill
+	// and the full budget is pressure, until credit comes back.
+	o.mu.Lock()
+	o.sp.max = 1
+	o.mu.Unlock()
+	o.sp.refuse()
+	if s := since(o); s != nil {
+		t.Fatalf("refused, nobody waiting: pressure since %v", s)
+	}
+	t2 := advance(time.Hour)
+	o.mu.Lock()
+	o.stack = []*node[string, tp]{{r: "y", state: queued}}
+	o.mu.Unlock()
+	bg(o, o.worker)
+	expectWait(t, ws, waitAdmission)
+	if s := since(o); s == nil || !s.Equal(t2) || o.g.publishWait.n.Load() != 0 {
+		t.Fatalf("at admission: pressure since %v, want %v (%d in publish)", s, t2, o.g.publishWait.n.Load())
+	}
+	o.g.pressure.listed.Store(true) // as listing done stores it
+	if s := since(o); s != nil {
+		t.Fatalf("listing done: pressure since %v", s)
 	}
 }
 
