@@ -249,10 +249,11 @@ type Engine[P any] struct {
 	tileErr  tileErrors
 	lastTile int32
 	plan     *plan[P] // a counted prior's plan, once the order stage asked for it (Planner)
-	// windowHeld is the workers the order stage's frontier window holds
-	// back (Planner's Waiting): not split demand for a tile's slices.
-	windowHeld atomic.Int64
-	reuse      []source.Span // reused certificates a resume lists around (Reuse)
+	// windowBound: the order stage's frontier window refuses tiles
+	// (Planner's Bound); idle workers are then not demand for a tile's
+	// slices.
+	windowBound atomic.Bool
+	reuse       []source.Span // reused certificates a resume lists around (Reuse)
 	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
 	// slowQueued: children of slow splits not yet started.
 	latSum     float64

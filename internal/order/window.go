@@ -112,6 +112,7 @@ type window[R, P any] struct {
 	sumEst int64        // every admitted tile's expected rows, for the mean (growth's floor)
 	done   bool         // the plan ended (mu)
 	why    string
+	bound  bool // the window refuses tiles (bind)
 	// need is the expected rows of the tile the window last refused for
 	// its rows (0: none since an admission): settle wakes the workers at
 	// the window once that many fit (mu).
@@ -120,6 +121,19 @@ type window[R, P any] struct {
 	// units and rows: the budget units and rows measured as emitters
 	// received them, the budget's bytes per row.
 	units, rows atomic.Int64
+}
+
+// bind tells the plan when the window binds: from its first refusal once
+// rows are measured until the plan ends (source.Planner's Bound: idle
+// workers are then not demand for slicing the tiles admitted; mu held).
+// It does not lapse at each admission: a window that refused once admits
+// as tiles are written, and each lapse would hand the idle workers to the
+// tiles admitted until the next refusal.
+func (w *window[R, P]) bind(on bool) {
+	if w.bound != on {
+		w.bound = on
+		w.plan.Bound(on)
+	}
 }
 
 // tileRun is a run of rows of one tile in the drainer's pending batch.
@@ -213,6 +227,9 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 		return admitDone, nil
 	case !ok && why != "":
 		w.why = why
+		if !force && w.rows.Load() > 0 {
+			w.bind(true) // a refusal of what the run measured, not of the empty window at its start
+		}
 		return admitRefused, nil
 	case !ok:
 		return admitNone, nil
@@ -303,6 +320,7 @@ func (o *run[R, P]) measured(units int64, rows int) {
 // without mu; mu held).
 func (o *run[R, P]) endPlan() bool {
 	o.win.done = true
+	o.win.bind(false) // every tile admitted: idle workers are demand again
 	o.win.root.state = done
 	o.work.Broadcast()
 	o.winCond.Broadcast()

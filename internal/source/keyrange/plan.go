@@ -99,9 +99,9 @@ func (pl *plan[P]) Start(ctx context.Context, wake func()) func() {
 	return pl.stream.Start(ctx, pl.after, wake)
 }
 
-// Waiting records the workers the frontier window holds back
+// Bound records whether the frontier window refuses tiles
 // (source.Planner): the demand a split counts (Engine.demand).
-func (pl *plan[P]) Waiting(n int) { pl.p.windowHeld.Store(int64(n)) }
+func (pl *plan[P]) Bound(on bool) { pl.p.windowBound.Store(on) }
 
 // RowBytes is the prior's stored bytes per row (source.Planner).
 func (pl *plan[P]) RowBytes() float64 {

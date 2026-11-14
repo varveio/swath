@@ -249,8 +249,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `awaited.skipped.remainder` | count | pages | split | awaited pages not split: the bounded remainder is under 2 pages |
 | `awaited.skipped.lower_tiny` | count | pages | split | awaited pages not split: the lower child would be under 1 page |
 | `awaited.skipped.upper_tiny` | count | pages | split | awaited pages not split: the upper child would be under 1 page |
-| `awaited.skipped.window` | count | pages | seed_from | awaited pages not split: the only idle workers were held back by the frontier window (split.skipped.window) |
-| `split.skipped.window` | count | decisions | seed_from | no idle worker but those the frontier window held back, which feed only a range whose remainder holds two tiles or more (a planned run) |
+| `awaited.skipped.window` | count | pages | seed_from | awaited pages not split: idle workers, but the frontier window refusing tiles (split.skipped.window) |
+| `split.skipped.window` | count | decisions | seed_from | idle workers, but the frontier window refusing tiles: they feed only a range whose remainder holds two tiles or more (a planned run) |
 | `child_empty.lower` | count | ranges | split | lower split children that listed no key |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
 | `child_empty.by.reflect.lower` | count | ranges | split | empty lower children of a reflect pivot |
