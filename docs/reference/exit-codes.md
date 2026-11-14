@@ -47,7 +47,7 @@ answers.
 | 3 | the output is usable but partial: accept it, or fix the permissions and run again |
 | 130, 143 | `swath resume DIR --report NEW-FILE` |
 | 75 | resume once; a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
-| 74 | free space, or move the directory to a larger disk, then `swath resume DIR`; `spill_budget`: `swath resume DIR --spill-budget SIZE` with a larger cap, on a disk with room for it (a plain resume keeps the recorded cap) |
+| 74 | free space, or move the directory to a larger disk, then `swath resume DIR`; `spill_budget`: `swath resume DIR --spill-budget SIZE` with a larger cap, on a disk with room for it (a plain resume keeps a recorded `--spill-budget`; with the default cap it takes half the free space it finds) |
 | 124 | resume only within a separate budget of attempts or total time: a source that keeps a run busy without finishing reaches 124 on every attempt; past the budget, a person |
 | 1, 2 | a person: a resume will not fix it |
 

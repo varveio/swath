@@ -242,7 +242,7 @@ connections that fail later are an outage instead: swath retries them until `--s
 
 A part, the journal or the manifest could not be written. Free space, or move the output directory to a
 larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almost every row once on the
-output's filesystem: size the disk as [Running swath in production](production.md#disk-sizing) says, or cap spill with
+output's filesystem, unless it is seeded from the previous dataset (`--seed-from`): size the disk as [Running swath in production](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
 A run that is far short of spill room keeps going at the output's pace, which on a very large bucket can be a
@@ -254,7 +254,8 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `resources.spill.refused` above 0
 ([the first bad pattern](production.md#three-bad-patterns)). Stop it and resume on a larger disk or with a
-larger `--spill-budget`, or let it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
+larger `--spill-budget` (with the default cap, a plain resume on a larger disk takes half its free space), or let
+it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
 the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
 `stopped by --spill-wait-timeout 30m0s: resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 

@@ -64,7 +64,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 10) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 11) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
