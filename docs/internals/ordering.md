@@ -225,9 +225,10 @@ the row budget holds (its bytes over the budget bytes per row the emitters measu
 rows), `spill_cap`; with spill uncapped the target alone; with spill off, what the row budget holds alone,
 `budget`. So the window binds on a generously sized disk too: listing in order beats listing ahead, spilling
 and draining a tail. 8M is a measured starting default: about 250 tiles of 32 pages, enough for about 5M rows a
-second of listing at 50 ms a page while one writer takes about 1M rows a second; at 2,048 workers a window of
-about 8.9M rows finished a median 25 s against 41 s for one that never bound. It is an admission target, not a
-storage or recovery bound. The drainer, having drained and handed on every admitted tile, admits the
+second of listing at 50 ms a page while one writer takes about 1M rows a second; at 2,048 workers on ample disk
+the default finished a median 31 s against 41 s for a window that never bound
+([measurements](measurements.md#the-seeded-frontier-window)). It is an admission target, not a storage or
+recovery bound. The drainer, having drained and handed on every admitted tile, admits the
 next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
 stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
 admitted. Once the window binds (it refused a tile; for the rest of the run), idle workers are demand only for a range whose remainder holds two
@@ -784,8 +785,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   The limits were fixed at 10,000 slots and H = 40,000 until they bound billion-key listings, which spill
   nearly every range ahead of the output at once ([measurements](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)):
   73,081 spilled ranges, 20,000 sealed. One slot per MiB then still ran out on listings of 200 to 600 million
-  keys at 2,048 workers, whose ranges are small: 16 of 28 had `no_slot` above 0, and those resumes replayed 35
-  to 46 % of the keys where the others replayed 93 to 97 % ([measurements](measurements.md#durable-spill-slots-2026-11-15)).
+  keys at 2,048 workers, whose ranges are small: 16 of 28 had `no_slot` above 0, and those resumes replayed as
+  little as 35 % of the keys from certificates where the others replayed 93 to 97 % ([measurements](measurements.md#durable-spill-slots)).
   Their spill cap was 220 to 450 KiB per spilled range, so one slot per 64 KiB admits every range, and the
   metadata ceiling, not the spill, is what bounds the slots from a 16 GiB cap. The 64 KiB keeps the ledger
   proportional to the spill below the ceiling. A listing whose ranges spill less than 64 KiB per range of its

@@ -2310,7 +2310,59 @@ What a certificate costs, for the limits that scale with the spill cap ([orderin
   with 99-byte keys, 3,534 against 4,016 with 1 KiB keys, 9,677 against 10,928 with 3 KiB keys (2,000
   certificates each, the range bounds and first key no longer kept).
 
-## Durable spill slots (2026-11-15)
+## Spill caps, the frontier window and resume on production key lists (2026-11-14)
+
+Production key lists of public buckets served by the fake S3 (`keyfake`) at 50 ms a page, sorted Parquet to a
+local disk, `--part-interval 0`. A spill cap is given as a share of the same list's uncapped spill peak. Each
+subsection names its build and its other settings; the figures are from the runs' reports.
+
+### Spill-capped runs before the fixes
+
+Main before [#551](https://github.com/varveio/swath/pull/551): 64 lists of 20 to 150 million keys, 64 workers,
+a 900 s limit per run.
+
+| Arm | Completed | Timed out | Died with `spill: corrupt frame` |
+|---|---|---|---|
+| uncapped | 64 of 64 (median 46 s) | 0 | 0 |
+| cap at 25 % | 22 | 25 | 17 |
+| cap at 10 % | 4 | 43 | 17 |
+
+The corrupt-frame stops were a range whose every spill frame the cap refused: its file held only its trailer,
+which the parallel tail's check misread (fixed in #551; [ordering.md](ordering.md#segments-parts-written-in-parallel-after-listing)).
+Seeded from each list's own dataset, with the 10 % cap, 7 of 64 completed. A seed did not reduce spill then,
+because its tiles were all queued at once: uncapped, it changed the spill peak by 0.93x and the wall time by
+0.94x.
+
+### Where workers wait under a cap
+
+With the wait-site counters of [#549](https://github.com/varveio/swath/pull/549) (`resources.publish_wait_ns`,
+`admission_wait_ns`, `idle_wait_ns`; the range engine's `awaited.*`), capped runs of the same lists:
+
+- **64 workers.** 93 % of worker time was blocked publishing (emitters with a refused frame, still inside their
+  ranges). The range the output waited for did not split for want of demand: of its pages, 54 % had no idle
+  worker (`awaited.skipped.no_demand`), 46 % were outranked by larger ranges, 0.3 % split.
+- **2,048 workers.** 59 % of worker time publishing and 39 % at admission; the awaited range split on 36 % of its
+  pages, and 0 of 64 lists completed.
+
+### The seeded frontier window
+
+[#555](https://github.com/varveio/swath/pull/555): lists of 20 to 150 million keys, each seeded from its own
+dataset ([the frontier window](ordering.md#the-frontier-window)):
+
+- **Cap at 10 %, 64 workers:** 57 of 57 complete with no refused frame, wall 0.87x the unseeded uncapped run's
+  (before: 7 of 64 in 900 s).
+- **Cap at 10 %, 2,048 workers:** all complete, median 25 to 29 s, 1.008 requests per 1,000 keys.
+- **Ample disk, 2,048 workers:** a median 31 s with the default window, against 41 s with a window that never
+  bound; 52 s with a window of 2 million rows, 33 s with 32 million.
+- **Stale seed:** with 5 % of the keyspace grown tenfold since the prior, the capped run completes. A grown region
+  larger than the cap can hold still refuses frames and crawls: seen with caps of 2 to 6 MB.
+- **Many workers, a small cap:** on a list of 145 million keys at 2,048 workers, a 57 MB cap took 219 s against
+  78 s uncapped, while admission waited on spill: the window admits no tile while live spill is past half the
+  cap or a frame is refused, and thousands of workers wait at it.
+
+Every completed run was key-identical to the unseeded one.
+
+### Durable spill slots
 
 A kill-and-resume sweep on main `bd2c0509` (one slot per MiB of the spill cap): 28 production key lists of 160 to
 593 million keys through the fake S3 at 50 ms a page, `--workers 2048`, sorted Parquet to a 150 GB local disk with
@@ -2326,7 +2378,21 @@ missing rejection.
   slots, `no_slot` 70,116, 40 %.
 - Their spill cap per spilled range (slots times 1 MiB over slots plus `no_slot`) was 220 to 450 KiB. Since
   then a slot is 64 KiB of the cap, up to the metadata ceiling ([ordering.md](ordering.md#durable-spill)): every
-  one of these lists' ranges has a slot. Not yet measured again.
+  one of these lists' ranges has a slot. In the sweep of the resume tail below, no list ran out of slots.
+
+
+### Kill and resume: the tail in segments
+
+[#561](https://github.com/varveio/swath/pull/561) with #560: lists of 160 to 593 million keys, `--workers 2048`,
+SIGKILL at 25 s or 50 s, then `swath resume`; the resume's wall time against a fresh run's.
+
+| Kill | Before (main `bd2c0509`, 28 lists) | After (10 lists) |
+|---|---|---|
+| at 50 s | 2.18x | 0.67x (0.65x on #561's final commit, 5 lists) |
+| at 25 s | 2.11x | 0.82x |
+
+Before, no resume engaged the parallel tail (`drain.segments.reason` `listing_active` in 56 of 56); after, every
+resume did, and every resume was key-identical to the uninterrupted run.
 
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 
