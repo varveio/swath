@@ -94,12 +94,12 @@ var largeGeo = &geometry{name: "large", tenants: 1399, browse: 300, folderObjs: 
 		"point lookup":              {{7, 1}, {6, 0}},
 		"one-part scan":             {{5, 1}, {4, 0}},
 		"CheckSchema":               {{20, 4}, {16, 0}},
-		"browse page, counts on":    {{19, 2}, {15, 0}},
-		"browse page, counts off":   {{19, 2}, {15, 0}},
+		"browse page, counts on":    {{17, 2}, {13, 0}},
+		"browse page, counts off":   {{17, 2}, {13, 0}},
 		"count of a prefix":         {{10, 2}, {8, 0}},
 		"count of every key":        {{0, 0}, {0, 0}},
 		"sum of a prefix":           {{13, 2}, {11, 0}},
-		"browse page, small budget": {{18, 2}, {14, 0}},
+		"browse page, small budget": {{16, 2}, {12, 0}},
 	}}
 
 func (g *geometry) browseRows() int { return 1600 - 100 + 100*g.folderObjs }
