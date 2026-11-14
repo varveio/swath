@@ -237,6 +237,11 @@ type Spill struct {
 	Opens     int64 `json:"opens"`
 	PeakBytes int64 `json:"peak_bytes"`
 	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+	// RefusedNs is the time spill stood refused: from a refused frame
+	// until a spill file's credit next returned (an interval open at the
+	// end included); RefusedSpells the intervals that ended.
+	RefusedNs     int64 `json:"refused_ns"`
+	RefusedSpells int64 `json:"refused_spells"`
 	// MaxBytes is the cap on live spill bytes in effect (0: none);
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
@@ -1285,6 +1290,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+			RefusedNs: int64(ost.SpillRefusedTime), RefusedSpells: ost.SpillRefusedSpells,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
@@ -1295,6 +1301,8 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res.PeakAheadRows, res.FrontierStuckMaxNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
+	res.PublishWaitNs, res.AdmissionWaitNs, res.IdleWaitNs = int64(ost.PublishWait), int64(ost.AdmissionWait), int64(ost.IdleWait)
+	res.PeakPublishWaiters, res.PeakAdmissionWaiters, res.PeakIdleWorkers = ost.PeakPublishWaiters, ost.PeakAdmissionWaiters, ost.PeakIdleWorkers
 	if !ost.ListingDone.IsZero() {
 		a.sum.Timings.ListingDoneAt = ost.ListingDone.UTC()
 	}

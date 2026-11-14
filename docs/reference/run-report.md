@@ -55,6 +55,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
 | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
 | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
+| `order.publish_waiters`, `order.admission_waiters`, `order.idle_workers` | the order stage's waiters now, each with a `peak_` twin: emitters waiting in publish on a full budget (a worker still listing its range), workers waiting to claim a queued range (budget and spill used), workers with nothing queued to list |
 | `started_at`, `as_of`, `duration_ms` | timing |
 
 ## Run report
@@ -167,10 +168,15 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 100 ms), `max_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`
 (the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
 output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
-`budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
+`budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), the order stage's waits by site, each
+summed over goroutines with the most goroutines waiting there at once: `publish_wait_ns` and `peak_publish_waiters`
+(emitters waiting in publish on a full budget), `admission_wait_ns` and `peak_admission_waiters` (workers waiting to
+claim a queued range; with `publish_wait_ns`, `budget_wait_ns`), `idle_wait_ns` and `peak_idle_workers` (workers with
+nothing queued to list, read-ahead waits included, over the whole run), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+`refused_ns` (the time spill stood refused: from a refused frame until a spill file's credit next returned, an interval
+open at the end included), `refused_spells` (those intervals that ended), `max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
 handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill

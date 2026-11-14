@@ -346,6 +346,66 @@ func TestRefusedSpillWakesOnCredit(t *testing.T) {
 	}
 }
 
+// TestWaitCensus: the listing's waits are counted while they last and
+// after: an idle worker, an emitter whose frame the disk budget refused
+// (at publish), then the worker at admission once a range is queued. The
+// gauges read each site's waiters now and at peak, the times sum per site
+// (publish and admission make up the budget wait), and the refused
+// interval ends, timed and counted once, when spill credit returns.
+func TestWaitCensus(t *testing.T) {
+	ws := waits(t)
+	p := newCtl()
+	o := testRun(t, p, Options{Budget: 1, SpillDir: t.TempDir(), SpillMax: 1})
+	o.buffered = 1
+	now := func() GaugeSnapshot {
+		o.mu.Lock() // a waiter that told hookWait holds mu until it waits
+		defer o.mu.Unlock()
+		return o.g.Snapshot()
+	}
+	bg(o, o.worker)
+	expectWait(t, ws, waitIdle)
+	if g := now(); g.IdleWorkers != 1 || g.PublishWaiters != 0 || g.AdmissionWaiters != 0 {
+		t.Fatalf("idle: %+v", g)
+	}
+	n := &node[string, tp]{r: "x", state: expanding}
+	done := publishing(o, n, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "k"}}, units: 1}}, 1)
+	expectWait(t, ws, waitPublish)
+	if g := now(); g.PublishWaiters != 1 || g.IdleWorkers != 1 || o.sp.refused.Load() != 1 || o.sp.refusedAt.Load() == 0 {
+		t.Fatalf("refused publish: %+v, %d refused", g, o.sp.refused.Load())
+	}
+	o.mu.Lock()
+	o.stack = []*node[string, tp]{{r: "y"}}
+	o.work.Broadcast()
+	o.mu.Unlock()
+	expectWait(t, ws, waitAdmission)
+	if g := now(); g.AdmissionWaiters != 1 || g.IdleWorkers != 0 || g.PeakIdleWorkers != 1 || g.PublishWaiters != 1 {
+		t.Fatalf("admission: %+v", g)
+	}
+	o.mu.Lock()
+	o.sp.max = 1 << 30
+	o.mu.Unlock()
+	o.sp.release(&spillFile{}) // credit returned: the emitter spills, the worker claims
+	if err := expect(t, done, "spill credit"); err != nil {
+		t.Fatal(err)
+	}
+	if r := expect(t, p.started, "claim"); r != "y" {
+		t.Fatalf("claimed %q", r)
+	}
+	p.ch("y") <- op{end: true}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	g := o.g.Snapshot()
+	if g.PublishWaiters != 0 || g.AdmissionWaiters != 0 || g.PeakPublishWaiters != 1 || g.PeakAdmissionWaiters != 1 {
+		t.Fatalf("after: %+v", g)
+	}
+	if o.publishWait <= 0 || o.admissionWait <= 0 || o.idleWait <= 0 || o.budget != o.publishWait+o.admissionWait {
+		t.Fatalf("publish %v + admission %v != budget %v; idle %v", o.publishWait, o.admissionWait, o.budget, o.idleWait)
+	}
+	if o.sp.refusedSpells.Load() != 1 || o.sp.refusedAt.Load() != 0 || o.sp.refusedTime() <= 0 {
+		t.Fatalf("refused: %d spells, open at %d, %v", o.sp.refusedSpells.Load(), o.sp.refusedAt.Load(), o.sp.refusedTime())
+	}
+}
+
 // TestFrontierWaitWakes: the drainer waits for the range it needs while a
 // worker lists it; the worker publishing rows, completing with nothing
 // (control-only), completing with only a child, and cancellation each

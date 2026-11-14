@@ -450,6 +450,16 @@ type Resources struct {
 	FrontierStuckMaxNs int64 `json:"frontier_stuck_max_ns"`
 	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
 	BudgetWaitNs       int64 `json:"budget_wait_ns"`
+	// The order stage's waits by site, summed over goroutines, each with
+	// the most goroutines waiting there at once: emitters in publish on a
+	// full budget and workers at admission (together budget_wait_ns), and
+	// idle workers, nothing queued to list (read-ahead waits included).
+	PublishWaitNs        int64 `json:"publish_wait_ns"`
+	PeakPublishWaiters   int64 `json:"peak_publish_waiters"`
+	AdmissionWaitNs      int64 `json:"admission_wait_ns"`
+	PeakAdmissionWaiters int64 `json:"peak_admission_waiters"`
+	IdleWaitNs           int64 `json:"idle_wait_ns"`
+	PeakIdleWorkers      int64 `json:"peak_idle_workers"`
 	// EncoderWaitNs is the time the order stage waited for an encoder (nil
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`

@@ -120,6 +120,11 @@ type spiller[P any] struct {
 	// plain frame's rows view its buffers, so each gets fresh ones.
 	rbuf, zbuf []byte
 
+	// refusedAt is when the current refused interval began (monotonic,
+	// 0: none); refusedNs sums the ended intervals, refusedSpells counts them
+	// (refuse, unrefuse). Accounting only: nothing decides on them.
+	refusedAt, refusedNs, refusedSpells atomic.Int64
+
 	mu   sync.Mutex
 	open map[*spillFile]struct{} // files with an open reader, closed by close
 	tick uint64                  // reader use order, for eviction (mu)
@@ -603,8 +608,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 			return fmt.Errorf("spill trailer: %w", syscall.ENOSPC)
 		}
 		if err == errSpillFull {
-			s.refused.Add(1)
-			s.full.Store(true)
+			s.refuse()
 			return err
 		}
 		return fmt.Errorf("spill: %w", err)
@@ -690,8 +694,7 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	if !final {
 		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
 			s.live.Add(-n)
-			s.refused.Add(1)
-			s.full.Store(true)
+			s.refuse()
 			// Drained certificates hold credit until K covers them: the
 			// oldest is retired now (its credit returns at its unlink,
 			// through the waker); an undrained file never is.
@@ -730,11 +733,49 @@ func (s *spiller[P]) drained(f *spillFile) error {
 func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
 	s.track()
-	s.full.Store(false)
+	s.unrefuse()
 	if s.wake != nil {
 		s.wake()
 	}
 }
+
+// refuse records a frame the disk budget refused: spill stands refused
+// (full) until credit returns (unrefuse).
+func (s *spiller[P]) refuse() {
+	s.refused.Add(1)
+	s.full.Store(true)
+	if s.refusedAt.Load() == 0 {
+		s.refusedAt.CompareAndSwap(0, monotonic())
+	}
+}
+
+// unrefuse clears full (credit returned), ending a refused interval.
+func (s *spiller[P]) unrefuse() {
+	s.full.Store(false)
+	if s.refusedAt.Load() == 0 {
+		return
+	}
+	if at := s.refusedAt.Swap(0); at != 0 {
+		s.refusedNs.Add(monotonic() - at)
+		s.refusedSpells.Add(1)
+	}
+}
+
+// refusedTime is the time spill stood refused, an interval still open
+// included.
+func (s *spiller[P]) refusedTime() time.Duration {
+	ns := s.refusedNs.Load()
+	if at := s.refusedAt.Load(); at != 0 {
+		ns += monotonic() - at
+	}
+	return time.Duration(ns)
+}
+
+// clockBase anchors monotonic.
+var clockBase = time.Now()
+
+// monotonic is a monotonic clock reading in nanoseconds, never 0.
+func monotonic() int64 { return int64(time.Since(clockBase)) + 1 }
 
 var errSpillFrame = errors.New("spill: corrupt frame")
 

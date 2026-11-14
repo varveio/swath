@@ -208,6 +208,12 @@ func TestSpillCleanedOnFailure(t *testing.T) {
 // certain: nothing is drained before, and the siblings spill four times
 // the cap. A hold released only on one-range-open would wait for the
 // refused siblings, and they for the drainer.
+//
+// The report's account follows: the free run never refuses or waits on
+// the budget (zeros); the capped run's refused interval ends when credit
+// returns, its waiters at publish or admission are counted, and their
+// times make up the budget wait; the reserve run's refusal is timed while
+// it lasts.
 func TestSpillDiskBudget(t *testing.T) {
 	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100}
 	want := f.keys()
@@ -251,6 +257,11 @@ func TestSpillDiskBudget(t *testing.T) {
 	if free.SpillRefused != 0 || free.SpillPeak == 0 {
 		t.Fatalf("no budget: peak %d, refused %d", free.SpillPeak, free.SpillRefused)
 	}
+	if free.SpillRefusedTime != 0 || free.SpillRefusedSpells != 0 || free.BudgetWait != 0 || free.PublishWait != 0 || free.AdmissionWait != 0 ||
+		free.PeakPublishWaiters != 0 || free.PeakAdmissionWaiters != 0 {
+		t.Fatalf("no budget: refused %v in %d spells, budget wait %v (publish %v, %d at once; admission %v, %d at once)", free.SpillRefusedTime, free.SpillRefusedSpells,
+			free.BudgetWait, free.PublishWait, free.PeakPublishWaiters, free.AdmissionWait, free.PeakAdmissionWaiters)
+	}
 	limit := free.SpillPeak / 4
 	capped := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit}, true)
 	t.Logf("peak without a cap %d bytes; with cap %d: peak %d, refused %d, %d rows spilled", free.SpillPeak, limit, capped.SpillPeak, capped.SpillRefused, capped.SpillRows)
@@ -258,9 +269,14 @@ func TestSpillDiskBudget(t *testing.T) {
 	if capped.SpillRefused == 0 || capped.SpillPeak > limit+16*capped.SpillFiles {
 		t.Fatalf("cap %d: peak %d, refused %d", limit, capped.SpillPeak, capped.SpillRefused)
 	}
+	if capped.SpillRefusedTime <= 0 || capped.SpillRefusedSpells == 0 || capped.PeakPublishWaiters+capped.PeakAdmissionWaiters == 0 ||
+		capped.PublishWait+capped.AdmissionWait != capped.BudgetWait {
+		t.Fatalf("cap %d: refused %v in %d spells, budget wait %v (publish %v, %d at once; admission %v, %d at once)", limit, capped.SpillRefusedTime, capped.SpillRefusedSpells,
+			capped.BudgetWait, capped.PublishWait, capped.PeakPublishWaiters, capped.AdmissionWait, capped.PeakAdmissionWaiters)
+	}
 	none := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillReserve: 1 << 62}, true)
-	if none.SpillRows != 0 || none.SpillRefused == 0 {
-		t.Fatalf("reserve: %d rows spilled, %d refused", none.SpillRows, none.SpillRefused)
+	if none.SpillRows != 0 || none.SpillRefused == 0 || none.SpillRefusedTime <= 0 {
+		t.Fatalf("reserve: %d rows spilled, %d refused for %v", none.SpillRows, none.SpillRefused, none.SpillRefusedTime)
 	}
 	if ents := readDir(t, dir); len(ents) != 0 {
 		t.Fatalf("spill files left: %d", len(ents))
