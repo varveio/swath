@@ -562,6 +562,118 @@ func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 	}
 }
 
+// refusedRange is a root with two ranges: a, which emits a page and holds
+// until every other range is done, and b, which waits until a's page is
+// out, then emits its batches with the budget full (Shared) and the disk
+// budget refusing every frame. b's file is created for its first frame,
+// refused, and holds its trailer alone, at offset 0.
+type refusedRange struct {
+	shared         *Shared
+	full           int64
+	bStart, aHeld  chan struct{}
+	batches, pageA int
+}
+
+func (p *refusedRange) Root() int { return 0 }
+
+func (p *refusedRange) Expand(ctx context.Context, r int, e source.Emitter[int, tp]) error {
+	wait := func(c chan struct{}) error {
+		select {
+		case <-c:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	switch r {
+	case 0:
+		if err := e.Child(1); err != nil {
+			return err
+		}
+		return e.Child(2)
+	case 1:
+		if err := e.Rows(refusedPage("a", 0, p.pageA)); err != nil {
+			return err
+		}
+		p.shared.Add(p.full) // the budget is full from here
+		close(p.bStart)
+		return wait(p.aHeld)
+	}
+	if err := wait(p.bStart); err != nil {
+		return err
+	}
+	for i := range p.batches {
+		if err := e.Rows(refusedPage("b", i, publishRows)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refusedPage(prefix string, i, n int) []schema.Row[tp] {
+	rows := make([]schema.Row[tp], n)
+	for j := range rows {
+		rows[j] = schema.Row[tp]{Key: fmt.Sprintf("%s/%04d/%05d", prefix, i, j), Data: tp{Size: int64(j), ETag: "e"}}
+	}
+	return rows
+}
+
+func (p *refusedRange) keys() []string {
+	var out []string
+	for _, r := range refusedPage("a", 0, p.pageA) {
+		out = append(out, r.Key)
+	}
+	for i := range p.batches {
+		for _, r := range refusedPage("b", i, publishRows) {
+			out = append(out, r.Key)
+		}
+	}
+	return out
+}
+
+// TestSegmentsRangeWithEveryFrameRefused: a range whose every spill frame
+// the disk budget refused (its rows went to memory once the budget had
+// room) still has its file, holding its trailer alone at offset 0. The
+// segments, planned once listing is done with that range not yet drained,
+// check its trailer like any other: a trailer at offset 0 was taken for
+// one never written ("spill: corrupt frame"), which stopped a capped run.
+func TestSegmentsRangeWithEveryFrameRefused(t *testing.T) {
+	anyShare(t)
+	withProcs(t, 5)
+	const full = 1 << 40
+	p := &refusedRange{shared: &Shared{}, full: full, bStart: make(chan struct{}), aHeld: make(chan struct{}), batches: 12, pageA: 100}
+	var released sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "one-range-open" { // b is done: a ends the listing
+			released.Do(func() { close(p.aHeld) })
+		}
+	})()
+	var refused sync.Once
+	hookWait = func(site string) {
+		if site == waitPublish { // b's first frame was refused: room in memory from now
+			refused.Do(func() { go p.shared.Add(-full) })
+		}
+	}
+	t.Cleanup(func() { hookWait = nil })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	s := &partSink{limit: 20_000, encoders: 4}
+	st, err := Run[int, tp](ctx, p, s, &testSchema, Options{Workers: 4, Budget: 1 << 30, Shared: p.shared, SpillDir: t.TempDir(), SpillMax: 1})
+	if err != nil {
+		t.Fatalf("%v (segments %+v, %d frames refused)", err, st.Segments, st.SpillRefused)
+	}
+	s.close()
+	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, p.keys()) {
+		t.Fatalf("%d rows, want %d", len(got), len(p.keys()))
+	}
+	if st.SpillRefused == 0 || st.SpillRows != 0 || st.SpillFiles != 1 {
+		t.Fatalf("%d frames refused, %d rows spilled, %d files: want refusals, no rows, b's file", st.SpillRefused, st.SpillRows, st.SpillFiles)
+	}
+	if st.Segments.Reason != SegmentEngaged {
+		t.Fatalf("segments %+v, want engaged", st.Segments)
+	}
+}
+
 // queuedSink is partSink whose segments queue their batches to stalled
 // encoders, as the Parquet router's do: each batch's bytes are counted
 // downstream (Shared) from Write until its encoder has taken it, two
