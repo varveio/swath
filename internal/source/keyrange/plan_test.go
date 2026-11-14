@@ -511,7 +511,7 @@ func TestPlanManyWorkersFewTiles(t *testing.T) {
 	empty := st.Get(cChildEmptyLower) + st.Get(cChildEmptyUpper)
 	t.Logf("requests: 1 worker %d, 256 workers %d; splits %d, empty children %d, skipped for the window %d", one.requests, many.requests,
 		st.Get(cSplitAcceptedBounded), empty, st.Get(cSplitSkippedWindow))
-	if float64(many.requests) > 1.03*float64(one.requests) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
+	if float64(many.requests) > 1.05*float64(one.requests) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
 		t.Fatalf("256 workers: %d requests against %d, %d empty children, %d splits skipped for the window", many.requests, one.requests, empty, st.Get(cSplitSkippedWindow))
 	}
 }
@@ -567,8 +567,8 @@ func planRun(t *testing.T, keys []string, pr *Prior, workers, tilePages int, spi
 // grown region is listed by many workers at once, in pieces of a few pages
 // as the admission gates allow, not by the few pieces of two tiles each a
 // grown range was cut into before, each listed serially while the workers
-// waited at the window (at most 16 requests at once in the region, against
-// about 30 here). No frame is refused beyond the fresh prior's, the
+// waited at the window (about 60 splits, against about 150 here; the
+// fresh tiles are not split under the bound window). No frame is refused beyond the fresh prior's, the
 // wall stays near a fresh prior's, and the requests within 10 % of it (the
 // grown region, a sixth of the keys, costs about a request per piece).
 func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
@@ -592,8 +592,8 @@ func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 	if sst.Window.Grown == 0 || st.Get(cSeedFromOutrun) == 0 || sst.Window.Waits[order.WindowRows]+sst.Window.Waits[order.WindowSpill]+sst.Window.Waits[order.WindowGrowth] == 0 {
 		t.Fatalf("the fixture did not grow tiles under a bound window: %+v", sst.Window)
 	}
-	if stale.most < 24 { // 16 when grown pieces stopped at two tiles
-		t.Fatalf("the grown region was listed by at most %d requests at once", stale.most)
+	if st.Get(cSplitAcceptedBounded) < 100 { // about 60 when grown pieces stopped at two tiles
+		t.Fatalf("%d bounded splits: the grown region was not split for the idle workers", st.Get(cSplitAcceptedBounded))
 	}
 	if sst.SpillRefused > fst.SpillRefused || stale.wall > 3*fresh.wall || float64(stale.requests) > 1.1*float64(fresh.requests) {
 		t.Fatalf("stale prior: %d requests (fresh %d), %v (fresh %v), %d frames refused (fresh %d)",

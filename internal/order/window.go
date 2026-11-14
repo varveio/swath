@@ -252,8 +252,8 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 		return admitDone, nil
 	case !ok && why != "":
 		w.why = why
-		if !force && w.rows.Load() > 0 {
-			w.bind(true) // a refusal of what the run measured, not of the empty window at its start
+		if !force && (o.sp != nil || w.rows.Load() > 0) {
+			w.bind(true) // not the empty window of a run without spill before its first rows
 		}
 		return admitRefused, nil
 	case !ok:
