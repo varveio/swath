@@ -5,6 +5,7 @@ package keyrange
 
 import (
 	"context"
+	"encoding/binary"
 	"sync"
 
 	"github.com/varveio/swath/internal/schema"
@@ -35,7 +36,14 @@ var Schema = schema.Schema[Object]{
 	Columns: []schema.Column[Object]{{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Size, true }}},
 	Heap:    func(*Object) int64 { return 0 },
 	Bytes:   func(*Object) int64 { return 8 },
+	Codec:   objectCodec{},
 }
+
+// objectCodec is the test payload's spill codec: its size.
+type objectCodec struct{}
+
+func (objectCodec) Append(dst []byte, o *Object) []byte { return binary.AppendVarint(dst, o.Size) }
+func (objectCodec) Decode(d *schema.Decoder, o *Object) { o.Size = d.Varint() }
 
 // lister is the fake API's shape.
 type lister interface {
