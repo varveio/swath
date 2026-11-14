@@ -103,12 +103,16 @@ func (pl *plan[P]) Start(ctx context.Context, wake func()) func() {
 // (source.Planner): the demand a split counts (Engine.demand).
 func (pl *plan[P]) Bound(on bool) { pl.p.windowBound.Store(on) }
 
-// RowBytes is the prior's stored bytes per row (source.Planner).
-func (pl *plan[P]) RowBytes() float64 {
+// Sizes are the plan's sizes for the window (source.Planner).
+func (pl *plan[P]) Sizes() source.PlanSizes {
+	s := source.PlanSizes{TileRows: pl.tileKeys, WindowRows: pl.p.opt.WindowRows}
 	if pr := pl.p.opt.Prior; pr.Rows > 0 {
-		return float64(pr.Bytes) / float64(pr.Rows)
+		s.RowBytes = float64(pr.Bytes) / float64(pr.Rows)
+		if pr.Parts > 0 {
+			s.PartRows = float64(pr.Rows) / float64(pr.Parts)
+		}
 	}
-	return 0
+	return s
 }
 
 // Next hands out the next range of the plan if admit takes its expected

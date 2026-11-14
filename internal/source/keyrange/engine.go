@@ -194,8 +194,10 @@ type Options struct {
 	// once the prior's tiles hold pages of keys each (Azure's 5,000).
 	PriorPageSize int
 	// TilePages is the pages a planned prior's tile holds (0: TilePages;
-	// Planner).
-	TilePages int
+	// Planner); WindowRows the order stage's frontier window's rows (0:
+	// its default rule; source.PlanSizes).
+	TilePages  int
+	WindowRows int64
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.

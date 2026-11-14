@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/order"
@@ -469,14 +470,27 @@ func TestPlanAccountsStayBounded(t *testing.T) {
 	}
 }
 
-// counting is a lister that counts its requests.
+// counting is a lister that counts its requests, each taking latency, and
+// the most in flight at once whose start lies in [lo, hi).
 type counting struct {
 	*sorted
-	n atomic.Int64
+	latency  time.Duration
+	lo, hi   string
+	n        atomic.Int64
+	mu       sync.Mutex
+	in, most int
 }
 
 func (c *counting) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
 	c.n.Add(1)
+	if c.hi != "" && in.StartAfter >= c.lo && in.StartAfter < c.hi {
+		c.mu.Lock()
+		c.in++
+		c.most = max(c.most, c.in)
+		c.mu.Unlock()
+		defer func() { c.mu.Lock(); c.in--; c.mu.Unlock() }()
+	}
+	time.Sleep(c.latency)
 	return c.sorted.List(ctx, in)
 }
 
@@ -491,35 +505,98 @@ func TestPlanManyWorkersFewTiles(t *testing.T) {
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
 	}
-	// Spill on, as in the command, so no worker idles on a full budget
-	// (that idle demand is a cold run's too): only the window holds them.
-	run := func(workers int) (int64, Stats) {
-		api := &counting{sorted: newSorted(keys, true, 1)}
-		var mu sync.Mutex
-		var leaves []span
-		opt := Options{Prior: priorOf(keys, 100), PageSize: 100, PriorPageSize: 100, TilePages: 4, Workers: workers,
-			Trace: func(lo, hi string, open bool) { mu.Lock(); leaves = append(leaves, span{lo, hi, open}); mu.Unlock() }}
-		p, err := newTest(api, opt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := &collect{}
-		if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 16 << 10,
-			SpillDir: t.TempDir(), SpillMax: 16 << 10}); err != nil {
-			t.Fatal(err)
-		}
-		if got := keysOf(c.rows); !slices.Equal(got, keys) {
-			t.Fatalf("w%d: %d keys, want %d", workers, len(got), len(keys))
-		}
-		checkTiling(t, fmt.Sprintf("w%d", workers), leaves)
-		return api.n.Load(), p.Stats()
-	}
-	one, _ := run(1)
-	many, st := run(256)
+	pr := priorOf(keys, 100)
+	one, _, _ := planRun(t, keys, pr, 1, 4, 16<<10, 0)
+	many, st, _ := planRun(t, keys, pr, 256, 4, 16<<10, 0)
 	empty := st.Get(cChildEmptyLower) + st.Get(cChildEmptyUpper)
-	t.Logf("requests: 1 worker %d, 256 workers %d; splits %d, empty children %d, skipped for the window %d", one, many,
+	t.Logf("requests: 1 worker %d, 256 workers %d; splits %d, empty children %d, skipped for the window %d", one.requests, many.requests,
 		st.Get(cSplitAcceptedBounded), empty, st.Get(cSplitSkippedWindow))
-	if float64(many) > 1.03*float64(one) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
-		t.Fatalf("256 workers: %d requests against %d, %d empty children, %d splits skipped for the window", many, one, empty, st.Get(cSplitSkippedWindow))
+	if float64(many.requests) > 1.03*float64(one.requests) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
+		t.Fatalf("256 workers: %d requests against %d, %d empty children, %d splits skipped for the window", many.requests, one.requests, empty, st.Get(cSplitSkippedWindow))
+	}
+}
+
+// plannedRun is a planned run's outcome: its requests, wall time and the
+// most requests in flight at once inside the region asked for.
+type plannedRun struct {
+	requests int64
+	wall     time.Duration
+	most     int
+}
+
+// planRun lists keys planned from pr (pages of 100, tiles of tilePages) at
+// workers, with spill on and capped at spillMax (as in the command, so no
+// worker idles on a full budget: only the window holds them back), each
+// request taking latency; it checks every key listed once, in order, and
+// the tiling, and returns the run, the engine's counters and the order
+// stage's account.
+func planRun(t *testing.T, keys []string, pr *Prior, workers, tilePages int, spillMax int64, latency time.Duration, region ...string) (plannedRun, Stats, order.Stats) {
+	t.Helper()
+	api := &counting{sorted: newSorted(keys, true, 1), latency: latency}
+	if len(region) == 2 {
+		api.lo, api.hi = region[0], region[1]
+	}
+	var mu sync.Mutex
+	var leaves []span
+	opt := Options{Prior: pr, PageSize: 100, PriorPageSize: 100, TilePages: tilePages, Workers: workers,
+		Trace: func(lo, hi string, open bool) { mu.Lock(); leaves = append(leaves, span{lo, hi, open}); mu.Unlock() }}
+	p, err := newTest(api, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &collect{}
+	start := time.Now()
+	ost, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 16 << 10,
+		SpillDir: t.TempDir(), SpillMax: spillMax})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wall := time.Since(start)
+	if got := keysOf(c.rows); !slices.Equal(got, keys) {
+		t.Fatalf("w%d: %d keys, want %d", workers, len(got), len(keys))
+	}
+	checkTiling(t, fmt.Sprintf("w%d", workers), leaves)
+	return plannedRun{api.n.Load(), wall, api.most}, p.Stats(), ost
+}
+
+// TestPlanGrownTileUnderBoundWindow: a stale prior whose region (2 % of
+// the keys, three tiles of seven pages) has grown tenfold since (nine keys added after each),
+// listed under a window bound by a small spill cap. A range that has listed
+// past its prior's count, and its children, stay split demand for the idle
+// workers however the window binds (their remainder is unknown), so the
+// grown region is listed by many workers at once, in pieces of a few pages
+// as the admission gates allow, not by the few pieces of two tiles each a
+// grown range was cut into before, each listed serially while the workers
+// waited at the window (at most 16 requests at once in the region, against
+// about 30 here). No frame is refused beyond the fresh prior's, the
+// wall stays near a fresh prior's, and the requests within 10 % of it (the
+// grown region, a sixth of the keys, costs about a request per piece).
+func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
+	var base, keys []string
+	lo, hi := fmt.Sprintf("k%06d", 16000), fmt.Sprintf("k%06d", 18000)
+	for i := range 100000 {
+		k := fmt.Sprintf("k%06d", i)
+		base, keys = append(base, k), append(keys, k)
+		if k > lo && k <= hi {
+			for d := range 9 {
+				keys = append(keys, fmt.Sprintf("%s~%d", k, d))
+			}
+		}
+	}
+	const latency, cap, tilePages = 2 * time.Millisecond, 64 << 10, 8
+	fresh, _, fst := planRun(t, keys, priorOf(keys, 100), 64, tilePages, cap, latency)
+	stale, st, sst := planRun(t, keys, priorOf(base, 100), 64, tilePages, cap, latency, lo, hi)
+	t.Logf("fresh: %d requests, %v, %d refused; stale: %d requests, %v, %d refused, %d bounded splits, %d skipped for the window, "+
+		"%d tiles grown, at most %d requests at once in the grown region", fresh.requests, fresh.wall, fst.SpillRefused, stale.requests, stale.wall,
+		sst.SpillRefused, st.Get(cSplitAcceptedBounded), st.Get(cSplitSkippedWindow), sst.Window.Grown, stale.most)
+	if sst.Window.Grown == 0 || st.Get(cSeedFromOutrun) == 0 || sst.Window.Waits[order.WindowRows]+sst.Window.Waits[order.WindowSpill]+sst.Window.Waits[order.WindowGrowth] == 0 {
+		t.Fatalf("the fixture did not grow tiles under a bound window: %+v", sst.Window)
+	}
+	if stale.most < 24 { // 16 when grown pieces stopped at two tiles
+		t.Fatalf("the grown region was listed by at most %d requests at once", stale.most)
+	}
+	if sst.SpillRefused > fst.SpillRefused || stale.wall > 3*fresh.wall || float64(stale.requests) > 1.1*float64(fresh.requests) {
+		t.Fatalf("stale prior: %d requests (fresh %d), %v (fresh %v), %d frames refused (fresh %d)",
+			stale.requests, fresh.requests, stale.wall, fresh.wall, sst.SpillRefused, fst.SpillRefused)
 	}
 }

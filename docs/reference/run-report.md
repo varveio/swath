@@ -210,7 +210,7 @@ encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`,
 `--seed-from`; absent otherwise) is the frontier window
 ([internals/ordering.md](../internals/ordering.md#the-frontier-window)): `tiles` admitted, `forced` of them by the
 drainer past a refusal, `grown` (tiles whose rows reached 4 times the prior's), `rows` (the window's rows when last
-evaluated) and `bound_by` (`spill_cap`, `budget` or `unbounded`), `waits` (workers' waits at the window by the
+evaluated) and `bound_by` (`run`, `set`, `spill_cap`, `budget` or `unbounded`), `waits` (workers' waits at the window by the
 refusal that held them: `rows`, `spill`, `growth`), `wait_ns` and `peak_waiters`, `plan_wait_ns` (the drainer
 waiting for the prior to be read), `peak_tiles`, `peak_credit_rows` (the rows charged to the tiles held) and
 `peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
