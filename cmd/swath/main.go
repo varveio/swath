@@ -526,6 +526,7 @@ type options struct {
 	partSize, rowBudget    size
 	spillBudget            zsize
 	spillReserve           zsize
+	segmentWorkers         int
 	resume, noJournal      bool
 	noSpill, spillCompress bool
 	spillPlain             bool
@@ -587,7 +588,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "segment-workers", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -885,7 +886,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}, SegmentWorkers: o.segmentWorkers},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,

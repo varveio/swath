@@ -167,6 +167,9 @@ type Limits struct {
 	// (frozen for a resume: boundaries depend on it).
 	PartMaxRows int64
 	Spill       SpillLimits
+	// SegmentWorkers, when above 0, replaces the processors rule for the
+	// tail's segment workers (order.Options.SegmentWorkersAsked).
+	SegmentWorkers int
 	// maxEncoders is the encoders admitted once listing has ended
 	// (admitAfterListing): the default's, or Encoders when given
 	// (encodersGiven).
@@ -1090,7 +1093,7 @@ func routerOptions(ctx context.Context, cfg Config, jr *runJournal, shared *orde
 func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (oopt order.Options, scratch string, err error) {
 	gauges := &order.Gauges{}
 	oopt = order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
-		After: jr.after(), Gauges: gauges, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
+		After: jr.after(), Gauges: gauges, SegmentWorkersAsked: cfg.Limits.SegmentWorkers, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
 	}
