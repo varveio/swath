@@ -318,7 +318,10 @@ func TestPhaseProfilesRun(t *testing.T) {
 	}
 	ls, _ := profileSpan(t, cpu+phaseListing)
 	ts, _ := profileSpan(t, cpu+phaseTail)
-	if ls.After(r.Timings.ListingDoneAt) || ts.Before(r.Timings.ListingDoneAt) {
+	// The listing profile's own start time is stamped by the profiler's
+	// writer goroutine, which a short listing can finish ahead of, so it is
+	// compared with the tail's start, not with listing_done_at.
+	if !ls.Before(ts) || ts.Before(r.Timings.ListingDoneAt) {
 		t.Fatalf("listing profile from %v, tail from %v, listing_done_at %v", ls, ts, r.Timings.ListingDoneAt)
 	}
 	// run.json, written at the commit after the switch, names the same
