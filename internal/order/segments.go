@@ -29,6 +29,14 @@ import (
 // against the previous (adjacency) before publishing it; the seams between
 // segments are checked again here. Before listing is done nothing
 // changes: the drainer walks the tree as always.
+//
+// A resume's reused certificates (replay ranges) are not listed: listing
+// ends with the gaps around them, and the ones the drainer has not reached
+// yet are the segments' too. Their files are read once before the cut
+// (scanCert: their frames located, their rows checked and counted, none
+// kept), and each frame holding a row above K is a unit, read again by
+// its segment; the files go back to their cache once every segment is
+// written, as this run's durable files do.
 
 // Segmenter is a sink that can take the rest of its stream as consecutive
 // segments (the Parquet router through registry).
@@ -93,12 +101,20 @@ type SegmentStats struct {
 	// drain holds it too).
 	Tree int64
 	// DurableFiles is the durable spill files (order.Cache) the segments
-	// read frames of; DurableBoundaries the segment boundaries that fall
-	// inside one of their frames (a span of it on either side).
+	// read frames of, reused certificates included; DurableBoundaries the
+	// segment boundaries that fall inside one of their frames (a span of it
+	// on either side).
 	DurableFiles, DurableBoundaries int
 	// Deferred is the rows a planned boundary moved past, in group mode,
 	// because they continued the group of the key before it (cut).
 	Deferred int64
+	// Certificates is the reused certificates (a resume's) the segments
+	// replayed, the ones the drainer had not reached when listing ended;
+	// CertRows their rows handed on (in Rows), CertScan the plan's time
+	// reading them before the cut (scanCert; in Plan).
+	Certificates int
+	CertRows     int64
+	CertScan     time.Duration
 }
 
 // What set the segment workers' count (SegmentStats.WorkersBy).
@@ -159,13 +175,24 @@ type segState[P any] struct {
 }
 
 // unit is a run of rows still to hand on: an in-memory item's rows, or a
-// spilled frame.
+// spilled frame, a reused certificate's included (its first skip rows lie
+// at or below K: n and logical are the rows after them).
 type unit[P any] struct {
 	rows       []schema.Row[P]
 	f          *spillFile
 	at         spillAt
 	n, logical int64
 	units      int64 // what its rows count against the row budget
+	skip       int
+}
+
+// certAt is a reused certificate the drainer has not reached when the
+// segments are planned: its replay range's node, and its place among the
+// units (before the unit at index at).
+type certAt[R, P any] struct {
+	n    *node[R, P]
+	cert int
+	at   int
 }
 
 // segment is one part's rows: from row r0 of unit u0 to row r1 of unit u1
@@ -231,7 +258,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		return false, err
 	}
 	t := time.Now()
-	units, files, released, releasedMeta, nodes, markers, mem := o.flatten()
+	units, files, certs, released, releasedMeta, nodes, markers, mem := o.flatten()
 	tree := o.buffered
 	// What the segments may hold is the budget beside the tree: the tree
 	// holds about the budget once listing has ended (spill keeps it
@@ -243,6 +270,28 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		free -= sh.Load()
 	}
 	o.mu.Unlock()
+	var scans []*certScan[P]
+	var certRows int64
+	if len(certs) > 0 {
+		// The drainer's readers close (reopened where they were if the
+		// segments do not go ahead): their descriptors are the scans'.
+		o.sp.closeReaders()
+		ts := time.Now()
+		scans, err = o.scanCerts(certs, min(maxReaders, max(1, spareProcs())))
+		o.seg.st.CertScan += time.Since(ts)
+		if err != nil {
+			o.mu.Lock()
+			return false, err
+		}
+		all := make([]unit[P], 0, len(units)+len(certs))
+		at := 0
+		for j, c := range certs {
+			all = append(append(all, units[at:c.at]...), scans[j].units...)
+			at = c.at
+			certRows += scans[j].emitted
+		}
+		units = append(all, units[at:]...)
+	}
 	per := segmentShare(units, pl)
 	if hookShare != nil {
 		per = hookShare(per)
@@ -278,6 +327,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		if began {
 			sg.AbandonSegments() // the drainer writes on, the interval cut resumes
 		}
+		o.dropScans(scans)
 		o.mu.Lock()
 		switch {
 		case err != nil:
@@ -306,6 +356,15 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	for _, it := range mem {
 		it.rows = nil
 	}
+	// The certificates are the segments' to replay: their rows are
+	// received here, as the drainer's replay receives them (Rows).
+	for _, c := range certs {
+		c.n.state = done
+	}
+	o.seg.st.Certificates, o.seg.st.CertRows = len(certs), certRows
+	o.received.Add(certRows)
+	o.replayed.Add(certRows)
+	o.g.ahead.add(certRows)
 	o.seg.uses = make([]atomic.Int32, len(units))
 	for _, sg := range segs {
 		for ui := sg.u0; ui < sg.u1 || (ui == sg.u1 && sg.r1 > 0); ui++ {
@@ -340,8 +399,18 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		// Every spill file the segments finished is done as the drainer's
 		// trailer read leaves it: a run-private file removed and its credit
 		// returned, a durable one handed back to its cache (drainedFile).
+		// A certificate goes back the same way, as the drainer's replay
+		// leaves it, and is retired once K covers it: until here it is
+		// undrained, so neither K nor eviction retires it while a segment
+		// may still read it.
 		for f := range files {
 			if e := o.sp.drained(f); e != nil && err == nil {
+				err = e
+			}
+		}
+		for _, s := range scans {
+			o.sp.cache.replayedCert(s.emitted, s.skipped)
+			if e := o.sp.drained(s.f); e != nil && err == nil {
 				err = e
 			}
 		}
@@ -490,11 +559,13 @@ var hookShare func(per int64) int64
 var hookSegmenter func(mu *sync.Mutex)
 
 // flatten lists the rows still to hand on, in drain order, from the
-// drainer's walk (mu held; every node is done), with the rows each spill
-// file must account for at its trailer, the budget units the items hold,
-// the nodes and markers they release, and the items holding rows in memory
-// (whose rows the segments, once committed, own instead).
-func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, released, meta, nodes, markers int64, mem []*item[R, P]) {
+// drainer's walk (mu held; every node is done but the replay ranges not
+// reached yet), with the rows each spill file must account for at its
+// trailer, those replay ranges (their certificates' rows are not units
+// yet: scanCert), the budget units the items hold, the nodes and markers
+// they release, and the items holding rows in memory (whose rows the
+// segments, once committed, own instead).
+func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, certs []certAt[R, P], released, meta, nodes, markers int64, mem []*item[R, P]) {
 	files = map[*spillFile]int64{}
 	path := append([]drainFrame[R, P](nil), o.path...)
 	for len(path) > 0 {
@@ -502,6 +573,9 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 		if f.i >= len(f.n.items) {
 			if sf := f.n.spill; sf != nil {
 				files[sf] += sf.read // what the drainer replayed itself
+			}
+			if i, ok := o.replayOf(f.n); ok && f.n.state == queued {
+				certs = append(certs, certAt[R, P]{n: f.n, cert: i, at: len(units)})
 			}
 			path = path[:len(path)-1]
 			nodes++
@@ -528,12 +602,13 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 			units = append(units, unit[P]{rows: it.rows, n: int64(len(it.rows)), logical: l, units: it.units})
 		}
 	}
-	return units, files, released, meta, nodes, markers, mem
+	return units, files, certs, released, meta, nodes, markers, mem
 }
 
 // rowsTimed is a unit's rows, with the frame's decoding time: in memory,
-// or its frame read and decoded on its file's read handle; a frame holding
-// other than the rows its marker recorded is refused.
+// or its frame read and decoded on its file's read handle (past its skip
+// rows); a frame holding other than the rows its marker (or its
+// certificate's scan) recorded is refused.
 func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error) {
 	if u.f == nil {
 		return u.rows, 0, nil
@@ -542,10 +617,10 @@ func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error
 	if err != nil {
 		return nil, 0, err
 	}
-	if int64(len(rows)) != u.n {
-		return nil, 0, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), u.n)
+	if int64(len(rows)) != int64(u.skip)+u.n {
+		return nil, 0, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), int64(u.skip)+u.n)
 	}
-	return rows, dec, nil
+	return rows[u.skip:], dec, nil
 }
 
 // segTimes is one segment's time by what it did (SegmentStats).
@@ -765,6 +840,11 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 				return 0, 0, "", "", false, err
 			}
 			held += u.units
+		}
+		if u.f != nil && u.f.d != nil && u.f.d.reused {
+			if err := faults.At("spill-replay-frame"); err != nil { // a recovery replay's frame, earlier ones handed on
+				return 0, 0, "", "", false, err
+			}
 		}
 		t := time.Now()
 		rs, dec, err := o.rowsTimed(u)

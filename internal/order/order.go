@@ -103,7 +103,8 @@ type Options struct {
 	// source.Fencing), is the attempt's durable spill: a spilled range with
 	// a free slot writes a durable file and seals its certificate, and the
 	// provider's replay ranges (source.Replaying) are its reused
-	// certificates, replayed by the drainer. Run never closes it.
+	// certificates, replayed by the drainer or, once listing is done, by
+	// the segments (segments.go). Run never closes it.
 	Durable *Cache
 }
 
@@ -164,8 +165,9 @@ type Stats struct {
 	// nothing on: from the drain's start to the first row, between two
 	// hand-ons, or from the last row to the drain's end.
 	FrontierStuck time.Duration
-	// ListingDone is when the provider finished (every range expanded),
-	// zero if it never did; DrainEnd when the drainer handed on its last
+	// ListingDone is when the provider finished (every range expanded but
+	// the replay ranges, which are not listed), zero if it never did;
+	// DrainEnd when the drainer handed on its last
 	// row. The drain tail is the interval between them.
 	ListingDone, DrainEnd time.Time
 	// IdleAfter is the workers' idle time (nothing queued to list,
@@ -177,7 +179,8 @@ type Stats struct {
 	// zero when the sink is no Segmenter).
 	Segments SegmentStats
 	// ReplayedRows are the rows recovery replay handed on from reused
-	// certificates (in Received and Rows; never listed by the provider).
+	// certificates, the drainer's and the segments' (in Received and Rows;
+	// never listed by the provider).
 	ReplayedRows int64
 	// Durable reports whether durable spill engaged for this run.
 	Durable bool
@@ -436,9 +439,10 @@ type run[R, P any] struct {
 	dt             DrainerTimes // drainer only
 	drainEnd       time.Time
 
-	// open counts the ranges created and not yet done: the listing is done
-	// when it reaches zero (listedAt, under mu). idleAfter is the workers'
-	// idle time after it (mu).
+	// open counts the ranges created and not yet done, replay ranges
+	// excepted (nothing lists them): the listing is done when it reaches
+	// zero (listedAt, under mu). idleAfter is the workers' idle time after
+	// it (mu).
 	open      atomic.Int64
 	listedAt  time.Time
 	idleAfter time.Duration
@@ -694,6 +698,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if hookBeforeDrain != nil {
 		hookBeforeDrain()
 	}
+	event("drain-start") // tests: the drainer is about to start
 	st, err := o.drainTree(root, sink)
 	if err != nil && ctx.Err() != nil {
 		// A worker failed first and cancelled the run; report its error,
@@ -891,13 +896,25 @@ func fences[R, P any](p source.Provider[R, P]) bool {
 	return ok && f.Fences()
 }
 
-// replayOf is n's certificate when n is a replay range (the drainer's
-// alone).
+// replayOf is n's certificate when n is a replay range (never a
+// worker's: the drainer's, or the segments').
 func (o *run[R, P]) replayOf(n *node[R, P]) (int, bool) {
 	if o.replayFn == nil {
 		return 0, false
 	}
 	return o.replayFn(n.r)
+}
+
+// listed counts the ranges among kids that are listed: every one but the
+// replay ranges (open).
+func (o *run[R, P]) listed(kids []*node[R, P]) int64 {
+	var n int64
+	for _, k := range kids {
+		if _, ok := o.replayOf(k); !ok {
+			n++
+		}
+	}
+	return n
 }
 
 func (o *run[R, P]) worker() {
@@ -985,6 +1002,7 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 				o.opt.ListingDone()
 			}
 			o.listedNotified.Store(true)
+			event("listing-done") // tests: every range is listed
 		}
 	}()
 	o.mu.Lock()
@@ -1013,7 +1031,7 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 				d.Dispose(k.r)
 			}
 		}
-		o.open.Add(-int64(len(e.kids)))
+		o.open.Add(-o.listed(e.kids))
 		e.kids = nil
 	}
 	n.state = done
@@ -1142,7 +1160,9 @@ func (e *emitter[R, P]) Child(r R) error {
 	e.kids = append(e.kids, c)
 	e.units += u
 	e.o.g.nodes.add(1)
-	e.o.open.Add(1)
+	if _, ok := e.o.replayOf(c); !ok { // a replay range is never listed
+		e.o.open.Add(1)
+	}
 	return e.maybePublish()
 }
 

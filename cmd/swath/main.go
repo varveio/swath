@@ -387,8 +387,9 @@ func printVersion(w io.Writer) {
 // (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
 // SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
 // "point:n": the n-th time the process reaches crash point point; and on
-// the order stage's events (order.SetDurableEvents), serialSeals' and
-// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile).
+// the order stage's events (order.SetDurableEvents), serialSeals',
+// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and
+// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing).
 func testHooks() {
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
@@ -397,6 +398,9 @@ func testHooks() {
 	}
 	if path := os.Getenv("SWATH_TEST_LAST_RANGE_FILE"); path != "" {
 		events = append(events, lastRangeFile(path))
+	}
+	if os.Getenv("SWATH_TEST_DRAIN_AFTER_LISTING") != "" {
+		events = append(events, drainAfterListing())
 	}
 	if len(events) > 0 {
 		order.SetDurableEvents(func(e string) {
@@ -502,6 +506,28 @@ func lastRangeFile(path string) func(string) {
 		if alone.Load() && sealed.Load() && made.CompareAndSwap(false, true) {
 			if f, err := os.Create(path); err == nil {
 				f.Close()
+			}
+		}
+	}
+}
+
+// drainAfterListing is SWATH_TEST_DRAIN_AFTER_LISTING: the drainer starts
+// ("drain-start", on its goroutine) only once every range is listed
+// ("listing-done"), so a resume's reused certificates are all left to the
+// segments, none replayed by the drainer while the gaps are listed
+// (cmd/swath's TestSegmentsReplayDurableFiles). A wait over 30 s gives up:
+// the test then finds the certificates replayed serially and fails.
+func drainAfterListing() func(string) {
+	listed := make(chan struct{})
+	var once sync.Once
+	return func(e string) {
+		switch e {
+		case "listing-done":
+			once.Do(func() { close(listed) })
+		case "drain-start":
+			select {
+			case <-listed:
+			case <-time.After(30 * time.Second):
 			}
 		}
 	}

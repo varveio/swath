@@ -53,7 +53,8 @@ creates, a durable file's first write (its header, with the capture start at a r
 and trailer writes, its seal's fsync, the flusher's directory sync, ledger append, ledger sync and unlink.
 `faults.RecoveryPoints`: a resume's ledger truncation, the moment after it (truncated, not yet synced), its
 retirements' append and sync, an unlink, the directory sync, a recovery replay's start and each captured
-frame it replays. `TestDurableKillMatrix` (in process: each point's 1st and 4th occurrence; writes torn at
+frame it replays (the drainer's replay, or the segments': a certificate's scan, and each certified frame a
+segment reads; [ordering.md](ordering.md#segments-parts-written-in-parallel-after-listing)). `TestDurableKillMatrix` (in process: each point's 1st and 4th occurrence; writes torn at
 an explicit offset inside a header, a capture start, a rows frame, a trailer, a tail and a ledger record;
 lost unsynced state) and `TestSIGKILLDurableSpill` (the real process) run them on a slow-frontier fixture
 and fail if a point is not reached. In process the fixture is gated, not timed: each seal waits until the seal

@@ -5,6 +5,15 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a resume that reuses durable-spill certificates writes its tail with the parallel segments. Before,
+  such a resume never finished listing: its replay ranges were counted as ranges still to list, so the segments
+  never engaged (`drain.segments.reason` `listing_active`), the encoders reserved for after listing were never
+  admitted, and every replayed row went through the one drainer. A resume took a median 2.16 times as long as a
+  fresh run on 28 production key lists. Listing now ends with the gaps around the certificates, and the
+  certificates the drainer has not reached by then are replayed by the segments, read by offset after one scan
+  of their files. The parts are the uninterrupted run's. The run report (`report_version` 10) adds
+  `drain.segments.certificates_read`, `certified_rows` and `certificate_scan_ns`, and
+  `spill.durable.resume.replayed_certificates` (#288).
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
   live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
   without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted

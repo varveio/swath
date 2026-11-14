@@ -33,7 +33,9 @@ type segReport struct {
 			Durable *struct {
 				SealedFiles int64 `json:"sealed_files"`
 				Resume      *struct {
-					ReplayedRows int64 `json:"replayed_rows"`
+					Accepted             int64 `json:"accepted"`
+					ReplayedRows         int64 `json:"replayed_rows"`
+					ReplayedCertificates int64 `json:"replayed_certificates"`
 				} `json:"resume"`
 			} `json:"durable"`
 		} `json:"spill"`
@@ -41,8 +43,11 @@ type segReport struct {
 			Segments *struct {
 				Reason            string `json:"reason"`
 				Workers           int    `json:"workers"`
+				Rows              int64  `json:"rows"`
 				DurableFilesRead  int    `json:"durable_files_read"`
 				DurableBoundaries int    `json:"durable_boundaries"`
+				CertificatesRead  int64  `json:"certificates_read"`
+				CertifiedRows     int64  `json:"certified_rows"`
 			} `json:"segments"`
 		} `json:"drain"`
 	} `json:"resources"`
@@ -129,12 +134,18 @@ func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Requ
 // room for several segment workers: the clean run engages segments that
 // read durable files, with part boundaries inside their frames. Then runs
 // killed after a seal, after a ledger append, and in a resume's recovery
-// replay (frames of a reused certificate already handed on), each resumed:
-// the resume engages segments over durable files too, its rows reconcile
-// (fetched - filtered + replayed = emitted), and the dataset is the clean
-// run's, byte for byte. A segment that could not read a durable file fails
-// the run (the offset reader opens it through the output root and checks
-// its version-2 CRC); nothing falls back to the serial drain silently.
+// replay, each resumed: the resume engages segments that replay its reused
+// certificates (#288), its rows reconcile (fetched - filtered + replayed =
+// emitted), and the dataset is the clean run's, byte for byte. Every
+// resume's drainer starts only once listing is done
+// (SWATH_TEST_DRAIN_AFTER_LISTING), so the certificates are left to the
+// segments, not replayed by the drainer while the gaps are listed. Resumes
+// are killed in their segment tail too (faults.SegmentPoints, the
+// certificates' scan at spill-replay, a certified frame a segment reads at
+// spill-replay-frame) and resumed again. A segment that could not read a
+// durable file fails the run (the offset reader opens it through the output
+// root and checks its version-2 CRC); nothing falls back to the serial
+// drain silently.
 func TestSegmentsReplayDurableFiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -187,28 +198,32 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 			t.Fatalf("%s: not killed at %s (not reached): %v\n%s", at, kill, err, out)
 		}
 	}
-	// engaged requires reconciled rows and segments over durable files,
-	// or, on a resume that reuses certificates, the reason they could not
-	// run: a reused certificate is a replay range the drainer alone
-	// expands when it reaches it, so listing is not done (and the tail not
-	// immutable) until the drainer has passed the last one.
-	engaged := func(at string, r segReport) {
+	// reconciled requires every row emitted once: fetched - filtered +
+	// replayed = emitted.
+	reconciled := func(at string, r segReport) {
 		t.Helper()
 		sg, o := r.Resources.Drain.Segments, r.Output
-		var replayed int64
+		var replayed, certs int64
 		if res := r.Resources.Spill.Durable.Resume; res != nil {
-			replayed = res.ReplayedRows
+			replayed, certs = res.ReplayedRows, res.ReplayedCertificates
 		}
-		t.Logf("%s: segments %s, %d workers, %d durable files read, %d boundaries in them; %d fetched, %d replayed, %d emitted",
-			at, sg.Reason, sg.Workers, sg.DurableFilesRead, sg.DurableBoundaries, o.RowsFetched, replayed, o.RowsEmitted)
-		switch {
-		case sg.Reason == "engaged" && sg.Workers >= 2 && sg.DurableFilesRead >= 1:
-		case sg.Reason == "listing_active" && replayed > 0:
-		default:
-			t.Fatalf("%s: the segments did not replay durable files: %+v (%d rows replayed)", at, *sg, replayed)
-		}
+		t.Logf("%s: segments %s, %d workers, %d rows, %d durable files read, %d boundaries in them, %d of %d certificates replayed (%d rows); %d fetched, %d replayed, %d emitted",
+			at, sg.Reason, sg.Workers, sg.Rows, sg.DurableFilesRead, sg.DurableBoundaries, sg.CertificatesRead, certs, sg.CertifiedRows, o.RowsFetched, replayed, o.RowsEmitted)
 		if o.RowsFetched-o.RowsFiltered+replayed != o.RowsEmitted {
 			t.Fatalf("%s: rows do not reconcile: %d fetched - %d filtered + %d replayed != %d emitted", at, o.RowsFetched, o.RowsFiltered, replayed, o.RowsEmitted)
+		}
+	}
+	// engaged requires reconciled rows and segments over durable files,
+	// and on a resume that reuses certificates, segments that replay them.
+	engaged := func(at string, r segReport) {
+		t.Helper()
+		reconciled(at, r)
+		sg := r.Resources.Drain.Segments
+		if sg.Reason != "engaged" || sg.Workers < 2 || sg.Rows == 0 || sg.DurableFilesRead < 1 {
+			t.Fatalf("%s: the segments did not replay durable files: %+v", at, *sg)
+		}
+		if res := r.Resources.Spill.Durable.Resume; res != nil && (sg.CertificatesRead < 1 || sg.CertifiedRows < 1 || sg.CertificatesRead > res.ReplayedCertificates) {
+			t.Fatalf("%s: segments %+v: want them to replay certificates (%d replayed, %d accepted)", at, *sg, res.ReplayedCertificates, res.Accepted)
 		}
 	}
 	same := func(at, ref, out string) {
@@ -234,6 +249,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	resume := func(at, out, kill string, extra ...string) segReport {
 		t.Helper()
 		rep := filepath.Join(t.TempDir(), "resume.json")
+		extra = append(extra, "SWATH_TEST_DRAIN_AFTER_LISTING=1")
 		run(at+" resume", exec.Command(bin, append(append([]string{"resume", "--report", rep}, runtime...), out)...), kill, extra...)
 		if kill != "" {
 			return segReport{}
@@ -268,4 +284,16 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		t.Fatalf("%s: the second resume replayed no certificate", at)
 	}
 	same(at, ref, out)
+	// Killed in the resume's segment tail: with the segments planned, a
+	// segment's part published, every row handed on, at the certificates'
+	// scan and at a certified frame a segment reads. The resume after it
+	// replays from max(cs, K) whatever certificates are left, or none.
+	for _, kill := range []string{"segments-begun:1", "segment-published:1", "segments-written:1", "spill-replay:1", "spill-replay-frame:2"} {
+		at := "resume " + kill
+		out := filepath.Join(t.TempDir(), "ds")
+		run(at, exec.Command(bin, args(out)...), "spill-ledger-sync:4", "SWATH_TEST_SERIAL_SEALS=1")
+		resume(at, out, kill)
+		reconciled(at, resume(at+" again", out, ""))
+		same(at, ref, out)
+	}
 }

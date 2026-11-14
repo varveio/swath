@@ -886,7 +886,9 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 // readAt reads and decodes the rows frame of size bytes at off in f on a
 // lease of f's read handle (the read-ahead and the segments: any
 // goroutine, concurrently with the drainer, which never reads this frame
-// itself). It returns the decoding time.
+// itself). A reused certificate's frame may be of any rows type: an
+// earlier attempt wrote it, with its own spill flags. It returns the
+// decoding time.
 func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], time.Duration, error) {
 	if size <= 8 || size-8 > maxSpillFrame { // checked before allocating
 		return nil, 0, errSpillFrame
@@ -901,7 +903,13 @@ func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], tim
 		return nil, 0, fmt.Errorf("spill: %w", err)
 	}
 	payload := buf[8:]
-	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || !frameOK(f, [8]byte(buf[:8]), payload) || payload[0] != s.rowsType() {
+	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || !frameOK(f, [8]byte(buf[:8]), payload) {
+		return nil, 0, errSpillFrame
+	}
+	switch typ := payload[0]; {
+	case typ == s.rowsType():
+	case f.d != nil && f.d.reused && (typ == frameRows || typ == frameRowsZstd || typ == frameDelta || typ == frameDeltaZstd):
+	default:
 		return nil, 0, errSpillFrame
 	}
 	t := time.Now()

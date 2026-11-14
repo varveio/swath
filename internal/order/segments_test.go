@@ -40,6 +40,12 @@ type partSink struct {
 	failAt         int // the segment (1-based, in opening order) whose Write fails (0: none)
 	opened         int
 	failed         *fakePart // the failing segment's part
+	// stated: the rule is stated from the start, as a resumed router's is
+	// (its limit restored from the journal), not once two parts closed.
+	stated bool
+	// onClose, if set, sees each segment's part closed (not the last),
+	// with its last key, after the sink's lock is released.
+	onClose func(last string)
 
 	mu        sync.Mutex
 	parts     []*fakePart
@@ -92,7 +98,7 @@ func (s *partSink) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 func (s *partSink) Plan() (dataset.SegmentPlan, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.parts) < 2 || s.segmented {
+	if len(s.parts) < 2 && !s.stated || s.segmented {
 		return dataset.SegmentPlan{}, false
 	}
 	pl := dataset.SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue}
@@ -165,10 +171,18 @@ func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 
 func (f *fakeSeg) Close(_ context.Context, rowCut bool) {
 	f.s.mu.Lock()
-	defer f.s.mu.Unlock()
 	f.p.closed = true
 	if rowCut {
 		f.s.rowCuts++
+	}
+	n := len(f.p.keys)
+	var last string
+	if n > 0 {
+		last = f.p.keys[n-1]
+	}
+	f.s.mu.Unlock()
+	if f.s.onClose != nil && n > 0 {
+		f.s.onClose(last)
 	}
 }
 
@@ -1232,5 +1246,312 @@ func TestSegmentsSeamInsideAGroup(t *testing.T) {
 		if o.seg.st.Deferred == 0 || o.rows != 70 || o.distinct != 10 || o.seg.st.Seams != int64(len(segs)-1) {
 			t.Fatalf("%d rows, %d distinct keys, %d seams of %d segments, %d deferred", o.rows, o.distinct, o.seg.st.Seams, len(segs), o.seg.st.Deferred)
 		}
+	}
+}
+
+// tiled is a resume's tiling of (K, ⊤], keyrange.aroundReuse's shape: a
+// replay range at each certificate's span above K and, between them, the
+// gaps, each listing the oracle's rows in it in pages of 100.
+type tiled struct {
+	rows  []schema.Row[tp] // the oracle, ascending
+	spans []Span
+	k     string
+}
+
+// tz is a tiled range: the root, a gap (lo, hi] (open: up to ⊤), or the
+// replay range of certificate replay.
+type tz struct {
+	root   bool
+	lo, hi string
+	open   bool
+	replay int
+}
+
+func (p *tiled) Root() tz                { return tz{root: true, replay: -1} }
+func (p *tiled) Fences() bool            { return true }
+func (p *tiled) Replay(r tz) (int, bool) { return r.replay, r.replay >= 0 }
+
+func (p *tiled) Expand(_ context.Context, r tz, e source.Emitter[tz, tp]) error {
+	if r.root {
+		lo := p.k
+		for i, s := range p.spans {
+			start := max(s.Lo, p.k)
+			if start > lo {
+				if err := e.Child(tz{lo: lo, hi: start, replay: -1}); err != nil {
+					return err
+				}
+			}
+			if err := e.Child(tz{lo: start, hi: s.Hi, open: s.HiOpen, replay: i}); err != nil {
+				return err
+			}
+			if s.HiOpen {
+				return nil
+			}
+			lo = s.Hi
+		}
+		return e.Child(tz{lo: lo, open: true, replay: -1})
+	}
+	var page []schema.Row[tp]
+	for _, row := range p.rows {
+		if row.Key > r.lo && (r.open || row.Key <= r.hi) {
+			if page = append(page, row); len(page) == 100 {
+				if err := e.Rows(page); err != nil {
+					return err
+				}
+				page = nil
+			}
+		}
+	}
+	return e.Rows(page)
+}
+
+// allRows is every row of f, in order, as its ranges emit them.
+func (f *fencedTree) allRows() []schema.Row[tp] {
+	var out []schema.Row[tp]
+	for i := range f.ranges {
+		for p := range f.pages {
+			for j := range f.rows(i, p) {
+				out = append(out, schema.Row[tp]{Key: f.key(i, p, j), Data: tp{Size: int64(j), ETag: "etag"}})
+			}
+		}
+	}
+	return out
+}
+
+// certResume is a resume for the segments' certificate tests: the
+// certificates a durable run sealed behind its held frontier, recovered
+// with K the last key of one of the uninterrupted run's parts (cut at
+// limit) that ends inside a certificate with another after it, and the
+// uninterrupted run's parts after K.
+type certResume struct {
+	c     *Cache
+	root  *os.Root
+	rows  []schema.Row[tp]
+	k     string
+	limit int64
+	want  [][]string
+}
+
+func newCertResume(t *testing.T) *certResume {
+	t.Helper()
+	f := &fencedTree{ranges: 10, pages: 4, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
+	c, root, _ := newDurable(t)
+	if err := c.Start(slots(64), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	sink := &collect{}
+	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: c}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sink.keys, f.keys(nil)) {
+		t.Fatal("the durable run's rows differ")
+	}
+	c.Close()
+	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Start(slots(64), 0, nil)
+	spans := probe.Spans()
+	probe.Close()
+	cr := &certResume{root: root, rows: f.allRows(), limit: 3000}
+	ref := &partSink{limit: cr.limit}
+	ref.Write(context.Background(), [][]schema.Row[tp]{cr.rows})
+	ref.close()
+	parts := ref.boundaries()
+	for j := 0; j < len(parts)-1 && cr.k == ""; j++ {
+		k := parts[j][len(parts[j])-1]
+		for _, s := range spans[:max(0, len(spans)-1)] {
+			if s.Lo < k && k < s.Hi {
+				cr.k, cr.want = k, parts[j+1:]
+			}
+		}
+	}
+	if cr.k == "" {
+		t.Fatalf("no part of %d ends inside one of %d certificates", len(parts), len(spans))
+	}
+	if cr.c, err = RecoverDurable(root, nil, testUUID, "ident", "test", &cr.k); err != nil {
+		t.Fatal(err)
+	}
+	cr.c.Start(slots(64), 0, nil)
+	t.Cleanup(func() { cr.c.Close() })
+	return cr
+}
+
+// run resumes into s, its drainer held until listing is done
+// (hookBeforeDrain): every certificate above K is the segments'.
+func (cr *certResume) run(t *testing.T, s *partSink) (Stats, error) {
+	t.Helper()
+	withProcs(t, 5)
+	anyShare(t)
+	listed := make(chan struct{})
+	var once sync.Once
+	hookBeforeDrain = func() {
+		select {
+		case <-listed:
+		case <-time.After(time.Minute):
+			t.Error("listing did not end with the drainer held")
+		}
+	}
+	defer func() { hookBeforeDrain = nil }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	k := cr.k
+	p := &tiled{rows: cr.rows, spans: cr.c.Spans(), k: k}
+	return Run[tz, tp](ctx, p, s, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: cr.c, After: &k,
+		ListingDone: func() { once.Do(func() { close(listed) }) }})
+}
+
+// certified is the oracle's rows above K inside spans, and every row above K.
+func (cr *certResume) certified(spans []Span) (in, all int64) {
+	for _, r := range cr.rows {
+		if r.Key <= cr.k {
+			continue
+		}
+		all++
+		for _, s := range spans {
+			if r.Key > s.Lo && (s.HiOpen || r.Key <= s.Hi) {
+				in++
+			}
+		}
+	}
+	return in, all
+}
+
+// TestSegmentsReplayCertificates: a resume whose reused certificates the
+// drainer has not reached when listing ends replays them in the segments
+// (#288). The certificates lie ahead of the durable run's held frontier;
+// K is the end of one of the uninterrupted run's parts inside a
+// certificate, so that certificate straddles K (its rows up to K skipped,
+// a frame cut at K), and with parts of 100 rows in frames of 200 part and
+// segment boundaries fall inside certified frames. The resume's drainer is
+// held until listing ends, so the segments take every certificate. The
+// parts are the uninterrupted run's after K, and the replay is accounted
+// as the drainer's would be: every certified row above K handed on once
+// (received = rows), the rest skipped. Each segment part closed moves K
+// to its last key (a part record's SetK, in any order: the strongest K),
+// and no certificate is drained or retired while the segments may still
+// read it; once K covers them all, every one retires.
+func TestSegmentsReplayCertificates(t *testing.T) {
+	cr := newCertResume(t)
+	spans := cr.c.Spans()
+	var early []string
+	var closes atomic.Int64
+	s := &partSink{limit: cr.limit, encoders: 4, stated: true}
+	s.onClose = func(last string) {
+		closes.Add(1)
+		cr.c.SetK(last)
+		cr.c.mu.Lock()
+		for _, d := range cr.c.reused {
+			if d.drained || d.retiring {
+				early = append(early, d.name)
+			}
+		}
+		cr.c.mu.Unlock()
+	}
+	st, err := cr.run(t, s)
+	if err != nil {
+		t.Fatalf("%v (segments %+v)", err, st.Segments)
+	}
+	s.close()
+	if got := s.boundaries(); !slices.EqualFunc(got, cr.want, slices.Equal[[]string]) {
+		t.Fatalf("%d parts, the uninterrupted run's after K %d; or their rows differ", len(got), len(cr.want))
+	}
+	sg := st.Segments
+	in, all := cr.certified(spans)
+	if sg.Reason != SegmentEngaged || sg.Workers < 2 || sg.Certificates != len(spans) || sg.CertRows != in || sg.DurableBoundaries == 0 {
+		t.Fatalf("segments %+v: want engaged over %d certificates (%d rows), a boundary inside a certified frame", sg, len(spans), in)
+	}
+	if st.ReplayedRows != in || st.Received != st.Rows || st.Rows != all {
+		t.Fatalf("replayed %d (want %d), received %d, handed on %d (want %d)", st.ReplayedRows, in, st.Received, st.Rows, all)
+	}
+	rs := &cr.c.st
+	if rs.ReplayedCerts.Load() != int64(len(spans)) || rs.ReplayedRows.Load() != in || rs.ReplaySkippedRows.Load() == 0 {
+		t.Fatalf("the cache counted %d certificates, %d rows replayed and %d skipped", rs.ReplayedCerts.Load(), rs.ReplayedRows.Load(), rs.ReplaySkippedRows.Load())
+	}
+	if closes.Load() == 0 || len(early) > 0 {
+		t.Fatalf("%d parts closed; certificates drained or retired while the segments ran: %v", closes.Load(), early)
+	}
+	cr.c.SetK(spans[len(spans)-1].Hi) // the last certificate ends at its range's end, past the last key
+	if n := rs.RetiredPublished.Load(); n != int64(len(spans)) {
+		t.Fatalf("%d of %d certificates retired once K covers them", n, len(spans))
+	}
+	t.Logf("%d segments over %d workers, %d certificates (%d rows, %d skipped), %d boundaries in durable frames, scan %v",
+		sg.Segments, sg.Workers, sg.Certificates, sg.CertRows, rs.ReplaySkippedRows.Load(), sg.DurableBoundaries, sg.CertScan)
+}
+
+// damageCaptured flips a byte inside the payload of d's first captured
+// rows frame (after its C frame), its CRC left as it was.
+func damageCaptured(t *testing.T, root *os.Root, d *Cert) {
+	t.Helper()
+	rel := filepath.Join(DurableDir, d.name)
+	b, err := root.ReadFile(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := false
+	for off := 0; off+8 <= len(b)-tailSize; {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		switch typ := b[off+8]; {
+		case typ == frameCapture:
+			capture = true
+		case capture && typ != frameTrailer:
+			b[off+8+n/2] ^= 0x5a
+			if err := root.WriteFile(rel, b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		off += 8 + n
+	}
+	t.Fatalf("%s: no captured rows frame", d.name)
+}
+
+// TestSegmentsCertificateScanFails: a reused certificate whose file is
+// damaged after recovery accepted it (a captured frame's byte flipped)
+// fails its scan when the segments are planned: the run stops with an
+// invariant error before any segment opens, and no part is final. The
+// resume is a resume as any other: recovery rejects the file (corrupt),
+// its interval is listed, and the parts are the uninterrupted run's.
+func TestSegmentsCertificateScanFails(t *testing.T) {
+	cr := newCertResume(t)
+	spans := cr.c.Spans()
+	damageCaptured(t, cr.root, cr.c.reused[len(cr.c.reused)-1])
+	s := &partSink{limit: cr.limit, encoders: 4, stated: true}
+	_, err := cr.run(t, s)
+	var inv *dataset.InvariantError
+	if !errors.As(err, &inv) || !strings.Contains(err.Error(), "damaged frame") {
+		t.Fatalf("err %v, want the scan's invariant error", err)
+	}
+	s.close()
+	if s.opened != 0 {
+		t.Fatalf("%d segments opened before the certificates were scanned", s.opened)
+	}
+	for i, p := range s.parts {
+		if p.final {
+			t.Fatalf("part %d final", i)
+		}
+	}
+	cr.c.Close()
+	r, err := RecoverDurable(cr.root, nil, testUUID, "ident", "test", &cr.k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Start(slots(64), 0, nil)
+	cr.c = r
+	if n := r.st.RejectedCorrupt.Load(); n != 1 || len(r.Spans()) != len(spans)-1 {
+		t.Fatalf("recovery rejected %d as corrupt, kept %d of %d", n, len(r.Spans()), len(spans))
+	}
+	s = &partSink{limit: cr.limit, encoders: 4, stated: true}
+	st, err := cr.run(t, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	if got := s.boundaries(); !slices.EqualFunc(got, cr.want, slices.Equal[[]string]) {
+		t.Fatalf("%d parts, the uninterrupted run's after K %d; or their rows differ", len(got), len(cr.want))
+	}
+	if st.Segments.Certificates != len(spans)-1 {
+		t.Fatalf("segments %+v: want the %d certificates left", st.Segments, len(spans)-1)
 	}
 }

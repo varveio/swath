@@ -63,7 +63,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 9) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 10) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
@@ -73,7 +73,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 9 |
+| `report_version` | 10 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -190,8 +190,8 @@ began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exh
 metadata bound), `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
-`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
-`requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
+`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`,
+`replayed_certificates` (by the drainer or the segments), `gaps`, `requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
 drain: its tail once listing is done, and the drainer's times over the whole run
 ([internals/ordering.md](../internals/ordering.md), every field in
 [internals/counters.md](../internals/counters.md)): `tail_ns`,
@@ -202,7 +202,8 @@ encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
-`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`); and `encoders_at_start`, `encoders_after_listing`,
+`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`, and on a
+resume the reused certificates the segments replayed: `certificates_read`, `certified_rows`, `certificate_scan_ns`); and `encoders_at_start`, `encoders_after_listing`,
 `encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
 `--sort-buffer` says), `encoder_writer_bytes` and `encoder_upload_bytes` (one encoder's prices), and
 `encoders_at_start_bound_by` and `encoders_after_listing_bound_by` (`memory`, `cpu`, `descriptors`, `minimum`,

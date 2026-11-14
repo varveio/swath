@@ -364,6 +364,7 @@ type DurableResume struct {
 	Orphans            int64            `json:"orphans"`
 	ReplayedRows       int64            `json:"replayed_rows"`
 	ReplaySkippedRows  int64            `json:"replay_skipped_rows"`
+	ReplayedCerts      int64            `json:"replayed_certificates"` // by the drainer or the segments (drain.segments.certificates_read)
 	Gaps               int64            `json:"gaps"`
 	RequestsSavedEst   int64            `json:"requests_saved_est"`
 }
@@ -391,7 +392,7 @@ func (c *Cache) Report() *DurableReport {
 		r.Resume = &DurableResume{LedgerDroppedBytes: s.LedgerDroppedBytes.Load(), LedgerCut: s.LedgerCut.Load() > 0, Accepted: s.Accepted.Load(), AcceptedBytes: s.AcceptedBytes.Load(),
 			Rejected: map[string]int64{"missing": s.RejectedMissing.Load(), "corrupt": s.RejectedCorrupt.Load(), "foreign": s.RejectedForeign.Load(),
 				"codec": s.RejectedCodec.Load(), "overlap": s.RejectedOverlap.Load(), "budget": s.RejectedBudget.Load()},
-			Orphans: s.Orphans.Load(), ReplayedRows: s.ReplayedRows.Load(), ReplaySkippedRows: s.ReplaySkippedRows.Load(),
+			Orphans: s.Orphans.Load(), ReplayedRows: s.ReplayedRows.Load(), ReplaySkippedRows: s.ReplaySkippedRows.Load(), ReplayedCerts: s.ReplayedCerts.Load(),
 			Gaps: s.Gaps.Load(), RequestsSavedEst: s.RequestsSavedEst.Load()}
 	}
 	return r
@@ -433,9 +434,11 @@ func event(e string) {
 
 // SetDurableEvents installs f to see the durable spill's lifecycle events
 // ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "cycle-records", "flusher-joined",
-// "ledger-closed", and Run's "waker-stopped" and "one-range-open": a range
-// is done and one is left), for the shutdown-order tests and the tests
-// that hold a range; nil removes it. It returns a function restoring the
+// "ledger-closed", and Run's "waker-stopped", "one-range-open": a range
+// is done and one is left, "listing-done": every range is listed, and
+// "drain-start": the drainer is about to start, on its goroutine), for
+// the shutdown-order tests and the tests that hold a range or the
+// drainer; nil removes it. It returns a function restoring the
 // previous one.
 func SetDurableEvents(f func(string)) (restore func()) {
 	var p *func(string)
