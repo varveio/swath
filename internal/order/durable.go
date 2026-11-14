@@ -346,9 +346,10 @@ func event(e string) {
 
 // SetDurableEvents installs f to see the durable spill's lifecycle events
 // ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "cycle-records", "flusher-joined",
-// "ledger-closed", and Run's "waker-stopped" and "one-range-open": a range
-// is done and one is left), for the shutdown-order tests and the tests
-// that hold a range; nil removes it. It returns a function restoring the
+// "ledger-closed", and Run's "waker-stopped", "one-range-open": a range
+// is done and one is left, and "stretch-kept": a stretch written during
+// listing has kept its last part), for the shutdown-order tests and the
+// tests that hold a range; nil removes it. It returns a function restoring the
 // previous one.
 func SetDurableEvents(f func(string)) (restore func()) {
 	var p *func(string)

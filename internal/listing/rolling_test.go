@@ -18,6 +18,7 @@ import (
 
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
+	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/client"
@@ -80,6 +81,9 @@ func (h *rollHolds) before(ctx context.Context, start string) error {
 	return nil
 }
 
+// release lets the last range go without a stretch kept.
+func (h *rollHolds) release() { h.keptO.Do(func() { close(h.kept) }) }
+
 // after is called with a request's start key once it is answered.
 func (h *rollHolds) after(start string) {
 	if start >= h.ahead {
@@ -132,6 +136,50 @@ func rollBudget(spill bool) int64 {
 	return 64 << 20
 }
 
+// rollBackend is 100,000 keys in d00/ to d08/: enough rows that a row
+// budget leaving room for several segment workers (order.budgetWorkers)
+// still spills.
+func rollBackend(t *testing.T) *s3mem.Backend {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	return s3test.Backend(t, gcstest.Keys(100000), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
+}
+
+// newPlainHolds holds a run over rollBackend: the frontier at d02/ until a
+// range at d06/ has been answered, and d08/ until a stretch is kept.
+func newPlainHolds(t *testing.T) *rollHolds { return newRollHolds(t, "d02/", "d03/", "d06/", "d08/") }
+
+// rollServer serves backend, held by its holds when set (nil: not held):
+// one endpoint for a run and its resumes.
+type rollServer struct {
+	url   string
+	holds atomic.Pointer[rollHolds]
+}
+
+func newRollServer(t *testing.T, backend *s3mem.Backend) *rollServer {
+	s := &rollServer{}
+	next := s3test.Delayed(s3test.Handler(backend), 200*time.Microsecond)
+	s.url = s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h := s.holds.Load(); h != nil {
+			h.handler(next).ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+	return s
+}
+
+// rollConfig is a run over url with four encoders, seeded from prior (""
+// none), at w workers.
+func rollConfig(url, out, prior string, w int, spill bool) Config {
+	cfg := plannedConfig(url, out, prior, w)
+	cfg.Limits.Encoders = 4
+	cfg.Limits.Spill.Off = !spill
+	cfg.Limits.RowBudget = rollBudget(spill)
+	return cfg
+}
+
 // TestRollingIsTheSerialRun: a seeded run (its predecessor's dataset, or a
 // coarse counted cut file) with four encoders writes the listed tiles ahead
 // of its drainer as segments while listing goes on, and its parts are the
@@ -140,29 +188,21 @@ func rollBudget(spill bool) int64 {
 // --all-versions one (groups of up to 40 versions, cut only at key changes,
 // across stretch and part boundaries). At 4 and 64 workers the run is held so that it must
 // roll (rollHolds): the report counts a stretch, rows written by it and
-// parts published before listing ended.
+// parts published before listing ended; with spill on, it spills, and its
+// segments read durable spill files (journaled).
 func TestRollingIsTheSerialRun(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
-	// 100,000 keys in d00/ to d08/: enough rows that a row budget leaving
-	// room for several segment workers (order.budgetWorkers) still spills.
-	s3test.NoCredentials(t)
-	t.Setenv("AWS_REGION", "")
-	t.Setenv("AWS_DEFAULT_REGION", "")
-	backend := s3test.Backend(t, gcstest.Keys(100000), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
+	backend := rollBackend(t)
 	type arm struct {
 		name   string
 		config func(t *testing.T, out, prior string, w int, spill, hold bool) Config
 	}
 	plain := func(t *testing.T, out, prior string, w int, spill, hold bool) Config {
-		var h http.Handler = s3test.Delayed(s3test.Handler(backend), 200*time.Microsecond)
+		srv := newRollServer(t, backend)
 		if hold {
-			h = newRollHolds(t, "d02/", "d03/", "d06/", "d08/").handler(h)
+			srv.holds.Store(newPlainHolds(t))
 		}
-		cfg := plannedConfig(s3test.Serve(t, h), out, prior, w)
-		cfg.Limits.Encoders = 4
-		cfg.Limits.Spill.Off = !spill
-		cfg.Limits.RowBudget = rollBudget(spill)
-		return cfg
+		return rollConfig(srv.url, out, prior, w, spill)
 	}
 	api := newHotVersionsN(t, 60000)
 	versions := func(t *testing.T, out, prior string, w int, spill, hold bool) Config {
@@ -217,6 +257,9 @@ func TestRollingIsTheSerialRun(t *testing.T) {
 					if spill && hold && (sum.Resources.Spill == nil || sum.Resources.Spill.Rows == 0) {
 						t.Fatalf("%s: nothing spilled", name)
 					}
+					if d := sum.Resources.Drain; spill && hold && !datasettest.NoJournal() && (d == nil || d.Segments == nil || d.Segments.DurableFilesRead == 0) {
+						t.Fatalf("%s: the segments read no durable spill file", name)
+					}
 					d := sum.Resources.Drain
 					if d == nil || d.Segments == nil || d.Segments.Rolling == nil || sum.Resources.Window == nil {
 						t.Fatalf("%s: no rolling account in the report", name)
@@ -225,7 +268,7 @@ func TestRollingIsTheSerialRun(t *testing.T) {
 					if hold && (rl.Stretches == 0 || rl.Rows == 0 || d.WriterBeforeListingDone == nil || d.WriterBeforeListingDone.Parts == 0) {
 						t.Fatalf("%s: held to roll, rolling %+v, writer before listing done %+v", name, *rl, d.WriterBeforeListingDone)
 					}
-					t.Logf("%s: rolling %d stretches, %d segments, %d rows; not engaged %v", name, rl.Stretches, rl.Segments, rl.Rows, rl.NotEngaged)
+					t.Logf("%s: rolling %d stretches, %d segments, %d rows; not engaged %v; %d durable files read by segments", name, rl.Stretches, rl.Segments, rl.Rows, rl.NotEngaged, d.Segments.DurableFilesRead)
 				}
 			}
 		}

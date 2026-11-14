@@ -387,8 +387,9 @@ func printVersion(w io.Writer) {
 // (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
 // SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
 // "point:n": the n-th time the process reaches crash point point; and on
-// the order stage's events (order.SetDurableEvents), serialSeals' and
-// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile).
+// the order stage's events (order.SetDurableEvents), serialSeals',
+// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and SWATH_TEST_STRETCH_FILE
+// (stretchFile).
 func testHooks() {
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
@@ -397,6 +398,9 @@ func testHooks() {
 	}
 	if path := os.Getenv("SWATH_TEST_LAST_RANGE_FILE"); path != "" {
 		events = append(events, lastRangeFile(path))
+	}
+	if path := os.Getenv("SWATH_TEST_STRETCH_FILE"); path != "" {
+		events = append(events, stretchFile(path))
 	}
 	if len(events) > 0 {
 		order.SetDurableEvents(func(e string) {
@@ -500,6 +504,21 @@ func lastRangeFile(path string) func(string) {
 			return
 		}
 		if alone.Load() && sealed.Load() && made.CompareAndSwap(false, true) {
+			if f, err := os.Create(path); err == nil {
+				f.Close()
+			}
+		}
+	}
+}
+
+// stretchFile is SWATH_TEST_STRETCH_FILE: the file is created once a
+// stretch written during listing has kept its last part (order's
+// "stretch-kept"). A test that holds a range from outside the process so
+// that listing goes on while the run rolls releases it on the file.
+func stretchFile(path string) func(string) {
+	var made atomic.Bool
+	return func(e string) {
+		if e == "stretch-kept" && made.CompareAndSwap(false, true) {
 			if f, err := os.Create(path); err == nil {
 				f.Close()
 			}
