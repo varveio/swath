@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a seeded run writes the tiles already listed ahead of its output as several Parquet parts at once
+  while listing goes on, instead of one part at a time until listing ends: each such stretch is cut with the
+  part router's own rule, so the parts are the same, byte for byte without the part interval, and its last part
+  stays open for the rows after it. The run report (`report_version` 10) adds
+  `resources.drain.segments.rolling` (#535).
+
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window sized from `--spill-budget` and `--sort-buffer`, so rows listed ahead of the

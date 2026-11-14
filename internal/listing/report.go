@@ -40,7 +40,7 @@ import (
 // resources.spill.refused_ns and refused_spells, and
 // resources.drain.writer_before_listing_done. 9 adds resources.window, the
 // frontier window of a run planned from a counted --seed-from (#535).
-const ReportVersion = 9
+const ReportVersion = 10
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -650,6 +650,30 @@ type Segments struct {
 	// DeferredRows is the rows a planned boundary moved past because they
 	// continued the group of the key before it (versions schemas).
 	DeferredRows int64 `json:"deferred_rows"`
+	// Rolling is the stretches written while listing went on (a seeded
+	// run's plan; nil without one). The fields above count them too;
+	// reason is the tail's.
+	Rolling *Rolling `json:"rolling,omitempty"`
+}
+
+// Rolling is the segments written before listing ended (rolling): the
+// listed tiles ahead of the drainer, in stretches, each one's last part
+// kept open for the serial drain (order.RollingStats).
+type Rolling struct {
+	Stretches int64 `json:"stretches"`
+	Segments  int64 `json:"segments"`
+	Rows      int64 `json:"rows"`
+	// TimeNs is the drainer's time inside the stretches (planning them,
+	// waiting for their segments, retiring their spill files): the serial
+	// drain stands meanwhile. OpenWaitNs is the segments' time opening
+	// their parts, an encoder slot's wait included.
+	TimeNs     int64 `json:"time_ns"`
+	OpenWaitNs int64 `json:"open_wait_ns"`
+	// NotEngaged counts the looks at the listed tiles ahead that wrote no
+	// stretch, by reason: frontier_listing (the drainer's tile still
+	// listing), below_two_parts, not_planned, single_part, row_budget,
+	// one_encoder (after which it stops looking until listing ends).
+	NotEngaged map[string]int64 `json:"not_engaged"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

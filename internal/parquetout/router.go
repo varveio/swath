@@ -676,6 +676,16 @@ func (r *Router[P]) encode(p *part[P]) {
 	base := int64(0)
 	var before *dataset.Part // the part this one follows: published, or resumed
 	if p.prev != nil {
+		if p.segment {
+			select {
+			case <-p.prev.published:
+			default:
+				if p.err = faults.At("segment-ahead"); p.err != nil { // tests: killed with this part finished before the one it follows is published
+					r.fail(p.err)
+					return
+				}
+			}
+		}
 		<-p.prev.published // publication goes in ordinal order
 		if p.prev.err != nil {
 			p.err = fmt.Errorf("part %d: not published after part %d failed", p.ordinal, p.prev.ordinal)

@@ -7,19 +7,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/schema"
 )
 
-// Segments. Once the order stage knows the rest of the stream (listing is
-// done and every range is immutable), it can cut it into parts itself,
-// with the router's own rule (Plan), and write consecutive parts at once
-// from several goroutines (OpenSegment): each segment is one part, opened
-// in ordinal order, encoded and published as any other (publication stays
-// in ordinal order, adjacency checked before each). The interval cut stops
-// when segments begin: the rest is cut by size and row count only.
+// Segments. Once the order stage knows a stretch of the stream (the rest,
+// once listing is done; with a plan, the tiles already listed ahead of
+// it), it can cut it into parts itself, with the router's own rule (Plan),
+// and write consecutive parts at once from several goroutines
+// (OpenSegment): each segment is one part, opened in ordinal order,
+// encoded and published as any other (publication stays in ordinal order,
+// adjacency checked before each). The interval cut stops when segments
+// begin: they are cut by size and row count only. A stretch that ends
+// before the stream does hands its last part back to Write (Keep), and the
+// interval cut resumes (AbandonSegments).
 
 // Plan is the cut rule for the rows still to come, or false while it
 // cannot be stated: before the size ratio is frozen (part 0 measured),
@@ -110,7 +114,17 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 		}
 		p := r.cur
 		p.segment, p.tokens = true, make(chan struct{}, segmentQueue+1)
-		r.cur, r.full = nil, false
+		if r.full {
+			// The segment closes the part (the order stage cuts where Write
+			// would): the pending cut is taken, and counted by its reason.
+			if r.byRows {
+				r.rowCuts.Add(1)
+			}
+			if r.byTime {
+				r.timeCuts.Add(1)
+			}
+		}
+		r.cur, r.full, r.byRows, r.byTime = nil, false, false, false
 		return &Segment[P]{r: r, p: p}, nil
 	}
 	if err := r.firstErr(); err != nil {
@@ -177,6 +191,7 @@ func (s *Segment[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 		n += int64(len(seg))
 	}
 	s.r.segRows.Add(n)
+	s.p.n += n // the segment's goroutine alone, until Keep hands the part back
 	if t := s.p.tokens; t != nil {
 		select {
 		case t <- struct{}{}:
@@ -222,4 +237,25 @@ func (s *Segment[P]) Hold(rowCut bool) {
 	if rowCut {
 		s.r.rowCuts.Add(1)
 	}
+}
+
+// Keep hands the segment's part back as the open part for Write to
+// continue (segments that end before the stream does): st is the cut
+// rule's state after its last row, as Plan states the open part (Rows,
+// Logical, Full: a cut pending), rowCut that the row cap asked the pending
+// cut, last the part's last key (group mode: a pending cut waits for a
+// greater one). Rows the segment did not write are an invariant error.
+func (s *Segment[P]) Keep(rowCut bool, st dataset.SegmentPlan, last string) error {
+	r, p := s.r, s.p
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p.n != st.Rows || r.cur != nil {
+		return &dataset.InvariantError{Reason: fmt.Sprintf("parquet router: part %d kept at %d rows, its segments wrote %d", p.ordinal, st.Rows, p.n)}
+	}
+	p.logical, p.bySize = st.Logical, st.Logical >= r.target()
+	r.cur, r.full, r.byRows, r.byTime = p, st.Full, st.Full && rowCut, false
+	if r.schema.Info.Groups && st.Rows > 0 {
+		r.last, r.hasLast = strings.Clone(last), true
+	}
+	return nil
 }

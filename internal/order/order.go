@@ -716,6 +716,10 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	if o.seg != nil {
 		st.Segments = o.seg.st
+		if o.win != nil {
+			r := o.seg.roll
+			st.Segments.Rolling = &r
+		}
 		switch {
 		case st.Segments.Reason != "":
 		case o.listedAt.IsZero():
@@ -751,7 +755,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	ctx, cancel := context.WithCancelCause(ctx)
 	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes, schema: s}
 	if sg, ok := sink.(Segmenter[P]); ok {
-		o.seg = &segState[P]{sg: sg, waitRows: -1}
+		o.seg = &segState[P]{sg: sg, waitRows: -1, roll: RollingStats{NotEngaged: map[string]int64{}}}
 	}
 	o.work = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
@@ -1022,9 +1026,15 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 			}
 		}
 		o.open.Add(-int64(len(e.kids)))
+		if t := n.tile; t != nil {
+			t.open.Add(-int64(len(e.kids)))
+		}
 		e.kids = nil
 	}
 	n.state = done
+	if t := n.tile; t != nil && t.open.Add(-1) == 0 {
+		o.win.listed.Add(1)
+	}
 	switch o.open.Add(-1) {
 	case 0:
 		if err == nil && !o.stopped.Load() {
@@ -1153,6 +1163,9 @@ func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
 	e.childSeen = true
 	c := &node[R, P]{r: r, tile: e.n.tile}
+	if t := c.tile; t != nil {
+		t.open.Add(1)
+	}
 	u := childUnits()
 	e.items = append(e.items, item[R, P]{child: c, units: u})
 	e.kids = append(e.kids, c)
@@ -1494,7 +1507,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		if o.win != nil {
 			o.settle()
 		}
-		if o.segmentsDue() {
+		if o.segmentsDue() && o.stretchDue() {
 			done, err := o.trySegments()
 			if err != nil {
 				o.mu.Unlock()
