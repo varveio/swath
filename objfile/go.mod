@@ -1,6 +1,6 @@
 module github.com/varveio/swath/objfile
 
-go 1.26.0
+go 1.26.3
 
 toolchain go1.27.4
 
@@ -73,7 +73,7 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.9.0 // indirect
-	github.com/twpayne/go-geom v1.6.1 // indirect
+	github.com/twpayne/go-geom v1.7.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.47.0 // indirect
