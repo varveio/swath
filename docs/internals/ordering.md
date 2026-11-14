@@ -261,8 +261,12 @@ a refused frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTh
 the unseeded run's spill peak, none refused from the dataset's tiles, the parts identical). Expected, not guaranteed, even on a fresh prior
 with exact counts: admission gates tiles, not the listing inside a tile admitted. A tile of 200,000 rows that
 splits, whose lower range stalls while an upper range lists 100,000 poorly compressible rows of about 1 KiB, puts
-some 100 MB ahead of the output whatever the window; past the cap, its frames are refused as on any run. The rows still leave through the one part writer,
-so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
+some 100 MB ahead of the output whatever the window; past the cap, its frames are refused as on any run (a
+stale prior's grown region larger than the cap crawled so with caps of 2 to 6 MB). Under a small cap many workers
+also slow a planned run: past half the cap no tile is admitted, so the workers wait at the window (`spill`)
+while the tiles admitted drain (145 million keys at 2,048 workers: 219 s with a 57 MB cap against 78 s
+uncapped, [measurements](measurements.md#the-seeded-frontier-window)). The rows still leave through the one
+part writer, so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
 plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
 run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
 
