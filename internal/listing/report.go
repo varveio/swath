@@ -500,6 +500,10 @@ type Drain struct {
 	AheadWaitNs    int64 `json:"ahead_wait_ns"`
 	OrderCheckNs   int64 `json:"order_check_ns"`
 	SinkWriteNs    int64 `json:"sink_write_ns"`
+	// WriterBeforeListingDone is the Parquet writer's account at
+	// listing_done_at (nil without a dataset, or when listing never
+	// finished).
+	WriterBeforeListingDone *ListingWriter `json:"writer_before_listing_done,omitempty"`
 	// ReadAhead is the spill read-ahead (nil: spill off).
 	ReadAhead *ReadAhead `json:"read_ahead,omitempty"`
 	// Segments is the segment-parallel replay after listing (nil without
@@ -522,6 +526,17 @@ type Drain struct {
 	EncoderUploadBytes          int64  `json:"encoder_upload_bytes,omitempty"`
 	EncodersAtStartBoundBy      string `json:"encoders_at_start_bound_by,omitempty"`
 	EncodersAfterListingBoundBy string `json:"encoders_after_listing_bound_by,omitempty"`
+}
+
+// ListingWriter is the Parquet writer's account up to listing_done_at
+// (parquetout.WriterStats): the parts published and their rows, and the
+// encoders' time on the batches written, encoding and in the parts' files or
+// uploads.
+type ListingWriter struct {
+	Parts    int64 `json:"parts"`
+	Rows     int64 `json:"rows"`
+	EncodeNs int64 `json:"encode_ns"`
+	OutputNs int64 `json:"output_ns"`
 }
 
 // Why the encoders after listing are what they are (Drain.EncoderAdmission).

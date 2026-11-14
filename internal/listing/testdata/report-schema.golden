@@ -176,6 +176,10 @@ resources.drain.segments.write_ns int64
 resources.drain.sink_write_ns int64
 resources.drain.tail_ns int64
 resources.drain.worker_idle_after_listing_done_ns int64
+resources.drain.writer_before_listing_done.encode_ns int64
+resources.drain.writer_before_listing_done.output_ns int64
+resources.drain.writer_before_listing_done.parts int64
+resources.drain.writer_before_listing_done.rows int64
 resources.encoder_wait_ns int64
 resources.features map
 resources.free_disk_min_bytes int64

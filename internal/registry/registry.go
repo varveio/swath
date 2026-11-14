@@ -310,9 +310,11 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	opt := env.Order
 	if enc != nil {
 		// Once listing has ended, the encoders the router reserved for
-		// the drain are admitted (parquetout.Options.MaxEncoders).
+		// the drain are admitted (parquetout.Options.MaxEncoders), after
+		// the writer's account up to then is recorded.
 		prev := opt.ListingDone
 		opt.ListingDone = func() {
+			enc.ListingDone()
 			enc.Admit()
 			if prev != nil {
 				prev()

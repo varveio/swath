@@ -1340,6 +1340,9 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 			MaxWorkers: oopt.SegmentWorkers, BudgetWaits: s.BudgetWaits, BudgetWaitNs: int64(s.BudgetWait), MaxHeldBytes: s.MaxHeld,
 			WorkersBy: s.WorkersBy, PerWorkerBytes: s.PerWorker, FreeBytes: s.Free, TreeBytes: s.Tree,
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred}
+		if w, ok := a.router.AtListingDone(); ok {
+			d.WriterBeforeListingDone = &ListingWriter{Parts: w.Parts, Rows: w.Rows, EncodeNs: w.EncodeNs, OutputNs: w.OutputNs}
+		}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
 		d.EncoderAllowanceBytes, d.EncoderWriterBytes, d.EncoderUploadBytes = l.encoderAllowance, l.writerBytes, l.uploadBytes

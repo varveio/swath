@@ -191,7 +191,9 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 ([internals/ordering.md](../internals/ordering.md), every field in
 [internals/counters.md](../internals/counters.md)): `tail_ns`,
 `worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
-`order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
+`order_check_ns` and `sink_write_ns`; `writer_before_listing_done` (the Parquet writer up to `listing_done_at`; absent
+when listing never finished): `parts` and `rows` published, and the encoders' time on the batches written, `encode_ns`
+encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,

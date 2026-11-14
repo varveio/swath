@@ -192,6 +192,72 @@ type Router[P any] struct {
 	// not Write; segRows counts the rows they routed.
 	segmented bool
 	segRows   atomic.Int64
+
+	// The encoders' account (WriterStats): their time on batches and part
+	// closes, less the time in the parts' files or uploads (encodeNs), and
+	// that time (outputNs); the parts published and their rows. listed is
+	// the account when listing ended (ListingDone).
+	encodeNs, outputNs, published, publishedRows atomic.Int64
+	listed                                       atomic.Pointer[WriterStats]
+}
+
+// WriterStats is the encoders' account: parts published and their rows,
+// and the encoders' time on batches and part closes, split into encoding
+// (EncodeNs: building pages, compressing, hashing) and output (OutputNs:
+// writing to the part's file or upload, and the sync and close that
+// complete it). A batch counts once it is written.
+type WriterStats struct {
+	Parts, Rows        int64
+	EncodeNs, OutputNs int64
+}
+
+// ListingDone records the account when listing ended, once (AtListingDone).
+func (r *Router[P]) ListingDone() {
+	w := WriterStats{Parts: r.published.Load(), Rows: r.publishedRows.Load(), EncodeNs: r.encodeNs.Load(), OutputNs: r.outputNs.Load()}
+	r.listed.CompareAndSwap(nil, &w)
+}
+
+// AtListingDone is the account ListingDone recorded (false: never called).
+func (r *Router[P]) AtListingDone() (WriterStats, bool) {
+	if w := r.listed.Load(); w != nil {
+		return *w, true
+	}
+	return WriterStats{}, false
+}
+
+// timed is a part's artifact counting the time spent in it into ns.
+type timed struct {
+	dataset.Artifact
+	ns *atomic.Int64
+}
+
+func (a timed) Write(b []byte) (int, error) {
+	t := time.Now()
+	n, err := a.Artifact.Write(b)
+	a.ns.Add(int64(time.Since(t)))
+	return n, err
+}
+
+func (a timed) Sync() error {
+	t := time.Now()
+	err := a.Artifact.Sync()
+	a.ns.Add(int64(time.Since(t)))
+	return err
+}
+
+func (a timed) Close() error {
+	t := time.Now()
+	err := a.Artifact.Close()
+	a.ns.Add(int64(time.Since(t)))
+	return err
+}
+
+// spent adds the encoder's time since t to the account: out's growth since
+// o as output, the rest as encoding.
+func (r *Router[P]) spent(t time.Time, out *atomic.Int64, o int64) {
+	d := out.Load() - o
+	r.outputNs.Add(d)
+	r.encodeNs.Add(int64(time.Since(t)) - d)
 }
 
 // ErrAmbiguousTail: a reproduced claimed part reached its recorded row
@@ -536,6 +602,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	var f dataset.Artifact
+	var out atomic.Int64 // the encoder's time in the part's artifact
 	if err == nil {
 		if r.opt.Create != nil {
 			f, err = r.opt.Create(p.ordinal)
@@ -544,7 +611,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		}
 	}
 	if err == nil {
-		w, err = create(f, s, r.codec, columns, createdBy) // closes f when it fails
+		w, err = create(timed{f, &out}, s, r.codec, columns, createdBy) // closes f when it fails
 	}
 	if err != nil {
 		p.err = err
@@ -566,6 +633,7 @@ func (r *Router[P]) encode(p *part[P]) {
 			r.done1(b)
 			continue
 		}
+		t, o := time.Now(), out.Load()
 		for _, seg := range b.segs {
 			if err := w.write(seg); err != nil {
 				p.err = fmt.Errorf("part %d: %w", p.ordinal, err)
@@ -576,6 +644,7 @@ func (r *Router[P]) encode(p *part[P]) {
 				r.opt.Encoded.Add(int64(len(seg)))
 			}
 		}
+		r.spent(t, &out, o)
 		r.done1(b)
 	}
 	close(p.drained)
@@ -583,7 +652,9 @@ func (r *Router[P]) encode(p *part[P]) {
 		w.abort()
 		return
 	}
+	t, o := time.Now(), out.Load()
 	p.info, p.err = w.close()
+	r.spent(t, &out, o)
 	if p.err != nil {
 		r.fail(p.err)
 		return
@@ -620,7 +691,11 @@ func (r *Router[P]) encode(p *part[P]) {
 	if r.opt.Publish != nil && !r.aborted.Load() {
 		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows, p.final); p.err != nil {
 			r.fail(p.err)
-		} else if p.segment {
+			return
+		}
+		r.published.Add(1)
+		r.publishedRows.Add(p.info.Rows)
+		if p.segment {
 			if p.err = faults.At("segment-published"); p.err != nil { // tests: killed with later segments open
 				r.fail(p.err)
 			}
@@ -784,6 +859,10 @@ type Encoder interface {
 	// many are admitted; Encoders is that count now.
 	Admit() int
 	Encoders() int
+	// ListingDone records the writer's account when listing ended,
+	// AtListingDone reads it.
+	ListingDone()
+	AtListingDone() (WriterStats, bool)
 	TimeCuts() int64
 	RowCuts() int64
 	// Routed is the rows this run routed into parts: after listing it

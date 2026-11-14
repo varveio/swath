@@ -71,3 +71,40 @@ func TestMaxRowsRotation(t *testing.T) {
 		}
 	}
 }
+
+// TestWriterAccountAtListingDone: the writer's account recorded when
+// listing ends holds the parts published by then and their rows, and the
+// encoders' time split into encoding and output (the part files' writes,
+// syncs and closes); later parts do not change it. Listing ends here while
+// the last part publishes: parts 0 and 1 are published, in order, before.
+func TestWriterAccountAtListingDone(t *testing.T) {
+	out := t.TempDir()
+	var r *Router[tr]
+	publish := func(ordinal int, p dataset.Part, _, _ int64, _ bool) (dataset.Part, error) {
+		if ordinal == 2 {
+			r.ListingDone()
+		}
+		return p, nil
+	}
+	r, err := NewRouter(Options{Out: out, PartSize: 64 << 20, Encoders: 1, MaxRows: 3000, Publish: publish}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.AtListingDone(); ok {
+		t.Fatal("an account before listing ended")
+	}
+	rows := testRows(7000, 5)
+	for i := 0; i < len(rows); i += 1500 {
+		if err := r.Write(context.Background(), [][]row{rows[i:min(i+1500, len(rows))]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parts, err := r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, ok := r.AtListingDone()
+	if len(parts) != 3 || !ok || w.Parts != 2 || w.Rows != 6000 || w.EncodeNs <= 0 || w.OutputNs <= 0 {
+		t.Fatalf("%d parts; at listing done (%v): %+v", len(parts), ok, w)
+	}
+}
