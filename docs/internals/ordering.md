@@ -313,13 +313,15 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
-| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on, the spill ahead drains or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit; all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on, the spill ahead drains or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit, frames planned for the read-ahead (one per read it can start); all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
 | plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
 not woken per frame: planning signals as many idle workers as can start a read when it queued frames
 (refilling at half of its window), and the drainer wakes the workers held at the share once the read-ahead
-holds half of it. A release of drained
+holds half of it. Each signal also wakes a worker held at the frontier window, which waits on its own condition:
+refused again, it reads ahead before it waits, so a window held for long (a grown tile, spill) still leaves the
+drainer its readers (`keyrange` `TestPlanStaleManyWorkersSmallCap`). A release of drained
 bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry

@@ -117,9 +117,11 @@ type window[R, P any] struct {
 	why    string
 	bound  bool // the window refuses tiles (bind)
 	// need is the expected rows of the tile the window last refused for
-	// its rows or spill (0: none since an admission): settle wakes the
-	// workers at the window once it fits (mu).
-	need int64
+	// its rows (0: none since an admission): settle wakes the workers at
+	// the window once that many fit (mu). spillHeld: the window refused a
+	// tile for spill since; settle wakes one once spill no longer refuses.
+	need      int64
+	spillHeld bool
 	// spillRows and spillRefused sum the rows charged at the spill gate's
 	// refusals and count them (WindowStats.SpillRows; mu).
 	spillRows, spillRefused int64
@@ -258,7 +260,7 @@ func (o *run[R, P]) refuses(e int64) string {
 		return WindowGrowth
 	}
 	if o.spillRefuses() {
-		w.need = max(e, 1)
+		w.spillHeld = true
 		w.spillRows += w.est + w.excess.Load()
 		w.spillRefused++
 		return WindowSpill
@@ -301,7 +303,7 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 		return admitNone, nil
 	}
 	w.st.Tiles++
-	w.need = 0
+	w.need, w.spillHeld = 0, false
 	if why != "" {
 		w.st.Forced++
 	}
@@ -355,20 +357,36 @@ func (o *run[R, P]) settle() {
 	o.roomCheck()
 }
 
-// roomCheck wakes the workers the window refused for its rows or spill
-// once the refused tile fits: rows handed on, spill ahead drained, or the
-// window grown with what the run measured (a row's bytes in memory or
-// spilled). Once per refusal, not at every step: the drainer's steps
-// (settle) and every publish ask (mu held), which also evict as the spill
-// gate does.
+// roomCheck wakes the workers the window refused for its rows once the
+// refused tile fits: rows handed on, or the window grown with what the run
+// measured (a row's bytes in memory or spilled); and one refused for spill
+// once spill no longer refuses. Once per refusal, not at every step: the
+// drainer's steps (settle) and every publish ask (mu held), which also
+// evict as the spill gate does.
 func (o *run[R, P]) roomCheck() {
 	w := o.win
 	spill := o.spillRefuses()
-	if w.need > 0 && !spill && o.g.windowWait.n.Load() > 0 {
+	if o.g.windowWait.n.Load() == 0 {
+		return
+	}
+	if w.need > 0 {
 		if rows, _ := o.windowRows(); float64(w.est+w.excess.Load()+w.need) <= rows {
 			w.need = 0
 			o.winCond.Signal()
 		}
+	}
+	if w.spillHeld && !spill {
+		w.spillHeld = false
+		o.winCond.Signal()
+	}
+}
+
+// wakeWindow wakes a worker held at the frontier window, if any (mu held):
+// refused again, it reads spilled frames ahead of the drainer before it
+// waits (worker).
+func (o *run[R, P]) wakeWindow() {
+	if o.win != nil && o.g.windowWait.n.Load() > 0 {
+		o.winCond.Signal()
 	}
 }
 

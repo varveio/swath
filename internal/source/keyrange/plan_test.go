@@ -600,3 +600,37 @@ func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 			stale.requests, fresh.requests, stale.wall, fresh.wall, sst.SpillRefused, fst.SpillRefused)
 	}
 }
+
+// TestPlanStaleManyWorkersSmallCap: a stale prior whose region (5 % of the
+// keys) has grown tenfold, far more workers than tiles, and a spill cap far
+// below durable spill's minimum (no certificates: nothing behind the
+// output to leave out or evict). The grown tiles hold admission (growth)
+// while their region spills; the workers held at the window still read
+// spilled frames ahead of the drainer, so the run completes within a small
+// factor of the fresh prior's, every key once, in order, and the frames
+// refused stay bounded (a frame refused is retried on credit: a crawl
+// refuses about one per row).
+func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
+	var base, keys []string
+	lo, hi := fmt.Sprintf("k%06d", 40000), fmt.Sprintf("k%06d", 45000)
+	for i := range 100000 {
+		k := fmt.Sprintf("k%06d", i)
+		base, keys = append(base, k), append(keys, k)
+		if k > lo && k <= hi {
+			for d := range 9 {
+				keys = append(keys, fmt.Sprintf("%s~%d", k, d))
+			}
+		}
+	}
+	const workers, latency, cap, tilePages = 512, 2 * time.Millisecond, 16 << 10, 8
+	fresh, _, fst := planRun(t, keys, priorOf(keys, 100), workers, tilePages, cap, latency)
+	stale, _, sst := planRun(t, keys, priorOf(base, 100), workers, tilePages, cap, latency)
+	t.Logf("fresh: %v, %d refused; stale: %v, %d refused, %d tiles grown, waits %v, read ahead %d frames (drainer %d)",
+		fresh.wall, fst.SpillRefused, stale.wall, sst.SpillRefused, sst.Window.Grown, sst.Window.Waits, sst.ReadAhead.Frames, sst.ReadAhead.DrainerFrames)
+	if sst.Window.Grown == 0 || sst.Window.Waits[order.WindowGrowth] == 0 {
+		t.Fatalf("the fixture did not grow tiles: %+v", sst.Window)
+	}
+	if stale.wall > 3*fresh.wall || sst.SpillRefused > int64(len(keys)/20) {
+		t.Fatalf("stale prior: %v (fresh %v), %d frames refused for %d keys", stale.wall, fresh.wall, sst.SpillRefused, len(keys))
+	}
+}
