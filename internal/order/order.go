@@ -103,7 +103,8 @@ type Options struct {
 	// source.Fencing), is the attempt's durable spill: a spilled range with
 	// a free slot writes a durable file and seals its certificate, and the
 	// provider's replay ranges (source.Replaying) are its reused
-	// certificates, replayed by the drainer. Run never closes it.
+	// certificates, replayed by the drainer or, once listing is done, by
+	// the segments (segments.go). Run never closes it.
 	Durable *Cache
 }
 
@@ -164,8 +165,9 @@ type Stats struct {
 	// nothing on: from the drain's start to the first row, between two
 	// hand-ons, or from the last row to the drain's end.
 	FrontierStuck time.Duration
-	// ListingDone is when the provider finished (every range expanded),
-	// zero if it never did; DrainEnd when the drainer handed on its last
+	// ListingDone is when the provider finished (every range expanded but
+	// the replay ranges, which are not listed), zero if it never did;
+	// DrainEnd when the drainer handed on its last
 	// row. The drain tail is the interval between them.
 	ListingDone, DrainEnd time.Time
 	// IdleAfter is the workers' idle time (nothing queued to list,
@@ -177,7 +179,8 @@ type Stats struct {
 	// zero when the sink is no Segmenter).
 	Segments SegmentStats
 	// ReplayedRows are the rows recovery replay handed on from reused
-	// certificates (in Received and Rows; never listed by the provider).
+	// certificates, the drainer's and the segments' (in Received and Rows;
+	// never listed by the provider).
 	ReplayedRows int64
 	// Durable reports whether durable spill engaged for this run.
 	Durable bool
@@ -223,11 +226,23 @@ type Gauges struct {
 	// the budget, workers at admission, idle workers (nothing queued to
 	// list, read-ahead waits included).
 	publishWait, admissionWait, idleWait gauge
+	windowWait                           gauge // workers held at the frontier window (window.go)
 	// pressure is spill pressure (spiller.press); spillMax and
 	// spillReserve are the spill cap and reserve in effect (0: none).
-	windowWait             gauge // workers held at the frontier window (window.go)
 	pressure               pressure
 	spillMax, spillReserve atomic.Int64
+	// scanned is the bytes of reused certificates the segments' plan has
+	// read (scanCert): the run's progress while it hands nothing on.
+	scanned atomic.Int64
+}
+
+// CertScanned is the bytes of reused certificates the segments' plan has
+// read so far (0 for nil).
+func (g *Gauges) CertScanned() int64 {
+	if g == nil {
+		return 0
+	}
+	return g.scanned.Load()
 }
 
 // clock is the time spill pressure is recorded and read at (tests set it).
@@ -387,6 +402,7 @@ type run[R, P any] struct {
 	opt      Options
 	mu       sync.Mutex
 	work     *sync.Cond // workers: stack empty or budget used
+	winCond  *sync.Cond // workers waiting at the frontier window (window.go)
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R, P]
 	buffered int64
@@ -441,9 +457,10 @@ type run[R, P any] struct {
 	dt             DrainerTimes // drainer only
 	drainEnd       time.Time
 
-	// open counts the ranges created and not yet done: the listing is done
-	// when it reaches zero (listedAt, under mu). idleAfter is the workers'
-	// idle time after it (mu).
+	// open counts the ranges created and not yet done, replay ranges
+	// excepted (nothing lists them): the listing is done when it reaches
+	// zero (listedAt, under mu). idleAfter is the workers' idle time after
+	// it (mu).
 	open      atomic.Int64
 	listedAt  time.Time
 	idleAfter time.Duration
@@ -724,7 +741,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		// The plan root is never claimed: it stays open, counted, until the
 		// plan ends, its tiles admitted as its children (window.go).
 		root.state = expanding
-		o.win = &window[R, P]{plan: plan, root: root, rowBytes: plan.RowBytes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
+		o.win = &window[R, P]{plan: plan, root: root, sizes: plan.Sizes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
 		defer plan.Start(ctx, func() {
 			o.mu.Lock()
 			o.work.Broadcast()
@@ -748,6 +765,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if hookBeforeDrain != nil {
 		hookBeforeDrain()
 	}
+	event("drain-start") // tests: the drainer is about to start
 	st, err := o.drainTree(root, sink)
 	if err != nil && ctx.Err() != nil {
 		// A worker failed first and cancelled the run; report its error,
@@ -757,6 +775,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	o.mu.Lock()
 	o.finished = true
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	o.mu.Unlock()
 	if err != nil {
@@ -827,6 +846,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.seg = &segState[P]{sg: sg, waitRows: -1}
 	}
 	o.work = sync.NewCond(&o.mu)
+	o.winCond = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	o.g = opt.Gauges
 	if o.g == nil {
@@ -845,6 +865,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.mu.Lock()
 		o.work.Broadcast()
 		o.drain.Broadcast()
+		o.winCond.Signal()
 		o.mu.Unlock()
 	}
 	if opt.SpillDir != "" {
@@ -928,6 +949,9 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		o.stopped.Store(true)
 		wake()
+		o.mu.Lock()
+		o.winCond.Broadcast()
+		o.mu.Unlock()
 	})
 	return o, func() {
 		stop()
@@ -949,13 +973,25 @@ func fences[R, P any](p source.Provider[R, P]) bool {
 	return ok && f.Fences()
 }
 
-// replayOf is n's certificate when n is a replay range (the drainer's
-// alone).
+// replayOf is n's certificate when n is a replay range (never a
+// worker's: the drainer's, or the segments').
 func (o *run[R, P]) replayOf(n *node[R, P]) (int, bool) {
 	if o.replayFn == nil {
 		return 0, false
 	}
 	return o.replayFn(n.r)
+}
+
+// listed counts the ranges among kids that are listed: every one but the
+// replay ranges (open).
+func (o *run[R, P]) listed(kids []*node[R, P]) int64 {
+	var n int64
+	for _, k := range kids {
+		if _, ok := o.replayOf(k); !ok {
+			n++
+		}
+	}
+	return n
 }
 
 func (o *run[R, P]) worker() {
@@ -970,6 +1006,7 @@ func (o *run[R, P]) worker() {
 					// admits it (window.go).
 					switch st, err := o.admitTile(false); st {
 					case admitted:
+						o.winCond.Signal() // the next waiter tries the next tile
 						continue
 					case admitFailed:
 						o.planFailed(err)
@@ -994,7 +1031,7 @@ func (o *run[R, P]) worker() {
 				if refused {
 					o.win.st.Waits[o.win.why]++
 					t := time.Now()
-					o.waitAt(o.work, waitWindow)
+					o.waitAt(o.winCond, waitWindow)
 					o.idle(t)
 					continue
 				}
@@ -1096,7 +1133,7 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 				d.Dispose(k.r)
 			}
 		}
-		o.open.Add(-int64(len(e.kids)))
+		o.open.Add(-o.listed(e.kids))
 		e.kids = nil
 	}
 	n.state = done
@@ -1114,6 +1151,11 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	}
 	if len(n.pending) > 0 {
 		o.work.Broadcast()
+		if o.win != nil {
+			for range n.pending { // workers at the window take children too
+				o.winCond.Signal()
+			}
+		}
 	}
 	n.pending = nil
 	if n.onPath.Load() {
@@ -1234,7 +1276,9 @@ func (e *emitter[R, P]) Child(r R) error {
 	e.kids = append(e.kids, c)
 	e.units += u
 	e.o.g.nodes.add(1)
-	e.o.open.Add(1)
+	if _, ok := e.o.replayOf(c); !ok { // a replay range is never listed
+		e.o.open.Add(1)
+	}
 	return e.maybePublish()
 }
 

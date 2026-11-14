@@ -194,8 +194,10 @@ type Options struct {
 	// once the prior's tiles hold pages of keys each (Azure's 5,000).
 	PriorPageSize int
 	// TilePages is the pages a planned prior's tile holds (0: TilePages;
-	// Planner).
-	TilePages int
+	// Planner); WindowRows the order stage's frontier window's rows (0:
+	// its default rule; source.PlanSizes).
+	TilePages  int
+	WindowRows int64
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
@@ -248,8 +250,12 @@ type Engine[P any] struct {
 	tiles    map[int32]*tileAccount
 	tileErr  tileErrors
 	lastTile int32
-	plan     *plan[P]      // a counted prior's plan, once the order stage asked for it (Planner)
-	reuse    []source.Span // reused certificates a resume lists around (Reuse)
+	plan     *plan[P] // a counted prior's plan, once the order stage asked for it (Planner)
+	// windowBound: the order stage's frontier window refuses tiles
+	// (Planner's Bound); idle workers are then not demand for a tile's
+	// slices.
+	windowBound atomic.Bool
+	reuse       []source.Span // reused certificates a resume lists around (Reuse)
 	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
 	// slowQueued: children of slow splits not yet started.
 	latSum     float64

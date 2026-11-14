@@ -112,6 +112,9 @@ type Range struct {
 	// in, inherited by its children; 0 for none. Its keys add to the
 	// tile's, which the report compares with the prior (priorErrors).
 	tile int32
+	// grown: the range, or an ancestor, listed past its prior's count:
+	// its region grew since the prior, and its remainder is unknown.
+	grown bool
 	// lat is the page latency (ns) the range starts with: its parent's
 	// (SlowSplit; 0 unknown). slow: a child of a slow split (slowQueued).
 	lat  float64
@@ -153,6 +156,7 @@ type running struct {
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
 	groupOpen    bool           // group mode: its last emitted key's group may continue, or it emitted none yet (no split, unranked)
 	prior        float64        // a counted prior's expected keys in the range (Range.prior; 0: none)
+	grown        bool           // listed past its prior's count, or a child of a range that did (Range.grown)
 	lane         int            // the run trace's worker lane (TraceTo; lane)
 }
 
@@ -458,7 +462,7 @@ func (p *Engine[P]) enter(r Range) *running {
 	if r.born != fromRoot {
 		p.queued--
 	}
-	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow}
+	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow, grown: r.grown}
 	if r.prior && r.estOK {
 		st.prior = r.est
 	}
@@ -715,7 +719,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			held, st.rem = h, h
 			p.c.Inc(cSeedFromHeld)
 		case st.prior > 0 && !done:
-			st.prior = 0
+			st.prior, st.grown = 0, true
 			p.c.Inc(cSeedFromOutrun)
 			fallthrough
 		default:
@@ -734,7 +738,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Max(cSlowMaxRangeLatency, int64(st.lat))
 			p.c.Set(cSlowRunLatency, int64(p.runLatency()))
 		}
-		hunger := p.opt.Workers - len(p.running) - p.queued
+		hunger, _ := p.demand(st)
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
 		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		unsplittable := st.unsplittable
@@ -950,9 +954,11 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			return
 		}
 	}
-	hunger := p.opt.Workers - len(p.running) - p.queued
+	hunger, held := p.demand(st)
 	if p.opt.SplitCoin == nil {
 		switch {
+		case held: // idle workers, but the window binds and the range holds under two tiles
+			return pivot{}, false, cSplitSkippedWindow
 		case !pr.ready: // the demand rose after the page's snapshot
 			return pivot{}, false, cSplitSkippedNoDemand
 		case hunger <= 0 && p.slowSplitWanted(st, r):
@@ -1087,6 +1093,24 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	return pv, true, 0
 }
 
+// demand is the idle workers a split of st could feed (hunger: workers -
+// active - queued), mu held. In a planned run, once the frontier window
+// binds (Bound), idle workers are demand only for a range whose
+// remainder would give each child a tile's keys or more (a coarse cut's
+// tile, the open frontier), or that grew past its prior's count (its
+// remainder unknown: the prior's count is spent, and the page's gauge
+// errs short on keys added between the old ones); the window admits tiles, so
+// slicing an admitted tile further for them only adds requests and
+// overfetch, the output being bound by the window. held reports that the
+// window took the demand there was.
+func (p *Engine[P]) demand(st *running) (hunger int, held bool) {
+	hunger = p.opt.Workers - len(p.running) - p.queued
+	if hunger <= 0 || p.plan == nil || !p.windowBound.Load() || st.grown || st.remainder() >= 2*p.plan.tileKeys {
+		return hunger, false
+	}
+	return 0, true
+}
+
 // pivot is a decided split's pivot m and the synthesis that made it;
 // anchored: the reflection had an anchor; chain: the upper child's anchor.
 type pivot struct {
@@ -1152,6 +1176,7 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
 	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
 	lower.est, lower.estOK, lower.prior = pv.lower, pv.estOK, pv.prior
+	lower.grown, upper.grown = st.grown, st.grown
 	upper.est, upper.estOK, upper.prior = pv.upper, pv.estOK && !r.open, pv.prior && !r.open
 	// A resumed range split before its cursor passed the resume key hands
 	// the key on: keys up to it are already published.

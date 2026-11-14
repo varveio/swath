@@ -24,6 +24,7 @@ type Policy struct {
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
 	TilePages  int       // the pages of a counted prior's tile (0: TilePages); diagnostic
+	WindowRows int64     // the frontier window's rows in a planned run (0: the default rule); diagnostic
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -45,7 +46,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, TilePages: p.TilePages}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, TilePages: p.TilePages, WindowRows: p.WindowRows}
 }
 
 // Group is the engine's flag group, which every provider on the engine
@@ -117,6 +118,8 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 				p.TilePages = n
 				return nil
 			})})
+		source.Define(f, source.Flag{Name: "seed-from-window-rows", Value: source.Count64(&p.WindowRows, 0), Metavar: "N",
+			Usage: "a counted --seed-from's window holds N rows (0: 8,000,000)"})
 	}
 	return c
 }

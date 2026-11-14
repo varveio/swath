@@ -1,4 +1,4 @@
-report_version 11
+report_version 12
 args_hash string
 attempt.id string
 attempt.started time
@@ -154,6 +154,9 @@ resources.drain.replay_decode_ns int64
 resources.drain.replay_read_ns int64
 resources.drain.segments.budget_wait_ns int64
 resources.drain.segments.budget_waits int64
+resources.drain.segments.certificate_scan_ns int64
+resources.drain.segments.certificates_read int
+resources.drain.segments.certified_rows int64
 resources.drain.segments.decode_ns int64
 resources.drain.segments.deferred_rows int64
 resources.drain.segments.durable_boundaries int
@@ -227,6 +230,7 @@ resources.spill.durable.resume.ledger_dropped_bytes int64
 resources.spill.durable.resume.orphans int64
 resources.spill.durable.resume.rejected map
 resources.spill.durable.resume.replay_skipped_rows int64
+resources.spill.durable.resume.replayed_certificates int64
 resources.spill.durable.resume.replayed_rows int64
 resources.spill.durable.resume.requests_saved_est int64
 resources.spill.durable.retained_bytes int64

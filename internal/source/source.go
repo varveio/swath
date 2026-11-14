@@ -123,8 +123,20 @@ type Planner[R any] interface {
 	// err on its failure (never a silent end), else nothing is ready yet
 	// (wake follows) or admit refused.
 	Next(admit func(rows int64) bool) (r R, ok, done bool, err error)
-	// RowBytes is the prior's stored bytes per row (0: unknown).
-	RowBytes() float64
+	// Sizes are the plan's sizes the window is set from.
+	Sizes() PlanSizes
+	// Bound tells the plan that the window binds (it has refused a tile;
+	// for the rest of the run): idle workers are then not demand for
+	// slicing the tiles admitted.
+	Bound(on bool)
+}
+
+// PlanSizes are what a plan tells the order stage's window: the prior's
+// stored bytes per row (0: unknown) and the window's rows when set (swath
+// diag list --seed-from-window-rows; 0: the default target).
+type PlanSizes struct {
+	RowBytes   float64
+	WindowRows int64
 }
 
 // Planning is a provider whose root may be a plan: Planner, called before

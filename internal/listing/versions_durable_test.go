@@ -489,7 +489,9 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 // segments with workers reading the sealed files. The row budget is the
 // one that leaves room for several workers (at the minimum budget the
 // planner allows one). The dataset is byte-identical to a serial run held
-// in memory, and no key spans a seam.
+// in memory, and no key spans a seam; so is a resume's whose segments
+// replay its reused certificates, its cut file too (the parts written from
+// certificates collected in publication order like any other).
 func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
 	datasettest.RequireJournal(t)
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
@@ -526,11 +528,59 @@ func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
 	}
 	t.Logf("segments: %d over %d workers (%d bytes each of %d free), %d durable files, %d boundaries in them, %d rows deferred; %d rows spilled",
 		sg.Segments, sg.Workers, sg.PerWorkerBytes, sg.FreeBytes, sg.DurableFilesRead, sg.DurableBoundaries, sg.DeferredRows, sum.Resources.Spill.Rows)
-	sameDataset(t, "segments", ref, out)
-	m := manifestOf(t, out)
-	for i := 1; i < len(m.Parts); i++ {
-		if a, b := string(m.Parts[i-1].MaxKey), string(m.Parts[i].MinKey); a >= b {
-			t.Fatalf("part %d ends at %q and part %d starts at %q: a key spans a seam", i-1, a, i, b)
+	seams := func(name, out string) {
+		t.Helper()
+		sameDataset(t, name, ref, out)
+		m := manifestOf(t, out)
+		for i := 1; i < len(m.Parts); i++ {
+			if a, b := string(m.Parts[i-1].MaxKey), string(m.Parts[i].MinKey); a >= b {
+				t.Fatalf("%s: part %d ends at %q and part %d starts at %q: a key spans a seam", name, i-1, a, i, b)
+			}
 		}
 	}
+	requireCuts(t, "segments", out)
+	seams("segments", out)
+	// A resume that reuses certificates replays them in the segments
+	// (#288). The run is killed at its third ledger sync with the frontier
+	// held for good, certificates sealed above K; the resume's drainer
+	// starts only once listing is done (order's "drain-start" held until
+	// "listing-done"), so the segments replay every certificate, their
+	// bounds complete keys: the dataset is the serial run's, no key spans
+	// a seam.
+	out = filepath.Join(t.TempDir(), "resumed")
+	cfg = config(out)
+	cfg.Limits.Encoders = 4
+	api.gate.Store(&versionsGate{release: make(chan struct{}), hold: true})
+	crashDurable(t, cfg, "spill-ledger-sync", 3)
+	cfg = hotVersionsConfig(api, out, true)
+	cfg.Source.Options.(*s3.Options).Policy.PageSize = 100
+	cfg.Limits.RowBudget, cfg.Limits.Encoders = 10<<20, 4
+	listed := make(chan struct{})
+	var once sync.Once
+	restore := order.SetDurableEvents(func(e string) {
+		switch e {
+		case "listing-done":
+			once.Do(func() { close(listed) })
+		case "drain-start":
+			select {
+			case <-listed:
+			case <-time.After(time.Minute):
+				t.Error("listing did not end with the drainer held")
+			}
+		}
+	})
+	sum, err = Run(context.Background(), cfg)
+	restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sg, d := sum.Resources.Drain.Segments, sum.Resources.Spill.Durable
+	if d == nil || d.Resume == nil || d.Resume.Accepted == 0 || sg == nil || sg.Reason != order.SegmentEngaged || sg.Workers < 2 ||
+		sg.CertificatesRead < 1 || int64(sg.CertificatesRead) != d.Resume.ReplayedCerts || sg.CertifiedRows != d.Resume.ReplayedRows {
+		t.Fatalf("resume: durable %+v segments %+v: want engaged, every certificate replayed by the segments", d, sg)
+	}
+	t.Logf("resume: %d certificates accepted, %d replayed by the segments (%d rows, %d skipped), %d segments over %d workers, %d rows deferred",
+		d.Resume.Accepted, sg.CertificatesRead, sg.CertifiedRows, d.Resume.ReplaySkippedRows, sg.Segments, sg.Workers, sg.DeferredRows)
+	requireCuts(t, "resume", out)
+	seams("resume", out)
 }

@@ -204,6 +204,19 @@ func TestRemoteDataset(t *testing.T) {
 				t.Fatalf("resume of a committed run: %v", err)
 			}
 		}
+		// A cut file at a fresh prefix that no run of this one wrote is not
+		// replaced: the run commits and warns once.
+		stale := []byte("logs/00/\t1\n")
+		d.Put("stale/"+dataset.CutsName, stale)
+		var w warnings
+		cfg := remoteConfig(url, filepath.Join(t.TempDir(), "work3"), false, d.output("stale"))
+		cfg.Warn = w.warn
+		if sum, err := Run(context.Background(), cfg); err != nil || sum.Outcome.Status != StatusCommitted {
+			t.Fatalf("a run over a stale cut file: %v", err)
+		}
+		if o, _ := d.Object("stale/" + dataset.CutsName); !bytes.Equal(o, stale) || len(w.about(dataset.CutsName)) != 1 {
+			t.Fatalf("stale cut file %q, warnings %q", o, w.got)
+		}
 	})
 }
 

@@ -41,7 +41,9 @@ const spillRowBytes = 64
 const (
 	WindowSpillCap  = "spill_cap" // half the spill cap over a spilled row's bytes, with what the budget holds
 	WindowBudget    = "budget"    // spill off: what the budget holds
-	WindowUnbounded = "unbounded" // spill without a cap: no limit
+	WindowUnbounded = "unbounded" // spill without a cap: no storage limit (the target applies)
+	WindowTarget    = "rows"      // the target, windowTarget rows, under the spill cap's
+	WindowSet       = "set"       // the plan's set rows (swath diag list --seed-from-window-rows), under the spill cap's
 	WindowRows      = "rows"      // a refusal: the charges and the tile past the window's rows
 	WindowSpill     = "spill"     // a refusal: live spill past half its cap, or a frame refused
 	WindowGrowth    = "growth"    // a refusal: a held tile grown past growthFactor
@@ -74,6 +76,13 @@ type WindowStats struct {
 	PeakTiles, PeakCreditRows, PeakRetainedBytes int64
 }
 
+// The waiters at the window wait on their own condition (run.winCond),
+// woken one at a time as room comes back: a tile released wakes one per
+// tile, the refused tile fitting one, a worker that admits a tile the next
+// (so waking follows the room, not every step of the drainer), children
+// queued one per child, spill credit one; a stop, the plan's end or
+// failure all of them.
+
 // tileCredit is an admitted tile's account.
 type tileCredit struct {
 	est    int64
@@ -85,9 +94,9 @@ type tileCredit struct {
 
 // window is the run's frontier window (nil without a plan).
 type window[R, P any] struct {
-	plan     source.Planner[R]
-	root     *node[R, P]
-	rowBytes float64 // the prior's bytes per row (0: unknown)
+	plan  source.Planner[R]
+	root  *node[R, P]
+	sizes source.PlanSizes
 	// tiles are the admitted tiles not yet released, in key order; est
 	// their expected rows (mu); excess the rows held past their
 	// expectations, grown how many are grown (atomic: emitters charge
@@ -100,6 +109,7 @@ type window[R, P any] struct {
 	sumEst int64        // every admitted tile's expected rows, for the mean (growth's floor)
 	done   bool         // the plan ended (mu)
 	why    string
+	bound  bool // the window refuses tiles (bind)
 	// need is the expected rows of the tile the window last refused for
 	// its rows (0: none since an admission): settle wakes the workers at
 	// the window once that many fit (mu).
@@ -108,6 +118,19 @@ type window[R, P any] struct {
 	// units and rows: the budget units and rows measured as emitters
 	// received them, the budget's bytes per row.
 	units, rows atomic.Int64
+}
+
+// bind tells the plan when the window binds: from its first refusal once
+// rows are measured, for the rest of the run (source.Planner's Bound: idle
+// workers are then not demand for slicing the tiles admitted; mu held).
+// It does not lapse at each admission, nor when the plan ends: a window
+// that refused admits as tiles are written, the output sets the pace, and
+// a lapse would hand every idle worker to the tiles still listing.
+func (w *window[R, P]) bind(on bool) {
+	if w.bound != on {
+		w.bound = on
+		w.plan.Bound(on)
+	}
 }
 
 // tileRun is a run of rows of one tile in the drainer's pending batch.
@@ -138,8 +161,36 @@ const (
 	admitFailed
 )
 
-// windowRows is the window's rows and the term that set it (mu held).
+// windowTarget is the window's rows by default: a measured starting
+// point, about 250 tiles of 32 pages, enough for about 5M rows a second of
+// listing at 50 ms a page while one writer takes about 1M rows a second
+// (2,048 workers: a window of about 8.9M rows finished a median 25 s, one
+// that never bound 41 s). An admission target, not a storage or recovery
+// bound.
+const windowTarget = 8_000_000
+
+// windowRows is the window's rows and the term that set it (mu held): the
+// target (windowTarget, or the plan's set rows) where it is under what the
+// spill cap and the budget give, so a small disk still binds first; with
+// spill off, what the budget holds alone.
 func (o *run[R, P]) windowRows() (float64, string) {
+	rows, by := o.storageRows()
+	if o.sp == nil {
+		return rows, by
+	}
+	target, tby := float64(o.win.sizes.WindowRows), WindowSet
+	if target == 0 {
+		target, tby = windowTarget, WindowTarget
+	}
+	if target < rows {
+		return target, tby
+	}
+	return rows, by
+}
+
+// storageRows is what the spill cap and the row budget give the window, and
+// the term that set it (mu held).
+func (o *run[R, P]) storageRows() (float64, string) {
 	w := o.win
 	mem := 0.0
 	if u := w.units.Load(); u > 0 {
@@ -151,7 +202,7 @@ func (o *run[R, P]) windowRows() (float64, string) {
 	case o.sp.max <= 0:
 		return math.Inf(1), WindowUnbounded
 	}
-	beta := w.rowBytes
+	beta := w.sizes.RowBytes
 	if n := o.sp.rows.Load(); n > 0 {
 		beta = float64(o.sp.bytes.Load()) / float64(n)
 	}
@@ -201,6 +252,9 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 		return admitDone, nil
 	case !ok && why != "":
 		w.why = why
+		if !force && (o.sp != nil || w.rows.Load() > 0) {
+			w.bind(true) // not the empty window of a run without spill before its first rows
+		}
 		return admitRefused, nil
 	case !ok:
 		return admitNone, nil
@@ -221,7 +275,9 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 	o.buffered += u
 	o.max = max(o.max, o.buffered)
 	o.g.nodes.add(1)
-	o.open.Add(1)
+	if _, ok := o.replayOf(n); !ok { // a replay range is never listed (open)
+		o.open.Add(1)
+	}
 	o.stack = append(o.stack, n)
 	w.st.PeakTiles = max(w.st.PeakTiles, int64(len(w.tiles)))
 	w.st.PeakCreditRows = max(w.st.PeakCreditRows, w.est+w.excess.Load())
@@ -250,7 +306,9 @@ func (o *run[R, P]) settle() {
 	}
 	if n > 0 {
 		w.tiles = w.tiles[n:]
-		o.work.Broadcast()
+		for range n { // a waiter per tile's room
+			o.winCond.Signal()
+		}
 		return
 	}
 	o.roomCheck()
@@ -265,7 +323,7 @@ func (o *run[R, P]) roomCheck() {
 	if w.need > 0 && o.g.windowWait.n.Load() > 0 {
 		if rows, _ := o.windowRows(); float64(w.est+w.excess.Load()+w.need) <= rows {
 			w.need = 0
-			o.work.Broadcast()
+			o.winCond.Signal()
 		}
 	}
 }
@@ -278,7 +336,7 @@ func (o *run[R, P]) measured(units int64, rows int) {
 	w.units.Add(units)
 	if w.rows.Add(int64(rows)) == int64(rows) {
 		o.mu.Lock()
-		o.work.Broadcast()
+		o.winCond.Signal()
 		o.mu.Unlock()
 	}
 }
@@ -290,6 +348,7 @@ func (o *run[R, P]) endPlan() bool {
 	o.win.done = true
 	o.win.root.state = done
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	if o.open.Add(-1) == 0 && !o.stopped.Load() {
 		o.listedAt = time.Now()
@@ -304,6 +363,7 @@ func (o *run[R, P]) planFailed(err error) error {
 	o.cancel(err)
 	o.stopped.Store(true)
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	return err
 }
@@ -314,6 +374,7 @@ func (o *run[R, P]) notifyListed() {
 		o.opt.ListingDone()
 	}
 	o.listedNotified.Store(true)
+	event("listing-done") // tests: every range is listed
 }
 
 // awaitPlan is the drainer at the plan root with every admitted tile
@@ -331,6 +392,7 @@ func (o *run[R, P]) awaitPlan() error {
 	switch st, err := o.admitTile(true); st {
 	case admitted:
 		o.work.Signal()
+		o.winCond.Signal() // a worker at the window may take it
 		return nil
 	case admitDone:
 		if o.endPlan() {

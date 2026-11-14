@@ -29,6 +29,7 @@ type planned struct {
 	failAt      int
 	failErr     error
 	hold        map[int]chan struct{}
+	sizes       source.PlanSizes
 
 	mu       sync.Mutex
 	next     int
@@ -49,7 +50,8 @@ func newPlanned(tiles, rows, page int) *planned {
 
 func (p *planned) Planner() source.Planner[int] { return p }
 func (p *planned) Root() int                    { return -1 }
-func (p *planned) RowBytes() float64            { return 0 }
+func (p *planned) Sizes() source.PlanSizes      { return p.sizes }
+func (p *planned) Bound(bool)                   {}
 
 func (p *planned) Start(_ context.Context, wake func()) func() {
 	p.mu.Lock()
@@ -197,29 +199,32 @@ func TestWindowSmallerThanATile(t *testing.T) {
 }
 
 // TestPlanWaitWakes: the drainer, every admitted tile drained and the
-// plan's next tile not yet read, waits at the plan; the reader's wake
-// releases it, and the run completes.
+// plan's next tile not yet read, waits at the plan, and listing is not done
+// (the plan root stays open until the plan ends, though every range
+// admitted is); the reader's wake releases it, and the run completes, its
+// listing done once.
 func TestPlanWaitWakes(t *testing.T) {
 	p := newPlanned(6, 300, 100)
 	p.ready = 2
 	ch := waits(t)
 	done := make(chan error, 1)
 	var got []string
+	var listed atomic.Int64
 	go func() {
 		var err error
-		_, got, err = runPlanned(t, p, Options{Workers: 2, Budget: 1 << 20})
+		_, got, err = runPlanned(t, p, Options{Workers: 2, Budget: 1 << 20, ListingDone: func() { listed.Add(1) }})
 		done <- err
 	}()
 	expectWait(t, ch, waitPlan)
-	if p.admitted() != 2 {
-		t.Fatalf("%d tiles admitted before the plan read on, want 2", p.admitted())
+	if p.admitted() != 2 || p.finished.Load() != 2 || listed.Load() != 0 {
+		t.Fatalf("at the plan's wait: %d tiles admitted, %d listed (want 2 each), listing done %d times (want none)", p.admitted(), p.finished.Load(), listed.Load())
 	}
 	p.setReady(-1)
 	if err := expect(t, done, "plan"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got, p.keys()) {
-		t.Fatalf("%d keys, want %d", len(got), len(p.keys()))
+	if !slices.Equal(got, p.keys()) || listed.Load() != 1 {
+		t.Fatalf("%d keys, want %d; listing done %d times", len(got), len(p.keys()), listed.Load())
 	}
 }
 
@@ -323,5 +328,40 @@ func TestWindowSpillCapHeld(t *testing.T) {
 	w := st.Window
 	if w == nil || w.BoundBy != WindowSpillCap || w.Waits[WindowRows]+w.Waits[WindowSpill] == 0 || st.SpillRows == 0 || st.SpillRefused != 0 {
 		t.Fatalf("window %+v, spilled %d rows, refused %d frames", w, st.SpillRows, st.SpillRefused)
+	}
+}
+
+// TestWindowTarget: with a disk and a budget that hold far more, the
+// window is its target (windowTarget: bound_by rows), or the rows the plan
+// sets (the diag knob: bound_by set), the tiles held never charging more;
+// under a small spill cap the cap's bound applies first; the run
+// completes.
+func TestWindowTarget(t *testing.T) {
+	for _, tc := range []struct {
+		sizes source.PlanSizes
+		by    string
+		rows  int64
+	}{
+		{source.PlanSizes{}, WindowTarget, windowTarget},
+		{source.PlanSizes{WindowRows: 500}, WindowSet, 500},
+	} {
+		p := newPlanned(40, 100, 50)
+		p.sizes = tc.sizes
+		st, got, err := runPlanned(t, p, Options{Workers: 4, Budget: 1 << 20, SpillDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, p.keys()) {
+			t.Fatalf("%s: %d keys, want %d", tc.by, len(got), len(p.keys()))
+		}
+		if w := st.Window; w == nil || w.BoundBy != tc.by || w.Rows != tc.rows || w.PeakCreditRows > tc.rows {
+			t.Fatalf("%s: window %+v, want %d rows", tc.by, w, tc.rows)
+		}
+	}
+	p := newPlanned(40, 100, 50)
+	p.sizes = source.PlanSizes{WindowRows: 1 << 30}
+	st, _, err := runPlanned(t, p, Options{Workers: 4, Budget: 1 << 20, SpillDir: t.TempDir(), SpillMax: 4 << 10})
+	if err != nil || st.Window.BoundBy != WindowSpillCap {
+		t.Fatalf("a small cap under a large target: %v, window %+v", err, st.Window)
 	}
 }

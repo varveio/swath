@@ -120,6 +120,8 @@ const (
 	cAwaitedRemainder
 	cAwaitedLowerTiny
 	cAwaitedUpperTiny
+	cAwaitedWindow
+	cSplitSkippedWindow
 	cChildEmptyLower
 	cChildEmptyUpper
 	cChildEmptyReflectLower
@@ -259,6 +261,8 @@ var Counters = table([numCounters]counters.Def{
 	cSplitRejectedNoPivot:         d("split.rejected.no_pivot", counters.Count, "decisions", "guard: no safe pivot exists", "split"),
 	cSplitRejectedUnsafeCursor:    d("split.rejected.unsafe_cursor", counters.Count, "decisions", "guard: the cursor is not a usable start-after", "split"),
 	cSplitRejectedUnsafePivot:     d("split.rejected.unsafe_pivot", counters.Count, "decisions", "guard: the provider vetoes the pivot as a bound", "split"),
+	cSplitSkippedWindow:           d("split.skipped.window", counters.Count, "decisions", "idle workers, but the frontier window refusing tiles: they feed only a range whose remainder holds two tiles or more (a planned run)", "seed_from"),
+	cAwaitedWindow:                d("awaited.skipped.window", counters.Count, "pages", "awaited pages not split: idle workers, but the frontier window refusing tiles (split.skipped.window)", "seed_from"),
 	cSplitSkippedNoDemand:         d("split.skipped.no_demand", counters.Count, "decisions", "no idle worker (hunger <= 0)", "split"),
 	cSplitReasonSlowRange:         d("split.reason.slow_range", counters.Count, "splits", "--slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges'", "slow_split"),
 	cSlowMaxRangeLatency:          d("split.slow.max_range_latency_ns", counters.Max, "ns", "--slow-split: the highest page latency (EWMA) of a range", "slow_split"),
@@ -381,7 +385,7 @@ var awaitedBy = map[counters.ID]counters.ID{
 	cSplitRejectedCursor: cAwaitedRejectedCursor, cSplitRejectedBound: cAwaitedRejectedBound, cSplitRejectedNoPivot: cAwaitedRejectedNoPivot,
 	cSplitRejectedUnsafeCursor: cAwaitedRejectedUnsafeCursor, cSplitRejectedUnsafePivot: cAwaitedRejectedUnsafePivot,
 	cSplitSliverRefused: cAwaitedSliverRefused, cSplitSkippedRemainder: cAwaitedRemainder, cSplitSkippedLowerTiny: cAwaitedLowerTiny,
-	cSplitSkippedUpperTiny: cAwaitedUpperTiny,
+	cSplitSkippedUpperTiny: cAwaitedUpperTiny, cSplitSkippedWindow: cAwaitedWindow,
 }
 
 // table is defs as a slice indexed by counter ID: an entry is keyed by its

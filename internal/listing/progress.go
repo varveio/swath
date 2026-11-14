@@ -84,7 +84,10 @@ type ProgressSnapshot struct {
 	// Verified is the bytes of retained parts a resume has read to check
 	// them against the journal (size and MD5), before it lists.
 	Verified int64 `json:"verified_bytes"`
-	Advance  int64 `json:"advance"` // the sum: it rises in every phase (verification included) while the run progresses
+	// Scanned is the bytes of reused certificates a resume's segments have
+	// read before their cut (order.Gauges.CertScanned): no row moves then.
+	Scanned int64 `json:"scanned_bytes"`
+	Advance int64 `json:"advance"` // the sum: it rises in every phase (verification included) while the run progresses
 	// Answered counts requests the source's service answered usably (pages
 	// without rows included): it shows the run is alive while no row moves.
 	Answered int64 `json:"answered"`
@@ -168,11 +171,11 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	s.Retained = p.retained.Load()
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()
-	s.Advance = s.Rows + s.Ordered + s.Encoded + s.Parts + s.Verified
 	if g := p.gauges.Load(); g != nil {
 		o := g.Snapshot()
-		s.Order = &o
+		s.Order, s.Scanned = &o, g.CertScanned()
 	}
+	s.Advance = s.Rows + s.Ordered + s.Encoded + s.Parts + s.Verified + s.Scanned
 	if st := p.started.Load(); st != 0 {
 		s.StartedAt = time.Unix(0, st).UTC()
 		s.DurationMs = now.Sub(s.StartedAt).Milliseconds()

@@ -36,7 +36,8 @@ func (fencingProvider) Planner() source.Planner[any] { return plan{} }
 type plan struct{}
 
 func (plan) Start(context.Context, func()) func() { return func() {} }
-func (plan) RowBytes() float64                    { return 3 }
+func (plan) Sizes() source.PlanSizes              { return source.PlanSizes{RowBytes: 3} }
+func (plan) Bound(bool)                           {}
 func (plan) Next(admit func(int64) bool) (any, bool, bool, error) {
 	return 5, admit(9), false, nil
 }

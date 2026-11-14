@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -132,6 +133,52 @@ func sameCuts(t testing.TB, name, ref, got string) {
 		t.Fatalf("%s: the cut file is not the reference's (%v, %v)", name, err, rerr)
 	}
 	checkCuts(t, got, datasetKeys(t, got))
+}
+
+// coarsened is a cut file written at every page end (R = 1) as its writer
+// writes it under a bound of at most lines lines (dataset.Cuts): R the
+// least power of two that fits, a cut at the first line where the rows
+// reach each multiple of R, the last key closing the last line.
+func coarsened(t testing.TB, b []byte, lines int) []byte {
+	t.Helper()
+	type cut struct {
+		key  string
+		rows int64
+	}
+	var all []cut
+	var at int64
+	for l := range strings.SplitSeq(strings.TrimSuffix(string(b), "\n"), "\n") {
+		i := strings.LastIndexByte(l, '\t')
+		n, err := strconv.ParseInt(l[i+1:], 10, 64)
+		if i < 0 || err != nil {
+			t.Fatalf("cut file line %q", l)
+		}
+		at += n
+		all = append(all, cut{l[:i], at})
+	}
+	for unit := int64(1); ; unit *= 2 {
+		var kept []cut
+		prev := int64(0)
+		for _, c := range all {
+			if c.rows/unit > prev/unit {
+				kept = append(kept, c)
+			}
+			prev = c.rows
+		}
+		if last := all[len(all)-1]; kept[len(kept)-1] != last {
+			kept = append(kept, last)
+		}
+		if len(kept) > lines {
+			continue
+		}
+		var out []byte
+		prev = 0
+		for _, c := range kept {
+			out = fmt.Appendf(out, "%s\t%d\n", c.key, c.rows-prev)
+			prev = c.rows
+		}
+		return out
+	}
 }
 
 // requireCuts: dir holds a cut file.

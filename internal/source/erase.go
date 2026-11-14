@@ -65,7 +65,8 @@ func (e erased[R, P]) Planner() Planner[any] {
 type erasedPlan[R any] struct{ p Planner[R] }
 
 func (e erasedPlan[R]) Start(ctx context.Context, wake func()) func() { return e.p.Start(ctx, wake) }
-func (e erasedPlan[R]) RowBytes() float64                             { return e.p.RowBytes() }
+func (e erasedPlan[R]) Sizes() PlanSizes                              { return e.p.Sizes() }
+func (e erasedPlan[R]) Bound(on bool)                                 { e.p.Bound(on) }
 
 func (e erasedPlan[R]) Next(admit func(int64) bool) (any, bool, bool, error) {
 	r, ok, done, err := e.p.Next(admit)

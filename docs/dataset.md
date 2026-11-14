@@ -213,7 +213,9 @@ Blob Storage); nothing of it is written to local disk. Readers see the same prof
   listing of `data/`, which may also hold parts no manifest names (below).
 - **The manifest is created, never replaced:** `PREFIX/manifest.json` is written only if absent (GCS
   `ifGenerationMatch=0`, S3 and Azure `If-None-Match: *`), so of two runs writing one prefix exactly one commits. `PREFIX/cuts.txt`
-  (the [cut file](#the-cut-file)) and `PREFIX/run.json` are written by the run that committed, after the commit, only if absent. A prefix that already holds a manifest is refused
+  (the [cut file](#the-cut-file)) and `PREFIX/run.json` are written by the run that committed, after the commit, only if absent: an
+  object already at either name, which no run of this dataset wrote, is left as it is (a run replaces nothing it did not create), and
+  for the cut file the run warns that it did not write its own; do not seed from that object. A prefix that already holds a manifest is refused
   before the run starts: a dataset in a bucket is not replaced (choose a new prefix per run).
 
 Parts are uploaded as they close and are individually visible before the commit; an upload aborted before

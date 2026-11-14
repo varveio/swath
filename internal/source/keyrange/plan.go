@@ -46,7 +46,7 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 		if stream == nil {
 			stream = &cutSlice{cuts: pr.Cuts}
 		}
-		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), after: p.resumeKey(), first: true}
+		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), tileKeys: float64(q * p.opt.PageSize), after: p.resumeKey(), first: true}
 		p.plan.lo, p.plan.last = p.plan.after, p.plan.after
 		p.c.Set(cSeedFromTilePages, int64(q))
 		p.c.Set(cSeedFromParts, int64(pr.Parts))
@@ -65,10 +65,11 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 // as it is made (cutReuse, one state across tiles). Only the order stage
 // calls Next, under its lock; the engine's state is changed under p.mu.
 type plan[P any] struct {
-	p      *Engine[P]
-	stream source.CutStream
-	fill   float64
-	after  string // the resume key ("" none)
+	p        *Engine[P]
+	stream   source.CutStream
+	fill     float64
+	tileKeys float64 // a tile's keys: its pages at the page size
+	after    string  // the resume key ("" none)
 
 	read    int        // cuts read
 	prev    string     // the last cut read
@@ -98,12 +99,17 @@ func (pl *plan[P]) Start(ctx context.Context, wake func()) func() {
 	return pl.stream.Start(ctx, pl.after, wake)
 }
 
-// RowBytes is the prior's stored bytes per row (source.Planner).
-func (pl *plan[P]) RowBytes() float64 {
+// Bound records whether the frontier window refuses tiles
+// (source.Planner): the demand a split counts (Engine.demand).
+func (pl *plan[P]) Bound(on bool) { pl.p.windowBound.Store(on) }
+
+// Sizes are the plan's sizes for the window (source.Planner).
+func (pl *plan[P]) Sizes() source.PlanSizes {
+	s := source.PlanSizes{WindowRows: pl.p.opt.WindowRows}
 	if pr := pl.p.opt.Prior; pr.Rows > 0 {
-		return float64(pr.Bytes) / float64(pr.Rows)
+		s.RowBytes = float64(pr.Bytes) / float64(pr.Rows)
 	}
-	return 0
+	return s
 }
 
 // Next hands out the next range of the plan if admit takes its expected
