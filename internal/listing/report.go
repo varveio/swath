@@ -39,8 +39,10 @@ import (
 // admission_wait_ns, idle_wait_ns and their peak_* twins),
 // resources.spill.refused_ns and refused_spells, and
 // resources.drain.writer_before_listing_done. 9 adds resources.window, the
-// frontier window of a run planned from a counted --seed-from (#535).
-const ReportVersion = 9
+// frontier window of a run planned from a counted --seed-from (#535). 10
+// adds invocation.prior.cuts_file and cuts_refused (a dataset prior's cut
+// file).
+const ReportVersion = 10
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

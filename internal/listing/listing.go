@@ -1508,16 +1508,59 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	}
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
-			cfg.Warn("run report not written: " + err.Error())
+			cfg.Warn("run report and cut file not written: " + err.Error())
 		}
 	} else if jr != nil && jr.remote != nil {
 		if err := a.finalizeRemote(parts, sum); err != nil {
 			return *sum, err
 		}
-	} else if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
-		cfg.Warn(err.Error())
+	} else {
+		a.writeCuts(parts, localPageEnds, func(b []byte) error {
+			return dataset.Replace(filepath.Join(cfg.Output.Dir, dataset.CutsName), b, dataset.Durable)
+		})
+		if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
+			cfg.Warn(err.Error())
+		}
 	}
 	return *sum, nil
+}
+
+// writeCuts writes the committed dataset's cut file (dataset.CutsName)
+// with put: the cuts the router collected of the parts this run wrote,
+// after those of the parts it retained, read from their key page index
+// (ends). It is advisory: a failure is a warning, and the dataset stands.
+func (a *attempt) writeCuts(parts []dataset.Part, ends func(dataset.Part) ([]dataset.PageEnd, error), put func([]byte) error) {
+	err := faults.At("cuts") // tests: the cut file is not written
+	c := dataset.NewCuts(0)
+	for i := 0; err == nil && i < a.sum.Output.PartsRetained; i++ {
+		var e []dataset.PageEnd
+		if e, err = ends(parts[i]); err != nil {
+			err = fmt.Errorf("retained part %d: %w", i, err)
+		}
+		c.Part(e)
+	}
+	if err == nil {
+		err = c.Join(a.router.Cuts())
+	}
+	var b []byte
+	if err == nil {
+		b, err = c.File()
+	}
+	if err == nil && b != nil {
+		err = put(b)
+	}
+	if err != nil && a.cfg.Warn != nil {
+		a.cfg.Warn(fmt.Sprintf("the dataset is committed; its cut file (%s, for a later --seed-from) is not written: %v", dataset.CutsName, err))
+	}
+}
+
+// localPageEnds are a local part's page ends, from its key page index.
+func localPageEnds(p dataset.Part) ([]dataset.PageEnd, error) {
+	pages, err := parquetout.KeyPages(p.Path)
+	if err != nil {
+		return nil, err
+	}
+	return parquetout.PageEnds(pages, p.Rows)
 }
 
 // reconcile compares the row counts of one attempt at each hop.

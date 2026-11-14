@@ -300,8 +300,9 @@ A scheduled relisting of the same bucket should pass the previous generation as 
 swath list s3://bucket/logs/ -o /data/logs-2026-11-08 --seed-from /data/logs-2026-11-07
 ```
 
-The previous dataset's parts and key page index divide the scope into ranges of about equal expected keys, so the
-run skips the delimiter seed and most early splits. With the default page policy, its requests approach one
+The previous dataset's cut file (`cuts.txt`, [the cut file](dataset.md#the-cut-file)) or, without one, its parts'
+key page index divide the scope into ranges of about equal expected keys, so the run skips the delimiter seed
+and most early splits. For a dataset in a bucket, copy its `cuts.txt` and pass that file. With the default page policy, its requests approach one
 per 1,000 keys on S3/GCS and one per 5,000 keys on Azure Blob with a counted prior. The prior
 must be the same source and scope: the manifest's source kind, bucket/container and prefix are compared
 with the run's (exit 2 on a mismatch; a dataset of `logs/` does not seed `logs/2026/`). The account URI
@@ -313,8 +314,8 @@ changed shape since is still listed whole and in order; the run report's `seed.f
 `seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
 them), and `seed.from.expected_keys` against the source counter `objects` is the growth.
 
-A cut file seeds from anything else that knows the keys (an S3 Inventory, a prefix list), but carries no
-identity; prefer the dataset. A cut file holds one key per line, ascending bytewise without repeats, each
+A cut file seeds from anything else that knows the keys (an S3 Inventory, a prefix list, a dataset's
+`cuts.txt`), but carries no identity; prefer the dataset. A cut file holds one key per line, ascending bytewise without repeats, each
 inside the scope, optionally followed by a tab and the keys expected since the previous cut (on every line or
 none), at most 262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it
 replaces). An unsorted or repeated cut, a cut outside the scope, a cut file past those bounds, `--seed-from`

@@ -4,6 +4,7 @@
 package listing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -55,8 +56,9 @@ func (d *destination) manifest(t *testing.T, prefix string) dataset.Manifest {
 
 // sameAsLocal: the remote dataset holds the local reference's parts, byte
 // for byte (by size and SHA-256), with the same manifest apart from the
-// part paths and the times; and nothing else of this run is left under
-// prefix but the manifest and the run report.
+// part paths and the times, and the reference's cut file if it holds one;
+// and nothing else of this run is left under prefix but the manifest, the
+// run report and the cut file.
 func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphans bool) {
 	t.Helper()
 	m := d.manifest(t, prefix)
@@ -85,6 +87,11 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 	if strip(m) != strip(lm) {
 		t.Fatalf("%s: manifests differ:\n%s\n%s", name, strip(m), strip(lm))
 	}
+	if b, ok := d.Object(prefix + "/" + dataset.CutsName); ok {
+		if want, err := os.ReadFile(filepath.Join(ref, dataset.CutsName)); err != nil || !bytes.Equal(b, want) {
+			t.Fatalf("%s: the cut file is not the local reference's (%v)", name, err)
+		}
+	}
 	if !orphans {
 		return
 	}
@@ -92,12 +99,15 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 }
 
 // onlyDataset: nothing is under prefix but the manifest m, its parts, the
-// run report and the objects at unproven (names relative to prefix): names
-// the run allocated and never recorded creating, which its cleanup leaves
-// (dataset.DeleteOwned).
+// run report, the cut file (if written) and the objects at unproven (names
+// relative to prefix): names the run allocated and never recorded
+// creating, which its cleanup leaves (dataset.DeleteOwned).
 func (d *destination) onlyDataset(t *testing.T, name, prefix string, m dataset.Manifest, unproven []string) {
 	t.Helper()
 	want := []string{prefix + "/" + dataset.ManifestName, prefix + "/" + dataset.ReportName}
+	if _, ok := d.Object(prefix + "/" + dataset.CutsName); ok {
+		want = append(want, prefix+"/"+dataset.CutsName)
+	}
 	for _, p := range m.Parts {
 		want = append(want, prefix+"/"+p.Path)
 	}
@@ -116,6 +126,14 @@ func (d *destination) onlyDataset(t *testing.T, name, prefix string, m dataset.M
 	}
 }
 
+// requireCuts: the dataset under prefix holds a cut file.
+func (d *destination) requireCuts(t *testing.T, name, prefix string) {
+	t.Helper()
+	if _, ok := d.Object(prefix + "/" + dataset.CutsName); !ok {
+		t.Fatalf("%s: no cut file under %s", name, prefix)
+	}
+}
+
 // remoteConfig is crashConfig writing to the destination, the work
 // directory at ws.
 func remoteConfig(url, ws string, resume bool, out *RemoteOutput) Config {
@@ -126,8 +144,8 @@ func remoteConfig(url, ws string, resume bool, out *RemoteOutput) Config {
 
 // TestRemoteDataset: a dataset written straight to a bucket holds the
 // local run's parts byte for byte under unique names, its manifest is the
-// commit, the run report sits beside it, and the work directory holds no
-// part; nothing else is left in the bucket.
+// commit, the run report and the local run's cut file sit beside it, and
+// the work directory holds no part; nothing else is left in the bucket.
 func TestRemoteDataset(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
 		url := crashBucket(t)
@@ -142,6 +160,7 @@ func TestRemoteDataset(t *testing.T) {
 			t.Fatal(err)
 		}
 		d.sameAsLocal(t, "remote", ref, "ds", true)
+		d.requireCuts(t, "remote", "ds")
 		r := sum.Output.Remote
 		if r == nil || r.Commit != dataset.CommitCreated || r.Uploads != int64(sum.Output.PartsWritten) || r.UploadBytes != sum.Output.OutputBytes ||
 			r.OrphansDeleted != 0 || r.Manifest != d.uri("ds/manifest.json") || r.ManifestIdentity == "" || r.WorkDir != ws {
@@ -200,7 +219,9 @@ var remotePoints = []string{"response-read", "split", "range-done", "encoding", 
 // TestRemoteCrashMatrix kills a remote run at each of its crash points, at
 // a first and a later occurrence, with spill off and on (its durable
 // spill's certificates retired as K moves), and resumes it: the resumed dataset
-// holds the uninterrupted run's parts byte for byte, and every object the
+// holds the uninterrupted run's parts byte for byte and its cut file (the
+// retained parts' cuts read from their objects' key page index; none after
+// a kill between the manifest's creation and the cut file), and every object the
 // crashed attempts left that the manifest does not name is deleted. A kill
 // once the manifest exists leaves a run whose resume finishes the
 // aftermath (orphans deleted, the run report) and reports it complete.
@@ -262,6 +283,7 @@ func TestRemoteCrashMatrix(t *testing.T) {
 							t.Fatalf("resume: %v", err)
 						}
 						d.sameAsLocal(t, point, ref, prefix, true)
+						d.requireCuts(t, point, prefix)
 					})
 				}
 			}
@@ -865,7 +887,7 @@ func TestRemoteLostJournalTail(t *testing.T) {
 
 // TestRemoteVersionGroups: a versions listing (keys repeat, a part never
 // ends inside a key's group) killed inside a hot group resumes to the
-// local run's parts.
+// local run's parts and cut file.
 func TestRemoteVersionGroups(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
 		datasettest.RequireJournal(t)
@@ -886,6 +908,7 @@ func TestRemoteVersionGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 		d.sameAsLocal(t, "versions", ref, "versions", true)
+		d.requireCuts(t, "versions", "versions")
 		if m := d.manifest(t, "versions"); m.Key.Unique {
 			t.Fatal("a versions manifest declares unique keys")
 		}

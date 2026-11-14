@@ -37,16 +37,20 @@ func manifestOf(t *testing.T, dir string) dataset.Manifest {
 	return m
 }
 
-// TestSeedFromDataset: a run seeded from its predecessor's dataset lists
-// the same rows into the same parts, from tiles cut at the predecessor's
-// key pages (no delimiter seed request) and admitted through the frontier
-// window, and its report names the prior (its cuts read as the run goes:
-// none offered up front).
+// TestSeedFromDataset: a run seeded from its predecessor's dataset (its
+// cut file removed: TestSeedFromDatasetCuts has it) lists the same rows
+// into the same parts, from tiles cut at the predecessor's key pages (no
+// delimiter seed request) and admitted through the frontier window, and
+// its report names the prior (its cuts read as the run goes: none offered
+// up front).
 func TestSeedFromDataset(t *testing.T) {
 	url := fakeS3(t, 6000)
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")
 	if _, err := listS3(t, url, "s3://bkt", first, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(first, dataset.CutsName)); err != nil {
 		t.Fatal(err)
 	}
 	sum, err := listS3(t, url, "s3://bkt", second, first)
@@ -67,7 +71,7 @@ func TestSeedFromDataset(t *testing.T) {
 		c.Value("seed.from.tiles") < 2 || c.Value("seed.requests") != 0 || c.Value("seed.from.expected_keys") != 6000 {
 		t.Fatalf("counters %v", c)
 	}
-	if p := sum.Invocation.Prior; p == nil || p.Source != "dataset" || p.Path != first || !p.Counted || p.Cuts != 0 {
+	if p := sum.Invocation.Prior; p == nil || p.Source != "dataset" || p.Path != first || !p.Counted || p.Cuts != 0 || p.CutsFile != "absent" {
 		t.Fatalf("report prior %+v", p)
 	}
 	if w := sum.Resources.Window; w == nil || w.Tiles != c.Value("seed.from.tiles") || w.BoundBy == "" {
@@ -150,9 +154,9 @@ func TestSeedFromCutFileBounded(t *testing.T) {
 		size int64 // if set, the file is extended (sparse) to this size
 		ok   bool
 	}{
-		"at-bound":   {body: cuts(maxCutFileCuts), ok: true},
-		"over-cuts":  {body: cuts(maxCutFileCuts + 1)},
-		"over-bytes": {body: "logs/03/\n", size: maxCutFileBytes + 1},
+		"at-bound":   {body: cuts(dataset.MaxCuts), ok: true},
+		"over-cuts":  {body: cuts(dataset.MaxCuts + 1)},
+		"over-bytes": {body: "logs/03/\n", size: dataset.MaxCutsBytes + 1},
 	} {
 		p := filepath.Join(dir, name+".cuts")
 		if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {
@@ -248,7 +252,7 @@ func TestDatasetPriorCoalescesFinalVersionGroup(t *testing.T) {
 	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 		t.Fatal(err)
 	}
-	pr, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"}, false)
+	pr, _, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

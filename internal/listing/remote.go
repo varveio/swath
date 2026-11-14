@@ -697,6 +697,10 @@ func (a *attempt) finalizeRemote(parts []dataset.Part, rep *Report) error {
 	for _, p := range parts {
 		keep[p.Path] = true
 	}
+	a.writeCuts(parts, func(p dataset.Part) ([]dataset.PageEnd, error) { return rs.pageEnds(ctx, p) }, func(b []byte) error {
+		_, err := rs.d.Writer.PutIfAbsent(ctx, dataset.CutsName, b)
+		return err
+	})
 	rec := dataset.RemoteCommitRecord{Destination: rs.d.URI(), ManifestIdentity: rs.commit.Identity, ManifestSHA256: rs.commit.SHA256}
 	err := rs.finalize(ctx, cfg, a.jr.root, rec, keep, rep)
 	if errors.Is(err, faults.ErrCrash) {
@@ -706,6 +710,24 @@ func (a *attempt) finalizeRemote(parts []dataset.Part, rep *Report) error {
 		cfg.Warn("the dataset is committed; its aftermath (orphan cleanup, run report) is not finished, and swath resume of the work directory finishes it: " + err.Error())
 	}
 	return nil
+}
+
+// pageEnds are a retained remote part's page ends, from the key page index
+// of the object version its record names.
+func (rs *remoteState) pageEnds(ctx context.Context, p dataset.Part) ([]dataset.PageEnd, error) {
+	obj, err := rs.d.Opener.OpenSized(ctx, p.Path, p.Bytes)
+	if err != nil {
+		return nil, objfile.RedactError(err)
+	}
+	defer obj.Close()
+	pages, err := seekparquet.InspectKeyPages(obj.WithContext(ctx), p.Bytes, dataset.KeyColumn)
+	if err != nil {
+		return nil, objfile.RedactError(err)
+	}
+	if p.Identity != "" && obj.Identity() != p.Identity {
+		return nil, fmt.Errorf("%s is version %s, its record %s", p.Path, obj.Identity(), p.Identity)
+	}
+	return parquetout.PageEnds(pages, p.Rows)
 }
 
 // failRemote cleans a failed remote run's uploads when nothing can resume

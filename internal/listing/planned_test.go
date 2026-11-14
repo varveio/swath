@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/source/keyrange"
 )
@@ -26,7 +27,8 @@ func plannedConfig(url, out, prior string, w int) Config {
 }
 
 // TestPlannedRunIsTheUnseededRun: a run planned from a counted prior (its
-// predecessor's dataset, read as it goes, or a counted cut file whose cuts
+// predecessor's dataset, from its cut file or, without it, its page index
+// read as it goes, or a counted cut file whose cuts
 // are each several tiles' worth, so the engine splits inside them) writes
 // the unseeded run's parts byte for byte at 1, 4 and 64 workers with the
 // part interval off, with a filter as well; under a spill cap at a fifth of
@@ -50,7 +52,14 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	if err := os.WriteFile(cuts, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, prior := range []string{ref, cuts} {
+	index := filepath.Join(dir, "index")
+	if err := os.CopyFS(index, os.DirFS(ref)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(index, dataset.CutsName)); err != nil {
+		t.Fatal(err)
+	}
+	for _, prior := range []string{ref, index, cuts} {
 		for _, w := range []int{1, 4, 64} {
 			name := fmt.Sprintf("%s/w%d", filepath.Base(prior), w)
 			out := filepath.Join(dir, strings.ReplaceAll(name, "/", "-"))
@@ -68,7 +77,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	if peak == 0 {
 		t.Fatal("the unseeded run did not spill: the cap arm proves nothing")
 	}
-	for _, prior := range []string{ref, cuts} {
+	for _, prior := range []string{ref, index, cuts} {
 		out := filepath.Join(dir, "capped-"+filepath.Base(prior))
 		cfg := plannedConfig(url, out, prior, 8)
 		cfg.Limits.Spill.Max = peak / 5
@@ -99,7 +108,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	}
 	sameDataset(t, "filtered", fref, fout)
 	// A dry run counts with the prior tiled at once.
-	for _, prior := range []string{ref, cuts} {
+	for _, prior := range []string{ref, index, cuts} {
 		cfg := plannedConfig(url, "", prior, 8)
 		sum, err := Run(context.Background(), cfg)
 		if err != nil || sum.Output.RowsEmitted != int64(len(keys)) || sum.Resources.Window != nil {

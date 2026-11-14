@@ -249,10 +249,11 @@ Performance:
                                 Set it when readers want parts of a bounded row count; it is fixed
                                 for the run.
       --seed-from PATH        object stores: start from a previous listing's key distribution
-                                A committed dataset of the same source and scope, or a cut file (one
-                                key per line, ascending bytewise, optionally TAB and the keys
-                                expected since the previous cut); the engine still splits
-                                adaptively.
+                                A committed dataset of the same source and scope (its cuts.txt, else
+                                its parts' key page index), or a cut file (one key per line,
+                                ascending bytewise, optionally TAB and the keys expected since the
+                                previous cut; a bucket dataset's cuts.txt is one); the engine still
+                                splits adaptively.
 
 Limits:
       --max-duration DURATION

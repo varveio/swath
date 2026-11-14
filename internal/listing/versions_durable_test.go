@@ -431,7 +431,8 @@ func TestVersionsTailSeamsAtKeyChanges(t *testing.T) {
 // boundaries fall inside hot keys' 40 versions: the planner moves each to
 // the next key change, as the router defers its own cut
 // (drain.segments.deferred_rows), no key spans two parts, and the dataset
-// is byte-identical to the serial tail's (one encoder: no segments).
+// is byte-identical to the serial tail's (one encoder: no segments), its
+// cut file too (the segments' parts' cuts joined in ordinal order).
 // order's TestSegmentsCutAtKeyChanges covers a spilled tail.
 func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
@@ -469,6 +470,7 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 		t.Fatalf("spill %+v segments %+v: want engaged, boundaries deferred to key changes", *sum.Resources.Spill, *sg)
 	}
 	t.Logf("segments: %d of %d rows, %d deferred", sg.Segments, sg.Rows, sg.DeferredRows)
+	requireCuts(t, "segments", out)
 	sameDataset(t, "segments", ref, out)
 	// The segments' rows are classified and their keys counted as the
 	// serial drain's are.
