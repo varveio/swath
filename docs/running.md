@@ -121,7 +121,8 @@ platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.us
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 - **`--spill-wait-timeout`** (default 0: wait) stops a sorted run whose listing has waited that long on a
-  full spill cap (exit 74, `cause` `spill_budget`, resumable with more disk or a larger `--spill-budget`).
+  full spill cap (exit 74, `cause` `spill_budget`). A dataset run of an object store (one with a journal)
+  resumes with more disk or a larger `--spill-budget`; text output and a local tree run again.
   Without it the run goes on at the output's pace, and says so on stderr after 2 minutes
   ([production](production.md#three-bad-patterns)).
 
@@ -181,7 +182,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | `resources.peak_heap_live_bytes` against `invocation.sort_buffer_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
 | `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
 | `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
-| `order.spill_pressure_since` | absent | present: listing has waited on a full spill cap since then; at 2 minutes the run says so on stderr (`spill_pressure`), and `--spill-wait-timeout` stops it ([production](production.md#three-bad-patterns)) |
+| `order.spill_pressure_since` | absent | present: spill has been refused, with an emitter waiting in publish, since then: the spill cap is full, or free space is down to the reserve; at 2 minutes the run says so on stderr (`spill_pressure`), and `--spill-wait-timeout` stops it ([production](production.md#three-bad-patterns)) |
 | `rows` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
