@@ -77,18 +77,28 @@ func seedFrom(cfg Config, src registry.Source) (*Prior, error) {
 		// Without its cut file, a run that orders its rows plans its tiles
 		// from the whole page index as it goes; a dry run (order.Count,
 		// which takes no plan) tiles at once from cuts sampled from it.
-		pr, side, err = datasetPrior(path, src.Locator(), !dryRun(cfg))
+		pr, side, err = datasetPrior(path, src.Locator(), !dryRun(cfg), true)
 	} else {
 		pr, err = cutFilePrior(path)
 	}
 	if err != nil {
 		return nil, bad("%v", err)
 	}
+	err = seeded.SeedFrom(pr)
+	if err != nil && side.state == "read" {
+		// The engine refused the cut file's cuts (a key it cannot list, as
+		// the dataset's own keys can): its page index is read instead.
+		side = cutsFile{state: "refused", refused: err.Error()}
+		if pr, _, err = datasetPrior(path, src.Locator(), !dryRun(cfg), false); err != nil {
+			return nil, bad("%v", err)
+		}
+		err = seeded.SeedFrom(pr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("--seed-from %s: %w", path, err)
+	}
 	if side.refused != "" && cfg.Warn != nil {
 		cfg.Warn(fmt.Sprintf("--seed-from %s: its %s is not used (%s): its key page index is read instead", path, dataset.CutsName, side.refused))
-	}
-	if err := seeded.SeedFrom(pr); err != nil {
-		return nil, fmt.Errorf("--seed-from %s: %w", path, err)
 	}
 	return &Prior{Path: path, Source: pr.Source, Cuts: len(pr.Cuts), Counted: pr.Counted, CutsFile: side.state, CutsRefused: side.refused}, nil
 }
@@ -110,15 +120,15 @@ func samePath(a, b string) bool {
 // identity is the source kind and container (the bucket) of the manifest,
 // which must be the run's, and its scope, which the engine checks against
 // the run's prefix (Prior.Check); an endpoint or region is not in the
-// manifest and is not checked. Its cuts are its cut file's when it holds
-// one that is its own (datasetCuts). Else, with stream, they are every key
+// manifest and is not checked. With cuts, its cuts are its cut file's when
+// it holds one that is its own (datasetCuts). Else, with stream, they are every key
 // page's, read as the run goes (pageStream); without, priorCuts keys of
 // about equal rows: a cut falls at the end of the key page (1,024 rows)
 // where the running row count reaches the next multiple of rows/priorCuts,
 // read from the page index of the parts such a multiple falls in
 // (KeyPages); a part whose index cannot be read is cut at its own last
 // key. The dataset's last key always closes the last cut.
-func datasetPrior(dir string, loc source.Locator, stream bool) (*source.Prior, cutsFile, error) {
+func datasetPrior(dir string, loc source.Locator, stream, cuts bool) (*source.Prior, cutsFile, error) {
 	var side cutsFile
 	if !dataset.Committed(dir) {
 		return nil, side, errors.New("not a committed dataset (no manifest.json)")
@@ -156,14 +166,16 @@ func datasetPrior(dir string, loc source.Locator, stream bool) (*source.Prior, c
 		pr.Bytes += p.Bytes
 	}
 	pr.Rows = total
-	switch cuts, err := datasetCuts(dir, &m, total); {
-	case err != nil:
-		side = cutsFile{state: "refused", refused: err.Error()}
-	case cuts == nil:
-		side.state = "absent"
-	default:
-		pr.Cuts = cuts
-		return pr, cutsFile{state: "read"}, nil
+	if cuts {
+		switch got, err := datasetCuts(dir, &m, total); {
+		case err != nil:
+			side = cutsFile{state: "refused", refused: err.Error()}
+		case got == nil:
+			side.state = "absent"
+		default:
+			pr.Cuts = got
+			return pr, cutsFile{state: "read"}, nil
+		}
 	}
 	if stream {
 		ps := &pageStream{dir: dir}
@@ -226,7 +238,8 @@ func datasetPrior(dir string, loc source.Locator, stream bool) (*source.Prior, c
 // datasetCuts reads the cut file a dataset holds (dataset.CutsName) as
 // its prior's cuts when it is the dataset's own: every line counted, the
 // cuts ascending without repeats from the first part's first key, the last
-// the dataset's last key, the counts summing to the manifest's rows. nil
+// the dataset's last key, each count positive and the counts summing to
+// the manifest's rows (never past them on the way, so no sum wraps). nil
 // without an error: the dataset holds none (or no rows).
 func datasetCuts(dir string, m *dataset.Manifest, rows int64) ([]source.Cut, error) {
 	n := len(m.Parts)
@@ -248,6 +261,8 @@ func datasetCuts(dir string, m *dataset.Manifest, rows int64) ([]source.Cut, err
 			return nil, fmt.Errorf("its first cut %.64q is before the dataset's first key", c.Key)
 		case i > 0 && c.Key <= pr.Cuts[i-1].Key:
 			return nil, fmt.Errorf("cut %d %.64q does not sort after cut %d", i+1, c.Key, i)
+		case c.Rows <= 0 || c.Rows > rows-sum:
+			return nil, fmt.Errorf("cut %d counts %d rows, after %d of the manifest's %d", i+1, c.Rows, sum, rows)
 		}
 		sum += c.Rows
 	}

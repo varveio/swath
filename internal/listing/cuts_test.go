@@ -26,6 +26,7 @@ import (
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/keyrange"
+	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
 // datasetKeys reads every key of a committed local dataset in order,
@@ -367,11 +368,11 @@ func TestSeedFromDatasetCuts(t *testing.T) {
 		t.Fatal(err)
 	}
 	loc := source.Locator{Kind: "s3", Root: "s3://bkt", Container: "bkt"}
-	fromFile, side, err := datasetPrior(first, loc, true)
+	fromFile, side, err := datasetPrior(first, loc, true, true)
 	if err != nil || side.state != "read" || fromFile.Stream != nil {
 		t.Fatalf("%v, %+v", err, side)
 	}
-	fromIndex, side, err := datasetPrior(index, loc, true)
+	fromIndex, side, err := datasetPrior(index, loc, true, true)
 	if err != nil || side.state != "absent" || fromIndex.Stream == nil {
 		t.Fatalf("%v, %+v", err, side)
 	}
@@ -460,5 +461,62 @@ func TestSeedFromDatasetCuts(t *testing.T) {
 			t.Fatalf("%s: warnings %q", name, w.got)
 		}
 		sameDataset(t, name, first, out)
+	}
+}
+
+// TestSeedFromDatasetBadCuts: a cut file that passes the dataset's checks
+// (ascending from its first key, ending at its last, the counts summing to
+// its rows) but holds a key the engine cannot list (not UTF-8, longer than
+// a key may be) is refused as one that fails them, and so is one whose
+// counts are not each positive and within the manifest's rows on the way
+// (huge counts that wrap to the total, a zero): the run warns once,
+// reports it and reads the page index, and lists the same keys.
+func TestSeedFromDatasetBadCuts(t *testing.T) {
+	s3test.NoCredentials(t)
+	keys := []string{"a", "b"}
+	for i := range 97 {
+		keys = append(keys, fmt.Sprintf("c%03d", i))
+	}
+	keys = append(keys, "z")
+	url := s3test.Bucket(t, keys)
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first")
+	if _, err := listS3(t, url, "s3://bkt", first, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(first, dataset.CutsName)); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ body, why string }{
+		"utf8":     {"a\xff\t99\nz\t1\n", "UTF-8"},
+		"long":     {"a\t1\nc" + strings.Repeat("x", 1100) + "\t98\nz\t1\n", "longer than"},
+		"overflow": {"a\t9223372036854775807\nb\t9223372036854775807\nz\t102\n", "counts 9223372036854775807 rows"},
+		"zero":     {"b\t0\nz\t100\n", "counts 0 rows"},
+	} {
+		prior := filepath.Join(dir, "prior-"+name)
+		if err := os.CopyFS(prior, os.DirFS(first)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(prior, dataset.CutsName), []byte(tc.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out := filepath.Join(dir, "out-"+name)
+		var w warnings
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", SeedFrom: prior,
+			Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: true}}},
+			Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}, Warn: w.warn})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		p, c := sum.Invocation.Prior, s3Stats(sum).Counters
+		if p == nil || p.CutsFile != "refused" || !strings.Contains(p.CutsRefused, tc.why) || c.Value("seed.from.indexed_parts") == 0 {
+			t.Fatalf("%s: prior %+v, counters %v", name, p, c)
+		}
+		if got := w.about(dataset.CutsName); len(got) != 1 {
+			t.Fatalf("%s: warnings %q", name, w.got)
+		}
+		if got := checkContract(t, out); !slices.Equal(got, keys) {
+			t.Fatalf("%s: %d keys listed, want %d", name, len(got), len(keys))
+		}
 	}
 }

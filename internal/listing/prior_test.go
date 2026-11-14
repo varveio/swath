@@ -252,7 +252,7 @@ func TestDatasetPriorCoalescesFinalVersionGroup(t *testing.T) {
 	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 		t.Fatal(err)
 	}
-	pr, _, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"}, false)
+	pr, _, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
