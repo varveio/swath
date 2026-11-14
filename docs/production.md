@@ -73,9 +73,10 @@ A prior with counts (a previous dataset, or a cut file with counts) also changes
 output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
 yet written stay within a window sized from `--spill-budget` and `--sort-buffer`
 ([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
-near half the spill budget instead of growing with the bucket, and a small `--spill-budget` no longer makes
-frames refused. The window is not a hard bound: a region that grew since the prior, keys added after its last
-key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
+near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
+no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
+range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
+after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
 the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. Rows still leave
 through one part writer while listing, so such a run can be bound by that writer rather than by listing. A cut
 file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
@@ -109,8 +110,11 @@ four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-
 `idle_wait_ns`, with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say
 why the range the output waited for was or was not split
 ([counters](internals/counters.md#order-stage-and-encoders-run-summary-top-level)).
-The run does not fail and does not stop by itself: watch `progress.json`, or bound the run with
-`--max-duration`. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
+The run does not fail by itself. Once spill has stood refused with workers waiting on it for 2 minutes, swath says so
+on stderr, an error, and again every 30 minutes while it lasts: how long listing has waited, spill and its
+cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
+alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
+instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
 filesystem has the room. The cap is fixed when the run starts, so enlarging the disk under a running process
 does not raise it: stop the run and resume with the new value, `swath resume DIR --spill-budget 200GiB`.
 
@@ -136,7 +140,11 @@ directory listing keeps no journal and starts over.
   ([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
   minutes.
 - **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
-  the output), read back from `DIR/.swath/spill/durable/` instead of listed again.
+  the output), read back from `DIR/.swath/spill/durable/` instead of listed again. A range is certified when
+  it finishes; the number of certificates scales with the spill cap (one per MiB of it, at most 262,144), so a listing whose
+  ranges spill at least 1 MiB each on average certifies every finished range unless its spill turns over more
+  than about twice (`no_slot` and `history_exhausted` in `resources.spill.durable` count the ranges that were
+  not). The ranges unfinished at the stop are listed again.
 - **Listed again:** the keys after the last published key that no certified file holds. The report's
   `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
   [Running swath](running.md#stopping-and-resuming) owns the rules.
@@ -227,7 +235,9 @@ machine:
   `--s3-bearer-token-command`): give them again, or the resume is refused. The source's `--azure-sas-token`
   may come from `AZURE_STORAGE_SAS_TOKEN` instead; `--output-azure-sas-token` has no such variable.
 - **The spill cap** is a positive `--spill-budget` the run recorded or the resume gives; without one (or with
-  0) it is half the free space on the new disk, after the reserve, when the resume starts. Certified spill files that do not fit under it are
+  0) it is half the free space on the new disk, after the reserve, when the resume starts, the certified spill
+  files the resume keeps counted as free (on the same disk the cap is then the stopped run's, less half of
+  what parts took meanwhile). Certified spill files that do not fit under it are
   listed again (`rejected.budget` in `resources.spill.durable.resume`).
 - **Verification:** before listing continues, the resume reads every part the journal records back from the
   bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):

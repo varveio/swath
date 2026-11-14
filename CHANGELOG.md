@@ -10,14 +10,30 @@ Notable changes per release. The full human summary for the current release is i
   read back from the retained parts' page index on a resume. It is outside the SeekParquet format, and a run that
   cannot write it warns and stays committed. `--seed-from DATASET` reads it instead of the parts' page index when
   it matches the manifest; a bucket dataset's can be copied and passed as a cut file. The run report
-  (`report_version` 10) adds `invocation.prior.cuts_file` and `cuts_refused`.
+  (`report_version` 11) adds `invocation.prior.cuts_file` and `cuts_refused`.
 
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window sized from `--spill-budget` and `--sort-buffer`, so rows listed ahead of the
   output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
-  The run report (`report_version` 9) adds `resources.window`; the range engine counts `seed.from.merged` and
+  The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
   `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) (#535).
+- Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
+  live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
+  without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted
+  (`metadata_exhausted`), and a ledger history of four records per
+  slot, at least 40,000; a resume reads the ledger within the largest limits, whatever free space it finds. A
+  billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every finished range now
+  fits, so a resume relists the ranges unfinished at the stop. With the default spill cap a resume counts the
+  certified files it kept as free space, so on the same disk it no longer rejects those that fit the stopped
+  run's cap. The run report (`report_version` 9) says what the limits derive from:
+  `resources.spill.durable.limit_bytes` and `limited_by` (#513).
+- Go port: a sorted run whose spill cap is far too small, so that listing waits on the output, says so: once
+  spill has stood refused with workers waiting for 2 minutes, the error event `spill_pressure` names the wait,
+  spill and its cap, the output's rate and the remedy, and repeats every 30 minutes while it lasts
+  (`order.spill_pressure_since` in `progress.json`). `--spill-wait-timeout DURATION` (default 0: wait) stops
+  such a run instead: exit 74, `cause` `spill_budget`, `stop_source` `spill_wait`, resumable with more disk or
+  a larger `--spill-budget` (#535).
 
 - Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
   `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`

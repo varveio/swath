@@ -44,13 +44,12 @@ func seeded(t *testing.T, keys []string, pr *Prior, opt Options, workers int) ([
 	if err := p.SeedFrom(pr); err != nil {
 		t.Fatal(err)
 	}
+	var est []float64
+	hookTileAccount = func(e float64) { est = append(est, e) }
+	defer func() { hookTileAccount = nil }()
 	c := &collect{}
 	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 1 << 26}); err != nil {
 		t.Fatal(err)
-	}
-	var est []float64
-	for _, a := range p.tiles {
-		est = append(est, a.est)
 	}
 	return keysOf(c.rows), p.Stats(), est, api.asks
 }

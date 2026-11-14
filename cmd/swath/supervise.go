@@ -34,7 +34,7 @@ const (
 	exitFatal       = 1   // a cause that a resume will not fix
 	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
 	exitIncomplete  = 3   // finished, but the output is incomplete: unreadable entries, or a key limit
-	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
+	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR), or --spill-wait-timeout; resumable when the journal is intact
 	exitStuck       = 75  // no progress for the stall timeout, or a bucket commit unresolved; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
 	exitInterrupted = 130 // SIGINT
@@ -45,6 +45,9 @@ const (
 var (
 	errStuck    = errors.New("stuck: no progress within the stall timeout")
 	errDeadline = errors.New("deadline: --max-duration reached")
+	// errSpillWait: listing waited on a full spill cap for
+	// --spill-wait-timeout (spillWaitError says how).
+	errSpillWait = errors.New("spill cap too small")
 	// errIncomplete: the dataset is committed, but its coverage is partial.
 	errIncomplete = errors.New("the dataset is committed with partial coverage (see the manifest's coverage)")
 )
@@ -96,6 +99,15 @@ func stuckCause(at, now listing.ProgressSnapshot) string {
 	}
 	return stuckNoRows
 }
+
+// causeSpillBudget is the cause of a run --spill-wait-timeout stopped.
+const causeSpillBudget = "spill_budget"
+
+// spillWaitError is errSpillWait as the watch saw it (spillWatch).
+type spillWaitError struct{ msg string }
+
+func (e *spillWaitError) Error() string        { return e.msg }
+func (e *spillWaitError) Is(target error) bool { return target == errSpillWait }
 
 // signalError is a run stopped by a signal.
 type signalError struct{ sig os.Signal }
@@ -185,6 +197,10 @@ func classify(err, cause error, dir string) outcome {
 		}
 	case errors.Is(cause, errDeadline):
 		o.Class, o.ExitCode = listing.ClassDeadline, exitDeadline
+	case errors.Is(cause, errSpillWait):
+		// Out of the disk the run was given, as a full disk is: resumable
+		// with more of it (a larger --spill-budget, or a larger disk).
+		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, causeSpillBudget
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
 		o.Class, o.ExitCode = listing.ClassTerminated, exitTerminated
 	case errors.As(cause, &se):
@@ -216,8 +232,9 @@ func classify(err, cause error, dir string) outcome {
 }
 
 // stopSource names what cancelled a run (Java's stop_source tags): a
-// signal, the liveness watchdog (--stall-timeout) or the timebox
-// (--max-duration); "" when nothing did.
+// signal, the liveness watchdog (--stall-timeout), the timebox
+// (--max-duration) or the spill wait (--spill-wait-timeout); "" when
+// nothing did.
 func stopSource(cause error) string {
 	var se *signalError
 	switch {
@@ -227,6 +244,8 @@ func stopSource(cause error) string {
 		return "liveness_watchdog"
 	case errors.Is(cause, errDeadline):
 		return "timebox"
+	case errors.Is(cause, errSpillWait):
+		return "spill_wait"
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
 		return "sigterm"
 	case errors.As(cause, &se):
@@ -773,8 +792,9 @@ const progressEvery = 2 * time.Second
 // never returns, does not count, so a total outage or a hung source still
 // stops as stuck. A source without Frontier is live by its answered
 // requests (Answered). It is the only place that decides a run cannot go
-// on; nothing in the pipeline gives up on a slow source.
-func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string), d *display) (stop func()) {
+// on; nothing in the pipeline gives up on a slow source. It also watches
+// listing wait on a full spill cap (spill), which may stop the run.
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(string), d *display) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -805,6 +825,10 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 					// never overwrites its owner's progress.
 					written = now
 					pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), s, dataset.Atomic) })
+				}
+				if err := spill.check(s, now); err != nil {
+					cancel(err)
+					return
 				}
 				if live := s.Liveness(); live != last {
 					last, since, warned, at = live, now, false, s

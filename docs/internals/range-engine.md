@@ -168,7 +168,10 @@ would take (at 16 pages, 15 key pages: 4.2 %); a region the prior counted and th
 request per tile. A cut coarser than a tile (a counted cut file of one cut per part) is a tile of its own,
 which splits on demand as any range. Reused certificates are cut out of each tile as it is made, one position
 among the spans kept from tile to tile, so a certificate across several tiles is replayed once and every gap
-around it listed. A tile is queued work for the split demand only once admitted.
+around it listed. A tile is queued work for the split demand only once admitted. A tile's account (its expected
+keys and the keys its ranges listed, for `seed.from.error.*`) opens when it is admitted and is retired into the
+error counters when its last range ends, so the engine holds accounts for the tiles still listing only, and
+`Stats` scans those (`TestPlanAccountsStayBounded`: 3,000 tiles at 8 workers, at most 32 held).
 
 Tiling (`tilePrior`; the dry run's, an uncounted cut file's): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
 K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its

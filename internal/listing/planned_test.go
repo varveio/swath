@@ -4,15 +4,22 @@
 package listing
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source/keyrange"
 )
 
@@ -115,4 +122,127 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 			t.Fatalf("dry run from %s: %v, %d rows (want %d), window %+v", prior, err, sum.Output.RowsEmitted, len(keys), sum.Resources.Window)
 		}
 	}
+}
+
+// span is an interval (lo, hi], or (lo, ⊤] when open.
+type span struct {
+	lo, hi string
+	open   bool
+}
+
+// outside is the parts of t outside certs (ascending, disjoint), in order:
+// plain interval arithmetic.
+func outside(t span, certs []span) []span {
+	var out []span
+	cur := t.lo
+	for _, c := range certs {
+		if !t.open && c.lo >= t.hi {
+			break
+		}
+		if !c.open && c.hi <= cur {
+			continue
+		}
+		if c.lo > cur {
+			out = append(out, span{cur, c.lo, false})
+		}
+		if c.open || (!t.open && c.hi >= t.hi) {
+			return out
+		}
+		cur = c.hi
+	}
+	return append(out, span{cur, t.hi, t.open})
+}
+
+// TestDurableResumePlannedAcrossTiles: a crashed run's certificates are
+// reused by a resume planned from a fine counted prior (a cut every 40
+// keys, each a tile of its own). From the resume's run trace: the
+// certificates replayed cross several tiles' bounds, each is replayed
+// once, and the ranges listed are exactly what an interval oracle leaves
+// of each tile (K, c1], (c1, c2], ..., (cn, ⊤] after the certificates; the
+// dataset is the uninterrupted run's byte for byte.
+func TestDurableResumePlannedAcrossTiles(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url, _, ref, out := durableFixture(t)
+	keys := checkContract(t, ref)
+	cuts := filepath.Join(t.TempDir(), "fine.cuts")
+	var body []byte
+	var bounds []string
+	for i := 39; i < len(keys); i += 40 {
+		body = append(append(body, keys[i]...), "\t40\n"...)
+		bounds = append(bounds, keys[i])
+	}
+	if err := os.WriteFile(cuts, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var trace bytes.Buffer
+	tw := runtrace.New(&trace)
+	cfg := durableConfig(url, out, true)
+	cfg.Source.SeedFrom, cfg.Trace = cuts, tw
+	cfg.Source.Options.(*S3Config).Policy.PageSize, cfg.Source.Options.(*S3Config).Policy.TilePages = 10, 1
+	sum, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(10*time.Second, "", ""); err != nil || tw.Dropped() != 0 {
+		t.Fatalf("trace: %v, %d events dropped", err, tw.Dropped())
+	}
+	sameDataset(t, "planned resume", ref, out)
+	if d := sum.Resources.Spill.Durable; d == nil || d.Resume == nil || d.Resume.Accepted == 0 || sum.Resources.Window == nil {
+		t.Fatalf("nothing reused, or not planned: %+v, window %+v", d, sum.Resources.Window)
+	}
+	m := manifestOf(t, out)
+	k := string(m.Parts[sum.Output.PartsRetained-1].MaxKey)
+	var certs, listed []span
+	sc := bufio.NewScanner(&trace)
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var e struct {
+			Event, Lo, Hi, After string
+			Open, Reused         bool
+		}
+		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.Event != "seeded" {
+			continue
+		}
+		if e.Reused {
+			certs = append(certs, span{e.Lo, e.Hi, e.Open})
+		} else {
+			listed = append(listed, span{max(e.Lo, e.After), e.Hi, e.Open})
+		}
+	}
+	// The oracle: the tiles of (K, ⊤] at the cuts above K, less the
+	// certificates.
+	var want []span
+	lo := k
+	for _, b := range bounds {
+		if b > k {
+			want = append(want, outside(span{lo, b, false}, certs)...)
+			lo = b
+		}
+	}
+	want = append(want, outside(span{lo, "", true}, certs)...)
+	if !slices.Equal(listed, want) {
+		t.Fatalf("listed %d ranges, the oracle %d:\n%v\n%v", len(listed), len(want), listed, want)
+	}
+	across := 0
+	for i, c := range certs {
+		if c.lo < k || (i > 0 && c.lo < certs[i-1].hi) {
+			t.Fatalf("certificate %v below K %q or overlapping the one before", c, k)
+		}
+		n := 0
+		for _, b := range bounds {
+			if b > c.lo && (c.open || b < c.hi) {
+				n++
+			}
+		}
+		if n >= 2 {
+			across++
+		}
+	}
+	if across == 0 {
+		t.Fatalf("no certificate of %d crosses two tile bounds: %v", len(certs), certs)
+	}
+	t.Logf("K %q, %d certificates (%d across three tiles or more), %d ranges listed", k, len(certs), across, len(listed))
 }

@@ -133,7 +133,7 @@ Write `.tsv` and convert it, or read the TSV directly ([Output](output.md#readin
 ## The run was interrupted
 
 A dataset run of an object store stopped by a signal (130, 143), `--max-duration` (124), `--stall-timeout`
-(75) or a full disk (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
+(75), a full disk or `--spill-wait-timeout` (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
 A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
 statistics say `no file written`. After `--max-duration` the last line says which applies:
@@ -245,11 +245,18 @@ larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almos
 output's filesystem: size the disk as [Running swath in production](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
-A run that is far short of spill room does not exit 74: it keeps going at the output's pace, which on a very
-large bucket can be a few rows a second. `resources.spill.refused` above 0 in the report, or a request rate in
-`progress.json` that collapsed, is the sign
+A run that is far short of spill room keeps going at the output's pace, which on a very large bucket can be a
+few rows a second. After 2 minutes of it swath prints, and repeats every 30 minutes while it lasts:
+
+```text
+swath: spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it (spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE), or let it run: it finishes, slowly
+```
+
+`progress.json` has `order.spill_pressure_since` meanwhile, and the report `resources.spill.refused` above 0
 ([the first bad pattern](production.md#three-bad-patterns)). Stop it and resume on a larger disk or with a
-larger `--spill-budget`.
+larger `--spill-budget`, or let it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
+the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
+`stopped by --spill-wait-timeout 30m0s: resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 
 ## Memory is higher than `--sort-buffer`
 

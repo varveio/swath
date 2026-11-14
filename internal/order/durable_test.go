@@ -14,12 +14,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/schema"
@@ -46,18 +48,21 @@ type fencedTree struct {
 	gates         map[int]chan struct{} // range i waits for gates[i] to close before listing (held until a signal)
 }
 
-const fzWidth = 4
+const fzWidth = 5
 
 func (f *fencedTree) lo(i int) string         { return fmt.Sprintf("r%0*d", fzWidth, i) }
 func (f *fencedTree) key(i, p, j int) string  { return fmt.Sprintf("r%0*d/%06d-%05d", fzWidth, i, p, j) }
 func (f *fencedTree) Root() fz                { return fz{-1, -1} }
 func (f *fencedTree) Fences() bool            { return true }
 func (f *fencedTree) Replay(r fz) (int, bool) { return r.replay, r.replay >= 0 }
+
+// covered is the span covering range i: the spans are ascending and
+// disjoint, so only the first one ending at or past the range's end can.
 func (f *fencedTree) covered(i int) (int, bool) {
-	for k, s := range f.spans {
-		if s.Lo <= f.lo(i) && (s.HiOpen || f.lo(i+1) <= s.Hi) {
-			return k, true
-		}
+	lo, hi := f.lo(i), f.lo(i+1)
+	k := sort.Search(len(f.spans), func(k int) bool { return f.spans[k].HiOpen || hi <= f.spans[k].Hi })
+	if k < len(f.spans) && f.spans[k].Lo <= lo {
+		return k, true
 	}
 	return 0, false
 }
@@ -216,6 +221,11 @@ func ledgerOrder(t *testing.T) {
 	})
 }
 
+// slots is the limits of an attempt with n certificate slots.
+func slots(n int) DurableLimits {
+	return DurableLimits{Certificates: n, History: max(minHistory, historyPerCertificate*n)}
+}
+
 // recoverAll closes c and recovers its spill afresh with K (nil: ⊥).
 func recoverAll(t *testing.T, c *Cache, root *os.Root, k *string) *Cache {
 	t.Helper()
@@ -283,7 +293,7 @@ func TestDurableCertifiesExactRows(t *testing.T) {
 		t.Run(fmt.Sprint(page), func(t *testing.T) {
 			f := &fencedTree{ranges: 6, pages: 4, rows: func(int, int) int { return page }, hold: make(chan struct{})}
 			c, root, _ := newDurable(t)
-			if err := c.Start(64, 0, nil); err != nil {
+			if err := c.Start(slots(64), 0, nil); err != nil {
 				t.Fatal(err)
 			}
 			sink := &collect{}
@@ -299,7 +309,7 @@ func TestDurableCertifiesExactRows(t *testing.T) {
 				t.Fatalf("nothing sealed: %+v", c.Report())
 			}
 			r := recoverAll(t, c, root, nil)
-			if err := r.Start(64, 0, nil); err != nil {
+			if err := r.Start(slots(64), 0, nil); err != nil {
 				t.Fatal(err)
 			}
 			if got := r.st.Accepted.Load(); got != sealed {
@@ -325,14 +335,14 @@ func TestDurableCertifiesExactRows(t *testing.T) {
 func TestDurableReplayAboveK(t *testing.T) {
 	f := &fencedTree{ranges: 5, pages: 3, rows: func(int, int) int { return 300 }, hold: make(chan struct{})}
 	c, root, _ := newDurable(t)
-	c.Start(64, 0, nil)
+	c.Start(slots(64), 0, nil)
 	sink := &collect{}
 	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: c}); err != nil {
 		t.Fatal(err)
 	}
 	c.Close()
 	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
-	probe.Start(64, 0, nil)
+	probe.Start(slots(64), 0, nil)
 	spans := probe.Spans()
 	probe.Close()
 	if len(spans) == 0 {
@@ -345,7 +355,7 @@ func TestDurableReplayAboveK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Start(64, 0, nil)
+	r.Start(slots(64), 0, nil)
 	got, st := replayAll(t, r, &k)
 	want := f.keys(inSpans(r.Spans(), k))
 	if !slices.Equal(got, want) || len(want) == 0 {
@@ -371,7 +381,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	c, root, _ := newDurable(t)
-	if err := c.Start(64, 0, nil); err != nil {
+	if err := c.Start(slots(64), 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	o, closeRun, err := newRun[fz, tp](context.Background(), &fencedTree{}, &collect{}, &testSchema, Options{Workers: 1, Budget: 1 << 20, SpillDir: t.TempDir(), Durable: c})
@@ -531,10 +541,10 @@ func TestDurablePendingCapture(t *testing.T) {
 // never take more than H.
 func TestDurableHistoryRace(t *testing.T) {
 	c, _, _ := newDurable(t)
-	c.Start(maxCertificates, 0, nil)
+	c.Start(slots(fixedCertificates), 0, nil)
 	defer c.Close()
 	c.mu.Lock()
-	c.hist = historyCap - 11
+	c.hist = minHistory - 11
 	c.mu.Unlock()
 	var won atomic.Int64
 	var wg sync.WaitGroup
@@ -548,8 +558,8 @@ func TestDurableHistoryRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if won.Load() != 5 || c.hist > historyCap || c.st.HistoryExhausted.Load() != 59 {
-		t.Fatalf("%d reservations, history %d of %d, exhausted %d", won.Load(), c.hist, historyCap, c.st.HistoryExhausted.Load())
+	if won.Load() != 5 || c.hist > minHistory || c.st.HistoryExhausted.Load() != 59 {
+		t.Fatalf("%d reservations, history %d of %d, exhausted %d", won.Load(), c.hist, minHistory, c.st.HistoryExhausted.Load())
 	}
 }
 
@@ -559,7 +569,7 @@ func TestDurableHistoryRace(t *testing.T) {
 func TestDurableSlotsFull(t *testing.T) {
 	f := &fencedTree{ranges: 40, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 	c, _, _ := newDurable(t)
-	c.Start(minCertificates, 0, nil)
+	c.Start(slots(minCertificates), 0, nil)
 	defer c.Close()
 	sink := &collect{}
 	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
@@ -578,7 +588,7 @@ func TestDurableSlotsFull(t *testing.T) {
 // retires it; a file drained first waits for K.
 func TestDurableRetireDefer(t *testing.T) {
 	c, _, _ := newDurable(t)
-	c.Start(64, 0, nil)
+	c.Start(slots(64), 0, nil)
 	defer c.Close()
 	a := &Cert{name: "a.spill", ce: "b", certified: true, slot: true}
 	b := &Cert{name: "b.spill", ce: "d", certified: true, slot: true}
@@ -694,7 +704,7 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 		return nil
 	})()
 	c, _, _ = newDurable(t)
-	c.Start(1000, 0, nil)
+	c.Start(slots(1000), 0, nil)
 	defer c.Close()
 	sink := &collect{}
 	// A hold never released ends at the deadline as a failure of the
@@ -792,7 +802,7 @@ func TestDurableSealErrorStopsRun(t *testing.T) {
 	defer func() { hookStopCallback = nil }()
 	f := &fencedTree{ranges: 12, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 	c, root, _ := newDurable(t)
-	c.Start(64, 0, nil)
+	c.Start(slots(64), 0, nil)
 	sink := &collect{}
 	_, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), Durable: c})
 	if err == nil || !strings.Contains(err.Error(), "injected sync failure") {
@@ -803,7 +813,7 @@ func TestDurableSealErrorStopsRun(t *testing.T) {
 		t.Fatalf("the output is not a prefix of the oracle (%d rows)", len(sink.keys))
 	}
 	r := recoverAll(t, c, root, nil)
-	r.Start(64, 0, nil)
+	r.Start(slots(64), 0, nil)
 	defer r.Close()
 	if r.st.RejectedCorrupt.Load()+r.st.RejectedMissing.Load() != 0 {
 		t.Fatalf("a record names the failed file: %+v", r.Report().Resume)
@@ -820,7 +830,7 @@ func TestDurableLedgerPrefix(t *testing.T) {
 	build := func(t *testing.T) (*os.Root, string, []int) {
 		f := &fencedTree{ranges: 8, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 		c, root, dir := newDurable(t)
-		c.Start(64, 0, nil)
+		c.Start(slots(64), 0, nil)
 		if _, err := Run[fz, tp](context.Background(), f, &collect{}, &testSchema, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
 			t.Fatal(err)
 		}
@@ -859,7 +869,7 @@ func TestDurableLedgerPrefix(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				r.Start(64, 0, nil)
+				r.Start(slots(64), 0, nil)
 				rep := r.Report().Resume
 				classes = append(classes, fmt.Sprint(rep.Accepted))
 				size, _ := os.Stat(path)
@@ -890,7 +900,7 @@ func TestDurableCorruption(t *testing.T) {
 		t.Run(damage, func(t *testing.T) {
 			f := &fencedTree{ranges: 4, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 			c, root, dir := newDurable(t)
-			c.Start(64, 0, nil)
+			c.Start(slots(64), 0, nil)
 			if _, err := Run[fz, tp](context.Background(), f, &collect{}, &testSchema, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
 				t.Fatal(err)
 			}
@@ -946,7 +956,7 @@ func TestDurableCorruption(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.Start(64, 0, nil)
+			r.Start(slots(64), 0, nil)
 			defer r.Close()
 			rep := r.Report().Resume
 			want := map[string]string{"foreign": "foreign", "missing": "missing"}[damage]
@@ -988,7 +998,7 @@ func sealedSpill(t *testing.T, ranges int) (*os.Root, *fencedTree) {
 	t.Helper()
 	f := &fencedTree{ranges: ranges, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 	c, root, _ := newDurable(t)
-	c.Start(1000, 0, nil)
+	c.Start(slots(1000), 0, nil)
 	if _, err := Run[fz, tp](context.Background(), f, &collect{}, &testSchema, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
 		t.Fatal(err)
 	}
@@ -997,11 +1007,12 @@ func sealedSpill(t *testing.T, ranges int) (*os.Root, *fencedTree) {
 }
 
 // TestDurableReducedCap: a resume with a smaller cap (or spill cap) retires
-// the highest-keyed certificates first (rejected_budget) and keeps the rest.
+// the highest-keyed certificates first (rejected_budget) and keeps the rest;
+// recovery, bounded by the format, not by the attempt, cuts none.
 func TestDurableReducedCap(t *testing.T) {
 	root, _ := sealedSpill(t, 12)
 	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
-	probe.Start(1000, 0, nil)
+	probe.Start(slots(1000), 0, nil)
 	all := probe.Spans()
 	probe.Close()
 	if len(all) < 4 {
@@ -1011,10 +1022,10 @@ func TestDurableReducedCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Start(len(all)/2, 0, nil)
+	r.Start(slots(len(all)/2), 0, nil)
 	defer r.Close()
 	kept := r.Spans()
-	if len(kept) != len(all)/2 || r.st.RejectedBudget.Load() != int64(len(all)-len(all)/2) || !slices.Equal(kept, all[:len(kept)]) {
+	if len(kept) != len(all)/2 || r.st.RejectedBudget.Load() != int64(len(all)-len(all)/2) || !slices.Equal(kept, all[:len(kept)]) || r.st.LedgerCut.Load() != 0 {
 		t.Fatalf("kept %d of %d (rejected %d): not the lowest-keyed", len(kept), len(all), r.st.RejectedBudget.Load())
 	}
 }
@@ -1030,7 +1041,7 @@ func TestDurableHistoryAcrossAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf []byte
-	for range historyCap - 40 {
+	for range minHistory - 40 {
 		buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
 	}
 	lf.Write(buf)
@@ -1039,15 +1050,15 @@ func TestDurableHistoryAcrossAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Start(1000, 0, nil)
+	r.Start(slots(1000), 0, nil)
 	f2 := &fencedTree{ranges: 40, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 	_ = f
 	if _, err := Run[fz, tp](context.Background(), f2, &collect{}, &testSchema, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), Durable: r}); err != nil {
 		t.Fatal(err)
 	}
 	r.Close()
-	if r.st.HistoryExhausted.Load() == 0 || r.hist > historyCap {
-		t.Fatalf("history %d of %d, exhausted %d", r.hist, historyCap, r.st.HistoryExhausted.Load())
+	if r.st.HistoryExhausted.Load() == 0 || r.hist > minHistory {
+		t.Fatalf("history %d of %d, exhausted %d", r.hist, minHistory, r.st.HistoryExhausted.Load())
 	}
 }
 
@@ -1065,7 +1076,7 @@ func TestDurableReplacedOutput(t *testing.T) {
 		return nil
 	}
 	var cause atomic.Value
-	c.Start(64, 0, func(err error) { cause.Store(err) })
+	c.Start(slots(64), 0, func(err error) { cause.Store(err) })
 	d := &Cert{id: randomID(), certified: true, slot: true}
 	d.name = fileName(d.id)
 	root.WriteFile(filepath.Join(DurableDir, d.name), []byte("x"), 0o644)
@@ -1110,7 +1121,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 				return nil
 			})()
 			var cause atomic.Value
-			c.Start(64, 0, func(err error) { cause.Store(err) })
+			c.Start(slots(64), 0, func(err error) { cause.Store(err) })
 			var ds []*Cert
 			for range 3 {
 				d := &Cert{id: randomID(), certified: true, slot: true}
@@ -1262,7 +1273,7 @@ func TestDurableCodecRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe.Start(1000, 0, nil)
+	probe.Start(slots(1000), 0, nil)
 	n := len(probe.Spans())
 	probe.Close()
 	if n == 0 {
@@ -1272,7 +1283,7 @@ func TestDurableCodecRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Start(1000, 0, nil)
+	r.Start(slots(1000), 0, nil)
 	defer r.Close()
 	rep := r.Report().Resume
 	if rep.Rejected["codec"] != int64(n) || rep.Accepted != 0 || rep.Rejected["corrupt"] != 0 || len(r.Spans()) != 0 {
@@ -1284,33 +1295,51 @@ func TestDurableCodecRejected(t *testing.T) {
 }
 
 // TestDurableRecoveryBounds: recovery bounds its scan and its inventory by
-// the persisted format, whatever a checksum-valid ledger holds. A ledger
-// of more than 10,000 live sealed records is cut before the first record
-// past that (no cap could have admitted it), and one of more than H
-// records is cut at H: the scan reads at most H records, the inventory
-// holds at most 10,000 entries, the ledger is truncated there
+// the largest limits any attempt has (recoveryLimits: the metadata
+// ceiling's 262,144 certificates and H), never by the resuming attempt's,
+// whatever a checksum-valid ledger holds. A ledger of more live sealed
+// records than the ceiling is cut before the first record past it, and one
+// of more than H records is cut at H: the scan reads at most H records,
+// the inventory holds at most the ceiling, the ledger is truncated there
 // (ledger_cut, ledger_dropped_bytes), and the files named after the cut
-// are orphans.
+// are orphans; so is one whose live certificates' metadata (certMetadata,
+// here of 1 KiB keys) passes the metadata bound. A ledger past the old
+// fixed bounds (10,000 live, 40,000 records) is read whole.
 func TestDurableRecoveryBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		sealed, extra int // sealed records, then retirements of unknown files
+		keyLen        int // the records' key length (0: seven bytes)
+		bound         int64
+		cut           bool
 	}{
-		{"live", maxCertificates + 64, 0},
-		{"history", 10, historyCap + 64},
+		{"live", maxCertificates + 64, 0, 0, maxCertificateMetadata, true},
+		{"history", 10, maxHistory + 64, 0, maxCertificateMetadata, true},
+		{"past-fixed", fixedCertificates + 64, minHistory, 0, maxCertificateMetadata, false},
+		// The metadata bound, lowered to 4 MiB: 1 KiB keys reach it first.
+		{"metadata", 2_000, 0, 1024, 4 << 20, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			defer func(b int64) { metadataBound = b }(metadataBound)
+			metadataBound = tc.bound
+			key := func(i int) string {
+				if tc.keyLen == 0 {
+					return fmt.Sprintf("k%06d", i)
+				}
+				return fmt.Sprintf("k%06d%s", i, strings.Repeat("x", tc.keyLen-7))
+			}
 			c, root, dir := newDurable(t)
 			c.Close()
 			var buf []byte
 			var named [][16]byte
 			for i := range tc.sealed {
-				d := &Cert{id: randomID(), cs: fmt.Sprintf("k%06d", 2*i), ce: fmt.Sprintf("k%06d", 2*i+1), captured: 1, last: fmt.Sprintf("k%06d", 2*i+1), bytes: 1}
+				d := &Cert{id: randomID(), cs: key(2 * i), ce: key(2*i + 1), captured: 1, last: key(2*i + 1), bytes: 1}
 				buf = appendLedgerFrame(buf, ledgerRec{cert: d})
 				named = append(named, d.id)
 			}
+			unknown := &Cert{id: randomID()}
 			for range tc.extra {
-				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+				buf = appendLedgerFrame(buf, ledgerRec{cert: unknown, retire: retireRecovery})
 			}
 			path := filepath.Join(dir, DurableDir, ledgerName)
 			lf, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
@@ -1326,12 +1355,24 @@ func TestDurableRecoveryBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			r.lim = recoveryLimits
 			entries, err := r.readLedger()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(entries) > maxCertificates || r.hist > historyCap {
-				t.Fatalf("%d entries (bound %d), %d records scanned (bound %d)", len(entries), maxCertificates, r.hist, historyCap)
+			defer r.ledger.Close()
+			var meta int64
+			for _, e := range entries {
+				meta += certMetadata(e.cs, e.ce, e.last)
+			}
+			if len(entries) > r.lim.Certificates || r.hist > r.lim.History || meta > tc.bound {
+				t.Fatalf("%d entries (bound %d) of %d metadata bytes (bound %d), %d records scanned (bound %d)", len(entries), r.lim.Certificates, meta, tc.bound, r.hist, r.lim.History)
+			}
+			if !tc.cut {
+				if r.st.LedgerCut.Load() != 0 || len(entries) != tc.sealed || r.hist != tc.sealed+tc.extra {
+					t.Fatalf("cut within the bound: %d of %d entries, %d records", len(entries), tc.sealed, r.hist)
+				}
+				return
 			}
 			if r.st.LedgerCut.Load() == 0 || r.st.LedgerDroppedBytes.Load() == 0 {
 				t.Fatalf("not cut: dropped %d", r.st.LedgerDroppedBytes.Load())
@@ -1340,9 +1381,9 @@ func TestDurableRecoveryBounds(t *testing.T) {
 			if fi.Size() != r.lend {
 				t.Fatalf("ledger %d bytes, prefix %d: not truncated", fi.Size(), r.lend)
 			}
-			if tc.name == "live" {
+			if tc.extra == 0 {
 				if _, ok := entries[named[len(named)-1]]; ok {
-					t.Fatal("a record past the 10,000th live certificate kept")
+					t.Fatal("a record past the bound's last live certificate kept")
 				}
 				if err := r.sweep(entries); err != nil {
 					t.Fatal(err)
@@ -1351,7 +1392,6 @@ func TestDurableRecoveryBounds(t *testing.T) {
 					t.Fatalf("the file past the cut is not an orphan: %v, %d orphans", err, r.st.Orphans.Load())
 				}
 			}
-			r.ledger.Close()
 		})
 	}
 }
@@ -1404,7 +1444,7 @@ func ledgerRecords(t *testing.T, root *os.Root) int {
 }
 
 // TestDurableRecoveryHistory: a checksum-valid ledger whose records fill
-// H with certificates still live passes the scan, but recovery and Start
+// the largest H (recovery's) with certificates still live passes the scan, but recovery and Start
 // then owe one retirement per live certificate (written now, or reserved
 // for an accepted one). The prefix is cut so that the records kept plus
 // those owed stay within H: through complete recovery and Start, with
@@ -1419,8 +1459,9 @@ func TestDurableRecoveryHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			var buf []byte
-			for range historyCap - ledgerRecords(t, root) - 1 { // the scan alone would keep them all
-				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+			unknown := &Cert{id: randomID()}
+			for range maxHistory - ledgerRecords(t, root) - 1 { // the scan alone would keep them all
+				buf = appendLedgerFrame(buf, ledgerRec{cert: unknown, retire: retireRecovery})
 			}
 			lf.Write(buf)
 			lf.Close()
@@ -1436,18 +1477,310 @@ func TestDurableRecoveryHistory(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := r.Start(1000, 0, nil); err != nil {
+				if err := r.Start(slots(1000), 0, nil); err != nil {
 					t.Fatal(err)
 				}
 				hist, reused := r.hist, r.Reused()
 				r.Close()
-				if n := ledgerRecords(t, root); hist > historyCap || n > historyCap || n+reused > historyCap {
-					t.Fatalf("attempt %d: history %d, ledger %d records plus %d reserved (H %d)", attempt, hist, n, reused, historyCap)
+				if n := ledgerRecords(t, root); hist > maxHistory || n > maxHistory || n+reused > maxHistory {
+					t.Fatalf("attempt %d: history %d, ledger %d records plus %d reserved (H %d)", attempt, hist, n, reused, maxHistory)
 				}
 				if attempt == 0 && !missing && reused == 0 {
 					t.Fatal("nothing accepted")
 				}
 			}
 		})
+	}
+}
+
+// listedTree is a fencedTree that counts the ranges it lists (a replay
+// range is the order stage's, never expanded by the provider).
+type listedTree struct {
+	*fencedTree
+	listed atomic.Int64
+}
+
+func (l *listedTree) Expand(ctx context.Context, r fz, e source.Emitter[fz, tp]) error {
+	if r.i >= 0 {
+		l.listed.Add(1)
+	}
+	return l.fencedTree.Expand(ctx, r, e)
+}
+
+// plantCertificates is the durable spill a run killed with every range of
+// f but those skip names sealed and none retired leaves: each range's file
+// written through the spiller and sealed (its record handed to the
+// flusher) without its fsync, which a kill's state does not need.
+func plantCertificates(t *testing.T, f *fencedTree, lim DurableLimits, skip func(int) bool) (*os.Root, int) {
+	t.Helper()
+	c, root, _ := newDurable(t)
+	if err := c.Start(lim, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	o, closeRun, err := newRun[fz, tp](context.Background(), f, &collect{}, &testSchema, Options{Workers: 1, Budget: 1 << 20, SpillDir: t.TempDir(), Durable: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planted := 0
+	for i := range f.ranges {
+		if skip(i) {
+			continue
+		}
+		sf := o.sp.durableFile(f.lo(i), f.lo(i+1), false)
+		if sf == nil {
+			t.Fatalf("range %d: no slot (%+v)", i, c.Report())
+		}
+		var rows []schema.Row[tp]
+		for p := range f.pages {
+			for j := range f.rows(i, p) {
+				rows = append(rows, schema.Row[tp]{Key: f.key(i, p, j), Data: tp{Size: int64(j), ETag: "etag"}})
+			}
+		}
+		if err := o.sp.capture(sf, f.lo(i)); err != nil {
+			t.Fatal(err)
+		}
+		if err := o.sp.write(sf, rows, false); err != nil {
+			t.Fatal(err)
+		}
+		sf.d.ce, sf.d.certified = f.lo(i+1), true
+		if err := o.sp.write(sf, nil, true); err != nil {
+			t.Fatal(err)
+		}
+		sf.d.bytes, sf.d.crc = sf.size, sf.crc
+		c.sealed(sf.d)
+		planted++
+	}
+	closeRun()
+	c.Close()
+	if got := c.st.SealedDurable.Load(); got != int64(planted) {
+		t.Fatalf("%d of %d records durable", got, planted)
+	}
+	return root, planted
+}
+
+// TestDurableRecoveryPastFixedLimits: recovery, Start and recovery replay
+// at counts past the old fixed bounds (10,000 live certificates, H 40,000
+// records), where those bounds cut the ledger. The state is planted
+// (plantCertificates: files certified through the spiller without the
+// seal's fsync, records appended by the flusher): 10,090 live
+// certificates, and a ledger of 35,090 records (their seals plus 25,000
+// retirements an earlier attempt left), which with one retirement owed per
+// live certificate passes 40,000. Under limits of a 16 GiB spill cap
+// recovery cuts nothing and Start keeps every certificate; the provider
+// lists only the ranges that had none; a kill mid replay (an injected
+// crash at spill-replay-frame) and a second resume accept every one again;
+// the output is every row once, in order, every certified row replayed,
+// and the history within H. K stays ⊥ (no part is published) and the sink
+// collects keys: the production seal and K's retirement are the listing
+// kill matrices' (at fixture scale).
+func TestDurableRecoveryPastFixedLimits(t *testing.T) {
+	f := &fencedTree{ranges: fixedCertificates + 100, pages: 1, rows: func(int, int) int { return 2 }}
+	lim := Limits(16<<30, 0)
+	gap := func(i int) bool { return i%1000 == 999 }
+	root, planted := plantCertificates(t, f, lim, gap)
+	lf, err := root.OpenFile(filepath.Join(DurableDir, ledgerName), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf []byte
+	for range 25_000 {
+		buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+	}
+	if _, err := lf.Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	lf.Close()
+	if n := ledgerRecords(t, root); n+planted <= minHistory || planted <= fixedCertificates {
+		t.Fatalf("%d records, %d live: within the fixed limits", n, planted)
+	}
+	want := f.keys(nil)
+	for attempt, kill := range []bool{true, false} {
+		r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Start(lim, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		if r.st.LedgerCut.Load() != 0 || r.Reused() != planted || r.st.RejectedBudget.Load() != 0 {
+			t.Fatalf("attempt %d: %d of %d accepted, cut %d, rejected %+v", attempt, r.Reused(), planted, r.st.LedgerCut.Load(), r.Report().Resume.Rejected)
+		}
+		lt := &listedTree{fencedTree: &fencedTree{ranges: f.ranges, pages: f.pages, rows: f.rows, spans: r.Spans()}}
+		var frames atomic.Int64
+		restore := faults.Set(func(p string) error {
+			if kill && p == "spill-replay-frame" && frames.Add(1) == int64(planted/2) {
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		sink := &collect{}
+		st, err := Run[fz, tp](context.Background(), lt, sink, &testSchema, Options{Workers: 4, Budget: 1 << 20, SpillDir: t.TempDir(), Durable: r})
+		restore()
+		if kill {
+			if !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("not killed mid replay: %v", err)
+			}
+			r.Abort(err)
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Close()
+		if !slices.Equal(sink.keys, want) {
+			t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
+		}
+		if gaps := int64(f.ranges - planted); lt.listed.Load() != gaps {
+			t.Fatalf("listed %d ranges, %d had no certificate", lt.listed.Load(), gaps)
+		}
+		if st.ReplayedRows != int64(2*planted) {
+			t.Fatalf("replayed %d rows, certified %d", st.ReplayedRows, 2*planted)
+		}
+		if hist := r.Report().History; hist > lim.History || ledgerRecords(t, root) > lim.History {
+			t.Fatalf("history %d, ledger %d records, H %d", hist, ledgerRecords(t, root), lim.History)
+		}
+	}
+}
+
+// TestDurableLimits: the slots and H scale with the spill an attempt may
+// hold (one slot per MiB, H four records per slot and at least 40,000), up
+// to the metadata ceiling (512 MiB at 2 KiB a certificate: 262,144 slots,
+// also recovery's bound; limited_by metadata),
+// the billion-key listing that bound the fixed limits (73,081 spilled
+// ranges in 167 GiB of spill) fits them, and the metadata stays within
+// the bounds the limits state: a live certificate's Cert at most 256 bytes
+// besides its name and keys, a seal record at most 56 bytes plus its three
+// keys, a retirement 26 bytes.
+func TestDurableLimits(t *testing.T) {
+	for _, tc := range []struct {
+		spillCap, free int64
+		want           DurableLimits
+	}{
+		{15 << 20, 0, DurableLimits{Bytes: 15 << 20, By: limitSpillCap}},
+		{16 << 20, 0, DurableLimits{Certificates: 16, History: minHistory, Bytes: 16 << 20, By: limitSpillCap}},
+		{10_000 << 20, 0, DurableLimits{Certificates: 10_000, History: minHistory, Bytes: 10_000 << 20, By: limitSpillCap}},
+		{167 << 30, 0, DurableLimits{Certificates: 171_008, History: 684_032, Bytes: 167 << 30, By: limitSpillCap}},
+		{0, 200 << 30, DurableLimits{Certificates: 204_800, History: 819_200, Bytes: 200 << 30, By: limitFreeSpace}},
+		{0, 8 << 20, DurableLimits{Bytes: 8 << 20, By: limitFreeSpace}},
+		{0, Unlimited, DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}},
+		{1 << 40, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 1 << 40, By: limitMetadata}},
+		{0, 4 << 40, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 4 << 40, By: limitMetadata}},
+	} {
+		if got := Limits(tc.spillCap, tc.free); got != tc.want {
+			t.Errorf("Limits(%d, %d) = %+v, want %+v", tc.spillCap, tc.free, got, tc.want)
+		}
+	}
+	if l := Limits(167<<30, 0); l.Certificates < 73_081 || l.History < 2*73_081 {
+		t.Errorf("%+v: 73,081 spilled ranges do not fit", l)
+	}
+	if maxCertificates*certificateMetadata != 512<<20 || recoveryLimits != (DurableLimits{Certificates: maxCertificates, History: maxHistory}) {
+		t.Errorf("the metadata ceiling is %d certificates of %d bytes, recovery's bound %+v", maxCertificates, certificateMetadata, recoveryLimits)
+	}
+	if n := unsafe.Sizeof(Cert{}) + unsafe.Sizeof(entry{}); n > certificateMetadata/4 {
+		t.Errorf("a Cert and an entry are %d bytes, over a quarter of the %d charged", n, certificateMetadata)
+	}
+	if n := unsafe.Sizeof(Cert{}); n > 256 {
+		t.Errorf("a Cert is %d bytes, over the stated 256", n)
+	}
+	if n := certMetadata(strings.Repeat("k", 1024), strings.Repeat("k", 1024), strings.Repeat("k", 1024)); n != 4016 {
+		t.Errorf("1 KiB keys charged %d bytes", n)
+	}
+	for _, l := range []int{0, 100, 1024, 3072} {
+		key := strings.Repeat("k", l)
+		d := &Cert{id: randomID(), cs: key, ce: key, last: key, captured: 1<<63 - 1, bytes: 1<<63 - 1}
+		if n := len(appendLedgerFrame(nil, ledgerRec{cert: d})); n > 56+3*l {
+			t.Errorf("a seal record of %d-byte keys is %d bytes, over %d", l, n, 56+3*l)
+		}
+		if n := len(appendLedgerFrame(nil, ledgerRec{cert: d, retire: retirePublished})); n != 26 {
+			t.Errorf("a retirement record is %d bytes", n)
+		}
+	}
+}
+
+// TestDurableMetadataCharge: certMetadata covers what recovery holds per
+// certificate, measured: its ledger entry, the map slot and the three
+// keys readLedger clones, and the Cert classify builds on them (its file
+// name, its place in the accepted list), at key lengths from 7 bytes to
+// Azure's 3 KiB. So the metadata bound bounds recovery's memory.
+func TestDurableMetadataCharge(t *testing.T) {
+	for _, l := range []int{7, 99, 1024, 3072} {
+		c, root, dir := newDurable(t)
+		c.Close()
+		key := func(i int) string { return fmt.Sprintf("k%06d%s", i, strings.Repeat("x", l-7)) }
+		const n = 2_000
+		var buf []byte
+		var charge int64
+		for i := range n {
+			d := &Cert{id: randomID(), cs: key(2 * i), ce: key(2*i + 1), captured: 1, last: key(2*i + 1), bytes: 1}
+			buf = appendLedgerFrame(buf, ledgerRec{cert: d})
+			charge += certMetadata(d.cs, d.ce, d.last)
+		}
+		lf, err := os.OpenFile(filepath.Join(dir, DurableDir, ledgerName), os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lf.Write(buf)
+		lf.Close()
+		buf = nil
+		r, err := newCache(root, nil, testUUID, "ident", "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.lim = recoveryLimits
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		entries, err := r.readLedger()
+		if err != nil {
+			t.Fatal(err)
+		}
+		certs := make([]*Cert, 0, len(entries))
+		for _, e := range entries {
+			certs = append(certs, &Cert{id: e.id, name: fileName(e.id), cs: e.cs, ce: e.ce, ceOpen: e.ceOpen, captured: e.rows, last: e.last, bytes: e.bytes, crc: e.crc, certified: true, reused: true})
+		}
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		held := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		runtime.KeepAlive(entries)
+		runtime.KeepAlive(certs)
+		r.ledger.Close()
+		if len(certs) != n || held > charge {
+			t.Errorf("%d-byte keys: %d certificates hold %d bytes, charged %d", l, len(certs), held, charge)
+		}
+		t.Logf("%d-byte keys: %d bytes a certificate, charged %d", l, held/n, charge/n)
+	}
+}
+
+// TestDurableMetadataBound: a running attempt charges each seal its
+// metadata; past the bound (lowered here to five certificates' worth) a
+// seal is not certified (metadata_exhausted), its slot and history go
+// back, and the run completes with every row. A recovery then accepts
+// exactly the certificates sealed within the bound and unlinks the rest as
+// orphans.
+func TestDurableMetadataBound(t *testing.T) {
+	defer func(b int64) { metadataBound = b }(metadataBound)
+	f := &fencedTree{ranges: 40, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
+	metadataBound = 5 * certMetadata(f.key(0, 0, 0), f.key(0, 0, 0), f.key(0, 0, 0))
+	c, root, _ := newDurable(t)
+	c.Start(slots(1000), 0, nil)
+	sink := &collect{}
+	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
+		t.Fatal(err)
+	}
+	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
+		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
+	}
+	c.Close()
+	sealed := c.st.SealedFiles.Load()
+	if c.st.MetadataExhausted.Load() == 0 || sealed == 0 || c.meta > metadataBound || c.slots != int(sealed) {
+		t.Fatalf("metadata_exhausted %d, sealed %d, metadata %d of %d, slots %d", c.st.MetadataExhausted.Load(), sealed, c.meta, metadataBound, c.slots)
+	}
+	r := recoverAll(t, c, root, nil)
+	defer r.Close()
+	if err := r.Start(slots(1000), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.st.Accepted.Load(); got != sealed || r.meta > metadataBound {
+		t.Fatalf("%d accepted of %d sealed, metadata %d of %d", got, sealed, r.meta, metadataBound)
 	}
 }

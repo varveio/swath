@@ -242,9 +242,14 @@ type Engine[P any] struct {
 	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
-	tiles   []tileAccount // the prior's bounded tiles (expandPrior, plan), by Range.tile
-	plan    *plan[P]      // a counted prior's plan, once the order stage asked for it (Planner)
-	reuse   []source.Span // reused certificates a resume lists around (Reuse)
+	// tiles are the accounts of the prior's tiles with a range made and
+	// not yet ended, by Range.tile (retired into tileErr when the last
+	// ends); lastTile the latest tile number.
+	tiles    map[int32]*tileAccount
+	tileErr  tileErrors
+	lastTile int32
+	plan     *plan[P]      // a counted prior's plan, once the order stage asked for it (Planner)
+	reuse    []source.Span // reused certificates a resume lists around (Reuse)
 	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
 	// slowQueued: children of slow splits not yet started.
 	latSum     float64
@@ -276,7 +281,7 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 		opt.PageSize = PageKeys
 	}
 	now := time.Now()
-	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, start: now, areaAt: now}
+	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, tiles: map[int32]*tileAccount{}, start: now, areaAt: now}
 	p.c = counters.New(append(append([]counters.Def(nil), Counters...), d.Counters...))
 	return p, nil
 }

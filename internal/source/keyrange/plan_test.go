@@ -16,6 +16,7 @@ import (
 
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/keyrange/keyrangetest"
 )
 
 // stream is a counted prior read lazily, as a dataset's page index is: its
@@ -114,13 +115,58 @@ func planOf(t *testing.T, p *Engine[Object]) []Range {
 	}
 }
 
+// iv is an interval (lo, hi], or (lo, ⊤] when open.
+type iv struct {
+	lo, hi string
+	open   bool
+}
+
+// minus is the parts of t outside spans (ascending, disjoint), in order:
+// plain interval arithmetic, the oracle of the gaps a tile lists around
+// reused certificates.
+func minus(t iv, spans []iv) []iv {
+	var out []iv
+	cur := t.lo
+	for _, s := range spans {
+		if !t.open && s.lo >= t.hi {
+			break // this span and the later ones start past the tile
+		}
+		if !s.open && s.hi <= cur {
+			continue // ends before what is left of the tile
+		}
+		if s.lo > cur {
+			out = append(out, iv{cur, s.lo, false})
+		}
+		if s.open || (!t.open && s.hi >= t.hi) {
+			return out // the span covers the rest of the tile
+		}
+		cur = s.hi
+	}
+	return append(out, iv{cur, t.hi, t.open})
+}
+
+// inside counts the tile bounds strictly inside s: a certificate across
+// n+1 tiles holds n of them.
+func inside(s iv, bounds []string) int {
+	n := 0
+	for _, b := range bounds {
+		if b > s.lo && (s.open || b < s.hi) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestPlanTilesAsTilePrior: for random counted priors (ASCII, multi-byte
 // scalars, cuts the provider vetoes, keys repeated across batches), resume
 // keys (unsafe ones included) and reused spans, the plan made lazily is the
-// tiling expandPrior makes at once from the same cuts at the same fill:
-// tiles of whole pages ascending from the resume key's safe start, the open
-// frontier last, each certificate's replay once and every gap around it.
+// tiling expandPrior makes at once from the same cuts at the same fill
+// (tiles of whole pages ascending from the resume key's safe start, the
+// open frontier last); with reused spans, each certificate is replayed
+// once, and the ranges listed are exactly the gaps an interval oracle
+// leaves of each tile, spans across several tiles included.
 func TestPlanTilesAsTilePrior(t *testing.T) {
+	across := 0 // spans across three tiles or more
 	alpha := []string{"a", "b", "z", "/", "0", "9", "é", "日", "\U0001F600", "5"}
 	veto := func(s string) bool { return Safe(s) && !strings.Contains(s, "5") }
 	for seed := range 300 {
@@ -187,19 +233,52 @@ func TestPlanTilesAsTilePrior(t *testing.T) {
 		if s := p.safeStart(after); s != after {
 			want[0].lo, want[0].after = s, after
 		}
-		want = p.aroundReuse(want)
 		same := func(a, b Range) bool {
 			return a.kind == b.kind && a.lo == b.lo && a.hi == b.hi && a.open == b.open && a.after == b.after && a.est == b.est &&
 				a.prior == b.prior && a.cert == b.cert && a.gapEnd == b.gapEnd
 		}
-		if !slices.EqualFunc(got, want, same) {
+		if len(spans) == 0 && !slices.EqualFunc(got, want, same) {
 			t.Fatalf("%s: the plan made %d ranges, expandPrior's tiling %d:\n%+v\n%+v", what, len(got), len(want), got, want)
+		}
+		if len(spans) > 0 {
+			// The oracle: the certificates above K, and each tile less them.
+			var certs []iv
+			for _, sp := range spans {
+				certs = append(certs, iv{max(sp.Lo, after), sp.Hi, sp.HiOpen})
+			}
+			var bounds []string
+			var wantGaps []iv
+			for _, w := range want {
+				wantGaps = append(wantGaps, minus(iv{max(w.lo, w.after), w.hi, w.open}, certs)...)
+				if !w.open {
+					bounds = append(bounds, w.hi)
+				}
+			}
+			var gotCerts, gotGaps []iv
+			for _, r := range got {
+				if r.kind == reused {
+					gotCerts = append(gotCerts, iv{r.lo, r.hi, r.open})
+				} else {
+					gotGaps = append(gotGaps, iv{max(r.lo, r.after), r.hi, r.open})
+				}
+			}
+			if !slices.Equal(gotCerts, certs) || !slices.Equal(gotGaps, wantGaps) {
+				t.Fatalf("%s: replayed %v, want %v; listed %v, want %v", what, gotCerts, certs, gotGaps, wantGaps)
+			}
+			for _, c := range certs {
+				if inside(c, bounds) >= 2 {
+					across++
+				}
+			}
 		}
 		for _, r := range got {
 			if !utf8.ValidString(r.lo) || (!r.open && r.kind != reused && !veto(r.hi)) {
 				t.Fatalf("%s: unusable bound in %+v", what, r)
 			}
 		}
+	}
+	if across < 10 {
+		t.Fatalf("%d certificates across three tiles or more: the oracle was not exercised", across)
 	}
 }
 
@@ -336,5 +415,54 @@ func TestPlanSplitsBehindTheWindow(t *testing.T) {
 	checkTiling(t, "coarse", leaves)
 	if st.Get(cSeedFromTiles) != 21 || st.Get(cSplitAcceptedBounded) == 0 {
 		t.Fatalf("tiles %d, bounded splits %d", st.Get(cSeedFromTiles), st.Get(cSplitAcceptedBounded))
+	}
+}
+
+// sampled is a lister that samples, at every request, the prior tile
+// accounts its engine holds.
+type sampled struct {
+	*sorted
+	p    *Engine[Object]
+	most int
+}
+
+func (s *sampled) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	s.p.lock()
+	s.most = max(s.most, len(s.p.tiles))
+	s.p.unlock()
+	return s.sorted.List(ctx, in)
+}
+
+// TestPlanAccountsStayBounded: a planned run of thousands of tiles holds an
+// account only for the tiles whose ranges still list (each retired into the
+// prior's error counters when its last range ends), so what the engine
+// retains, and what Stats scans, stays near the workers however many tiles
+// the prior makes; every tile is still counted once.
+func TestPlanAccountsStayBounded(t *testing.T) {
+	var keys []string
+	for i := range 30000 {
+		keys = append(keys, fmt.Sprintf("k%06d", i))
+	}
+	pr := priorOf(keys, 10)
+	pr.Stream = &stream{cuts: pr.Cuts, seed: 1}
+	const workers = 8
+	api := &sampled{sorted: newSorted(keys, true, 1)}
+	p, err := newTest(api, Options{Prior: pr, Workers: workers, PageSize: 10, TilePages: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.p = p
+	c := &collect{}
+	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 1 << 20}); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysOf(c.rows); !slices.Equal(got, keys) {
+		t.Fatalf("%d keys, want %d", len(got), len(keys))
+	}
+	st := p.Stats()
+	tiles := st.Get(cSeedFromTiles) - 1 // the open frontier has no account
+	counted := st.Get(cSeedFromErrWithin) + st.Get(cSeedFromErrGrown) + st.Get(cSeedFromErrShrunk)
+	if tiles != 3000 || counted != tiles || len(p.tiles) != 0 || api.most > 4*workers {
+		t.Fatalf("%d tiles, %d classified, %d accounts left, at most %d held at once", tiles, counted, len(p.tiles), api.most)
 	}
 }

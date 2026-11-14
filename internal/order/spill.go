@@ -123,7 +123,8 @@ type spiller[P any] struct {
 	// refusal times the intervals spill stands refused (refuse,
 	// unrefuse): full and the interval change together under its mu, so
 	// credit returned while a refusal is recorded cannot leave an interval
-	// open with full cleared. Accounting only: nothing decides on it.
+	// open with full cleared; so does spill pressure (press). Accounting
+	// only: nothing in the order stage decides on it.
 	refusal struct {
 		mu     sync.Mutex
 		at     time.Time // the current interval's start (zero: none)
@@ -756,6 +757,7 @@ func (s *spiller[P]) refuse() {
 	if r.at.IsZero() {
 		r.at = time.Now()
 	}
+	s.pressLocked()
 	r.mu.Unlock()
 }
 
@@ -769,7 +771,24 @@ func (s *spiller[P]) unrefuse() {
 		r.spells++
 		r.at = time.Time{}
 	}
+	s.pressLocked()
 	r.mu.Unlock()
+}
+
+// press records spill pressure (Gauges.pressure) as it is now: spill
+// refused while a worker waits on it, in publish or at admission. Called
+// where either changes.
+func (s *spiller[P]) press() {
+	s.refusal.mu.Lock()
+	s.pressLocked()
+	s.refusal.mu.Unlock()
+}
+
+// pressLocked is press with the refusal mutex held.
+func (s *spiller[P]) pressLocked() {
+	if g := s.g; g != nil {
+		g.pressure.set(s.full.Load() && g.publishWait.n.Load()+g.admissionWait.n.Load() > 0, clock().UnixNano())
+	}
 }
 
 // refusedTime is the time spill stood refused, an interval still open

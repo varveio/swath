@@ -486,7 +486,7 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time, err error) {
 	}
 	p.c.Add(cBusyNs, int64(time.Since(start)))
 	if r.tile > 0 {
-		p.tiles[r.tile-1].keys += st.keys
+		p.tileEnded(r.tile, st.keys)
 	}
 	child := r.born == fromLower || r.born == fromUpper
 	if child && st.keys == 0 {
@@ -1141,6 +1141,9 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	p.c.Max(cMaxQueued, int64(p.queued))
 	depth := r.depth + 1
 	p.c.Max(cSplitMaxDepth, depth)
+	if r.tile > 0 {
+		p.tileRanges(r.tile, 0, 2) // the children; the parent ends after
+	}
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
