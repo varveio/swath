@@ -457,7 +457,9 @@ and for S3 the delete-marker state, in wire order.
   large versioned buckets are unmeasured.
 - **Memory:** `--sort-buffer` bounds rows in flight, not resident memory (see Sizing).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
-  of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
-  ([measurements](internals/measurements.md#known-gaps)).
+  of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of
+  objects (35 completed, 50.6 billion objects in all) are individual runs, not a benchmark
+  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
+  other gaps are in [measurements](internals/measurements.md#known-gaps).
 
 When a run fails: [Troubleshooting](troubleshooting.md).
