@@ -194,7 +194,7 @@ func TestDurableSpillResume(t *testing.T) {
 	t.Logf("cold durable: %+v", cold.Resources.Spill.Durable)
 	if d := cold.Resources.Spill.Durable; d == nil || d.SealedFiles == 0 {
 		t.Fatalf("no certificate sealed: %+v", cold.Resources.Spill)
-	} else if d.Slots != 64 || d.HistoryCap != 40_000 || d.LimitBytes != 64<<20 || d.LimitedBy != "spill_cap" {
+	} else if d.Slots != 1024 || d.HistoryCap != 40_000 || d.LimitBytes != 64<<20 || d.LimitedBy != "spill_cap" {
 		t.Fatalf("limits of a 64 MiB spill cap: %d slots, H %d, from %d bytes (%s)", d.Slots, d.HistoryCap, d.LimitBytes, d.LimitedBy)
 	}
 	if _, err := os.Stat(filepath.Join(ref, order.DurableDir)); !os.IsNotExist(err) {
