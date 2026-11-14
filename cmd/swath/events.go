@@ -21,6 +21,7 @@ import (
 
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/textout"
 )
 
 // The event log is every line swath writes to stderr outside the redrawn
@@ -43,8 +44,10 @@ const (
 	evRequest  = "request"
 	evRetry    = "retry"
 	evOutcome  = "outcome"
-	evDataset  = "dataset" // swath du --from-dataset: the dataset the totals are read from
-	evRead     = "read"    // swath du --from-dataset -v: what was read of it
+	// evSpillPressure: listing has waited on a full spill cap (spillWatch).
+	evSpillPressure = "spill_pressure"
+	evDataset       = "dataset" // swath du --from-dataset: the dataset the totals are read from
+	evRead          = "read"    // swath du --from-dataset -v: what was read of it
 
 	lvDebug = "debug"
 	lvInfo  = "info"
@@ -409,6 +412,88 @@ func (w *failureWatch) outstanding(now time.Time) string {
 		return ""
 	}
 	return fmt.Sprintf("%s %s (%d attempts)", w.provider, best, n)
+}
+
+// spillPressureFor is how long listing waits on a full spill cap before
+// the error: past the seconds a spill file's credit takes to come back
+// while the output keeps up, short against the hours of a crawl.
+// spillPressureEvery spaces the repeats while the wait lasts.
+const spillPressureFor, spillPressureEvery = 2 * time.Minute, 30 * time.Minute
+
+// spillWatch watches listing wait on a full spill cap
+// (order.GaugeSnapshot.SpillPressureSince) for a run writing to dir: an
+// error event once the wait has lasted spillPressureFor, again every
+// spillPressureEvery while it lasts, and with wait (--spill-wait-timeout)
+// the run's stop once it has lasted that long.
+type spillWatch struct {
+	dir   string
+	wait  time.Duration
+	since time.Time // the wait watched (zero: none)
+	told  time.Time // its last event (zero: none yet)
+	// The output rate's window: its start, and the rows ordered then.
+	from time.Time
+	rows int64
+}
+
+// spillFields are a spill_pressure event's.
+type spillFields struct {
+	Since             time.Time `json:"since"`
+	SpillBytes        int64     `json:"spill_bytes"`
+	SpillMaxBytes     int64     `json:"spill_max_bytes"`
+	SpillReserveBytes int64     `json:"spill_reserve_bytes"`
+	OutputRowsPerS    float64   `json:"output_rows_per_s"`
+}
+
+// check takes the progress snapshot s at now: it prints the event when one
+// is due, and returns the run's stop cause (a *spillWaitError) once the
+// wait has lasted --spill-wait-timeout.
+func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
+	if w == nil {
+		return nil
+	}
+	if s.Order == nil || s.Order.SpillPressureSince == nil {
+		w.since = time.Time{}
+		return nil
+	}
+	g := s.Order
+	if since := *g.SpillPressureSince; !since.Equal(w.since) {
+		w.since, w.told, w.from, w.rows = since, time.Time{}, now, s.Ordered
+	}
+	held := now.Sub(w.since)
+	stop := w.wait > 0 && held >= w.wait
+	if !stop && (held < spillPressureFor || (!w.told.IsZero() && now.Sub(w.told) < spillPressureEvery)) {
+		return nil
+	}
+	f := spillFields{Since: w.since, SpillBytes: g.SpillLiveBytes, SpillMaxBytes: g.SpillMaxBytes, SpillReserveBytes: g.SpillReserveBytes}
+	if d := now.Sub(w.from); d > 0 {
+		f.OutputRowsPerS = float64(s.Ordered-w.rows) / d.Seconds()
+	}
+	w.told, w.from, w.rows = now, now, s.Ordered
+	held = held.Round(time.Second)
+	cause := fmt.Sprintf("spill cap too small: listing has waited on the output for %s: the spill cap cannot hold the rows listed ahead of it (%s); the output writes %s rows/s",
+		held, f.capText(), count(int64(f.OutputRowsPerS+0.5)))
+	more := "more disk or a larger --spill-budget"
+	again := "run it again with " + more
+	if w.dir != "" && hasJournal(w.dir) {
+		again = "resume it with " + more + " (swath resume " + shellOperand(w.dir) + " --spill-budget SIZE)"
+	}
+	if stop {
+		return &spillWaitError{fmt.Sprintf("%s; stopped by --spill-wait-timeout %s: %s", cause, w.wait, again)}
+	}
+	elog().event(lvError, evSpillPressure, cause+"; stop the run and "+again+", or let it run: it finishes, slowly", f)
+	return nil
+}
+
+// capText is the spill and its limits as the event says them.
+func (f spillFields) capText() string {
+	t := "spill " + textout.Size(f.SpillBytes)
+	if f.SpillMaxBytes > 0 {
+		t += ", cap " + textout.Size(f.SpillMaxBytes)
+	}
+	if f.SpillReserveBytes > 0 {
+		t += ", free-space reserve " + textout.Size(f.SpillReserveBytes)
+	}
+	return t
 }
 
 // requestFields are a request event's.

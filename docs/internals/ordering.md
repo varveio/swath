@@ -431,7 +431,12 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at its first rows frame spilled, `order.Options.Spilling`; a run that never spills does not: `TestTmpfsSpillWarning`); `progress.json` carries the same as live values with their peaks
-  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin).
+  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin),
+  with `spill_max_bytes`, `spill_reserve_bytes` and `spill_pressure_since`: since when spill has stood refused
+  (the spiller's `full`) while an emitter waits in publish, recorded where either changes under the spiller's
+  refusal mutex and held through gaps under 30 s, since `full` clears at every credit return
+  (`TestSpillPressure`). The command's watchdog reads it (`spillWatch`): the `spill_pressure` event at 2
+  minutes, and `--spill-wait-timeout`.
   The stage's `Stats` carry `SpillPeak` and `SpillRefused`, the report's `spill.peak_bytes` and `spill.refused`
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve
   larger than the disk spills nothing).

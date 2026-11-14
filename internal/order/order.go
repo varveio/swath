@@ -216,6 +216,49 @@ type Gauges struct {
 	// the budget, workers at admission, idle workers (nothing queued to
 	// list, read-ahead waits included).
 	publishWait, admissionWait, idleWait gauge
+	// pressure is spill pressure (spiller.press); spillMax and
+	// spillReserve are the spill cap and reserve in effect (0: none).
+	pressure               pressure
+	spillMax, spillReserve atomic.Int64
+}
+
+// clock is the time spill pressure is recorded and read at (tests set it).
+var clock = time.Now
+
+// pressureGap is the gap in spill pressure that ends its spell: a shorter
+// one is credit returned and taken again, not the output catching up.
+const pressureGap = 30 * time.Second
+
+// pressure is spill pressure: spill refused while an emitter waits in
+// publish, the listing held at the output's pace. since is when its spell
+// began and off when its condition last went false (0: it holds), in unix
+// nanoseconds; a spell outlives a gap shorter than pressureGap. Written
+// under the spiller's refusal mutex, read without it (Snapshot): since is
+// stored before off, and read after it.
+type pressure struct{ since, off atomic.Int64 }
+
+// set records the condition, on or not, at t.
+func (p *pressure) set(on bool, t int64) {
+	since, off := p.since.Load(), p.off.Load()
+	switch {
+	case on && (since == 0 || (off != 0 && t-off >= int64(pressureGap))):
+		p.since.Store(t)
+		p.off.Store(0)
+	case on:
+		p.off.Store(0)
+	case since != 0 && off == 0:
+		p.off.Store(t)
+	}
+}
+
+// at is when the spell holding at t began (0: none).
+func (p *pressure) at(t int64) int64 {
+	off := p.off.Load()
+	since := p.since.Load()
+	if since == 0 || (off != 0 && t-off >= int64(pressureGap)) {
+		return 0
+	}
+	return since
 }
 
 // gauge is a count and its peak.
@@ -257,6 +300,13 @@ type GaugeSnapshot struct {
 	PeakAdmissionWaiters int64 `json:"peak_admission_waiters"`
 	IdleWorkers          int64 `json:"idle_workers"`
 	PeakIdleWorkers      int64 `json:"peak_idle_workers"`
+	// SpillPressureSince is when spill pressure began, absent while there
+	// is none: spill refused while an emitter waits in publish, through
+	// gaps under 30 s. SpillMaxBytes and SpillReserveBytes are the spill
+	// cap and the free space spill leaves on its filesystem (0: none).
+	SpillPressureSince *time.Time `json:"spill_pressure_since,omitempty"`
+	SpillMaxBytes      int64      `json:"spill_max_bytes"`
+	SpillReserveBytes  int64      `json:"spill_reserve_bytes"`
 }
 
 // Snapshot reads g; a nil Gauges reads as zero.
@@ -264,12 +314,18 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 	if g == nil {
 		return GaugeSnapshot{}
 	}
-	return GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
+	s := GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
 		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load(),
 		AheadRows: g.ahead.n.Load(), PeakAheadRows: g.ahead.peak.Load(),
 		PublishWaiters: g.publishWait.n.Load(), PeakPublishWaiters: g.publishWait.peak.Load(),
 		AdmissionWaiters: g.admissionWait.n.Load(), PeakAdmissionWaiters: g.admissionWait.peak.Load(),
-		IdleWorkers: g.idleWait.n.Load(), PeakIdleWorkers: g.idleWait.peak.Load()}
+		IdleWorkers: g.idleWait.n.Load(), PeakIdleWorkers: g.idleWait.peak.Load(),
+		SpillMaxBytes: g.spillMax.Load(), SpillReserveBytes: g.spillReserve.Load()}
+	if t := g.pressure.at(clock().UnixNano()); t != 0 {
+		since := time.Unix(0, t).UTC()
+		s.SpillPressureSince = &since
+	}
+	return s
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -445,11 +501,17 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 	if g != nil {
 		g.add(1)
 	}
+	if site == waitPublish && o.sp != nil {
+		o.sp.press()
+	}
 	c.Wait()
 	d := time.Since(t)
 	if g != nil {
 		g.add(-1)
 		*sum += d
+	}
+	if site == waitPublish && o.sp != nil {
+		o.sp.press()
 	}
 	return d
 }
@@ -731,6 +793,8 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		sp.wake, sp.verify, sp.spilling = wake, opt.SpillVerify, opt.Spilling
 		sp.g = o.g
+		o.g.spillMax.Store(opt.SpillMax)
+		o.g.spillReserve.Store(opt.SpillReserve)
 		o.sp = sp
 		if n := spareReaders(); n > 0 {
 			// The read-ahead needs a processor beside the drainer's: on
