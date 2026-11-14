@@ -1,4 +1,4 @@
-report_version 11
+report_version 13
 args_hash string
 attempt.id string
 attempt.started time
@@ -270,14 +270,17 @@ resources.spill.refused_spells int64
 resources.spill.reserve_bytes int64
 resources.spill.rows int64
 resources.window.bound_by string
+resources.window.evicted int64
 resources.window.forced int64
 resources.window.grown int64
+resources.window.peak_behind_bytes int64
 resources.window.peak_credit_rows int64
 resources.window.peak_retained_bytes int64
 resources.window.peak_tiles int64
 resources.window.peak_waiters int64
 resources.window.plan_wait_ns int64
 resources.window.rows int64
+resources.window.spill_rows int64
 resources.window.tiles int64
 resources.window.wait_ns int64
 resources.window.waits map

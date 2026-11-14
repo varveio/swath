@@ -365,3 +365,130 @@ func TestWindowTarget(t *testing.T) {
 		t.Fatalf("a small cap under a large target: %v, window %+v", err, st.Window)
 	}
 }
+
+// fencedPlanned is planned with durable spill: each tile declares its span
+// (t%04d of its index, of the next] and a fence after every page and at
+// its end, so a tile that spills seals a certificate.
+type fencedPlanned struct{ *planned }
+
+func (f fencedPlanned) Fences() bool { return true }
+
+func (f fencedPlanned) Expand(ctx context.Context, i int, e source.Emitter[int, tp]) error {
+	if i < 0 {
+		return errors.New("the plan root expanded")
+	}
+	p := f.planned
+	fence := e.(source.Fencer)
+	fence.Span(fmt.Sprintf("t%04d", i), fmt.Sprintf("t%04d", i+1), false)
+	p.listing.Add(1)
+	defer p.listing.Add(-1)
+	for j := 0; j < p.rows[i]; j += p.page {
+		end := min(j+p.page, p.rows[i])
+		rows := make([]schema.Row[tp], 0, end-j)
+		for k := j; k < end; k++ {
+			rows = append(rows, schema.Row[tp]{Key: p.key(i, k), Data: tp{Size: int64(k), ETag: "etag"}})
+		}
+		if err := e.Rows(rows); err != nil {
+			return err
+		}
+		fence.Fence(p.key(i, end-1), false)
+		if h := p.hold[i]; h != nil && j == 0 {
+			select {
+			case <-h:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+	}
+	fence.Fence(fmt.Sprintf("t%04d", i+1), false)
+	p.finished.Add(1)
+	return nil
+}
+
+// pacedSink is collect behind a writer the durable spill's unlinks keep up
+// with, as a part writer is beside a flusher cycling every 100 ms: a batch
+// waits for the unlinks queued before it.
+type pacedSink struct {
+	collect
+	c        *Cache
+	unlinked chan struct{}
+}
+
+func (s *pacedSink) Write(ctx context.Context, segs [][]schema.Row[tp]) error {
+	for behind, waiting := s.c.Behind(); behind > waiting; behind, waiting = s.c.Behind() {
+		select {
+		case <-s.unlinked:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return s.collect.Write(ctx, segs)
+}
+
+// TestWindowShrinksToTheSpillCap: far more workers than a small spill cap
+// can serve, tiles finishing out of order (every eighth tile stalls after
+// its first page until a worker waits), a fresh counted prior, durable
+// spill whose drained certificates wait for a K that never comes (no part
+// is published), a writer the unlinks keep up with. The spill behind the
+// output does not hold the window: it is evicted while live spill is past
+// half the cap, so the spill ahead holds the window, which shrinks to what
+// the cap serves (spill_rows under its rows) instead of closing on spill
+// the writer has passed and crawling on the drainer's forced admissions
+// (counted against the gate, 295 of 320 tiles were forced). No frame is
+// refused and every key is handed on once, in order.
+func TestWindowShrinksToTheSpillCap(t *testing.T) {
+	const tiles, rows, page = 320, 120, 30
+	p := newPlanned(tiles, rows, page)
+	var holds []chan struct{}
+	for i := 8; i < tiles; i += 8 {
+		h := make(chan struct{})
+		p.hold[i], holds = h, append(holds, h)
+	}
+	var released int
+	hookWait = func(site string) {
+		// A worker waits: the oldest stalled tile goes on (mu held).
+		if (site == waitWindow || site == waitIdle || site == waitPublish) && released < len(holds) {
+			close(holds[released])
+			released++
+		}
+	}
+	defer func() { hookWait = nil }()
+	interval := flushInterval
+	flushInterval = 0 // a cycle whenever one is queued
+	defer func() { flushInterval = interval }()
+	unlinked := make(chan struct{}, 1)
+	defer SetDurableEvents(func(e string) {
+		if e == "unlinked" {
+			select {
+			case unlinked <- struct{}{}:
+			default:
+			}
+		}
+	})()
+	c, _, _ := newDurable(t)
+	if err := c.Start(slots(4096), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	sink := &pacedSink{c: c, unlinked: unlinked}
+	st, err := Run[int, tp](ctx, fencedPlanned{p}, sink, &testSchema, Options{Workers: 64, Budget: 240, SpillDir: t.TempDir(), SpillMax: 48 << 10, Durable: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sink.keys, p.keys()) {
+		t.Fatalf("%d keys, want %d", len(sink.keys), len(p.keys()))
+	}
+	w := st.Window
+	t.Logf("window %+v; spilled %d rows, peak %d, refused %d; durable %+v", w, st.SpillRows, st.SpillPeak, st.SpillRefused, c.Report())
+	if !st.Durable || c.st.SealedFiles.Load() == 0 || w.PeakBehindBytes == 0 {
+		t.Fatalf("no certificate drained behind the output: the arm proves nothing")
+	}
+	if st.SpillRefused != 0 || w.Forced > tiles/20 {
+		t.Fatalf("refused %d frames, %d of %d tiles forced: the window crawled", st.SpillRefused, w.Forced, w.Tiles)
+	}
+	if w.Waits[WindowSpill] == 0 || w.Evicted == 0 || w.SpillRows == 0 || w.SpillRows >= w.Rows {
+		t.Fatalf("spill did not bind the window below its rows: %+v", w)
+	}
+}

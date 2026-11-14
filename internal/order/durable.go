@@ -98,11 +98,6 @@ const (
 	historyPerCertificate = 4
 	minHistory            = 40_000
 	maxHistory            = historyPerCertificate * maxCertificates
-	// flushInterval is the flusher's shortest cycle: seals and
-	// retirements are batched into one directory sync, one ledger append
-	// and one ledger sync per cycle at most every 100 ms (contract §7.6,
-	// the recommended default).
-	flushInterval = 100 * time.Millisecond
 	// replayPageKeys is the page size requests_saved_est divides by: the
 	// engine's default page (keyrange.PageKeys).
 	replayPageKeys = 1000
@@ -122,6 +117,12 @@ var DurableDir = filepath.Join(dataset.JournalDir, "spill", "durable")
 
 // ledgerName is the ledger's name inside DurableDir.
 const ledgerName = "ledger"
+
+// flushInterval is the flusher's shortest cycle: seals and retirements are
+// batched into one directory sync, one ledger append and one ledger sync
+// per cycle at most every 100 ms (contract §7.6, the recommended default;
+// a variable for the tests whose whole run is shorter).
+var flushInterval = 100 * time.Millisecond
 
 // DurableLimits are an attempt's durable spill limits: the certificate
 // slots (live certificates), the history cap H (ledger records), and the
@@ -283,6 +284,10 @@ type Cache struct {
 	credit   atomic.Pointer[func(int64)] // Run's: lowers live spill bytes and wakes waiters
 	retained atomic.Int64                // bytes of retained durable files (charged)
 	peakRet  atomic.Int64
+	// behind is the charged bytes of drained files not yet unlinked: spill
+	// the output has passed; waiting, of them, the certificates waiting for
+	// K (drained), which an eviction retires (Behind).
+	behind, waiting atomic.Int64
 
 	st durableStats
 }
@@ -438,7 +443,7 @@ func event(e string) {
 }
 
 // SetDurableEvents installs f to see the durable spill's lifecycle events
-// ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "cycle-records", "flusher-joined",
+// ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "cycle-records", "unlinked", "flusher-joined",
 // "ledger-closed", and Run's "waker-stopped", "one-range-open": a range
 // is done and one is left, "listing-done": every range is listed, and
 // "drain-start": the drainer is about to start, on its goroutine), for
@@ -472,6 +477,7 @@ func (c *Cache) SetK(k string) {
 	kept := c.drained[:0]
 	for _, d := range c.drained {
 		if c.coveredLocked(d) {
+			c.waiting.Add(-d.charged)
 			c.retireLocked(d, retirePublished)
 			continue
 		}
@@ -605,6 +611,7 @@ func (c *Cache) drainedFile(d *Cert) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	d.drained = true
+	c.behind.Add(d.charged)
 	switch {
 	case !d.certified:
 		if d.slot { // capture never closed (a failed range): live-only
@@ -618,7 +625,18 @@ func (c *Cache) drainedFile(d *Cert) {
 	default:
 		c.st.RetireDeferred.Add(1)
 		c.drained = append(c.drained, d)
+		c.waiting.Add(d.charged)
 	}
+}
+
+// Behind is the bytes of drained files still charged to the live spill
+// (unlinked, they are not), and of them the certificates waiting for K,
+// which an eviction can retire (0 for nil).
+func (c *Cache) Behind() (behind, waiting int64) {
+	if c == nil {
+		return 0, 0
+	}
+	return c.behind.Load(), c.waiting.Load()
 }
 
 // evict retires the oldest drained certificate (a refused frame with
@@ -627,13 +645,37 @@ func (c *Cache) drainedFile(d *Cert) {
 func (c *Cache) evict() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.drained) == 0 {
-		return false
+	return c.evictLocked(1) == 1
+}
+
+// trim evicts the oldest drained certificates until n bytes of them are
+// retired or none waits, and returns how many it retired (0 for nil).
+func (c *Cache) trim(n int64) int64 {
+	if c == nil {
+		return 0
 	}
-	d := c.drained[0]
-	c.drained = append(c.drained[:0], c.drained[1:]...)
-	c.retireLocked(d, retireEvicted)
-	return true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := 0
+	for k < len(c.drained) && n > 0 {
+		n -= c.drained[k].charged
+		k++
+	}
+	return c.evictLocked(k)
+}
+
+// evictLocked retires the k oldest drained certificates, or every one
+// when fewer wait, and returns how many it retired (mu held).
+func (c *Cache) evictLocked(k int) int64 {
+	k = min(k, len(c.drained))
+	for _, d := range c.drained[:k] {
+		c.waiting.Add(-d.charged)
+		c.retireLocked(d, retireEvicted)
+	}
+	n := copy(c.drained, c.drained[k:])
+	clear(c.drained[n:])
+	c.drained = c.drained[:n]
+	return int64(k)
 }
 
 // retireLocked queues d's retirement: its record (with a healthy ledger)
@@ -773,6 +815,9 @@ func (c *Cache) cycle() {
 			return
 		}
 	}
+	if len(unl) > 0 {
+		event("unlinked") // tests: the cycle's unlinks returned their credit
+	}
 }
 
 // replacedError is Lock.Verify's failure before a mutation: the output (or
@@ -882,6 +927,9 @@ func (c *Cache) unlink(d *Cert) error {
 	if n := d.charged; n > 0 {
 		d.charged = 0
 		c.retained.Add(-n)
+		if d.drained {
+			c.behind.Add(-n)
+		}
 		if f := c.credit.Load(); f != nil {
 			(*f)(n)
 		}

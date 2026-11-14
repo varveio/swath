@@ -64,7 +64,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 11) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 13) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
@@ -74,7 +74,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 11 |
+| `report_version` | 13 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
@@ -215,7 +215,10 @@ drainer past a refusal, `grown` (tiles whose rows reached 4 times the prior's), 
 evaluated) and `bound_by` (`rows`, the 8M target; `set`, `--seed-from-window-rows`; `spill_cap`; `budget`), `waits` (workers' waits at the window by the
 refusal that held them: `rows`, `spill`, `growth`), `wait_ns` and `peak_waiters`, `plan_wait_ns` (the drainer
 waiting for the prior to be read), `peak_tiles`, `peak_credit_rows` (the rows charged to the tiles held) and
-`peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+`peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission), `spill_rows`
+(the mean rows the tiles held were charged when spill refused a tile: the window the spill cap allowed),
+`peak_behind_bytes` (the most live spill behind the output: drained durable files not yet unlinked) and `evicted`
+(drained certificates the window evicted while live spill was past half the cap). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).

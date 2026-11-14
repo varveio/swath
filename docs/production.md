@@ -78,9 +78,9 @@ no frame. Expected, not guaranteed: the window admits tiles, it does not stop th
 range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
 after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
 the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. With thousands
-of workers and a cap of a few hundred MB or less, a seeded run can still slow sharply: the window admits no tile
-while live spill is past half the cap, and the workers wait at it (a list of 145 million keys at 2,048 workers took
-219 s with a 57 MB cap against 78 s uncapped, [measurements](internals/measurements.md#the-seeded-frontier-window)).
+of workers and a cap of a few hundred MB or less, the window holds fewer tiles: it admits none while the spill
+ahead of the output is past half the cap (`resources.window.spill_rows` is the window the cap allowed), and it
+evicts the durable certificates behind the output to keep room, so a crash relists those keys.
 Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
 listing. A cut file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
 the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).

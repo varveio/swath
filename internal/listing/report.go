@@ -45,8 +45,11 @@ import (
 // certified_rows and certificate_scan_ns (a resume's certificates the
 // segments replayed), and resources.spill.durable.resume.
 // replayed_certificates. 11 adds resources.window, the frontier window of
-// a run planned from a counted --seed-from (#535).
-const ReportVersion = 11
+// a run planned from a counted --seed-from (#535). 12 is the cut points'
+// side file's (#557). 13 adds fields only (#535): resources.window.
+// spill_rows, peak_behind_bytes and evicted (the spill gate's window and
+// the certificates behind the output it evicted).
+const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -505,7 +508,9 @@ type Resources struct {
 // them (rows, spill, growth) with their time and peak, the drainer's wait
 // for the plan to read ahead, and the peaks of the tiles held, the rows
 // charged to them and the bytes the order stage held (memory and live
-// spill) at an admission.
+// spill) at an admission; under the spill gate, the mean rows charged at
+// its refusals, the most live spill behind the output and the drained
+// certificates it evicted.
 type Window struct {
 	Tiles             int64            `json:"tiles"`
 	Forced            int64            `json:"forced"`
@@ -519,6 +524,9 @@ type Window struct {
 	PeakTiles         int64            `json:"peak_tiles"`
 	PeakCreditRows    int64            `json:"peak_credit_rows"`
 	PeakRetainedBytes int64            `json:"peak_retained_bytes"`
+	SpillRows         int64            `json:"spill_rows"`
+	PeakBehindBytes   int64            `json:"peak_behind_bytes"`
+	Evicted           int64            `json:"evicted"`
 }
 
 // Drain is the order stage's drain after listing and the time it took.
