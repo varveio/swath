@@ -55,21 +55,45 @@ const (
 	// record holds three keys (each at most a provider's key, 1 KiB on S3
 	// and GCS) and fixed fields.
 	maxLedgerFrame = 64 << 10
-	// historyCap (H) bounds the ledger's retained durable prefix plus the
-	// records reserved and not yet written (a seal and a retirement per
-	// certificate): the ledger is never compacted, so this bounds its size
-	// and the recovery scan (40,000 records of at most a few KiB). It does
-	// not change with the certificate cap; a resume counts the prefix it
-	// kept, so history a truncation dropped is refunded.
-	historyCap = 40_000
-	// maxCertificates is the largest certificate cap any attempt may have
-	// (the cap of --spill-budget none, and of a cap of 10,000 MiB or more):
-	// recovery inventories at most that many before applying its own cap.
-	maxCertificates = 10_000
-	// minCertificates is the smallest cap: below 16 MiB of --spill-budget
-	// durable spill is off (a certificate per MiB of the cap; sixteen is
-	// the fewest worth a ledger).
+	// certificateBytes is the spill an attempt may hold per certificate
+	// slot: one slot per MiB (DurableLimits). Billion-key listings spilled
+	// 2.3 to 2.8 MiB per range (measurements.md, "Spill at billion scale").
+	certificateBytes = 1 << 20
+	// minCertificates is the smallest cap: below 16 MiB of spill durable
+	// spill is off (sixteen is the fewest worth a ledger).
 	minCertificates = 16
+	// fixedCertificates is the cap when the spill an attempt may hold is
+	// unknown (no spill cap, and the free space not measurable).
+	fixedCertificates = 10_000
+	// maxCertificateMetadata bounds the memory the certificates' metadata
+	// takes, whatever the spill: 512 MiB, each certificate charged what it
+	// holds (certMetadata) from its seal (or recovery's reading of its
+	// record) to its retirement. A seal past it is not certified
+	// (metadata_exhausted); recovery cuts the ledger before a record past
+	// it (ledger_cut).
+	maxCertificateMetadata = 512 << 20
+	// certificateOverhead is what certMetadata charges a certificate
+	// besides its keys: its Cert, file name and slot in the accepted list,
+	// recovery's ledger entry and map slot (about 440 bytes measured,
+	// TestDurableMetadataCharge).
+	certificateOverhead = 512
+	// certificateMetadata is the charge of a certificate whose three keys
+	// are about 300 bytes each: the slots' ceiling, maxCertificates
+	// (262,144), is the metadata bound at that charge, and holds 590 to
+	// 720 GiB of spill at the 2.3 to 2.8 MiB per range measured. With
+	// longer keys the bytes bind first.
+	certificateMetadata = 2 << 10
+	maxCertificates     = maxCertificateMetadata / certificateMetadata
+	// The history cap H bounds the ledger's retained durable prefix plus
+	// the records reserved and not yet written (a seal and a retirement per
+	// certificate): the ledger is never compacted, so H bounds its size and
+	// the recovery scan. It is four records per slot (every slot's
+	// certificate sealed and retired twice over), and never below
+	// minHistory; a resume counts the prefix it kept, so history a
+	// truncation dropped is refunded.
+	historyPerCertificate = 4
+	minHistory            = 40_000
+	maxHistory            = historyPerCertificate * maxCertificates
 	// flushInterval is the flusher's shortest cycle: seals and
 	// retirements are batched into one directory sync, one ledger append
 	// and one ledger sync per cycle at most every 100 ms (contract §7.6,
@@ -95,17 +119,74 @@ var DurableDir = filepath.Join(dataset.JournalDir, "spill", "durable")
 // ledgerName is the ledger's name inside DurableDir.
 const ledgerName = "ledger"
 
-// CertificateCap is the certificate cap for a live spill cap of max bytes
-// (0: none): one per MiB, clamped to [16, 10,000]; 0 (durable spill off)
-// below 16 MiB.
-func CertificateCap(max int64) int {
-	switch {
-	case max == 0:
-		return maxCertificates
-	case max < minCertificates<<20:
-		return 0
+// DurableLimits are an attempt's durable spill limits: the certificate
+// slots (live certificates), the history cap H (ledger records), and the
+// spill they derive from. Both scale with that spill up to the metadata
+// ceiling, so a listing whose ranges spill at least 1 MiB each on average
+// has a slot for every range it holds; per MiB of that spill the cache
+// holds at most one live certificate's metadata and the ledger at most
+// four records.
+type DurableLimits struct {
+	Certificates int
+	History      int
+	Bytes        int64  // the spill the attempt may hold (0: unknown)
+	By           string // what bounds the slots: limitSpillCap, limitFreeSpace, limitMetadata or limitFixed
+}
+
+// What bounds an attempt's durable spill limits (DurableReport.LimitedBy).
+const (
+	limitSpillCap  = "spill_cap"  // the spill cap (--spill-budget, or half the free space)
+	limitFreeSpace = "free_space" // no spill cap: the spill filesystem's free space
+	limitMetadata  = "metadata"   // the spill would allow more: the metadata ceiling, 262,144 slots
+	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000
+)
+
+// metadataBound is maxCertificateMetadata (tests lower it).
+var metadataBound int64 = maxCertificateMetadata
+
+// certMetadata is the memory a certificate of keys cs, ce and last is
+// charged: certificateOverhead and each key's allocation (its bytes, the
+// allocator's rounding of at most an eighth, and 16 bytes for the
+// smallest size classes). A sealed or recovered Cert holds no other key:
+// its range bounds and first key are dropped once written.
+func certMetadata(cs, ce, last string) int64 {
+	n := int64(certificateOverhead)
+	for _, k := range []string{cs, ce, last} {
+		if k != "" {
+			n += int64(len(k) + len(k)/8 + 16)
+		}
 	}
-	return int(min(max>>20, maxCertificates))
+	return n
+}
+
+// recoveryLimits are recovery's bounds, whatever the attempt: the largest
+// slots and H any attempt has, so no attempt's ledger is cut (Start then
+// applies the attempt's own limits: rejected.budget).
+var recoveryLimits = DurableLimits{Certificates: maxCertificates, History: maxHistory}
+
+// Limits is the durable spill's limits for a spill cap of spillCap bytes
+// (0: none) on a filesystem with free bytes free (Unlimited: not known):
+// one certificate slot per MiB of the cap, or without one of the free
+// space, at most 262,144 (the metadata ceiling), and H four records per
+// slot, at least 40,000. Below 16 MiB the cap is 0 (durable spill off).
+func Limits(spillCap, free int64) DurableLimits {
+	l := DurableLimits{Bytes: spillCap, By: limitSpillCap}
+	switch {
+	case spillCap > 0:
+	case free != Unlimited:
+		l.Bytes, l.By = free, limitFreeSpace
+	default:
+		return DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}
+	}
+	if l.Bytes < minCertificates*certificateBytes {
+		return l
+	}
+	n := l.Bytes / certificateBytes
+	if n > maxCertificates {
+		n, l.By = maxCertificates, limitMetadata
+	}
+	l.Certificates, l.History = int(n), max(minHistory, historyPerCertificate*int(n))
+	return l
 }
 
 // Cert is one durable file and, once sealed, its certificate (cs, ce].
@@ -127,6 +208,7 @@ type Cert struct {
 	reused      bool   // accepted by recovery
 	most, owned int64  // recovery: the largest frame's rows and declared storage (replay's decode bounds)
 	charged     int64  // bytes charged to the live spill budget (returned at unlink)
+	meta        int64  // its certMetadata charged to the cache (returned at retirement)
 	drained     bool   // its reader closed
 	retiring    bool   // queued for retirement or unlink
 	codec       string // recovery: the header's row codec ID
@@ -166,9 +248,10 @@ type Cache struct {
 	hasK   bool
 
 	mu        sync.Mutex
-	cap       int // certificate slots
-	slots     int // slots held: capturing, sealed and reused certificates
-	hist      int // ledger records in the prefix and written since, plus reservations
+	lim       DurableLimits // the attempt's slots and H (Start)
+	slots     int           // slots held: capturing, sealed and reused certificates
+	hist      int           // ledger records in the prefix and written since, plus reservations
+	meta      int64         // certMetadata of the certificates sealed or accepted and not retired
 	stopping  bool
 	failed    bool // the ledger failed: no new slot, records dropped, unlinks continue
 	fatal     error
@@ -207,6 +290,7 @@ type durableStats struct {
 	CapturePendingDropped atomic.Int64
 	NoSlot                atomic.Int64
 	HistoryExhausted      atomic.Int64
+	MetadataExhausted     atomic.Int64
 	AbandonedAwaited      atomic.Int64
 	AbandonedRefused      atomic.Int64
 	AbandonedUnfenced     atomic.Int64
@@ -249,11 +333,14 @@ type DurableReport struct {
 	Slots                 int              `json:"slots"`       // the certificate cap
 	History               int              `json:"history"`     // ledger records retained and reserved at the end
 	HistoryCap            int              `json:"history_cap"` // H
+	LimitBytes            int64            `json:"limit_bytes"` // the spill slots and H derive from (one slot per MiB)
+	LimitedBy             string           `json:"limited_by"`  // what bounds the slots: spill_cap, free_space, metadata, or fixed
 	CapturedRanges        int64            `json:"captured_ranges"`
 	CaptureAt             map[string]int64 `json:"capture_at"`
 	CapturePendingDropped int64            `json:"capture_pending_dropped"`
 	NoSlot                int64            `json:"no_slot"`
 	HistoryExhausted      int64            `json:"history_exhausted"`
+	MetadataExhausted     int64            `json:"metadata_exhausted"` // seals not certified: the metadata bound was reached
 	Abandoned             map[string]int64 `json:"abandoned"`
 	SealedFiles           int64            `json:"sealed_files"`
 	SealedDurable         int64            `json:"sealed_durable"`
@@ -270,7 +357,7 @@ type DurableReport struct {
 // DurableResume is a resume's account of the durable spill it found.
 type DurableResume struct {
 	LedgerDroppedBytes int64            `json:"ledger_dropped_bytes"`
-	LedgerCut          bool             `json:"ledger_cut"` // the prefix was cut at H records or 10,000 live certificates
+	LedgerCut          bool             `json:"ledger_cut"` // the prefix was cut at H records or the live certificates' bound
 	Accepted           int64            `json:"accepted"`
 	AcceptedBytes      int64            `json:"accepted_bytes"`
 	Rejected           map[string]int64 `json:"rejected"`
@@ -288,12 +375,12 @@ func (c *Cache) Report() *DurableReport {
 	}
 	s := &c.st
 	c.mu.Lock()
-	slots, hist, failed := c.cap, c.hist, c.failed
+	lim, hist, failed := c.lim, c.hist, c.failed
 	c.mu.Unlock()
-	r := &DurableReport{Slots: slots, History: hist, HistoryCap: historyCap,
+	r := &DurableReport{Slots: lim.Certificates, History: hist, HistoryCap: lim.History, LimitBytes: lim.Bytes, LimitedBy: lim.By,
 		CapturedRanges:        s.CapturedRanges.Load(),
 		CaptureAt:             map[string]int64{"range_start": s.CaptureAtStart.Load(), "fence": s.CaptureAtFence.Load()},
-		CapturePendingDropped: s.CapturePendingDropped.Load(), NoSlot: s.NoSlot.Load(), HistoryExhausted: s.HistoryExhausted.Load(),
+		CapturePendingDropped: s.CapturePendingDropped.Load(), NoSlot: s.NoSlot.Load(), HistoryExhausted: s.HistoryExhausted.Load(), MetadataExhausted: s.MetadataExhausted.Load(),
 		Abandoned: map[string]int64{"awaited": s.AbandonedAwaited.Load(), "refused": s.AbandonedRefused.Load(), "unfenced": s.AbandonedUnfenced.Load(),
 			"stopping": s.AbandonedStopping.Load(), "empty": s.AbandonedEmpty.Load()},
 		SealedFiles: s.SealedFiles.Load(), SealedDurable: s.SealedDurable.Load(), FlushNs: s.FlushNs.Load(), FlushCycles: s.FlushCycles.Load(),
@@ -431,10 +518,10 @@ func (c *Cache) reserve() bool {
 	switch {
 	case c.stopping || c.failed || c.fatal != nil || !c.started:
 		return false
-	case c.slots >= c.cap:
+	case c.slots >= c.lim.Certificates:
 		c.st.NoSlot.Add(1)
 		return false
-	case c.hist+2 > historyCap:
+	case c.hist+2 > c.lim.History:
 		c.st.HistoryExhausted.Add(1)
 		return false
 	}
@@ -465,9 +552,31 @@ func (c *Cache) sealable() bool {
 
 // sealed hands a sealed file's record to the flusher (its file and data
 // are synced); the node never waits for the ledger.
+//
+// A seal whose metadata would pass the metadata bound is not certified:
+// the file serves the live run only (its slot and history go back, no
+// record names it, so a recovery unlinks it as an orphan).
 func (c *Cache) sealed(d *Cert) {
+	m := certMetadata(d.cs, d.ce, d.last)
 	c.mu.Lock()
-	d.certified = true
+	if c.meta+m > metadataBound {
+		d.certified = false
+		if d.slot {
+			d.slot = false
+			c.slots--
+			c.hist -= 2
+		}
+		c.st.MetadataExhausted.Add(1)
+		c.mu.Unlock()
+		return
+	}
+	d.certified, d.meta = true, m
+	// Only its own key bytes stay (a fence's key may share a page's
+	// storage), and no key certMetadata does not charge: the bounds and
+	// first key were written.
+	d.cs, d.ce = strings.Clone(d.cs), strings.Clone(d.ce)
+	d.lo, d.hi, d.first = "", "", ""
+	c.meta += m
 	c.queue = append(c.queue, ledgerRec{cert: d})
 	c.st.SealedFiles.Add(1)
 	c.mu.Unlock()
@@ -538,6 +647,8 @@ func (c *Cache) retireLocked(d *Cert, why string) {
 		d.slot = false
 		c.slots--
 	}
+	c.meta -= d.meta
+	d.meta = 0
 	if !c.failed {
 		c.queue = append(c.queue, ledgerRec{cert: d, retire: why})
 	}

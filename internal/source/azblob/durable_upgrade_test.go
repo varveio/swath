@@ -72,7 +72,7 @@ func TestDurableLegacySpillUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.Start(1000, 0, nil)
+	cache.Start(order.Limits(1000<<20, 0), 0, nil)
 	defer cache.Close()
 	rep := cache.Report().Resume
 	if rep.Accepted != 0 || rep.Rejected["codec"] != 4 || rep.Rejected["corrupt"] != 0 || len(cache.Spans()) != 0 {

@@ -167,6 +167,9 @@ type Limits struct {
 	// (frozen for a resume: boundaries depend on it).
 	PartMaxRows int64
 	Spill       SpillLimits
+	// SegmentWorkers, when above 0, replaces the processors rule for the
+	// tail's segment workers (order.Options.SegmentWorkersAsked).
+	SegmentWorkers int
 	// maxEncoders is the encoders admitted once listing has ended
 	// (admitAfterListing): the default's, or Encoders when given
 	// (encodersGiven).
@@ -270,18 +273,41 @@ type Spill struct {
 // spillMax is the live spill cap for spill under dir: the configured one,
 // none for a negative one, else half the space free on dir's filesystem
 // (its nearest existing ancestor) when the run starts, after the reserve.
-func spillMax(l SpillLimits, dir string) int64 {
+// retained is the bytes of the certified spill a resume recovered there:
+// they count as free, being spill the cap already holds (their bytes are
+// charged to it), so a same-disk resume has the cap its killed run had.
+func spillMax(l SpillLimits, dir string, retained int64) int64 {
 	switch {
 	case l.Max > 0:
 		return l.Max
 	case l.Max < 0:
 		return 0
 	}
-	free := order.FreeBytes(existing(dir))
+	free := freeBytes(existing(dir))
 	if free == order.Unlimited {
 		return 0
 	}
-	return max(1, (free-l.Reserve)/2)
+	return halfFree(free+retained, l.Reserve)
+}
+
+// freeBytes is order.FreeBytes (tests replace it).
+var freeBytes = order.FreeBytes
+
+// halfFree is the default spill cap with free bytes free: half of them
+// after the reserve, at least one byte.
+func halfFree(free, reserve int64) int64 { return max(1, (free-reserve)/2) }
+
+// durableLimits is the durable spill's limits for a spill cap of max bytes
+// in dir (0: none, so the free space there, the retained certified spill
+// counted as free, bounds them).
+func durableLimits(max int64, dir string, retained int64) order.DurableLimits {
+	free := int64(order.Unlimited)
+	if max == 0 {
+		if free = freeBytes(existing(dir)); free != order.Unlimited {
+			free += retained
+		}
+	}
+	return order.Limits(max, free)
 }
 
 // existing is dir or its nearest existing ancestor: the filesystem a
@@ -1067,7 +1093,7 @@ func routerOptions(ctx context.Context, cfg Config, jr *runJournal, shared *orde
 func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (oopt order.Options, scratch string, err error) {
 	gauges := &order.Gauges{}
 	oopt = order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
-		After: jr.after(), Gauges: gauges, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
+		After: jr.after(), Gauges: gauges, SegmentWorkersAsked: cfg.Limits.SegmentWorkers, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
 	}
@@ -1105,7 +1131,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		oopt.SpillDir = filepath.Join(scratch, "spill")
 	}
 	if oopt.SpillDir != "" {
-		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
+		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir, jr.cacheOf().AcceptedBytes())
 		// Warned at the first spill, not here: most runs never spill, and
 		// a usage error found later must come alone.
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
@@ -1218,19 +1244,21 @@ func (a *attempt) startCache(oopt *order.Options, src registry.Source, cancel co
 	}
 	f, fences := src.(source.Fencing)
 	ru, reusing := src.(source.Reusing)
-	slots := order.CertificateCap(oopt.SpillMax)
+	lim := durableLimits(oopt.SpillMax, oopt.SpillDir, c.AcceptedBytes())
 	switch {
 	case oopt.SpillDir == "":
-		slots = 0
+		lim = order.DurableLimits{}
 	case !fences || !f.Fences() || !reusing:
-		slots, a.jr.off = 0, "the provider declares no coverage fences"
-	case slots == 0:
+		lim, a.jr.off = order.DurableLimits{}, "the provider declares no coverage fences"
+	case lim.Certificates == 0 && oopt.SpillMax == 0:
+		a.jr.off = "the free space for spill is below 16 MiB"
+	case lim.Certificates == 0:
 		a.jr.off = "the spill budget (--spill-budget) is below 16 MiB"
 	}
-	if err := c.Start(slots, oopt.SpillMax, func(err error) { cancel(err) }); err != nil {
+	if err := c.Start(lim, oopt.SpillMax, func(err error) { cancel(err) }); err != nil {
 		return err
 	}
-	if slots == 0 {
+	if lim.Certificates == 0 {
 		return nil
 	}
 	oopt.Durable = c

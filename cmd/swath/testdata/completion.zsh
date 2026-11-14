@@ -36,6 +36,7 @@ _swath_list() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -176,6 +177,7 @@ _swath_diag_list() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -191,6 +193,7 @@ _swath_diag_list() {
         '--no-journal[publish parts only at the end, without the journal resume needs]' \
         '--no-spill[wait on the sort buffer instead of spilling rows to disk]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
+        '--segment-workers=[workers writing the tail (0: one per two CPUs, at least 8)]:N: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -264,6 +267,7 @@ _swath_diag_count() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -329,6 +333,7 @@ _swath_resume() {
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
+        '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
@@ -342,6 +347,7 @@ _swath_resume() {
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
+        '--segment-workers=[workers writing the tail (0: one per two CPUs, at least 8)]:N: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \

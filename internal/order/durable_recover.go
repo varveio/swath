@@ -151,7 +151,8 @@ type entry struct {
 	last   string
 	bytes  int64
 	crc    uint32
-	order  int // the record's position (ties)
+	order  int   // the record's position (ties)
+	meta   int64 // its certMetadata
 }
 
 // RecoverDurable is a resume's recovery of its durable spill, single
@@ -161,17 +162,20 @@ type entry struct {
 // the files no record in it names, validates every recorded file and
 // classifies it: accepted (a replay range), or retired (covered by K,
 // missing, corrupt, foreign, overlapping), writing its retirements and
-// unlinks before it returns; Start applies the new caps. A missing
-// directory or ledger, or a foreign ledger header, starts afresh (every
-// spill file is unlinked). An error is the output's replacement or an
-// unsafe layout (a run failure), or ErrDurableUnavailable (the run goes on
-// without durable spill and relists).
+// unlinks before it returns; Start applies the attempt's limits. The
+// ledger is read within recoveryLimits, the largest any attempt has, never
+// within the resuming attempt's own: those depend on the free space as it
+// starts. A missing directory or ledger, or a foreign ledger header,
+// starts afresh (every spill file is unlinked). An error is the output's
+// replacement or an unsafe layout (a run failure), or
+// ErrDurableUnavailable (the run goes on without durable spill and
+// relists).
 func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string) (*Cache, error) {
 	c, err := newCache(root, verify, uuid, ident, codec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
-	c.resumed = true
+	c.resumed, c.lim = true, recoveryLimits
 	if k != nil {
 		c.k, c.hasK = *k, true
 	}
@@ -208,12 +212,12 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 //
 // The prefix is also cut where the history no writer could have made
 // begins: where its records plus one retirement per live entry would pass
-// H (a writer reserves both within H), and at a sealed record that would
-// make more than 10,000 certificates live at once (the largest cap any
-// attempt has). The scan and the inventory are bounded by
-// the persisted format, not by trusting the writer's admission; what is
-// cut is dropped like a damaged tail (its files are orphans, their
-// intervals relisted), which is always safe (ledger_cut).
+// the largest H (a writer reserves both within its H), and at a sealed
+// record that would make more certificates live at once than the largest
+// cap any attempt has (c.lim, recoveryLimits). The scan and the inventory
+// are bounded by the persisted format, not by trusting the writer's
+// admission; what is cut is dropped like a damaged tail (its files are
+// orphans, their intervals relisted), which is always safe (ledger_cut).
 func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	fi, err := dataset.NeedIn(c.root, c.rel(ledgerName), false, true)
 	if err != nil {
@@ -253,6 +257,7 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	}
 	entries := map[[16]byte]*entry{}
 	records := 0
+	var meta int64 // the live entries' certMetadata
 	// History: every record kept, plus the retirement each live entry will
 	// still write (recovery's, or the reservation of an accepted
 	// certificate), stays within H; a record that would pass it is where
@@ -270,7 +275,7 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 			off = at
 			break
 		}
-		_, live := entries[e.id]
+		was, live := entries[e.id]
 		grow := 1 // the record
 		switch {
 		case typ == ledgerRetired && live:
@@ -278,18 +283,26 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		case typ == ledgerSealed && !live:
 			grow = 2 // the seal and its retirement to come
 		}
-		if records+len(entries)+grow > historyCap || (typ == ledgerSealed && !live && len(entries) >= maxCertificates) {
-			off = at // past H, or more live certificates than any cap: cut here
+		sealing := typ == ledgerSealed && !live
+		if sealing {
+			e.meta = certMetadata(e.cs, e.ce, e.last)
+		}
+		if records+len(entries)+grow > c.lim.History || (sealing && (len(entries) >= c.lim.Certificates || meta+e.meta > metadataBound)) {
+			off = at // past the largest H, more live certificates than any cap, or past the metadata bound: cut here
 			c.st.LedgerCut.Add(1)
 			break
 		}
 		records++
 		switch {
 		case typ == ledgerRetired:
+			if live {
+				meta -= was.meta
+			}
 			delete(entries, e.id)
 		case !live:
 			e.order = records
 			entries[e.id] = e
+			meta += e.meta
 		} // a second seal of one file: the first stands
 	}
 	if dropped := size - off; dropped > 0 {
@@ -557,16 +570,17 @@ func (c *Cache) retireNow(ds []*Cert) error {
 	return nil
 }
 
-// Start applies this attempt's caps to the accepted certificates (above
-// cap slots, or past max retained bytes (0: none): the highest-keyed are
+// Start applies this attempt's limits to the accepted certificates (above
+// lim's slots, or past max retained bytes (0: none): the highest-keyed are
 // retired first, rejected_budget), charges the rest, and starts the
 // flusher, which owns the ledger from here; cancel is the attempt's, for a
-// fatal flusher error. cap 0 rejects every accepted certificate and opens
-// no slot (durable spill off for this attempt).
-func (c *Cache) Start(cap int, max int64, cancel func(error)) error {
+// fatal flusher error. No slot rejects every accepted certificate and
+// opens none (durable spill off for this attempt).
+func (c *Cache) Start(lim DurableLimits, max int64, cancel func(error)) error {
 	if c == nil {
 		return nil
 	}
+	cap := lim.Certificates
 	var drop []*Cert
 	var total int64
 	for _, d := range c.reused {
@@ -583,11 +597,12 @@ func (c *Cache) Start(cap int, max int64, cancel func(error)) error {
 		return err
 	}
 	c.mu.Lock()
-	c.cap, c.cancel = cap, cancel
+	c.lim, c.cancel = lim, cancel
 	c.slots = len(c.reused)
 	c.hist += len(c.reused) // each one's retirement
 	for _, d := range c.reused {
-		d.slot = true
+		d.slot, d.meta = true, certMetadata(d.cs, d.ce, d.last)
+		c.meta += d.meta
 		c.charge(d, d.bytes)
 		c.st.Accepted.Add(1)
 		c.st.AcceptedBytes.Add(d.bytes)
@@ -604,6 +619,19 @@ func (c *Cache) Gaps(n int) {
 	if c != nil {
 		c.st.Gaps.Store(int64(n))
 	}
+}
+
+// AcceptedBytes is the bytes of the certificates recovery accepted (before
+// Start applies the attempt's limits); 0 for nil or a fresh run.
+func (c *Cache) AcceptedBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	var n int64
+	for _, d := range c.reused {
+		n += d.bytes
+	}
+	return n
 }
 
 // Reused is the number of accepted certificates.
@@ -738,7 +766,7 @@ func (v *validator) run() rejection {
 				t.rows != rows || t.captured != captured || t.captured != d.captured || t.cs != d.cs || t.ce != d.ce || t.open != d.ceOpen || t.last != d.last {
 				return rejectCorrupt
 			}
-			d.rows, d.first = rows, t.first
+			d.rows = rows
 			var tl [tailSize]byte
 			if _, err := io.ReadFull(v.r, tl[:]); err != nil || int64(binary.LittleEndian.Uint64(tl[:8])) != start || string(tl[8:]) != durableMagic {
 				return rejectCorrupt
@@ -763,10 +791,11 @@ func (v *validator) header(body []byte) rejection {
 		return rejectForeign
 	}
 	dd := schema.NewDecoder(b[32:])
-	ident, codec := dd.Str(), strings.Clone(dd.Str())
+	ident, codec := dd.Str(), dd.Str()
 	codecVer := dd.Uvarint()
 	maxRows, maxDecode := dd.Uvarint(), dd.Uvarint()
-	lo, hi := strings.Clone(dd.Str()), strings.Clone(dd.Str())
+	dd.Str() // the range's bounds: a recovered certificate keeps none (certMetadata)
+	dd.Str()
 	open := dd.Byte()
 	if dd.Err() != nil || dd.Len() != 0 || open > 1 {
 		return rejectCorrupt
@@ -785,8 +814,8 @@ func (v *validator) header(body []byte) rejection {
 		return rejectCorrupt // a limit above the hard one rejects the file
 	}
 	v.maxRows, v.maxDecode = maxRows, min(maxDecode, maxSpillDecoded)
-	v.d.lo, v.d.hi, v.d.open = lo, hi, open == 1
-	v.d.codec, v.d.codecVer = codec, codecVer
+	v.d.open = open == 1
+	v.d.codec, v.d.codecVer = v.c.codec, codecVer
 	return accepted
 }
 

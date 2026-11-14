@@ -539,11 +539,13 @@ type options struct {
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	memProfileRate         int      // SWATH_MEMPROFILERATE, with memProfile
 	maxDuration, stall     time.Duration
+	spillWait              time.Duration // --spill-wait-timeout
 	partInterval           time.Duration
 	workers, encoders      int
 	partSize, rowBudget    size
 	spillBudget            zsize
 	spillReserve           zsize
+	segmentWorkers         int
 	resume, noJournal      bool
 	noSpill, spillCompress bool
 	spillPlain             bool
@@ -605,7 +607,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "segment-workers", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -903,7 +905,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}, SegmentWorkers: o.segmentWorkers},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
@@ -955,6 +957,8 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 				exitAfterGrace(exitDeadline, "--max-duration")
 			case errors.Is(c, errStuck):
 				exitAfterGrace(exitStuck, "--stall-timeout")
+			case errors.Is(c, errSpillWait):
+				exitAfterGrace(exitDiskFull, "--spill-wait-timeout")
 			}
 		})
 		defer stopGrace()
@@ -1012,7 +1016,8 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)
 	defer statusNow.Store(nil)
-	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
+	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait}
+	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()

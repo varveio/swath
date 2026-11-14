@@ -29,7 +29,8 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
 `swath diag list --no-spill` or a count, `features.order` is false for `swath du` and `swath diag count` (rows counted, not
 ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
-abandons by reason, retirements, retained bytes, and on a resume `resume` with what it accepted, rejected and
+abandons by reason, retirements, retained bytes, its limits with what they derive from (`slots`,
+`history_cap`, `limit_bytes`, `limited_by`), and on a resume `resume` with what it accepted, rejected and
 replayed; [ordering.md](ordering.md#durable-spill)) is absent when durable spill was off, and
 `spill.durable_off` then says why when it could have run (a version 7 journal, a spill budget below 16 MiB, a
 provider without fences, a directory that could not be set up).
@@ -107,7 +108,7 @@ for the report only: no decision reads whether a range is awaited.
 | `drain.segments.durable_files_read`, `.durable_boundaries` | files, boundaries | durable spill files (`order.Cache`) whose frames the segments read, and the segment boundaries that fall inside one of their frames |
 | `drain.segments.deferred_rows` | rows | versions schemas: rows a planned segment boundary moved past because they continued the group of the key before it (no part ends inside a key) |
 | `drain.segments.tree_bytes` | bytes | what the tree held when the segments were planned: not the segments' budget, which they take beside it (two budgets in all, at most) |
-| `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
+| `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `flag` (`swath diag list --segment-workers`), `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
 | `drain.segments.rolling.stretches`, `.segments`, `.rows` | stretches, parts, rows | a planned (seeded) run only: the listed tiles ahead of the drainer written as segments while listing went on, in stretches, each one's last part kept open for the serial drain; their segments and rows (also in `drain.segments.segments` and `.rows`). Against `stats.rows`, the share of the output written in parallel before listing ended; `writer_before_listing_done.parts` is what was published by then |
 | `drain.segments.rolling.time_ns`, `.open_wait_ns` | ns | the drainer's time inside the stretches (planning, waiting for their segments, retiring their spill: the serial drain stands meanwhile); the segments' time opening their parts (an encoder slot: the encoders admitted at start, every one busy) |
 | `drain.segments.rolling.not_engaged.*` | looks | looks at the listed tiles ahead that wrote no stretch, by reason: `frontier_listing` (the drainer's own tile still listing), `below_two_parts` (the listed rows ahead hold fewer than two parts), `not_planned` (part 0 not measured, or a recovered boundary ahead), `single_part`, `row_budget` (one worker fits), `one_encoder` (one encoder before listing ends: no more looks until it ends) |
@@ -248,6 +249,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `awaited.skipped.remainder` | count | pages | split | awaited pages not split: the bounded remainder is under 2 pages |
 | `awaited.skipped.lower_tiny` | count | pages | split | awaited pages not split: the lower child would be under 1 page |
 | `awaited.skipped.upper_tiny` | count | pages | split | awaited pages not split: the upper child would be under 1 page |
+| `awaited.skipped.window` | count | pages | seed_from | awaited pages not split: the only idle workers were held back by the frontier window (split.skipped.window) |
+| `split.skipped.window` | count | decisions | seed_from | no idle worker but those the frontier window held back, which feed only a range whose remainder holds two tiles or more (a planned run) |
 | `child_empty.lower` | count | ranges | split | lower split children that listed no key |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
 | `child_empty.by.reflect.lower` | count | ranges | split | empty lower children of a reflect pivot |

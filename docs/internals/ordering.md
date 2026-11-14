@@ -225,8 +225,17 @@ over the budget bytes per row the emitters measured; nothing before the first ro
 alone; with spill uncapped, no limit. The drainer, having drained and handed on every admitted tile, admits the
 next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
 stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
-admitted, so the workers the window holds back are idle demand, and the tiles admitted split for them as any
-range does (`keyrange` `TestPlanSplitsBehindTheWindow`).
+admitted. The workers the window holds back are idle, but demand only for a range whose remainder holds two
+tiles or more (a coarse cut's tile, a grown one, the open frontier), which splits for them as any range does
+(`keyrange` `TestPlanSplitsBehindTheWindow`); a tile-sized range is not sliced for them (`split.skipped.window`):
+while the window binds, the output, not the listing, sets the pace, and slicing would only add requests and
+overfetch. Measured on a production list of 85.9M keys at 2,048 workers under a 10 % spill cap before this
+rule: the held workers sliced the admitted tiles below a page (48,190 bounded splits, 27,447 empty upper children,
+47 % of the keys overfetched, 1.39 requests per 1,000 keys against 1.08 uncapped) (`TestPlanManyWorkersFewTiles`:
+256 workers, a window of a few tiles, the requests of one worker). The workers at the window wait on a condition
+of their own and are woken as room comes back, one per tile released, one when the tile refused fits, the next
+after each admission, one per child queued, and all at a stop or the plan's end, not at every step of the
+drainer.
 
 **The plan.** The range engine reads the prior lazily (a dataset's page index part by part, at most two parts
 ahead of the plan, from the first part ending after a resume key; a cut file from memory), checks every cut as
@@ -240,9 +249,12 @@ the plan's waiters; the reader is joined after the workers.
 listing whatever it holds (a region grown since the prior, keys appended past its last cut, the open frontier
 after it), and certified durable files stay on disk until K covers them. What it removes is the cause of spill
 on a fresh prior: rows listed across the whole keyspace ahead of the output. Rows ahead of the output stay near
-the window's rows plus one tile per worker, so a cap a fraction of a cold run's spill holds without a refused
-frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of the
-unseeded run's spill peak, none refused, the parts identical). The listed tiles ahead of the drainer leave
+the window's rows plus one tile per worker, so a cap a fraction of a cold run's spill is expected to hold without
+a refused frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of
+the unseeded run's spill peak, none refused, the parts identical). Expected, not guaranteed, even on a fresh prior
+with exact counts: admission gates tiles, not the listing inside a tile admitted. A tile of 200,000 rows that
+splits, whose lower range stalls while an upper range lists 100,000 poorly compressible rows of about 1 KiB, puts
+some 100 MB ahead of the output whatever the window; past the cap, its frames are refused as on any run. The listed tiles ahead of the drainer leave
 through several part writers at once ([rolling segments](#rolling-segments-during-listing)); the frontier tile
 still leaves through one. The read-ahead plans frames inside the tile being drained only (the
 plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
@@ -262,7 +274,8 @@ too), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); 
 ## The waits
 
 Every wait is on one of two condition variables under the stage's mutex, and every event that can make a
-waiter eligible broadcasts to both; each waiter rechecks its own condition. Each wait is driven to its wait
+waiter eligible broadcasts to both; each waiter rechecks its own condition. The one exception is the frontier
+window's, which has a third, woken one waiter at a time (below). Each wait is driven to its wait
 and released by one event in a test with a deterministic barrier (`hookWait`):
 
 | Wait | Who | Released by | Test |
@@ -274,7 +287,7 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
-| window (`work`) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | a tile released, the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, spill credit, a stop | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit; all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
 | plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
@@ -496,7 +509,12 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at its first rows frame spilled, `order.Options.Spilling`; a run that never spills does not: `TestTmpfsSpillWarning`); `progress.json` carries the same as live values with their peaks
-  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin).
+  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin),
+  with `spill_max_bytes`, `spill_reserve_bytes` and `spill_pressure_since`: since when spill has stood refused
+  (the spiller's `full`) while workers wait on it, in publish or at admission, recorded where either changes
+  under the spiller's refusal mutex. It is present only while that holds and listing is not done; since `full`
+  clears at every credit return, a wait that comes back within 30 s keeps its start (`TestSpillPressure`). The command's watchdog reads it (`spillWatch`): the `spill_pressure` event at 2
+  minutes, and `--spill-wait-timeout`.
   The stage's `Stats` carry `SpillPeak` and `SpillRefused`, the report's `spill.peak_bytes` and `spill.refused`
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve
   larger than the disk spills nothing).
@@ -564,7 +582,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
-  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too; `swath diag list --segment-workers N` replaces that last rule for a measurement, the other bounds standing. And the row budget, at plan time:
   each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
   gathers, the batch its encoder writes and its part's queue (`dataset.SegmentPlan.Queue`, two batches; the open part
   the first continues has the serial part's 16-batch queue, and the router holds that segment to two queued
@@ -785,11 +803,38 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   uncertified, and its slot and history go back (`TestDurableAbandonThenSpill`).
 - **Slots and history.** One non-blocking reservation takes a certificate slot and two ledger records (its
   seal and its retirement); without either the range spills disposably, as before (`no_slot`,
-  `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). The cap is one slot
-  per MiB of the spill cap, clamped to 16..10,000 (10,000 without a cap; below 16 MiB durable spill is off,
-  `durable_off`). The history cap H = 40,000 bounds the ledger's retained prefix plus outstanding
-  reservations; on a resume the prefix's record count is what counts, so history a truncation dropped is
-  refunded (`TestDurableHistoryRace`: racing captures never pass H).
+  `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). Both limits scale
+  with the spill the attempt may hold (`order.Limits`): one slot per MiB of the spill cap, or without a cap
+  of the spill filesystem's free space when the run starts (on a resume the certified files it kept count as
+  free in both), at most 262,144 slots, the metadata ceiling (10,000 when neither is known; below 16 MiB
+  durable spill is off, `durable_off`), and a history cap H of four records per slot, at least 40,000. H
+  bounds the ledger's retained prefix plus outstanding reservations; on a resume the prefix's record count is
+  what counts, so history a truncation dropped is refunded (`TestDurableHistoryRace`: racing captures never
+  pass H). The report says what the limits derive from and what bound the slots (`limit_bytes`;
+  `limited_by`: `spill_cap`, `free_space`, `metadata` or `fixed`).
+
+  The limits were fixed at 10,000 slots and H = 40,000 until they bound billion-key listings, which spill
+  nearly every range ahead of the output at once ([measurements](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)):
+  73,081 spilled ranges, 20,000 sealed. Those listings spilled 2.3 to 2.8 MiB per range, so one slot per MiB
+  admits every range, and H every range's seal and retirement twice over. A listing whose ranges spill less
+  than 1 MiB each on average, or whose spill turns over more than about twice within one ledger (the ledger
+  is never compacted), still runs out (`no_slot`, `history_exhausted`) and relists those ranges after a
+  crash. The bounds, per MiB of the spill the limits derive from: in memory one live certificate; and
+  whatever the spill at most 512 MiB of certificate metadata. Each certificate is charged what it holds
+  (`certMetadata`: 512 bytes for its `Cert`, file name and recovery's ledger entry and map slot, plus its three
+  keys with the allocator's rounding; 893 bytes with 99-byte keys, 4,016 with 1 KiB keys, measured above what
+  recovery holds by `TestDurableMetadataCharge`) from its seal, or recovery's reading of its record, to its
+  retirement. A seal past the bound is not certified (`metadata_exhausted`: the file serves the live run,
+  its slot and history go back; `TestDurableMetadataBound`), and recovery cuts the ledger before a record
+  past it (`ledger_cut`). A sealed or recovered certificate keeps no other key: its range bounds and first
+  key are dropped once written, and its keys are its own copies. The slots stop at 262,144, the bound at a
+  2 KiB charge (keys of about 300 bytes), which holds 590 to 720 GiB of spill at 2.3 to 2.8 MiB per range (a
+  `--spill-budget none` run on a 4 TiB disk stops there, `limited_by` `metadata`); with longer keys the bytes
+  bind first. On disk at most two
+  certificates' records, a seal of at most 56 bytes plus its three keys and a 26-byte retirement each
+  (about 0.07 % of the spill with 100-byte keys, 0.6 % with 1 KiB keys); and a recovery scan of the ledger
+  that read 100,000 records of 100-byte keys in about 40 ms from the page cache
+  ([measurements](measurements.md#durable-spill-limits-2026-11-14)).
 - **Seal.** After `Expand` returns and its last batch is published, outside the order mutex, a capturing
   file whose last fence closes it (no row after it) is sealed with `ce` that fence: the trailer and tail are
   written, the file is fsynced, and its record goes to the flusher; the node is marked done only then, and
@@ -841,10 +886,14 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
-  trusting the writer: the scan stops where the records kept plus one retirement owed per live certificate
-  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more than
-  10,000 certificates live (the largest cap any attempt has); the ledger is truncated there like a damaged
-  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`);
+  trusting the writer, within the largest limits any attempt has (262,144 certificates, 512 MiB of their
+  metadata, H = 1,048,576), never
+  the resuming attempt's, which depend on the free space it finds: the scan stops where the records kept plus one retirement owed per live certificate
+  (written by recovery, or reserved for an accepted one) would pass that H (`TestDurableRecoveryHistory`), and before a sealed record that would make more
+  certificates live than that; the ledger is truncated there like a damaged
+  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`;
+  `TestDurableRecoveryPastFixedLimits` recovers, starts and replays a planted state past the old fixed bounds,
+  killed mid replay and recovered again);
   the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
   CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
   `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the
@@ -865,8 +914,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   consumes every rows frame, pre-capture included. Replayed rows reach the order stage without the
   provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
   `objects`, `pages`, `requests` or the filters' counts.
-- **Report.** `resources.spill.durable`: `slots`, `history`, `captured_ranges`, `capture_at.{range_start,fence}`,
-  `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
+- **Report.** `resources.spill.durable`: `slots`, `history`, `history_cap`, `limit_bytes`, `limited_by`, `captured_ranges`, `capture_at.{range_start,fence}`,
+  `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
   resume `resume.{ledger_dropped_bytes, ledger_cut, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},

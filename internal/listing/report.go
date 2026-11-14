@@ -38,9 +38,13 @@ import (
 // the order stage's waits by site (resources.publish_wait_ns,
 // admission_wait_ns, idle_wait_ns and their peak_* twins),
 // resources.spill.refused_ns and refused_spells, and
-// resources.drain.writer_before_listing_done. 9 adds resources.window, the
-// frontier window of a run planned from a counted --seed-from (#535).
-const ReportVersion = 10
+// resources.drain.writer_before_listing_done. 9 adds fields only (#513):
+// resources.spill.durable.limit_bytes and limited_by (the spill the
+// certificate slots and the ledger history cap derive from). 10 adds
+// resources.window, the frontier window of a run planned from a counted
+// --seed-from (#535). 11 adds resources.drain.segments.rolling, the segments a
+// seeded run writes while listing goes on (#535).
+const ReportVersion = 11
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -275,9 +279,10 @@ type Outcome struct {
 	Complete   bool   `json:"complete"`              // the listing reached the end of its scope
 	StopReason string `json:"stop_reason,omitempty"` // "completed", or why it stopped early
 	// StopSource is what stopped a run that was stopped: sigint, sigterm,
-	// liveness_watchdog (--stall-timeout), timebox (--max-duration), with
-	// "+forced_exit" when it did not stop within the shutdown grace; empty
-	// for a run that ended on its own.
+	// liveness_watchdog (--stall-timeout), timebox (--max-duration),
+	// spill_wait (--spill-wait-timeout), with "+forced_exit" when it did
+	// not stop within the shutdown grace; empty for a run that ended on its
+	// own.
 	StopSource string `json:"stop_source,omitempty"`
 	// Unreadable counts the entries that could not be read: the rows and
 	// totals leave them out, although Complete may be true (the manifest's

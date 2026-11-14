@@ -37,6 +37,7 @@ type plan struct{}
 
 func (plan) Start(context.Context, func()) func() { return func() {} }
 func (plan) RowBytes() float64                    { return 3 }
+func (plan) Waiting(int)                          {}
 func (plan) Next(admit func(int64) bool) (any, bool, bool, error) {
 	return 5, admit(9), false, nil
 }

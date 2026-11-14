@@ -46,7 +46,7 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 		if stream == nil {
 			stream = &cutSlice{cuts: pr.Cuts}
 		}
-		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), after: p.resumeKey(), first: true}
+		p.plan = &plan[P]{p: p, stream: stream, fill: float64(q*p.opt.PageSize - 1), tileKeys: float64(q * p.opt.PageSize), after: p.resumeKey(), first: true}
 		p.plan.lo, p.plan.last = p.plan.after, p.plan.after
 		p.c.Set(cSeedFromTilePages, int64(q))
 		p.c.Set(cSeedFromParts, int64(pr.Parts))
@@ -65,10 +65,11 @@ func (p *Engine[P]) Planner() source.Planner[Range] {
 // as it is made (cutReuse, one state across tiles). Only the order stage
 // calls Next, under its lock; the engine's state is changed under p.mu.
 type plan[P any] struct {
-	p      *Engine[P]
-	stream source.CutStream
-	fill   float64
-	after  string // the resume key ("" none)
+	p        *Engine[P]
+	stream   source.CutStream
+	fill     float64
+	tileKeys float64 // a tile's keys: its pages at the page size
+	after    string  // the resume key ("" none)
 
 	read    int        // cuts read
 	prev    string     // the last cut read
@@ -85,14 +86,22 @@ type plan[P any] struct {
 
 	reuse reuseCut
 	ready []Range // ranges made and not yet admitted
-	eof   bool
-	err   error
+	// made are the tiles in ready: their expected keys and ranges (a tile
+	// cut around reused spans can be several), until the first is
+	// admitted and the tile's account opens.
+	made map[int32]madeTile
+	eof  bool
+	err  error
 }
 
 // Start reads the prior ahead (source.Planner).
 func (pl *plan[P]) Start(ctx context.Context, wake func()) func() {
 	return pl.stream.Start(ctx, pl.after, wake)
 }
+
+// Waiting records the workers the frontier window holds back
+// (source.Planner): the demand a split counts (Engine.demand).
+func (pl *plan[P]) Waiting(n int) { pl.p.windowHeld.Store(int64(n)) }
 
 // RowBytes is the prior's stored bytes per row (source.Planner).
 func (pl *plan[P]) RowBytes() float64 {
@@ -139,6 +148,10 @@ func (pl *plan[P]) Next(admit func(rows int64) bool) (Range, bool, bool, error) 
 	pl.ready[0] = Range{}
 	pl.ready = pl.ready[1:]
 	p.lock()
+	if m, ok := pl.made[r.tile]; ok && r.tile > 0 {
+		p.tileRanges(r.tile, m.est, m.ranges)
+		delete(pl.made, r.tile)
+	}
 	p.account(time.Now())
 	p.queued += p.queue([]Range{r})
 	p.c.Max(cMaxQueued, int64(p.queued))
@@ -223,12 +236,32 @@ func (pl *plan[P]) close() {
 	p := pl.p
 	r := pl.tile(Range{lo: pl.lo, hi: pl.hi, est: pl.acc, estOK: true, prior: true})
 	p.lock()
-	p.tiles = append(p.tiles, tileAccount{est: pl.acc})
-	r.tile = int32(len(p.tiles))
+	p.lastTile++
+	r.tile = p.lastTile
 	p.unlock()
 	p.c.Add(cSeedFromExpected, int64(pl.acc))
 	pl.lo, pl.acc, pl.filled = pl.hi, 0, false
+	n := len(pl.ready)
 	pl.ready = p.cutReuse(&pl.reuse, r, pl.ready)
+	m := madeTile{est: r.est}
+	for _, c := range pl.ready[n:] {
+		if c.tile == r.tile {
+			m.ranges++
+		}
+	}
+	if m.ranges > 0 { // a tile wholly inside reused spans lists nothing: no account
+		if pl.made == nil {
+			pl.made = map[int32]madeTile{}
+		}
+		pl.made[r.tile] = m
+	}
+}
+
+// madeTile is a tile made and not yet admitted: its expected keys and the
+// ranges it was cut into.
+type madeTile struct {
+	est    float64
+	ranges int
 }
 
 // end closes the plan at the end of the prior: its last cut completes, its

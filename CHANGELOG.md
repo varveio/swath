@@ -8,15 +8,31 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: a seeded run writes the tiles already listed ahead of its output as several Parquet parts at once
   while listing goes on, instead of one part at a time until listing ends: each such stretch is cut with the
   part router's own rule, so the parts are the same, byte for byte without the part interval, and its last part
-  stays open for the rows after it. The run report (`report_version` 10) adds
+  stays open for the rows after it. The run report (`report_version` 11) adds
   `resources.drain.segments.rolling` (#535).
 
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window sized from `--spill-budget` and `--sort-buffer`, so rows listed ahead of the
   output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
-  The run report (`report_version` 9) adds `resources.window`; the range engine counts `seed.from.merged` and
+  The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
   `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) (#535).
+- Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
+  live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
+  without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted
+  (`metadata_exhausted`), and a ledger history of four records per
+  slot, at least 40,000; a resume reads the ledger within the largest limits, whatever free space it finds. A
+  billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every finished range now
+  fits, so a resume relists the ranges unfinished at the stop. With the default spill cap a resume counts the
+  certified files it kept as free space, so on the same disk it no longer rejects those that fit the stopped
+  run's cap. The run report (`report_version` 9) says what the limits derive from:
+  `resources.spill.durable.limit_bytes` and `limited_by` (#513).
+- Go port: a sorted run whose spill cap is far too small, so that listing waits on the output, says so: once
+  spill has stood refused with workers waiting for 2 minutes, the error event `spill_pressure` names the wait,
+  spill and its cap, the output's rate and the remedy, and repeats every 30 minutes while it lasts
+  (`order.spill_pressure_since` in `progress.json`). `--spill-wait-timeout DURATION` (default 0: wait) stops
+  such a run instead: exit 74, `cause` `spill_budget`, `stop_source` `spill_wait`, resumable with more disk or
+  a larger `--spill-budget` (#535).
 
 - Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
   `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`
@@ -54,7 +70,7 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: `reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
-  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `7264a9f88420`).
+  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `8ceebf48d986`).
   The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
   `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
   and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.

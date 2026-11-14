@@ -138,6 +138,7 @@ const (
 	WorkersByEncoders    = "encoders"    // the encoders admitted after listing
 	WorkersByProcessors  = "processors"  // one per spare processor, at most one per two
 	WorkersByDescriptors = "descriptors" // Options.SegmentWorkers
+	WorkersByFlag        = "flag"        // Options.SegmentWorkersAsked (--segment-workers)
 	WorkersByRowBudget   = "row_budget"  // what the row budget leaves holds no more (segmentShare)
 	WorkersBySegments    = "segments"    // fewer segments than workers
 )
@@ -324,8 +325,12 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		}
 	}
 	k, by := pl.Encoders, WorkersByEncoders
-	if p := min(spareProcs(), max(minSegmentWorkers, aheadProcs()/2)); p < k {
-		k, by = p, WorkersByProcessors
+	p, pby := min(spareProcs(), max(minSegmentWorkers, aheadProcs()/2)), WorkersByProcessors
+	if a := o.opt.SegmentWorkersAsked; a > 0 {
+		p, pby = a, WorkersByFlag
+	}
+	if p < k {
+		k, by = p, pby
 	}
 	if c := o.opt.SegmentWorkers; c > 0 && c < k {
 		k, by = c, WorkersByDescriptors
