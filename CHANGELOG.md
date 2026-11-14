@@ -35,7 +35,7 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: `reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
-  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `3e9490c709de`).
+  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `a1fceed4bd1d`).
   The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
   `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
   and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.
