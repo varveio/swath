@@ -124,11 +124,11 @@ type window[R, P any] struct {
 }
 
 // bind tells the plan when the window binds: from its first refusal once
-// rows are measured until the plan ends (source.Planner's Bound: idle
+// rows are measured, for the rest of the run (source.Planner's Bound: idle
 // workers are then not demand for slicing the tiles admitted; mu held).
-// It does not lapse at each admission: a window that refused once admits
-// as tiles are written, and each lapse would hand the idle workers to the
-// tiles admitted until the next refusal.
+// It does not lapse at each admission, nor when the plan ends: a window
+// that refused admits as tiles are written, the output sets the pace, and
+// a lapse would hand every idle worker to the tiles still listing.
 func (w *window[R, P]) bind(on bool) {
 	if w.bound != on {
 		w.bound = on
@@ -320,7 +320,6 @@ func (o *run[R, P]) measured(units int64, rows int) {
 // without mu; mu held).
 func (o *run[R, P]) endPlan() bool {
 	o.win.done = true
-	o.win.bind(false) // every tile admitted: idle workers are demand again
 	o.win.root.state = done
 	o.work.Broadcast()
 	o.winCond.Broadcast()

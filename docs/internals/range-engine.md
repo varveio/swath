@@ -165,7 +165,7 @@ request per tile. A cut coarser than a tile (a counted cut file of one cut per p
 which splits on demand as any range. Reused certificates are cut out of each tile as it is made, one position
 among the spans kept from tile to tile, so a certificate across several tiles is replayed once and every gap
 around it listed. A tile is queued work for the split demand only once admitted, and once the order stage's
-window binds (`Planner.Bound`: it refused a tile, until the plan ends) idle workers are demand only for a range whose
+window binds (`Planner.Bound`: it refused a tile; for the rest of the run) idle workers are demand only for a range whose
 remainder holds two tiles or more
 (`split.skipped.window` counts the splits refused for want of other demand). A tile's account (its expected
 keys and the keys its ranges listed, for `seed.from.error.*`) opens when it is admitted and is retired into the

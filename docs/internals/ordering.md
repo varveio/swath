@@ -225,7 +225,7 @@ over the budget bytes per row the emitters measured; nothing before the first ro
 alone; with spill uncapped, no limit. The drainer, having drained and handed on every admitted tile, admits the
 next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
 stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
-admitted. Once the window binds (it refused a tile, until the plan ends), idle workers are demand only for a range whose remainder holds two
+admitted. Once the window binds (it refused a tile; for the rest of the run), idle workers are demand only for a range whose remainder holds two
 tiles or more (a coarse cut's tile, a grown one, the open frontier), which splits for them as any range does
 (`keyrange` `TestPlanSplitsBehindTheWindow`); a tile-sized range is not sliced for them (`split.skipped.window`):
 while the window binds, the output, not the listing, sets the pace, and slicing would only add requests and
