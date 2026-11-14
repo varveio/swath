@@ -830,7 +830,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	ctx, cancel := context.WithCancelCause(ctx)
 	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes, schema: s}
 	if sg, ok := sink.(Segmenter[P]); ok {
-		o.seg = &segState[P]{sg: sg, waitRows: -1, roll: RollingStats{NotEngaged: map[string]int64{}}}
+		o.seg = &segState[P]{sg: sg, waitRows: -1, rollWait: -1, roll: RollingStats{NotEngaged: map[string]int64{}}}
 	}
 	o.work = sync.NewCond(&o.mu)
 	o.winCond = sync.NewCond(&o.mu)

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,4 +349,39 @@ func TestRollingEngagesDuringListing(t *testing.T) {
 		t.Fatalf("rolling %+v, %d segments at once, %d closed when listing ended", rl, s.maxWriting, closedAtListed)
 	}
 	t.Logf("rolling %+v; %d parts, %d closed by segments before listing ended", *rl, len(s.parts), closedAtListed)
+}
+
+// TestSegmentsLeaveIdleWorkersAlone: the tail's segments, writing rows held
+// in memory, do not wake the listing workers, idle once listing is done:
+// at 64 workers they wait at idle a few times each over the whole tail,
+// not once per unit written (a broadcast per unit woke every worker for
+// each, the tail slower by half at 2,048 workers).
+func TestSegmentsLeaveIdleWorkersAlone(t *testing.T) {
+	withProcs(t, 9)
+	const workers = 64
+	f := &frontier{slowPages: 2, siblings: 40, sibPages: 20, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	s := &partSink{limit: 20_000, encoders: 8}
+	var listed atomic.Bool
+	var idle atomic.Int64 // idle waits after listing is done
+	hookWait = func(site string) {
+		if site == waitIdle && listed.Load() {
+			idle.Add(1)
+		}
+	}
+	t.Cleanup(func() { hookWait = nil })
+	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: workers, Budget: 1 << 30,
+		ListingDone: func() { listed.Store(true) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	units := int64(f.siblings * f.sibPages)
+	t.Logf("segments %d, %d rows; %d idle waits after listing, %d units", st.Segments.Segments, st.Segments.Rows, idle.Load(), units)
+	if st.Segments.Reason != SegmentEngaged || st.Segments.Segments < 4 {
+		t.Fatalf("segments %+v", st.Segments)
+	}
+	if idle.Load() > 4*workers {
+		t.Fatalf("%d idle waits after listing at %d workers: the segments woke them", idle.Load(), workers)
+	}
 }

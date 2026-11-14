@@ -195,9 +195,13 @@ type segState[P any] struct {
 	// part, then from each stretch); off stops rolling until listing ends
 	// (one encoder admitted before then).
 	seen     int64
+	rollWait int64 // asked when the rule could not be stated: again past this many rows handed on
 	partRows int64
 	off      bool
-	roll     RollingStats
+	// unwoken: tree bytes the workers released since they last woke the
+	// listing workers (segRelease; mu).
+	unwoken int64
+	roll    RollingStats
 }
 
 // unit is a run of rows still to hand on: an in-memory item's rows, or a
@@ -223,13 +227,13 @@ type segment struct {
 // now: listing is done, or (rolling) more tiles are listed than at its
 // last look. Without mu (drainer only).
 func (o *run[R, P]) segmentsDue() bool {
-	if o.seg == nil || o.seg.tried || o.handed() <= o.seg.waitRows {
+	if o.seg == nil || o.seg.tried {
 		return false
 	}
 	if o.listedNotified.Load() {
-		return true
+		return o.handed() > o.seg.waitRows
 	}
-	return o.win != nil && !o.seg.off && o.win.listed.Load() != o.seg.seen
+	return o.win != nil && !o.seg.off && o.win.listed.Load() != o.seg.seen && o.handed() > o.seg.rollWait
 }
 
 // stretchDue reports whether a stretch is worth planning now (mu held,
@@ -241,7 +245,7 @@ func (o *run[R, P]) stretchDue() bool {
 		return true
 	}
 	o.seg.seen = o.win.listed.Load()
-	rows, ok := o.listedAhead()
+	rows, ok := o.listedAhead(2 * o.seg.partRows)
 	switch {
 	case !ok:
 		o.seg.notEngaged(RollFrontierListing)
@@ -256,9 +260,10 @@ func (o *run[R, P]) stretchDue() bool {
 func (s *segState[P]) notEngaged(why string) { s.roll.NotEngaged[why]++ }
 
 // listedAhead is the rows held by the run of listed tiles that starts with
-// the drainer's own (its node's tile, or the plan root's next child), and
-// false when that tile is still listing (mu held).
-func (o *run[R, P]) listedAhead() (int64, bool) {
+// the drainer's own (its node's tile, or the plan root's next child), summed
+// until they reach enough, and false when that tile is still listing (mu
+// held).
+func (o *run[R, P]) listedAhead(enough int64) (int64, bool) {
 	if len(o.path) == 0 || o.path[0].n != o.win.root {
 		return 0, false
 	}
@@ -272,7 +277,7 @@ func (o *run[R, P]) listedAhead() (int64, bool) {
 	}
 	items := o.win.root.items
 	j := o.path[0].i
-	for ; j < len(items); j++ {
+	for ; j < len(items) && (rows < enough || j == o.path[0].i); j++ {
 		t := items[j].child.tile
 		if t.open.Load() != 0 {
 			break
@@ -309,12 +314,14 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	pl, ok := sg.Plan()
 	o.mu.Lock()
 	if !ok {
-		o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
-		if !listed {
+		if listed {
+			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
+		} else {
 			// Asked again once more rows are handed on, whether or not
-			// another tile is listed by then.
+			// another tile is listed by then; the tail's wait (waitRows)
+			// is left alone.
 			o.seg.notEngaged(SegmentNotPlanned)
-			o.seg.seen = -1
+			o.seg.seen, o.seg.rollWait = -1, o.handed()
 		}
 		return false, nil
 	}
@@ -412,9 +419,11 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		switch {
 		case err != nil:
 			return false, err
-		case !began:
+		case !began && listed:
 			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
-			why, o.seg.seen = SegmentNotPlanned, -1
+			why = SegmentNotPlanned
+		case !began:
+			why, o.seg.seen, o.seg.rollWait = SegmentNotPlanned, -1, o.handed()
 		case tight:
 			why = SegmentRowBudget
 			if end.final {
@@ -687,7 +696,16 @@ func (o *run[R, P]) segRelease(c, tree int64) {
 	o.buffered -= tree
 	o.seg.freed += tree
 	o.drain.Broadcast()
-	o.work.Broadcast() // listing workers held at admission (rolling)
+	if o.listedAt.IsZero() {
+		// A stretch written while listing goes on: the workers held at
+		// admission wait on work, woken as the drainer's release wakes
+		// them, once per releaseEvery bytes; after listing, never (every
+		// idle worker would wake for each unit written).
+		if o.seg.unwoken += tree; o.seg.unwoken >= o.releaseEvery {
+			o.seg.unwoken = 0
+			o.work.Broadcast()
+		}
+	}
 	o.mu.Unlock()
 }
 

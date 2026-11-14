@@ -744,7 +744,9 @@ rows, the drainer's time inside them, the segments' time opening their parts, an
 stretch, by reason; `writer_before_listing_done` counts the parts published before listing ended. Tests: `order`
 `TestRollingCutWhereTheSinkWould` (random plans, unique keys and groups, spill on and off, 2, 4 and 8 encoders,
 listing ending inside a stretch: the parts the serial drain's), `TestRollingEngagesDuringListing`,
-`TestRollingTrailerFailureClosesNoPart`, `TestRollingFailureMidStretch`; `parquetout` `TestKeptPartContinuesAsWrite`;
+`TestRollingTrailerFailureClosesNoPart`, `TestRollingFailureMidStretch`, `TestSegmentsLeaveIdleWorkersAlone` (the
+segments wake the listing workers held at admission once per `--sort-buffer`/16 released while listing goes on,
+never after it: at 64 workers a waking per unit written cost about 200 idle wake-ups each); `parquetout` `TestKeptPartContinuesAsWrite`;
 `listing` `TestRollingIsTheSerialRun` (seeded from a dataset and from a coarse counted cut file, 1, 4 and 64
 workers, spill on and off, `--all-versions`: the one-encoder unseeded run's parts; held so that it must roll),
 `TestCrashMatrix` (`s3-rolling`: every rolling crash point, listing ending inside a stretch, a cancellation and
