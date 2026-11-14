@@ -41,9 +41,9 @@ const spillRowBytes = 64
 const (
 	WindowSpillCap  = "spill_cap" // half the spill cap over a spilled row's bytes, with what the budget holds
 	WindowBudget    = "budget"    // spill off: what the budget holds
-	WindowUnbounded = "unbounded" // spill without a cap: no limit
-	WindowRun       = "run"       // the run's own bound, under the others: a tile per worker and four parts
-	WindowSet       = "set"       // the plan's set rows (swath diag list --seed-from-window-rows), under the others
+	WindowUnbounded = "unbounded" // spill without a cap: no storage limit (the target applies)
+	WindowTarget    = "rows"      // the target, windowTarget rows, under the spill cap's
+	WindowSet       = "set"       // the plan's set rows (swath diag list --seed-from-window-rows), under the spill cap's
 	WindowRows      = "rows"      // a refusal: the charges and the tile past the window's rows
 	WindowSpill     = "spill"     // a refusal: live spill past half its cap, or a frame refused
 	WindowGrowth    = "growth"    // a refusal: a held tile grown past growthFactor
@@ -166,22 +166,29 @@ const (
 	admitFailed
 )
 
-// windowParts is the parts' worth of rows the run's own bound gives the
-// writers ahead of the output (with a tile per worker).
-const windowParts = 4
+// windowTarget is the window's rows by default: a measured starting
+// point, about 250 tiles of 32 pages, enough for about 5M rows a second of
+// listing at 50 ms a page while one writer takes about 1M rows a second
+// (2,048 workers: a window of about 8.9M rows finished a median 25 s, one
+// that never bound 41 s). An admission target, not a storage or recovery
+// bound.
+const windowTarget = 8_000_000
 
 // windowRows is the window's rows and the term that set it (mu held): the
-// run's own bound (a tile per worker and windowParts parts of the prior's,
-// or the plan's set rows) where it is under what the spill cap and the
-// budget give, so a small disk still binds first.
+// target (windowTarget, or the plan's set rows) where it is under what the
+// spill cap and the budget give, so a small disk still binds first; with
+// spill off, what the budget holds alone.
 func (o *run[R, P]) windowRows() (float64, string) {
 	rows, by := o.storageRows()
-	run, rby := float64(o.win.sizes.WindowRows), WindowSet
-	if run == 0 {
-		run, rby = float64(o.opt.Workers)*o.win.sizes.TileRows+windowParts*o.win.sizes.PartRows, WindowRun
+	if o.sp == nil {
+		return rows, by
 	}
-	if run > 0 && run < rows {
-		return run, rby
+	target, tby := float64(o.win.sizes.WindowRows), WindowSet
+	if target == 0 {
+		target, tby = windowTarget, WindowTarget
+	}
+	if target < rows {
+		return target, tby
 	}
 	return rows, by
 }
@@ -250,8 +257,8 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 		return admitDone, nil
 	case !ok && why != "":
 		w.why = why
-		if !force && w.rows.Load() > 0 {
-			w.bind(true) // a refusal of what the run measured, not of the empty window at its start
+		if !force && (o.sp != nil || w.rows.Load() > 0) {
+			w.bind(true) // not the empty window of a run without spill before its first rows
 		}
 		return admitRefused, nil
 	case !ok:

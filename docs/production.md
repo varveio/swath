@@ -71,8 +71,7 @@ per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still lis
 
 A prior with counts (a previous dataset, or a cut file with counts) also changes what is listed ahead of the
 output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
-yet written stay within a window: a tile per worker and a few parts' rows, smaller still when `--spill-budget`
-and `--sort-buffer` hold less
+yet written stay within a window of 8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold less
 ([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
 near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
 no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a

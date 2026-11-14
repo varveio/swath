@@ -219,15 +219,16 @@ range in it drained) and nothing of it is held.
 held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (`--spill-budget`)
 and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
 ahead of a grown one until the frontier passes it). Otherwise it waits at the window (`window`) holding no
-range. The window's rows are the run's own bound: a tile per worker and four of the prior's parts (its rows over
-its parts; none for a cut file), `run`, or the rows `swath diag list --seed-from-window-rows` sets, `set`; but
-never more than what the storage gives: half the spill cap over a spilled row's bytes (the run's frames' bytes
-over their rows, before the first frame the prior's part bytes per row, else 64) plus what the row budget holds
-(its bytes over the budget bytes per row the emitters measured; nothing before the first rows), `spill_cap`;
-with spill off, the latter alone, `budget`; with spill uncapped, no storage limit. So the window binds on a
-generously sized disk too: listing in order beats listing ahead, spilling and draining a tail (measured at
-2,048 workers: a window bound at about 8M rows finished a median 25 s against 41 s uncapped, whose window never
-bound). The run's own bound is a starting rule, to be set from the sweep of the diag knob. The drainer, having drained and handed on every admitted tile, admits the
+range. The window's rows are a target of 8,000,000 (`rows`; `swath diag list --seed-from-window-rows` sets
+another, `set`), but never more than what the storage gives: half the spill cap over a spilled row's bytes (the
+run's frames' bytes over their rows, before the first frame the prior's part bytes per row, else 64) plus what
+the row budget holds (its bytes over the budget bytes per row the emitters measured; nothing before the first
+rows), `spill_cap`; with spill uncapped the target alone; with spill off, what the row budget holds alone,
+`budget`. So the window binds on a generously sized disk too: listing in order beats listing ahead, spilling
+and draining a tail. 8M is a measured starting default: about 250 tiles of 32 pages, enough for about 5M rows a
+second of listing at 50 ms a page while one writer takes about 1M rows a second; at 2,048 workers a window of
+about 8.9M rows finished a median 25 s against 41 s for one that never bound. It is an admission target, not a
+storage or recovery bound. The drainer, having drained and handed on every admitted tile, admits the
 next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
 stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
 admitted. Once the window binds (it refused a tile; for the rest of the run), idle workers are demand only for a range whose remainder holds two

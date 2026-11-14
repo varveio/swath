@@ -105,12 +105,9 @@ func (pl *plan[P]) Bound(on bool) { pl.p.windowBound.Store(on) }
 
 // Sizes are the plan's sizes for the window (source.Planner).
 func (pl *plan[P]) Sizes() source.PlanSizes {
-	s := source.PlanSizes{TileRows: pl.tileKeys, WindowRows: pl.p.opt.WindowRows}
+	s := source.PlanSizes{WindowRows: pl.p.opt.WindowRows}
 	if pr := pl.p.opt.Prior; pr.Rows > 0 {
 		s.RowBytes = float64(pr.Bytes) / float64(pr.Rows)
-		if pr.Parts > 0 {
-			s.PartRows = float64(pr.Rows) / float64(pr.Parts)
-		}
 	}
 	return s
 }

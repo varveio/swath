@@ -57,7 +57,7 @@ Diagnostics:
       --seed-from-tile-pages N
                             a counted --seed-from's tiles hold N pages (default 32)
       --seed-from-window-rows N
-                            a counted --seed-from's window holds N rows (0: the default rule)
+                            a counted --seed-from's window holds N rows (0: 8,000,000)
 ```
 <!-- diag-list:end -->
 
@@ -85,7 +85,7 @@ Diagnostics:
       --seed-from-tile-pages N
                      a counted --seed-from's tiles hold N pages (default 32)
       --seed-from-window-rows N
-                     a counted --seed-from's window holds N rows (0: the default rule)
+                     a counted --seed-from's window holds N rows (0: 8,000,000)
 ```
 <!-- diag-count:end -->
 

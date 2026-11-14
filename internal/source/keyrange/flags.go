@@ -119,7 +119,7 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 				return nil
 			})})
 		source.Define(f, source.Flag{Name: "seed-from-window-rows", Value: source.Count64(&p.WindowRows, 0), Metavar: "N",
-			Usage: "a counted --seed-from's window holds N rows (0: the default rule)"})
+			Usage: "a counted --seed-from's window holds N rows (0: 8,000,000)"})
 	}
 	return c
 }

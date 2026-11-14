@@ -132,12 +132,11 @@ type Planner[R any] interface {
 }
 
 // PlanSizes are what a plan tells the order stage's window: the prior's
-// stored bytes per row (0: unknown), a tile's rows at its target, the
-// prior's rows per part (0: unknown, a cut file), and the window's rows
-// when set (swath diag list --seed-from-window-rows; 0: the default rule).
+// stored bytes per row (0: unknown) and the window's rows when set (swath
+// diag list --seed-from-window-rows; 0: the default target).
 type PlanSizes struct {
-	RowBytes, TileRows, PartRows float64
-	WindowRows                   int64
+	RowBytes   float64
+	WindowRows int64
 }
 
 // Planning is a provider whose root may be a plan: Planner, called before
