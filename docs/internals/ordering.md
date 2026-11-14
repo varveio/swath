@@ -739,9 +739,9 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Slots and history.** One non-blocking reservation takes a certificate slot and two ledger records (its
   seal and its retirement); without either the range spills disposably, as before (`no_slot`,
   `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). Both limits scale
-  with the spill the attempt may hold (`order.Limits`): one slot per MiB of the spill cap, or without a cap
+  with the spill the attempt may hold (`order.Limits`): one slot per 64 KiB of the spill cap, or without a cap
   of the spill filesystem's free space when the run starts (on a resume the certified files it kept count as
-  free in both), at most 262,144 slots, the metadata ceiling (10,000 when neither is known; below 16 MiB
+  free in both), at most 262,144 slots, the metadata ceiling, reached at 16 GiB (10,000 when neither is known; below 16 MiB
   durable spill is off, `durable_off`), and a history cap H of four records per slot, at least 40,000. H
   bounds the ledger's retained prefix plus outstanding reservations; on a resume the prefix's record count is
   what counts, so history a truncation dropped is refunded (`TestDurableHistoryRace`: racing captures never
@@ -750,11 +750,16 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 
   The limits were fixed at 10,000 slots and H = 40,000 until they bound billion-key listings, which spill
   nearly every range ahead of the output at once ([measurements](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)):
-  73,081 spilled ranges, 20,000 sealed. Those listings spilled 2.3 to 2.8 MiB per range, so one slot per MiB
-  admits every range, and H every range's seal and retirement twice over. A listing whose ranges spill less
-  than 1 MiB each on average, or whose spill turns over more than about twice within one ledger (the ledger
-  is never compacted), still runs out (`no_slot`, `history_exhausted`) and relists those ranges after a
-  crash. The bounds, per MiB of the spill the limits derive from: in memory one live certificate; and
+  73,081 spilled ranges, 20,000 sealed. One slot per MiB then still ran out on listings of 200 to 600 million
+  keys at 2,048 workers, whose ranges are small: 16 of 28 had `no_slot` above 0, and those resumes replayed 35
+  to 46 % of the keys where the others replayed 93 to 97 % ([measurements](measurements.md#durable-spill-slots-2026-11-15)).
+  Their spill cap was 220 to 450 KiB per spilled range, so one slot per 64 KiB admits every range, and the
+  metadata ceiling, not the spill, is what bounds the slots from a 16 GiB cap. The 64 KiB keeps the ledger
+  proportional to the spill below the ceiling. A listing whose ranges spill less than 64 KiB per range of its
+  cap on average, past 262,144 live ranges, or whose spill turns over more than about twice within one ledger
+  (the ledger is never compacted), still runs out (`no_slot`, `history_exhausted`, `metadata_exhausted`) and
+  relists those ranges after a crash.
+  The bounds, per 64 KiB of the spill the limits derive from: in memory one live certificate; and
   whatever the spill at most 512 MiB of certificate metadata. Each certificate is charged what it holds
   (`certMetadata`: 512 bytes for its `Cert`, file name and recovery's ledger entry and map slot, plus its three
   keys with the allocator's rounding; 893 bytes with 99-byte keys, 4,016 with 1 KiB keys, measured above what
@@ -765,11 +770,14 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   key are dropped once written, and its keys are its own copies. The slots stop at 262,144, the bound at a
   2 KiB charge (keys of about 300 bytes), which holds 590 to 720 GiB of spill at 2.3 to 2.8 MiB per range (a
   `--spill-budget none` run on a 4 TiB disk stops there, `limited_by` `metadata`); with longer keys the bytes
-  bind first. On disk at most two
-  certificates' records, a seal of at most 56 bytes plus its three keys and a 26-byte retirement each
-  (about 0.07 % of the spill with 100-byte keys, 0.6 % with 1 KiB keys); and a recovery scan of the ledger
-  that read 100,000 records of 100-byte keys in about 40 ms from the page cache
-  ([measurements](measurements.md#durable-spill-limits-2026-11-14)).
+  bind first. On disk, per slot, at most two certificates' records, a seal of at most 56 bytes plus its
+  three keys and a 26-byte retirement each: about 1.2 % of the spill with 100-byte keys and under 10 % with
+  1 KiB keys (`TestDurableLimits`). At the ceiling, H = 1,048,576 records bound the ledger at about 200 MB
+  with 100-byte keys (1.6 GB with 1 KiB keys), against a spill cap of at least 16 GiB, and recovery's scan,
+  which read 100,000 records of 100-byte keys in about 40 ms from the page cache
+  ([measurements](measurements.md#durable-spill-limits-2026-11-14)), at about 0.4 s plus the disk read. A
+  1 GiB cap has 16,384 slots and H = 65,536: at most about 12 MB of ledger with 100-byte keys. Below 625 MiB
+  H stays at its 40,000 floor, so a 16 MiB cap (256 slots) may still write about 7 MB of ledger.
 - **Seal.** After `Expand` returns and its last batch is published, outside the order mutex, a capturing
   file whose last fence closes it (no row after it) is sealed with `ce` that fence: the trailer and tail are
   written, the file is fsynced, and its record goes to the flusher; the node is marked done only then, and

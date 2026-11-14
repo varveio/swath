@@ -569,7 +569,7 @@ func TestDurableHistoryRace(t *testing.T) {
 func TestDurableSlotsFull(t *testing.T) {
 	f := &fencedTree{ranges: 40, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 	c, _, _ := newDurable(t)
-	c.Start(slots(minCertificates), 0, nil)
+	c.Start(slots(16), 0, nil)
 	defer c.Close()
 	sink := &collect{}
 	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c}); err != nil {
@@ -578,7 +578,7 @@ func TestDurableSlotsFull(t *testing.T) {
 	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
 		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
 	}
-	if c.st.NoSlot.Load() == 0 || c.st.SealedFiles.Load() > minCertificates {
+	if c.st.NoSlot.Load() == 0 || c.st.SealedFiles.Load() > 16 {
 		t.Fatalf("no_slot %d, sealed %d", c.st.NoSlot.Load(), c.st.SealedFiles.Load())
 	}
 }
@@ -1643,35 +1643,55 @@ func TestDurableRecoveryPastFixedLimits(t *testing.T) {
 }
 
 // TestDurableLimits: the slots and H scale with the spill an attempt may
-// hold (one slot per MiB, H four records per slot and at least 40,000), up
-// to the metadata ceiling (512 MiB at 2 KiB a certificate: 262,144 slots,
-// also recovery's bound; limited_by metadata),
-// the billion-key listing that bound the fixed limits (73,081 spilled
-// ranges in 167 GiB of spill) fits them, and the metadata stays within
-// the bounds the limits state: a live certificate's Cert at most 256 bytes
-// besides its name and keys, a seal record at most 56 bytes plus its three
-// keys, a retirement 26 bytes.
+// hold (one slot per 64 KiB, H four records per slot and at least 40,000),
+// up to the metadata ceiling, reached at a 16 GiB spill cap (512 MiB at 2
+// KiB a certificate: 262,144 slots, also recovery's bound; limited_by
+// metadata). The listings that ran out of slots at one per MiB fit, the
+// ledger stays proportional to the spill below the ceiling, and the
+// metadata stays within the bounds the limits state: a live certificate's
+// Cert at most 256 bytes besides its name and keys, a seal record at most
+// 56 bytes plus its three keys, a retirement 26 bytes.
 func TestDurableLimits(t *testing.T) {
 	for _, tc := range []struct {
 		spillCap, free int64
 		want           DurableLimits
 	}{
 		{15 << 20, 0, DurableLimits{Bytes: 15 << 20, By: limitSpillCap}},
-		{16 << 20, 0, DurableLimits{Certificates: 16, History: minHistory, Bytes: 16 << 20, By: limitSpillCap}},
-		{10_000 << 20, 0, DurableLimits{Certificates: 10_000, History: minHistory, Bytes: 10_000 << 20, By: limitSpillCap}},
-		{167 << 30, 0, DurableLimits{Certificates: 171_008, History: 684_032, Bytes: 167 << 30, By: limitSpillCap}},
-		{0, 200 << 30, DurableLimits{Certificates: 204_800, History: 819_200, Bytes: 200 << 30, By: limitFreeSpace}},
+		{16 << 20, 0, DurableLimits{Certificates: 256, History: minHistory, Bytes: 16 << 20, By: limitSpillCap}},
+		{1 << 30, 0, DurableLimits{Certificates: 16_384, History: 65_536, Bytes: 1 << 30, By: limitSpillCap}},
+		{16 << 30, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 16 << 30, By: limitSpillCap}},
+		{16<<30 + 64<<10, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 16<<30 + 64<<10, By: limitMetadata}},
+		{167 << 30, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 167 << 30, By: limitMetadata}},
+		{0, 1 << 30, DurableLimits{Certificates: 16_384, History: 65_536, Bytes: 1 << 30, By: limitFreeSpace}},
 		{0, 8 << 20, DurableLimits{Bytes: 8 << 20, By: limitFreeSpace}},
 		{0, Unlimited, DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}},
-		{1 << 40, 0, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 1 << 40, By: limitMetadata}},
 		{0, 4 << 40, DurableLimits{Certificates: 262_144, History: 1_048_576, Bytes: 4 << 40, By: limitMetadata}},
 	} {
 		if got := Limits(tc.spillCap, tc.free); got != tc.want {
 			t.Errorf("Limits(%d, %d) = %+v, want %+v", tc.spillCap, tc.free, got, tc.want)
 		}
 	}
-	if l := Limits(167<<30, 0); l.Certificates < 73_081 || l.History < 2*73_081 {
-		t.Errorf("%+v: 73,081 spilled ranges do not fit", l)
+	// Listings that ran out of slots at one per MiB: a 9.07-billion-row one
+	// (73,081 spilled ranges in a cap of at least 167 GiB) and a 461-million
+	// one at 2,048 workers (58,376 slots, 145,522 more ranges without one).
+	for _, ranges := range []struct{ spillCap, n int64 }{{167 << 30, 73_081}, {58_376 << 20, 58_376 + 145_522}} {
+		if l := Limits(ranges.spillCap, 0); int64(l.Certificates) < ranges.n || int64(l.History) < 2*ranges.n {
+			t.Errorf("%+v: %d spilled ranges do not fit", l, ranges.n)
+		}
+	}
+	// The ledger below the ceiling is proportional to the spill: four
+	// records per 64 KiB slot, two seals and two retirements, about 1.2 %
+	// of the spill with 100-byte keys and under 10 % with 1 KiB keys.
+	for _, kc := range []struct {
+		keyLen int
+		share  float64
+	}{{100, 0.012}, {1024, 0.097}} {
+		key := strings.Repeat("k", kc.keyLen)
+		d := &Cert{id: randomID(), cs: key, ce: key, last: key, captured: 1<<63 - 1, bytes: 1<<63 - 1}
+		perSlot := 2*len(appendLedgerFrame(nil, ledgerRec{cert: d})) + 2*len(appendLedgerFrame(nil, ledgerRec{cert: d, retire: retirePublished}))
+		if got := float64(perSlot) / certificateBytes; got > kc.share {
+			t.Errorf("%d-byte keys: %d ledger bytes per slot, %.4f of its spill", kc.keyLen, perSlot, got)
+		}
 	}
 	if maxCertificates*certificateMetadata != 512<<20 || recoveryLimits != (DurableLimits{Certificates: maxCertificates, History: maxHistory}) {
 		t.Errorf("the metadata ceiling is %d certificates of %d bytes, recovery's bound %+v", maxCertificates, certificateMetadata, recoveryLimits)
