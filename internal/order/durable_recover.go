@@ -161,17 +161,19 @@ type entry struct {
 // the files no record in it names, validates every recorded file and
 // classifies it: accepted (a replay range), or retired (covered by K,
 // missing, corrupt, foreign, overlapping), writing its retirements and
-// unlinks before it returns; Start applies the new caps. A missing
-// directory or ledger, or a foreign ledger header, starts afresh (every
-// spill file is unlinked). An error is the output's replacement or an
-// unsafe layout (a run failure), or ErrDurableUnavailable (the run goes on
-// without durable spill and relists).
-func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string) (*Cache, error) {
+// unlinks before it returns; Start applies the new caps. lim is the
+// attempt's limits: the ledger is read within them, and never within less
+// than the fixed ones. A missing directory or ledger, or a foreign ledger
+// header, starts afresh (every spill file is unlinked). An error is the
+// output's replacement or an unsafe layout (a run failure), or
+// ErrDurableUnavailable (the run goes on without durable spill and
+// relists).
+func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string, lim DurableLimits) (*Cache, error) {
 	c, err := newCache(root, verify, uuid, ident, codec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
-	c.resumed = true
+	c.resumed, c.lim = true, lim.recovery()
 	if k != nil {
 		c.k, c.hasK = *k, true
 	}
@@ -206,14 +208,14 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 // appended). A missing, foreign or unreadable header starts a new ledger,
 // and every file becomes an orphan (nil entries).
 //
-// The prefix is also cut where the history no writer could have made
-// begins: where its records plus one retirement per live entry would pass
-// H (a writer reserves both within H), and at a sealed record that would
-// make more than 10,000 certificates live at once (the largest cap any
-// attempt has). The scan and the inventory are bounded by
-// the persisted format, not by trusting the writer's admission; what is
-// cut is dropped like a damaged tail (its files are orphans, their
-// intervals relisted), which is always safe (ledger_cut).
+// The prefix is also cut where the history this attempt's limits (c.lim,
+// RecoverDurable's bound) do not admit begins: where its records plus one
+// retirement per live entry would pass H (a writer reserves both within
+// its H), and at a sealed record that would make more certificates live at
+// once than its cap. The scan and the inventory are bounded by those
+// limits, not by trusting the writer's admission; what is cut is dropped
+// like a damaged tail (its files are orphans, their intervals relisted),
+// which is always safe (ledger_cut).
 func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	fi, err := dataset.NeedIn(c.root, c.rel(ledgerName), false, true)
 	if err != nil {
@@ -278,8 +280,8 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		case typ == ledgerSealed && !live:
 			grow = 2 // the seal and its retirement to come
 		}
-		if records+len(entries)+grow > historyCap || (typ == ledgerSealed && !live && len(entries) >= maxCertificates) {
-			off = at // past H, or more live certificates than any cap: cut here
+		if records+len(entries)+grow > c.lim.History || (typ == ledgerSealed && !live && len(entries) >= c.lim.Certificates) {
+			off = at // past H, or more live certificates than the bound: cut here
 			c.st.LedgerCut.Add(1)
 			break
 		}
@@ -557,16 +559,17 @@ func (c *Cache) retireNow(ds []*Cert) error {
 	return nil
 }
 
-// Start applies this attempt's caps to the accepted certificates (above
-// cap slots, or past max retained bytes (0: none): the highest-keyed are
+// Start applies this attempt's limits to the accepted certificates (above
+// lim's slots, or past max retained bytes (0: none): the highest-keyed are
 // retired first, rejected_budget), charges the rest, and starts the
 // flusher, which owns the ledger from here; cancel is the attempt's, for a
-// fatal flusher error. cap 0 rejects every accepted certificate and opens
-// no slot (durable spill off for this attempt).
-func (c *Cache) Start(cap int, max int64, cancel func(error)) error {
+// fatal flusher error. No slot rejects every accepted certificate and
+// opens none (durable spill off for this attempt).
+func (c *Cache) Start(lim DurableLimits, max int64, cancel func(error)) error {
 	if c == nil {
 		return nil
 	}
+	cap := lim.Certificates
 	var drop []*Cert
 	var total int64
 	for _, d := range c.reused {
@@ -583,7 +586,7 @@ func (c *Cache) Start(cap int, max int64, cancel func(error)) error {
 		return err
 	}
 	c.mu.Lock()
-	c.cap, c.cancel = cap, cancel
+	c.lim, c.cancel = lim, cancel
 	c.slots = len(c.reused)
 	c.hist += len(c.reused) // each one's retirement
 	for _, d := range c.reused {

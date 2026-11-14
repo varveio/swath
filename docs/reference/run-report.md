@@ -61,7 +61,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 8) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 9) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
@@ -71,7 +71,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 8 |
+| `report_version` | 9 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -181,7 +181,8 @@ handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
-`history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
+`history` and `history_cap` (ledger records against H), `limit_bytes` and `limited_by` (the spill both derive
+from, one slot per MiB: `spill_cap`, `free_space` without a cap, or `fixed` when neither is known), `captured_ranges`, `capture_at` (by where the capture
 began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,

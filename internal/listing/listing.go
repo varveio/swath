@@ -284,6 +284,16 @@ func spillMax(l SpillLimits, dir string) int64 {
 	return max(1, (free-l.Reserve)/2)
 }
 
+// durableLimits is the durable spill's limits for a spill cap of max bytes
+// in dir (0: none, so the free space there bounds them).
+func durableLimits(max int64, dir string) order.DurableLimits {
+	free := int64(order.Unlimited)
+	if max == 0 {
+		free = order.FreeBytes(existing(dir))
+	}
+	return order.Limits(max, free)
+}
+
 // existing is dir or its nearest existing ancestor: the filesystem a
 // directory not yet created will be on.
 func existing(dir string) string {
@@ -1218,19 +1228,21 @@ func (a *attempt) startCache(oopt *order.Options, src registry.Source, cancel co
 	}
 	f, fences := src.(source.Fencing)
 	ru, reusing := src.(source.Reusing)
-	slots := order.CertificateCap(oopt.SpillMax)
+	lim := durableLimits(oopt.SpillMax, oopt.SpillDir)
 	switch {
 	case oopt.SpillDir == "":
-		slots = 0
+		lim = order.DurableLimits{}
 	case !fences || !f.Fences() || !reusing:
-		slots, a.jr.off = 0, "the provider declares no coverage fences"
-	case slots == 0:
+		lim, a.jr.off = order.DurableLimits{}, "the provider declares no coverage fences"
+	case lim.Certificates == 0 && oopt.SpillMax == 0:
+		a.jr.off = "the free space for spill is below 16 MiB"
+	case lim.Certificates == 0:
 		a.jr.off = "the spill budget (--spill-budget) is below 16 MiB"
 	}
-	if err := c.Start(slots, oopt.SpillMax, func(err error) { cancel(err) }); err != nil {
+	if err := c.Start(lim, oopt.SpillMax, func(err error) { cancel(err) }); err != nil {
 		return err
 	}
-	if slots == 0 {
+	if lim.Certificates == 0 {
 		return nil
 	}
 	oopt.Durable = c

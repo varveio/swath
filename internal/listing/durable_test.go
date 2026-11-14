@@ -194,6 +194,8 @@ func TestDurableSpillResume(t *testing.T) {
 	t.Logf("cold durable: %+v", cold.Resources.Spill.Durable)
 	if d := cold.Resources.Spill.Durable; d == nil || d.SealedFiles == 0 {
 		t.Fatalf("no certificate sealed: %+v", cold.Resources.Spill)
+	} else if d.Slots != 64 || d.HistoryCap != 40_000 || d.LimitBytes != 64<<20 || d.LimitedBy != "spill_cap" {
+		t.Fatalf("limits of a 64 MiB spill cap: %d slots, H %d, from %d bytes (%s)", d.Slots, d.HistoryCap, d.LimitBytes, d.LimitedBy)
 	}
 	if _, err := os.Stat(filepath.Join(ref, order.DurableDir)); !os.IsNotExist(err) {
 		t.Fatalf("the committed run left its durable spill: %v", err)
@@ -623,11 +625,11 @@ func TestDurableChangedSource(t *testing.T) {
 	}
 	root, _ := os.OpenRoot(cp)
 	defer root.Close()
-	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k)
+	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k, order.DurableLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Start(1000, 0, nil)
+	c.Start(order.Limits(1000<<20, 0), 0, nil)
 	spans := c.Spans()
 	c.Close()
 	if len(spans) == 0 {

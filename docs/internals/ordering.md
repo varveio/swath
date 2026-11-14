@@ -651,11 +651,26 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   uncertified, and its slot and history go back (`TestDurableAbandonThenSpill`).
 - **Slots and history.** One non-blocking reservation takes a certificate slot and two ledger records (its
   seal and its retirement); without either the range spills disposably, as before (`no_slot`,
-  `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). The cap is one slot
-  per MiB of the spill cap, clamped to 16..10,000 (10,000 without a cap; below 16 MiB durable spill is off,
-  `durable_off`). The history cap H = 40,000 bounds the ledger's retained prefix plus outstanding
-  reservations; on a resume the prefix's record count is what counts, so history a truncation dropped is
-  refunded (`TestDurableHistoryRace`: racing captures never pass H).
+  `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). Both limits scale
+  with the spill the attempt may hold (`order.Limits`): one slot per MiB of the spill cap, or without a cap
+  of the spill filesystem's free space when the run starts (10,000 when neither is known; below 16 MiB
+  durable spill is off, `durable_off`), and a history cap H of four records per slot, at least 40,000. H
+  bounds the ledger's retained prefix plus outstanding reservations; on a resume the prefix's record count is
+  what counts, so history a truncation dropped is refunded (`TestDurableHistoryRace`: racing captures never
+  pass H). The report says what the limits derive from (`limit_bytes`, `limited_by`).
+
+  The limits were fixed at 10,000 slots and H = 40,000 until they bound billion-key listings, which spill
+  nearly every range ahead of the output at once ([measurements](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)):
+  73,081 spilled ranges, 20,000 sealed. Those listings spilled 2.3 to 2.8 MiB per range, so one slot per MiB
+  admits every range, and H every range's seal and retirement twice over. A listing whose ranges spill less
+  than 1 MiB each on average, or whose spill turns over more than about twice within one ledger (the ledger
+  is never compacted), still runs out (`no_slot`, `history_exhausted`) and relists those ranges after a
+  crash. The bounds, per MiB of the spill the limits derive from: in memory one `Cert` (at most 256 bytes;
+  `TestDurableLimits`) with its file name and four keys per live certificate; on disk at most two
+  certificates' records, a seal of at most 56 bytes plus its three keys and a 26-byte retirement each
+  (about 0.07 % of the spill with 100-byte keys, 0.6 % with 1 KiB keys); and a recovery scan of the ledger
+  that read 100,000 records of 100-byte keys in about 40 ms from the page cache
+  ([measurements](measurements.md#durable-spill-limits-2026-11-14)).
 - **Seal.** After `Expand` returns and its last batch is published, outside the order mutex, a capturing
   file whose last fence closes it (no row after it) is sealed with `ce` that fence: the trailer and tail are
   written, the file is fsynced, and its record goes to the flusher; the node is marked done only then, and
@@ -707,10 +722,13 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
-  trusting the writer: the scan stops where the records kept plus one retirement owed per live certificate
-  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more than
-  10,000 certificates live (the largest cap any attempt has); the ledger is truncated there like a damaged
-  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`);
+  trusting the writer, within the resuming attempt's limits (from its spill cap as the resume starts, and never
+  less than 10,000 certificates and H = 40,000): the scan stops where the records kept plus one retirement owed per live certificate
+  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more
+  certificates live than the slots; the ledger is truncated there like a damaged
+  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`; a resume past
+  the fixed bounds, killed mid replay and resumed again, accepts and replays every certificate:
+  `TestDurableBeyondFixedLimits`);
   the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
   CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
   `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the
@@ -731,7 +749,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   consumes every rows frame, pre-capture included. Replayed rows reach the order stage without the
   provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
   `objects`, `pages`, `requests` or the filters' counts.
-- **Report.** `resources.spill.durable`: `slots`, `history`, `captured_ranges`, `capture_at.{range_start,fence}`,
+- **Report.** `resources.spill.durable`: `slots`, `history`, `history_cap`, `limit_bytes`, `limited_by`, `captured_ranges`, `capture_at.{range_start,fence}`,
   `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a

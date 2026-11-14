@@ -445,8 +445,11 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 	switch {
 	case cfg.Limits.Spill.Off:
 	default:
-		// The durable spill's recovery, after the parts': K is theirs.
-		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID, jr.after())
+		// The durable spill's recovery, after the parts': K is theirs. It
+		// reads the ledger within the limits of this attempt's spill cap.
+		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
+		lim := durableLimits(spillMax(cfg.Limits.Spill, spill), spill)
+		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID, jr.after(), lim)
 		if err := jr.durableOff(cfg, err); err != nil {
 			j.Close()
 			return nil, err

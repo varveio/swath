@@ -38,8 +38,10 @@ import (
 // the order stage's waits by site (resources.publish_wait_ns,
 // admission_wait_ns, idle_wait_ns and their peak_* twins),
 // resources.spill.refused_ns and refused_spells, and
-// resources.drain.writer_before_listing_done.
-const ReportVersion = 8
+// resources.drain.writer_before_listing_done. 9 adds fields only (#513):
+// resources.spill.durable.limit_bytes and limited_by (the spill the
+// certificate slots and the ledger history cap derive from).
+const ReportVersion = 9
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

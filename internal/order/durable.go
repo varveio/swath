@@ -55,21 +55,26 @@ const (
 	// record holds three keys (each at most a provider's key, 1 KiB on S3
 	// and GCS) and fixed fields.
 	maxLedgerFrame = 64 << 10
-	// historyCap (H) bounds the ledger's retained durable prefix plus the
-	// records reserved and not yet written (a seal and a retirement per
-	// certificate): the ledger is never compacted, so this bounds its size
-	// and the recovery scan (40,000 records of at most a few KiB). It does
-	// not change with the certificate cap; a resume counts the prefix it
-	// kept, so history a truncation dropped is refunded.
-	historyCap = 40_000
-	// maxCertificates is the largest certificate cap any attempt may have
-	// (the cap of --spill-budget none, and of a cap of 10,000 MiB or more):
-	// recovery inventories at most that many before applying its own cap.
-	maxCertificates = 10_000
-	// minCertificates is the smallest cap: below 16 MiB of --spill-budget
-	// durable spill is off (a certificate per MiB of the cap; sixteen is
-	// the fewest worth a ledger).
+	// certificateBytes is the spill an attempt may hold per certificate
+	// slot: one slot per MiB (DurableLimits). Billion-key listings spilled
+	// 2.3 to 2.8 MiB per range (measurements.md, "Spill at billion scale").
+	certificateBytes = 1 << 20
+	// minCertificates is the smallest cap: below 16 MiB of spill durable
+	// spill is off (sixteen is the fewest worth a ledger).
 	minCertificates = 16
+	// fixedCertificates is the cap when the spill an attempt may hold is
+	// unknown (no spill cap, and the free space not measurable), and the
+	// least recovery inventories, whatever its attempt's cap.
+	fixedCertificates = 10_000
+	// The history cap H bounds the ledger's retained durable prefix plus
+	// the records reserved and not yet written (a seal and a retirement per
+	// certificate): the ledger is never compacted, so H bounds its size and
+	// the recovery scan. It is four records per slot (every slot's
+	// certificate sealed and retired twice over), and never below
+	// minHistory; a resume counts the prefix it kept, so history a
+	// truncation dropped is refunded.
+	historyPerCertificate = 4
+	minHistory            = 40_000
 	// flushInterval is the flusher's shortest cycle: seals and
 	// retirements are batched into one directory sync, one ledger append
 	// and one ledger sync per cycle at most every 100 ms (contract §7.6,
@@ -95,17 +100,53 @@ var DurableDir = filepath.Join(dataset.JournalDir, "spill", "durable")
 // ledgerName is the ledger's name inside DurableDir.
 const ledgerName = "ledger"
 
-// CertificateCap is the certificate cap for a live spill cap of max bytes
-// (0: none): one per MiB, clamped to [16, 10,000]; 0 (durable spill off)
-// below 16 MiB.
-func CertificateCap(max int64) int {
+// DurableLimits are an attempt's durable spill limits: the certificate
+// slots (live certificates), the history cap H (ledger records), and the
+// spill they derive from. Both scale with that spill, so a listing whose
+// ranges spill at least 1 MiB each on average has a slot for every range
+// it holds; per MiB of that spill the cache holds at most one live
+// certificate's metadata and the ledger at most four records.
+type DurableLimits struct {
+	Certificates int
+	History      int
+	Bytes        int64  // the spill the attempt may hold (0: unknown)
+	By           string // what Bytes is: limitSpillCap, limitFreeSpace or limitFixed
+}
+
+// What bounds an attempt's durable spill limits (DurableReport.LimitedBy).
+const (
+	limitSpillCap  = "spill_cap"  // the spill cap (--spill-budget, or half the free space)
+	limitFreeSpace = "free_space" // no spill cap: the spill filesystem's free space
+	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000
+)
+
+// Limits is the durable spill's limits for a spill cap of spillCap bytes
+// (0: none) on a filesystem with free bytes free (Unlimited: not known):
+// one certificate slot per MiB of the cap, or without one of the free
+// space, and H four records per slot, at least 40,000. Below 16 MiB the
+// cap is 0 (durable spill off).
+func Limits(spillCap, free int64) DurableLimits {
+	l := DurableLimits{Bytes: spillCap, By: limitSpillCap}
 	switch {
-	case max == 0:
-		return maxCertificates
-	case max < minCertificates<<20:
-		return 0
+	case spillCap > 0:
+	case free != Unlimited:
+		l.Bytes, l.By = free, limitFreeSpace
+	default:
+		return DurableLimits{Certificates: fixedCertificates, History: minHistory, By: limitFixed}
 	}
-	return int(min(max>>20, maxCertificates))
+	if l.Bytes < minCertificates*certificateBytes {
+		return l
+	}
+	n := int(l.Bytes / certificateBytes)
+	l.Certificates, l.History = n, max(minHistory, historyPerCertificate*n)
+	return l
+}
+
+// recovery is the bound recovery reads a ledger within for an attempt of
+// limits l: its own, never less than the fixed ones (Start then applies
+// the attempt's cap: rejected.budget).
+func (l DurableLimits) recovery() DurableLimits {
+	return DurableLimits{Certificates: max(l.Certificates, fixedCertificates), History: max(l.History, minHistory)}
 }
 
 // Cert is one durable file and, once sealed, its certificate (cs, ce].
@@ -166,9 +207,9 @@ type Cache struct {
 	hasK   bool
 
 	mu        sync.Mutex
-	cap       int // certificate slots
-	slots     int // slots held: capturing, sealed and reused certificates
-	hist      int // ledger records in the prefix and written since, plus reservations
+	lim       DurableLimits // the attempt's slots and H (Start)
+	slots     int           // slots held: capturing, sealed and reused certificates
+	hist      int           // ledger records in the prefix and written since, plus reservations
 	stopping  bool
 	failed    bool // the ledger failed: no new slot, records dropped, unlinks continue
 	fatal     error
@@ -249,6 +290,8 @@ type DurableReport struct {
 	Slots                 int              `json:"slots"`       // the certificate cap
 	History               int              `json:"history"`     // ledger records retained and reserved at the end
 	HistoryCap            int              `json:"history_cap"` // H
+	LimitBytes            int64            `json:"limit_bytes"` // the spill slots and H derive from (one slot per MiB)
+	LimitedBy             string           `json:"limited_by"`  // what LimitBytes is: spill_cap, free_space, or fixed
 	CapturedRanges        int64            `json:"captured_ranges"`
 	CaptureAt             map[string]int64 `json:"capture_at"`
 	CapturePendingDropped int64            `json:"capture_pending_dropped"`
@@ -270,7 +313,7 @@ type DurableReport struct {
 // DurableResume is a resume's account of the durable spill it found.
 type DurableResume struct {
 	LedgerDroppedBytes int64            `json:"ledger_dropped_bytes"`
-	LedgerCut          bool             `json:"ledger_cut"` // the prefix was cut at H records or 10,000 live certificates
+	LedgerCut          bool             `json:"ledger_cut"` // the prefix was cut at H records or the live certificates' bound
 	Accepted           int64            `json:"accepted"`
 	AcceptedBytes      int64            `json:"accepted_bytes"`
 	Rejected           map[string]int64 `json:"rejected"`
@@ -288,9 +331,9 @@ func (c *Cache) Report() *DurableReport {
 	}
 	s := &c.st
 	c.mu.Lock()
-	slots, hist, failed := c.cap, c.hist, c.failed
+	lim, hist, failed := c.lim, c.hist, c.failed
 	c.mu.Unlock()
-	r := &DurableReport{Slots: slots, History: hist, HistoryCap: historyCap,
+	r := &DurableReport{Slots: lim.Certificates, History: hist, HistoryCap: lim.History, LimitBytes: lim.Bytes, LimitedBy: lim.By,
 		CapturedRanges:        s.CapturedRanges.Load(),
 		CaptureAt:             map[string]int64{"range_start": s.CaptureAtStart.Load(), "fence": s.CaptureAtFence.Load()},
 		CapturePendingDropped: s.CapturePendingDropped.Load(), NoSlot: s.NoSlot.Load(), HistoryExhausted: s.HistoryExhausted.Load(),
@@ -430,10 +473,10 @@ func (c *Cache) reserve() bool {
 	switch {
 	case c.stopping || c.failed || c.fatal != nil || !c.started:
 		return false
-	case c.slots >= c.cap:
+	case c.slots >= c.lim.Certificates:
 		c.st.NoSlot.Add(1)
 		return false
-	case c.hist+2 > historyCap:
+	case c.hist+2 > c.lim.History:
 		c.st.HistoryExhausted.Add(1)
 		return false
 	}

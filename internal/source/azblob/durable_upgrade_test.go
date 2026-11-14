@@ -68,11 +68,11 @@ func TestDurableLegacySpillUpgrade(t *testing.T) {
 	// Model the journal's committed frontier: only the suffix may be emitted.
 	const prefix = "r1/000-000"
 	k := prefix
-	cache, err := order.RecoverDurable(root, nil, "00112233445566778899aabbccddeeff", "ident", Schema.ID, &k)
+	cache, err := order.RecoverDurable(root, nil, "00112233445566778899aabbccddeeff", "ident", Schema.ID, &k, order.DurableLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.Start(1000, 0, nil)
+	cache.Start(order.Limits(1000<<20, 0), 0, nil)
 	defer cache.Close()
 	rep := cache.Report().Resume
 	if rep.Accepted != 0 || rep.Rejected["codec"] != 4 || rep.Rejected["corrupt"] != 0 || len(cache.Spans()) != 0 {

@@ -2291,6 +2291,19 @@ progress logs; they are individual runs, not a benchmark.
   tail after listing wrote 6.6 to 8.5 million rows a second and took about a third of the wall time. The
   two shares come from counters that overlap in a few runs, so they are approximate.
 
+## Durable spill limits (2026-11-14)
+
+What a certificate costs, for the limits that scale with the spill cap ([ordering.md](ordering.md#durable-spill),
+[#513](https://github.com/varveio/swath/issues/513)); a development VM, one run each, not a benchmark.
+
+- **Ledger.** A seal record of 99-byte keys is 337 bytes and a retirement 26, so 363 bytes per certificate. A
+  ledger of 100,000 records (50,000 certificates sealed and retired, 18.2 MB) was read by recovery's scan in
+  about 40 ms from the page cache; 50,000 live seals (16.9 MB, every entry kept in memory) in about 31 ms. At
+  that rate five million certificates (ten million records, about 1.8 GB) scan in about four seconds plus the
+  disk read. Recovery then reads every accepted file whole (validation), which costs the retained spill's
+  bytes, not the records.
+- **Memory.** A `Cert` is 232 bytes on linux/amd64, a recovery ledger entry 104, each besides its keys.
+
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 
 Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
