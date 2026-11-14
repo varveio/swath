@@ -140,6 +140,8 @@ complete -c swath -n '__swath_cmd "diag list" "diag count"' -l sequential -d 'li
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l max-keys -x -d 'with --sequential, stop after N objects (marked incomplete)'
 complete -c swath -n '__swath_cmd "diag list" "diag count" "resume"' -l trace -r -F -d 'write the range engine\'s run trace (JSON Lines) to FILE'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l page-size -x -d 'ask for pages of N entries (1 to 1000; default the provider\'s)'
+complete -c swath -n '__swath_cmd "diag list" "diag count"' -l seed-from-tile-pages -x -d 'a counted --seed-from\'s tiles hold N pages (default 32)'
+complete -c swath -n '__swath_cmd "diag list" "diag count"' -l seed-from-window-rows -x -d 'a counted --seed-from\'s window holds N rows (0: 8,000,000)'
 complete -c swath -n '__swath_cmd "resume"' -l spill-compress -d 'undo a recorded --no-spill-compress'
 complete -c swath -n '__swath_cmd "resume"' -l no-spill-plain -d 'undo a recorded --spill-plain'
 complete -c swath -n '__swath_cmd "resume"' -l no-anonymous -d 'undo a recorded --anonymous'

@@ -254,6 +254,7 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 					{"seed+structure", Options{Workers: 16, Seed: true, SeedFirstPage: true, Structure: StructureOn}},
 					{"demand", Options{Workers: 16}},
 					{"warm-start", Options{Workers: 16, Prior: prior}},
+					{"warm-start-pages", Options{Workers: 16, TilePages: 2}},
 					{"slow-split", Options{Workers: 16, Seed: true, SeedFirstPage: true, SlowSplit: true}},
 					{"resume", Options{Workers: 8, SplitCoin: coin(seed), Resume: &Resume{After: keys[600]}}},
 					{"resume-hot", Options{Workers: 8, Seed: true, Resume: &Resume{After: keys[300]}}},
@@ -267,11 +268,34 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 							v.short, v.empties, v.inclusive = short, short, inclusive
 							opt := c.opt
 							opt.PageSize = page
+							if c.name == "warm-start-pages" {
+								// A dataset's key pages, read as the run goes: a cut
+								// every 5 rows, so the hot key's group repeats its key
+								// across cuts and batches.
+								var cuts []source.Cut
+								var n int64
+								versions := groupKeyspace(len(keys), page, 300)
+								for i, key := range keys {
+									for range versions(i) {
+										if n++; n == 5 {
+											cuts, n = append(cuts, source.Cut{Key: key, Rows: n}), 0
+										}
+									}
+								}
+								if n > 0 {
+									cuts = append(cuts, source.Cut{Key: keys[len(keys)-1], Rows: n})
+								}
+								opt.Prior = &source.Prior{Source: "dataset", Counted: true, Stream: &stream{cuts: cuts, seed: int64(seed)}}
+							}
 							st := runGroups(t, v, opt)
 							switch c.name {
 							case "warm-start":
 								if st.Get(cSeedFromCuts) != int64(len(prior.Cuts)) || st.Get(cSeedFromTiles) < 2 || st.Get(cSeedFromExpected) == 0 || st.Get(cSeedRequests) != 0 {
 									t.Errorf("warm start: cuts=%d tiles=%d expected=%d seed_requests=%d", st.Get(cSeedFromCuts), st.Get(cSeedFromTiles), st.Get(cSeedFromExpected), st.Get(cSeedRequests))
+								}
+							case "warm-start-pages":
+								if st.Get(cSeedFromMerged) == 0 || st.Get(cSeedFromTiles) < 2 || st.Get(cSeedRequests) != 0 {
+									t.Errorf("planned from pages: merged=%d tiles=%d seed_requests=%d", st.Get(cSeedFromMerged), st.Get(cSeedFromTiles), st.Get(cSeedRequests))
 								}
 							case "slow-split":
 								for _, id := range []counterID{cSlowMaxRangeLatency, cSlowRunLatency} {

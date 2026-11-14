@@ -69,9 +69,18 @@ per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still lis
 64-worker ideal (`stale4`, 2026-11-07). The prior must be the same bucket and prefix, or the run is refused
 (exit 2). The output is the same with or without a prior.
 
-A prior does not reduce spill: the run still lists ahead of the output across the whole keyspace, so size the
-disk as for a cold run ([disk sizing](#disk-sizing)). What the previous dataset does give is the size to plan
-for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
+A prior with counts (a previous dataset, or a cut file with counts) also changes what is listed ahead of the
+output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
+yet written stay within a window of 8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold less
+([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
+near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
+no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
+range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
+after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
+the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. Rows still leave
+through one part writer while listing, so such a run can be bound by that writer rather than by listing. A cut
+file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
+the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
 
 ## A healthy run report
 

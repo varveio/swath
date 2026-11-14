@@ -184,6 +184,9 @@ type Stats struct {
 	ReplayedRows int64
 	// Durable reports whether durable spill engaged for this run.
 	Durable bool
+	// Window is the frontier window's account (window.go); nil when the
+	// provider's root is no plan.
+	Window *WindowStats
 }
 
 // DrainerTimes is the drainer's time by what it did (Stats.FrontierWait is
@@ -223,6 +226,7 @@ type Gauges struct {
 	// the budget, workers at admission, idle workers (nothing queued to
 	// list, read-ahead waits included).
 	publishWait, admissionWait, idleWait gauge
+	windowWait                           gauge // workers held at the frontier window (window.go)
 	// pressure is spill pressure (spiller.press); spillMax and
 	// spillReserve are the spill cap and reserve in effect (0: none).
 	pressure               pressure
@@ -388,6 +392,7 @@ type node[R, P any] struct {
 	queued  int64         // units published and not yet drained (mu; kept for running nodes only)
 	onPath  atomic.Bool   // the drainer's current node: its emitter publishes at once (written under mu)
 	awaited atomic.Bool   // the drainer waits for, or itself expands, this node: its emitter never blocks
+	tile    *tileCredit   // the plan's tile the node lies in (window.go; nil without a plan)
 }
 
 type run[R, P any] struct {
@@ -397,6 +402,7 @@ type run[R, P any] struct {
 	opt      Options
 	mu       sync.Mutex
 	work     *sync.Cond // workers: stack empty or budget used
+	winCond  *sync.Cond // workers waiting at the frontier window (window.go)
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R, P]
 	buffered int64
@@ -461,6 +467,10 @@ type run[R, P any] struct {
 	// replay is the provider's replay ranges (source.Replaying), nil
 	// without durable spill.
 	replayFn func(r R) (int, bool)
+	// win is the frontier window when the provider's root is a plan;
+	// segTiles the tiles of the rows in the pending batch (drainer only).
+	win      *window[R, P]
+	segTiles []tileRun
 }
 
 // dispose releases the ranges that were queued but never expanded (a
@@ -502,6 +512,8 @@ const (
 	waitAhead     = "ahead"     // a worker: nothing queued, the read-ahead at its share of the budget (work.Wait)
 	waitFetch     = "fetch"     // the drainer: its next frame being read by the read-ahead (drain.Wait)
 	waitSegment   = "segment"   // a segment worker: its next spilled frame would take the budget past full (drain.Wait)
+	waitWindow    = "window"    // a worker: nothing queued, the frontier window refusing the next tile (work.Wait)
+	waitPlan      = "plan"      // the drainer: every admitted tile drained, the plan's next not yet read (drain.Wait)
 )
 
 // hookWait sees every wait just before it starts (tests; mu held).
@@ -523,6 +535,8 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 		g, sum = &o.g.admissionWait, &o.admissionWait
 	case waitIdle, waitAhead:
 		g, sum = &o.g.idleWait, &o.idleWait
+	case waitWindow:
+		g, sum = &o.g.windowWait, &o.win.st.WaitTime
 	}
 	t := time.Now()
 	if g != nil {
@@ -660,12 +674,28 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	o.stalled()
 	o.advanced = now
 	o.g.ahead.add(-int64(len(rows)))
+	if t := o.drainTile(); t != nil {
+		if k := len(o.segTiles) - 1; k >= 0 && o.segTiles[k].t == t {
+			o.segTiles[k].n += int64(len(rows))
+		} else {
+			o.segTiles = append(o.segTiles, tileRun{t, int64(len(rows))})
+		}
+	}
 	o.segs = append(o.segs, rows)
 	o.segRows += len(rows)
 	if o.segRows >= batchRows {
 		return o.flush()
 	}
 	return nil
+}
+
+// drainTile is the tile of the node the drainer hands rows on from (nil
+// without a plan; drainer only).
+func (o *run[R, P]) drainTile() *tileCredit {
+	if o.win == nil || len(o.path) == 0 {
+		return nil
+	}
+	return o.path[len(o.path)-1].n.tile
 }
 
 func (o *run[R, P]) flush() error {
@@ -677,6 +707,13 @@ func (o *run[R, P]) flush() error {
 	t := time.Now()
 	err := o.sink.Write(o.ctx, o.segs)
 	o.dt.SinkWrite += time.Since(t)
+	// The rows are the sink's now: their tiles' credit comes back (the
+	// drainer releases it, settle).
+	for i, r := range o.segTiles {
+		o.win.charge(r.t, -r.n)
+		o.segTiles[i] = tileRun{}
+	}
+	o.segTiles = o.segTiles[:0]
 	o.segs, o.segRows = nil, 0
 	o.segDistinct = 0
 	return err
@@ -694,8 +731,26 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	defer closeRun()
 	ctx, cancel := o.ctx, o.cancel
+	// A plan is asked for before the root, which it makes the plan's.
+	var plan source.Planner[R]
+	if pl, ok := p.(source.Planning[R]); ok {
+		plan = pl.Planner()
+	}
 	root := &node[R, P]{r: p.Root()}
-	o.stack = []*node[R, P]{root}
+	if plan != nil {
+		// The plan root is never claimed: it stays open, counted, until the
+		// plan ends, its tiles admitted as its children (window.go).
+		root.state = expanding
+		o.win = &window[R, P]{plan: plan, root: root, sizes: plan.Sizes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
+		defer plan.Start(ctx, func() {
+			o.mu.Lock()
+			o.work.Broadcast()
+			o.drain.Broadcast()
+			o.mu.Unlock()
+		})()
+	} else {
+		o.stack = []*node[R, P]{root}
+	}
 	o.g.nodes.add(1)
 	o.open.Store(1)
 
@@ -720,6 +775,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	o.mu.Lock()
 	o.finished = true
 	o.work.Broadcast()
+	o.winCond.Broadcast()
 	o.drain.Broadcast()
 	o.mu.Unlock()
 	if err != nil {
@@ -746,6 +802,10 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	st.ListingDone, st.DrainEnd, st.IdleAfter = o.listedAt, o.drainEnd, o.idleAfter
 	st.Drainer = o.dt
+	if o.win != nil {
+		st.Window = o.win.stats()
+		st.Window.PeakWaiters = o.g.windowWait.peak.Load()
+	}
 	if o.seg != nil {
 		st.Segments = o.seg.st
 		switch {
@@ -786,6 +846,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.seg = &segState[P]{sg: sg, waitRows: -1}
 	}
 	o.work = sync.NewCond(&o.mu)
+	o.winCond = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	o.g = opt.Gauges
 	if o.g == nil {
@@ -804,6 +865,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.mu.Lock()
 		o.work.Broadcast()
 		o.drain.Broadcast()
+		o.winCond.Signal()
 		o.mu.Unlock()
 	}
 	if opt.SpillDir != "" {
@@ -887,6 +949,9 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		o.stopped.Store(true)
 		wake()
+		o.mu.Lock()
+		o.winCond.Broadcast()
+		o.mu.Unlock()
 	})
 	return o, func() {
 		stop()
@@ -935,10 +1000,39 @@ func (o *run[R, P]) worker() {
 	for {
 		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || ((o.sp == nil || o.sp.full.Load()) && o.full())) {
 			if len(o.stack) == 0 {
+				refused := false
+				if o.win != nil && !o.win.done && !((o.sp == nil || o.sp.full.Load()) && o.full()) {
+					// Nothing queued: the plan's next tile, if the window
+					// admits it (window.go).
+					switch st, err := o.admitTile(false); st {
+					case admitted:
+						o.winCond.Signal() // the next waiter tries the next tile
+						continue
+					case admitFailed:
+						o.planFailed(err)
+						return
+					case admitDone:
+						if o.endPlan() {
+							o.mu.Unlock()
+							o.notifyListed()
+							o.mu.Lock()
+						}
+						continue
+					case admitRefused:
+						refused = true
+					}
+				}
 				// Nothing to list: read spilled frames ahead of the drainer.
 				ft, capped := o.claimAhead()
 				if ft != nil {
 					o.fetchAhead(ft)
+					continue
+				}
+				if refused {
+					o.win.st.Waits[o.win.why]++
+					t := time.Now()
+					o.waitAt(o.winCond, waitWindow)
+					o.idle(t)
 					continue
 				}
 				site := waitIdle
@@ -1010,11 +1104,7 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	listed := false
 	defer func() { // after the unlock below
 		if listed {
-			if o.opt.ListingDone != nil {
-				o.opt.ListingDone()
-			}
-			o.listedNotified.Store(true)
-			event("listing-done") // tests: every range is listed
+			o.notifyListed()
 		}
 	}()
 	o.mu.Lock()
@@ -1061,6 +1151,11 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	}
 	if len(n.pending) > 0 {
 		o.work.Broadcast()
+		if o.win != nil {
+			for range n.pending { // workers at the window take children too
+				o.winCond.Signal()
+			}
+		}
 	}
 	n.pending = nil
 	if n.onPath.Load() {
@@ -1140,8 +1235,14 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 	}
 	e.o.received.Add(int64(len(rows)))
 	e.o.g.ahead.add(int64(len(rows)))
+	if t := e.n.tile; t != nil {
+		e.o.win.charge(t, int64(len(rows)))
+	}
 	e.fenced = false
 	if e.direct {
+		if e.o.win != nil {
+			e.o.measured(e.o.measure(rows), len(rows))
+		}
 		if e.o.stopped.Load() {
 			return context.Cause(e.o.ctx)
 		}
@@ -1153,6 +1254,9 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 		chunk := rows[:min(len(rows), publishRows)]
 		rows = rows[len(chunk):]
 		u := e.o.measure(chunk)
+		if e.o.win != nil {
+			e.o.measured(u, len(chunk))
+		}
 		e.items = append(e.items, item[R, P]{rows: chunk, units: u})
 		e.rows += len(chunk)
 		e.units += u
@@ -1166,7 +1270,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
 	e.childSeen = true
-	c := &node[R, P]{r: r}
+	c := &node[R, P]{r: r, tile: e.n.tile}
 	u := childUnits()
 	e.items = append(e.items, item[R, P]{child: c, units: u})
 	e.kids = append(e.kids, c)
@@ -1302,6 +1406,9 @@ func (e *emitter[R, P]) publish() error {
 	}
 	if e.n.onPath.Load() {
 		o.drain.Broadcast()
+	}
+	if o.win != nil {
+		o.roomCheck()
 	}
 	return nil
 }
@@ -1504,6 +1611,9 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			o.mu.Unlock()
 			return st, context.Cause(o.ctx)
 		}
+		if o.win != nil {
+			o.settle()
+		}
 		if o.segmentsDue() {
 			done, err := o.trySegments()
 			if err != nil {
@@ -1528,6 +1638,9 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				o.path[len(o.path)-1] = drainFrame[R, P]{} // the spare capacity must not keep the node alive
 				o.path = o.path[:len(o.path)-1]
 				o.g.nodes.add(-1)
+				if o.win != nil && len(o.path) == 1 && o.path[0].n == o.win.root {
+					n.tile.closed = true // a tile, every range in it drained
+				}
 				if len(o.path) > 0 {
 					o.path[len(o.path)-1].n.onPath.Store(true)
 					o.drain.Broadcast() // its emitter may be blocked on the budget
@@ -1535,6 +1648,8 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			}
 		case n.state == queued:
 			err = o.expandHere(n, f.i == 0)
+		case o.win != nil && n == o.win.root:
+			err = o.awaitPlan()
 		case n.state == expanding:
 			err = o.awaitFrontier(n)
 		}

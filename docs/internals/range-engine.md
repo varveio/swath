@@ -125,11 +125,15 @@ in the interval it closes, and the scope they were taken under. Two sources fill
 - *a committed dataset directory* (SeekParquet): the manifest's parts give exact bounds and row counts; the key
   column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
   reads the footer and those two index sections, never a data page, through `seekparquet.InspectKeyPages`, which
-  checks its footer and stamps first) gives cuts a thousand times finer. The
-  reader offers 4,096 cuts of about equal rows (four candidates per tile at the most tiles a run starts with),
-  reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a footer or
-  stamp the module refuses) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes
-  the last cut;
+  checks its footer and stamps first) gives cuts a thousand times finer. A run that orders its rows reads every
+  part's page index as it goes, in key order (`Prior.Stream`, `listing.pageStream`: one goroutine, at most two
+  parts ahead of the plan, from the first part ending after a resume key; every key page a cut), for the plan
+  below; the cuts offered up front (`invocation.prior.cuts`) are then 0. A dry run (`order.Count`, which takes no
+  plan) is offered 4,096 cuts of about equal rows instead (four candidates per tile at the most tiles a run
+  starts with), reading the index only of parts a cut falls in. Either way a part whose index cannot be read
+  (another writer, a footer or stamp the module refuses) or does not match the manifest (its rows, its last key,
+  its pages' keys ascending within the part) is cut at its own last key (`seed.from.index_failed`), and the
+  dataset's last key closes the last cut;
 - *a cut file*: one key per line, ascending bytewise without repeats, optionally a tab and the expected count;
   every line has a count or none does (uncounted cuts weigh one each). Its cuts are held for the run and
   merged into at most 1,000 tiles, so the file is bounded: more than 262,144 cuts or 16 MiB (counted while reading, so a
@@ -146,7 +150,29 @@ either: verify that the prior belongs to the same account yourself. A cut file r
 run's prefix. Either way the cuts must ascend, be valid UTF-8 and at most 1,024 bytes. The prior is not the output
 directory; the sequential listing and sources off the range engine (the filesystem) refuse it.
 
-Tiling (`tilePrior`): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
+*The plan* (`plan.go`). A run through the order stage with a counted prior (a dataset, or a cut file with
+counts) does not tile the scope at once: `Planner`, which `order.Run` calls before `Root`, makes the root a plan
+whose tiles the order stage admits one at a time as its [frontier window](ordering.md#the-frontier-window) lets
+it. Each cut is checked as it is read (`source.CheckCut`, and ascending): one that fails, or a reader that fails,
+fails the run (`seed.from.plan_errors`); the plan never ends early. A cut that repeats the previous key (a
+version group across key pages) is merged into it (`seed.from.merged`), and a cut is used only once the next
+greater key or the end shows it complete, across the reader's batches. Then the rules below, with two
+differences: a tile holds `TilePages` pages (32, `swath diag list --seed-from-tile-pages`), whatever the
+workers, and there is no cap on the tiles (`seed.from.tiles` counts them as they are made). At 32 pages of 1,000
+keys a tile holds 31 key pages of 1,024 (31,744 keys) in 32 requests, 0.8 % more requests than whole key pages
+would take (at 16 pages, 15 key pages: 4.2 %); a region the prior counted and the source deleted costs one
+request per tile. A cut coarser than a tile (a counted cut file of one cut per part) is a tile of its own,
+which splits on demand as any range. Reused certificates are cut out of each tile as it is made, one position
+among the spans kept from tile to tile, so a certificate across several tiles is replayed once and every gap
+around it listed. A tile is queued work for the split demand only once admitted, and once the order stage's
+window binds (`Planner.Bound`: it refused a tile; for the rest of the run) idle workers are demand only for a range whose
+remainder holds two tiles or more
+(`split.skipped.window` counts the splits refused for want of other demand). A tile's account (its expected
+keys and the keys its ranges listed, for `seed.from.error.*`) opens when it is admitted and is retired into the
+error counters when its last range ends, so the engine holds accounts for the tiles still listing only, and
+`Stats` scans those (`TestPlanAccountsStayBounded`: 3,000 tiles at 8 workers, at most 32 held).
+
+Tiling (`tilePrior`; the dry run's, an uncounted cut file's): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
 K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its
 longest accepted prefix when that still sorts after the previous cut and inside the scope, else merged into the
 next (`seed.from.unsafe`). A counted prior targets whole-page tiles: the prior's expected keys over 2 tiles per

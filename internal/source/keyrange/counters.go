@@ -58,6 +58,8 @@ const (
 	cSeedFromTilePages
 	cSeedFromHeld
 	cSeedFromOutrun
+	cSeedFromMerged
+	cSeedFromPlanErrors
 	cSentinelDeclinedTruncated
 	cSentinelDeclinedObjectLast
 	cSentinelDeclinedNoCeiling
@@ -118,6 +120,8 @@ const (
 	cAwaitedRemainder
 	cAwaitedLowerTiny
 	cAwaitedUpperTiny
+	cAwaitedWindow
+	cSplitSkippedWindow
 	cChildEmptyLower
 	cChildEmptyUpper
 	cChildEmptyReflectLower
@@ -221,16 +225,18 @@ var Counters = table([numCounters]counters.Def{
 	cSeedFromIndexFailed:          d("seed.from.index_failed", counters.Count, "parts", "parts whose key page index could not be read: their part bounds were cut at instead", "seed_from"),
 	cSeedFromCuts:                 d("seed.from.cuts", counters.Count, "cuts", "cut keys the prior offered (before the merge into tiles)", "seed_from"),
 	cSeedFromUnsafe:               d("seed.from.unsafe", counters.Count, "cuts", "cuts the provider does not accept as a bound: cut at their longest accepted prefix, or merged into the next", "seed_from"),
-	cSeedFromTiles:                d("seed.from.tiles", counters.Count, "ranges", "ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers))", "seed_from"),
+	cSeedFromTiles:                d("seed.from.tiles", counters.Count, "ranges", "ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers), except a counted prior's plan, made as the run goes)", "seed_from"),
 	cSeedFromExpected:             d("seed.from.expected_keys", counters.Count, "keys", "keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth", "seed_from"),
 	cSeedFromErrWithin:            d("seed.from.error.within_2x", counters.Count, "ranges", "prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included)", "seed_from"),
 	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (past its count the gauge estimates its remainder, and splits share it out)", "seed_from"),
 	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
 	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
 	cSeedFromPageSize:             d("seed.from.page_size", counters.Max, "keys", "the page size a counted prior set (the provider's largest; 0: not engaged)", "seed_from"),
-	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the target pages per counted-prior tile; a coarse first cut can exceed the target (0: not engaged)", "seed_from"),
+	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the target pages per counted-prior tile (a planned run: TilePages, or --seed-from-tile-pages); a coarse first cut can exceed the target (0: not engaged)", "seed_from"),
 	cSeedFromHeld:                 d("seed.from.held_pages", counters.Count, "pages", "range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge", "seed_from"),
 	cSeedFromOutrun:               d("seed.from.outrun", counters.Count, "ranges", "ranges that listed their prior's count and went on: the page's gauge estimates their remainder from there", "seed_from"),
+	cSeedFromMerged:               d("seed.from.merged", counters.Count, "cuts", "cuts that repeated the previous cut's key (a version group across key pages) and were merged into it", "seed_from"),
+	cSeedFromPlanErrors:           d("seed.from.plan_errors", counters.Count, "errors", "a counted prior's plan failed while the run went on (an invalid cut, or the prior's reader): the run fails, it never ends the plan early", "seed_from"),
 	cSplitConsidered:              d("split.considered", counters.Count, "decisions", "split decisions taken with demand and rank", "split"),
 	cSplitPivotReflect:            d("split.pivot.reflect", counters.Count, "splits", "accepted splits whose pivot is the cursor reflected from its chain's anchor (forwardReflect at the scalar where they diverge)", "split"),
 	cSplitPivotMidpoint:           d("split.pivot.midpoint", counters.Count, "splits", "accepted splits whose pivot is a safe scalar midpoint between the cursor and hi", "split"),
@@ -255,6 +261,8 @@ var Counters = table([numCounters]counters.Def{
 	cSplitRejectedNoPivot:         d("split.rejected.no_pivot", counters.Count, "decisions", "guard: no safe pivot exists", "split"),
 	cSplitRejectedUnsafeCursor:    d("split.rejected.unsafe_cursor", counters.Count, "decisions", "guard: the cursor is not a usable start-after", "split"),
 	cSplitRejectedUnsafePivot:     d("split.rejected.unsafe_pivot", counters.Count, "decisions", "guard: the provider vetoes the pivot as a bound", "split"),
+	cSplitSkippedWindow:           d("split.skipped.window", counters.Count, "decisions", "idle workers, but the frontier window refusing tiles: they feed only a range whose remainder holds two tiles or more (a planned run)", "seed_from"),
+	cAwaitedWindow:                d("awaited.skipped.window", counters.Count, "pages", "awaited pages not split: idle workers, but the frontier window refusing tiles (split.skipped.window)", "seed_from"),
 	cSplitSkippedNoDemand:         d("split.skipped.no_demand", counters.Count, "decisions", "no idle worker (hunger <= 0)", "split"),
 	cSplitReasonSlowRange:         d("split.reason.slow_range", counters.Count, "splits", "--slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges'", "slow_split"),
 	cSlowMaxRangeLatency:          d("split.slow.max_range_latency_ns", counters.Max, "ns", "--slow-split: the highest page latency (EWMA) of a range", "slow_split"),
@@ -377,7 +385,7 @@ var awaitedBy = map[counters.ID]counters.ID{
 	cSplitRejectedCursor: cAwaitedRejectedCursor, cSplitRejectedBound: cAwaitedRejectedBound, cSplitRejectedNoPivot: cAwaitedRejectedNoPivot,
 	cSplitRejectedUnsafeCursor: cAwaitedRejectedUnsafeCursor, cSplitRejectedUnsafePivot: cAwaitedRejectedUnsafePivot,
 	cSplitSliverRefused: cAwaitedSliverRefused, cSplitSkippedRemainder: cAwaitedRemainder, cSplitSkippedLowerTiny: cAwaitedLowerTiny,
-	cSplitSkippedUpperTiny: cAwaitedUpperTiny,
+	cSplitSkippedUpperTiny: cAwaitedUpperTiny, cSplitSkippedWindow: cAwaitedWindow,
 }
 
 // table is defs as a slice indexed by counter ID: an entry is keyed by its

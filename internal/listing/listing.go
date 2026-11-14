@@ -1334,6 +1334,11 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if !ost.ListingDone.IsZero() {
 		a.sum.Timings.ListingDoneAt = ost.ListingDone.UTC()
 	}
+	if w := ost.Window; w != nil {
+		res.Window = &Window{Tiles: w.Tiles, Forced: w.Forced, Grown: w.Grown, Rows: w.Rows, BoundBy: w.BoundBy, Waits: w.Waits,
+			WaitNs: int64(w.WaitTime), PeakWaiters: w.PeakWaiters, PlanWaitNs: int64(w.PlanWait), PeakTiles: w.PeakTiles,
+			PeakCreditRows: w.PeakCreditRows, PeakRetainedBytes: w.PeakRetainedBytes}
+	}
 	if !dryRun(a.cfg) {
 		res.Drain = a.drain(ost, oopt)
 	}

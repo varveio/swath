@@ -196,10 +196,91 @@ admitted the most the host carries) or `not_reached` (listing never finished); b
 each count (`encoders_at_start_bound_by`, `encoders_after_listing_bound_by`: `memory`, `cpu`, `descriptors`,
 `minimum` or `explicit`).
 
+## The frontier window
+
+A run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to back: the
+provider's root is a *plan* (`source.Planning`, the range engine's `Planner`), whose tiles the order stage takes
+one at a time, in key order, and appends to the root as its children (`order/window.go`). The plan root is never
+claimed or expanded; it stays open, counted in the ranges not yet done, until the plan ends, so listing is not
+done (`ListingDone`) between two tiles. Unseeded runs, uncounted cut files and `order.Count` (which never asks
+for a plan) keep the root as a range and the paths above unchanged.
+
+**Credit.** Each admitted tile holds a credit: `est`, the rows the prior expects in it, and `held`, the rows its
+ranges have received and the drainer has not yet handed to the sink. A row is charged to its tile when an emitter
+of any node in the tile receives it (published, spilled, emitted directly by the drainer's own expansion, or
+replayed from a certificate): a spilled publication's rows stay charged though its items are markers. The
+charge comes back when the drainer's batch holding the row is handed to the sink (`sink.Write` returned), not
+when its budget bytes are released (the drainer releases them before a batch is written). A tile's charge is
+the larger of `est` and `held`; it is released, in key order, once the drainer has closed the tile's node (every
+range in it drained) and nothing of it is held.
+
+**Admission.** A worker with nothing queued admits the next tile, and lists it, when the charges of the tiles
+held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (`--spill-budget`)
+and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
+ahead of a grown one until the frontier passes it). Otherwise it waits at the window (`window`) holding no
+range. The window's rows are a target of 8,000,000 (`rows`; `swath diag list --seed-from-window-rows` sets
+another, `set`), but never more than what the storage gives: half the spill cap over a spilled row's bytes (the
+run's frames' bytes over their rows, before the first frame the prior's part bytes per row, else 64) plus what
+the row budget holds (its bytes over the budget bytes per row the emitters measured; nothing before the first
+rows), `spill_cap`; with spill uncapped the target alone; with spill off, what the row budget holds alone,
+`budget`. So the window binds on a generously sized disk too: listing in order beats listing ahead, spilling
+and draining a tail. 8M is a measured starting default: about 250 tiles of 32 pages, enough for about 5M rows a
+second of listing at 50 ms a page while one writer takes about 1M rows a second; at 2,048 workers a window of
+about 8.9M rows finished a median 25 s against 41 s for one that never bound. It is an admission target, not a
+storage or recovery bound. The drainer, having drained and handed on every admitted tile, admits the
+next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
+stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
+admitted. Once the window binds (it refused a tile; for the rest of the run), idle workers are demand only for a range whose remainder holds two
+tiles or more (a coarse cut's tile, the open frontier) or that listed past its prior's count, and its children
+(a grown region, whose remainder is unknown), which split for them as any range does
+(`keyrange` `TestPlanSplitsBehindTheWindow`); a tile-sized range is not sliced for them (`split.skipped.window`):
+while the window binds, the output, not the listing, sets the pace, and slicing would only add requests and
+overfetch. Measured on a production list of 85.9M keys at 2,048 workers under a 10 % spill cap before this
+rule: the held workers sliced the admitted tiles below a page (48,190 bounded splits, 27,447 empty upper children,
+47 % of the keys overfetched, 1.39 requests per 1,000 keys against 1.08 uncapped) (`TestPlanManyWorkersFewTiles`:
+256 workers, a window of a few tiles, the requests of one worker). The workers at the window wait on a condition
+of their own and are woken as room comes back, one per tile released, one when the tile refused fits, the next
+after each admission, one per child queued, and all at a stop or the plan's end, not at every step of the
+drainer.
+
+**The plan.** The range engine reads the prior lazily (a dataset's page index part by part, at most two parts
+ahead of the plan, from the first part ending after a resume key; a cut file from memory), checks every cut as
+it reads it, and closes a tile only once the cut after it is known: a key repeated across key pages (a version
+group) is merged into its cut across batches ([range-engine.md](range-engine.md), "Warm start").
+A failure of the plan (an invalid cut, the reader's error) fails the run with it; it never ends the plan as if
+complete. Cancellation stops the reader at its next batch, a full buffer included, and wakes the window's and
+the plan's waiters; the reader is joined after the workers.
+
+**What it bounds.** The window is an admission heuristic, not a storage bound: a tile already listing keeps
+listing whatever it holds (a region grown since the prior, keys appended past its last cut, the open frontier
+after it), and certified durable files stay on disk until K covers them. What it removes is the cause of spill
+on a fresh prior: rows listed across the whole keyspace ahead of the output. Rows ahead of the output stay near
+the window's rows plus one tile per worker, so a cap a fraction of a cold run's spill is expected to hold without
+a refused frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of
+the unseeded run's spill peak, none refused from the dataset's tiles, the parts identical). Expected, not guaranteed, even on a fresh prior
+with exact counts: admission gates tiles, not the listing inside a tile admitted. A tile of 200,000 rows that
+splits, whose lower range stalls while an upper range lists 100,000 poorly compressible rows of about 1 KiB, puts
+some 100 MB ahead of the output whatever the window; past the cap, its frames are refused as on any run. The rows still leave through the one part writer,
+so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
+plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
+run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
+
+The report's `resources.window` ([counters.md](counters.md#order-stage-and-encoders-run-summary-top-level))
+counts the tiles admitted and forced, the tiles grown, the window's rows and what set them, the waits at the
+window by the refusal that held them, the drainer's wait for the plan, and the peaks of the tiles held, the
+rows charged to them and the bytes held at an admission. Tests: `order` `TestWindowBoundsRowsAhead` (a stalled
+frontier: workers wait at the window holding no range, the tiles held stay within it, the run completes when
+released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
+`TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`; `keyrange` `TestPlanTilesAsTilePrior`,
+`TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `listing` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
+too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
+`TestSIGKILLAtEveryPoint` (`s3-planned`).
+
 ## The waits
 
 Every wait is on one of two condition variables under the stage's mutex, and every event that can make a
-waiter eligible broadcasts to both; each waiter rechecks its own condition. Each wait is driven to its wait
+waiter eligible broadcasts to both; each waiter rechecks its own condition. The one exception is the frontier
+window's, which has a third, woken one waiter at a time (below). Each wait is driven to its wait
 and released by one event in a test with a deterministic barrier (`hookWait`):
 
 | Wait | Who | Released by | Test |
@@ -211,6 +292,8 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
+| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit; all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
 not woken per frame: planning signals as many idle workers as can start a read when it queued frames

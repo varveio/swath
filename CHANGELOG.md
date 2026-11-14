@@ -5,6 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
+  back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
+  order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold
+  less), so rows listed ahead of the
+  output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
+  The run report (`report_version` 11) adds `resources.window`; the range engine counts `seed.from.merged` and
+  `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and `--seed-from-window-rows` the window's
+  rows (#535).
 - Go port: a resume that reuses durable-spill certificates writes its tail with the parallel segments. Before,
   such a resume never finished listing: its replay ranges were counted as ranges still to list, so the segments
   never engaged (`drain.segments.reason` `listing_active`), the encoders reserved for after listing were never

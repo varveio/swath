@@ -183,13 +183,14 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	out := make([]Range, 0, len(tiles)+1)
 	lo := after
 	var expected float64
+	est := map[int32]float64{}
 	for _, t := range tiles {
 		r := Range{lo: lo, hi: t.hi, id: p.ids.Add(1), born: fromSeed}
 		if pr.Counted {
 			r.est, r.estOK, r.prior = t.est, true, true
 			expected += t.est
-			p.tiles = append(p.tiles, tileAccount{est: t.est})
-			r.tile = int32(len(p.tiles))
+			p.lastTile++
+			r.tile, est[p.lastTile] = p.lastTile, t.est
 		}
 		out = append(out, r)
 		lo = t.hi
@@ -205,6 +206,11 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	// reused ranges the order stage replays. A prior never confers
 	// coverage: no key range is skipped because the prior listed it.
 	out = p.aroundReuse(out)
+	for _, r := range out {
+		if r.tile > 0 {
+			p.tileRanges(r.tile, est[r.tile], 1)
+		}
+	}
 	if p.opt.Resume != nil {
 		p.c.Set(cResumedRanges, int64(len(out)))
 	}
@@ -223,39 +229,78 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	return nil
 }
 
-// tileAccount is a prior tile's expectation and the keys its ranges have
-// listed (under mu).
+// tileAccount is a prior tile's expectation, the keys its ranges have
+// listed, and its ranges made and not yet ended (under mu).
 type tileAccount struct {
-	est  float64
-	keys int64
+	est    float64
+	keys   int64
+	ranges int
 }
 
-// priorErrors classifies every prior tile by the keys its ranges listed
-// (once the run is done, the tile's exact count) against the prior's
-// expectation, mu held: within a factor of priorErrorFactor, grown past
-// it, or shrunk below it, and the largest growth. Read at every Stats, so
-// a run report taken while ranges still list shows the tiles so far.
+// tileErrors is the prior's error over tiles: how many listed within a
+// factor of priorErrorFactor of their expectation, grown past it, or shrunk
+// below it, and the largest growth.
+type tileErrors struct{ within, grown, shrunk, most int64 }
+
+// add classifies a tile by the keys its ranges listed.
+func (e *tileErrors) add(a *tileAccount) {
+	ratio := float64(a.keys) / max(a.est, 1)
+	switch {
+	case ratio > priorErrorFactor:
+		e.grown++
+	case ratio < 1/priorErrorFactor:
+		e.shrunk++
+	default:
+		e.within++
+	}
+	e.most = max(e.most, int64(math.Round(ratio)))
+}
+
+// hookTileAccount sees each tile account as it opens (tests; mu held).
+var hookTileAccount func(est float64)
+
+// tileRanges adds n ranges to tile id's account, opening it with the
+// tile's expected keys when it has none (mu held).
+func (p *Engine[P]) tileRanges(id int32, est float64, n int) {
+	a := p.tiles[id]
+	if a == nil {
+		a = &tileAccount{est: est}
+		p.tiles[id] = a
+		if hookTileAccount != nil {
+			hookTileAccount(est)
+		}
+	}
+	a.ranges += n
+}
+
+// tileEnded adds a range's keys to its tile, and retires the account into
+// the errors when it was the tile's last range: its count is then exact,
+// and the accounts held are the tiles still listing (mu held).
+func (p *Engine[P]) tileEnded(id int32, keys int64) {
+	a := p.tiles[id]
+	a.keys += keys
+	if a.ranges--; a.ranges == 0 {
+		p.tileErr.add(a)
+		delete(p.tiles, id)
+	}
+}
+
+// priorErrors sets the prior's error counters: the tiles retired, and the
+// tiles still listing by the keys listed so far, mu held. Read at every
+// Stats, so a run report taken while ranges still list shows the tiles so
+// far; the cost is the tiles still listing.
 func (p *Engine[P]) priorErrors() {
-	if len(p.tiles) == 0 {
+	e := p.tileErr
+	for _, a := range p.tiles {
+		e.add(a)
+	}
+	if e == (tileErrors{}) {
 		return
 	}
-	var within, grown, shrunk, most int64
-	for _, t := range p.tiles {
-		ratio := float64(t.keys) / max(t.est, 1)
-		switch {
-		case ratio > priorErrorFactor:
-			grown++
-		case ratio < 1/priorErrorFactor:
-			shrunk++
-		default:
-			within++
-		}
-		most = max(most, int64(math.Round(ratio)))
-	}
-	p.c.Set(cSeedFromErrWithin, within)
-	p.c.Set(cSeedFromErrGrown, grown)
-	p.c.Set(cSeedFromErrShrunk, shrunk)
-	p.c.Set(cSeedFromErrMaxGrown, most)
+	p.c.Set(cSeedFromErrWithin, e.within)
+	p.c.Set(cSeedFromErrGrown, e.grown)
+	p.c.Set(cSeedFromErrShrunk, e.shrunk)
+	p.c.Set(cSeedFromErrMaxGrown, e.most)
 }
 
 // priorErrorFactor is the error a prior tile may show and still count as

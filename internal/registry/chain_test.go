@@ -29,7 +29,18 @@ func (fencingProvider) Expand(_ context.Context, _ any, e source.Emitter[any, re
 	f.Fence("m", false)
 	return nil
 }
-func (fencingProvider) Fences() bool             { return true }
+func (fencingProvider) Fences() bool                 { return true }
+func (fencingProvider) Planner() source.Planner[any] { return plan{} }
+
+// plan is a plan of one tile, 5.
+type plan struct{}
+
+func (plan) Start(context.Context, func()) func() { return func() {} }
+func (plan) Sizes() source.PlanSizes              { return source.PlanSizes{RowBytes: 3} }
+func (plan) Bound(bool)                           {}
+func (plan) Next(admit func(int64) bool) (any, bool, bool, error) {
+	return 5, admit(9), false, nil
+}
 func (fencingProvider) Replay(r any) (int, bool) { return 7, true }
 
 // fenceSink is an emitter that records the fences it is handed and the
@@ -45,8 +56,11 @@ func (s *fenceSink) Awaited() bool                     { s.awaited++; return tru
 // TestWrappersForwardDurableSpill: every provider wrapper between a
 // provider and the order stage (the filters, the object sizes) forwards
 // what durable spill needs: Fences, Replay, and the emitter's Span and
-// Fence; and the emitter's Awaited, the split account's. The sizes wrapper of the 0.4 CLI did not, and durable spill
-// silently captured nothing (no fence reached the order stage).
+// Fence; and the emitter's Awaited, the split account's; and the plan of a
+// counted prior's tiles (Planner), without which the frontier window
+// would never engage. The sizes wrapper of the 0.4 CLI did not forward
+// fences, and durable spill silently captured nothing (no fence reached the
+// order stage).
 func TestWrappersForwardDurableSpill(t *testing.T) {
 	var n atomic.Int64
 	size := func(*retPayload) (int64, bool) { return 1, true }
@@ -62,6 +76,11 @@ func TestWrappersForwardDurableSpill(t *testing.T) {
 			t.Errorf("%s: Replay not forwarded", name)
 		} else if c, ok := rp.Replay(0); !ok || c != 7 {
 			t.Errorf("%s: Replay = %d, %v", name, c, ok)
+		}
+		if pl, ok := p.(source.Planning[any]); !ok || pl.Planner() == nil {
+			t.Errorf("%s: Planner not forwarded", name)
+		} else if r, ok, _, _ := pl.Planner().Next(func(n int64) bool { return n == 9 }); !ok || r != 5 {
+			t.Errorf("%s: the plan's tile %v, %v", name, r, ok)
 		}
 		var s fenceSink
 		if err := p.Expand(context.Background(), p.Root(), &s); err != nil {

@@ -131,6 +131,12 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	// byte-order adapter, its pairs on both sides of the filler.
 	azh := azblobtest.Serve(t, azblobtest.Keys())
 	common := []string{"--workers", "8", "--part-size", "4KiB", "--sort-buffer", "512KiB"}
+	// The planned arm's prior: a dataset of the same keys, its page index
+	// read as the run goes.
+	prior := filepath.Join(t.TempDir(), "prior")
+	if out, err := exec.Command(bin, append(append([]string{"diag", "list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, common...), "-o", prior)...).CombinedOutput(); err != nil {
+		t.Fatalf("prior: %v\n%s", err, out)
+	}
 	// unsplit: the first occurrences the seeded arms never reach (their
 	// ranges are a page each; the s3-unseeded and azblob-unseeded arms
 	// cross split).
@@ -140,28 +146,33 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		src     []string
 		runtime []string // also given to swath resume
 		byTime  bool     // parts are closed by time: compare rows, not part bytes
+		more    []string // points beyond the common ones on this arm's path
 	}{
 		// Seeded (the default) and unseeded: the seed tiles these keys
 		// into ranges of a page each, so the seeded arms never split, and
 		// it moves response-read to its own requests and changes how
 		// ranges finish; the unseeded arm splits.
-		{"s3", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, []string{"--part-interval=0"}, false},
-		{"s3-unseeded", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--no-seed"}, []string{"--part-interval=0"}, false},
-		{"gcs", []string{"gs://bkt", "--endpoint-url", gcs, "--anonymous"}, []string{"--part-interval=0"}, false},
+		{"s3", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, []string{"--part-interval=0"}, false, nil},
+		{"s3-unseeded", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--no-seed"}, []string{"--part-interval=0"}, false, nil},
+		// Planned from a counted prior through the frontier window: tiles
+		// of 20 pages of 100, split on demand; its reader killed too.
+		{"s3-planned", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--seed-from", prior, "--page-size", "100",
+			"--seed-from-tile-pages", "20"}, []string{"--part-interval=0"}, false, []string{"seed-from-part"}},
+		{"gcs", []string{"gs://bkt", "--endpoint-url", gcs, "--anonymous"}, []string{"--part-interval=0"}, false, nil},
 		// 1,000, as the others, so the seed tiles these keys as it does
 		// theirs whatever the provider's default.
 		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--endpoint-url", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
-			"--anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
+			"--anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false, nil},
 		// Unseeded, as s3-unseeded: one range whose owner splits, so the
 		// split points and recovery after an owner split are crossed on the
 		// Azure route too.
 		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--endpoint-url", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
-			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false},
+			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false, nil},
 		// The hostile corpus, unseeded so that it splits: crashes inside
 		// the adapter's split spans resume to the same parts.
 		{"azblob-hostile", []string{"az://" + azh.Account + "/" + azh.Container, "--endpoint-url", strings.TrimSuffix(azh.Endpoint, "/"+azh.Account),
-			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false},
-		{"s3-interval", []string{"s3://bkt", "--endpoint-url", slowURL, "--s3-path-style", "--anonymous"}, []string{"--part-interval", "1ms"}, true},
+			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false, nil},
+		{"s3-interval", []string{"s3://bkt", "--endpoint-url", slowURL, "--s3-path-style", "--anonymous"}, []string{"--part-interval", "1ms"}, true, nil},
 	} {
 		args := func(out string, extra ...string) []string {
 			a := append(append(append(append([]string{"diag", "list"}, prov.src...), common...), prov.runtime...), "-o", out)
@@ -171,8 +182,8 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
 			t.Fatalf("%s reference: %v\n%s", prov.name, err, out)
 		}
-		for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
-			"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"} {
+		for _, point := range append([]string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
+			"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"}, prov.more...) {
 			nths := []string{"1", "5"}
 			if point == "journal-append" {
 				// The first part's record (1 is the header's): the

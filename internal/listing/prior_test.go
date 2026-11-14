@@ -39,7 +39,9 @@ func manifestOf(t *testing.T, dir string) dataset.Manifest {
 
 // TestSeedFromDataset: a run seeded from its predecessor's dataset lists
 // the same rows into the same parts, from tiles cut at the predecessor's
-// key pages (no delimiter seed request), and its report names the prior.
+// key pages (no delimiter seed request) and admitted through the frontier
+// window, and its report names the prior (its cuts read as the run goes:
+// none offered up front).
 func TestSeedFromDataset(t *testing.T) {
 	url := fakeS3(t, 6000)
 	dir := t.TempDir()
@@ -65,14 +67,19 @@ func TestSeedFromDataset(t *testing.T) {
 		c.Value("seed.from.tiles") < 2 || c.Value("seed.requests") != 0 || c.Value("seed.from.expected_keys") != 6000 {
 		t.Fatalf("counters %v", c)
 	}
-	if p := sum.Invocation.Prior; p == nil || p.Source != "dataset" || p.Path != first || !p.Counted || p.Cuts < 2 {
+	if p := sum.Invocation.Prior; p == nil || p.Source != "dataset" || p.Path != first || !p.Counted || p.Cuts != 0 {
 		t.Fatalf("report prior %+v", p)
+	}
+	if w := sum.Resources.Window; w == nil || w.Tiles != c.Value("seed.from.tiles") || w.BoundBy == "" {
+		t.Fatalf("window %+v, %d tiles planned", w, c.Value("seed.from.tiles"))
 	}
 }
 
 // TestSeedFromCutFile: a cut file seeds the run (with and without
-// counts); one out of order, outside the scope, or mixing counted and
-// uncounted lines is refused before anything is listed.
+// counts: a counted one is planned, its three cuts one tile of whole pages
+// and the open frontier, admitted through the frontier window); one out of
+// order, outside the scope, or mixing counted and uncounted lines is
+// refused before anything is listed.
 func TestSeedFromCutFile(t *testing.T) {
 	url := fakeS3(t, 3000)
 	dir := t.TempDir()
@@ -92,8 +99,14 @@ func TestSeedFromCutFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := s3Stats(sum).Counters
-		if sum.Output.RowsEmitted != 3000 || c.Value("seed.from.cuts") != 3 || c.Value("seed.from.tiles") != 4 || c.Value("seed.requests") != 0 {
-			t.Fatalf("%s: rows %d, counters %v", name, sum.Output.RowsEmitted, c)
+		counted := strings.Contains(body, "\t")
+		tiles := int64(4)
+		if counted {
+			tiles = 2
+		}
+		if sum.Output.RowsEmitted != 3000 || c.Value("seed.from.cuts") != 3 || c.Value("seed.from.tiles") != tiles || c.Value("seed.requests") != 0 ||
+			(sum.Resources.Window != nil) != counted {
+			t.Fatalf("%s: rows %d, window %+v, counters %v", name, sum.Output.RowsEmitted, sum.Resources.Window, c)
 		}
 		if p := sum.Invocation.Prior; p == nil || p.Source != "cuts" || p.Counted != strings.Contains(body, "\t") {
 			t.Fatalf("%s: report prior %+v", name, p)
@@ -235,7 +248,7 @@ func TestDatasetPriorCoalescesFinalVersionGroup(t *testing.T) {
 	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 		t.Fatal(err)
 	}
-	pr, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"})
+	pr, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

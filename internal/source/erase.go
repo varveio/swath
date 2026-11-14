@@ -50,6 +50,32 @@ func (e erased[R, P]) Replay(r any) (int, bool) {
 	return rp.Replay(rr)
 }
 
+// Planner forwards the provider's Planning (nil without it).
+func (e erased[R, P]) Planner() Planner[any] {
+	pl, ok := e.p.(Planning[R])
+	if !ok {
+		return nil
+	}
+	if p := pl.Planner(); p != nil {
+		return erasedPlan[R]{p}
+	}
+	return nil
+}
+
+type erasedPlan[R any] struct{ p Planner[R] }
+
+func (e erasedPlan[R]) Start(ctx context.Context, wake func()) func() { return e.p.Start(ctx, wake) }
+func (e erasedPlan[R]) Sizes() PlanSizes                              { return e.p.Sizes() }
+func (e erasedPlan[R]) Bound(on bool)                                 { e.p.Bound(on) }
+
+func (e erasedPlan[R]) Next(admit func(int64) bool) (any, bool, bool, error) {
+	r, ok, done, err := e.p.Next(admit)
+	if !ok {
+		return nil, false, done, err
+	}
+	return r, true, false, nil
+}
+
 type typed[R, P any] struct{ e Emitter[any, P] }
 
 func (t typed[R, P]) Rows(rows []schema.Row[P]) error { return t.e.Rows(rows) }

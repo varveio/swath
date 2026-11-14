@@ -6,6 +6,7 @@ package keyrange
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -36,6 +37,7 @@ const (
 	resume        // (after, ⊤] after a journaled run's last published key, without the seed
 	warm          // the tiling at a prior's cuts (SeedFrom), of (after, ⊤] on a resume
 	reused        // a reused coverage certificate: the order stage replays it (Replay), the engine never lists it
+	planned       // a counted prior's plan (Planner): the order stage admits its tiles, never expands it
 )
 
 type origin uint8
@@ -110,6 +112,9 @@ type Range struct {
 	// in, inherited by its children; 0 for none. Its keys add to the
 	// tile's, which the report compares with the prior (priorErrors).
 	tile int32
+	// grown: the range, or an ancestor, listed past its prior's count:
+	// its region grew since the prior, and its remainder is unknown.
+	grown bool
 	// lat is the page latency (ns) the range starts with: its parent's
 	// (SlowSplit; 0 unknown). slow: a child of a slow split (slowQueued).
 	lat  float64
@@ -151,6 +156,7 @@ type running struct {
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
 	groupOpen    bool           // group mode: its last emitted key's group may continue, or it emitted none yet (no split, unranked)
 	prior        float64        // a counted prior's expected keys in the range (Range.prior; 0: none)
+	grown        bool           // listed past its prior's count, or a child of a range that did (Range.grown)
 	lane         int            // the run trace's worker lane (TraceTo; lane)
 }
 
@@ -265,6 +271,8 @@ func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
+	case p.plan != nil:
+		return Range{kind: planned}
 	case p.opt.Prior != nil:
 		return Range{kind: warm}
 	case p.opt.Seed:
@@ -288,6 +296,8 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 		return p.expandResume(e)
 	case reused:
 		return fmt.Errorf("keyrange: reused range %d expanded: only the order stage replays it", r.cert)
+	case planned:
+		return errors.New("keyrange: the plan root expanded: only the order stage admits its tiles")
 	}
 	return p.expandRange(ctx, r, e)
 }
@@ -324,9 +334,31 @@ func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 	if len(p.reuse) == 0 {
 		return tiles
 	}
+	var rc reuseCut
+	out := make([]Range, 0, len(tiles)+2*len(p.reuse))
+	for _, t := range tiles {
+		out = p.cutReuse(&rc, t, out)
+	}
+	return out
+}
+
+// reuseCut is where a tiling stands among the reused spans: the next span,
+// and whether its reused range was emitted (a span that began in an
+// earlier tile). One value serves the tiles of a run in key order, so a
+// span across several tiles is replayed once and every gap is listed.
+type reuseCut struct {
+	ci    int
+	begun bool
+}
+
+// cutReuse appends tile t, cut around the reused spans from rc on, to out
+// (aroundReuse, one tile at a time).
+func (p *Engine[P]) cutReuse(rc *reuseCut, t Range, out []Range) []Range {
+	if len(p.reuse) == 0 {
+		return append(out, t)
+	}
 	k := p.resumeKey()
 	start := func(i int) string { return max(p.reuse[i].Lo, k) }
-	out := make([]Range, 0, len(tiles)+2*len(p.reuse))
 	piece := func(t Range, lo, hi string, open, gapEnd bool) {
 		if !open && hi <= lo {
 			return
@@ -337,33 +369,29 @@ func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 		}
 		out = append(out, g)
 	}
-	ci, begun := 0, false // the next span, and whether its reused range was emitted
-	for _, t := range tiles {
-		pos := max(t.lo, t.after)
-		inside := func(x string) bool { return t.open || x < t.hi }
-		for {
-			if ci < len(p.reuse) && begun {
-				// A span that began in an earlier tile (or at this tile's start).
-				s := p.reuse[ci]
-				if s.HiOpen || !inside(s.Hi) {
-					if !s.HiOpen && !t.open && s.Hi == t.hi {
-						ci, begun = ci+1, false
-					}
-					pos = ""
-					break // the span covers the rest of the tile
+	pos := max(t.lo, t.after)
+	inside := func(x string) bool { return t.open || x < t.hi }
+	for {
+		if rc.ci < len(p.reuse) && rc.begun {
+			// A span that began in an earlier tile (or at this tile's start).
+			s := p.reuse[rc.ci]
+			if s.HiOpen || !inside(s.Hi) {
+				if !s.HiOpen && !t.open && s.Hi == t.hi {
+					rc.ci, rc.begun = rc.ci+1, false
 				}
-				pos, ci, begun = s.Hi, ci+1, false
-				continue
+				break // the span covers the rest of the tile
 			}
-			if ci < len(p.reuse) && inside(start(ci)) {
-				piece(t, pos, start(ci), false, true)
-				out = append(out, Range{kind: reused, cert: ci, lo: start(ci), hi: p.reuse[ci].Hi, open: p.reuse[ci].HiOpen, id: p.ids.Add(1), born: fromSeed})
-				begun = true
-				continue
-			}
-			piece(t, pos, t.hi, t.open, false)
-			break
+			pos, rc.ci, rc.begun = s.Hi, rc.ci+1, false
+			continue
 		}
+		if rc.ci < len(p.reuse) && inside(start(rc.ci)) {
+			piece(t, pos, start(rc.ci), false, true)
+			out = append(out, Range{kind: reused, cert: rc.ci, lo: start(rc.ci), hi: p.reuse[rc.ci].Hi, open: p.reuse[rc.ci].HiOpen, id: p.ids.Add(1), born: fromSeed})
+			rc.begun = true
+			continue
+		}
+		piece(t, pos, t.hi, t.open, false)
+		break
 	}
 	return out
 }
@@ -434,7 +462,7 @@ func (p *Engine[P]) enter(r Range) *running {
 	if r.born != fromRoot {
 		p.queued--
 	}
-	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow}
+	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow, grown: r.grown}
 	if r.prior && r.estOK {
 		st.prior = r.est
 	}
@@ -462,7 +490,7 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time, err error) {
 	}
 	p.c.Add(cBusyNs, int64(time.Since(start)))
 	if r.tile > 0 {
-		p.tiles[r.tile-1].keys += st.keys
+		p.tileEnded(r.tile, st.keys)
 	}
 	child := r.born == fromLower || r.born == fromUpper
 	if child && st.keys == 0 {
@@ -691,7 +719,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			held, st.rem = h, h
 			p.c.Inc(cSeedFromHeld)
 		case st.prior > 0 && !done:
-			st.prior = 0
+			st.prior, st.grown = 0, true
 			p.c.Inc(cSeedFromOutrun)
 			fallthrough
 		default:
@@ -710,7 +738,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Max(cSlowMaxRangeLatency, int64(st.lat))
 			p.c.Set(cSlowRunLatency, int64(p.runLatency()))
 		}
-		hunger := p.opt.Workers - len(p.running) - p.queued
+		hunger, _ := p.demand(st)
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
 		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		unsplittable := st.unsplittable
@@ -926,9 +954,11 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			return
 		}
 	}
-	hunger := p.opt.Workers - len(p.running) - p.queued
+	hunger, held := p.demand(st)
 	if p.opt.SplitCoin == nil {
 		switch {
+		case held: // idle workers, but the window binds and the range holds under two tiles
+			return pivot{}, false, cSplitSkippedWindow
 		case !pr.ready: // the demand rose after the page's snapshot
 			return pivot{}, false, cSplitSkippedNoDemand
 		case hunger <= 0 && p.slowSplitWanted(st, r):
@@ -1063,6 +1093,24 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	return pv, true, 0
 }
 
+// demand is the idle workers a split of st could feed (hunger: workers -
+// active - queued), mu held. In a planned run, once the frontier window
+// binds (Bound), idle workers are demand only for a range whose
+// remainder would give each child a tile's keys or more (a coarse cut's
+// tile, the open frontier), or that grew past its prior's count (its
+// remainder unknown: the prior's count is spent, and the page's gauge
+// errs short on keys added between the old ones); the window admits tiles, so
+// slicing an admitted tile further for them only adds requests and
+// overfetch, the output being bound by the window. held reports that the
+// window took the demand there was.
+func (p *Engine[P]) demand(st *running) (hunger int, held bool) {
+	hunger = p.opt.Workers - len(p.running) - p.queued
+	if hunger <= 0 || p.plan == nil || !p.windowBound.Load() || st.grown || st.remainder() >= 2*p.plan.tileKeys {
+		return hunger, false
+	}
+	return 0, true
+}
+
 // pivot is a decided split's pivot m and the synthesis that made it;
 // anchored: the reflection had an anchor; chain: the upper child's anchor.
 type pivot struct {
@@ -1117,6 +1165,9 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	p.c.Max(cMaxQueued, int64(p.queued))
 	depth := r.depth + 1
 	p.c.Max(cSplitMaxDepth, depth)
+	if r.tile > 0 {
+		p.tileRanges(r.tile, 0, 2) // the children; the parent ends after
+	}
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
@@ -1125,6 +1176,7 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
 	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
 	lower.est, lower.estOK, lower.prior = pv.lower, pv.estOK, pv.prior
+	lower.grown, upper.grown = st.grown, st.grown
 	upper.est, upper.estOK, upper.prior = pv.upper, pv.estOK && !r.open, pv.prior && !r.open
 	// A resumed range split before its cursor passed the resume key hands
 	// the key on: keys up to it are already published.
