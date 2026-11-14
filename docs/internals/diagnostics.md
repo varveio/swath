@@ -51,6 +51,9 @@ Diagnostics:
                               tools/explainer reads it. Events the file cannot keep up with are
                               dropped, never waited for (trace.dropped).
       --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
+      --seed-from-tile-pages N
+                            with a counted --seed-from, tiles of N pages each (1 to 4096; default
+                            32)
 ```
 <!-- diag-list:end -->
 
@@ -75,6 +78,8 @@ Diagnostics:
                        tools/explainer reads it. Events the file cannot keep up with are dropped,
                        never waited for (trace.dropped).
       --page-size N  ask for pages of N entries (1 to 1000; default the provider's)
+      --seed-from-tile-pages N
+                     with a counted --seed-from, tiles of N pages each (1 to 4096; default 32)
 ```
 <!-- diag-count:end -->
 

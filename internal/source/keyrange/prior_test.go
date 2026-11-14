@@ -211,7 +211,9 @@ func TestPriorStale(t *testing.T) {
 			once.Do(func() { close(h.release) })
 		}
 	})()
-	got, st, leaves := runBudget(t, h, Options{Prior: pr}, 4, 1<<20)
+	// Tiles of 10 pages: every 10,000-key cut is a tile of its own, larger
+	// than the target.
+	got, st, leaves := runBudget(t, h, Options{Prior: pr, TilePages: 10}, 4, 1<<20)
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}

@@ -23,6 +23,7 @@ type Policy struct {
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
+	TilePages  int       // the pages of a counted prior's tile (0: TilePages); diagnostic
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -44,7 +45,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, TilePages: p.TilePages}
 }
 
 // Group is the engine's flag group, which every provider on the engine
@@ -105,6 +106,15 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 					return fmt.Errorf("want 1 to %d", PageKeys)
 				}
 				p.PageSize = n
+				return nil
+			})})
+		source.Define(f, source.Flag{Name: "seed-from-tile-pages", Metavar: "N", Usage: fmt.Sprintf("with a counted --seed-from, tiles of N pages each (1 to %d; default %d)", maxTilePages, TilePages),
+			Value: source.Func(func(v string) error {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1 || n > maxTilePages {
+					return fmt.Errorf("want 1 to %d", maxTilePages)
+				}
+				p.TilePages = n
 				return nil
 			})})
 	}

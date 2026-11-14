@@ -6,6 +6,7 @@ package keyrange
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -36,6 +37,7 @@ const (
 	resume        // (after, ⊤] after a journaled run's last published key, without the seed
 	warm          // the tiling at a prior's cuts (SeedFrom), of (after, ⊤] on a resume
 	reused        // a reused coverage certificate: the order stage replays it (Replay), the engine never lists it
+	planned       // a counted prior's plan (Planner): the order stage admits its tiles, never expands it
 )
 
 type origin uint8
@@ -265,6 +267,8 @@ func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
+	case p.plan != nil:
+		return Range{kind: planned}
 	case p.opt.Prior != nil:
 		return Range{kind: warm}
 	case p.opt.Seed:
@@ -288,6 +292,8 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 		return p.expandResume(e)
 	case reused:
 		return fmt.Errorf("keyrange: reused range %d expanded: only the order stage replays it", r.cert)
+	case planned:
+		return errors.New("keyrange: the plan root expanded: only the order stage admits its tiles")
 	}
 	return p.expandRange(ctx, r, e)
 }
@@ -324,9 +330,31 @@ func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 	if len(p.reuse) == 0 {
 		return tiles
 	}
+	var rc reuseCut
+	out := make([]Range, 0, len(tiles)+2*len(p.reuse))
+	for _, t := range tiles {
+		out = p.cutReuse(&rc, t, out)
+	}
+	return out
+}
+
+// reuseCut is where a tiling stands among the reused spans: the next span,
+// and whether its reused range was emitted (a span that began in an
+// earlier tile). One value serves the tiles of a run in key order, so a
+// span across several tiles is replayed once and every gap is listed.
+type reuseCut struct {
+	ci    int
+	begun bool
+}
+
+// cutReuse appends tile t, cut around the reused spans from rc on, to out
+// (aroundReuse, one tile at a time).
+func (p *Engine[P]) cutReuse(rc *reuseCut, t Range, out []Range) []Range {
+	if len(p.reuse) == 0 {
+		return append(out, t)
+	}
 	k := p.resumeKey()
 	start := func(i int) string { return max(p.reuse[i].Lo, k) }
-	out := make([]Range, 0, len(tiles)+2*len(p.reuse))
 	piece := func(t Range, lo, hi string, open, gapEnd bool) {
 		if !open && hi <= lo {
 			return
@@ -337,33 +365,29 @@ func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 		}
 		out = append(out, g)
 	}
-	ci, begun := 0, false // the next span, and whether its reused range was emitted
-	for _, t := range tiles {
-		pos := max(t.lo, t.after)
-		inside := func(x string) bool { return t.open || x < t.hi }
-		for {
-			if ci < len(p.reuse) && begun {
-				// A span that began in an earlier tile (or at this tile's start).
-				s := p.reuse[ci]
-				if s.HiOpen || !inside(s.Hi) {
-					if !s.HiOpen && !t.open && s.Hi == t.hi {
-						ci, begun = ci+1, false
-					}
-					pos = ""
-					break // the span covers the rest of the tile
+	pos := max(t.lo, t.after)
+	inside := func(x string) bool { return t.open || x < t.hi }
+	for {
+		if rc.ci < len(p.reuse) && rc.begun {
+			// A span that began in an earlier tile (or at this tile's start).
+			s := p.reuse[rc.ci]
+			if s.HiOpen || !inside(s.Hi) {
+				if !s.HiOpen && !t.open && s.Hi == t.hi {
+					rc.ci, rc.begun = rc.ci+1, false
 				}
-				pos, ci, begun = s.Hi, ci+1, false
-				continue
+				break // the span covers the rest of the tile
 			}
-			if ci < len(p.reuse) && inside(start(ci)) {
-				piece(t, pos, start(ci), false, true)
-				out = append(out, Range{kind: reused, cert: ci, lo: start(ci), hi: p.reuse[ci].Hi, open: p.reuse[ci].HiOpen, id: p.ids.Add(1), born: fromSeed})
-				begun = true
-				continue
-			}
-			piece(t, pos, t.hi, t.open, false)
-			break
+			pos, rc.ci, rc.begun = s.Hi, rc.ci+1, false
+			continue
 		}
+		if rc.ci < len(p.reuse) && inside(start(rc.ci)) {
+			piece(t, pos, start(rc.ci), false, true)
+			out = append(out, Range{kind: reused, cert: rc.ci, lo: start(rc.ci), hi: p.reuse[rc.ci].Hi, open: p.reuse[rc.ci].HiOpen, id: p.ids.Add(1), born: fromSeed})
+			rc.begun = true
+			continue
+		}
+		piece(t, pos, t.hi, t.open, false)
+		break
 	}
 	return out
 }

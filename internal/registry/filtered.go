@@ -52,6 +52,15 @@ func (f filtered[P]) Replay(r any) (int, bool) {
 	return 0, false
 }
 
+// Planner forwards the provider's (source.Planning): the order stage
+// admits a plan's tiles only when every adapter forwards it.
+func (f filtered[P]) Planner() source.Planner[any] {
+	if pl, ok := f.p.(source.Planning[any]); ok {
+		return pl.Planner()
+	}
+	return nil
+}
+
 type filteredDisposer[P any] struct {
 	filtered[P]
 	d source.Disposer[any]

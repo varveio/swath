@@ -193,6 +193,9 @@ type Options struct {
 	// (SeedFrom) sets instead: the provider's largest page, worth asking
 	// once the prior's tiles hold pages of keys each (Azure's 5,000).
 	PriorPageSize int
+	// TilePages is the pages a planned prior's tile holds (0: TilePages;
+	// Planner).
+	TilePages int
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
@@ -239,7 +242,8 @@ type Engine[P any] struct {
 	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
-	tiles   []tileAccount // the prior's bounded tiles (expandPrior), by Range.tile
+	tiles   []tileAccount // the prior's bounded tiles (expandPrior, plan), by Range.tile
+	plan    *plan[P]      // a counted prior's plan, once the order stage asked for it (Planner)
 	reuse   []source.Span // reused certificates a resume lists around (Reuse)
 	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
 	// slowQueued: children of slow splits not yet started.

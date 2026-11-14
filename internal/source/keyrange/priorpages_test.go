@@ -56,10 +56,10 @@ func seeded(t *testing.T, keys []string, pr *Prior, opt Options, workers int) ([
 }
 
 // TestPriorWholePages: a counted prior sets the provider's prior page size
-// (PriorPageSize) and cuts its tiles into whole pages: each bounded tile
-// holds at most tile_pages pages less one key, and all but the last at
-// least that less one cut, where the next cut would take it past; its
-// count stays each range's remainder (held_pages), and the listing is
+// (PriorPageSize) and its plan cuts its tiles into whole pages: each
+// bounded tile holds at most tile_pages pages less one key, and all but the
+// last at least that less one cut, where the next cut would take it past;
+// its count stays each range's remainder (held_pages), and the listing is
 // exact. A prior without counts keeps the page size and the equal-count
 // tiling.
 func TestPriorWholePages(t *testing.T) {
@@ -70,11 +70,11 @@ func TestPriorWholePages(t *testing.T) {
 	slices.Sort(keys)
 	const page, workers, step = 500, 4, 50
 	pr := priorOf(keys, step)
-	got, st, est, asks := seeded(t, keys, pr, Options{PageSize: 100, PriorPageSize: page}, workers)
+	const q = 3
+	got, st, est, asks := seeded(t, keys, pr, Options{PageSize: 100, PriorPageSize: page, TilePages: q}, workers)
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}
-	q := int(math.Ceil(float64(len(keys)) / (priorTilesPerWorker * workers * page)))
 	fill := float64(q*page - 1)
 	if st.Get(cSeedFromPageSize) != page || st.Get(cSeedFromTilePages) != int64(q) || st.Get(cSeedFromHeld) == 0 {
 		t.Fatalf("page size %d, tile pages %d (want %d), held pages %d", st.Get(cSeedFromPageSize), st.Get(cSeedFromTilePages), q,
@@ -118,7 +118,7 @@ func TestPriorCountHeld(t *testing.T) {
 	// page, at most 199 are left by the prior, under two pages.
 	var mu sync.Mutex
 	coin := func() bool { mu.Lock(); defer mu.Unlock(); return true }
-	got, st, _, _ := seeded(t, keys, pr, Options{PageSize: 100, PriorPageSize: 100, SplitCoin: coin}, 4)
+	got, st, _, _ := seeded(t, keys, pr, Options{PageSize: 100, PriorPageSize: 100, SplitCoin: coin, TilePages: 3}, 4)
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}

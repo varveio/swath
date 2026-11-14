@@ -110,6 +110,31 @@ type Replaying[R any] interface {
 	Replay(r R) (cert int, ok bool)
 }
 
+// Planner is a root made of tiles the order stage takes one at a time, in
+// key order, as its window admits them (docs/internals/ordering.md, "The
+// frontier window"). The order stage never expands the root itself.
+type Planner[R any] interface {
+	// Start reads the plan ahead until ctx ends, calling wake (without
+	// the caller's locks) whenever Next may answer anew; stop ends the
+	// read-ahead and waits for it.
+	Start(ctx context.Context, wake func()) (stop func())
+	// Next hands out the next tile (ok) if admit accepts its expected
+	// rows; it never blocks. With ok false: done at the end of the plan,
+	// err on its failure (never a silent end), else nothing is ready yet
+	// (wake follows) or admit refused.
+	Next(admit func(rows int64) bool) (r R, ok, done bool, err error)
+	// RowBytes is the prior's stored bytes per row (0: unknown).
+	RowBytes() float64
+}
+
+// Planning is a provider whose root may be a plan: Planner, called before
+// Root, returns it (nil: the root is an ordinary range) and makes Root the
+// plan's. A caller that never calls it (order.Count) expands the root as
+// any range.
+type Planning[R any] interface {
+	Planner() Planner[R]
+}
+
 // Span is a coverage certificate's interval (Lo, Hi] (HiOpen: up to ⊤), as
 // a resume hands it to the provider to list around.
 type Span struct {

@@ -50,6 +50,15 @@ func (s sized[P]) Replay(r any) (int, bool) {
 	return 0, false
 }
 
+// Planner forwards the provider's (source.Planning): the order stage
+// admits a plan's tiles only when every adapter forwards it.
+func (s sized[P]) Planner() source.Planner[any] {
+	if pl, ok := s.p.(source.Planning[any]); ok {
+		return pl.Planner()
+	}
+	return nil
+}
+
 type sizedDisposer[P any] struct {
 	sized[P]
 	d source.Disposer[any]

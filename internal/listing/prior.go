@@ -5,18 +5,21 @@ package listing
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
@@ -60,7 +63,10 @@ func seedFrom(cfg Config, src registry.Source) (*Prior, error) {
 	}
 	var pr *source.Prior
 	if fi.IsDir() {
-		pr, err = datasetPrior(path, src.Locator())
+		// A run that orders its rows plans its tiles from the whole page
+		// index as it goes; a dry run (order.Count, which takes no plan)
+		// tiles at once from cuts sampled from it.
+		pr, err = datasetPrior(path, src.Locator(), !dryRun(cfg))
 	} else {
 		pr, err = cutFilePrior(path)
 	}
@@ -90,13 +96,14 @@ func samePath(a, b string) bool {
 // identity is the source kind and container (the bucket) of the manifest,
 // which must be the run's, and its scope, which the engine checks against
 // the run's prefix (Prior.Check); an endpoint or region is not in the
-// manifest and is not checked. Its cuts are priorCuts keys of about equal
-// rows: a cut falls at the end of the key page (1,024 rows) where the
+// manifest and is not checked. With stream, its cuts are every key page's,
+// read as the run goes (pageStream). Else they are priorCuts keys of about
+// equal rows: a cut falls at the end of the key page (1,024 rows) where the
 // running row count reaches the next multiple of rows/priorCuts, read from
 // the page index of the parts such a multiple falls in (KeyPages); a part
 // whose index cannot be read is cut at its own last key. The dataset's
 // last key always closes the last cut.
-func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
+func datasetPrior(dir string, loc source.Locator, stream bool) (*source.Prior, error) {
 	if !dataset.Committed(dir) {
 		return nil, errors.New("not a committed dataset (no manifest.json)")
 	}
@@ -130,6 +137,16 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 			return nil, fmt.Errorf("manifest part %d: empty, or not after part %d", i, i-1)
 		}
 		total += p.Rows
+		pr.Bytes += p.Bytes
+	}
+	pr.Rows = total
+	if stream {
+		ps := &pageStream{dir: dir}
+		for _, p := range m.Parts {
+			ps.parts = append(ps.parts, streamPart{min: string(p.MinKey), max: string(p.MaxKey), rows: p.Rows})
+		}
+		pr.Stream = ps
+		return pr, nil
 	}
 	// threshold j is the row count the j-th cut should reach.
 	threshold := func(j int64) int64 { return (j*total + priorCuts - 1) / priorCuts }
@@ -250,4 +267,94 @@ func cutFilePrior(path string) (*source.Prior, error) {
 	}
 	pr.Counted = counted > 0
 	return pr, nil
+}
+
+// pageStream is a dataset prior's key page index read as the run goes
+// (source.CutStream): one goroutine reads the parts' indexes in key order,
+// from the first part that ends after the resume key, each part one batch
+// of cuts (a page's last key and rows), at most streamAhead batches ahead
+// of the plan. A part whose index cannot be read, or does not match the
+// manifest (its rows, its last key, its pages' keys ascending inside the
+// part's bounds), is one cut at its last key with its rows, as datasetPrior
+// does.
+type pageStream struct {
+	dir   string
+	parts []streamPart
+	ch    chan *source.CutBatch
+	end   error // io.EOF, or the cause the read-ahead stopped for (set before ch closes)
+}
+
+// streamPart is a manifest part as the stream reads it.
+type streamPart struct {
+	min, max string
+	rows     int64
+}
+
+// streamAhead is the batches (parts) read ahead of the plan.
+const streamAhead = 2
+
+func (s *pageStream) Start(ctx context.Context, after string, wake func()) func() {
+	s.ch = make(chan *source.CutBatch, streamAhead)
+	ctx, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	first := sort.Search(len(s.parts), func(i int) bool { return s.parts[i].max > after })
+	go func() {
+		defer close(done)
+		defer wake()
+		defer close(s.ch)
+		for i := first; i < len(s.parts); i++ {
+			if err := faults.At("seed-from-part"); err != nil { // tests: the prior's reader fails mid-run
+				s.end = err
+				return
+			}
+			select {
+			case s.ch <- s.part(i):
+				wake()
+			case <-ctx.Done():
+				s.end = context.Cause(ctx)
+				return
+			}
+		}
+		s.end = io.EOF
+	}()
+	return func() {
+		cancel(errors.New("--seed-from: the plan stopped"))
+		<-done
+	}
+}
+
+func (s *pageStream) Next() (*source.CutBatch, error) {
+	select {
+	case b, ok := <-s.ch:
+		if !ok {
+			return nil, s.end
+		}
+		return b, nil
+	default:
+		return nil, nil
+	}
+}
+
+// part is part i's batch: its key pages, or its own last key.
+func (s *pageStream) part(i int) *source.CutBatch {
+	p := s.parts[i]
+	pages, err := parquetout.KeyPages(filepath.Join(s.dir, dataset.DataDir, dataset.PartName(i)))
+	var sum int64
+	prev := p.min
+	for _, pg := range pages {
+		k := string(pg.Max)
+		if k < prev || k > p.max {
+			err = errors.New("key pages out of order")
+		}
+		sum += pg.Rows
+		prev = k
+	}
+	if err != nil || sum != p.rows || len(pages) == 0 || prev != p.max {
+		return &source.CutBatch{Cuts: []source.Cut{{Key: p.max, Rows: p.rows}}, Part: true}
+	}
+	b := &source.CutBatch{Cuts: make([]source.Cut, len(pages)), Part: true, Indexed: true}
+	for j, pg := range pages {
+		b.Cuts[j] = source.Cut{Key: string(pg.Max), Rows: pg.Rows}
+	}
+	return b
 }

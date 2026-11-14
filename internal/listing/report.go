@@ -38,8 +38,9 @@ import (
 // the order stage's waits by site (resources.publish_wait_ns,
 // admission_wait_ns, idle_wait_ns and their peak_* twins),
 // resources.spill.refused_ns and refused_spells, and
-// resources.drain.writer_before_listing_done.
-const ReportVersion = 8
+// resources.drain.writer_before_listing_done. 9 adds resources.window, the
+// frontier window of a run planned from a counted --seed-from (#535).
+const ReportVersion = 9
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -470,6 +471,9 @@ type Resources struct {
 	Spill         *Spill `json:"spill,omitempty"` // nil: spill was off
 	// Drain is the order stage's drain (nil for a dry run).
 	Drain *Drain `json:"drain,omitempty"`
+	// Window is the frontier window (nil: the run was not planned from a
+	// counted prior; docs/internals/ordering.md, "The frontier window").
+	Window *Window `json:"window,omitempty"`
 	// Features are the pipeline's policies and whether this run had them
 	// on; an off policy reports no counters, so a zero always means "on,
 	// never fired" (docs/internals/counters.md).
@@ -484,6 +488,30 @@ type Resources struct {
 	// PartRowCuts counts parts closed by --part-rotation-max-rows before
 	// their size target (deterministic, unlike time cuts).
 	PartRowCuts int64 `json:"part_row_cuts"`
+}
+
+// Window is the frontier window's account (order.WindowStats): the tiles
+// admitted (forced: by the drainer past a refusal, having drained every
+// other; grown: held rows past 4 times the prior's), the window's rows when
+// last evaluated and the term that set them (bound_by: spill_cap, budget or
+// unbounded), the workers' waits at the window by the refusal that held
+// them (rows, spill, growth) with their time and peak, the drainer's wait
+// for the plan to read ahead, and the peaks of the tiles held, the rows
+// charged to them and the bytes the order stage held (memory and live
+// spill) at an admission.
+type Window struct {
+	Tiles             int64            `json:"tiles"`
+	Forced            int64            `json:"forced"`
+	Grown             int64            `json:"grown"`
+	Rows              int64            `json:"rows"`
+	BoundBy           string           `json:"bound_by"`
+	Waits             map[string]int64 `json:"waits"`
+	WaitNs            int64            `json:"wait_ns"`
+	PeakWaiters       int64            `json:"peak_waiters"`
+	PlanWaitNs        int64            `json:"plan_wait_ns"`
+	PeakTiles         int64            `json:"peak_tiles"`
+	PeakCreditRows    int64            `json:"peak_credit_rows"`
+	PeakRetainedBytes int64            `json:"peak_retained_bytes"`
 }
 
 // Drain is the order stage's drain after listing and the time it took.

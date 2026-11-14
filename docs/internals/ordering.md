@@ -196,6 +196,67 @@ admitted the most the host carries) or `not_reached` (listing never finished); b
 each count (`encoders_at_start_bound_by`, `encoders_after_listing_bound_by`: `memory`, `cpu`, `descriptors`,
 `minimum` or `explicit`).
 
+## The frontier window
+
+A run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to back: the
+provider's root is a *plan* (`source.Planning`, the range engine's `Planner`), whose tiles the order stage takes
+one at a time, in key order, and appends to the root as its children (`order/window.go`). The plan root is never
+claimed or expanded; it stays open, counted in the ranges not yet done, until the plan ends, so listing is not
+done (`ListingDone`) between two tiles. Unseeded runs, uncounted cut files and `order.Count` (which never asks
+for a plan) keep the root as a range and the paths above unchanged.
+
+**Credit.** Each admitted tile holds a credit: `est`, the rows the prior expects in it, and `held`, the rows its
+ranges have received and the drainer has not yet handed to the sink. A row is charged to its tile when an emitter
+of any node in the tile receives it (published, spilled, emitted directly by the drainer's own expansion, or
+replayed from a certificate): a spilled publication's rows stay charged though its items are markers. The
+charge comes back when the drainer's batch holding the row is handed to the sink (`sink.Write` returned), not
+when its budget bytes are released (the drainer releases them before a batch is written). A tile's charge is
+the larger of `est` and `held`; it is released, in key order, once the drainer has closed the tile's node (every
+range in it drained) and nothing of it is held.
+
+**Admission.** A worker with nothing queued admits the next tile, and lists it, when the charges of the tiles
+held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (`--spill-budget`)
+and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
+ahead of a grown one until the frontier passes it). Otherwise it waits at the window (`window`) holding no
+range. The window's rows are half the spill cap over a spilled row's bytes (the run's frames' bytes over their
+rows, before the first frame the prior's part bytes per row, else 64) plus what the row budget holds (its bytes
+over the budget bytes per row the emitters measured; nothing before the first rows); with spill off, the latter
+alone; with spill uncapped, no limit. The drainer, having drained and handed on every admitted tile, admits the
+next regardless (`forced`), so a window smaller than one tile still lists, a tile at a time, and the run cannot
+stop on the window. A tile not yet admitted is not queued work: the range engine counts a tile queued only once
+admitted, so the workers the window holds back are idle demand, and the tiles admitted split for them as any
+range does (`keyrange` `TestPlanSplitsBehindTheWindow`).
+
+**The plan.** The range engine reads the prior lazily (a dataset's page index part by part, at most two parts
+ahead of the plan, from the first part ending after a resume key; a cut file from memory), checks every cut as
+it reads it, and closes a tile only once the cut after it is known: a key repeated across key pages (a version
+group) is merged into its cut across batches ([range-engine.md](range-engine.md), "Warm start").
+A failure of the plan (an invalid cut, the reader's error) fails the run with it; it never ends the plan as if
+complete. Cancellation stops the reader at its next batch, a full buffer included, and wakes the window's and
+the plan's waiters; the reader is joined after the workers.
+
+**What it bounds.** The window is an admission heuristic, not a storage bound: a tile already listing keeps
+listing whatever it holds (a region grown since the prior, keys appended past its last cut, the open frontier
+after it), and certified durable files stay on disk until K covers them. What it removes is the cause of spill
+on a fresh prior: rows listed across the whole keyspace ahead of the output. Rows ahead of the output stay near
+the window's rows plus one tile per worker, so a cap a fraction of a cold run's spill holds without a refused
+frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of the
+unseeded run's spill peak, none refused, the parts identical). The rows still leave through the one part writer,
+so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
+plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
+run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
+
+The report's `resources.window` ([counters.md](counters.md#order-stage-and-encoders-run-summary-top-level))
+counts the tiles admitted and forced, the tiles grown, the window's rows and what set them, the waits at the
+window by the refusal that held them, the drainer's wait for the plan, and the peaks of the tiles held, the
+rows charged to them and the bytes held at an admission. Tests: `order` `TestWindowBoundsRowsAhead` (a stalled
+frontier: workers wait at the window holding no range, the tiles held stay within it, the run completes when
+released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
+`TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`; `keyrange` `TestPlanTilesAsTilePrior`,
+`TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `listing` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
+too), `TestResumeChangesPriorWorkersEncodersAndSpillFormat` (certificates spanning many tiles); `cmd/swath`
+`TestSIGKILLAtEveryPoint` (`s3-planned`).
+
 ## The waits
 
 Every wait is on one of two condition variables under the stage's mutex, and every event that can make a
@@ -211,6 +272,8 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
+| window (`work`) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | a tile released, the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, spill credit, a stop | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
 not woken per frame: planning signals as many idle workers as can start a read when it queued frames

@@ -71,6 +71,12 @@ func crashConfig(url, out string, resume bool) Config {
 func TestCrashMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
 	s3url, gcsep, azep := crashBucket(t), gcsBucket(t, 8000), azblobBucket(t, 8000)
+	// The seeded arm's prior: an earlier listing's dataset, its page index
+	// read as the run goes (and its reader failing at seed-from-part).
+	prior := filepath.Join(t.TempDir(), "prior")
+	if _, err := Run(context.Background(), crashConfig(s3url, prior, false)); err != nil {
+		t.Fatal(err)
+	}
 	var trickle []string
 	for i := range 400 {
 		trickle = append(trickle, fmt.Sprintf("k%04d", i))
@@ -91,17 +97,26 @@ func TestCrashMatrix(t *testing.T) {
 		// first part's record (#1 is the header): the calibrating part
 		// claimed but unrecorded, reproduced at its pinned boundary.
 		also map[string][]int64
+		// more: points beyond faults.Points on this provider's path.
+		more []string
 	}{
-		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}, nil, calibrating},
-		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating},
-		{"azblob", func(out string, resume bool) Config { return azblobConfig(azep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating},
+		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}, nil, calibrating, nil},
+		{"s3-seeded", func(out string, resume bool) Config {
+			cfg := crashConfig(s3url, out, resume)
+			cfg.Source.SeedFrom = prior
+			// Tiles of 20 pages of 100: a few, each split on demand.
+			cfg.Source.Options.(*S3Config).Policy.PageSize, cfg.Source.Options.(*S3Config).Policy.TilePages = 100, 20
+			return cfg
+		}, []bool{false, true}, []time.Duration{off}, []int64{1, 4}, nil, calibrating, []string{"seed-from-part"}},
+		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating, nil},
+		{"azblob", func(out string, resume bool) Config { return azblobConfig(azep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating, nil},
 		{"trickle", func(out string, resume bool) Config {
 			scriptMu.Lock()
 			scriptNext = &scripted{keys: trickle, chunk: 1, slow: time.Millisecond}
 			scriptMu.Unlock()
 			return Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
 				Limits: Limits{PartSize: 2 << 10, Workers: 2, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: off}}
-		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}, []string{"response-read", "split", "range-done"}, nil},
+		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}, []string{"response-read", "split", "range-done"}, nil, nil},
 	} {
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), prov.config(ref, false)); err != nil {
@@ -116,7 +131,7 @@ func TestCrashMatrix(t *testing.T) {
 			if !slices.Contains(prov.spill, spill) || !slices.Contains(prov.intervals, mode.interval) {
 				continue
 			}
-			for _, point := range faults.Points {
+			for _, point := range append(slices.Clone(faults.Points), prov.more...) {
 				for _, nth := range append(slices.Clone(prov.nth), prov.also[point]...) {
 					t.Run(fmt.Sprintf("%s/spill=%v/interval=%v/%s#%d", prov.name, spill, mode.interval > 0, point, nth), func(t *testing.T) {
 						out := filepath.Join(t.TempDir(), "ds")

@@ -18,8 +18,10 @@ import (
 // cut file, spilling delta-coded zstd frames with 8 workers and 2
 // encoders, is killed after its third record (and, in the calibration
 // arm, with its first size-cut part claimed but unrecorded); the resume
-// runs with the prior removed or replaced by a stale one, 3 workers, 1
-// encoder and plain uncompressed spill frames. The dataset is the
+// runs with the prior removed, replaced by a stale one or by a fine one
+// (tiles of a few dozen keys, so a certificate the killed run sealed spans
+// many of the resume's tiles: replayed once, every gap listed), 3 workers,
+// 1 encoder and plain uncompressed spill frames. The dataset is the
 // unseeded clean run's, byte for byte: a prior, the workers, the encoders
 // and the spill format change how the work is done, never the parts.
 func TestResumeChangesPriorWorkersEncodersAndSpillFormat(t *testing.T) {
@@ -34,11 +36,12 @@ func TestResumeChangesPriorWorkersEncodersAndSpillFormat(t *testing.T) {
 		name  string
 		point string
 		nth   int64
-		prior string // the prior's fate before the resume: "removed" or "stale"
+		prior string // the prior's fate before the resume: "removed", "stale" or "fine"
 	}{
 		{"removed/recorded#3", "recorded", 3, "removed"},
 		{"stale/recorded#3", "recorded", 3, "stale"},
 		{"stale/calibrating-claim", "journal-append", 2, "stale"},
+		{"fine/recorded#3", "recorded", 3, "fine"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -82,13 +85,28 @@ func TestResumeChangesPriorWorkersEncodersAndSpillFormat(t *testing.T) {
 				if err := os.WriteFile(cuts, stale, 0o644); err != nil {
 					t.Fatal(err)
 				}
+			case "fine": // a cut every 40 keys, each a tile of its own
+				var fine []byte
+				for i := 39; i < len(keys); i += 40 {
+					fine = append(append(fine, keys[i]...), "\t40\n"...)
+				}
+				if err := os.WriteFile(cuts, fine, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			rcfg := crashConfig(url, out, true)
 			rcfg.Source.SeedFrom = cuts
 			rcfg.Limits.Workers, rcfg.Limits.Encoders = 3, 1
 			rcfg.Limits.Spill.Off, rcfg.Limits.Spill.Plain, rcfg.Limits.Spill.Uncompressed = false, true, true
-			if _, err := Run(context.Background(), rcfg); err != nil {
+			if tc.prior == "fine" {
+				rcfg.Source.Options.(*S3Config).Policy.PageSize, rcfg.Source.Options.(*S3Config).Policy.TilePages = 10, 1
+			}
+			sum, err := Run(context.Background(), rcfg)
+			if err != nil {
 				t.Fatalf("resume: %v", err)
+			}
+			if c := s3Stats(sum).Counters; tc.prior == "fine" && (c.Value("reuse.ranges") == 0 || c.Value("seed.from.tiles") < 4*c.Value("reuse.ranges")) {
+				t.Fatalf("fine prior: %d certificates reused across %d tiles", c.Value("reuse.ranges"), c.Value("seed.from.tiles"))
 			}
 			sameDataset(t, tc.name, ref, out)
 		})
