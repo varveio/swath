@@ -37,8 +37,10 @@ func plannedConfig(url, out, prior string, w int) Config {
 // are each several tiles' worth, so the engine splits inside them) writes
 // the unseeded run's parts byte for byte at 1, 4, 64 and 256 workers with the
 // part interval off, with a filter as well; under a spill cap at a fifth of
-// the unseeded run's spill peak the frontier window keeps every frame
-// admitted (none refused), and the parts are the same. A dry run seeded
+// the unseeded run's spill peak the frontier window binds and the parts are
+// the same, and with the dataset's tiles (a key page each, far under half
+// the cap) no frame is refused. A coarse cut's tile can spill past the cap
+// by itself: the window admits tiles, it does not bound one. A dry run seeded
 // from the same priors counts every row (order.Count takes no plan).
 func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	url := crashBucket(t)
@@ -86,7 +88,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 		sameDataset(t, out, ref, out)
 		s, w := sum.Resources.Spill, sum.Resources.Window
 		t.Logf("%s: unseeded peak %d, cap %d: peak %d, refused %d, window %+v", filepath.Base(prior), peak, cfg.Limits.Spill.Max, s.PeakBytes, s.Refused, w)
-		if s.Refused != 0 || w.BoundBy != "spill_cap" || w.Waits["rows"]+w.Waits["spill"] == 0 {
+		if (prior == ref && s.Refused != 0) || w.BoundBy != "spill_cap" || w.Waits["rows"]+w.Waits["spill"] == 0 {
 			t.Fatalf("capped: refused %d frames, window %+v", s.Refused, w)
 		}
 	}

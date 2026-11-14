@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"unicode/utf8"
@@ -490,21 +491,35 @@ func TestPlanManyWorkersFewTiles(t *testing.T) {
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
 	}
+	// Spill on, as in the command, so no worker idles on a full budget
+	// (that idle demand is a cold run's too): only the window holds them.
 	run := func(workers int) (int64, Stats) {
 		api := &counting{sorted: newSorted(keys, true, 1)}
-		got, st, leaves := runBudget(t, api, Options{Prior: priorOf(keys, 100), PageSize: 100, PriorPageSize: 100, TilePages: 4}, workers, 200)
-		if !slices.Equal(got, keys) {
+		var mu sync.Mutex
+		var leaves []span
+		opt := Options{Prior: priorOf(keys, 100), PageSize: 100, PriorPageSize: 100, TilePages: 4, Workers: workers,
+			Trace: func(lo, hi string, open bool) { mu.Lock(); leaves = append(leaves, span{lo, hi, open}); mu.Unlock() }}
+		p, err := newTest(api, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &collect{}
+		if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 16 << 10,
+			SpillDir: t.TempDir(), SpillMax: 16 << 10}); err != nil {
+			t.Fatal(err)
+		}
+		if got := keysOf(c.rows); !slices.Equal(got, keys) {
 			t.Fatalf("w%d: %d keys, want %d", workers, len(got), len(keys))
 		}
 		checkTiling(t, fmt.Sprintf("w%d", workers), leaves)
-		return api.n.Load(), st
+		return api.n.Load(), p.Stats()
 	}
 	one, _ := run(1)
 	many, st := run(256)
 	empty := st.Get(cChildEmptyLower) + st.Get(cChildEmptyUpper)
 	t.Logf("requests: 1 worker %d, 256 workers %d; splits %d, empty children %d, skipped for the window %d", one, many,
 		st.Get(cSplitAcceptedBounded), empty, st.Get(cSplitSkippedWindow))
-	if float64(many) > 1.05*float64(one) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
+	if float64(many) > 1.03*float64(one) || empty > 10 || st.Get(cSplitSkippedWindow) == 0 {
 		t.Fatalf("256 workers: %d requests against %d, %d empty children, %d splits skipped for the window", many, one, empty, st.Get(cSplitSkippedWindow))
 	}
 }
