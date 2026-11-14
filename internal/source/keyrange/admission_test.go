@@ -205,7 +205,7 @@ func TestAdmissionOverride(t *testing.T) {
 	g := newGauge(page)
 	pr := proposal{ready: true, m: "z/0/1>", src: srcMidpoint, found: true, gauge: g, rem: g.keys(c, r.hi)}
 	for i := range admitRefusals + 1 {
-		_, ok := p.decide(st, r, c, pr)
+		_, ok, _ := p.decide(st, r, c, pr)
 		if want := i == admitRefusals; ok != want {
 			t.Fatalf("decision %d: split %v, want %v", i, ok, want)
 		}
@@ -278,7 +278,7 @@ func TestRankProgress(t *testing.T) {
 		lo := fmt.Sprintf("r%d/", i)
 		r := Range{lo: lo, hi: lo + "z", id: st.id, born: fromSeed}
 		pr := proposal{ready: true, m: lo + "m", src: srcMidpoint, found: true, why: extShort}
-		if _, ok := p.decide(st, r, lo+"a", pr); ok {
+		if _, ok, _ := p.decide(st, r, lo+"a", pr); ok {
 			split++
 			if i != 1 {
 				t.Errorf("range %d split; want the +Inf range", i)

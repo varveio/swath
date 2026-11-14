@@ -201,7 +201,7 @@ func TestPriorChildrenOutrunAfterAdmittedSplit(t *testing.T) {
 	var pv pivot
 	var ok bool
 	for range admitRefusals + 1 {
-		pv, ok = p.decide(st, r, c, pr)
+		pv, ok, _ = p.decide(st, r, c, pr)
 		if ok {
 			break
 		}

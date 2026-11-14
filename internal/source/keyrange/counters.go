@@ -102,6 +102,22 @@ const (
 	cUnsplittable
 	cUnsplittableKeys
 	cIdleDemandNs
+	cAwaitedPages
+	cAwaitedOpenPages
+	cAwaitedSplit
+	cAwaitedNoDemand
+	cAwaitedOutranked
+	cAwaitedUnsplittable
+	cAwaitedGroupOpen
+	cAwaitedRejectedCursor
+	cAwaitedRejectedBound
+	cAwaitedRejectedNoPivot
+	cAwaitedRejectedUnsafeCursor
+	cAwaitedRejectedUnsafePivot
+	cAwaitedSliverRefused
+	cAwaitedRemainder
+	cAwaitedLowerTiny
+	cAwaitedUpperTiny
 	cChildEmptyLower
 	cChildEmptyUpper
 	cChildEmptyReflectLower
@@ -255,6 +271,22 @@ var Counters = table([numCounters]counters.Def{
 	cUnsplittable:                 d("split.unsplittable", counters.Count, "ranges", "ranges proven unsplittable: no pivot exists above a safe cursor (no_pivot); an unsafe cursor declines one page only", "split"),
 	cUnsplittableKeys:             d("split.unsplittable_keys", counters.Count, "keys", "keys listed by ranges after they became unsplittable (drained by one worker)", "split"),
 	cIdleDemandNs:                 d("idle_demand_ns", counters.Count, "ns", "worker time idle with demand: max(0, workers - active - queued) integrated while a range is in Expand", "split"),
+	cAwaitedPages:                 d("awaited.pages", counters.Count, "pages", "continuing pages of a range the drain was at (the output waiting for its rows; sorted output only), each counted once below by its split decision", "split"),
+	cAwaitedOpenPages:             d("awaited.open_pages", counters.Count, "pages", "of awaited.pages, those of the open frontier (the range ranked first)", "split"),
+	cAwaitedSplit:                 d("awaited.split", counters.Count, "pages", "awaited pages after which the range split", "split"),
+	cAwaitedNoDemand:              d("awaited.skipped.no_demand", counters.Count, "pages", "awaited pages not split: no idle worker (hunger <= 0; a worker waiting in the order stage still counts as active)", "split"),
+	cAwaitedOutranked:             d("awaited.skipped.outranked", counters.Count, "pages", "awaited pages not split: larger ranges took the demand", "split"),
+	cAwaitedUnsplittable:          d("awaited.unsplittable", counters.Count, "pages", "awaited pages not split: the range was proven unsplittable", "split"),
+	cAwaitedGroupOpen:             d("awaited.skipped.group_open", counters.Count, "pages", "awaited pages not split: a hot key's group open, or no complete key yet", "groups"),
+	cAwaitedRejectedCursor:        d("awaited.rejected.cursor", counters.Count, "pages", "awaited pages not split, guard: pivot not above the cursor", "split"),
+	cAwaitedRejectedBound:         d("awaited.rejected.bound", counters.Count, "pages", "awaited pages not split, guard: pivot not below hi (or the scope ceiling)", "split"),
+	cAwaitedRejectedNoPivot:       d("awaited.rejected.no_pivot", counters.Count, "pages", "awaited pages not split, guard: no safe pivot exists", "split"),
+	cAwaitedRejectedUnsafeCursor:  d("awaited.rejected.unsafe_cursor", counters.Count, "pages", "awaited pages not split, guard: the cursor is not a usable start-after", "split"),
+	cAwaitedRejectedUnsafePivot:   d("awaited.rejected.unsafe_pivot", counters.Count, "pages", "awaited pages not split, guard: the provider vetoes the pivot as a bound", "split"),
+	cAwaitedSliverRefused:         d("awaited.sliver_refused", counters.Count, "pages", "awaited pages not split: the only pivot was a sliver just above the cursor", "split"),
+	cAwaitedRemainder:             d("awaited.skipped.remainder", counters.Count, "pages", "awaited pages not split: the bounded remainder is under 2 pages", "split"),
+	cAwaitedLowerTiny:             d("awaited.skipped.lower_tiny", counters.Count, "pages", "awaited pages not split: the lower child would be under 1 page", "split"),
+	cAwaitedUpperTiny:             d("awaited.skipped.upper_tiny", counters.Count, "pages", "awaited pages not split: the upper child would be under 1 page", "split"),
 	cChildEmptyLower:              d("child_empty.lower", counters.Count, "ranges", "lower split children that listed no key", "split"),
 	cChildEmptyUpper:              d("child_empty.upper", counters.Count, "ranges", "upper split children that listed no key", "split"),
 	cChildEmptyReflectLower:       d("child_empty.by.reflect.lower", counters.Count, "ranges", "empty lower children of a reflect pivot", "split"),
@@ -338,6 +370,15 @@ var probeSent = [...]counters.ID{probeFrontier: cStructureSentFrontier, probeSta
 var extRefused = [...]counters.ID{extShort: cDensityRefusedShort, extAlphabet: cDensityRefusedAlphabet,
 	extZeroSpan: cDensityRefusedZeroSpan, extPastTop: cDensityRefusedPastTop, extHole: cDensityRefusedHole,
 	extOutside: cDensityRefusedOutside}
+
+// awaitedBy is the awaited-page counter of each refusal decide returns.
+var awaitedBy = map[counters.ID]counters.ID{
+	cSplitSkippedNoDemand: cAwaitedNoDemand, cSplitSkippedOutranked: cAwaitedOutranked, cSplitSkippedGroupOpen: cAwaitedGroupOpen,
+	cSplitRejectedCursor: cAwaitedRejectedCursor, cSplitRejectedBound: cAwaitedRejectedBound, cSplitRejectedNoPivot: cAwaitedRejectedNoPivot,
+	cSplitRejectedUnsafeCursor: cAwaitedRejectedUnsafeCursor, cSplitRejectedUnsafePivot: cAwaitedRejectedUnsafePivot,
+	cSplitSliverRefused: cAwaitedSliverRefused, cSplitSkippedRemainder: cAwaitedRemainder, cSplitSkippedLowerTiny: cAwaitedLowerTiny,
+	cSplitSkippedUpperTiny: cAwaitedUpperTiny,
+}
 
 // table is defs as a slice indexed by counter ID: an entry is keyed by its
 // ID, so no position carries a meaning (TestCounterTable).

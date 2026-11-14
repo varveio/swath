@@ -55,7 +55,10 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 `split.leaves`; the work a frontier split hands out is `split.frontier_handout_keys` /
 `split.accepted_frontier`; the `split.pivot.*` counters sum to the accepted splits, and the
 `child_empty.by.*` counters (and separately `child_empty.hi.pivot` + `child_empty.hi.bound`) to
-`child_empty.lower` + `child_empty.upper`.
+`child_empty.lower` + `child_empty.upper`. The `awaited.*` counters (sorted output only: the order stage's
+emitter says whether the drain is at the range, `source.Awaiter`) take the split decision after each continuing
+page of a range the output waits for; every one but `awaited.open_pages` sums to `awaited.pages`. They are read
+for the report only: no decision reads whether a range is awaited.
 
 ## Order stage and encoders (run summary, top level)
 
@@ -64,6 +67,9 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `frontier_wait_ns` | ns | the drainer waited for the range it needs next while a worker was still listing it (the slow-frontier cost) |
 | `budget_wait_ns` | ns | emitters, and workers with ranges queued, waited on a full reorder budget (the reorder cost); summed over goroutines |
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
+| `publish_wait_ns`, `peak_publish_waiters` | ns, goroutines | emitters waiting in publish on a full budget (each a worker still in its range's `Expand`, so the range engine counts it active), summed over them, and the most at once (live: `progress.json` `order.publish_waiters`) |
+| `admission_wait_ns`, `peak_admission_waiters` | ns, goroutines | workers waiting to claim a queued range while the budget and spill were used; with `publish_wait_ns`, `budget_wait_ns` (live: `order.admission_waiters`) |
+| `idle_wait_ns`, `peak_idle_workers` | ns, goroutines | workers with nothing queued to list, read-ahead waits included, over the whole run (`drain.worker_idle_after_listing_done_ns` is its part after listing; live: `order.idle_workers`) |
 | `spill.rows`, `spill.bytes`, `spill.ranges` | rows, bytes, ranges | rows written to spill and replayed, bytes written, ranges that spilled |
 | `spill.frames`, `spill.opens` | frames, opens | row frames written (a file's header, capture and trailer frames excluded); spill file opens attempted, failed ones included: one per frame written, one per read handle miss (a frame read at an offset, a trailer read or a reader whose file had no open handle), seals and recovered certificates' replays (a resume's validation of the recorded certificates is not counted). Against `spill.ranges`, the per-file and per-frame cost of many small spills |
 | `spill.read_handles.hits`, `.misses`, `.raced` | leases | reads of a spill file (a frame at an offset, a trailer, the drainer's reader; not a recovered certificate's replay) served by the file's open descriptor, and those that opened it (one open each, two when the first is refused with EMFILE/ENFILE); `raced`: misses whose open lost to a concurrent one for the same file (closed at once). `hits / (hits + misses)` is the reuse rate; a range that spills one frame can at best share its frame read with its trailer read |
@@ -73,6 +79,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--no-spill-compress`), `plain+zstd` or `plain` (`--spill-plain`) |
 | `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
+| `spill.refused_ns`, `spill.refused_spells` | ns, intervals | the time spill stood refused, from a refused frame until a spill file's credit next returned (an interval open at the end included), and the intervals that ended: many short spells are a budget that frees and refills, one long one a budget that never frees |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and a run that spills there warns at its first spill |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
 | `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
@@ -81,6 +88,8 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time after `listing_done_at` (nothing queued to list, read-ahead waits included), summed over workers |
 | `drain.replay_read_ns`, `drain.replay_decode_ns` | ns | the drainer reading spilled frames itself, and the part of it spent decoding (trailers included); the drainer's times accumulate over the whole run, not the tail alone |
 | `drain.ahead_wait_ns`, `drain.order_check_ns`, `drain.sink_write_ns` | ns | the drainer waiting for a frame the read-ahead was reading; the stream-wide order guard; handing batches to the sink (`encoder_wait_ns` included) |
+| `drain.writer_before_listing_done.parts`, `.rows` | parts, rows | Parquet parts published before `listing_done_at`, and their rows (absent when listing never finished). Approximate at the boundary: a part published as listing ends may fall on either side |
+| `drain.writer_before_listing_done.encode_ns`, `.output_ns` | ns | the encoders' time on the batches written before `listing_done_at`: building and compressing pages and hashing (`encode_ns`), and writing to the part's file or upload with the sync and close that complete it (`output_ns`) |
 | `drain.read_ahead.frames`, `drain.read_ahead.rows` | frames, rows | spilled frames idle workers read and decoded ahead of the drainer (feature: `spill`) |
 | `drain.read_ahead.drainer_frames`, `drain.read_ahead.unplanned_frames` | frames | frames planned and taken over unread by the drainer; frames it reached with nothing planned (both read by the drainer; with `frames`, every frame spilled, each once) |
 | `drain.read_ahead.drainer_waits`, `drain.read_ahead.capped_waits` | waits | the drainer waiting for a frame being read; workers waiting at the read-ahead's share of the row budget |
@@ -213,6 +222,22 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.unsplittable` | count | ranges | split | ranges proven unsplittable: no pivot exists above a safe cursor (no_pivot); an unsafe cursor declines one page only |
 | `split.unsplittable_keys` | count | keys | split | keys listed by ranges after they became unsplittable (drained by one worker) |
 | `idle_demand_ns` | count | ns | split | worker time idle with demand: max(0, workers - active - queued) integrated while a range is in Expand |
+| `awaited.pages` | count | pages | split | continuing pages of a range the drain was at (the output waiting for its rows; sorted output only), each counted once below by its split decision |
+| `awaited.open_pages` | count | pages | split | of awaited.pages, those of the open frontier (the range ranked first) |
+| `awaited.split` | count | pages | split | awaited pages after which the range split |
+| `awaited.skipped.no_demand` | count | pages | split | awaited pages not split: no idle worker (hunger <= 0; a worker waiting in the order stage still counts as active) |
+| `awaited.skipped.outranked` | count | pages | split | awaited pages not split: larger ranges took the demand |
+| `awaited.unsplittable` | count | pages | split | awaited pages not split: the range was proven unsplittable |
+| `awaited.skipped.group_open` | count | pages | groups | awaited pages not split: a hot key's group open, or no complete key yet |
+| `awaited.rejected.cursor` | count | pages | split | awaited pages not split, guard: pivot not above the cursor |
+| `awaited.rejected.bound` | count | pages | split | awaited pages not split, guard: pivot not below hi (or the scope ceiling) |
+| `awaited.rejected.no_pivot` | count | pages | split | awaited pages not split, guard: no safe pivot exists |
+| `awaited.rejected.unsafe_cursor` | count | pages | split | awaited pages not split, guard: the cursor is not a usable start-after |
+| `awaited.rejected.unsafe_pivot` | count | pages | split | awaited pages not split, guard: the provider vetoes the pivot as a bound |
+| `awaited.sliver_refused` | count | pages | split | awaited pages not split: the only pivot was a sliver just above the cursor |
+| `awaited.skipped.remainder` | count | pages | split | awaited pages not split: the bounded remainder is under 2 pages |
+| `awaited.skipped.lower_tiny` | count | pages | split | awaited pages not split: the lower child would be under 1 page |
+| `awaited.skipped.upper_tiny` | count | pages | split | awaited pages not split: the upper child would be under 1 page |
 | `child_empty.lower` | count | ranges | split | lower split children that listed no key |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
 | `child_empty.by.reflect.lower` | count | ranges | split | empty lower children of a reflect pivot |

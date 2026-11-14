@@ -76,6 +76,12 @@ func (e sizeEmitter[P]) Fence(x string, top bool) {
 	}
 }
 
+// Awaited forwards an Awaiter emitter's (false without one).
+func (e sizeEmitter[P]) Awaited() bool {
+	a, ok := e.Emitter.(source.Awaiter)
+	return ok && a.Awaited()
+}
+
 // Rows hands the rows on and adds their sizes once the order stage has
 // accepted them: a page it refuses (the run stopping) is not counted. The
 // sizes are summed first, because the slice passes to the order stage,

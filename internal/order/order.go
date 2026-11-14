@@ -132,11 +132,24 @@ type Stats struct {
 	// SpillRefused counts frames the disk budget refused; each made its
 	// emitter wait on the reorder budget instead.
 	SpillRefused int64
+	// SpillRefusedTime is the time spill stood refused, from a refused
+	// frame until a spill file's credit next returned (an interval still
+	// open at the end included); SpillRefusedSpells counts the intervals
+	// that ended.
+	SpillRefusedTime   time.Duration
+	SpillRefusedSpells int64
 	// FrontierWait is the time the drainer waited for the range it needs
 	// next while a worker was still listing it (the slow-frontier cost).
 	// BudgetWait is the time emitters and workers with ranges queued waited
 	// on a full budget (the reorder cost). Both sum over goroutines.
 	FrontierWait, BudgetWait time.Duration
+	// The waits by site (waitAt), summed over goroutines, and the most
+	// goroutines waiting there at once: PublishWait and AdmissionWait make
+	// up BudgetWait (emitters in publish, workers at admission); IdleWait
+	// is the workers' time with nothing queued to list, read-ahead waits
+	// included, over the whole run.
+	PublishWait, AdmissionWait, IdleWait                      time.Duration
+	PeakPublishWaiters, PeakAdmissionWaiters, PeakIdleWorkers int64
 	// Peaks of the stage's metadata (Gauges): outstanding range nodes,
 	// spill markers in memory, open spill readers.
 	PeakNodes, PeakMarkers, PeakReaders int64
@@ -199,6 +212,10 @@ type ReadAheadStats struct {
 type Gauges struct {
 	nodes, markers, readers, spill gauge
 	ahead                          gauge // rows received and not yet handed on
+	// The goroutines waiting now, by site (waitAt): emitters in publish on
+	// the budget, workers at admission, idle workers (nothing queued to
+	// list, read-ahead waits included).
+	publishWait, admissionWait, idleWait gauge
 }
 
 // gauge is a count and its peak.
@@ -231,6 +248,15 @@ type GaugeSnapshot struct {
 	// publish frontier, in memory or spilled.
 	AheadRows     int64 `json:"ahead_rows"`
 	PeakAheadRows int64 `json:"peak_ahead_rows"`
+	// PublishWaiters are emitters waiting in publish on a full budget,
+	// AdmissionWaiters workers waiting to claim a queued range (budget and
+	// spill used), IdleWorkers workers with nothing queued to list.
+	PublishWaiters       int64 `json:"publish_waiters"`
+	PeakPublishWaiters   int64 `json:"peak_publish_waiters"`
+	AdmissionWaiters     int64 `json:"admission_waiters"`
+	PeakAdmissionWaiters int64 `json:"peak_admission_waiters"`
+	IdleWorkers          int64 `json:"idle_workers"`
+	PeakIdleWorkers      int64 `json:"peak_idle_workers"`
 }
 
 // Snapshot reads g; a nil Gauges reads as zero.
@@ -240,7 +266,10 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 	}
 	return GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
 		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load(),
-		AheadRows: g.ahead.n.Load(), PeakAheadRows: g.ahead.peak.Load()}
+		AheadRows: g.ahead.n.Load(), PeakAheadRows: g.ahead.peak.Load(),
+		PublishWaiters: g.publishWait.n.Load(), PeakPublishWaiters: g.publishWait.peak.Load(),
+		AdmissionWaiters: g.admissionWait.n.Load(), PeakAdmissionWaiters: g.admissionWait.peak.Load(),
+		IdleWorkers: g.idleWait.n.Load(), PeakIdleWorkers: g.idleWait.peak.Load()}
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -296,6 +325,9 @@ type run[R, P any] struct {
 	finished bool
 	g        *Gauges
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
+
+	// Stats.PublishWait, AdmissionWait and IdleWait (under mu).
+	publishWait, admissionWait, idleWait time.Duration
 
 	// Drainer-owned output batch (only the drainer goroutine touches it).
 	sp      *spiller[P]                 // nil: no spill
@@ -392,12 +424,34 @@ const (
 // hookWait sees every wait just before it starts (tests; mu held).
 var hookWait func(site string)
 
-// waitAt waits on c (mu held), telling hookWait first.
-func (o *run[R, P]) waitAt(c *sync.Cond, site string) {
+// waitAt waits on c (mu held), telling hookWait first, and returns the time
+// it waited. A listing site's wait is counted: its waiters now (Gauges) and
+// its time (Stats.PublishWait, AdmissionWait, IdleWait).
+func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 	if hookWait != nil {
 		hookWait(site)
 	}
+	var g *gauge
+	var sum *time.Duration
+	switch site {
+	case waitPublish:
+		g, sum = &o.g.publishWait, &o.publishWait
+	case waitAdmission:
+		g, sum = &o.g.admissionWait, &o.admissionWait
+	case waitIdle, waitAhead:
+		g, sum = &o.g.idleWait, &o.idleWait
+	}
+	t := time.Now()
+	if g != nil {
+		g.add(1)
+	}
 	c.Wait()
+	d := time.Since(t)
+	if g != nil {
+		g.add(-1)
+		*sum += d
+	}
+	return d
 }
 
 // Test hooks that widen race windows; nil in production.
@@ -594,6 +648,8 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	o.dispose()
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
+	st.PublishWait, st.AdmissionWait, st.IdleWait = o.publishWait, o.admissionWait, o.idleWait
+	st.PeakPublishWaiters, st.PeakAdmissionWaiters, st.PeakIdleWorkers = o.g.publishWait.peak.Load(), o.g.admissionWait.peak.Load(), o.g.idleWait.peak.Load()
 	st.DistinctKeys = o.distinct
 	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.sp != nil && o.sp.cache != nil
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
@@ -622,6 +678,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles, st.SpillOpens = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load(), o.sp.opens.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
+		st.SpillRefusedTime, st.SpillRefusedSpells, _ = o.sp.refusedTime()
 		st.SpillHandles = o.sp.h.stats()
 		st.SpillFrameBytes, st.SpillFrameRows = o.sp.frameBytes.quantiles(), o.sp.frameRows.quantiles()
 		st.Drainer.ReplayDecode += time.Duration(o.sp.decodeNs.Load())
@@ -699,7 +756,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		c.attach(func(n int64) {
 			sp.live.Add(-n)
 			sp.track()
-			sp.full.Store(false)
+			sp.unrefuse()
 			select {
 			case credit <- struct{}{}:
 			default:
@@ -790,9 +847,7 @@ func (o *run[R, P]) worker() {
 				o.idle(t)
 				continue
 			}
-			t := time.Now()
-			o.waitAt(o.work, waitAdmission)
-			o.budget += time.Since(t)
+			o.budget += o.waitAt(o.work, waitAdmission)
 		}
 		if o.finished || o.stopped.Load() {
 			return
@@ -966,6 +1021,11 @@ func (e *emitter[R, P]) Fence(x string, top bool) {
 	e.fenced = true
 }
 
+// Awaited reports whether the drainer is at this range: its current node, or
+// the node it waits for or expands itself (source.Awaiter). Read for the
+// provider's account only.
+func (e *emitter[R, P]) Awaited() bool { return e.n.onPath.Load() || e.n.awaited.Load() }
+
 const publishRows = 1024
 
 func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
@@ -1096,9 +1156,7 @@ func (e *emitter[R, P]) publish() error {
 				break
 			}
 		}
-		t := time.Now()
-		o.waitAt(o.drain, waitPublish)
-		o.budget += time.Since(t)
+		o.budget += o.waitAt(o.drain, waitPublish)
 		refused = false
 	}
 	if o.stopped.Load() {
@@ -1569,9 +1627,7 @@ func (o *run[R, P]) awaitFrontier(n *node[R, P]) error {
 	o.release()
 	n.awaited.Store(true)
 	o.drain.Broadcast() // its emitter may be blocked on the budget
-	t := time.Now()
-	o.waitAt(o.drain, waitFrontier)
-	o.frontier += time.Since(t)
+	o.frontier += o.waitAt(o.drain, waitFrontier)
 	n.awaited.Store(false)
 	return nil
 }

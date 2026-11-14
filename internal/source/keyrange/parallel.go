@@ -532,6 +532,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	// after an unsafe resume key, whose keys up to K are dropped; a fence is
 	// declared only at a bound the provider accepts or at K itself.
 	fence, _ := e.(source.Fencer)
+	wait, _ := e.(source.Awaiter) // the account's only: whether the output waits for r
 	llo := max(r.lo, r.after)
 	k := p.resumeKey()
 	fenceAt := func(x string, top bool) {
@@ -712,6 +713,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		hunger := p.opt.Workers - len(p.running) - p.queued
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
 		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
+		unsplittable := st.unsplittable
 		p.unlock()
 		if p.tr != nil {
 			p.tracePage(r, st, before, c, n, pageNs, done)
@@ -739,7 +741,24 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 				pr.rem, pr.held = held, true
 			}
 		}
-		if pv, ok := p.decide(st, r, c, pr); ok {
+		awaited := wait != nil && wait.Awaited()
+		pv, ok, why := p.decide(st, r, c, pr)
+		if awaited {
+			// The output waits for this range: why it split or not.
+			p.c.Inc(cAwaitedPages)
+			if r.open {
+				p.c.Inc(cAwaitedOpenPages)
+			}
+			switch id, refused := awaitedBy[why]; {
+			case ok:
+				p.c.Inc(cAwaitedSplit)
+			case refused:
+				p.c.Inc(id)
+			case unsplittable:
+				p.c.Inc(cAwaitedUnsplittable)
+			}
+		}
+		if ok {
 			if p.d.Groups && grp.unsplittable() {
 				// decide refuses a range whose group is open (the lower
 				// child would start after the key, past its other rows)
@@ -883,10 +902,16 @@ func propose(r Range, page []string, head, c, ceil string, bounded bool, hunger 
 // at least admitChildPages. The pivot is a structure boundary when one is
 // known inside (c, hi), else the proposal's (propose). On success the two
 // children are reserved in the demand count; the caller then commits the
-// split.
-func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivot, ok bool) {
+// split. A refusal is returned as why, its counter, which decide counts (0:
+// an unsplittable range or the test coin, counted by neither).
+func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivot, ok bool, why counters.ID) {
 	p.lock()
 	defer p.unlock()
+	defer func() {
+		if why != 0 {
+			p.c.Inc(why)
+		}
+	}()
 	st.continuing = true
 	if st.unsplittable {
 		return
@@ -894,8 +919,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	if st.groupOpen {
 		// A hot key's rows run on past the page: no split inside them,
 		// whatever the gate (the coin and structure boundaries included).
-		p.c.Inc(cSplitSkippedGroupOpen)
-		return
+		return pivot{}, false, cSplitSkippedGroupOpen
 	}
 	if coin := p.opt.SplitCoin; coin != nil {
 		if !coin() {
@@ -906,13 +930,11 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	if p.opt.SplitCoin == nil {
 		switch {
 		case !pr.ready: // the demand rose after the page's snapshot
-			p.c.Inc(cSplitSkippedNoDemand)
-			return
+			return pivot{}, false, cSplitSkippedNoDemand
 		case hunger <= 0 && p.slowSplitWanted(st, r):
 			pv.slow = true // a latency outlier: split without an idle worker, unranked
 		case hunger <= 0:
-			p.c.Inc(cSplitSkippedNoDemand)
-			return
+			return pivot{}, false, cSplitSkippedNoDemand
 		}
 		if !pv.slow {
 			rank := 0
@@ -927,8 +949,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			}
 			p.c.Inc(cSplitConsidered)
 			if rank >= hunger {
-				p.c.Inc(cSplitSkippedOutranked)
-				return
+				return pivot{}, false, cSplitSkippedOutranked
 			}
 		}
 	}
@@ -960,8 +981,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			p.c.Inc(cDensityShrinkPrevented)
 		}
 		if pr.sliver {
-			p.c.Inc(cSplitSliverRefused)
-			return
+			return pivot{}, false, cSplitSliverRefused
 		}
 		m, found, pv.src, pv.anchored = pr.m, pr.found, pr.src, pr.anchored
 	}
@@ -973,7 +993,6 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	pv.m = m
 	switch guard(c, m, found, ceil, bounded, p.safe) {
 	case clauseNoPivot:
-		p.c.Inc(cSplitRejectedNoPivot)
 		// No pivot after a safe cursor is a fact about the interval: a later
 		// cursor only narrows (c, hi]. After an unsafe one it is the
 		// cursor's, as below.
@@ -981,22 +1000,18 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			st.unsplittable = true
 			p.c.Inc(cUnsplittable)
 		}
-		return
+		return pivot{}, false, cSplitRejectedNoPivot
 	case clauseUnsafeCursor:
 		// The cursor cannot be the lower child's start-after: decline this
 		// page's split only. The next page ends at another key, usually a
 		// safe one, and is evaluated afresh.
-		p.c.Inc(cSplitRejectedUnsafeCursor)
-		return
+		return pivot{}, false, cSplitRejectedUnsafeCursor
 	case clauseCursor:
-		p.c.Inc(cSplitRejectedCursor)
-		return
+		return pivot{}, false, cSplitRejectedCursor
 	case clauseUnsafePivot:
-		p.c.Inc(cSplitRejectedUnsafePivot)
-		return
+		return pivot{}, false, cSplitRejectedUnsafePivot
 	case clauseBound:
-		p.c.Inc(cSplitRejectedBound)
-		return
+		return pivot{}, false, cSplitRejectedBound
 	}
 	// Admission (bounded ranges; the frontier's remainder is unbounded, and
 	// a frontier refused for a near pivot would keep its anchor at ⊥ and
@@ -1029,9 +1044,8 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 				p.c.Inc(cSplitAdmittedPersistent)
 				pv.persistent = true
 			case refuse != 0:
-				p.c.Inc(refuse)
 				st.refused++
-				return pivot{}, false
+				return pivot{}, false, refuse
 			}
 		}
 	}
@@ -1046,7 +1060,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	if pv.slow {
 		p.slowQueued += 2
 	}
-	return pv, true
+	return pv, true, 0
 }
 
 // pivot is a decided split's pivot m and the synthesis that made it;

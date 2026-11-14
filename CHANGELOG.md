@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
+  `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`
+  as `order.publish_waiters`, `admission_waiters`, `idle_workers`), `resources.spill.refused_ns` and
+  `refused_spells`, and `resources.drain.writer_before_listing_done`; the range engine's `awaited.*` counters
+  say why the range the output waited for was or was not split (#535).
+
 - Changes from 0.3: 0.4 is a different tool. The Go implementation replaces the Java 0.3 releases with
   another command line (`swath list`, `du`, `show`, `resume`; renamed and removed options), more sources
   (local and mounted filesystems, Google Cloud Storage, Azure Blob Storage beside S3), and another dataset

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/source"
 )
 
 // TestBetweenSources: betweenFrom names the synthesis that made its pivot.
@@ -201,5 +202,61 @@ func TestAnchoredStructuralFrontierSplit(t *testing.T) {
 	p.commit(st, r, "b/x", pv)
 	if p.c.Load(cFrontierAnchored) != 1 || p.c.Load(cStructureFrontierPivots) != 1 {
 		t.Fatalf("anchored=%d structure frontier=%d", p.c.Load(cFrontierAnchored), p.c.Load(cStructureFrontierPivots))
+	}
+}
+
+// awaiting is an emitter whose range the drain is at (source.Awaiter).
+type awaiting struct{ clearing }
+
+func (*awaiting) Awaited() bool { return true }
+
+// TestAwaitedSplitDecisions: each continuing page of a range the output
+// waits for counts its split decision: no idle worker (a worker blocked in
+// the order stage still counts as active), or the split. A range the drain
+// is not at counts nothing, and through the order stage the root, which
+// the drain is at, counts its pages once its emitter has had to wait for
+// the drainer.
+func TestAwaitedSplitDecisions(t *testing.T) {
+	keys := make([]string, 1000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%06d", i)
+	}
+	expand := func(workers int, e source.Emitter[Range, Object]) *Engine[Object] {
+		t.Helper()
+		p, err := newTest(newSorted(keys, false, 1), Options{Workers: workers, PageSize: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Expand(t.Context(), p.Root(), e); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p := expand(1, &awaiting{}) // nine continuing pages, no idle worker
+	if p.c.Load(cAwaitedPages) != 9 || p.c.Load(cAwaitedOpenPages) != 9 || p.c.Load(cAwaitedNoDemand) != 9 || p.c.Load(cSplitSkippedNoDemand) != 9 {
+		t.Fatalf("awaited: pages %d (open %d), no demand %d of %d", p.c.Load(cAwaitedPages), p.c.Load(cAwaitedOpenPages), p.c.Load(cAwaitedNoDemand), p.c.Load(cSplitSkippedNoDemand))
+	}
+	if p = expand(1, &clearing{}); p.c.Load(cAwaitedPages) != 0 || p.c.Load(cSplitSkippedNoDemand) != 9 {
+		t.Fatalf("not awaited: pages %d, no demand %d", p.c.Load(cAwaitedPages), p.c.Load(cSplitSkippedNoDemand))
+	}
+	e := &awaiting{}
+	if p = expand(4, e); p.c.Load(cAwaitedPages) != 1 || p.c.Load(cAwaitedSplit) != 1 || len(e.children) != 2 {
+		t.Fatalf("idle workers: pages %d, split %d, %d children", p.c.Load(cAwaitedPages), p.c.Load(cAwaitedSplit), len(e.children))
+	}
+
+	// One worker and a row budget of one row: the root's first publish
+	// (1,024 rows) fills the budget and its second waits until the drainer
+	// is at the root, which it stays at to the end. Every page from there
+	// (the 22nd of 49 continuing ones) is awaited.
+	keys = make([]string, 5000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%06d", i)
+	}
+	got, st, _ := runBudget(t, newSorted(keys, false, 1), Options{PageSize: 100}, 1, 1)
+	if len(got) != len(keys) {
+		t.Fatalf("%d keys", len(got))
+	}
+	if n := st.Get(cAwaitedPages); n < 28 || n > 49 || st.Get(cAwaitedNoDemand) != n {
+		t.Fatalf("through the order stage: %d awaited pages, %d without demand", n, st.Get(cAwaitedNoDemand))
 	}
 }

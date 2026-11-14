@@ -34,8 +34,12 @@ import (
 // destination, uploads, retries, commit and orphan cleanup). 6:
 // output.committed_object_bytes (the committed dataset's object bytes). 7:
 // outcome.unreadable is the count of entries that could not be read (it
-// was a flag), and outcome.entry_errors is gone.
-const ReportVersion = 7
+// was a flag), and outcome.entry_errors is gone. 8 adds fields only (#535):
+// the order stage's waits by site (resources.publish_wait_ns,
+// admission_wait_ns, idle_wait_ns and their peak_* twins),
+// resources.spill.refused_ns and refused_spells, and
+// resources.drain.writer_before_listing_done.
+const ReportVersion = 8
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -450,6 +454,16 @@ type Resources struct {
 	FrontierStuckMaxNs int64 `json:"frontier_stuck_max_ns"`
 	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
 	BudgetWaitNs       int64 `json:"budget_wait_ns"`
+	// The order stage's waits by site, summed over goroutines, each with
+	// the most goroutines waiting there at once: emitters in publish on a
+	// full budget and workers at admission (together budget_wait_ns), and
+	// idle workers, nothing queued to list (read-ahead waits included).
+	PublishWaitNs        int64 `json:"publish_wait_ns"`
+	PeakPublishWaiters   int64 `json:"peak_publish_waiters"`
+	AdmissionWaitNs      int64 `json:"admission_wait_ns"`
+	PeakAdmissionWaiters int64 `json:"peak_admission_waiters"`
+	IdleWaitNs           int64 `json:"idle_wait_ns"`
+	PeakIdleWorkers      int64 `json:"peak_idle_workers"`
 	// EncoderWaitNs is the time the order stage waited for an encoder (nil
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`
@@ -490,6 +504,10 @@ type Drain struct {
 	AheadWaitNs    int64 `json:"ahead_wait_ns"`
 	OrderCheckNs   int64 `json:"order_check_ns"`
 	SinkWriteNs    int64 `json:"sink_write_ns"`
+	// WriterBeforeListingDone is the Parquet writer's account at
+	// listing_done_at (nil without a dataset, or when listing never
+	// finished).
+	WriterBeforeListingDone *ListingWriter `json:"writer_before_listing_done,omitempty"`
 	// ReadAhead is the spill read-ahead (nil: spill off).
 	ReadAhead *ReadAhead `json:"read_ahead,omitempty"`
 	// Segments is the segment-parallel replay after listing (nil without
@@ -512,6 +530,17 @@ type Drain struct {
 	EncoderUploadBytes          int64  `json:"encoder_upload_bytes,omitempty"`
 	EncodersAtStartBoundBy      string `json:"encoders_at_start_bound_by,omitempty"`
 	EncodersAfterListingBoundBy string `json:"encoders_after_listing_bound_by,omitempty"`
+}
+
+// ListingWriter is the Parquet writer's account up to listing_done_at
+// (parquetout.WriterStats): the parts published and their rows, and the
+// encoders' time on the batches written, encoding and in the parts' files or
+// uploads.
+type ListingWriter struct {
+	Parts    int64 `json:"parts"`
+	Rows     int64 `json:"rows"`
+	EncodeNs int64 `json:"encode_ns"`
+	OutputNs int64 `json:"output_ns"`
 }
 
 // Why the encoders after listing are what they are (Drain.EncoderAdmission).

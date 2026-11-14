@@ -88,6 +88,14 @@ type Fencer interface {
 	Fence(x string, top bool)
 }
 
+// Awaiter is an Emitter that tells whether the order stage's drain is at its
+// range: the output waits for this range's rows. It is read for the run
+// report's account only, never for a decision. An adapter between a
+// provider and the order stage forwards it.
+type Awaiter interface {
+	Awaited() bool
+}
+
 // Fencing is a provider whose ranges declare fences through a Fencer
 // emitter: durable spill engages only for one (and only when every adapter
 // between it and the order stage forwards them).

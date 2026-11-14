@@ -55,12 +55,13 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
 | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
 | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
+| `order.publish_waiters`, `order.admission_waiters`, `order.idle_workers` | the order stage's waiters now, each with a `peak_` twin: emitters waiting in publish on a full budget (a worker still listing its range), workers waiting to claim a queued range (budget and spill used), workers with nothing queued to list |
 | `started_at`, `as_of`, `duration_ms` | timing |
 
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 7) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 8) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
@@ -70,7 +71,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 7 |
+| `report_version` | 8 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -167,10 +168,15 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 100 ms), `max_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`
 (the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
 output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
-`budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
+`budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), the order stage's waits by site, each
+summed over goroutines with the most goroutines waiting there at once: `publish_wait_ns` and `peak_publish_waiters`
+(emitters waiting in publish on a full budget), `admission_wait_ns` and `peak_admission_waiters` (workers waiting to
+claim a queued range; with `publish_wait_ns`, `budget_wait_ns`), `idle_wait_ns` and `peak_idle_workers` (workers with
+nothing queued to list, read-ahead waits included, over the whole run), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+`refused_ns` (the time spill stood refused: from a refused frame until a spill file's credit next returned, an interval
+open at the end included), `refused_spells` (those intervals that ended), `max_bytes`, `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
 handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
 the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
@@ -185,7 +191,9 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 ([internals/ordering.md](../internals/ordering.md), every field in
 [internals/counters.md](../internals/counters.md)): `tail_ns`,
 `worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
-`order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
+`order_check_ns` and `sink_write_ns`; `writer_before_listing_done` (the Parquet writer up to `listing_done_at`; absent
+when listing never finished): `parts` and `rows` published, and the encoders' time on the batches written, `encode_ns`
+encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,

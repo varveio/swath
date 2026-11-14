@@ -97,6 +97,10 @@ large. `resources.free_disk_min_bytes` is close to `resources.spill.reserve_byte
 can be a small fraction of the listing's: three listings of 8 to 30 billion objects on a 100 GiB disk at 2,048
 workers fell from about 7,000 requests a second to about 10 once the spill cap filled, and were stopped after
 four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
+`resources.spill.refused_ns` is how long spill stood refused; `publish_wait_ns`, `admission_wait_ns` and
+`idle_wait_ns`, with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say
+why the range the output waited for was or was not split
+([counters](internals/counters.md#order-stage-and-encoders-run-summary-top-level)).
 The run does not fail and does not stop by itself: watch `progress.json`, or bound the run with
 `--max-duration`. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
 filesystem has the room. The cap is fixed when the run starts, so enlarging the disk under a running process

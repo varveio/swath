@@ -120,6 +120,17 @@ type spiller[P any] struct {
 	// plain frame's rows view its buffers, so each gets fresh ones.
 	rbuf, zbuf []byte
 
+	// refusal times the intervals spill stands refused (refuse,
+	// unrefuse): full and the interval change together under its mu, so
+	// credit returned while a refusal is recorded cannot leave an interval
+	// open with full cleared. Accounting only: nothing decides on it.
+	refusal struct {
+		mu     sync.Mutex
+		at     time.Time // the current interval's start (zero: none)
+		total  time.Duration
+		spells int64 // the intervals that ended
+	}
+
 	mu   sync.Mutex
 	open map[*spillFile]struct{} // files with an open reader, closed by close
 	tick uint64                  // reader use order, for eviction (mu)
@@ -604,8 +615,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 			return fmt.Errorf("spill trailer: %w", syscall.ENOSPC)
 		}
 		if err == errSpillFull {
-			s.refused.Add(1)
-			s.full.Store(true)
+			s.refuse()
 			return err
 		}
 		return fmt.Errorf("spill: %w", err)
@@ -691,8 +701,7 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	if !final {
 		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
 			s.live.Add(-n)
-			s.refused.Add(1)
-			s.full.Store(true)
+			s.refuse()
 			// Drained certificates hold credit until K covers them: the
 			// oldest is retired now (its credit returns at its unlink,
 			// through the waker); an undrained file never is.
@@ -731,10 +740,49 @@ func (s *spiller[P]) drained(f *spillFile) error {
 func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
 	s.track()
-	s.full.Store(false)
+	s.unrefuse()
 	if s.wake != nil {
 		s.wake()
 	}
+}
+
+// refuse records a frame the disk budget refused: spill stands refused
+// (full) until credit returns (unrefuse).
+func (s *spiller[P]) refuse() {
+	s.refused.Add(1)
+	r := &s.refusal
+	r.mu.Lock()
+	s.full.Store(true)
+	if r.at.IsZero() {
+		r.at = time.Now()
+	}
+	r.mu.Unlock()
+}
+
+// unrefuse clears full (credit returned), ending a refused interval.
+func (s *spiller[P]) unrefuse() {
+	r := &s.refusal
+	r.mu.Lock()
+	s.full.Store(false)
+	if !r.at.IsZero() {
+		r.total += time.Since(r.at)
+		r.spells++
+		r.at = time.Time{}
+	}
+	r.mu.Unlock()
+}
+
+// refusedTime is the time spill stood refused, an interval still open
+// included, the intervals that ended, and whether one is open.
+func (s *spiller[P]) refusedTime() (d time.Duration, spells int64, open bool) {
+	r := &s.refusal
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, open = r.total, !r.at.IsZero()
+	if open {
+		d += time.Since(r.at)
+	}
+	return d, r.spells, open
 }
 
 var errSpillFrame = errors.New("spill: corrupt frame")
