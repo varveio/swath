@@ -77,6 +77,18 @@ func TestCrashMatrix(t *testing.T) {
 	if _, err := Run(context.Background(), crashConfig(s3url, prior, false)); err != nil {
 		t.Fatal(err)
 	}
+	// The coarse arm's prior: a counted cut file of a cut every 2,000 keys,
+	// ten tiles' worth each, which the workers the window holds back split.
+	coarse := filepath.Join(t.TempDir(), "coarse.cuts")
+	var body []byte
+	for i, k := range checkContract(t, prior) {
+		if (i+1)%2000 == 0 {
+			body = append(body, k+"\t2000\n"...)
+		}
+	}
+	if err := os.WriteFile(coarse, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var trickle []string
 	for i := range 400 {
 		trickle = append(trickle, fmt.Sprintf("k%04d", i))
@@ -101,13 +113,22 @@ func TestCrashMatrix(t *testing.T) {
 		more []string
 	}{
 		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}, nil, calibrating, nil},
+		// Planned from the dataset: tiles of 20 pages of 100, which the
+		// workers the window holds back do not split (split is absent).
 		{"s3-seeded", func(out string, resume bool) Config {
 			cfg := crashConfig(s3url, out, resume)
 			cfg.Source.SeedFrom = prior
-			// Tiles of 20 pages of 100: a few, each split on demand.
 			cfg.Source.Options.(*S3Config).Policy.PageSize, cfg.Source.Options.(*S3Config).Policy.TilePages = 100, 20
 			return cfg
-		}, []bool{false, true}, []time.Duration{off}, []int64{1, 4}, nil, calibrating, []string{"seed-from-part"}},
+		}, []bool{false, true}, []time.Duration{off}, []int64{1, 4}, []string{"split"}, calibrating, []string{"seed-from-part"}},
+		// Planned from coarse counted cuts, tiles of 2 pages of 100: each
+		// cut's tile is split behind the window.
+		{"s3-coarse", func(out string, resume bool) Config {
+			cfg := crashConfig(s3url, out, resume)
+			cfg.Source.SeedFrom = coarse
+			cfg.Source.Options.(*S3Config).Policy.PageSize, cfg.Source.Options.(*S3Config).Policy.TilePages = 100, 2
+			return cfg
+		}, []bool{false}, []time.Duration{off}, []int64{1}, nil, nil, nil},
 		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating, nil},
 		{"azblob", func(out string, resume bool) Config { return azblobConfig(azep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating, nil},
 		{"trickle", func(out string, resume bool) Config {
