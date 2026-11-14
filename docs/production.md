@@ -73,9 +73,10 @@ A prior with counts (a previous dataset, or a cut file with counts) also changes
 output: the run lists front to back, taking the prior's tiles in key order only while the rows listed and not
 yet written stay within a window sized from `--spill-budget` and `--sort-buffer`
 ([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
-near half the spill budget instead of growing with the bucket, and a small `--spill-budget` no longer makes
-frames refused. The window is not a hard bound: a region that grew since the prior, keys added after its last
-key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
+near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
+no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
+range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
+after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
 the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. Rows still leave
 through one part writer while listing, so such a run can be bound by that writer rather than by listing. A cut
 file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives

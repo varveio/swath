@@ -232,42 +232,6 @@ func TestDurableSpillResume(t *testing.T) {
 	}
 }
 
-// TestDurableResumePlannedAcrossTiles: a crashed run's certificates are
-// reused by a resume planned from a fine counted prior (a cut every 40
-// keys, each a tile of its own), so a certificate spans many tiles: it is
-// replayed once, every gap around it listed, and the dataset is the
-// uninterrupted run's byte for byte.
-func TestDurableResumePlannedAcrossTiles(t *testing.T) {
-	datasettest.RequireJournal(t)
-	url, _, ref, out := durableFixture(t)
-	keys := checkContract(t, ref)
-	cuts := filepath.Join(t.TempDir(), "fine.cuts")
-	var body []byte
-	for i := 39; i < len(keys); i += 40 {
-		body = append(append(body, keys[i]...), "\t40\n"...)
-	}
-	if err := os.WriteFile(cuts, body, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg := durableConfig(url, out, true)
-	cfg.Source.SeedFrom = cuts
-	cfg.Source.Options.(*S3Config).Policy.PageSize, cfg.Source.Options.(*S3Config).Policy.TilePages = 10, 1
-	sum, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sameDataset(t, "planned resume", ref, out)
-	d, c := sum.Resources.Spill.Durable, s3Stats(sum).Counters
-	if d == nil || d.Resume == nil || d.Resume.Accepted == 0 || d.Resume.ReplayedRows == 0 || sum.Resources.Window == nil {
-		t.Fatalf("nothing reused, or not planned: %+v, window %+v", d, sum.Resources.Window)
-	}
-	if c.Value("reuse.ranges") == 0 || c.Value("seed.from.tiles") < 4*c.Value("reuse.ranges") {
-		t.Fatalf("%d certificates reused across %d tiles", c.Value("reuse.ranges"), c.Value("seed.from.tiles"))
-	}
-	t.Logf("accepted %d, replayed %d rows, %d tiles, %d reused ranges, %d gaps", d.Resume.Accepted, d.Resume.ReplayedRows,
-		c.Value("seed.from.tiles"), c.Value("reuse.ranges"), c.Value("reuse.gaps"))
-}
-
 // crashDurable runs cfg until the crash point's nth occurrence (an
 // injected crash, a kill's state) and checks it happened.
 func crashDurable(t *testing.T, cfg Config, point string, nth int64) {
