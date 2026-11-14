@@ -254,7 +254,7 @@ frontier: workers wait at the window holding no range, the tiles held stay withi
 released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
 `TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`; `keyrange` `TestPlanTilesAsTilePrior`,
 `TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `listing` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
-too), `TestResumeChangesPriorWorkersEncodersAndSpillFormat` (certificates spanning many tiles); `cmd/swath`
+too), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
 `TestSIGKILLAtEveryPoint` (`s3-planned`).
 
 ## The waits

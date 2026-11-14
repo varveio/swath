@@ -108,7 +108,7 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 				p.PageSize = n
 				return nil
 			})})
-		source.Define(f, source.Flag{Name: "seed-from-tile-pages", Metavar: "N", Usage: fmt.Sprintf("with a counted --seed-from, tiles of N pages each (1 to %d; default %d)", maxTilePages, TilePages),
+		source.Define(f, source.Flag{Name: "seed-from-tile-pages", Metavar: "N", Usage: fmt.Sprintf("a counted --seed-from's tiles hold N pages (default %d)", TilePages),
 			Value: source.Func(func(v string) error {
 				n, err := strconv.Atoi(v)
 				if err != nil || n < 1 || n > maxTilePages {

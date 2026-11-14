@@ -207,7 +207,7 @@ _swath_diag_list() {
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
         '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
-        '--seed-from-tile-pages=[with a counted --seed-from, tiles of N pages each (1 to 4096; default 32)]:N: ' \
+        '--seed-from-tile-pages=[a counted --seed-from'\''s tiles hold N pages (default 32)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -290,7 +290,7 @@ _swath_diag_count() {
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
         '--trace=[write the range engine'\''s run trace (JSON Lines) to FILE]:FILE:_files' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
-        '--seed-from-tile-pages=[with a counted --seed-from, tiles of N pages each (1 to 4096; default 32)]:N: ' \
+        '--seed-from-tile-pages=[a counted --seed-from'\''s tiles hold N pages (default 32)]:N: ' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
