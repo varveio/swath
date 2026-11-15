@@ -56,8 +56,8 @@ func TestTextFormattersShareTheSpillingBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sp := sum.Resources.Spill; sp == nil || sp.Rows == 0 || sum.Output.Text.Formatters != 4 {
-		t.Fatalf("spill %+v, %d formatters: the test proves nothing", sp, sum.Output.Text.Formatters)
+	if sp := sum.Resources.Spill; sp == nil || sp.Rows == 0 || sum.Text.Formatters != 4 {
+		t.Fatalf("spill %+v, %d formatters: the test proves nothing", sp, sum.Text.Formatters)
 	}
 	a, err := os.ReadFile(one)
 	if err != nil {

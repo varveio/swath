@@ -36,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/varveio/swath/internal/jsontime"
 )
 
 // DefaultMaxPrefixes is the cap on distinct prefixes when Options gives
@@ -184,7 +186,7 @@ type Stats struct {
 	AllocatedBytesMissing int64  `json:"allocated_bytes_missing"`
 	// MaxLastModified is the newest time among the objects counted, nil
 	// when none had one.
-	MaxLastModified *time.Time `json:"max_last_modified"`
+	MaxLastModified *jsontime.Time `json:"max_last_modified"`
 	// NotObjects counts rows that are not objects (directories, delete
 	// markers): listed under their prefixes, not counted as objects.
 	NotObjects int64 `json:"not_objects"`
@@ -592,7 +594,7 @@ func (t *Tally) Stats() Stats {
 		s.AllocatedBytes = &r.Allocated
 	}
 	if r.HasNewest {
-		at := time.UnixMicro(r.Newest).UTC()
+		at := jsontime.Of(time.UnixMicro(r.Newest))
 		s.MaxLastModified = &at
 	}
 	return s

@@ -685,7 +685,7 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	if written > 0 {
 		out = append(out, textout.Size(written)+" written")
 	}
-	if rss := r.Resources.PeakRSSBytes; rss != nil && *rss > 0 {
+	if rss := r.Process.PeakRSSBytes; rss != nil && *rss > 0 {
 		out = append(out, "peak RSS "+textout.Size(*rss))
 	}
 	if len(out) > 0 {
@@ -741,7 +741,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 	if json {
 		tty, width = false, 0
 	}
-	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started, tty: tty}
+	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.StartedAt.Time, tty: tty}
 	elog().start(start)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
@@ -755,7 +755,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun, dataset)
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.StartedAt.Time, noun, dataset)
 	return tt
 }
 

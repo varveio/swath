@@ -298,7 +298,7 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 
 // showFlags defines swath show's own flags on f, the ones its help lists.
 func showFlags(f *pflag.FlagSet, raw *bool) []*pflag.Flag {
-	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(raw), Usage: "dump the journal's header and records as JSON lines"})
+	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(raw), Usage: "dump the journal's header and records as JSON lines (diagnostic: the journal's private format, which may change in any release)"})
 	return []*pflag.Flag{f.Lookup("journal")}
 }
 

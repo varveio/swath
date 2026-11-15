@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/order"
 )
 
@@ -34,16 +35,16 @@ type History struct {
 // space on the filesystem the run writes to (absent: none); and the
 // resident set (absent where it is not measured).
 type Sample struct {
-	At            time.Time `json:"at"`
-	RowsFetched   int64     `json:"rows_fetched"`
-	RowsEmitted   int64     `json:"rows_emitted"`
-	RowsDurable   int64     `json:"rows_durable"`
-	HTTPAttempts  int64     `json:"http_attempts"`
-	Inflight      int64     `json:"inflight"`
-	Limit         int64     `json:"limit"`
-	SpillBytes    int64     `json:"spill_bytes"`
-	FreeDiskBytes *int64    `json:"free_disk_bytes,omitempty"`
-	RSSBytes      *int64    `json:"rss_bytes,omitempty"`
+	At            jsontime.Time `json:"at"`
+	RowsFetched   int64         `json:"rows_fetched"`
+	RowsEmitted   int64         `json:"rows_emitted"`
+	RowsDurable   int64         `json:"rows_durable"`
+	HTTPAttempts  int64         `json:"http_attempts"`
+	Inflight      int64         `json:"inflight"`
+	Limit         int64         `json:"limit"`
+	SpillBytes    int64         `json:"spill_bytes"`
+	FreeDiskBytes *int64        `json:"free_disk_bytes,omitempty"`
+	RSSBytes      *int64        `json:"rss_bytes,omitempty"`
 }
 
 // sampler records a run's History until finish.
@@ -114,7 +115,7 @@ func (s *sampler) keep(v Sample) (halved bool) {
 // sample reads the run now, and the free space under disk.
 func (s *sampler) sample() Sample {
 	v := s.read()
-	v.At = time.Now().UTC()
+	v.At = jsontime.Of(time.Now())
 	if s.disk != "" {
 		if f := order.FreeBytes(existing(s.disk)); f != order.Unlimited {
 			v.FreeDiskBytes = &f

@@ -8,32 +8,36 @@ import (
 
 	"github.com/varveio/swath/internal/buildinfo"
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/totals"
 )
 
-// ReportVersion is the run report's schema version, the report_version field.
+// ReportVersion is the run report's schema version, the report_version
+// field: it covers the stable core, not Diagnostics.
 const ReportVersion = 1
 
 // Report is the one run report: run.json beside a committed dataset, and
-// what -json prints, for every provider. It is operational: a dataset is
-// read by its manifest, never by this report. It accounts for this
+// what --report writes, for every provider. It is operational: a dataset
+// is read by its manifest, never by this report. It accounts for this
 // invocation (rows it listed, requests it made) separately from the dataset
 // (rows retained from an interrupted run, rows committed). Durations are
-// integers with their unit in the name.
+// integers with their unit in the name. Its members are its stable core,
+// but for Diagnostics.
 type Report struct {
 	ReportVersion int   `json:"report_version"`
 	Build         Build `json:"build"`
 	// Attempt is the invocation this report accounts for (Config.Attempt).
-	Attempt    *Attempt   `json:"attempt,omitempty"`
+	Attempt *Attempt `json:"attempt,omitempty"`
+	// Run is the run the attempt belongs to (nil when the attempt stopped
+	// before its output was opened).
+	Run        *RunInfo   `json:"run,omitempty"`
 	Invocation Invocation `json:"invocation"`
 	Outcome    Outcome    `json:"outcome"`
 	Timings    Timings    `json:"timings"`
+	Process    Process    `json:"process"`
 	Output     Output     `json:"output"`
-	Resources  Resources  `json:"resources"`
-	// Source is the provider's account of the listing, under its name.
-	Source *SourceStats `json:"source,omitempty"`
 	// ArgsHash is the digest of the run's frozen identity
 	// (journal.Identity.Hash): the same for a run and its resumes; empty
 	// when the run stopped before its source opened.
@@ -44,6 +48,36 @@ type Report struct {
 	// Cost is the estimated price of Requests.HTTPAttempts (nil with
 	// Requests).
 	Cost *Cost `json:"cost,omitempty"`
+	// Diagnostics is the report's diagnostics member: embedded, so its
+	// fields read as the report's own (r.Resources), and written as one
+	// JSON member, "diagnostics".
+	Diagnostics `json:"diagnostics"`
+
+	report    *source.Report
+	sampler   *sampler        // the history's, stopped by finish
+	finalized bool            // Config.Finalize has accounted it
+	src       any             // the opened source, read by finish for the request account
+	live      source.Requests // its request account at the end
+}
+
+// Diagnostics is everything in the report that describes how the
+// pipeline ran rather than what the run did: the sort buffer's sizing, the
+// seed, the text sink, the resources, the provider's counters, the
+// efficiency, the history and the profiles. Its names follow the
+// algorithm and may change in any release, without a new ReportVersion
+// (docs/internals/counters.md).
+type Diagnostics struct {
+	// SortBuffer is how invocation.sort_buffer_bytes was chosen.
+	SortBuffer RowBudget `json:"sort_buffer"`
+	// SeedMs is the range engine's seed, from its first delimiter request
+	// to its tiles (inside timings.listing_ms; absent where no seed ran: a
+	// local source, a seed turned off, a warm start).
+	SeedMs *int64 `json:"seed_ms,omitempty"`
+	// Text is a text run's sink (nil for a dataset or a dry run).
+	Text      *TextSink `json:"text,omitempty"`
+	Resources Resources `json:"resources"`
+	// Source is the provider's account of the listing, under its name.
+	Source *SourceStats `json:"source,omitempty"`
 	// Efficiency is this invocation's throughput and request economy.
 	Efficiency *Efficiency `json:"efficiency,omitempty"`
 	// History is the run's progress, sampled (at most HistoryCap samples;
@@ -52,12 +86,6 @@ type Report struct {
 	// Profiles is the development profiles this run writes
 	// (SWATH_CPUPROFILE, SWATH_MEMPROFILE; nil when neither is set).
 	Profiles *Profiles `json:"profiles,omitempty"`
-
-	report    *source.Report
-	sampler   *sampler        // the history's, stopped by finish
-	finalized bool            // Config.Finalize has accounted it
-	src       any             // the opened source, read by finish for the request account
-	live      source.Requests // its request account at the end
 }
 
 // Live is the source's request account when the report was finished
@@ -70,11 +98,11 @@ func (r *Report) Live() source.Requests { return r.live }
 // (cmd/swath) fills it.
 type Profiles struct {
 	// PhaseBoundaryAt is the logical boundary between the phases: the
-	// event timings.listing_done_at records (the provider finished), taken
+	// event timings.provider_finished_at records (the provider finished), taken
 	// microseconds after it. Absent when listing never finished (a failed
 	// or stopped run, a dry run): the listing-phase files then hold the
 	// whole run and no tail file is written.
-	PhaseBoundaryAt time.Time `json:"phase_boundary_at,omitzero"`
+	PhaseBoundaryAt jsontime.Time `json:"phase_boundary_at,omitzero"`
 	// CPUCutDelayNs is from the boundary to the listing phase's CPU
 	// profile's stop (the phase switch runs on a goroutine of its own): the
 	// listing file holds this much of the tail too. CPUGapNs is from that
@@ -161,8 +189,16 @@ type Efficiency struct {
 // this invocation's report can tell a stale outcome file, left by an earlier
 // attempt whose successor could not write its own, from a current one.
 type Attempt struct {
-	ID      string    `json:"id"`      // random, 128 bits, hex
-	Started time.Time `json:"started"` // when the invocation began (UTC)
+	ID        string        `json:"id"`         // random, 128 bits, hex
+	StartedAt jsontime.Time `json:"started_at"` // when the invocation began
+}
+
+// RunInfo identifies the run an attempt belongs to: the same for the run and
+// every resume of it. Its ID is the journal's run UUID (a dataset in a
+// bucket: the RUN of its data/RUN/ATTEMPT/ parts); a run without a journal
+// is its one attempt, and has the attempt's ID.
+type RunInfo struct {
+	ID string `json:"id"`
 }
 
 // Unstarted is the report of an invocation that stopped before a run began
@@ -173,11 +209,11 @@ func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
 	if err != nil {
 		r.Outcome.Error = err.Error()
 	}
-	now := time.Now().UTC()
-	r.Timings.StartedAt, r.Timings.FinishedAt = now, now
+	now := time.Now()
+	r.Timings.StartedAt, r.Timings.FinishedAt = jsontime.Of(now), jsontime.Of(now)
 	if attempt != nil {
-		r.Timings.StartedAt = attempt.Started
-		r.Timings.WallMs = now.Sub(attempt.Started).Milliseconds()
+		r.Timings.StartedAt = attempt.StartedAt
+		r.Timings.WallMs = now.Sub(attempt.StartedAt.Time).Milliseconds()
 		r.Timings.SessionMs = r.Timings.WallMs
 	}
 	return r
@@ -188,19 +224,18 @@ type Build = buildinfo.Build
 
 // Invocation is what was asked.
 type Invocation struct {
-	Argv           []string  `json:"argv"`
-	Source         string    `json:"source"`              // the root as recorded
-	Narrowing      string    `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
-	Out            string    `json:"out,omitempty"`       // the dataset directory; empty for a dry run
-	Resume         bool      `json:"resume,omitempty"`    // continued an interrupted run
-	SchemaID       string    `json:"schema_id"`
-	Fields         string    `json:"fields,omitempty"` // the metadata tier, for providers with tiers
-	Workers        int       `json:"workers"`
-	Encoders       int       `json:"encoders"`
-	RowBudgetBytes int64     `json:"sort_buffer_bytes"` // --sort-buffer
-	RowBudget      RowBudget `json:"sort_buffer"`       // how sort_buffer_bytes was chosen
-	PartSizeBytes  int64     `json:"part_size_bytes"`
-	Prior          *Prior    `json:"prior,omitempty"` // the --seed-from prior the range engine started from
+	Argv           []string `json:"argv"`
+	Source         string   `json:"source"`              // the root as recorded
+	Narrowing      string   `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
+	Out            string   `json:"out,omitempty"`       // the dataset directory; empty for a dry run
+	Resume         bool     `json:"resume,omitempty"`    // continued an interrupted run
+	SchemaID       string   `json:"schema_id"`
+	Metadata       string   `json:"metadata,omitempty"` // the metadata tier (--metadata), for providers with tiers
+	Workers        int      `json:"workers"`
+	Encoders       int      `json:"encoders"`
+	RowBudgetBytes int64    `json:"sort_buffer_bytes"` // --sort-buffer; how it was chosen: Diagnostics.SortBuffer
+	PartSizeBytes  int64    `json:"part_size_bytes"`
+	Prior          *Prior   `json:"prior,omitempty"` // the --seed-from prior the range engine started from
 }
 
 // The outcome vocabulary, in one place. Three separate dimensions:
@@ -295,15 +330,16 @@ func (o Outcome) Unreadables() int64 {
 // and the setup before listing (credentials, the journal, a resume's
 // verification); session_ms holds wall_ms.
 type Timings struct {
-	StartedAt time.Time `json:"started_at"`
-	// ListingDoneAt is when the provider finished (every range listed, none
-	// in flight); ListingFinishedAt when the order stage ended, its drain
-	// handed on: the drain's tail lies between (Resources.Drain.TailNs).
-	ListingDoneAt     time.Time `json:"listing_done_at,omitzero"`
-	ListingFinishedAt time.Time `json:"listing_finished_at,omitzero"`
-	FinishedAt        time.Time `json:"finished_at"`
-	WallMs            int64     `json:"wall_ms"` // from started_at (the run's start, after the command line was read) to finished_at
-	// SessionMs is the whole invocation: from attempt.started (the command
+	StartedAt jsontime.Time `json:"started_at"`
+	// ProviderFinishedAt is when the provider finished (every range listed,
+	// none in flight); ListingFinishedAt when the order stage ended, its
+	// drain handed on: the drain's tail lies between
+	// (Resources.Drain.TailNs).
+	ProviderFinishedAt jsontime.Time `json:"provider_finished_at,omitzero"`
+	ListingFinishedAt  jsontime.Time `json:"listing_finished_at,omitzero"`
+	FinishedAt         jsontime.Time `json:"finished_at"`
+	WallMs             int64         `json:"wall_ms"` // from started_at (the run's start, after the command line was read) to finished_at
+	// SessionMs is the whole invocation: from attempt.started_at (the command
 	// began) to finished_at, the credential lookup, a resume's
 	// verification and publication included.
 	SessionMs int64 `json:"session_ms"`
@@ -312,10 +348,6 @@ type Timings struct {
 	// queues, the text output, or counted). It includes the setup and the
 	// order stage's drain after the last request.
 	ListingMs int64 `json:"listing_ms"`
-	// SeedMs is the range engine's seed, from its first delimiter request to
-	// its tiles (inside listing_ms; absent where no seed ran: a local
-	// source, a seed turned off, a warm start).
-	SeedMs *int64 `json:"seed_ms,omitempty"`
 	// DrainMs runs from listing_finished_at until the encoders have written
 	// and closed the last part; PublicationMs from there until the manifest
 	// is installed (the commit). Both absent for a run that commits no
@@ -351,8 +383,10 @@ type Output struct {
 	PartsRetained int   `json:"parts_retained"`
 	// ObjectBytes sums the sizes of the objects the order stage accepted
 	// from this invocation (the size column; absent for a schema without
-	// one): on a committed run exactly those of rows_emitted, on a run that
-	// stopped also rows accepted and never handed on.
+	// one), every name once: a local file with several hard links counts
+	// once per link, unlike output.totals. On a committed run exactly those
+	// of rows_emitted, on a run that stopped also rows accepted and never
+	// handed on.
 	// OutputBytes is the dataset's part bytes (a text run's: output.text.bytes).
 	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 	OutputBytes int64  `json:"output_bytes"`
@@ -391,6 +425,10 @@ type TextOutput struct {
 	Compression string `json:"compression"` // none, gzip, zstd
 	Rows        int64  `json:"rows"`
 	Bytes       int64  `json:"bytes"` // delivered, compressed
+}
+
+// TextSink is how a text run's rows reached its output.
+type TextSink struct {
 	// SinkWaitNs is the time the order stage spent in the text sink: with
 	// one formatter, formatting rows and handing the bytes on; with more,
 	// handing batches to them (waiting while their queue is full).
@@ -424,15 +462,20 @@ const (
 	JobsGzip      = "gzip"              // gzip: one stream
 )
 
+// Process is the process's account of itself.
+type Process struct {
+	// PeakRSSBytes is the process's peak resident set (Windows: peak
+	// working set): absent (nil) where it is not measured
+	// (Resources.RusageAvailable).
+	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
+}
+
 // Resources the run used. Wait times sum over goroutines.
 type Resources struct {
-	// PeakRSSBytes is the process's peak resident set (Windows: peak
-	// working set): absent (nil) where it is not measured.
-	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
 	// RusageAvailable says whether this platform measured the CPU times and
 	// peak RSS; false leaves them out rather than reporting zeros.
-	RusageAvailable  bool  `json:"rusage_available"`
-	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage (the budget: invocation.sort_buffer_bytes)
+	RusageAvailable   bool  `json:"rusage_available"`
+	PeakBufferedBytes int64 `json:"peak_buffered_bytes"` // peak reorder storage (the budget: invocation.sort_buffer_bytes)
 	// FreeDiskMinBytes is the least free space seen on the filesystem the
 	// run writes to (the spill directory's, else the output's), sampled
 	// every second (HistoryEvery); absent for a run that writes nothing.
@@ -443,10 +486,10 @@ type Resources struct {
 	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
 	// PeakAheadRows is the most rows listed and not yet handed on at once
 	// (ahead of the publish frontier, in memory or spilled);
-	// FrontierStuckMaxNs the longest interval in which the order stage
+	// MaxFrontierStuckNs the longest interval in which the order stage
 	// handed nothing on. Both 0 for a dry run, which does not order.
 	PeakAheadRows      int64 `json:"peak_ahead_rows"`
-	FrontierStuckMaxNs int64 `json:"frontier_stuck_max_ns"`
+	MaxFrontierStuckNs int64 `json:"max_frontier_stuck_ns"`
 	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
 	BudgetWaitNs       int64 `json:"budget_wait_ns"`
 	// The order stage's waits by site, summed over goroutines, each with
@@ -518,12 +561,13 @@ type Window struct {
 // Drain is the order stage's drain after listing and the time it took.
 // Durations sum over goroutines where several wait.
 type Drain struct {
-	// TailNs is from listing_done_at to the drain's last row: the part of
-	// the run in which only the drain was left (0: listing never finished).
+	// TailNs is from provider_finished_at to the drain's last row: the
+	// part of the run in which only the drain was left (0: listing never
+	// finished).
 	TailNs int64 `json:"tail_ns"`
-	// The workers' idle time after listing_done_at (nothing queued to
+	// The workers' idle time after provider_finished_at (nothing queued to
 	// list; read-ahead waits included), summed over workers.
-	WorkerIdleAfterNs int64 `json:"worker_idle_after_listing_done_ns"`
+	WorkerIdleAfterNs int64 `json:"worker_idle_after_provider_finished_ns"`
 	// The drainer's time beside frontier_wait_ns: reading spilled frames
 	// itself (decoding included, and counted again in ReplayDecodeNs),
 	// waiting for a frame the read-ahead was reading, the order guard, and
@@ -534,9 +578,9 @@ type Drain struct {
 	OrderCheckNs   int64 `json:"order_check_ns"`
 	SinkWriteNs    int64 `json:"sink_write_ns"`
 	// WriterBeforeListingDone is the Parquet writer's account at
-	// listing_done_at (nil without a dataset, or when listing never
+	// provider_finished_at (nil without a dataset, or when listing never
 	// finished).
-	WriterBeforeListingDone *ListingWriter `json:"writer_before_listing_done,omitempty"`
+	WriterBeforeListingDone *ListingWriter `json:"writer_before_provider_finished,omitempty"`
 	// ReadAhead is the spill read-ahead (nil: spill off).
 	ReadAhead *ReadAhead `json:"read_ahead,omitempty"`
 	// Segments is the segment-parallel replay after listing (nil without
@@ -561,7 +605,7 @@ type Drain struct {
 	EncodersAfterListingBoundBy string `json:"encoders_after_listing_bound_by,omitempty"`
 }
 
-// ListingWriter is the Parquet writer's account up to listing_done_at
+// ListingWriter is the Parquet writer's account up to provider_finished_at
 // (parquetout.WriterStats): the parts published and their rows, and the
 // encoders' time on the batches written, encoding and in the parts' files or
 // uploads.
@@ -574,10 +618,10 @@ type ListingWriter struct {
 
 // Why the encoders after listing are what they are (Drain.EncoderAdmission).
 const (
-	AdmissionListingDone = "listing_done" // raised when the provider finished (admitAfterListing)
-	AdmissionExplicit    = "explicit"     // --encoders was given: never raised
-	AdmissionAtCap       = "at_cap"       // the start already admitted the most the host carries
-	AdmissionNotReached  = "not_reached"  // listing never finished (a failed or stopped run)
+	AdmissionListingDone = "provider_finished" // raised when the provider finished (admitAfterListing)
+	AdmissionExplicit    = "explicit"          // --encoders was given: never raised
+	AdmissionAtCap       = "at_cap"            // the start already admitted the most the host carries
+	AdmissionNotReached  = "not_reached"       // listing never finished (a failed or stopped run)
 )
 
 // ReadAhead counts the spill read-ahead: frames idle workers read and
@@ -610,7 +654,7 @@ type Segments struct {
 	Segments int    `json:"segments"`
 	Workers  int    `json:"workers"`
 	Rows     int64  `json:"rows"`
-	MaxRows  int64  `json:"max_rows"`
+	MaxRows  int64  `json:"max_rows"` // the largest segment's
 	Seams    int64  `json:"seam_checks"`
 	TimeNs   int64  `json:"time_ns"`     // summed over segments, open to close
 	MaxNs    int64  `json:"max_time_ns"` // the longest segment
@@ -625,12 +669,12 @@ type Segments struct {
 	// MaxWorkers is the cap on workers (listing.segmentWorkers).
 	MaxWorkers int `json:"max_workers"`
 	// BudgetWaits are the times a worker waited for the row budget before
-	// reading or gathering a unit, BudgetWaitNs their time; MaxHeldBytes
+	// reading or gathering a unit, BudgetWaitNs their time; PeakHeldBytes
 	// the most the segments held at once beside the tree (the encoders'
 	// queues, the units the workers read or gathered).
-	BudgetWaits  int64 `json:"budget_waits"`
-	BudgetWaitNs int64 `json:"budget_wait_ns"`
-	MaxHeldBytes int64 `json:"max_held_bytes"`
+	BudgetWaits   int64 `json:"budget_waits"`
+	BudgetWaitNs  int64 `json:"budget_wait_ns"`
+	PeakHeldBytes int64 `json:"peak_held_bytes"`
 	// WorkersBy is what set workers: encoders, processors, descriptors,
 	// row_budget or segments. PerWorkerBytes is the budget one worker
 	// holds at most, FreeBytes the budget the segments could take when
@@ -672,7 +716,7 @@ func (r *Report) SourceReport() *source.Report { return r.report }
 
 func (r *Report) setSource(sr source.Report) {
 	r.report = &sr
-	r.Invocation.Fields = sr.Fields
+	r.Invocation.Metadata = sr.Fields
 	n := sr.Coverage.Unreadable
 	r.Outcome.Unreadable = &n
 	r.Outcome.Complete, r.Outcome.StopReason = sr.Coverage.Complete, sr.Coverage.StopReason
@@ -685,11 +729,11 @@ func (r *Report) finish() {
 		r.History, r.Resources.FreeDiskMinBytes = r.sampler.finish()
 	}
 	now := time.Now()
-	r.Timings.FinishedAt = now.UTC()
-	r.Timings.WallMs = now.Sub(r.Timings.StartedAt).Milliseconds()
+	r.Timings.FinishedAt = jsontime.Of(now)
+	r.Timings.WallMs = now.Sub(r.Timings.StartedAt.Time).Milliseconds()
 	r.setRusage(rusage())
 	if r.Attempt != nil {
-		r.Timings.SessionMs = now.Sub(r.Attempt.Started).Milliseconds()
+		r.Timings.SessionMs = now.Sub(r.Attempt.StartedAt.Time).Milliseconds()
 	}
 	r.requests()
 }
@@ -698,11 +742,11 @@ func (r *Report) finish() {
 func (r *Report) setRusage(user, sys time.Duration, peak int64, ok bool) {
 	r.Resources.RusageAvailable = ok
 	if !ok {
-		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = nil, nil, nil
+		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Process.PeakRSSBytes = nil, nil, nil
 		return
 	}
 	u, s := user.Milliseconds(), sys.Milliseconds()
-	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = &u, &s, &peak
+	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Process.PeakRSSBytes = &u, &s, &peak
 }
 
 // requests fills Requests, Cost and Efficiency from the source's request

@@ -54,7 +54,7 @@ order stage's goroutines; at most `--workers` plus one, the drainer, listing a r
 
 | Event | When | Fields |
 |---|---|---|
-| `run_start` | the trace opens, before the first request | `trace_version` (1), `tool`, `version`, `revision` (absent when unknown), `time` (RFC 3339, UTC, the wall clock at `ts_ns` 0), `prefix` (the scope), `workers`, `page_size`, `sequential`, `seed` (the delimiter seed), `prior` (`--seed-from`), `structure` (`auto`, `on` or `off`), `slow_split`, `versions` (`--all-versions`), `resume_after` (on a resume) |
+| `run_start` | the trace opens, before the first request | `trace_version` (1), `tool`, `version`, `revision` (absent when unknown), `time` (RFC 3339, UTC, six fraction digits: the wall clock at `ts_ns` 0), `prefix` (the scope), `workers`, `page_size`, `sequential`, `seed` (the delimiter seed), `prior` (`--seed-from`), `structure` (`auto`, `on` or `off`), `slow_split`, `versions` (`--all-versions`), `resume_after` (on a resume) |
 | `seed` | the delimiter seed has tiled the scope | `dur_ns`, `requests`, `round_trips`, `levels` (descended below the top), `cuts`, `stop` (why it stopped: the `seed.stop.*` counters' names, [counters.md](counters.md)), `keys` (rows its first data page emitted when that page held the whole scope, `stop` `one_page`: then no range follows) |
 | `seeded` | a range made by a tiling: the seed's tiles, `--seed-from`'s, a resume's, or the root | `id`, `lo`, `hi` or `open`, `after`; `expected` (a counted prior's keys in it); `reused: true` for a resume's reused span, which the order stage replays and no worker claims |
 | `claimed` | a worker starts listing a range | `id`, `worker`, `lo`, `hi` or `open`, `after`, `depth` (splits since its tile), `born` (`root`, `seed`, `lower` or `upper`) |

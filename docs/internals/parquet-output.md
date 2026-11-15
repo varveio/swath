@@ -172,7 +172,7 @@ frontier (buffered, spilled, or in parts not yet recorded) are relisted whatever
 ([durability.md](durability.md)). The
 default is Java's rotation interval, 30 s; a cut part can be far below its target size. The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
-the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (zero;
+the report counts such cuts (`diagnostics.resources.part_time_cuts`); with none, or with the interval off (zero;
 `--part-interval` refuses a negative value), boundaries depend only on the rows and the byte-identity guarantees above hold
 (`TestIntervalClosesAnAgedPart`, `TestPartIntervalBoundsRecoveryPointAge`: a 2 s trickle keeps the recovery
 point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a

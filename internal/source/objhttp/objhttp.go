@@ -386,7 +386,7 @@ type Counts struct {
 	// InflightMax is the most attempts in flight at once (admitted, from
 	// send to body read); InflightNs sums their time in flight, so
 	// InflightNs over the listing's wall time is the mean in flight.
-	InflightMax int64 `json:"inflight_max"`
+	InflightMax int64 `json:"peak_inflight"`
 	InflightNs  int64 `json:"inflight_ns"`
 	// P50Ns, P90Ns and P99Ns are attempt latency percentiles (send to body
 	// read, every attempt), from a log-spaced histogram (latencyHist): the
@@ -579,7 +579,7 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
 	d[CUnreachable] = counters.Def{Key: "unreachable.attempts", Kind: counters.Count, Unit: "requests", Help: "attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while nothing in the run had answered"}
 	d[CUnreachableStops] = counters.Def{Key: "unreachable.stops", Kind: counters.Count, Unit: "calls", Help: "calls stopped as unreachable: nothing in the run had answered, and connections had failed so for " + source.UnreachableGrace.String() + " (at most half --stall-timeout; exit 75, cause unreachable)"}
-	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
+	d[CInflightMax] = counters.Def{Key: "inflight.peak_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
 	for id, q := range map[ClientCounter]string{CInflightP50: "50", CInflightP90: "90", CInflightP99: "99"} {
 		d[id] = counters.Def{Key: "inflight.p" + q + "_ns", Kind: counters.Gauge, Unit: "ns", Help: "attempt latency (send to body read), " + q + "th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns"}
@@ -598,7 +598,7 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CLimiterValve] = counters.Def{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"}
 	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
 	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
-	d[CLimiterDepth] = counters.Def{Key: "limiter.max_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
+	d[CLimiterDepth] = counters.Def{Key: "limiter.peak_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
 	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
 	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
 	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping)"}

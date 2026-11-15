@@ -24,6 +24,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
@@ -59,7 +60,7 @@ type Config struct {
 	Deliver func(ctx context.Context) error
 	// Attempt, if set, identifies this invocation in its report.
 	Attempt *Attempt
-	Warn    func(string) // one-time warnings for the user (nil: dropped)
+	Warn    func(code, msg string) // one-time warnings for the user, code a source.Warn* (nil: dropped)
 	// Progress, if set, is updated while the run goes (watchdog, progress
 	// file); Progress.Owned says whether this run owns the output.
 	Progress *Progress
@@ -88,7 +89,7 @@ type Config struct {
 	// without running step means not committed. nil runs step.
 	Commit func(step func() error) error
 	// ListingDone, if set, is called once when the provider has finished
-	// listing: the event timings.listing_done_at records
+	// listing: the event timings.provider_finished_at records
 	// (order.Options.ListingDone), from an order-stage goroutine without
 	// its lock; the drain may still have rows to hand on. A failed or
 	// stopped listing and a dry run (nothing ordered) never call it. It
@@ -264,17 +265,17 @@ type Spill struct {
 	// free space spill left on its filesystem (0: none). MaxBy is what
 	// set the cap (CapBudget, CapDisk, CapDiskHalf, CapNone); a cap set by
 	// the disk follows it: a frame it would refuse re-reads the free
-	// space, and MaxRaised counts the times the cap rose (the filesystem
+	// space, and CapRaises counts the times the cap rose (the filesystem
 	// grew, or other files on it were removed). While such a cap holds
 	// the run back (a frame refused, workers waiting on it) the
-	// free space is also reread every 2 s: MaxRechecks counts those reads,
-	// MaxRecheckRaised those that raised the cap.
+	// free space is also reread every 2 s: CapRechecks counts those reads,
+	// CapRecheckRaises those that raised the cap.
 	MaxBytes         int64  `json:"max_bytes"`
 	StartMaxBytes    int64  `json:"start_max_bytes"`
 	MaxBy            string `json:"max_by"`
-	MaxRaised        int64  `json:"max_raised"`
-	MaxRechecks      int64  `json:"max_rechecks"`
-	MaxRecheckRaised int64  `json:"max_recheck_raised"`
+	CapRaises        int64  `json:"cap_raises"`
+	CapRechecks      int64  `json:"cap_rechecks"`
+	CapRecheckRaises int64  `json:"cap_recheck_raises"`
 	ReserveBytes     int64  `json:"reserve_bytes"`
 	PeakReaders      int64  `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
 	// ReadHandles is the spill read handles' account: every read of a
@@ -652,6 +653,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		rep, err = run(ctx, cfg)
 	}
 	cfg.finalize(&rep, err)
+	cfg.Progress.End(err)
 	return rep, err
 }
 
@@ -722,14 +724,14 @@ func replace(ctx context.Context, cfg Config) (Report, error) {
 	rep, err := run(ctx, inner)
 	rep.Invocation.Out = dir
 	if rerr := dataset.RemoveNext(dir); rerr != nil && cfg.Warn != nil {
-		cfg.Warn("the replaced dataset's files are not removed: " + rerr.Error())
+		cfg.Warn(source.WarnReplacedNotRemoved, "the replaced dataset's files are not removed: "+rerr.Error())
 	}
 	return rep, err
 }
 
 func run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
-	sum := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
+	sum := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: jsontime.Of(start)},
 		Outcome: Outcome{Status: StatusFailed}}
 	asked := cfg.Limits.Encoders
 	if err := cfg.resolve(); err != nil {
@@ -738,14 +740,15 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	switch n := admit(cfg); {
 	case asked <= n || cfg.Warn == nil:
 	case cfg.Output.Text != nil:
-		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; the encoder allowance (%d MiB, from the memory found) carries %d",
+		cfg.Warn(source.WarnEncodersLimited, fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; the encoder allowance (%d MiB, from the memory found) carries %d",
 			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.encoderAllowance>>20, n))
 	default:
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; the encoder allowance (%d MiB, from the memory found) and the descriptor limit carry %d",
+		cfg.Warn(source.WarnEncodersLimited, fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; the encoder allowance (%d MiB, from the memory found) and the descriptor limit carry %d",
 			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.encoderAllowance>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
-		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression, Compressor: textJobs(cfg, asked)}
+		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression}
+		sum.Text = &TextSink{Compressor: textJobs(cfg, asked)}
 		if t.Path == "" {
 			sum.Output.Text.Destination = "-"
 		}
@@ -758,7 +761,8 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		argv = []string{}
 	}
 	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.final(), Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
-		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, RowBudget: cfg.Limits.rowBudgetWhy, PartSizeBytes: cfg.Limits.PartSize}
+		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
+	sum.SortBuffer = cfg.Limits.rowBudgetWhy
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
 		return sum.failed(err)
@@ -769,7 +773,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	warn := cfg.Warn
 	if warn == nil {
-		warn = func(string) {}
+		warn = func(string, string) {}
 	}
 	// The unfinished run this invocation means to continue or replace, as
 	// it is now: an early failure settles only that run (settleUnowned).
@@ -797,7 +801,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		case cfg.Output.Resume:
 			// A prior shapes the tiling only: a resume whose prior is gone
 			// or changed lists as a run without one.
-			warn(fmt.Sprintf("%v: resuming without it, as a run without --seed-from", err))
+			warn(source.WarnSeedFromUnavailable, fmt.Sprintf("%v: resuming without it, as a run without --seed-from", err))
 		default:
 			rep, err := sum.failed(err)
 			cfg.finalize(&rep, err)
@@ -841,6 +845,9 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 				sum.Output.Remote.Commit = "lost_race"
 			}
 		}
+		// A resume that finished a committed run's aftermath (a dataset in a
+		// bucket) is an attempt of that run.
+		sum.Run = cfg.remote.runInfo()
 		rep, err := sum.failed(err)
 		cfg.finalize(&rep, err)
 		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
@@ -853,6 +860,8 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		}
 		return rep, err
 	}
+	sum.Run = runInfo(cfg, jr)
+	cfg.Progress.identify(cfg.Attempt, sum.Run)
 	rep, err := owned(ctx, cfg, sum, src, s, jr)
 	if jr.discardUnanswered(cfg, err) {
 		rep.Outcome.Unrecorded = UnrecordedDiscarded
@@ -905,13 +914,13 @@ func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started, listed time.Time) dataset.Meta {
 	m := dataset.Meta{SchemaID: s.ID, Groups: s.Groups, Source: dataset.Source{Kind: loc.Kind, URI: loc.Root, Container: loc.Container},
 		Scope: dataset.Scope{Kind: "whole"}}
-	m.Coverage = dataset.Coverage{ListingStartedAt: started.UTC(), ListingFinishedAt: listed.UTC()}
+	m.Coverage = dataset.Coverage{ListingStartedAt: jsontime.Of(started), ListingFinishedAt: jsontime.Of(listed)}
 	if rep == nil {
 		m.Coverage.StopReason = "unreported" // a source without a report claims nothing
 		return m
 	}
 	if f := rep.Filesystem; f != nil {
-		m.Filesystem = &dataset.FilesystemSpace{TotalBytes: f.TotalBytes, FreeBytes: f.FreeBytes, AvailableBytes: f.AvailableBytes, MeasuredAt: f.MeasuredAt}
+		m.Filesystem = &dataset.FilesystemSpace{TotalBytes: f.TotalBytes, FreeBytes: f.FreeBytes, AvailableBytes: f.AvailableBytes, MeasuredAt: jsontime.Of(f.MeasuredAt)}
 	}
 	c := rep.Coverage
 	if c.Prefix != "" {
@@ -969,13 +978,14 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if err := a.startCache(&oopt, src, cancel); err != nil {
 		return a.sum.failed(err)
 	}
-	if done := cfg.ListingDone; done != nil {
-		prev := oopt.ListingDone
-		oopt.ListingDone = func() {
-			if prev != nil {
-				prev()
-			}
-			done()
+	listingDone := oopt.ListingDone
+	oopt.ListingDone = func() {
+		if listingDone != nil {
+			listingDone()
+		}
+		cfg.Progress.setState(StateDraining)
+		if cfg.ListingDone != nil {
+			cfg.ListingDone()
 		}
 	}
 	env.Order = oopt
@@ -984,7 +994,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	var text *textout.Out
 	if cfg.Output.Text != nil {
 		tc := *cfg.Output.Text
-		if c := sum.Output.Text.Compressor; c != nil {
+		if c := sum.Text.Compressor; c != nil {
 			tc.Jobs = c.Jobs
 		}
 		if tc.Path != "" {
@@ -1041,7 +1051,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if sd, ok := src.(source.SeedTimed); ok {
 		if d, ok := sd.SeedTime(); ok {
 			ms := d.Milliseconds()
-			a.sum.Timings.SeedMs = &ms
+			a.sum.SeedMs = &ms
 		}
 	}
 	if text != nil {
@@ -1068,7 +1078,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 	}
 	listed := time.Now()
-	a.sum.Timings.ListingFinishedAt, a.sum.Timings.ListingMs = listed.UTC(), listed.Sub(a.sum.Timings.StartedAt).Milliseconds()
+	a.sum.Timings.ListingFinishedAt, a.sum.Timings.ListingMs = jsontime.Of(listed), listed.Sub(a.sum.Timings.StartedAt.Time).Milliseconds()
 	if r, ok := src.(source.Reporter); ok {
 		a.sum.setSource(r.Report())
 	}
@@ -1246,7 +1256,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 			return oopt, "", err
 		}
 		if err := removeSpill(spill, jr.cacheOf() != nil); err != nil && cfg.Warn != nil {
-			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
+			cfg.Warn(source.WarnSpillNotRemoved, fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
 		}
 		if !cfg.Limits.Spill.Off {
 			oopt.SpillDir = spill
@@ -1279,7 +1289,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 				fix = "set TMPDIR to a disk"
 			}
 			msg := fmt.Sprintf("rows are spilling to %s, which is on %s: they are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix)
-			oopt.Spilling = func() { cfg.Warn(msg) }
+			oopt.Spilling = func() { cfg.Warn(source.WarnSpillInMemory, msg) }
 		}
 	}
 	return oopt, scratch, nil
@@ -1362,9 +1372,10 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 			err = fmt.Errorf("text output: %w", werr)
 		}
 	}
-	st, out := text.Stats(), a.sum.Output.Text
-	out.Rows, out.Bytes, out.SinkWaitNs, out.OutputWaitNs, out.Formatters = text.Rows(), text.Bytes(), int64(st.SinkWait), int64(st.OutputWait), st.Formatters
-	if c := out.Compressor; c != nil {
+	st, out, sink := text.Stats(), a.sum.Output.Text, a.sum.Text
+	out.Rows, out.Bytes = text.Rows(), text.Bytes()
+	sink.SinkWaitNs, sink.OutputWaitNs, sink.Formatters = int64(st.SinkWait), int64(st.OutputWait), st.Formatters
+	if c := sink.Compressor; c != nil {
 		c.BytesIn, c.BytesOut = st.In, st.Out
 	}
 	return err
@@ -1450,28 +1461,28 @@ func (a *attempt) closeCache(committed bool) error {
 // account puts the order stage's and the router's resources in the report.
 func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res := &a.sum.Resources
-	res.MaxBufferedBytes, a.sum.Output.RowsEmitted = ost.MaxBuffered, ost.Rows
+	res.PeakBufferedBytes, a.sum.Output.RowsEmitted = ost.MaxBuffered, ost.Rows
 	a.sum.Output.RowsFiltered = filtered
 	// order: false for a dry run, which counts rows without ordering them
-	// (order.Count: no reorder storage, max_buffered_bytes 0).
+	// (order.Count: no reorder storage, peak_buffered_bytes 0).
 	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			RefusedNs: int64(ost.SpillRefusedTime), RefusedSpells: ost.SpillRefusedSpells,
-			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), MaxRaised: ost.SpillMaxRaised, MaxRechecks: ost.SpillMaxRechecks, MaxRecheckRaised: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), CapRaises: ost.SpillMaxRaised, CapRechecks: ost.SpillMaxRechecks, CapRecheckRaises: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {
 			res.Spill.Durable = c.Report()
 		}
 	}
-	res.PeakAheadRows, res.FrontierStuckMaxNs = ost.PeakAhead, int64(ost.FrontierStuck)
+	res.PeakAheadRows, res.MaxFrontierStuckNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	res.PublishWaitNs, res.AdmissionWaitNs, res.IdleWaitNs = int64(ost.PublishWait), int64(ost.AdmissionWait), int64(ost.IdleWait)
 	res.PeakPublishWaiters, res.PeakAdmissionWaiters, res.PeakIdleWorkers = ost.PeakPublishWaiters, ost.PeakAdmissionWaiters, ost.PeakIdleWorkers
 	if !ost.ListingDone.IsZero() {
-		a.sum.Timings.ListingDoneAt = ost.ListingDone.UTC()
+		a.sum.Timings.ProviderFinishedAt = jsontime.Of(ost.ListingDone)
 	}
 	if w := ost.Window; w != nil {
 		res.Window = &Window{Tiles: w.Tiles, Forced: w.Forced, Grown: w.Grown, Rows: w.Rows, BoundBy: w.BoundBy, Waits: w.Waits,
@@ -1510,7 +1521,7 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 		s := ost.Segments
 		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, MaxRows: s.MaxRows, Seams: s.Seams,
 			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan), ReadNs: int64(s.Read), DecodeNs: int64(s.Decode), WriteNs: int64(s.Write),
-			MaxWorkers: oopt.SegmentWorkers, BudgetWaits: s.BudgetWaits, BudgetWaitNs: int64(s.BudgetWait), MaxHeldBytes: s.MaxHeld,
+			MaxWorkers: oopt.SegmentWorkers, BudgetWaits: s.BudgetWaits, BudgetWaitNs: int64(s.BudgetWait), PeakHeldBytes: s.MaxHeld,
 			WorkersBy: s.WorkersBy, PerWorkerBytes: s.PerWorker, FreeBytes: s.Free, TreeBytes: s.Tree,
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred,
 			CertificatesRead: s.Certificates, CertifiedRows: s.CertRows, CertificateScanNs: int64(s.CertScan)}
@@ -1600,6 +1611,7 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		return a.fail(fmt.Errorf("encode: %w", err))
 	}
 	closed := time.Now()
+	cfg.Progress.setState(StatePublishing)
 	drain := closed.Sub(listed).Milliseconds()
 	sum.Timings.DrainMs = &drain
 	// Retirement outlives publication: the cache closes after the router
@@ -1617,7 +1629,7 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if err := jr.verify(); err != nil {
 		return a.fail(err)
 	}
-	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed)
+	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt.Time), listed)
 	meta.Coverage.Filters = append(meta.Coverage.Filters, cfg.Filter.Descriptions()...)
 	// The dataset's object bytes are the writers' counts, part by part
 	// (retained parts' from their records): each row once, however it
@@ -1686,11 +1698,11 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	}
 	// Committed: the durable spill is the dataset's now; its directory goes.
 	if err := jr.closeCache(true); err != nil && cfg.Warn != nil {
-		cfg.Warn("durable spill directory not removed: " + err.Error())
+		cfg.Warn(source.WarnSpillNotRemoved, "durable spill directory not removed: "+err.Error())
 	}
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
-			cfg.Warn("run report and cut file not written: " + err.Error())
+			cfg.Warn(source.WarnRunReportUnwritten, "run report and cut file not written: "+err.Error())
 		}
 	} else if jr != nil && jr.remote != nil {
 		if err := a.finalizeRemote(parts, sum); err != nil {
@@ -1698,7 +1710,7 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		}
 	} else {
 		if err := dataset.WriteReport(cfg.Output.final(), *sum); err != nil && cfg.Warn != nil {
-			cfg.Warn(err.Error())
+			cfg.Warn(source.WarnRunReportUnwritten, err.Error())
 		}
 		a.writeCuts(a.ctx, parts, localPageEnds, func(_ context.Context, b []byte) error {
 			return dataset.Replace(filepath.Join(cfg.Output.final(), dataset.CutsName), b, dataset.Durable)
@@ -1729,7 +1741,7 @@ func (a *attempt) writeCuts(ctx context.Context, parts []dataset.Part, ends func
 		err = put(ctx, b)
 	}
 	if err != nil && a.cfg.Warn != nil {
-		a.cfg.Warn(fmt.Sprintf("the dataset is committed; its cut file (%s, for a later --seed-from) is not written: %v", dataset.CutsName, err))
+		a.cfg.Warn(source.WarnCutsUnwritten, fmt.Sprintf("the dataset is committed; its cut file (%s, for a later --seed-from) is not written: %v", dataset.CutsName, err))
 	}
 }
 

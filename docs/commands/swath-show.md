@@ -67,13 +67,14 @@ lists ([Running swath](../running.md#reading-the-output)).
 
 <!-- flags:begin -->
 - <a id="option-journal"></a>[`--journal`](#option-journal)\
-  dump the journal's header and records as JSON lines
+  dump the journal's header and records as JSON lines (diagnostic: the journal's private format, which may change in any release)
 
 <details>
 <summary>Plain text, in the <code>--help</code> layout</summary>
 
 ```text
-      --journal  dump the journal's header and records as JSON lines
+      --journal  dump the journal's header and records as JSON lines (diagnostic: the journal's
+                 private format, which may change in any release)
 ```
 
 </details>
@@ -94,6 +95,10 @@ Dump an interrupted run's journal:
 ```bash
 swath show logs-inventory --journal
 ```
+
+`--journal` is a diagnostic: it prints the journal, swath's private resume record, as it is stored. Its
+members, their spelling and their types are not an interface and may change in any release; a program reads
+the run report, `progress.json`, `error.json` and the manifest instead.
 
 ## Exit status
 

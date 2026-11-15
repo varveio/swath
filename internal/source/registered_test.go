@@ -88,7 +88,7 @@ func TestRegisteredSources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: 2, Warn: func(string) {}})
+		src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: 2, Warn: func(string, string) {}})
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -166,7 +166,7 @@ func TestRegisteredRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: 2, Warn: func(string) {}})
+			src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: 2, Warn: func(string, string) {}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,7 +296,7 @@ func TestRegisteredLocators(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, opt := range []any{c.options, flagged} {
-				src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: opt, Workers: 2, Warn: func(string) {}})
+				src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: opt, Workers: 2, Warn: func(string, string) {}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -334,7 +334,7 @@ func TestRegisteredLocators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := f.Open(context.Background(), registry.Request{Root: root, Options: &azblob.Options{Client: azblobtest.NewStore(nil)}, Workers: 1, Warn: func(string) {}})
+	src, err := f.Open(context.Background(), registry.Request{Root: root, Options: &azblob.Options{Client: azblobtest.NewStore(nil)}, Workers: 1, Warn: func(string, string) {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestRegisteredEndpointRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, opt := range []any{c.options(ep), flagged} {
-					_, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: opt, Workers: 1, Warn: func(string) {}})
+					_, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: opt, Workers: 1, Warn: func(string, string) {}})
 					if err == nil || strings.Contains(err.Error(), "s3cret") {
 						t.Errorf("endpoint refusal: %v", err)
 					}
@@ -394,7 +394,7 @@ func TestRegisteredPoolSizeReported(t *testing.T) {
 			t.Fatal(err)
 		}
 		for workers, want := range map[int]int64{1: 1, 40: 3} {
-			src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: workers, Warn: func(string) {}})
+			src, err := f.Open(context.Background(), registry.Request{Root: c.root, Options: c.options, Workers: workers, Warn: func(string, string) {}})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -56,7 +56,8 @@ for (b, w, arm), runs in groups.items():
         rw.append((t2 - t1) / 1000)
         tw.append((t2 - t0) / 1000)
         try:
-            v = json.load(open(stem + '.json'))['source']['stats']['counters']['values']
+            d = json.load(open(stem + '.json'))
+            v = d.get('diagnostics', d)['source']['stats']['counters']['values']
             att.append(v.get('attempts')); dec.append(v.get('limiter.decreases')); inc.append(v.get('limiter.increases'))
             dbl.append(v.get('limiter.slow_start.doubles'))
         except Exception:

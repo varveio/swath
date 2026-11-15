@@ -98,7 +98,7 @@ func seedFrom(cfg Config, src registry.Source) (*Prior, error) {
 		return nil, fmt.Errorf("--seed-from %s: %w", path, err)
 	}
 	if side.refused != "" && cfg.Warn != nil {
-		cfg.Warn(fmt.Sprintf("--seed-from %s: its %s is not used (%s): its key page index is read instead", path, dataset.CutsName, side.refused))
+		cfg.Warn(source.WarnSeedFromCuts, fmt.Sprintf("--seed-from %s: its %s is not used (%s): its key page index is read instead", path, dataset.CutsName, side.refused))
 	}
 	return &Prior{Path: path, Source: pr.Source, Cuts: len(pr.Cuts), Counted: pr.Counted, CutsFile: side.state, CutsRefused: side.refused}, nil
 }

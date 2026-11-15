@@ -38,7 +38,7 @@ def flat(prefix, x, out):
 def go_row(path, d):
     """A Go run report (run.json, or what -json printed)."""
     inv, out, t = d["invocation"], d["output"], d["timings"]
-    stats = (d.get("source") or {}).get("stats", {})
+    stats = (d.get("diagnostics", d).get("source") or {}).get("stats", {})  # diagnostics: report 1 since 2026-11-15
     src = dict((stats.get("counters") or {}).get("values", {}))
     src["mean_active"] = stats.get("mean_active")
     feats = (stats.get("counters") or {}).get("features", {})
@@ -48,7 +48,7 @@ def go_row(path, d):
         "toggles_off": ",".join(sorted(k for k, v in feats.items() if not v)), "completed": d["outcome"]["complete"], "objects": out.get("rows_emitted", out.get("rows_listed")),
         "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("attempts", src.get("requests")),
         "pages": src.get("pages"), "splits": sum(v for k, v in src.items() if k.startswith("split.accepted")),
-        "steals": 0, "peak_in_flight": src.get("inflight.max", src.get("max_active")),
+        "steals": 0, "peak_in_flight": src.get("inflight.max", src.get("peak_active")),
         "avg_in_flight": src["inflight.ns"] / (t["listing_ms"] * 1e6) if src.get("inflight.ns") and t["listing_ms"] else src.get("mean_active"),
         "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out.get("output_bytes", out.get("bytes")),
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
@@ -57,7 +57,7 @@ def go_row(path, d):
         "probe_requests": src.get("probe.requests", 0) + src.get("structure.requests", 0) + src.get("seed.probes", 0),
     }
     g = {}
-    flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "requests", "max_active", "probe")}, g)
+    flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "peak_queued", "mean_active", "timeouts", "attempts", "requests", "peak_active", "probe")}, g)
     r.update(g)
     return r
 
@@ -100,7 +100,7 @@ def row(path):
         r["probe_requests"] = r.get("probe_requests", 0) + d["seed"]["probes"]
     if d.get("go", {}).get("s3"):
         g = {}
-        flat("go", {k: v for k, v in d["go"]["s3"].items() if k in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "retries", "throttles", "timeouts", "attempts")}, g)
+        flat("go", {k: v for k, v in d["go"]["s3"].items() if k in ("split", "seed", "child_empty", "overfetch_keys", "peak_queued", "mean_active", "retries", "throttles", "timeouts", "attempts")}, g)
         r.update(g)
         r["retries"], r["throttle_events"] = d["go"]["s3"].get("retries", ""), d["go"]["s3"].get("throttles", "")
     return r

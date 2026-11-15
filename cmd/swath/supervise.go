@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 )
@@ -135,6 +136,7 @@ type outcome struct {
 	// Attempt is the invocation this outcome belongs to; the report
 	// (--report) carries the same one.
 	Attempt *listing.Attempt `json:"attempt,omitempty"`
+	Run     *listing.RunInfo `json:"run,omitempty"` // the report's run
 	// Status, Complete, StopReason and Unreadable are the report's
 	// (listing.Outcome): what became of the output and its coverage, so
 	// that the outcome event tells a complete output from a partial one.
@@ -473,7 +475,7 @@ func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded strin
 // it (conclude).
 func reportUnrecorded(dir, why string) {
 	if why != "" {
-		elog().warn(fmt.Sprintf("the outcome is not recorded in %s: %s", filepath.Join(dir, errorName), why))
+		elog().warn(warnOutcomeUnrecorded, fmt.Sprintf("the outcome is not recorded in %s: %s", filepath.Join(dir, errorName), why))
 	}
 }
 
@@ -677,7 +679,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
 	buf := stacks.Bytes()
 	sj, _ := json.Marshal(s)
-	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
+	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, jsontime.Format(time.Now()), sj)
 	l := elog()
 	done := make(chan string, 1)
 	go func() {
@@ -703,7 +705,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	case <-time.After(stacksWait):
 	}
 	if path != "" {
-		l.warn("goroutine dump written to " + path)
+		l.warn(warnStacks, "goroutine dump written to "+path)
 		if !l.shows(lvInfo) {
 			return path
 		}
@@ -712,7 +714,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
 	}
 	if l.json {
-		l.print(lvWarn, evWarning, "goroutine dump: "+why+" ("+detail+")", stacksFields{string(buf)})
+		l.print(lvWarn, evWarning, "goroutine dump: "+why+" ("+detail+")", stacksFields{warnStacks, string(buf)})
 	} else {
 		note(errOut, head+string(buf)+"\n")
 	}
@@ -745,6 +747,7 @@ func tempStacks(why, head string, buf []byte) string {
 
 // stacksFields are a goroutine dump's event under --log-format json.
 type stacksFields struct {
+	Code   string `json:"code"`
 	Stacks string `json:"stacks"`
 }
 
@@ -804,14 +807,25 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		o.Attempt = f.att
 		account(&r.Outcome, o)
 		if f.dir != "" {
-			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
+			f.pr.Owned(func() {
+				_ = writeOutcome(f.dir, outcomeOf(r))
+				if f.pr.Started() {
+					// The run's final snapshot: done once committed.
+					var failed error
+					if r.Outcome.Status != listing.StatusCommitted {
+						failed = err
+					}
+					f.pr.End(failed)
+					progressWrite(f.dir, f.pr)
+				}
+			})
 		}
 		_ = writeReport(f.report, r, nil)
 	}()
 	select {
 	case <-done:
 	case <-time.After(stacksWait):
-		elog().warn("the forced exit's outcome could not be written in time")
+		elog().warn(warnOutcomeUnrecorded, "the forced exit's outcome could not be written in time")
 	}
 }
 
@@ -820,6 +834,19 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 var progressName = filepath.Join(dataset.Workspace, "progress.json")
 
 const progressEvery = 2 * time.Second
+
+// writeProgress rewrites dir's progress file with pr's snapshot, taken
+// under its ownership: only while the run owns the output (a refused run
+// never overwrites its owner's progress), and never a snapshot older than
+// one written before (the final one, done or failed, stays).
+func writeProgress(dir string, pr *listing.Progress) {
+	pr.Owned(func() { progressWrite(dir, pr) })
+}
+
+// progressWrite is writeProgress's write, inside pr.Owned.
+func progressWrite(dir string, pr *listing.Progress) {
+	_ = dataset.ReplaceJSON(filepath.Join(dir, progressName), pr.Snapshot(), dataset.Atomic)
+}
 
 // supervise runs list with the run's liveness owner: it rewrites the
 // progress file, and cancels the run as stuck when its liveness
@@ -837,7 +864,7 @@ const progressEvery = 2 * time.Second
 // requests (Answered). It is the only place that decides a run cannot go
 // on; nothing in the pipeline gives up on a slow source. It also watches
 // listing wait on a full spill cap (spill), which may stop the run.
-func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(string), d *display) (stop func()) {
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(code, msg string), d *display) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -864,10 +891,8 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 				s := pr.Snapshot()
 				d.offer(s)
 				if dir != "" && now.Sub(written) >= every-tick/2 {
-					// Only while the run owns the output: a refused run
-					// never overwrites its owner's progress.
 					written = now
-					pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), s, dataset.Atomic) })
+					writeProgress(dir, pr)
 				}
 				if err := spill.check(s, now); err != nil {
 					cancel(err)
@@ -884,14 +909,14 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 				switch {
 				case idle >= stall:
 					cause := stuckCause(at, s)
-					warn(fmt.Sprintf("no progress for %s (%s): stopping the run as stuck", idle.Round(time.Second), cause))
+					warn(warnStuck, fmt.Sprintf("no progress for %s (%s): stopping the run as stuck", idle.Round(time.Second), cause))
 					// The goroutines as they hung, before the cancel moves them.
 					dumpStacks(dir, pr, "stuck", cause, s)
 					cancel(&stuckError{cause})
 					return
 				case idle >= stall/2 && !warned:
 					warned = true
-					warn(fmt.Sprintf("no progress for %s (the run is stopped as stuck at %s)", idle.Round(time.Second), stall))
+					warn(warnNoProgress, fmt.Sprintf("no progress for %s (the run is stopped as stuck at %s)", idle.Round(time.Second), stall))
 				}
 			}
 		}

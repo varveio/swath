@@ -166,10 +166,10 @@ type Secret struct{ Flag, Env string }
 
 // Request is what the pipeline tells a factory.
 type Request struct {
-	Root    string       // as given, scheme included
-	Options any          // the provider's options value (Flags or Defaults)
-	Workers int          // the order stage's worker count
-	Warn    func(string) // one-time warnings for the user; never nil
+	Root    string                 // as given, scheme included
+	Options any                    // the provider's options value (Flags or Defaults)
+	Workers int                    // the order stage's worker count
+	Warn    func(code, msg string) // one-time warnings for the user (code: a source.Warn*); never nil
 }
 
 // Source is an opened provider bound to the pipeline (see Bind). It may

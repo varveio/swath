@@ -43,7 +43,7 @@ func TestTmpfsSpillWarning(t *testing.T) {
 			frontierMu.Unlock()
 			var mu sync.Mutex
 			var warned []string
-			warn := func(m string) {
+			warn := func(_, m string) {
 				mu.Lock()
 				defer mu.Unlock()
 				warned = append(warned, m)

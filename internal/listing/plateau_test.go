@@ -152,7 +152,7 @@ func TestDelayedFrontierPlateaus(t *testing.T) {
 	if res.Spill.Rows == 0 {
 		t.Fatal("nothing spilled: the frontier was not delayed long enough")
 	}
-	if d := res.Drain; d == nil || d.ReadAhead == nil || sum.Timings.ListingDoneAt.IsZero() {
+	if d := res.Drain; d == nil || d.ReadAhead == nil || sum.Timings.ProviderFinishedAt.IsZero() {
 		t.Fatalf("no drain account: %+v", d)
 	} else {
 		t.Logf("drain: tail %v, read-ahead %+v", time.Duration(d.TailNs), *d.ReadAhead)

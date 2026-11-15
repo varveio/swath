@@ -22,6 +22,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -428,25 +429,27 @@ func TestSIGKILLInSegments(t *testing.T) {
 			t.Fatalf("%s reference run: %v\n%s", arm.name, err, out)
 		}
 		var rep struct {
-			Resources struct {
-				Drain struct {
-					Segments *struct {
-						Reason     string `json:"reason"`
-						Segments   int    `json:"segments"`
-						Workers    int    `json:"workers"`
-						MaxWorkers int    `json:"max_workers"`
-						Rows       int64  `json:"rows"`
-						ReadNs     int64  `json:"read_ns"`
-						WorkersBy  string `json:"workers_by"`
-						PerWorker  int64  `json:"per_worker_bytes"`
-					} `json:"segments"`
-				} `json:"drain"`
-			} `json:"resources"`
+			Diagnostics struct {
+				Resources struct {
+					Drain struct {
+						Segments *struct {
+							Reason     string `json:"reason"`
+							Segments   int    `json:"segments"`
+							Workers    int    `json:"workers"`
+							MaxWorkers int    `json:"max_workers"`
+							Rows       int64  `json:"rows"`
+							ReadNs     int64  `json:"read_ns"`
+							WorkersBy  string `json:"workers_by"`
+							PerWorker  int64  `json:"per_worker_bytes"`
+						} `json:"segments"`
+					} `json:"drain"`
+				} `json:"resources"`
+			} `json:"diagnostics"`
 		}
 		if b, err := os.ReadFile(report); err != nil || json.Unmarshal(b, &rep) != nil {
 			t.Fatalf("%s report: %v", arm.name, err)
 		}
-		sg := rep.Resources.Drain.Segments
+		sg := rep.Diagnostics.Resources.Drain.Segments
 		if sg == nil || sg.Reason != "engaged" || sg.Workers < 2 || sg.MaxWorkers < 2 || sg.Segments < 4 || (sg.ReadNs > 0) != arm.spilled {
 			t.Fatalf("%s: the fixture does not reach the segment tail it means to: %+v", arm.name, sg)
 		}
@@ -492,7 +495,7 @@ func manifestBytes(t *testing.T, dir string) []byte {
 	if err != nil || json.Unmarshal(b, &m) != nil {
 		t.Fatalf("manifest of %s: %v", dir, err)
 	}
-	m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = time.Time{}, time.Time{}, time.Time{}
+	m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = time.Time{}, jsontime.Time{}, jsontime.Time{}
 	b, err = json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)

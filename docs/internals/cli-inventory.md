@@ -82,8 +82,8 @@ decision to add it later).
 | `--tune sort.*` (three keys of Java's seven-key `--tune` registry; the other "sort" settings were JVM properties) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
 | `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off; in the Performance help group: the resume granularity) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`); kept on `swath list` 2026-11-07 (owner: an operator's resume-granularity knob) |
-| `--part-rotation-max-rows N` (2,000,000) | `--part-max-rows N` (default 0: off; part of the resume identity; `resources.part_row_cuts`) | renamed (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries; renamed 2026-11-15 beside `--part-size` and `--part-interval` (the old spelling is a suggestion) |
-| Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
+| `--part-rotation-max-rows N` (2,000,000) | `--part-max-rows N` (default 0: off; part of the resume identity; `diagnostics.resources.part_row_cuts`) | renamed (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries; renamed 2026-11-15 beside `--part-size` and `--part-interval` (the old spelling is a suggestion) |
+| Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`diagnostics.resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 
 ## Resume and durability
 
@@ -138,15 +138,15 @@ decision to add it later).
 | Report: `argv`, `config` | `invocation` | renamed | – |
 | Report: `args_hash` | `args_hash`: SHA-256 of the Go run's frozen identity (filters included; not Java's value) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `started_at`, `duration_ms`, `listing_duration_ms` | `timings.started_at`, `wall_ms`, `listing_ms` | renamed | – |
-| Report: `session_duration_ms`, `keys_per_sec` | `timings.session_ms` (from `attempt.started`), `efficiency.keys_per_sec` (`output.rows_emitted` over `listing_ms`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| Report: `session_duration_ms`, `keys_per_sec` | `timings.session_ms` (from `attempt.started_at`), `diagnostics.efficiency.keys_per_sec` (`output.rows_emitted` over `listing_ms`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `objects`, `recovered_objects`, `bytes` | this attempt: `output.rows_fetched` (from the source), `rows_emitted` (after the filters), `object_bytes`; the dataset: `rows_retained`, `rows_durable`, `rows_committed`, `output_bytes`, and from report version 6 `committed_object_bytes` (Java's `objects` is the dataset's rows: `rows_committed`; its `bytes`, the dataset's object bytes, is `committed_object_bytes`) | renamed | report version 2, 2026-11-07; `committed_object_bytes` version 6 (owner: the cleanest CLI surface) |
 | Report: `complete`, `exit_code`, `stop_reason` | `outcome.complete`, `exit_code`, `stop_reason` (`complete` means nothing is missing: the end of the scope reached and no entry unreadable; a run that wrote no output: `complete` false, no `stop_reason`) | renamed | – |
 | Report: `error_class` | `outcome.cause` | renamed | – |
 | Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Report: `engine_flags` | `resources.features` | renamed | – |
-| Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)) | renamed | no Java names, 2026-11-05 |
-| Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint and for Azure Blob), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
-| Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
+| Report: `engine_flags` | `diagnostics.resources.features` | renamed | – |
+| Report: `recovered_errors`, `engine`, `seed`, `meters` | `diagnostics.source.stats.counters` (Go names; mapping in [../upgrade.md](https://github.com/varveio/swath/blob/a13a5d21/docs/upgrade.md)) | renamed | no Java names, 2026-11-05 |
+| Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint and for Azure Blob), `diagnostics.efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
+| Report: `sort` | none (spill: `diagnostics.resources.spill`) | removed | staging not ported, 2026-11-05 |
 | Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 
 ## Exit codes

@@ -138,7 +138,7 @@ func TestAdmissionFlat(t *testing.T) {
 	}
 	checkTiling(t, "flat", leaves)
 	g := st.Get
-	t.Logf("keys=%d requests=%d leaves=%d empty=%d/%d remainder=%d lower_tiny=%d upper_tiny=%d depth=%d max_active=%d",
+	t.Logf("keys=%d requests=%d leaves=%d empty=%d/%d remainder=%d lower_tiny=%d upper_tiny=%d depth=%d peak_active=%d",
 		n, g(cRequests), g(cLeaves), g(cChildEmptyLower), g(cChildEmptyUpper), g(cSplitSkippedRemainder), g(cSplitSkippedLowerTiny),
 		g(cSplitSkippedUpperTiny), g(cSplitMaxDepth), g(cMaxActive))
 	if g(cLeaves) >= 360 {
@@ -148,7 +148,7 @@ func TestAdmissionFlat(t *testing.T) {
 		t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), page, 4))
 	}
 	if g(cMaxActive) < 32 {
-		t.Errorf("max_active %d: the gates starved the workers", g(cMaxActive))
+		t.Errorf("peak_active %d: the gates starved the workers", g(cMaxActive))
 	}
 }
 

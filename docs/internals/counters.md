@@ -5,14 +5,24 @@ Every algorithm path counts its engagements. A provider declares its counters on
 `atomic.Int64` each (package `internal/counters`). That table is the one definition of every name, kind and
 meaning: the provider reads it out as one immutable `counters.Snapshot` (code reads `Get(id)`), and the run
 report renders the snapshot by iterating the table (`run.json` →
-`source.stats.counters`: `features` and `values`, flat stable names), and the table below is
+`diagnostics.source.stats.counters`: `features` and `values`, flat names), and the table below is
 generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestDocsCounters`). One
 adapter sits beside it: the HTTP client's counters (`objhttp.Counters`, the limiter's and the rate cap's) are
 kept in the client, which a provider may share or replace, and copied into the table when the provider
 snapshots, each by its named ID (`objhttp.ClientCounter`, end sentinel `NumCounters`; `Counts.Store`), so
 no position carries a meaning and `TestCounterTable` refuses an unfilled or doubly filled entry. A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
-a boolean, `gauge` a value derived when the provider snapshots (the attempt latency percentiles). Names: a dotted group, a snake_case leaf; high-water marks start with `max_`, durations end in `_ns`.
+a boolean, `gauge` a value derived when the provider snapshots (the attempt latency percentiles). Names: a dotted group, a snake_case leaf, durations ending in `_ns`. An extreme says which kind it is: `peak_`
+is a high-water mark over time, the most held at once (`peak_active`, `inflight.peak_active`); `max_` on a
+configured value is a limit (`spill.max_bytes`, `drain.read_ahead.max_reads`); `max_` on a measured quantity is
+its largest value over the items it measures, as SQL's `max()` (`split.max_depth` over ranges,
+`mutex.max_hold_ns` over holds, `groups.max_rows` over groups). The `max` kind records either kind of extreme.
+
+**Every name on this page is a diagnostic.** The counters, and every member of the run report's
+`diagnostics` they sit in, follow the algorithm: a release renames, adds and removes them as the algorithm
+changes, without a new `report_version` ([run report](../reference/run-report.md#diagnostics)). They are for a
+person explaining a run, and for tests and benchmarks pinned to a build, not for a program that must keep working
+across releases.
 
 **Feature state is separate from engagement; off, absent and zero are different.** A counter that measures
 a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
@@ -26,7 +36,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
   `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 
-The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
+The report's `diagnostics.resources` follow the same rule: `features.spill` is false and the `spill` object absent with
 `swath diag list --no-spill` or a count, `features.order` is false for `swath du` and `swath diag count` (rows counted, not
 ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
 abandons by reason, retirements, retained bytes, its limits with what they derive from (`slots`,
@@ -70,7 +80,7 @@ for the report only: no decision reads whether a range is awaited.
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
 | `publish_wait_ns`, `peak_publish_waiters` | ns, goroutines | emitters waiting in publish on a full budget (each a worker still in its range's `Expand`, so the range engine counts it active), summed over them, and the most at once (live: `progress.json` `order.publish_waiters`) |
 | `admission_wait_ns`, `peak_admission_waiters` | ns, goroutines | workers waiting to claim a queued range while the budget and spill were used; with `publish_wait_ns`, `budget_wait_ns` (live: `order.admission_waiters`) |
-| `idle_wait_ns`, `peak_idle_workers` | ns, goroutines | workers with nothing queued to list, read-ahead waits included, over the whole run (`drain.worker_idle_after_listing_done_ns` is its part after listing; live: `order.idle_workers`) |
+| `idle_wait_ns`, `peak_idle_workers` | ns, goroutines | workers with nothing queued to list, read-ahead waits included, over the whole run (`drain.worker_idle_after_provider_finished_ns` is its part after listing; live: `order.idle_workers`) |
 | `window.tiles`, `window.forced`, `window.grown` | tiles | a run planned from a counted prior ([the frontier window](ordering.md#the-frontier-window); absent otherwise): tiles admitted; those the drainer admitted past a refusal, having drained every other (a window smaller than a tile admits only these); tiles whose rows reached 4 times the prior's (each stopped admission until the frontier passed it) |
 | `window.rows`, `window.bound_by` | rows, name | the window's rows when last evaluated and what set them: `rows` (the target, 8,000,000), `set` (`swath diag list --seed-from-window-rows`), each only under what the storage gives: `spill_cap` (half the spill cap over a spilled row's bytes, with what the row budget holds), `budget` (spill off: what the row budget holds alone) |
 | `window.waits.rows`, `.spill`, `.growth` | waits | workers' waits at the window, by the refusal that held them: the tiles' charges and the next tile past the window's rows; live spill, less the drained certificates waiting for K, past half its cap, or a frame refused; a grown tile held |
@@ -88,17 +98,17 @@ for the report only: no decision reads whether a range is awaited.
 | `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
 | `spill.refused_ns`, `spill.refused_spells` | ns, intervals | the time spill stood refused, from a refused frame until a spill file's credit next returned (an interval open at the end included), and the intervals that ended: many short spells are a budget that frees and refills, one long one a budget that never frees |
-| `spill.max_by`, `spill.start_max_bytes`, `spill.max_bytes`, `spill.max_raised`, `spill.max_rechecks`, `spill.max_recheck_raised` | name, bytes, bytes, rises, reads, rises | what set the spill cap: `spill_budget` (`--spill-budget`, fixed), `disk` (the default for a dataset in a bucket: the spill filesystem's free space after the reserve), `disk_half` (the default otherwise, the filesystem shared with the output or, for a stream, other programs' temporary files: half of it), `none`; the cap the run started with; the cap in effect at the end; the times the cap rose (the filesystem grew, or other files on it went), each ending a standing refusal and waking the waiters; the follower's rereads of the free space every 2 s while the cap held the run back (a frame refused, workers at the frontier window, in publish or at admission), and those that raised the cap (the rest rose at a refused frame). `max_bytes` above `start_max_bytes` is a disk grown under the live run; 0 rises with `refused` above 0 is a cap that bound on a disk that stayed as it was ([ordering.md](ordering.md#spill)) |
+| `spill.max_by`, `spill.start_max_bytes`, `spill.max_bytes`, `spill.cap_raises`, `spill.cap_rechecks`, `spill.cap_recheck_raises` | name, bytes, bytes, rises, reads, rises | what set the spill cap: `spill_budget` (`--spill-budget`, fixed), `disk` (the default for a dataset in a bucket: the spill filesystem's free space after the reserve), `disk_half` (the default otherwise, the filesystem shared with the output or, for a stream, other programs' temporary files: half of it), `none`; the cap the run started with; the cap in effect at the end; the times the cap rose (the filesystem grew, or other files on it went), each ending a standing refusal and waking the waiters; the follower's rereads of the free space every 2 s while the cap held the run back (a frame refused, workers at the frontier window, in publish or at admission), and those that raised the cap (the rest rose at a refused frame). `max_bytes` above `start_max_bytes` is a disk grown under the live run; 0 rises with `refused` above 0 is a cap that bound on a disk that stayed as it was ([ordering.md](ordering.md#spill)) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and a run that spills there warns at its first spill |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
-| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
-| `timings.listing_done_at` | time | the provider finished: every range expanded, none in flight (a resume's reused certificates are not listed: it is when the gaps around them are); absent if it never did; `listing_finished_at` is the order stage's end, after the drain |
-| `drain.tail_ns` | ns | from `listing_done_at` to the drain's last row: the part of the run in which only the drain was left |
-| `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time after `listing_done_at` (nothing queued to list, read-ahead waits included), summed over workers |
+| `max_frontier_stuck_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
+| `timings.provider_finished_at` | time | the provider finished: every range expanded, none in flight (a resume's reused certificates are not listed: it is when the gaps around them are); absent if it never did; `listing_finished_at` is the order stage's end, after the drain |
+| `drain.tail_ns` | ns | from `provider_finished_at` to the drain's last row: the part of the run in which only the drain was left |
+| `drain.worker_idle_after_provider_finished_ns` | ns | the workers' idle time after `provider_finished_at` (nothing queued to list, read-ahead waits included), summed over workers |
 | `drain.replay_read_ns`, `drain.replay_decode_ns` | ns | the drainer reading spilled frames itself, and the part of it spent decoding (trailers included); the drainer's times accumulate over the whole run, not the tail alone |
 | `drain.ahead_wait_ns`, `drain.order_check_ns`, `drain.sink_write_ns` | ns | the drainer waiting for a frame the read-ahead was reading; the stream-wide order guard; handing batches to the sink (`encoder_wait_ns` included) |
-| `drain.writer_before_listing_done.parts`, `.rows` | parts, rows | Parquet parts published before `listing_done_at`, and their rows (absent when listing never finished). Approximate at the boundary: a part published as listing ends may fall on either side |
-| `drain.writer_before_listing_done.encode_ns`, `.output_ns` | ns | the encoders' time on the batches written before `listing_done_at`: building and compressing pages and hashing (`encode_ns`), and writing to the part's file or upload with the sync and close that complete it (`output_ns`) |
+| `drain.writer_before_provider_finished.parts`, `.rows` | parts, rows | Parquet parts published before `provider_finished_at`, and their rows (absent when listing never finished). Approximate at the boundary: a part published as listing ends may fall on either side |
+| `drain.writer_before_provider_finished.encode_ns`, `.output_ns` | ns | the encoders' time on the batches written before `provider_finished_at`: building and compressing pages and hashing (`encode_ns`), and writing to the part's file or upload with the sync and close that complete it (`output_ns`) |
 | `drain.read_ahead.frames`, `drain.read_ahead.rows` | frames, rows | spilled frames idle workers read and decoded ahead of the drainer (feature: `spill`) |
 | `drain.read_ahead.drainer_frames`, `drain.read_ahead.unplanned_frames` | frames | frames planned and taken over unread by the drainer; frames it reached with nothing planned (both read by the drainer; with `frames`, every frame spilled, each once) |
 | `drain.read_ahead.drainer_waits`, `drain.read_ahead.capped_waits` | waits | the drainer waiting for a frame being read; workers waiting at the read-ahead's share of the row budget |
@@ -113,7 +123,7 @@ for the report only: no decision reads whether a range is awaited.
 | `drain.segments.deferred_rows` | rows | versions schemas: rows a planned segment boundary moved past because they continued the group of the key before it (no part ends inside a key) |
 | `drain.segments.tree_bytes` | bytes | what the tree held when the segments were planned: not the segments' budget, which they take beside it (two budgets in all, at most) |
 | `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `flag` (`swath diag list --segment-workers`), `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
-| `drain.segments.budget_waits`, `.budget_wait_ns`, `.max_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit (a resume's certificate scans too, before each certificate), and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered, the frames being scanned) |
+| `drain.segments.budget_waits`, `.budget_wait_ns`, `.peak_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit (a resume's certificate scans too, before each certificate), and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered, the frames being scanned) |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `drain.encoder_allowance_bytes`, `.encoder_writer_bytes`, `.encoder_upload_bytes` | bytes | the memory encoders are admitted against (1/16 of memory, whatever `--sort-buffer` says) and one encoder's prices: its writer, and a dataset in a bucket's upload buffer (a GCS chunk, an S3 part or an Azure block) |
 | `drain.encoders_at_start_bound_by`, `.encoders_after_listing_bound_by` | name | what bound each count: `memory` (the allowance), `cpu` (GOMAXPROCS), `descriptors`, `minimum` (one), `explicit`; after listing, the start's when listing did not raise the count |
@@ -129,8 +139,8 @@ A text run's sink (run summary, `output.text`):
 | `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
 | `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `encoder_allowance` (16 MiB each of the encoder allowance carries fewer), `encoders` (asked), `gzip` (one stream) |
 
-A count (`swath du`, `swath diag count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
-and `frontier_stuck_max_ns` are 0 and `spill` is absent.
+A count (`swath du`, `swath diag count`) does not order (`features.order` false): `peak_buffered_bytes`, `peak_ahead_rows`
+and `max_frontier_stuck_ns` are 0 and `spill` is absent.
 
 Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 
@@ -269,8 +279,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `reuse.ranges` | count | ranges | resume | reused coverage certificates a resume replays from durable spill instead of listing them |
 | `reuse.gaps` | count | ranges | resume | ranges a resume with reused certificates lists: the gaps between them, tiled |
 | `reuse.boundary_overfetch_keys` | count | keys | resume | keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys) |
-| `max_active` | max | ranges |  | peak ranges in Expand at once |
-| `max_queued` | max | ranges | split | peak ranges queued for a worker |
+| `peak_active` | max | ranges |  | peak ranges in Expand at once |
+| `peak_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |
 | `sink_wait_ns` | count | ns |  | time Expand spent handing rows to the order stage (backpressure) |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
@@ -311,7 +321,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `unreachable.attempts` | count | requests |  | attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while nothing in the run had answered |
 | `unreachable.stops` | count | calls |  | calls stopped as unreachable: nothing in the run had answered, and connections had failed so for 30s (at most half --stall-timeout; exit 75, cause unreachable) |
-| `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
+| `inflight.peak_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
 | `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
 | `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
 | `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
@@ -330,7 +340,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
-| `limiter.max_depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `limiter.peak_depth` | max | permits | limiter | most permits the limit stood below the worker count |
 | `slow_start.doubles` | count | steps | slow_start | --adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
 | `slow_start.ramp_ns` | max | ns | slow_start | --adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
 | `slow_start.end_limit` | max | permits | slow_start | --adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping) |

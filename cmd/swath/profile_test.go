@@ -111,7 +111,7 @@ func TestProfilerPhases(t *testing.T) {
 	p.listingDone() // once: a second call changes nothing
 	p.wait()
 	a := p.account()
-	boundary := a.PhaseBoundaryAt
+	boundary := a.PhaseBoundaryAt.Time
 	if boundary.IsZero() || a.CPUGapNs == nil || *a.CPUGapNs < 0 || a.CPUCutDelayNs == nil || *a.CPUCutDelayNs < 0 {
 		t.Fatalf("account after the boundary: %+v", a)
 	}
@@ -241,7 +241,7 @@ func TestProfilerNoBoundary(t *testing.T) {
 
 // TestPhaseProfilesRun: a sorted run with both variables set writes the
 // phase files, and its report's profiles name them, with the boundary at
-// listing_done_at's event; unset, the run writes no profile and its report
+// provider_finished_at's event; unset, the run writes no profile and its report
 // has no profiles.
 func TestPhaseProfilesRun(t *testing.T) {
 	captureStderr(t)
@@ -279,8 +279,8 @@ func TestPhaseProfilesRun(t *testing.T) {
 	if err := run(context.Background(), []string{src, "-o", filepath.Join(base, "OUT"), "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
-	if r, raw := readReport(report); r.Profiles != nil || raw["profiles"] != nil || r.Timings.ListingDoneAt.IsZero() {
-		t.Fatalf("unset: profiles %+v, listing_done_at %v", r.Profiles, r.Timings.ListingDoneAt)
+	if r, raw := readReport(report); r.Profiles != nil || raw["diagnostics"] == nil || raw["diagnostics"].(map[string]any)["profiles"] != nil || r.Timings.ProviderFinishedAt.IsZero() {
+		t.Fatalf("unset: profiles %+v, provider_finished_at %v", r.Profiles, r.Timings.ProviderFinishedAt)
 	}
 	if ents, _ := os.ReadDir(base); len(ents) != 2 {
 		t.Fatalf("unset: %d entries beside the output, want the output and the report", len(ents))
@@ -297,13 +297,13 @@ func TestPhaseProfilesRun(t *testing.T) {
 	}
 	r, _ := readReport(report)
 	p := r.Profiles
-	if p == nil || r.Timings.ListingDoneAt.IsZero() {
-		t.Fatalf("profiles %+v, listing_done_at %v", p, r.Timings.ListingDoneAt)
+	if p == nil || r.Timings.ProviderFinishedAt.IsZero() {
+		t.Fatalf("profiles %+v, provider_finished_at %v", p, r.Timings.ProviderFinishedAt)
 	}
-	// The boundary is listing_done_at's event, microseconds after it (the
+	// The boundary is provider_finished_at's event, microseconds after it (the
 	// report's times are at microsecond precision or finer).
-	if d := p.PhaseBoundaryAt.Sub(r.Timings.ListingDoneAt); d < 0 || d > time.Second {
-		t.Fatalf("boundary %v, listing_done_at %v", p.PhaseBoundaryAt, r.Timings.ListingDoneAt)
+	if d := p.PhaseBoundaryAt.Sub(r.Timings.ProviderFinishedAt.Time); d < 0 || d > time.Second {
+		t.Fatalf("boundary %v, provider_finished_at %v", p.PhaseBoundaryAt, r.Timings.ProviderFinishedAt)
 	}
 	if p.MemProfileRate == nil || *p.MemProfileRate != 512 || p.CPUGapNs == nil || p.CPUCutDelayNs == nil {
 		t.Fatalf("profiles %+v", p)
@@ -320,14 +320,14 @@ func TestPhaseProfilesRun(t *testing.T) {
 	ts, _ := profileSpan(t, cpu+phaseTail)
 	// The listing profile's own start time is stamped by the profiler's
 	// writer goroutine, which a short listing can finish ahead of, so it is
-	// compared with the tail's start, not with listing_done_at.
-	if !ls.Before(ts) || ts.Before(r.Timings.ListingDoneAt) {
-		t.Fatalf("listing profile from %v, tail from %v, listing_done_at %v", ls, ts, r.Timings.ListingDoneAt)
+	// compared with the tail's start, not with provider_finished_at.
+	if !ls.Before(ts) || ts.Before(r.Timings.ProviderFinishedAt.Time) {
+		t.Fatalf("listing profile from %v, tail from %v, provider_finished_at %v", ls, ts, r.Timings.ProviderFinishedAt)
 	}
 	// run.json, written at the commit after the switch, names the same
 	// files, those written at the end as planned.
 	runJSON, _ := readReport(filepath.Join(out, "run.json"))
-	if runJSON.Profiles == nil || !runJSON.Profiles.PhaseBoundaryAt.Equal(p.PhaseBoundaryAt) {
+	if runJSON.Profiles == nil || !runJSON.Profiles.PhaseBoundaryAt.Equal(p.PhaseBoundaryAt.Time) {
 		t.Fatalf("run.json profiles %+v", runJSON.Profiles)
 	}
 	if got := statuses(runJSON.Profiles); !slices.Equal(got, []string{"cpu.pprof written", "cpu.pprof.listing written", "cpu.pprof.tail planned", "mem.pprof.listing written", "mem.pprof.exit planned", "mem.pprof planned"}) {

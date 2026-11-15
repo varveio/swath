@@ -48,18 +48,20 @@ func shortGrace(t *testing.T, d time.Duration) {
 
 // unreachableReport is the part of the report these tests read.
 type unreachableReport struct {
-	Outcome listing.Outcome `json:"outcome"`
-	Source  struct {
-		Stats struct {
-			Counters struct {
-				Values map[string]any `json:"values"`
-			} `json:"counters"`
-		} `json:"stats"`
-	} `json:"source"`
+	Outcome     listing.Outcome `json:"outcome"`
+	Diagnostics struct {
+		Source struct {
+			Stats struct {
+				Counters struct {
+					Values map[string]any `json:"values"`
+				} `json:"counters"`
+			} `json:"stats"`
+		} `json:"source"`
+	} `json:"diagnostics"`
 }
 
 func (r *unreachableReport) value(name string) int64 {
-	f, _ := r.Source.Stats.Counters.Values[name].(float64)
+	f, _ := r.Diagnostics.Source.Stats.Counters.Values[name].(float64)
 	return int64(f)
 }
 
@@ -107,7 +109,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 				t.Fatalf("outcome %+v", o)
 			}
 			if rep.value("unreachable.stops") < 1 || rep.value("unreachable.attempts") < 2 {
-				t.Fatalf("the fail-fast is not in the report: %v", rep.Source.Stats.Counters.Values)
+				t.Fatalf("the fail-fast is not in the report: %v", rep.Diagnostics.Source.Stats.Counters.Values)
 			}
 		})
 	}
@@ -176,7 +178,7 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 	var rep unreachableReport
 	readJSON(t, report, &rep)
 	if rep.value("unreachable.stops") != 0 || rep.Outcome.Class != listing.ClassStuck || rep.Outcome.Cause == source.CauseUnreachable {
-		t.Fatalf("outcome %+v, counters %v", rep.Outcome, rep.Source.Stats.Counters.Values)
+		t.Fatalf("outcome %+v, counters %v", rep.Outcome, rep.Diagnostics.Source.Stats.Counters.Values)
 	}
 }
 

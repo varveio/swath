@@ -107,7 +107,7 @@ func TestDiskFaultMatrix(t *testing.T) {
 		var mu sync.Mutex
 		var warned []string
 		cfg := crashConfig(url, out, false)
-		cfg.Warn = func(s string) {
+		cfg.Warn = func(_, s string) {
 			mu.Lock()
 			defer mu.Unlock()
 			warned = append(warned, s)

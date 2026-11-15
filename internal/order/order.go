@@ -33,6 +33,7 @@ import (
 	"unsafe"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
@@ -326,8 +327,8 @@ type GaugeSnapshot struct {
 	PeakMarkers      int64 `json:"peak_markers"`
 	SpillReaders     int64 `json:"spill_readers"`
 	PeakSpillReaders int64 `json:"peak_spill_readers"`
-	SpillLiveBytes   int64 `json:"spill_live_bytes"`
-	PeakSpillBytes   int64 `json:"peak_spill_live_bytes"`
+	SpillLiveBytes   int64 `json:"spill_bytes"`
+	PeakSpillBytes   int64 `json:"peak_spill_bytes"`
 	// AheadRows are rows received and not yet handed on: ahead of the
 	// publish frontier, in memory or spilled.
 	AheadRows     int64 `json:"ahead_rows"`
@@ -346,9 +347,9 @@ type GaugeSnapshot struct {
 	// it, in publish or at admission; a gap under 30 s keeps the start.
 	// SpillMaxBytes and SpillReserveBytes are the spill cap and the free
 	// space spill leaves on its filesystem (0: none).
-	SpillPressureSince *time.Time `json:"spill_pressure_since,omitempty"`
-	SpillMaxBytes      int64      `json:"spill_max_bytes"`
-	SpillReserveBytes  int64      `json:"spill_reserve_bytes"`
+	SpillPressureSince *jsontime.Time `json:"spill_pressure_since,omitempty"`
+	SpillMaxBytes      int64          `json:"spill_max_bytes"`
+	SpillReserveBytes  int64          `json:"spill_reserve_bytes"`
 }
 
 // Snapshot reads g; a nil Gauges reads as zero.
@@ -364,7 +365,7 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 		IdleWorkers: g.idleWait.n.Load(), PeakIdleWorkers: g.idleWait.peak.Load(),
 		SpillMaxBytes: g.spillMax.Load(), SpillReserveBytes: g.spillReserve.Load()}
 	if t := g.pressure.at(); t != 0 {
-		since := time.Unix(0, t).UTC()
+		since := jsontime.Of(time.Unix(0, t))
 		s.SpillPressureSince = &since
 	}
 	return s

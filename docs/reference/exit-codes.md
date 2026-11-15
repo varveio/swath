@@ -84,7 +84,10 @@ previous dataset, for an `--overwrite` run that did not replace it):
   "stop_source": "timebox",
   "attempt": {
     "id": "5c3c3d59be9ea1c21fa747cc8b647131",
-    "started": "2026-11-10T12:35:34.390093792Z"
+    "started_at": "2026-11-10T12:35:34.390093Z"
+  },
+  "run": {
+    "id": "0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a"
   },
   "status": "failed",
   "complete": false

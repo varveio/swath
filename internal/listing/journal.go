@@ -186,7 +186,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 		}
 	}
 	if !journal.LockEnforced && cfg.Warn != nil {
-		cfg.Warn("the output lock is not enforced on this platform: nothing stops a second run from writing the same output directory")
+		cfg.Warn(source.WarnLockUnenforced, "the output lock is not enforced on this platform: nothing stops a second run from writing the same output directory")
 	}
 	// Ownership first: nothing in the output is read, removed or renamed
 	// before this process holds its lock.
@@ -480,7 +480,7 @@ func (jr *runJournal) durableOff(cfg Config, err error) error {
 	case errors.Is(err, order.ErrDurableUnavailable):
 		jr.cache, jr.off = nil, err.Error()
 		if cfg.Warn != nil {
-			cfg.Warn("durable spill is off for this run (spill files are relisted after a crash): " + err.Error())
+			cfg.Warn(source.WarnDurableSpillOff, "durable spill is off for this run (spill files are relisted after a crash): "+err.Error())
 		}
 		return nil
 	}
@@ -893,7 +893,7 @@ func (jr *runJournal) complete() bool {
 // resumed run, else now.
 func (jr *runJournal) listingStarted(now time.Time) time.Time {
 	if jr != nil && jr.state != nil {
-		return jr.state.Header.Created
+		return jr.state.Header.Created.Time
 	}
 	return now
 }
@@ -1031,12 +1031,13 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 			// The service broke the listing contract: a resume would walk
 			// back into it, so the journal marks the run unresumable.
 			if merr := jr.j.MarkUnresumable("protocol", err.Error()); merr != nil && cfg.Warn != nil {
-				cfg.Warn("the run is not marked unresumable: " + merr.Error())
+				cfg.Warn(source.WarnUnresumableNotMarked, "the run is not marked unresumable: "+merr.Error())
 			}
 		}
 		_ = jr.j.Close()
 		jr.j = nil
 	}
+	cfg.Progress.End(err)
 	// The outcome goes into the output only while its pathname is still
 	// the directory this process locked.
 	if cfg.Settle != nil && !jr.discarded && jr.verify() == nil {
@@ -1079,6 +1080,21 @@ func (jr *runJournal) discardUnanswered(cfg Config, err error) bool {
 	_ = dataset.SyncDirIn(r, ".")
 	jr.discarded = true
 	return true
+}
+
+// runInfo is the run an attempt of cfg belongs to: its journal's run (a
+// dataset in a bucket: its parts' RUN), or without one the attempt's
+// alone; nil without either.
+func runInfo(cfg Config, jr *runJournal) *RunInfo {
+	switch {
+	case jr != nil && jr.remote != nil:
+		return jr.remote.runInfo()
+	case jr != nil && jr.j != nil:
+		return &RunInfo{ID: jr.j.RunUUID()}
+	case cfg.Attempt != nil:
+		return &RunInfo{ID: cfg.Attempt.ID}
+	}
+	return nil
 }
 
 // verify is journal.Lock.Verify for the run's output (nil without one).

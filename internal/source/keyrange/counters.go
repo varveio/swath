@@ -179,7 +179,7 @@ const (
 
 // Counters is the engine's tally: every engagement counter, in report
 // order; a provider's own counters (Description.Counters) follow. The run
-// report (source.stats.counters) and the provider tables in
+// report (diagnostics.source.stats.counters) and the provider tables in
 // docs/internals/counters.md are generated from them.
 var Counters = table([numCounters]counters.Def{
 	cObjects:                      d("objects", counters.Count, "objects", "objects listed (emitted rows)"),
@@ -312,8 +312,8 @@ var Counters = table([numCounters]counters.Def{
 	cReuseRanges:                  d("reuse.ranges", counters.Count, "ranges", "reused coverage certificates a resume replays from durable spill instead of listing them", "resume"),
 	cReuseGaps:                    d("reuse.gaps", counters.Count, "ranges", "ranges a resume with reused certificates lists: the gaps between them, tiled", "resume"),
 	cReuseBoundaryOverfetch:       d("reuse.boundary_overfetch_keys", counters.Count, "keys", "keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys)", "resume"),
-	cMaxActive:                    d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
-	cMaxQueued:                    d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
+	cMaxActive:                    d("peak_active", counters.Max, "ranges", "peak ranges in Expand at once"),
+	cMaxQueued:                    d("peak_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	cBusyNs:                       d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
 	cSinkWaitNs:                   d("sink_wait_ns", counters.Count, "ns", "time Expand spent handing rows to the order stage (backpressure)"),
 	cRequeues:                     d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),

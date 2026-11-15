@@ -12,12 +12,13 @@ A supervisor's outcome of record is the exit code plus the report at the path it
 (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`; `status`, `complete` and `stop_reason` follow the
 class: a run that wrote no output is `complete` false without a `stop_reason`, and a committed run's agree
 with the manifest's `coverage`, where `complete` means nothing is missing: the end of the scope reached and
-`unreadable` 0) and `attempt` (`id`, random, and `started`). For a run that did not commit,
-`DIR/error.json` holds the same outcome in the dataset (`class`, `exit_code`, `message`, `resumable`, `cause`:
-the provider's failure class such as `throttle` or `access_denied`, or `no_space` for a full disk; the same
-`attempt`, `status` and coverage fields); it never needs stderr. A committed dataset has no `error.json`, a
-partial one (exit 3) included: its manifest's coverage says what is missing, and the run removes a stale one;
-an `--overwrite` run that does not replace it leaves its own outcome there.
+`unreadable` 0) and `attempt` (`id`, random, and `started_at`), with `run` (`id`: the journal's, the same for
+every resume). For a run that did not commit, `DIR/error.json` holds the same outcome in the dataset (`class`,
+`exit_code`, `message`, `resumable`, `cause`: the provider's failure class such as `throttle` or
+`access_denied`, or `no_space` for a full disk; the same `attempt` and `run`, `status` and coverage fields); it
+never needs stderr. A committed dataset has no `error.json`, a partial one (exit 3) included: its manifest's
+coverage says what is missing, and the run removes a stale one; an `--overwrite` run that does not replace it
+leaves its own outcome there.
 
 The command classifies the outcome once, before any account is written, and that classification is frozen:
 `DIR/run.json` (a committed dataset), `error.json`, the report, the exit code and a forced exit's outcome agree
@@ -170,7 +171,7 @@ in the resume identity, so a resume would stop at the same place. Start over (`-
 
 `--part-max-rows N`'s cut depends on the rows only, so it is part of the resume identity, a resume
 reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part closed by size
-does); `resources.part_row_cuts` counts them. `--part-interval` is checked every eighth of the interval and
+does); `diagnostics.resources.part_row_cuts` counts them. `--part-interval` is checked every eighth of the interval and
 does not close a part whose boundary a resume fixed.
 
 ## Encoder sizing

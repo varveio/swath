@@ -40,8 +40,8 @@ type Options struct {
 	Timeout         time.Duration
 	Trust           source.Trust // how the service's certificate is verified
 	Workers         int
-	Warn            func(string) // one-time warnings for the user; may be nil
-	Client          API          // optional; built from the options above when nil
+	Warn            func(code, msg string) // one-time warnings for the user (registry.Request.Warn); may be nil
+	Client          API                    // optional; built from the options above when nil
 	// AllVersions lists every generation (versions=true, NewGenerations)
 	// instead of the live objects.
 	AllVersions bool
@@ -175,10 +175,10 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		}
 		if opt.Warn != nil {
 			if n := source.AnonymousNote("GCS", "GOOGLE_APPLICATION_CREDENTIALS"); opt.Anonymous && n != "" {
-				opt.Warn(n)
+				opt.Warn(source.WarnAnonymous, n)
 			}
 			if opt.Trust.NoVerify {
-				opt.Warn(source.NoVerifyWarning)
+				opt.Warn(source.WarnTLSUnverified, source.NoVerifyWarning)
 			}
 		}
 		p.client = c
