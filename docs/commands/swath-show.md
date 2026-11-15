@@ -65,9 +65,17 @@ lists ([Running swath](../running.md#reading-the-output)).
 ## Options
 
 <!-- flags:begin -->
+- <a id="option-journal"></a>[`--journal`](#option-journal)\
+  dump the journal's header and records as JSON lines
+
+<details>
+<summary>Plain text, in the <code>--help</code> layout</summary>
+
 ```text
       --journal  dump the journal's header and records as JSON lines
 ```
+
+</details>
 <!-- flags:end -->
 
 `swath show` also takes `-v`, `-q`, `--color` and `--log-format` ([swath(1)](swath.md#options)).

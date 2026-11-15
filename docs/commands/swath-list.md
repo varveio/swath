@@ -48,6 +48,338 @@ so in its manifest.
 ## Options
 
 <!-- flags:begin -->
+### Output
+
+- <a id="option-output"></a>[`-o, --output PATH`](#option-output)\
+  a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
+
+  A name ending in .parquet is refused unless it ends in / (an explicit directory). A file's name says its format; a --format that agrees with it is accepted.
+
+- <a id="option-format"></a>[`--format auto|table|tsv|jsonl`](#option-format)\
+  on stdout: auto is the table on a terminal, TSV otherwise
+
+- <a id="option-columns"></a>[`--columns NAME[,NAME...]`](#option-columns)\
+  TSV and JSONL: these columns, in order (repeatable)
+
+  By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.
+
+- <a id="option-overwrite"></a>[`--overwrite`](#option-overwrite)\
+  replace a previous dataset in -o
+
+- <a id="option-work-dir"></a>[`--work-dir DIR`](#option-work-dir)\
+  with a bucket -o: the local work directory (lock, journal, spill)
+
+  Required when -o is a bucket prefix (GCS, S3 or Azure Blob), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve.
+
+- <a id="option-output-gcs-credentials-file"></a>[`--output-gcs-credentials-file FILE`](#option-output-gcs-credentials-file)\
+  credentials for a GCS -o (default: Application Default Credentials)
+
+  A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume.
+
+- <a id="option-output-s3-region"></a>[`--output-s3-region NAME`](#option-output-s3-region)\
+  the region of an S3 -o
+
+  Default: AWS_REGION, AWS_DEFAULT_REGION, the --output-s3-profile's, else us-east-1. The region resolved is fixed for the run.
+
+- <a id="option-output-s3-profile"></a>[`--output-s3-profile NAME`](#option-output-s3-profile)\
+  the shared config profile an S3 -o takes credentials (and region) from
+
+  Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS). The destination's own: the source's credentials and --anonymous never apply to it, and its requests are always signed. It may change on resume.
+
+- <a id="option-output-azure-sas-token"></a>[`--output-azure-sas-token TOKEN`](#option-output-azure-sas-token)\
+  a shared access signature for an Azure -o; never recorded
+
+  Default: Entra ID (DefaultAzureCredential). The destination's own: the source's SAS, key and --anonymous never apply to it. Give it again to swath resume; it may change there.
+
+- <a id="option-output-endpoint-url"></a>[`--output-endpoint-url URL`](#option-output-endpoint-url)\
+  the endpoint of a bucket -o (default: the provider's)
+
+  GCS's JSON API base, an S3-compatible endpoint URL, or an Azure blob service base. GCS: as the SDK takes it (https://storage.googleapis.com/storage/v1/). S3: addressed path-style; AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_S3 are never applied to the destination. Azure: the account is its first path segment, as for an emulator (http://127.0.0.1:10000 serves ENDPOINT/ACCOUNT/CONTAINER). Fixed for the run.
+
+### Filters
+
+- <a id="option-include"></a>[`--include GLOB`](#option-include)\
+  keep keys this glob matches (repeatable: any of them)
+
+  Matched against the key below SOURCE: with a '/' from SOURCE's root (logs/\*.gz), without one the last segment at any depth (\*.gz). \* and ? stay within a segment, \*\* is whole segments, \[a-z\], \[!a-z\], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix. Filters select rows; recursive excludes can also prune local traversal.
+
+- <a id="option-exclude"></a>[`--exclude GLOB`](#option-exclude)\
+  drop keys this glob matches (repeatable; beats any include)
+
+  Matched as --include is. dir/ drops a directory's own row, dir/\*\* the rows below it. Local trees skip traversal below directories covered by a terminal /\*\*; other excludes only filter rows.
+
+- <a id="option-include-regex"></a>[`--include-regex REGEX`](#option-include-regex)\
+  keep keys this RE2 regex matches anywhere in the full key (repeatable)
+
+  The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does.
+
+- <a id="option-exclude-regex"></a>[`--exclude-regex REGEX`](#option-exclude-regex)\
+  drop keys this RE2 regex matches anywhere in the full key (repeatable)
+
+- <a id="option-min-size"></a>[`--min-size SIZE`](#option-min-size)\
+  keep objects (local: entries) of at least this size (1K, 1.5GiB)
+
+  Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal), any case.
+
+- <a id="option-max-size"></a>[`--max-size SIZE`](#option-max-size)\
+  keep objects or entries of at most this size
+
+- <a id="option-modified-since"></a>[`--modified-since TIME`](#option-modified-since)\
+  keep objects or entries modified at or after TIME (2026-01-01, 7d)
+
+  An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names.
+
+- <a id="option-modified-until"></a>[`--modified-until TIME`](#option-modified-until)\
+  keep objects or entries modified at or before this time
+
+- <a id="option-storage-class"></a>[`--storage-class NAME[,NAME...]`](#option-storage-class)\
+  keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+
+  In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).
+
+### Object stores
+
+- <a id="option-anonymous"></a>[`--anonymous`](#option-anonymous)\
+  send no credentials (a public bucket or container)
+
+  Ignores any configured. Without it a source with no usable credentials fails (auth) before listing.
+
+- <a id="option-endpoint-url"></a>[`--endpoint-url URL`](#option-endpoint-url)\
+  the service URL in place of the provider's own (emulators, MinIO)
+
+  S3: path-style addressing unless --no-s3-path-style; default AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). User information, a query and a fragment are refused. Part of the resume identity.
+
+- <a id="option-ca-bundle"></a>[`--ca-bundle FILE`](#option-ca-bundle)\
+  trust the certificates in this PEM file besides the system's
+
+  For a service behind a private certificate authority. S3: default AWS_CA_BUNDLE.
+
+- <a id="option-no-verify-ssl"></a>[`--no-verify-ssl`](#option-no-verify-ssl)\
+  do not verify the service's TLS certificate (warns)
+
+  For a test endpoint only. A resume replays it, and warns again.
+
+- <a id="option-all-versions"></a>[`--all-versions`](#option-all-versions)\
+  list every version of every key, not only the current objects
+
+  S3: versions and delete markers (needs s3:ListBucketVersions). GCS: generations, live and noncurrent. Azure Blob: versions, snapshots and soft-deleted blobs. A key's rows are consecutive and never split across parts.
+
+### S3
+
+- <a id="option-s3-region"></a>[`--s3-region NAME`](#option-s3-region)\
+  the bucket's region
+
+  Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else us-east-1.
+
+- <a id="option-s3-profile"></a>[`--s3-profile NAME`](#option-s3-profile)\
+  the shared config profile to take credentials and region from
+
+  Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS).
+
+- <a id="option-s3-requester-pays"></a>[`--s3-requester-pays`](#option-s3-requester-pays)\
+  accept the request charges of a requester-pays bucket
+
+- <a id="option-s3-path-style"></a>[`--s3-path-style`](#option-s3-path-style)\
+  address the bucket in the path (default with --endpoint-url)
+
+- <a id="option-no-s3-path-style"></a>[`--no-s3-path-style`](#option-no-s3-path-style)\
+  address the bucket in the host name, also with --endpoint-url
+
+- <a id="option-s3-bearer-token-command"></a>[`--s3-bearer-token-command COMMAND`](#option-s3-bearer-token-command)\
+  a shell command printing a bearer token, sent instead of SigV4
+
+  For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again.
+
+- <a id="option-s3-bearer-token-refresh-interval"></a>[`--s3-bearer-token-refresh-interval DURATION`](#option-s3-bearer-token-refresh-interval)\
+  run --s3-bearer-token-command again after this long (default `45m`)
+
+- <a id="option-s3-fips"></a>[`--s3-fips`](#option-s3-fips)\
+  use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+
+  Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing.
+
+- <a id="option-s3-dualstack"></a>[`--s3-dualstack`](#option-s3-dualstack)\
+  use the dual-stack (IPv6) endpoint
+
+  Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing.
+
+- <a id="option-s3-fetch-owner"></a>[`--s3-fetch-owner`](#option-s3-fetch-owner)\
+  fill owner_id and owner_display_name
+
+### GCS
+
+- <a id="option-gcs-credentials-file"></a>[`--gcs-credentials-file FILE`](#option-gcs-credentials-file)\
+  a service-account or authorized-user JSON file (default: ADC)
+
+  Without it, Application Default Credentials.
+
+- <a id="option-gcs-billing-project"></a>[`--gcs-billing-project NAME`](#option-gcs-billing-project)\
+  bill a requester-pays bucket's requests to this project
+
+### Azure Blob
+
+- <a id="option-azure-sas-token"></a>[`--azure-sas-token TOKEN`](#option-azure-sas-token)\
+  a shared access signature (a query string); never recorded
+
+  Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume.
+
+- <a id="option-azure-fetch-metadata"></a>[`--azure-fetch-metadata`](#option-azure-fetch-metadata)\
+  fill the metadata column with each blob's user metadata
+
+  A JSON object, keys sorted; {} for a blob without any, null for one encrypted with a customer-provided key. Up to 8 KiB a blob: it grows the responses, the memory a row holds and the dataset.
+
+- <a id="option-azure-fetch-tags"></a>[`--azure-fetch-tags`](#option-azure-fetch-tags)\
+  fill the tags column with each blob's index tags
+
+  A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included.
+
+- <a id="option-azure-fetch-immutability"></a>[`--azure-fetch-immutability`](#option-azure-fetch-immutability)\
+  fill the immutability policy and legal hold columns
+
+- <a id="option-azure-assume-flat"></a>[`--azure-assume-flat`](#option-azure-assume-flat)\
+  assume a flat namespace where the account will not tell
+
+  For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report.
+
+### Local
+
+- <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
+  what is read per entry (statx adds birth_time; Linux) (default `stat`)
+
+- <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
+  omit the directories' rows (kind DIR)
+
+- <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
+  do not read symbolic links' targets
+
+- <a id="option-one-file-system"></a>[`--one-file-system`](#option-one-file-system)\
+  do not walk into a mount point below the root, as du -x
+
+### Performance
+
+- <a id="option-workers"></a>[`-j, --workers N`](#option-workers)\
+  listing workers (default 64; a local tree: 4 per CPU, at most 64)
+
+  Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default.
+
+- <a id="option-encoders"></a>[`--encoders N`](#option-encoders)\
+  Parquet encoders, or a .zst file's compression jobs (default: CPUs)
+
+  Lower it to leave cores to other work; the default follows GOMAXPROCS, the descriptor limit and an encoder allowance of 1/16 of memory (as the default sort buffer, whatever --sort-buffer says; at most 1GiB). An explicit count is kept, with a warning when they cannot carry it.
+
+- <a id="option-sort-buffer"></a>[`--sort-buffer SIZE`](#option-sort-buffer)\
+  bytes buffered for sorted output; not a total-memory limit
+
+  Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders.
+
+- <a id="option-spill-budget"></a>[`--spill-budget SIZE`](#option-spill-budget)\
+  cap on spill (default: half the output filesystem's free space)
+
+  Set it when the output filesystem is shared or small. Past it, or at the reserve, listing waits instead of spilling.
+
+- <a id="option-part-size"></a>[`--part-size SIZE`](#option-part-size)\
+  target size of a Parquet part (default `64MiB`)
+
+  Smaller parts for readers that load whole parts, larger for fewer files on a very large listing.
+
+- <a id="option-part-interval"></a>[`--part-interval DURATION`](#option-part-interval)\
+  close a part with rows after this long, full or not (default `30s`)
+
+  0: by size only. Lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing.
+
+- <a id="option-part-rotation-max-rows"></a>[`--part-rotation-max-rows N`](#option-part-rotation-max-rows)\
+  also close a part at N rows (0: by size and --part-interval only)
+
+  Set it when readers want parts of a bounded row count; it is fixed for the run.
+
+- <a id="option-seed-from"></a>[`--seed-from PATH`](#option-seed-from)\
+  object stores: start from a previous listing's key distribution
+
+  A committed dataset of the same source and scope (its cuts.txt, else its parts' key page index), or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected since the previous cut; a bucket dataset's cuts.txt is one); the engine still splits adaptively.
+
+### Limits
+
+- <a id="option-max-duration"></a>[`--max-duration DURATION`](#option-max-duration)\
+  stop the run after this long (exit 124); 0: no limit
+
+  Give every unattended run one. Only a dataset run of an object store (one with a journal) resumes where it stopped; text output and swath du run again.
+
+- <a id="option-stall-timeout"></a>[`--stall-timeout DURATION`](#option-stall-timeout)\
+  stop as stuck after this long without progress (exit 75) (default `10m`)
+
+  0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped.
+
+- <a id="option-spill-wait-timeout"></a>[`--spill-wait-timeout DURATION`](#option-spill-wait-timeout)\
+  stop after waiting this long on a full spill cap (exit 74); 0: wait
+
+  Listing waits on the output while spill is refused, which on a large bucket can be close to a stall; after 2 minutes swath says so. Set it on an unattended run to stop instead (cause spill_budget), then resume with more disk or a larger --spill-budget. Only a dataset run of an object store (one with a journal) resumes where it stopped.
+
+- <a id="option-request-timeout"></a>[`--request-timeout DURATION`](#option-request-timeout)\
+  per-request timeout; a request over it is retried (default `30s`)
+
+  Raise it for a slow endpoint or emulator whose pages take longer to answer.
+
+- <a id="option-request-rate"></a>[`--request-rate N`](#option-request-rate)\
+  cap every HTTP attempt at N per second (0: no cap)
+
+  Set it to stay under a request quota shared with other clients. Refused when the spacing exceeds half --stall-timeout.
+
+- <a id="option-no-adaptive-limit"></a>[`--no-adaptive-limit`](#option-no-adaptive-limit)\
+  do not lower concurrency when the service throttles requests
+
+  Turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1. Without it each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them.
+
+### Reporting
+
+- <a id="option-report"></a>[`--report FILE`](#option-report)\
+  write the run report (JSON) to FILE, or - for stdout, at the end
+
+  Written on failure too, with the outcome and the attempt id; not for a command line that does not parse (an unknown flag, a bad value). A directory, or a name whose directory does not exist, is refused before listing; a report that cannot be written at the end fails the command (exit 1). - is refused where stdout carries rows.
+
+- <a id="option-verbose"></a>[`-v, --verbose`](#option-verbose)\
+  a start line, progress records; -vv, -vvv: the request log
+
+  -vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted).
+
+- <a id="option-quiet"></a>[`-q, --quiet`](#option-quiet)\
+  no warnings, no automatic progress or statistics (-qq: no errors)
+
+  With -qq the exit code and the reports stand alone.
+
+- <a id="option-progress"></a>[`--progress`](#option-progress)\
+  show progress on stderr (default: a terminal that rows do not share)
+
+  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal.
+
+- <a id="option-no-progress"></a>[`--no-progress`](#option-no-progress)\
+  no live progress on stderr
+
+- <a id="option-progress-interval"></a>[`--progress-interval DURATION`](#option-progress-interval)\
+  how often progress is printed (at least 1s); implies --progress
+
+  Default 1s while the line redraws on a terminal, 30s for appended records.
+
+- <a id="option-stats"></a>[`--stats`](#option-stats)\
+  print the end-of-run statistics on stderr
+
+  Default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe.
+
+- <a id="option-no-stats"></a>[`--no-stats`](#option-no-stats)\
+  no end-of-run statistics on stderr
+
+- <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
+  color the progress line, the statistics and the help (default `auto`)
+
+  auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
+
+- <a id="option-log-format"></a>[`--log-format text|json`](#option-log-format)\
+  stderr as text, or json: one JSON object per line (default `text`)
+
+  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block.
+
+<details>
+<summary>Plain text, in the <code>--help</code> layout</summary>
+
 ```text
 Output:
   -o, --output PATH           a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
@@ -318,6 +650,8 @@ Reporting:
                                 json: warnings, the start line, progress records, the request log
                                 and the outcome as events, no redrawn line or statistics block.
 ```
+
+</details>
 <!-- flags:end -->
 
 ## Examples
