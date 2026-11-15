@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Site: the field guide has its pictures back, drawn for the Go engine: an animated miniature model of a
+  listing (seed, owner-side splits, the sorted stream, commit before emit; still frames with reduced motion), a
+  diagram per section, and two figures from the home page's run (its 257 starting ranges, and requests in flight
+  over time on the range that held 64.5% of the bucket). Its claims are corrected against the code.
 - Site: a field guide at `/field-guide/` on how the Go engine divides, orders and resumes a listing, on the home
   page's run, and that run's report at `/runs/noaa-gestofs-pds/`, linked from the replay. The explainer's report
   names its run in its title and description and has a `main` landmark and a skip link.
