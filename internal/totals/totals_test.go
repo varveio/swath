@@ -243,6 +243,31 @@ func TestOrigin(t *testing.T) {
 	}
 }
 
+// TestUnreadable: an unreadable directory's prefix marks its row; one
+// deeper than the rows, or outside the origin, marks nothing.
+func TestUnreadable(t *testing.T) {
+	tl := New(Options{Depth: 1, Origin: "logs/"})
+	b := tl.Batch()
+	for _, k := range []string{"logs/a/", "logs/b/", "logs/b/c/", "logs/b/f"} {
+		b.Add(&Row{Key: k, Dir: strings.HasSuffix(k, "/"), Object: !strings.HasSuffix(k, "/"), Size: 1, HasSize: true})
+	}
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"logs/a/", "logs/b/c/", "other/"} {
+		tl.Unreadable(p)
+	}
+	var marked []string
+	for _, r := range tl.Result() {
+		if r.Unreadable {
+			marked = append(marked, r.Prefix)
+		}
+	}
+	if !slices.Equal(marked, []string{"logs/a/"}) {
+		t.Fatalf("marked %q", marked)
+	}
+}
+
 // TestHugeDepth: a depth far past the keys' costs what the keys' own depth
 // does: the per-level scratch grows with the levels reached, never with
 // the depth asked for.

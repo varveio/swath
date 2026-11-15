@@ -260,8 +260,15 @@ func (l *eventLog) start(f startFields) {
 		l.print(lvInfo, evStart, msg, f)
 		return
 	}
-	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+l.attempt+")\n")
+	id := l.attempt
+	if len(id) > shortAttempt {
+		id = id[:shortAttempt] // the start of the id run.json and the report hold whole
+	}
+	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+id+")\n")
 }
+
+// shortAttempt is the attempt id's characters the text start line shows.
+const shortAttempt = 8
 
 // startOf is a run's start event: src, and what it writes where. A local
 // src is made absolute, as the provider opens it (the report's
@@ -361,6 +368,9 @@ func conclude(err error) int {
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
 		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
+	}
+	if ee != nil && ee.stated {
+		return o.ExitCode // the closing line said it
 	}
 	noteFinal(errOut, "swath: "+escapeControl(err.Error())+"\n")
 	var sh seeHelp
@@ -527,6 +537,31 @@ func (w *failureWatch) outstanding(now time.Time) string {
 	return fmt.Sprintf("%s %s (%d attempts)", w.provider, best, n)
 }
 
+// retryingFor is how long a cause fails every request, after some were
+// answered, before the progress line shows it in place of the rate
+// (retrying): a moment's errors among answers are not a stall.
+const retryingFor = 2 * time.Second
+
+// retrying is the cause every request has failed with since the last
+// answer, while none was ever answered or for at least retryingFor up to
+// now: the one with the most attempts, without its host ("" when none).
+func (w *failureWatch) retrying(now time.Time) string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	answers := w.answers.Load()
+	best, n := "", int64(0)
+	for k, s := range w.streaks {
+		if s.answers == answers && (answers == 0 || now.Sub(s.first) >= retryingFor) && s.n > n {
+			best, n = k, s.n
+		}
+	}
+	_, cause, _ := strings.Cut(best, ": ")
+	return cause
+}
+
 // spillPressureFor is how long listing waits on a full spill cap before
 // the error: past the seconds a spill file's credit takes to come back
 // while the output keeps up, short against the hours of a crawl.
@@ -538,10 +573,13 @@ const spillPressureFor, spillPressureEvery = 2 * time.Minute, 30 * time.Minute
 // waits on it) for a run writing to dir: an error event once the wait has
 // lasted spillPressureFor, again every spillPressureEvery while it lasts,
 // and with wait (--spill-wait-timeout) the run's stop once it has lasted
-// that long; each only while the wait holds at that moment.
+// that long; each only while the wait holds at that moment. With fixed
+// (--spill-budget) the event's remedy is a restart with more; the default
+// cap follows the disk, so growing it is enough.
 type spillWatch struct {
 	dir   string
 	wait  time.Duration
+	fixed bool
 	since time.Time // the wait watched (zero: none)
 	told  time.Time // its last event (zero: none yet)
 	// The output rate's window: its start, and the rows ordered then.
@@ -593,7 +631,11 @@ func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
 	if stop {
 		return &spillWaitError{fmt.Sprintf("%s; stopped by --spill-wait-timeout %s: %s", cause, w.wait, again)}
 	}
-	elog().event(lvError, evSpillPressure, cause+"; stop the run and "+again+", or let it run: it finishes, slowly", f)
+	remedy := "stop the run and " + again
+	if !w.fixed {
+		remedy = "the cap follows the spill disk: grow the disk, or free space on it, and listing continues"
+	}
+	elog().event(lvError, evSpillPressure, cause+"; "+remedy+", or let it run: it finishes, slowly", f)
 	return nil
 }
 
@@ -735,10 +777,12 @@ type unreadableFields struct {
 }
 
 // reportUnreadable names the entries a listing could not read: up to
-// unreadableShown of them with their cause (the provider's samples), then
-// the count of the rest. Their count is the run's error line (exit 3,
-// unreadableError), which -q keeps.
-func reportUnreadable(r *listing.Report) {
+// unreadableShown of them with their cause (the provider's samples), a
+// path below the local SOURCE root relative to it, then the count of the
+// rest. Under swath du's view (drawn), which marks the lines they leave
+// out, it is one line unless -v. Their count is the run's error line
+// (exit 3, unreadableError), which -q keeps.
+func reportUnreadable(r *listing.Report, root string, view *viewOut) {
 	n := r.Outcome.Unreadables()
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {
@@ -756,11 +800,22 @@ func reportUnreadable(r *listing.Report) {
 		l.print(lvWarn, evWarning, msg, unreadableFields{warnUnreadable, n, samples})
 		return
 	}
+	if view != nil && view.drawn && !l.shows(lvInfo) {
+		noteKept(errOut, unreadableLine(int(n), view.unreadable)+"\n")
+		return
+	}
 	if len(samples) == 0 {
 		return // the error line counts them; the report's source counters say why
 	}
+	abs := ""
+	if !hasScheme(root) {
+		abs, _ = filepath.Abs(root)
+	}
 	l.warn(warnUnreadable, msg+":")
 	for _, s := range samples {
+		if abs != "" && strings.HasPrefix(s, abs+string(filepath.Separator)) {
+			s = s[len(abs)+1:]
+		}
 		noteKept(errOut, indent+escapeControl(s)+"\n")
 	}
 	if rest := n - int64(len(samples)); rest > 0 && len(samples) > 0 {

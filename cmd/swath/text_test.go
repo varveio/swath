@@ -277,10 +277,25 @@ func TestLocalTextEndToEnd(t *testing.T) {
 			t.Fatalf("%s: %.120q", name, b)
 		}
 	}
+	// A text file is always replaced; --overwrite asks for just that, and
+	// is accepted for a file as for stdout.
+	stale := filepath.Join(dir, "rows.tsv")
+	if err := os.WriteFile(stale, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []string{stale, "-"} {
+		out.Reset()
+		if err := run(context.Background(), []string{root, "-o", o, "--overwrite", "--no-stats"}, &out, false); err != nil {
+			t.Fatalf("-o %s --overwrite: %v", o, err)
+		}
+	}
+	if b, _ := os.ReadFile(stale); !strings.HasPrefix(string(b), "key\tsize\t") || !strings.HasPrefix(out.String(), "key\tsize\t") {
+		t.Fatalf("--overwrite: file %.40q, stdout %.40q", b, out.String())
+	}
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tfile\t",
 		"jsonl": `{"key":"a/b/f","key_base64":null,"size":null,"last_modified":null,"kind":"file",`,
-		"table": "-  file          a/b/f\n", // kind: block_device wide
+		"table": "                    file     a/b/f\n", // no time ("-", padded); kind as wide as symlink, the widest usual kind
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
@@ -291,8 +306,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	zone, _ := time.Now().Zone()
 	local := time.Date(2026, 1, 2, 4, 4, 5, 0, time.UTC).Local().Format(time.DateTime)
 	if err := run(context.Background(), []string{root, "--format", "table", "--no-stats"}, &out, false); err != nil ||
-		!strings.HasPrefix(out.String(), "last_modified ("+zone+")") || !strings.Contains(out.String(), "\n"+local+" ") ||
-		!strings.Contains(out.String(), "     5 B  file          a/b/f\n") {
+		!strings.HasPrefix(out.String(), "    size  last_modified ("+zone+")") || !strings.Contains(out.String(), "     5 B  "+local+"  file     a/b/f\n") {
 		t.Fatalf("table: %v\n%s", err, out.String())
 	}
 	out.Reset()

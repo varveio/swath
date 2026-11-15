@@ -9,7 +9,7 @@ A run covers its source and nothing else: the tree below a local directory, or t
 container that start with the prefix you named. An object-store prefix is a string prefix, not a directory:
 `s3://bucket/logs` covers `logs/` and `logs-old/`, while `s3://bucket/logs/` covers only `logs/`.
 
-In a directory, swath does not follow symbolic links; it lists each link as an entry of kind `SYMLINK` with its
+In a directory, swath does not follow symbolic links; it lists each link as an entry of kind `symlink` with its
 target. A mounted filesystem below the source is walked like any directory unless you pass
 `--one-file-system`. Filters such as `--include` or `--min-size` narrow the rows further. A dataset records
 both the scope and the filters, so you can tell later what it was meant to hold ([sources](sources/README.md),
@@ -28,7 +28,7 @@ $ swath du -d 1 media
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 100 MiB      6     5  2026-11-02 10:30:00  (total)
+ 100 MiB      6     5  2026-11-02 10:30:00  media (total)
   100 MiB in 6 files · 36.4 MiB on disk
 ```
 
@@ -41,7 +41,7 @@ $ swath du -d 1 media --allocated
  784 KiB      2     0  2026-11-02 10:30:00  archive/
 6.11 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
-36.4 MiB      6     5  2026-11-02 10:30:00  (total)
+36.4 MiB      6     5  2026-11-02 10:30:00  media (total)
   36.4 MiB on disk in 6 files · 100 MiB of data
 ```
 
@@ -83,14 +83,25 @@ names of the same file.
 ## Coverage and unreadable entries
 
 An entry swath cannot read, such as a directory without read permission, is missing from the output with
-everything below it. The rest is still listed and written; swath names the entry on stderr, ends with a line
-that counts the missing entries (it is printed under `-q` too), and exits with code 3:
+everything below it. The rest is still listed and written; swath names the entry on stderr (relative to
+SOURCE), its closing line's verdict counts the missing entries, and it exits with code 3. Under `-q`, which prints
+no closing line, a last line `swath: N entries could not be read and are missing from the output` says it:
 
 ```text
+$ swath du -d 1 media
+    size  files  dirs  last_modified (CET)  path
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+       -      -     -  -                    private/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+ 100 MiB      6     6  2026-11-02 10:30:00  media (total)
+  100 MiB in 6 files · 36.4 MiB on disk
 swath: warning: unreadable entries:
-  /home/you/media/private: permission denied
-swath: 1 entry could not be read and is missing from the output
+  private: permission denied
+  partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
 ```
+
+`swath du`'s table marks the directory it could not read with `-` for its size and counts, not `0`.
 
 A symbolic link whose target cannot be read keeps its row and is not counted, and an entry removed while
 swath walks the tree is no longer part of it. A source directory that cannot be opened at all stops the run
@@ -103,16 +114,19 @@ with exit code 1 ([troubleshooting](troubleshooting.md#entries-could-not-be-read
 > the count `coverage.skipped_entries`. On rc.2, exit code 0 does not prove a complete scan: check that count
 > ([differences in 0.4.0-rc.2](release-candidate.md)).
 
-A dataset keeps the count. `swath show` prints its verdict on the coverage line:
+A dataset keeps the count. `swath show` prints its verdict first, and the count on its coverage line:
 
 ```text
-coverage: partial: 1 unreadable entry
+inv: partial: 1 unreadable entry
+  ...
+  coverage  1 entry unreadable; no filters; no exclusions
 ```
 
 The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
-entry. Otherwise it is `partial:` and what is missing (`1 unreadable entry`, `--max-keys reached`). Filters
-and exclusions follow it (`; filtered: include=*.txt`, `; excluded: ...`): a filtered dataset is complete for
-its filters, and `exclusions` names what was left out by design, such as an output directory inside the tree.
+entry. Otherwise it is `partial:` and what is missing (`1 unreadable entry`, `--max-keys reached`). The
+coverage line names the filters and exclusions (`filtered: include=*.txt`, `excluded: ...`): a filtered
+dataset is complete for its filters, and an exclusion is what was left out by design, such as an output
+directory inside the tree.
 The run that wrote the dataset printed the same verdict, and `swath du --from-dataset` prints it too. A
 program reads `coverage.complete`, `stop_reason`, `unreadable` and `filters` from the manifest
 ([dataset](dataset.md#the-swath-extension)); the run report's `outcome.complete` and `outcome.unreadable` hold

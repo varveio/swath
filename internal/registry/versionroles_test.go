@@ -113,12 +113,12 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 				{Key: "d/b", Data: roleRow{label: "b1", hasLabel: true, size: 4, hasSize: true}},
 				{Key: "d/c", Data: roleRow{head: true, size: 8, hasSize: true}},
 			},
-			text: `last_modified (UTC)      size  label  latest  delete_marker  key
--                         1 B  a2     true    false          d/a
--                         2 B  a1     false   false          d/a
--                           -  bm     true    true           d/b
--                         4 B  b1     false   false          d/b
--                         8 B         true    false          d/c
+			text: `    size  last_modified (UTC)  label  latest  delete_marker  key
+     1 B  -                    a2     true    false          d/a
+     2 B  -                    a1     false   false          d/a
+       -  -                    bm     true    true           d/b
+     4 B  -                    b1     false   false          d/b
+     8 B  -                           true    false          d/c
 `,
 			markers: true,
 			counts:  [4]int64{4, 1, 2, 2},
@@ -133,11 +133,11 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 				{Key: "d/b", Data: roleRow{serial: 0, hasSer: true, retired: 0, hasRetired: true, head: true, size: 4, hasSize: true}},
 				{Key: "d/c", Data: roleRow{head: true, size: 8, hasSize: true}},
 			},
-			text: `last_modified (UTC)      size  serial  latest  key
--                         1 B  1700000000000001  false   d/a
--                         2 B  1700000000000002  false   d/a
--                         4 B  0                 true    d/b
--                         8 B                    true    d/c
+			text: `    size  last_modified (UTC)  serial  latest  key
+     1 B  -                    1700000000000001  false   d/a
+     2 B  -                    1700000000000002  false   d/a
+     4 B  -                    0                 true    d/b
+     8 B  -                                      true    d/c
 `,
 			counts:  [4]int64{4, 0, 2, 2},
 			objects: 4, bytes: 15,

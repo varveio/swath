@@ -12,10 +12,11 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | Path | What it is |
 | --- | --- |
 | `index.md` | The home page, served at `/`. |
-| `moved/` | Short pages for addresses that were published once or that readers type (`/docs/sources`, `/docs/commands/`, `/docs/reference/`, `/field-guide/`, `/runs/noaa-gestofs-pds/`): each says where the content is now, and forwards where one page replaces it. `MOVED` in `.vitepress/config.mts` maps them; they are not in search or the sitemap. |
+| `field-guide/` | The field guide, served at `/field-guide/`: how swath divides a listing, orders it and resumes it, on the home page's run. `index.md` holds the text and its diagrams (inline SVG in the theme's colors) and imports three Vue components: `MiniModel.vue`, the animated miniature model (`mini-model.ts` runs it, `ModelFrame.vue` draws a frame; still frames with `prefers-reduced-motion`), and `RunSeeds.vue` and `RunInFlight.vue`, the run's figures, drawn from `run-figures.json` (below). |
+| `moved/` | Short pages for addresses that were published once or that readers type (`/docs/sources`, `/docs/commands/`, `/docs/reference/`): each says where the content is now, and forwards where one page replaces it. `MOVED` in `.vitepress/config.mts` maps them; they are not in search or the sitemap. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm), the development-docs notice and the home page's terminal example (`index.ts`); no custom components. |
-| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, `data/media.json` (the videos the deploy fetches, below) and `media/` (the replay's poster) |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, `data/media.json` (the videos the deploy fetches, below), `media/` (the replay's poster) and `runs/noaa-gestofs-pds/index.html` (the home page's run report, below) |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
 | `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
@@ -64,6 +65,31 @@ varve.io.
 
 ```bash
 site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP server for the fonts
+```
+
+## The run report
+
+`static/runs/noaa-gestofs-pds/index.html` is the report [`tools/explainer`](../tools/explainer/README.md) renders
+from the home page's run trace, published as generated. It is not a VitePress page: links to it carry
+`target="_self"` so the browser loads it instead of the router (in Markdown,
+`[…](https://swath.varve.io/runs/noaa-gestofs-pds/){target="_self"}`: `go test ./docs` reads a root-relative
+link as a file in the repository), and
+`check-site.py` holds it to its own title, description, landmark and skip link, not to the development-docs
+notice or a canonical URL. The trace (48,216 events) and the run report are kept outside git, at
+`gs://s3-listing-study-results-29c02004/scratch-swath-go/homepage-2026-11-15/`. The page embeds its run-facts
+record (`#swath-run-facts`); to regenerate it, save that record as `facts.json` and run:
+
+```bash
+tools/explainer/explainer.py noaa-gestofs-pds.trace.jsonl -o site/static/runs/noaa-gestofs-pds/index.html \
+  --title s3://noaa-gestofs-pds --run-facts facts.json
+```
+
+The field guide's run figures come from the same trace. `field-guide/run-figures.py` (stdlib Python) reduces it to
+`field-guide/run-figures.json`: the objects each starting range held, and the listing requests in flight and the
+largest range's splits in quarter-second steps.
+
+```bash
+site/field-guide/run-figures.py noaa-gestofs-pds.trace.jsonl > site/field-guide/run-figures.json
 ```
 
 ## Replacing a video

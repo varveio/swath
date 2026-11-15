@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -399,7 +400,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	stderr := captureStderr(t)
 	t.Cleanup(func() { logs.Store(nil) })
 	const end = "swath: 1 entry could not be read and is missing from the output\n"
-	warning := "swath: warning: unreadable entries:\n  " + locked + ": permission denied\n"
+	warning := "swath: warning: unreadable entries:\n  locked: permission denied\n" // relative to SOURCE
 	var out bytes.Buffer
 	report := filepath.Join(t.TempDir(), "report.json")
 	err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out)
@@ -436,7 +437,8 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 		t.Fatalf("dataset: coverage %+v, error.json %v", c, eerr)
 	}
 	out.Reset()
-	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage: partial: 1 unreadable entry\n") {
+	if err := show([]string{dir}, &out); err != nil || !strings.HasPrefix(out.String(), dir+": partial: 1 unreadable entry\n") ||
+		!strings.Contains(out.String(), "\n  coverage  1 entry unreadable; ") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
 	// swath resume of it exits 3, and its report keeps the count and says
@@ -479,12 +481,19 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 			t.Fatalf("%s: exit %d, stderr %q", q, code, stderr.String())
 		}
 	}
-	// The statistics: the warning, then the block whose verdict names what
-	// is missing, then the error line.
+	// The closing lines: the warning, then the verdict naming what is
+	// missing with the total row's counts, and no error line saying it
+	// again.
 	stderr.Reset()
 	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--stats", "--no-progress"}, &out)); code != exitIncomplete ||
-		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry\n") || !strings.HasSuffix(stderr.String(), end) {
+		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry; 1 file, 1 directory, 2 B in ") || strings.Contains(stderr.String(), end) {
 		t.Fatalf("--stats: exit %d, stderr %q", code, stderr.String())
+	}
+	// The table marks the directory it could not read, not as empty.
+	out.Reset()
+	if code := conclude(runDu(context.Background(), []string{root, "-d", "1", "--format=table", "-q"}, &out)); code != exitIncomplete ||
+		!regexp.MustCompile(`(?m)^ +- +- +- +- +locked/$`).MatchString(out.String()) {
+		t.Fatalf("table: exit %d, stdout %q", code, out.String())
 	}
 	// The outcome event tells partial from complete without parsing msg.
 	stderr.Reset()
@@ -562,5 +571,67 @@ func TestWarningOutlastsBacklog(t *testing.T) {
 	w, o := strings.Index(got, `"msg":"unreadable entries"`), strings.Index(got, `"event":"outcome"`)
 	if w < 0 || o < 0 || w > o {
 		t.Fatalf("stderr %q", got)
+	}
+}
+
+// TestDuViewUnreadable: on a short terminal with unreadable directories
+// the view leaves room for everything printed after it, so its heading and
+// total stay on screen: it marks with "!" each line whose sums leave out an
+// unreadable directory (a fold too), one line under it says so (-v names
+// them relative to SOURCE), and the closing line's verdict is not
+// repeated as an error line.
+func TestDuViewUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	root := t.TempDir()
+	files := map[string]int{"big/f": 3_000_000, "sub/a/x": 500_000}
+	for i := 1; i <= 12; i++ {
+		files[fmt.Sprintf("d%02d/f", i)] = 1000 * i
+	}
+	for i := 1; i <= 5; i++ {
+		files[fmt.Sprintf("locked%d/inner/f", i)] = 3
+	}
+	for name, n := range files {
+		p := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= 5; i++ {
+		locked := filepath.Join(root, fmt.Sprintf("locked%d", i))
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	}
+	t.Setenv("NO_COLOR", "1")
+	viewTerminal(t, 100, 22)
+	stderr := captureStderr(t)
+	t.Cleanup(func() { logs.Store(nil) })
+	var out bytes.Buffer
+	if code := conclude(runDu(context.Background(), []string{root, "--no-progress"}, &out)); code != exitIncomplete {
+		t.Fatalf("exit %d", code)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	used := len(lines) + 1 // and the prompt
+	for _, l := range strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n") {
+		used += max(1, (utf8.RuneCountInString(l)+99)/100)
+	}
+	marked := regexp.MustCompile(`(?m)^ *[0-9.]+ [KMG]?i?B !`)
+	if used > 22 || !strings.HasPrefix(lines[0], "    size") || !marked.MatchString(lines[1]) ||
+		!regexp.MustCompile(`(?m)^ *[0-9.]+ [KMG]?i?B ! .*\(\d+ more\)$`).MatchString(out.String()) ||
+		!strings.Contains(stderr.String(), "\n! 5 directories could not be read (marked ! above); -v lists them\n") ||
+		!strings.Contains(stderr.String(), "  partial: 5 unreadable entries;") || strings.Contains(stderr.String(), "could not be read and are missing") {
+		t.Fatalf("%d rows of 22\nstdout\n%s\nstderr\n%s", used, out.String(), stderr.String())
+	}
+	// -v names them, relative to SOURCE.
+	stderr.Reset()
+	if code := conclude(runDu(context.Background(), []string{root, "--no-progress", "-v"}, io.Discard)); code != exitIncomplete ||
+		!strings.Contains(stderr.String(), "\n  locked1: permission denied\n") || strings.Contains(stderr.String(), root+"/locked") {
+		t.Fatalf("-v: exit %d\n%s", code, stderr.String())
 	}
 }

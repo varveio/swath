@@ -390,7 +390,7 @@ type Output struct {
 	Replaced bool `json:"replaced,omitempty"`
 	// ObjectBytes sums the sizes of the objects the order stage accepted
 	// from this invocation (the size column; absent for a schema without
-	// one), every name once: a local file with several hard links counts
+	// one, and when an object's size is null), every name once: a local file with several hard links counts
 	// once per link, unlike output.totals. On a committed run exactly those
 	// of rows_emitted, on a run that stopped also rows accepted and never
 	// handed on.

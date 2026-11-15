@@ -20,6 +20,8 @@ type exactNode struct {
 	timed                   bool
 	kids                    map[string]bool
 	self                    int64 // objects named as the prefix itself (or outside the origin)
+	selfNewest              int64 // their newest time, with selfTimed
+	selfTimed               bool
 }
 
 // exactTree is the view's nodes computed the plain way: every node of every
@@ -93,6 +95,9 @@ func exactTree(origin string, rows []Row, linksOnce bool) map[string]*exactNode 
 			}
 			seen[id] = true
 		}
+		if d := tree[chain[len(chain)-1]]; !leaf && r.HasMtime && (!d.selfTimed || r.Mtime > d.selfNewest) {
+			d.selfNewest, d.selfTimed = r.Mtime, true
+		}
 		for _, k := range chain {
 			n := tree[k]
 			n.bytes += b
@@ -107,8 +112,9 @@ func exactTree(origin string, rows []Row, linksOnce bool) map[string]*exactNode 
 }
 
 // checkView compares a view with the brute-force tree: the same total, and
-// exactly the nodes of at least 1 % of it (and above 0), with their sums
-// and children.
+// nodes held with their exact sums, children and time, each under a parent
+// held: at least every node among the viewKeep largest of its depth (ties
+// aside) whose ancestors are, so every node of 1 % of the total.
 func checkView(t *testing.T, v *View, origin string, tree map[string]*exactNode) {
 	t.Helper()
 	total := tree[origin]
@@ -116,25 +122,53 @@ func checkView(t *testing.T, v *View, origin string, tree map[string]*exactNode)
 		v.Total.HasNewest != total.timed || v.Total.Newest != total.newest {
 		t.Fatalf("total %+v, want %+v (%d kids, %d self)", v.Total, *total, len(total.kids), total.self)
 	}
-	floor := (total.bytes + viewShare - 1) / viewShare
-	var want []string
+	depth := func(k string) int {
+		d := strings.Count(k[len(origin):], "/")
+		if k != origin && !strings.HasSuffix(k, "/") {
+			d++
+		}
+		return d
+	}
+	// sure: a node no viewKeep others of its depth are as large as, and
+	// its ancestors too.
+	byDepth := map[int][]int64{}
 	for k, n := range tree {
-		if k != origin && n.bytes > 0 && n.bytes >= floor {
-			want = append(want, k)
+		if k != origin && n.bytes > 0 && strings.HasPrefix(k, origin) {
+			byDepth[depth(k)] = append(byDepth[depth(k)], n.bytes)
 		}
 	}
-	slices.Sort(want)
-	var got []string
+	for _, bs := range byDepth {
+		slices.Sort(bs)
+	}
+	top := func(k string) bool { // no viewKeep others of its depth as large
+		bs := byDepth[depth(k)]
+		i, _ := slices.BinarySearch(bs, tree[k].bytes)
+		return len(bs)-i <= viewKeep // itself included
+	}
+	sure := map[string]bool{origin: true}
+	var isSure func(k string) bool
+	isSure = func(k string) bool {
+		if v, ok := sure[k]; ok {
+			return v
+		}
+		v := tree[k].bytes > 0 && top(k) && isSure(parentOf(k))
+		sure[k] = v
+		return v
+	}
+	got := map[string]bool{}
 	for _, n := range v.Nodes {
-		got = append(got, n.Key)
+		got[n.Key] = true
 		e := tree[n.Key]
 		if e == nil || n.Bytes != e.bytes || n.Objects != e.objects || n.Missing != e.missing || n.Children != int64(len(e.kids))+e.self ||
-			n.HasNewest != e.timed || n.Newest != e.newest {
+			n.HasNewest != e.timed || n.Newest != e.newest || n.Bytes == 0 || parentOf(n.Key) != origin && !got[parentOf(n.Key)] {
 			t.Fatalf("node %+v, want %+v", n, e)
 		}
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("nodes %q, want %q", got, want)
+	floor := (total.bytes + 99) / 100
+	for k, n := range tree {
+		if k != origin && strings.HasPrefix(k, origin) && (isSure(k) || n.bytes > 0 && n.bytes >= floor) && !got[k] {
+			t.Fatalf("node %q (%d bytes) not held", k, n.bytes)
+		}
 	}
 }
 
@@ -176,14 +210,30 @@ func randomKeys(rng *rand.Rand, n int, origin string, groups bool) []Row {
 // feed runs the rows' runs through t's view concurrently, each run's rows in
 // order and flushed at random points, as order.Count's emitters would.
 func feed(t *Tally, runs [][]Row, ordered bool, rng *rand.Rand) {
+	feedRuns(t, runs, ordered, false, rng)
+}
+
+// feedRuns is feed, each run told the interval it covers when covered, as
+// the range engine's ranges are (order.CoveredRun): from the run before's
+// last key, through its own (the last run: to the end).
+func feedRuns(t *Tally, runs [][]Row, ordered, covered bool, rng *rand.Rand) {
 	var wg sync.WaitGroup
-	for _, run := range runs {
+	for n, run := range runs {
 		flushes := map[int]bool{}
 		for range rng.IntN(3) {
 			flushes[rng.IntN(len(run)+1)] = true
 		}
+		lo := ""
+		if n > 0 {
+			lo = runs[n-1][len(runs[n-1])-1].Key
+		}
 		wg.Go(func() {
 			r := t.ViewRun(ordered)
+			if covered {
+				r.From(lo)
+				defer r.End()
+				defer r.Through(run[len(run)-1].Key, n == len(runs)-1)
+			}
 			b := t.Batch()
 			for i := range run {
 				row := run[i]
@@ -197,7 +247,9 @@ func feed(t *Tally, runs [][]Row, ordered bool, rng *rand.Rand) {
 			if err := b.Flush(); err != nil {
 				panic(err)
 			}
-			r.End()
+			if !covered {
+				r.End()
+			}
 		})
 	}
 	wg.Wait()
@@ -229,7 +281,7 @@ func TestViewExactOrdered(t *testing.T) {
 			all = append(all, r...)
 		}
 		tl := New(Options{Origin: origin, View: true})
-		feed(tl, runs, true, rng)
+		feedRuns(tl, runs, true, seed%4 < 2, rng) // half the runs told their intervals
 		t.Run(fmt.Sprint(seed), func(t *testing.T) { checkView(t, tl.View(), origin, exactTree(origin, all, false)) })
 	}
 }
@@ -371,7 +423,7 @@ func TestViewLinksOrdered(t *testing.T) {
 }
 
 // TestViewMemory: a large flat listing in few runs remembers at most
-// viewShare nodes of a depth beyond those it holds partial: memory does not
+// viewKeep nodes of a depth beyond those it holds partial: memory does not
 // grow with the objects.
 func TestViewMemory(t *testing.T) {
 	var rows []Row
@@ -382,10 +434,10 @@ func TestViewMemory(t *testing.T) {
 	tl := New(Options{View: true})
 	feed(tl, [][]Row{rows[:100_000], rows[100_000:]}, true, rand.New(rand.NewPCG(1, 1)))
 	v := tl.view
-	if len(v.kept) > viewShare*2 || len(v.open) > 10 {
+	if len(v.kept) > viewKeep*2 || len(v.open) > 10 {
 		t.Fatalf("held %d remembered and %d partial nodes", len(v.kept), len(v.open))
 	}
-	if s := tl.View().Stats; s.Dropped < 199_000 || s.Partial == 0 || s.Runs != 2 {
+	if s := tl.View().Stats; s.Dropped+s.Pruned < 199_000 || s.Partial == 0 || s.Runs != 2 {
 		t.Fatalf("stats %+v", s)
 	}
 }
@@ -435,9 +487,13 @@ func TestViewSelect(t *testing.T) {
 		if len(lines) > limit {
 			t.Fatalf("seed %d: %d lines over %d", seed, len(lines), limit)
 		}
-		// Rebuild each parent's lines and check that they add up.
+		// Rebuild each parent's lines and check that they add up, and that
+		// a fold's time is the newest among the children not shown.
+		tree := exactTree("", rows, false)
 		type level struct {
 			row                ViewRow
+			key                string // the line's node (the last of a shared line)
+			shown              map[string]bool
 			bytes, objs, lines int64
 			prev               int64
 		}
@@ -468,9 +524,31 @@ func TestViewSelect(t *testing.T) {
 				if r.Fold && (r.More < 1 || r.Bytes == 0 || i+1 < len(lines) && lines[i+1].Level == r.Level) {
 					t.Fatalf("seed %d: fold %+v", seed, r)
 				}
+				if r.Fold {
+					e := tree[p.key]
+					at, timed := e.selfNewest, e.selfTimed
+					for k := range e.kids {
+						if n := tree[k]; !p.shown[k] && n.timed && (!timed || n.newest > at) {
+							at, timed = n.newest, true
+						}
+					}
+					if r.HasNewest != timed || timed && r.Newest != at {
+						t.Fatalf("seed %d: fold under %q has newest %v %d, want %v %d", seed, p.key, r.HasNewest, r.Newest, timed, at)
+					}
+				} else {
+					seg := r.Name
+					if i := strings.IndexByte(seg, '/'); i >= 0 {
+						seg = seg[:i+1]
+					}
+					p.shown[p.key+seg] = true
+				}
 			}
 			if !r.Fold {
-				stack = append(stack, &level{row: r})
+				key := ""
+				if r.Level > 0 {
+					key = stack[r.Level-1].key + r.Name
+				}
+				stack = append(stack, &level{row: r, key: key, shown: map[string]bool{}})
 			}
 		}
 		closeTo(0)
@@ -512,7 +590,7 @@ func TestViewLocalBudget(t *testing.T) {
 	if lv.Lowered || sv.Lowered || len(live.view.open) != 1 || heldNow(live.view) != live.view.held {
 		t.Fatalf("lowered %v %v, %d partial, held %d (counted %d)", lv.Lowered, sv.Lowered, len(live.view.open), live.view.held, heldNow(live.view))
 	}
-	if !slices.Equal(lv.Nodes, sv.Nodes) || lv.Total != sv.Total || len(lv.Nodes) != 2 || lv.Total.Children != 2001 {
+	if !sameNodes(lv.Nodes, sv.Nodes) || !sameNode(lv.Total, sv.Total) || len(lv.Nodes) != 2*viewKeep || lv.Total.Children != 2001 {
 		t.Fatalf("live %+v %+v\nsaved %+v %+v", lv.Total, lv.Nodes, sv.Total, sv.Nodes)
 	}
 	checkView(t, lv, "", exactTree("", all, false))
@@ -539,5 +617,182 @@ func TestViewPinnedBudget(t *testing.T) {
 	}
 	if got := tl.View(); got.Total.Bytes != 10_000 || got.Total.Objects != 1000 {
 		t.Fatalf("total %+v", got.Total)
+	}
+}
+
+// TestViewSelectFills: on a wide level (2,173 top-level prefixes, a few
+// large, the small ones holding most of the bytes) the lines fill with the
+// large prefixes and then the largest of the small ones, the level's rest
+// in a fold, rather than one fold of them all.
+func TestViewSelectFills(t *testing.T) {
+	var rows []Row
+	for i := range 2173 {
+		size := int64(1000 + i)
+		if i%500 == 0 {
+			size = 300_000 // a few large; the small ones hold three quarters
+		}
+		for j := range 3 {
+			rows = append(rows, Row{Key: fmt.Sprintf("p%04d/s%d/o", i, j), Object: true, Size: size / 3, HasSize: true})
+		}
+	}
+	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	tl := New(Options{View: true})
+	feed(tl, [][]Row{rows[:len(rows)/2], rows[len(rows)/2:]}, true, rand.New(rand.NewPCG(1, 2)))
+	v := tl.View()
+	lines := v.Select(25)
+	top := 0
+	for _, l := range lines {
+		if l.Level == 1 && !l.Fold {
+			top++
+		}
+	}
+	if len(lines) != 25 || top < 20 || !lines[len(lines)-1].Fold {
+		t.Fatalf("%d lines, %d top-level prefixes:\n%+v", len(lines), top, lines)
+	}
+	checkView(t, v, "", exactTree("", rows, false))
+}
+
+// TestViewCoveredRuns: runs told the intervals they cover complete their
+// edge nodes, and the nodes cut where two runs meet once both have ended:
+// 20,000 runs of three objects, each under its own prefix, fed in order
+// by eight workers, hold a few partial nodes at any time, not one per run,
+// and give the view of the same rows read as one run.
+func TestViewCoveredRuns(t *testing.T) {
+	var runs [][]Row
+	for i := range 20_000 {
+		var run []Row
+		for j := range 3 {
+			run = append(run, Row{Key: fmt.Sprintf("p%05d/%c", i, 'a'+j), Object: true, Size: int64(1 + i%97 + j), HasSize: true})
+		}
+		runs = append(runs, run)
+	}
+	tl := New(Options{View: true, MaxPrefixes: 10})
+	v := tl.view
+	peak := 0
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for n := range jobs {
+				run := runs[n]
+				r := tl.ViewRun(true)
+				lo := ""
+				if n > 0 {
+					lo = runs[n-1][2].Key
+				}
+				r.From(lo)
+				for i := range run {
+					r.Add(&run[i])
+				}
+				r.Through(run[2].Key, n == len(runs)-1)
+				r.End()
+				v.mu.Lock()
+				peak = max(peak, len(v.open))
+				v.mu.Unlock()
+			}
+		})
+	}
+	for n := range runs {
+		jobs <- n
+	}
+	close(jobs)
+	wg.Wait()
+	if len(v.open) != 1 || peak > 8*3 || v.lowered {
+		t.Fatalf("%d partial nodes at the end, %d at most, lowered %v", len(v.open), peak, v.lowered)
+	}
+	var all []Row
+	for _, r := range runs {
+		all = append(all, r...)
+	}
+	one := New(Options{View: true, MaxPrefixes: 10})
+	feed(one, [][]Row{all}, true, rand.New(rand.NewPCG(1, 1)))
+	got, want := tl.View(), one.View()
+	if !sameNode(got.Total, want.Total) || !sameNodes(got.Nodes, want.Nodes) {
+		t.Fatalf("covered runs %+v %d nodes, one run %+v %d nodes", got.Total, len(got.Nodes), want.Total, len(want.Nodes))
+	}
+	checkView(t, got, "", exactTree("", all, false))
+}
+
+// sameNode compares two nodes' sums, children and time.
+func sameNode(a, b ViewNode) bool {
+	return a.Key == b.Key && a.Depth == b.Depth && a.Bytes == b.Bytes && a.Objects == b.Objects && a.Missing == b.Missing &&
+		a.Children == b.Children && a.Newest == b.Newest && a.HasNewest == b.HasNewest
+}
+
+func sameNodes(a, b []ViewNode) bool { return slices.EqualFunc(a, b, sameNode) }
+
+// TestViewCoveredEmptyRuns: intervals that hold no row (a sparse key space,
+// or rows all filtered out) still meet their neighbors: 2,001 runs, every
+// other one empty and inside the prefix its neighbors share, leave no
+// partial node and one stretch once they have all ended.
+func TestViewCoveredEmptyRuns(t *testing.T) {
+	type cut struct {
+		lo, hi string
+		top    bool
+		rows   []Row
+	}
+	var cuts []cut
+	lo := ""
+	for i := range 1000 {
+		key := fmt.Sprintf("p%04d/a", i)
+		cuts = append(cuts, cut{lo: lo, hi: key, rows: []Row{{Key: key, Object: true, Size: int64(i + 1), HasSize: true}}})
+		cuts = append(cuts, cut{lo: key, hi: fmt.Sprintf("p%04d/z", i)}) // inside p<i>/, empty
+		lo = fmt.Sprintf("p%04d/z", i)
+	}
+	cuts = append(cuts, cut{lo: lo, top: true})
+	tl := New(Options{View: true})
+	rng := rand.New(rand.NewPCG(4, 4))
+	rng.Shuffle(len(cuts), func(i, j int) { cuts[i], cuts[j] = cuts[j], cuts[i] })
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for _, c := range cuts {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			r := tl.ViewRun(true)
+			r.From(c.lo)
+			for i := range c.rows {
+				r.Add(&c.rows[i])
+			}
+			r.Flush()
+			r.Through(c.hi, c.top)
+			r.End()
+		})
+	}
+	wg.Wait()
+	v := tl.view
+	if len(v.open) != 1 || len(v.byLo) != 1 {
+		t.Fatalf("%d partial nodes, %d stretches", len(v.open), len(v.byLo))
+	}
+	var all []Row
+	for _, c := range cuts {
+		all = append(all, c.rows...)
+	}
+	slices.SortFunc(all, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	checkView(t, tl.View(), "", exactTree("", all, false))
+}
+
+// TestViewUnreadable: a directory that could not be read marks every node
+// at or above it, and a fold holding it, kept even at 0 bytes.
+func TestViewUnreadable(t *testing.T) {
+	var rows []Row
+	for i := range 20 {
+		rows = append(rows, Row{Key: fmt.Sprintf("a/%02d", i), Object: true, Size: int64(100 - i), HasSize: true})
+	}
+	rows = append(rows, Row{Key: "b/big", Object: true, Size: 10_000, HasSize: true}, Row{Key: "z/", Dir: true})
+	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	tl := New(Options{View: true})
+	tl.Unreadable("a/locked/")
+	tl.Unreadable("z/")
+	feed(tl, [][]Row{rows}, true, rand.New(rand.NewPCG(1, 1)))
+	v := tl.View()
+	got := map[string]bool{}
+	for _, l := range v.Select(8) {
+		got[fmt.Sprintf("%d %s %v %v", l.Level, l.Name, l.Fold, l.Unreadable)] = true
+	}
+	for _, want := range []string{"0  false true", "1 a/ false true", "1 b/big false false", "2 00 false false", "2  true true", "1  true true"} {
+		if !got[want] {
+			t.Errorf("no line %q in %v", want, got)
+		}
 	}
 }

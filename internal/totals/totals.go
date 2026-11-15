@@ -156,6 +156,9 @@ type Prefix struct {
 	// HasNewest is false when no object under the prefix has a time (no
 	// object at all, or a metadata tier that reads none).
 	HasNewest bool
+	// Unreadable: the prefix is a directory the source could not read
+	// (Tally.Unreadable); its figures leave out what it holds.
+	Unreadable bool
 }
 
 // Figure is the prefix's bytes in the figure named (Size or
@@ -266,6 +269,9 @@ type Tally struct {
 	alloc bool              // the source has allocated bytes (Allocated)
 	err   error             // the first LimitError: every later merge returns it
 	view  *view             // Options.View
+	// unreadable is the prefixes the source could not read (Unreadable),
+	// those deep enough to be rows.
+	unreadable map[string]bool
 	notObjects,
 	linkedRows,
 	unidentified int64
@@ -529,7 +535,34 @@ func (t *Tally) prefix(p string, c *cell) Prefix {
 		Size: c.size, SizeMissing: c.sizeMissing, Allocated: c.alloc, AllocatedMissing: c.allocMissing, Newest: c.newest, HasNewest: c.hasNewest}
 	r.HasSize = r.known(r.SizeMissing)
 	r.HasAllocated = t.alloc && r.known(r.AllocatedMissing)
+	r.Unreadable = t.unreadable[p]
 	return r
+}
+
+// Unreadable records that the source could not read the directory whose
+// key prefix is p (ending in '/'), whose row is then marked: the prefixes
+// of rows the tally holds at most, those within Depth of the origin, and
+// for the view those of every depth (up to MaxPrefixes of them), whose
+// lines above them it marks. It is safe for concurrent use.
+func (t *Tally) Unreadable(p string) {
+	if v := t.view; v != nil && strings.HasPrefix(p, t.opt.Origin) {
+		v.mu.Lock()
+		if len(v.unreadable) < v.budget {
+			v.unreadable[strings.Clone(p)] = true
+		}
+		v.mu.Unlock()
+	}
+	if !strings.HasPrefix(p, t.opt.Origin) || strings.Count(p[len(t.opt.Origin):], "/") > t.opt.Depth {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.unreadable == nil {
+		t.unreadable = map[string]bool{}
+	}
+	if len(t.unreadable) < t.opt.MaxPrefixes {
+		t.unreadable[strings.Clone(p)] = true
+	}
 }
 
 // SortBySize reorders rows in Result's order (each prefix before the

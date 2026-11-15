@@ -21,53 +21,70 @@ nothing on disk.
 ### The view
 
 Bare `swath du SOURCE` on a terminal answers "where are the bytes": a tree of the largest prefixes and objects,
-largest first, each under its parent with its share of the total and, where the terminal is wide enough, a bar
-of that share and the newest modification time below it (`max_last_modified`, local, to the second, the zone
-named on the first line):
+largest first, each under its parent. Each line gives the size, the count of objects below it (`files` on a
+local tree, three significant digits: `12.0k`), its share of the total, a bar of that share, the date of the
+newest modification below it (`max_last_modified`, local, the zone named on the total's line) and the path,
+indented two blanks a level under its parent's, under one dim heading:
 
 ```text
 $ swath du s3://demo-lake
- 384 GiB   100%  ██████████████████████████████  2025-11-15 09:46:40 UTC  s3://demo-lake
- 164 GiB  42.7%  ████████████▊                   2025-11-15 09:46:40        backups/
-39.0 GiB  10.2%  ███                             2025-11-15 09:46:40          db-2025-05-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-02-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-04-01.dump
-27.0 GiB   7.0%  ██                              2025-11-15 09:46:40          db-2025-03-01.dump
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40          db-2025-01-01.dump
-2.00 KiB   0.0%                                                               (1 more)
- 164 GiB  42.6%  ████████████▊                   2025-11-15 09:46:40        warehouse/
- 159 GiB  41.5%  ████████████▍                   2025-11-15 09:46:40          events/year=2025/
-4.16 GiB   1.1%  ▎                                                            (1 more)
-27.7 GiB   7.2%  ██▏                             2025-11-15 09:46:40        logs/api/2025/
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40        images/
-4.54 GiB   1.2%  ▎                                                          (2 more)
+    size  objects  share                        newest          path
+ 384 GiB     130k   100%  ████████████████████  2025-11-15 UTC  s3://demo-lake
+ 164 GiB        6  42.7%  ████████▌             2025-11-15        backups/
+39.0 GiB        1  10.2%  ██                    2025-11-15          db-2025-05-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-02-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-04-01.dump
+27.0 GiB        1   7.0%  █▍                    2025-11-15          db-2025-03-01.dump
+24.0 GiB        1   6.3%  █▎                    2025-11-15          db-2025-01-01.dump
+2.00 KiB        1   0.0%                        2025-11-15          (1 more)
+ 164 GiB    2.18k  42.6%  ████████▌             2025-11-15        warehouse/
+ 159 GiB    1.85k  41.5%  ████████▎             2025-11-15          events/year=2025/
+14.4 GiB      159   3.8%  ▊                     2025-11-15            month=12/
+ 145 GiB    1.69k  37.8%  ███████▌              2025-11-15            (11 more)
+4.16 GiB      336   1.1%  ▏                     2025-11-15          sessions/year=2025/
+27.7 GiB    8.06k   7.2%  █▍                    2025-11-15        logs/api/2025/
+24.0 GiB     120k   6.3%  █▎                    2025-11-15        images/
+4.54 GiB      201   1.2%  ▏                     2025-11-15        (2 more)
   384 GiB in 130,453 objects
 ```
 
-Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are
-and what they hold together, so the lines under a parent always add up to it. Nothing is hidden without being
-counted; only a `(N more)` line of 0 bytes is left out. A name is written as the other terminal lines write
-it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
-terminal's width. A prefix with a single child shares its line with it (`logs/api/2025/`). The view fills the terminal's
-height, less a few lines; what does not fit is in the `(N more)` lines. One figure drives the whole view, its
-order, shares and bars: the size, or the allocated bytes with `--allocated`. A line on stderr under it gives the
-total once, with the other figure where the source has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q`
-leaves it out. Color follows `--color` and `NO_COLOR`. As the terminal narrows the bar is left out first, then
-the time; a `(N more)` line has no time.
+Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are,
+what they hold together (size, count, share) and their newest date, so the lines under a parent always add up
+to it. Nothing is hidden without being counted; only a `(N more)` line of 0 bytes is left out. A prefix with a
+single child shares its line with it (`logs/api/2025/`). The view fills the terminal's height, less a few
+lines, from the largest down: line by line, a fold or a prefix shown whole gives its largest child (a prefix a
+fold for the rest too), the one whose child is the largest; a fold of many small prefixes that together
+outweigh one line's share of the view gives them first, so a wide level of small prefixes is shown as far as
+the lines go rather than as one fold. What does not fit is in the `(N more)` lines.
+
+The columns fit the terminal's width, and a line never wraps: from 100 columns the bar has 20 cells (the rest
+goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
+then the date. The size, the count and the path always stay; a path is written as the other terminal lines
+write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass
+the width.
+
+The view leaves room for every line printed after it (the line of totals, the unreadable line, the closing
+line, the prompt), wrapped lines counted as they wrap, so its heading and total stay on screen.
+
+One figure drives the whole view, its order, shares and bars: the size, or the allocated bytes with
+`--allocated`. A line on stderr under it gives the total once, exactly, with the other figure where the source
+has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q` leaves it out. Color follows `--color` and
+`NO_COLOR`.
 
 Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
 one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
-subdirectories'. A complete prefix below 1 % of the bytes seen so far is dropped: the total can only be larger,
-so it is below 1 % of the total too, and its bytes are already counted in its parent's. Of the rest, the 100
-largest of each depth are kept: a prefix of 1 % of the total is always among them. A prefix cut by the edge
-of a range is summed across ranges and completes when the listing ends: a few a range. The local directories
+subdirectories'. Of the complete prefixes and objects, the 100 largest of each depth are kept, far more than
+a terminal shows; one dropped for 100 larger ones of its depth is counted in its parent's bytes, and which are
+kept does not depend on the order the listing completes them in. A prefix cut by the edge of a range is summed
+across ranges and completes once the ranges on both sides of that edge have been listed, so only the ranges
+still listing hold such prefixes. The local directories
 being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
 `--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
 report's `diagnostics.totals_view` counts what was kept, dropped and merged.
 
 The view is for reading. In a pipe `swath du` prints its rows (TSV) as before, and an explicit `-d N`
-(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows. `--from-dataset` draws the same view from a saved
-dataset, line for line.
+(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows.
+`--from-dataset` draws the same view from a saved dataset, line for line.
 
 The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
 [pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
@@ -80,13 +97,15 @@ $ swath du -d 1 /data/photos --format table
     size  files  dirs  last_modified (CET)  path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      4     3  2026-11-02 10:30:00  (total)
-  459 KiB in 4 files · 472 KiB on disk
+ 459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
+  459 KiB in 5 files · 472 KiB on disk
 ```
 
 A prefix ends at a `/`. Depth counts from SOURCE's prefix up to its last `/`: `s3://b/logs/2026/` counts from
 `logs/2026/`, `s3://b/logs` from the top of the bucket. A key with fewer than N slashes counts only in the
 prefixes it has. Each row includes everything below it, so add up rows of one depth only, never across depths.
+The table's total row names SOURCE as typed (`s3://b/logs/2026/0 (total)`); in TSV and JSONL the total's
+`prefix` is the key prefix SOURCE names (`logs/2026/0`), which every key it counts starts with.
 
 With `-d N` (or `--format table`) on a terminal the rows are a table with the total last; in a pipe they are TSV
 (`--no-header` leaves out its header line), and `--format jsonl` gives JSONL; both put the total first, its
@@ -128,37 +147,44 @@ Memory grows with the number of distinct prefixes, not objects. A run that would
 `--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
 
 Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
-the rest, names the entries on stderr and exits 3 ([exit codes](../reference/exit-codes.md)).
+the rest, names the entries on stderr (relative to SOURCE) and exits 3 ([exit codes](../reference/exit-codes.md)).
+In the table, a directory that could not be read shows `-` for its size and counts. The view marks with `!` after
+the size every line whose sums leave out such a directory, at or below it (a `(N more)` line too when one of the
+children it holds does), and says so in one line under it instead of naming them:
+`! 5 directories could not be read (marked ! above); -v lists them`.
 
 ### Totals from a saved dataset
 
 Each `swath du SOURCE` lists SOURCE again. To look at a large source at several depths, or with other filters,
 list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead (a live `swath du` that listed
-a million entries or more says so on a terminal: its statistics end with `hint:` lines giving both commands
+a million entries or more says so on a terminal: its closing lines end with `hint:` lines giving both commands
 for its SOURCE):
 
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
-swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12T10:00:03Z (3 hours ago); complete
+swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12 11:00:03 CET (3 hours ago); complete
     size  files  dirs  last_modified (CET)  path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      4     3  2026-11-02 10:30:00  (total)
-  459 KiB in 4 files · 472 KiB on disk
+ 459 KiB      5     3  2026-11-02 10:30:00  photos-inventory (total)
+  459 KiB in 5 files · 472 KiB on disk
 ```
 
 The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
 formats and filters. They are read from the dataset's Parquet parts: the key and only the columns the totals
 and filters need, in one parallel pass, once every part's columns are checked against the dataset's schema (a
 dataset that breaks it is refused, exit 1). Depth counts from the dataset's scope, as it would from the source.
-Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold.
+Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold; when
+DIR holds a dataset, a `hint:` line on stderr gives the `--from-dataset` command.
 
 An optional SOURCE after the directory takes the form a live `swath du` takes: the dataset's source as it was
 listed (the `source` stderr names), which totals the whole dataset as no SOURCE does, or a path or URL below it,
 which restricts the totals to the keys below it and prints what a live `swath du` of it prints. A local path
 is made absolute, as a live `swath du` resolves it, and taken as a directory below the listed tree:
 `/data/photos/2025` totals the keys under `2025/`, labelled and filtered relative to it, with depth counted
-from it. A URL names the same bucket or container and a prefix that starts with the listed one
+from it. A path that names a file in the tree totals that file's row alone, as a live `swath du` of the file
+does; a symbolic link is refused (exit 2), since a live `swath du` follows one to a directory whose keys the
+dataset holds under the target's path. A URL names the same bucket or container and a prefix that starts with the listed one
 (`s3://bucket/logs/2026/` of a dataset listed from `s3://bucket/logs/`); its rows keep whole keys, as a live
 run's do, and depth counts from its prefix up to the last `/`. The read seeks to the prefix rather than
 scanning the dataset. A SOURCE below the listed one that holds no key prints zeros
@@ -454,7 +480,7 @@ sizes) with exit 2.
   -vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted).
 
 - <a id="option-quiet"></a>[`-q, --quiet`](#option-quiet)\
-  no warnings, no automatic progress or statistics (-qq: no errors)
+  no warnings, no automatic progress or closing lines (-qq: no errors)
 
   With -qq the exit code and the reports stand alone.
 
@@ -472,22 +498,22 @@ sizes) with exit 2.
   Default 1s while the line redraws on a terminal, 30s for appended records.
 
 - <a id="option-stats"></a>[`--stats`](#option-stats)\
-  print the end-of-run statistics on stderr
+  print the closing lines on stderr, with the run's statistics
 
-  Default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe.
+  The closing lines (the verdict, the count, the time, where the output went, what to run next) print by default for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe. --stats prints them always, followed by the requests, in flight, throttles, retries, the estimate and the peak RSS.
 
 - <a id="option-no-stats"></a>[`--no-stats`](#option-no-stats)\
-  no end-of-run statistics on stderr
+  no closing lines on stderr
 
 - <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
-  color progress, statistics, the help and du's view (default `auto`)
+  color progress, closing lines, the help and du's view (default `auto`)
 
   auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
 
 - <a id="option-log-format"></a>[`--log-format text|json`](#option-log-format)\
   stderr as text, or json: one JSON object per line (default `text`)
 
-  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block.
+  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines.
 
 <details>
 <summary>Plain text, in the <code>--help</code> layout</summary>
@@ -698,7 +724,7 @@ Reporting:
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
-  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+  -q, --quiet                 no warnings, no automatic progress or closing lines (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
       --progress              show progress on stderr (default: a terminal that rows do not share)
                                 Not by default with -q or -v (which appends progress records), nor
@@ -709,17 +735,21 @@ Reporting:
                               how often progress is printed (at least 1s); implies --progress
                                 Default 1s while the line redraws on a terminal, 30s for appended
                                 records.
-      --stats                 print the end-of-run statistics on stderr
-                                Default: for runs over 1.5 s, runs that write output, and runs that
-                                do not complete; not with -q, nor after a closed downstream pipe.
-      --no-stats              no end-of-run statistics on stderr
+      --stats                 print the closing lines on stderr, with the run's statistics
+                                The closing lines (the verdict, the count, the time, where the
+                                output went, what to run next) print by default for runs over 1.5 s,
+                                runs that write output, and runs that do not complete; not with -q,
+                                nor after a closed downstream pipe. --stats prints them always,
+                                followed by the requests, in flight, throttles, retries, the
+                                estimate and the peak RSS.
+      --no-stats              no closing lines on stderr
       --color auto|always|never
-                              color progress, statistics, the help and du's view (default auto)
+                              color progress, closing lines, the help and du's view (default auto)
                                 auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                 forces it.
       --log-format text|json  stderr as text, or json: one JSON object per line (default text)
                                 json: warnings, the start line, progress records, the request log
-                                and the outcome as events, no redrawn line or statistics block.
+                                and the outcome as events, no redrawn line or closing lines.
 ```
 
 </details>

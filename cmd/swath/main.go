@@ -450,7 +450,6 @@ type options struct {
 	partSize, rowBudget    size
 	spillBudget            zsize
 	spillReserve           zsize
-	segmentWorkers         int
 	resume, noJournal      bool
 	noSpill, spillCompress bool
 	spillPlain             bool
@@ -506,6 +505,11 @@ type totalsOut struct {
 	// view, if set, draws the tally's adaptive view instead of the table
 	// (duView).
 	view *viewOut
+	// scope is the total row's prefix in TSV and JSONL, the key prefix
+	// SOURCE names (logs/2026/0, beyond the origin depth counts from), and
+	// label what the table's total row names: SOURCE as typed, as the view
+	// names it.
+	scope, label string
 }
 
 // write writes the tally's rows to w. The table shows one figure; for a
@@ -521,8 +525,14 @@ func (t *totalsOut) write(w io.Writer) error {
 		}
 	}
 	opt := t.tally.Options()
-	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset}
+	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset,
+		Total: escapeControl(t.label)}
 	rows := t.tally.Result()
+	for i := range rows {
+		if rows[i].Depth == 0 {
+			rows[i].Prefix = t.scope
+		}
+	}
 	if t.sortBy == sortSize {
 		totals.SortBySize(rows, opt.Primary)
 	}
@@ -563,7 +573,7 @@ func figuresLine(total *totals.Prefix, primary string) string {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "segment-workers", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
@@ -874,12 +884,19 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, usageError{err})
 	}
 	given := root // as typed, before an --include narrows it: the hint's SOURCE
+	if l := elog(); o.du && pf.Scheme == "" && l.quiet == 0 && !l.json && dataset.Committed(root) {
+		// swath du DIR totals DIR's own files, as asked; a person who
+		// meant the listing a dataset holds learns the command for it.
+		noteKept(errOut, "hint: "+escapeControl(root)+" is a swath dataset; to total what it lists: swath du --from-dataset "+shellOperand(root)+"\n")
+	}
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
-		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
+		// A text file is always replaced (written beside its name and
+		// renamed into place): --overwrite asks for what happens anyway.
+		Output: listing.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}, SegmentWorkers: o.segmentWorkers},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
@@ -983,7 +1000,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// the same screen while swath list's text goes there; swath du's table
 	// comes after its listing, when the live line is gone.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal(), fw.retrying)
 	defer tt.close()
 	if t := o.totals; t != nil {
 		if tt.disp != nil && stdoutTerminal() {
@@ -1004,7 +1021,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)
 	defer statusNow.Store(nil)
-	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait}
+	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait, fixed: cfg.Limits.Spill.Max > 0}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
@@ -1022,7 +1039,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			elog().warn(warnPrefixNotFound, fmt.Sprintf("no key starts with %q", p))
 		}
 	}
-	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
+	end := runEnd{source: given, settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
 	if cfg.Trace != nil {
 		// After the dataset, run.json and --report: the run's accounts
@@ -1062,6 +1079,7 @@ func (o *options) versions() bool {
 // listing request was answered or a directory read; failing the
 // persistent request failure outstanding at its end (failureWatch).
 type runEnd struct {
+	source     string // SOURCE as typed: unreadable paths below it are shown relative to it
 	settled    bool
 	unrecorded string
 	started    bool
@@ -1134,9 +1152,14 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	rerr := writeReport(o.report, sum, stdout)
 	// Entries left out say so, whatever the statistics' gating, before the
 	// closing block whose verdict they explain.
-	reportUnreadable(&sum)
+	var view *viewOut
+	if o.totals != nil {
+		view = o.totals.view
+	}
+	reportUnreadable(&sum, end.source, view)
+	closed := false // the closing block's verdict states what is missing
 	if !brief || o.term.stats.set {
-		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
+		closed = tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	}
 	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
 		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
@@ -1150,7 +1173,10 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if failing != "" {
 			err = fmt.Errorf("%w%s", err, failing)
 		}
-		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
+		// A partial output's verdict is the closing line's when it
+		// printed: no second line says it.
+		stated := closed && errors.Is(err, errIncomplete)
+		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out, stated: stated}, rerr)
 	case rerr != nil:
 		return reportFailed(nil, rerr)
 	}

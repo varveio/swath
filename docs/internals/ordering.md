@@ -388,17 +388,28 @@ emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owne
 claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
 subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
 (`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
-before its last is complete, so it is kept only when it holds at least 1 % of the bytes seen so far and is
+before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
-across runs and complete at the end. An unordered count (the local source) gives no order inside a run: there
+across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
+declares its ranges' intervals (`source.Fencer.Span`, the range engine's), the interval its rows cover: from
+the range's lower bound, through its last row or fence at a split (the children start after it) or the range's
+end when it returns; a range that listed no row the sink sees (none in its interval, or all filtered out) tells
+its interval through an empty run, so that the intervals around it meet (`TestCountCoveredEmpty`,
+`TestViewCoveredEmptyRuns`). The view completes an edge prefix inside that interval at once, records the intervals of
+the runs that ended, joining those that meet at a bound, and completes a partial prefix cut at a bound once the
+stretches on both sides have joined around it (`totals` `view.cover`): the partial prefixes held are then those
+cut by the bounds of ranges still listing, a few a range in flight, not one per range listed
+(`TestViewCoveredRuns`: 20,000 runs fed in order by eight workers hold at most 24; `TestCountCoveredRuns`). A
+dataset's shards are not told (a few, eight a worker): theirs complete at the end. An unordered count (the local source) gives no order inside a run: there
 only objects complete in a run. A sink that is also an `order.SubtreeSink` is told when a range that declared
 the prefix it owns (`source.Subtreer`, which every emitter adapter forwards: a local directory's range owns
 its prefix, its chunks and subdirectories being its descendants) has ended with every range it emitted: the
 count keeps a node per queued range, with its parent and its pending descendants, and the worker that settles
 the last one reports the prefixes that ended, the deepest first. The view then completes that directory
-through the same rule. Of the complete prefixes above 1 % of the bytes seen, the view keeps the 100 largest
-of each depth (a min-heap a depth), which holds every prefix of 1 % of the total whatever the order they
-complete in; `--max-prefixes` bounds the local directories being listed and the prefixes kept for a hard
+through the same rule. The 100 largest of each depth are a min-heap a depth, ordered by bytes and then by
+key, so which are kept does not depend on the order they complete in; a node below the least of a full depth
+is dropped without the lock (an atomic floor a depth), and at the end the partial and pinned nodes join the
+heaps' in one cut per depth, so a listing and its dataset hold the same nodes; `--max-prefixes` bounds the local directories being listed and the prefixes kept for a hard
 link (an ordered run's partial prefixes are its two edges, a few a range, and count against nothing). A
 run's children are counted once: by the run when complete there, else when first summed as a partial prefix.
 `TestViewExactOrdered` and `TestViewExactUnordered` check the view against a brute-force tree over random
@@ -668,7 +679,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
-  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too; `swath diag list --segment-workers N` replaces that last rule for a measurement, the other bounds standing. And the row budget, at plan time:
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
   each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
   gathers, the batch its encoder writes and its part's queue (`dataset.SegmentPlan.Queue`, two batches; the open part
   the first continues has the serial part's 16-batch queue, and the router holds that segment to two queued

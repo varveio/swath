@@ -39,9 +39,11 @@ func pressured(since time.Time, ordered int64) listing.ProgressSnapshot {
 // TestSpillWatch: listing waiting on a full spill cap is an error event
 // once it has lasted spillPressureFor, not before, and again every
 // spillPressureEvery while it lasts; a run without spill, or one whose wait
-// ended, says nothing, and a new wait starts the count again. With
-// --spill-wait-timeout it stops the run at that length, as a resumable
-// disk_full (exit 74, cause spill_budget) naming the resume.
+// ended, says nothing, and a new wait starts the count again. Its remedy
+// is growing the disk for the default cap, which follows it, and a resume
+// with more for a --spill-budget. With --spill-wait-timeout it stops the
+// run at that length, as a resumable disk_full (exit 74, cause
+// spill_budget) naming the resume.
 func TestSpillWatch(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	setLog(termOptions{logFormat: logText}, "")
@@ -68,9 +70,9 @@ func TestSpillWatch(t *testing.T) {
 		t.Fatalf("an event before %s: %q", spillPressureFor, stderr)
 	}
 	check(pressured(t0, 1000+9800*120), spillPressureFor)
-	want := "swath: spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it " +
-		"(spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; " +
-		"stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE), or let it run: it finishes, slowly\n"
+	told := "swath: spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it " +
+		"(spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; "
+	want := told + "the cap follows the spill disk: grow the disk, or free space on it, and listing continues, or let it run: it finishes, slowly\n"
 	if stderr.String() != want {
 		t.Fatalf("stderr\n%q, want\n%q", stderr, want)
 	}
@@ -95,6 +97,16 @@ func TestSpillWatch(t *testing.T) {
 	check(pressured(t1, 0), time.Hour+spillPressureFor)
 	if events() != 3 {
 		t.Fatalf("a new wait not told: %q", stderr)
+	}
+
+	// A --spill-budget is fixed: the remedy is a resume with more.
+	before := stderr.String()
+	w = &spillWatch{dir: "inventory", fixed: true}
+	check(pressured(t0, 1000), 0)
+	check(pressured(t0, 1000+9800*120), spillPressureFor)
+	want = told + "stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE), or let it run: it finishes, slowly\n"
+	if got := strings.TrimPrefix(stderr.String(), before); got != want {
+		t.Fatalf("stderr with --spill-budget\n%q, want\n%q", got, want)
 	}
 
 	w = &spillWatch{dir: "inventory", wait: 5 * time.Minute}

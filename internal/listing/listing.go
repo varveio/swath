@@ -182,9 +182,6 @@ type Limits struct {
 	// (frozen for a resume: boundaries depend on it).
 	PartMaxRows int64
 	Spill       SpillLimits
-	// SegmentWorkers, when above 0, replaces the processors rule for the
-	// tail's segment workers (order.Options.SegmentWorkersAsked).
-	SegmentWorkers int
 	// maxEncoders is the encoders admitted once listing has ended
 	// (admitAfterListing): the default's, or Encoders when given
 	// (encodersGiven).
@@ -1029,9 +1026,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	}
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes
+	if cfg.Progress != nil {
+		cfg.Progress.sizes.Store(sizes)
+	}
 	versions := &registry.VersionCounts{}
 	env.Versions = versions
 	env.Totals = cfg.Totals
+	if cfg.Totals != nil {
+		env.Unreadable = cfg.Totals.Unreadable
+	}
 	a.retained.Store(a.sum.Output.RowsRetained)
 	a.sum.sampler = startHistory(a.sample, historyDisk(cfg, oopt))
 	defer a.sum.sampler.finish()
@@ -1040,8 +1043,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	a.sum.Resources.PeakHeapLiveBytes = heap()
 	a.router = router
 	a.sum.Output.RowsFetched = src.Listed()
-	if sizes.Measured {
-		b := sizes.Bytes.Load()
+	if b, ok := sizes.Known(); ok {
 		a.sum.Output.ObjectBytes = &b
 	}
 	if cfg.Totals != nil {
@@ -1243,7 +1245,7 @@ func routerOptions(ctx context.Context, cfg Config, jr *runJournal, shared *orde
 func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (oopt order.Options, scratch string, err error) {
 	gauges := &order.Gauges{}
 	oopt = order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
-		After: jr.after(), Gauges: gauges, SegmentWorkersAsked: cfg.Limits.SegmentWorkers, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
+		After: jr.after(), Gauges: gauges, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
 	}
@@ -1717,7 +1719,19 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		if err := dataset.WriteReport(cfg.Output.final(), *sum); err != nil && cfg.Warn != nil {
 			cfg.Warn(source.WarnRunReportUnwritten, err.Error())
 		}
-		a.writeCuts(a.ctx, parts, localPageEnds, func(_ context.Context, b []byte) error {
+		ends := localPageEnds
+		if into := cfg.Output.into; into != "" {
+			// The installation moved the parts from Dir into into.
+			ends = func(ctx context.Context, p dataset.Part) ([]dataset.PageEnd, error) {
+				rel, err := filepath.Rel(cfg.Output.Dir, p.Path)
+				if err != nil {
+					return nil, err
+				}
+				p.Path = filepath.Join(into, rel)
+				return localPageEnds(ctx, p)
+			}
+		}
+		a.writeCuts(a.ctx, parts, ends, func(_ context.Context, b []byte) error {
 			return dataset.Replace(filepath.Join(cfg.Output.final(), dataset.CutsName), b, dataset.Durable)
 		})
 	}

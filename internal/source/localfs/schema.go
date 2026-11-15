@@ -90,11 +90,11 @@ func (e *Entry) Has(p Presence) bool { return e.Present&p == p }
 // unsigned; allocated_bytes is st_blocks × 512; metadata_changed_at is ctime.
 var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
 	Info: schema.Info{Name: "swath_listing", Containers: schema.Match{Column: "kind", Value: KindDir.String()}, // a directory names other rows
-		NamesTier: Names.String()},
+		Links: schema.Match{Column: "kind", Value: KindSymlink.String()}, NamesTier: Names.String()},
 	Columns: []schema.Column[Entry]{
 		intCol(HasSize, func(e *Entry) int64 { return e.Size }),
 		intCol(HasMtime, func(e *Entry) int64 { return e.Mtime }),
-		{Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }, Values: kindNames[:]},
+		{Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }, Values: kindNames[KindFile : KindSymlink+1]},
 		uint32Col(HasMode, func(e *Entry) uint32 { return e.Mode }),
 		uint32Col(HasUID, func(e *Entry) uint32 { return e.UID }),
 		uint32Col(HasGID, func(e *Entry) uint32 { return e.GID }),

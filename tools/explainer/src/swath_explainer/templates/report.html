@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>swath run trace</title>
+<title><!--__TITLE__--></title>
+<meta name="description" content="<!--__DESCRIPTION__-->">
 <style>
   :root {
     --paper:#F1F2EB; --panel:#E7E9DF; --deep:#DDE0D3;
@@ -25,6 +26,9 @@
   body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--serif);
          font-size:16.5px; line-height:1.6; overflow-x:hidden; }
   .wrap { max-width:64rem; margin:0 auto; padding:2.4rem 1.5rem 5rem; }
+  .skip { position:absolute; left:-999px; top:0; padding:.5rem .8rem; background:var(--paper);
+          color:var(--accent); font-family:var(--mono); font-size:.8rem; }
+  .skip:focus { left:0; }
   .col { max-width:36rem; }
   h1 { font-family:var(--mono); font-weight:500; font-size:clamp(1.55rem,4vw,2.25rem);
        letter-spacing:-.035em; margin:0 0 .35rem; text-wrap:balance; }
@@ -103,7 +107,8 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<a class="skip" href="#main">Skip to the report</a>
+<main class="wrap" id="main">
   <h1 id="title">swath run trace</h1>
   <div class="sub" id="subtitle"></div>
 
@@ -215,7 +220,7 @@
   </details>
 
   <footer id="provenance"></footer>
-</div>
+</main>
 
 <script>
 (function () {

@@ -103,10 +103,10 @@ func TestRowContract(t *testing.T) {
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "last_modified (CET)      size  key\n" +
-		"2023-11-14 23:13:20      12 B  a/b.txt\n" +
-		"-                         0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
-		"2023-11-14 23:13:20  1.00 TiB  µ\n"
+	table := "    size  last_modified (CET)  key\n" +
+		"    12 B  2023-11-14 23:13:20  a/b.txt\n" +
+		"     0 B  -                    tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
+		"1.00 TiB  2023-11-14 23:13:20  µ\n"
 	if got := string(write(t, Config{Format: Table, Loc: time.FixedZone("CET", 3600)})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
 	}
@@ -183,78 +183,91 @@ func TestFileCompressedAndAtomic(t *testing.T) {
 	}
 }
 
-// TestWriteView: the view's lines: the share with one decimal, the bar in
-// eighths of a cell, a fold line's count grouped or "(more)" when unknown,
-// names indented two blanks a level, no bar where the width leaves too
-// little, color only when asked.
+// TestWriteView: the view's lines under a heading: the size, the count of
+// objects (three significant digits), the share, a bar of 20 cells from
+// 100 columns and up to 10 at 80, the newest date (the zone named on the
+// total's line; a fold's date, none when unknown) and the path indented
+// two blanks a level. As the width shrinks the bar goes, then the share,
+// then the date; the path is cut so that no line passes the width.
 func TestWriteView(t *testing.T) {
-	rows := []totals.ViewRow{
-		{Name: "s3://b", Bytes: 2048},
-		{Name: "logs/", Level: 1, Bytes: 1536},
-		{Name: "a", Level: 2, Bytes: 1024},
-		{Fold: true, Level: 2, Bytes: 512, More: 1234},
-		{Fold: true, Level: 1, Bytes: 512, More: -1},
-	}
-	var b bytes.Buffer
-	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 60}, rows); err != nil {
-		t.Fatal(err)
-	}
-	want := "" +
-		"2.00 KiB   100%  █████████████████████████  s3://b\n" +
-		"1.50 KiB  75.0%  ██████████████████▊          logs/\n" +
-		"1.00 KiB  50.0%  ████████████▌                  a\n" +
-		"   512 B  25.0%  ██████▎                        (1,234 more)\n" +
-		"   512 B  25.0%  ██████▎                      (more)\n"
-	if b.String() != want {
-		t.Fatalf("got\n%s\nwant\n%s", b.String(), want)
-	}
-	b.Reset()
-	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 40, Color: true}, rows); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(b.String(), "█") || !strings.Contains(b.String(), "\x1b[2m(more)\x1b[0m") || !strings.HasPrefix(b.String(), "2.00 KiB   100%  s3://b\n") {
-		t.Fatalf("narrow, colored:\n%q", b.String())
-	}
-}
-
-// TestWriteViewTimes: each node's newest time, to the second in the zone
-// given, which the total's line names once; a fold line has none, a node
-// without one "-". As the width shrinks the bar goes first, then the time.
-func TestWriteViewTimes(t *testing.T) {
 	at := int64(1_763_210_310_000_000) // 2025-11-15T12:38:30Z
 	rows := []totals.ViewRow{
-		{Name: "s3://b", Bytes: 2048, Newest: at, HasNewest: true},
-		{Name: "logs/", Level: 1, Bytes: 1536, Newest: at - 3_600_000_000, HasNewest: true},
-		{Name: "a", Level: 1, Bytes: 0},
-		{Fold: true, Level: 1, Bytes: 512, More: 3},
-	}
-	write := func(width int) string {
-		var b bytes.Buffer
-		if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: width, Loc: time.UTC}, rows); err != nil {
-			t.Fatal(err)
-		}
-		return b.String()
+		{Name: "s3://bucket", Bytes: 2048 << 30, Objects: 37_100_000, Newest: at, HasNewest: true},
+		{Name: "logs/", Level: 1, Bytes: 1536 << 30, Objects: 12_000, Newest: at - 3_600_000_000*48, HasNewest: true},
+		{Name: "2025/app-events-archive.tar", Level: 2, Bytes: 1024 << 30, Objects: 1, Newest: at - 3_600_000_000*48, HasNewest: true},
+		{Fold: true, Level: 2, Bytes: 512 << 30, Objects: 11_999, More: 1234, Newest: at - 3_600_000_000*24*30, HasNewest: true},
+		{Fold: true, Level: 1, Bytes: 512 << 30, Objects: 37_088_000, More: 9},
 	}
 	want := map[int]string{
-		120: "" +
-			"2.00 KiB   100%  ██████████████████████████████  2025-11-15 12:38:30 UTC  s3://b\n" +
-			"1.50 KiB  75.0%  ██████████████████████▌         2025-11-15 11:38:30        logs/\n" +
-			"     0 B   0.0%                                  -                          a\n" +
-			"   512 B  25.0%  ███████▌                                                   (3 more)\n",
-		60: "" +
-			"2.00 KiB   100%  2025-11-15 12:38:30 UTC  s3://b\n" +
-			"1.50 KiB  75.0%  2025-11-15 11:38:30        logs/\n" +
-			"     0 B   0.0%  -                          a\n" +
-			"   512 B  25.0%                             (3 more)\n",
 		40: "" +
-			"2.00 KiB   100%  s3://b\n" +
-			"1.50 KiB  75.0%    logs/\n" +
-			"     0 B   0.0%    a\n" +
-			"   512 B  25.0%    (3 more)\n",
+			"    size  objects  path\n" +
+			"2.00 TiB    37.1M  s3://bucket\n" +
+			"1.50 TiB    12.0k    logs/\n" +
+			"1.00 TiB        1      2025/app…hive.tar\n" +
+			" 512 GiB    12.0k      (1,234 more)\n" +
+			" 512 GiB    37.1M    (9 more)\n",
+		60: "" +
+			"    size  objects  share  newest          path\n" +
+			"2.00 TiB    37.1M   100%  2025-11-15 UTC  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  2025-11-13          2025/a…ive.tar\n" +
+			" 512 GiB    12.0k  25.0%  2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%                    (9 more)\n",
+		80: "" +
+			"    size  objects  share              newest          path\n" +
+			"2.00 TiB    37.1M   100%  ██████████  2025-11-15 UTC  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  ███████▌    2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  █████       2025-11-13          2025/app-e…archive.tar\n" +
+			" 512 GiB    12.0k  25.0%  ██▌         2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%  ██▌                           (9 more)\n",
+		100: "" +
+			"    size  objects  share                        newest          path\n" +
+			"2.00 TiB    37.1M   100%  ████████████████████  2025-11-15 UTC  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  ███████████████       2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  ██████████            2025-11-13          2025/app-events-archive.tar\n" +
+			" 512 GiB    12.0k  25.0%  █████                 2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%  █████                                   (9 more)\n",
+		120: "" +
+			"    size  objects  share                        newest          path\n" +
+			"2.00 TiB    37.1M   100%  ████████████████████  2025-11-15 UTC  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  ███████████████       2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  ██████████            2025-11-13          2025/app-events-archive.tar\n" +
+			" 512 GiB    12.0k  25.0%  █████                 2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%  █████                                   (9 more)\n",
 	}
 	for width, w := range want {
-		if got := write(width); got != w {
-			t.Errorf("width %d:\n%s\nwant\n%s", width, got, w)
+		var b bytes.Buffer
+		if err := WriteView(&b, ViewLayout{Label: "s3://bucket", Width: width, Loc: time.UTC}, rows); err != nil {
+			t.Fatal(err)
+		}
+		if b.String() != w {
+			t.Errorf("width %d:\n%s\nwant\n%s", width, b.String(), w)
+		}
+		for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n") {
+			if cells(l) > width {
+				t.Errorf("width %d: %q is %d columns", width, l, cells(l))
+			}
+		}
+	}
+	// A local tree counts files; color dims the heading and the folds and
+	// paints the bar.
+	var b bytes.Buffer
+	if err := WriteView(&b, ViewLayout{Label: "/data", Local: true, Width: 120, Color: true, Loc: time.UTC}, rows); err != nil {
+		t.Fatal(err)
+	}
+	plain := regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(b.String(), "")
+	lines := strings.Split(b.String(), "\n")
+	if h := strings.SplitN(plain, "\n", 2)[0]; h != "    size  files  share                        newest          path" ||
+		!strings.HasPrefix(lines[0], "\x1b[2m") || !strings.Contains(b.String(), "\x1b[36m") ||
+		!strings.HasPrefix(lines[5], "\x1b[2m") || !strings.HasSuffix(lines[5], "(9 more)\x1b[0m") {
+		t.Errorf("local, colored:\n%q", b.String())
+	}
+	for _, c := range []struct {
+		n    int64
+		want string
+	}{{0, "0"}, {750, "750"}, {999, "999"}, {1000, "1.00k"}, {11_050, "11.1k"}, {12_000, "12.0k"}, {999_499, "999k"}, {999_500, "1.00M"}, {37_100_000, "37.1M"}} {
+		if got := string(appendAbbreviated(nil, c.n)); got != c.want {
+			t.Errorf("count %d: %q, want %q", c.n, got, c.want)
 		}
 	}
 }
@@ -274,8 +287,8 @@ func TestWriteViewClips(t *testing.T) {
 			t.Fatal(err)
 		}
 		plain := regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(b.String(), "")
-		for _, l := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
-			if n := utf8.RuneCountInString(l); n > width || !strings.Contains(l, "more") && !strings.HasSuffix(l, "tail.parquet") {
+		for _, l := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n")[1:] { // past the heading
+			if n := utf8.RuneCountInString(l); n > width || !strings.Contains(l, "more") && !strings.HasSuffix(l, "parquet") {
 				t.Errorf("width %d: %q (%d)", width, l, n)
 			}
 		}

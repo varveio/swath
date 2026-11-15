@@ -13,6 +13,9 @@ import './custom.css'
 
 const REPO = 'https://github.com/varveio/swath/blob/main/'
 const MEASURED = REPO + 'docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15'
+// The run report rendered from the inventory run's trace by tools/explainer: a static page in site/static/, outside
+// the VitePress build, so its link loads the page itself (target _self) instead of going through the router.
+const RUN_REPORT = '/runs/noaa-gestofs-pds/'
 
 type Caption = (string | { text: string; href: string })[]
 type Session = [command: string, output: string][]
@@ -85,7 +88,7 @@ png    22913029  1.3 TiB`],
       'they become free, so the listing keeps moving without being told how the keys are laid out: one of its ' +
       '257 starting ranges held 64.5% of the objects and was split 1,834 times.',
   ],
-  links: [['How this was measured', MEASURED]],
+  links: [['How this was measured', MEASURED], ['The run, range by range', RUN_REPORT], ['How it works', '/field-guide/']],
 }
 
 interface DevDocsNotice {
@@ -139,7 +142,7 @@ const HomeInventory = () =>
         Terminal(INVENTORY.caption, INVENTORY.session),
         ...INVENTORY.text.map((t) => h('p', t)),
         h('p', { class: 'swath-replay-links' }, INVENTORY.links.flatMap(([text, href], i) => [
-          i ? ' · ' : '', h('a', { href }, text),
+          i ? ' · ' : '', h('a', { href, target: href === RUN_REPORT ? '_self' : undefined }, text),
         ])),
       ]),
     ]),

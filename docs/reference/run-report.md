@@ -63,6 +63,7 @@ file; `DIR/run.json` follows the commit. Its counts carry the run report's names
 | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
 | `mutex_wait_ns`, `max_mutex_hold_ns` | the range engine's decision mutex: summed wait, longest hold |
 | `rows_retained` | rows a resume kept from the interrupted run (not in `rows_fetched`) |
+| `object_bytes` | the sizes of the objects handed on so far, summed: the report's `output.object_bytes` so far (absent for a schema without a size column, once an object's size is unknown, and before listing starts) |
 | `http_attempts`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](../internals/clients.md#retry-policy-and-accounting)) |
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
 | `cost_usd`, `rate_per_1k_usd` | `http_attempts` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
@@ -124,7 +125,7 @@ an earlier attempt, takes it from the manifest and retains and emits nothing its
 `parts_retained` count parts. `replaced` is true when the committed dataset replaced a previous one in the
 output (`--overwrite`), which stayed readable until this commit installed the new one in its place
 ([Overwrite and refresh](../running.md#overwrite-and-refresh)); absent otherwise.
-`object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept), each name once: a file with several hard links counts once per link, where `swath du`'s `totals.bytes` counts it once. On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
+`object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one, and when an object's size is unknown, as at the names metadata tier; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept), each name once: a file with several hard links counts once per link, where `swath du`'s `totals.bytes` counts it once. On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `committed_object_bytes` is the committed dataset's object bytes,
 the same sum over every row of it, as the manifest's `extensions.swath.committed_object_bytes` states it: retained parts
 and rows replayed from spill included, each row once whatever retries listed it. It is absent unless the dataset
@@ -210,7 +211,7 @@ seed, from its first delimiter request to its tiles (absent where none ran). `te
 
 `totals_view` is `swath du`'s [view](../commands/swath-du.md#the-view), when it was drawn: `runs` (the ranges'
 stretches of rows it read), `completed` (prefixes and objects complete inside one run, or local directories
-whose listing ended), split into `remembered` (at 1 % of the bytes seen, or holding a hard link) and `dropped`,
+whose listing ended), split into `remembered` (among the 100 largest of their depth, or holding a hard link) and `dropped`,
 `pruned` (remembered, dropped later for 100 larger ones of their depth), `partial` (cut by a run's edge, summed
 across runs), and `depth_kept` with `lowered` (-1 and false, or the deepest level kept once more than
 `output.totals.max_prefixes` were held).

@@ -5,6 +5,48 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Site: the field guide has its pictures back, drawn for the Go engine: an animated miniature model of a
+  listing (seed, owner-side splits, the sorted stream, commit before emit; still frames with reduced motion), a
+  diagram per section, and two figures from the home page's run (its 257 starting ranges, and requests in flight
+  over time on the range that held 64.5% of the bucket). Its claims are corrected against the code.
+- Go port: with the default spill cap, the `spill_pressure` event's remedy is to grow the spill disk, or free space
+  on it, as listing then continues; with a `--spill-budget` it still says to stop and resume with more.
+- Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
+  rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
+- Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular
+  expression. `.*\.parquet` is still refused, naming `--include-regex`.
+- Go port: `swath du --from-dataset DIR /tree/file`, a file in the dataset's tree, totals that file as a live
+  `swath du /tree/file` does; it sought `file/` and printed zeros. A symbolic link there is refused, naming it.
+- Go port: a resumed `swath list ... -o DIR --overwrite` writes `DIR/cuts.txt` again; the parts it kept from
+  the interrupted attempt were read where they lay before the installation, so the cut file was skipped with a
+  warning.
+- Site: a field guide at `/field-guide/` on how the Go engine divides, orders and resumes a listing, on the home
+  page's run, and that run's report at `/runs/noaa-gestofs-pds/`, linked from the replay. The explainer's report
+  names its run in its title and description and has a `main` landmark and a skip link.
+- Go port: a run's closing lines state the result: `complete: 60,010 objects, 5.55 TiB in 4.2s · 14,391 keys/s
+  → ds1 (1 part, 279 KiB)`, then `next: swath show ds1 · swath du --from-dataset ds1` (or `swath resume DIR`).
+  No rate under 2 s, the rate over the time printed; filtered runs say `3 objects kept, 1 filtered out`, an
+  interrupted one `7,003 saved, 12,003 listed`, a resume the dataset's total with the rows from earlier attempts,
+  `swath du` its total row's counts. API calls, in flight, throttles, retries, the estimate and peak RSS print
+  only with `--stats`, and only those that happened.
+- Go port: the progress line reads objects, bytes so far, elapsed, rate, then parts and (for an object store)
+  in flight and API calls; while every request fails it shows `retrying: CAUSE` instead of `0 keys/s`.
+  `progress.json` and the JSON `progress` event carry the bytes so far as `object_bytes`, the report's
+  `output.object_bytes` while the run lists. The report's `output.object_bytes` is absent when an object's
+  size is unknown (`--metadata names`), as `committed_object_bytes` is; it was 0.
+- Go port: `swath list -o FILE --overwrite` (or `-o -`) is accepted: a text file is always replaced, which
+  `--overwrite` asks for anyway (it stopped with `invalid configuration: replace needs an output directory`).
+- Go port: `swath show` prints the verdict first, then labelled lines in reading order (source, listed in local
+  time, contents with the object bytes and grouped counts, coverage with the filters' rules, storage last);
+  `swath show MISSING` says `no such file or directory`.
+- Go port: `swath list`'s table puts the size first, as `swath du`'s does, heads a local tree's keys `path`,
+  sizes `kind` to the usual kinds, and ends a symlink's row with ` -> TARGET`.
+- Go port: `swath du`'s table names its total row by SOURCE as typed (`s3://bkt/logs/2026/0 (total)`), marks a
+  directory it could not read `-`, and TSV/JSONL give the total the key prefix SOURCE names (`logs/2026/0`).
+  `swath du DIR` on a dataset directory prints a hint naming `--from-dataset`.
+- Go port: a GCS error answer without an error body names its HTTP status text and path; `-v`'s start line
+  shows the attempt id's first 8 characters; `swath du --from-dataset`'s label gives the listing time in local
+  time.
 - Releases tag the nested Go modules with swath's version: `reader/vX.Y.Z` and `objfile/vX.Y.Z` beside `vX.Y.Z`,
   all at one commit, so `go get github.com/varveio/swath/reader@v0.4.0` works. Both modules are at version 0, with
   no API promise. `just release` creates the three tags; the release workflow refuses a release whose module tags
@@ -149,15 +191,23 @@ Notable changes per release. The full human summary for the current release is i
   (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table heads its local times
   with the zone's abbreviation (`last_modified (CET)`) in place of `(local)`, and prints `-` for a missing value.
 - Go port: `swath du SOURCE` on a terminal, without `-d`, `--sort` or `--format`, draws the largest prefixes and
-  objects at whatever depth they are: a tree, largest first, each with its share of the total and, where the
-  width allows, a bar and the newest modification time in local time (the bar is left out first, then the
-  time; a long name is cut in the middle), color following `--color` and `NO_COLOR`. Each parent's other
-  children fold into one `(N more)` line carrying their sum, so every level adds up. Every figure is exact;
-  memory stays small because a complete prefix (inside one range, or a local directory whose listing ended)
-  is kept only at 1 % of the bytes seen so far and among the 100 largest of its depth. A pipe, `-d N`,
-  `--sort` and an explicit `--format` print the rows as before. The run report's `diagnostics.totals_view` counts
-  what the view kept, dropped and merged across ranges. The idea of the tree with shares is `dust`'s and
-  `pdu`'s (both Apache-2.0), implemented from their documented behavior.
+  objects at whatever depth they are, filling the terminal: a tree, largest first, under one heading, each line
+  with its size, its count of objects or files (`12.0k`), its share of the total, a bar (20 cells from 100
+  columns), the date of its newest object (local, the zone named once) and its path. As the terminal narrows the
+  bar goes, then the share, then the date; the size, the count and the path stay, a long path cut in the middle,
+  so no line wraps. A `!` after the size marks a line whose sums leave out a directory that could not be read,
+  and one line under the view says so (`-v` names them); the view leaves room for every line printed after it,
+  so its top stays on screen. Color follows `--color` and `NO_COLOR`. Each parent's other children fold into one
+  `(N more)` line carrying their sums and newest date, so every level adds up; a wide level of small prefixes is
+  shown as far as it outweighs what is below the large ones. Every figure is exact; memory stays small because
+  a complete prefix (inside one range, or a local directory whose listing ended) is kept only among the 100
+  largest of its depth, and a prefix cut by a range's edge completes once the ranges on both sides are listed.
+  A pipe, `-d N`, `--sort` and an explicit `--format` print the rows as before. The run report's
+  `diagnostics.totals_view` counts what the view kept, dropped and merged across ranges. The idea of the tree
+  with shares is `dust`'s and `pdu`'s (both Apache-2.0), implemented from their documented behavior.
+- Go port: the warning that names entries that could not be read gives a path below SOURCE relative to it, and
+  when the closing line's verdict says the output is partial, no error line repeats it (it remains under `-q`,
+  which prints no closing line).
 - Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
 - Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
   network filesystems) records it as null, not 0.

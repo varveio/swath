@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/reader"
 )
 
 // errNoCommand: an interrupted run that stopped before its journal header
@@ -332,6 +334,9 @@ func show(args []string, stdout io.Writer) error {
 		return usageError{err}
 	}
 	dir := p.operands[0]
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s: no such file or directory", dir)
+	}
 	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
 		return fmt.Errorf("%s holds neither a dataset nor an interrupted run", dir) // a file (a text listing, say)
 	}
@@ -379,36 +384,7 @@ func show(args []string, stdout io.Writer) error {
 		if err := json.Unmarshal(b, &m); err != nil {
 			return fmt.Errorf("manifest: %w", err)
 		}
-		var rows, bytes int64
-		for _, p := range m.Parts {
-			rows += p.Rows
-			bytes += p.Bytes
-		}
-		format := "SeekParquet format " + strconv.Itoa(m.FormatVersion)
-		if m.DraftRevision > 0 {
-			format += " draft " + strconv.Itoa(m.DraftRevision)
-		}
-		metadata := "no swath metadata"
-		if m.MetadataVersion > 0 {
-			metadata = "swath metadata version " + strconv.Itoa(m.MetadataVersion)
-		}
-		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", name, format, m.SchemaID, metadata)
-		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
-		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
-		c := m.Coverage
-		fmt.Fprintf(stdout, "coverage: %s", coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
-		if len(c.Filters) > 0 {
-			fmt.Fprintf(stdout, "; filtered: %s", strings.Join(filter.Texts(c.Filters), ", "))
-		}
-		if len(c.Exclusions) > 0 {
-			fmt.Fprintf(stdout, "; excluded: %s", strings.Join(c.Exclusions, ", "))
-		}
-		fmt.Fprintln(stdout)
-		fmt.Fprintf(stdout, "%d %s, %d %s, %d %s", len(m.Parts), plural(len(m.Parts), "part", "parts"), rows, plural(rows, "row", "rows"), bytes, plural(bytes, "byte", "bytes"))
-		if n := len(m.Parts); n > 0 {
-			fmt.Fprintf(stdout, ", keys %q .. %q", string(m.Parts[0].MinKey), string(m.Parts[n-1].MaxKey))
-		}
-		fmt.Fprintln(stdout)
+		writeSummary(stdout, name, &m, stdoutWidth())
 		if commit != "" {
 			fmt.Fprintln(stdout, commit)
 		}
@@ -429,34 +405,140 @@ func show(args []string, stdout io.Writer) error {
 		return err
 	}
 	h := st.Header
-	fmt.Fprintf(stdout, "interrupted run in %s (journal version %d, started %s)\n", dir, h.Version, h.Created.Format("2006-01-02T15:04:05Z"))
-	fmt.Fprintf(stdout, "command: swath %s\n", shellLine(redactArgv(h.Argv)))
+	fmt.Fprintf(stdout, "%s: interrupted run\n", dir)
+	label(stdout, "started", localTime(h.Created.Time)+" (journal version "+strconv.Itoa(h.Version)+")")
+	label(stdout, "command", "swath "+shellLine(redactArgv(h.Argv)))
 	id := h.Identity.Redacted()
-	fmt.Fprintf(stdout, "identity: provider %s, schema %s, writer %s, part size %d", id.Provider, id.SchemaID, id.Writer, id.PartSize)
+	ident := fmt.Sprintf("provider %s, schema %s, writer %s, part size %s", id.Provider, id.SchemaID, id.Writer, textout.Size(id.PartSize))
 	for _, f := range id.Source {
-		fmt.Fprintf(stdout, ", %s %s", f.Name, f.Value)
+		ident += ", " + f.Name + " " + f.Value
 	}
-	fmt.Fprintln(stdout)
+	label(stdout, "identity", ident)
 	if u := st.Unresumable; u != nil {
-		fmt.Fprintf(stdout, "marked unresumable (%s) at %s: %s; swath resume refuses it, swath list --overwrite starts over\n", u.Cause, u.At.Format("2006-01-02T15:04:05Z"), u.Reason)
+		label(stdout, "refused", fmt.Sprintf("marked unresumable (%s) at %s: %s; swath resume refuses it, swath list --overwrite starts over", u.Cause, localTime(u.At.Time), u.Reason))
 	}
 	if last := st.Last(); last != nil {
-		fmt.Fprintf(stdout, "%d %s committed, %d %s; swath resume lists after %q", len(st.Records), plural(len(st.Records), "part", "parts"),
-			last.RowsTotal, plural(last.RowsTotal, "row", "rows"), string(last.Part.MaxKey))
+		saved := fmt.Sprintf("%s %s, %s %s; swath resume lists after %q", count(int64(len(st.Records))), plural(len(st.Records), "part", "parts"),
+			count(last.RowsTotal), plural(last.RowsTotal, "row", "rows"), string(last.Part.MaxKey))
 		if last.Final {
-			fmt.Fprint(stdout, " (the final part is durable: resume only publishes)")
+			saved += " (the final part is durable: resume only publishes)"
 		}
-		fmt.Fprintln(stdout)
+		label(stdout, "saved", saved)
 	} else {
-		fmt.Fprintln(stdout, "no part committed; swath resume lists from the start")
+		label(stdout, "saved", "no part; swath resume lists from the start")
 	}
 	if st.TornBytes > 0 {
-		fmt.Fprintf(stdout, "torn tail: %d bytes (dropped by swath resume; its part, if written, must be reproduced exactly)\n", st.TornBytes)
+		fmt.Fprintf(stdout, "torn tail: %s bytes (dropped by swath resume; its part, if written, must be reproduced exactly)\n", count(st.TornBytes))
 	}
 	if ents, _ := os.ReadDir(filepath.Join(dir, dataset.Workspace, dataset.SuspectDir)); len(ents) > 0 {
 		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
+}
+
+// writeSummary prints a committed dataset's summary for people, in
+// reading order under labels: the verdict on its coverage, the source,
+// when it was listed, what it holds (its rows, the object bytes, the key
+// range, clipped to width when that is not 0 and left out where it cannot
+// fit), the coverage's account and the storage last.
+func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int) {
+	c := &m.Coverage
+	fmt.Fprintf(w, "%s: %s\n", escapeControl(name), coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
+	src := registry.Redact(m.Source.URI)
+	if m.Scope.Kind == "whole" {
+		whole := "bucket"
+		switch m.Source.Kind {
+		case "local":
+			whole = "tree"
+		case "azure":
+			whole = "container"
+		}
+		src += " (whole " + whole + ")"
+	}
+	label(w, "source", escapeControl(src))
+	if from, to := c.ListingStartedAt.Time, c.ListingFinishedAt.Time; !from.IsZero() && !to.IsZero() {
+		label(w, "listed", localSpan(from, to)+" ("+elapsed(to.Sub(from))+")")
+	}
+	spec, _ := reader.Schema(reader.SchemaID(m.SchemaID))
+	n := rowNouns(m.Source.Kind == "local", spec.Versions.ID != "")
+	t := m.Totals()
+	contents := n.of(t.Rows)
+	if b := t.CommittedObjectBytes; b != nil {
+		contents += ", " + textout.Size(*b)
+	}
+	if k := len(m.Parts); k > 0 {
+		lo, hi := strconv.Quote(string(m.Parts[0].MinKey)), strconv.Quote(string(m.Parts[k-1].MaxKey))
+		room := width - len(indent+labelWidth+contents+"; keys  .. ")
+		switch {
+		case width == 0 || len(lo)+len(hi) <= room:
+			contents += "; keys " + lo + " .. " + hi
+		case room >= 2*len(clipped):
+			contents += "; keys " + clip(lo, room/2) + " .. " + clip(hi, room-room/2)
+		}
+	}
+	label(w, "contents", contents)
+	cov := []string{"nothing unreadable"}
+	if c.Unreadable > 0 {
+		cov[0] = count(c.Unreadable) + " " + plural(c.Unreadable, "entry", "entries") + " unreadable"
+	}
+	if len(c.Filters) > 0 {
+		cov = append(cov, "filtered: "+strings.Join(filter.Texts(c.Filters), ", "))
+	} else {
+		cov = append(cov, "no filters")
+	}
+	if len(c.Exclusions) > 0 {
+		cov = append(cov, "excluded: "+strings.Join(c.Exclusions, ", "))
+	} else {
+		cov = append(cov, "no exclusions")
+	}
+	label(w, "coverage", escapeControl(strings.Join(cov, "; ")))
+	format := "SeekParquet format " + strconv.Itoa(m.FormatVersion)
+	if m.DraftRevision > 0 {
+		format += " draft " + strconv.Itoa(m.DraftRevision)
+	}
+	parts := int64(len(m.Parts))
+	label(w, "storage", fmt.Sprintf("%s %s, %s of Parquet (%s, schema %s)", count(parts), plural(parts, "part", "parts"), textout.Size(t.Bytes), format, m.SchemaID))
+}
+
+// labelWidth is the room a summary's labels take: the longest, contents,
+// and two blanks.
+const labelWidth = "contents  "
+
+// label prints one labelled line of a summary.
+func label(w io.Writer, name, text string) {
+	fmt.Fprintf(w, "%s%-*s%s\n", indent, len(labelWidth), name, text)
+}
+
+// localTime is t as the tables show a time, in local time to the second,
+// with its zone's abbreviation.
+func localTime(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05 MST") }
+
+// localSpan is from and to in local time, to's date left out when it is
+// from's.
+func localSpan(from, to time.Time) string {
+	from, to = from.Local(), to.Local()
+	if from.Format(time.DateOnly) == to.Format(time.DateOnly) {
+		return from.Format("2006-01-02 15:04:05") + " to " + to.Format("15:04:05 MST")
+	}
+	return localTime(from) + " to " + localTime(to)
+}
+
+// clipped is the shortest key clip leaves: a quote, a character, the
+// ellipsis and the closing quote. A narrower room leaves the range out.
+const clipped = "\"k...\""
+
+// clip cuts a quoted key to n bytes or fewer (n at least len(clipped)),
+// its start kept and an ellipsis after it.
+func clip(q string, n int) string {
+	const more = "...\""
+	if len(q) <= n {
+		return q
+	}
+	r := []rune(q)
+	for len(r) > 1 && len(string(r))+len(more) > n {
+		r = r[:len(r)-1]
+	}
+	return string(r) + more
 }
 
 // commitMarker is the commit marker of dir, a bucket dataset's work

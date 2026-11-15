@@ -43,7 +43,7 @@ hard-linked files it remembers ([Understand your results](../results.md)).
 with `--metadata names`.
 
 A SOURCE that is a file is read as the same entry in a listing of its parent: at the `--metadata` tier, and a
-symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never followed. Its key is its name.
+symbolic link as the link (kind `symlink`, its target in `link_target`), never followed. Its key is its name.
 
 Recursive exclude globs can prevent descent into entire subtrees ([Filters](../filters.md#globs)); other row
 filters do not stop the walk. On a filesystem `--workers` defaults to 4 per CPU, at most 64.

@@ -64,8 +64,9 @@ type Column[P any] struct {
 	// Delta writes a byte-array column DELTA_BYTE_ARRAY instead of
 	// dictionary-then-PLAIN (unique values such as ETags).
 	Delta bool
-	// Values are every value a column of names holds (a local entry's
-	// kind): a text table reserves the widest.
+	// Values are the values a column of names usually holds (a local
+	// entry's kind: file, dir, symlink): a text table reserves the widest,
+	// and widens the column for a rarer one when a row holds it.
 	Values []string
 }
 
@@ -110,6 +111,10 @@ type Info struct {
 	// from it, so a listing's rows and a dataset's (swath du
 	// --from-dataset) are read by one rule.
 	Containers Match
+	// Links, if set, marks a symbolic link's rows: a live listing of one
+	// follows it to a directory, whose rows the dataset holds under the
+	// target's name, so swath du --from-dataset refuses it as SOURCE.
+	Links Match
 	// NamesTier, if set, is the metadata tier (a manifest's
 	// collected.metadata) whose rows carry names alone: no stat column, no
 	// link identity. swath du --from-dataset counts such a dataset's
