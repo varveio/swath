@@ -71,7 +71,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: the files' allocated bytes first, and --sort size by them",
 		Long: "The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, " +
-			"so a tree's total is below du's by them. Each file must have them: --metadata names is refused, and a file without them fails the count."})
+			"so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
 	def(source.Flag{Name: "apparent-size", Value: source.Switch(&o.apparentSize), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "the files' lengths first, and --sort size by them (the default)",
 		Long:  "Not with --allocated."})

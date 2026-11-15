@@ -129,7 +129,7 @@ sizes) with exit 2.
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
   local: the files' allocated bytes first, and --sort size by them
 
-  The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, so a tree's total is below du's by them. Each file must have them: --metadata names is refused, and a file without them fails the count.
+  The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count.
 
 - <a id="option-apparent-size"></a>[`--apparent-size`](#option-apparent-size)\
   the files' lengths first, and --sort size by them (the default)
@@ -427,9 +427,8 @@ Totals:
       --allocated             local: the files' allocated bytes first, and --sort size by them
                                 The files' st_blocks x 512, the table's on disk; every row carries
                                 both figures whichever comes first. A directory's own blocks are not
-                                counted, so a tree's total is below du's by them. Each file must
-                                have them: --metadata names is refused, and a file without them
-                                fails the count.
+                                counted, so a tree's total is below du's by them. A file without
+                                them (the names metadata tier reads none) fails the count.
       --apparent-size         the files' lengths first, and --sort size by them (the default)
                                 Not with --allocated.
   -l, --count-links           local: count a file with several hard links under each of its names
