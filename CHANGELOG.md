@@ -15,7 +15,7 @@ Notable changes per release. The full human summary for the current release is i
   run UUID; a run without a journal has its attempt's id), also in `error.json`, `progress.json` and the log
   events' `run_id`.
 - Go port: every time in a JSON file or event (report, `run.json`, `error.json`, `progress.json`, the manifest,
-  the journal, the log's `ts`, a resolved `--modified-since` in `coverage.filters`, `swath du`'s
+  the journal, the log's `ts`, the times in `coverage.filters`, `swath du`'s
   `totals.max_last_modified` and `--from-dataset` provenance, the trace's `run_start.time`) is RFC 3339 in UTC with
   exactly six fraction digits: `2026-11-15T12:00:00.137198Z`, never `…28.1371984Z` or `…28Z`.
 - Go port: report and log names, one vocabulary: `attempt.started` is `attempt.started_at`;
