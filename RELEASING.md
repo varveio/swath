@@ -6,7 +6,9 @@ scheme and the per-release steps. The heavy lifting is automated by
 human side of it.
 
 A release ships the Go implementation (the module at the repository root): the `swath` lister and the `swath-replay`
-server. The Java implementation's last release was v0.3.2; it is no longer on `main` and is
+server. It also versions the nested Go modules `github.com/varveio/swath/reader` and
+`github.com/varveio/swath/objfile` at the same commit and version, so a program can require them
+by version. The Java implementation's last release was v0.3.2; it is no longer on `main` and is
 preserved at the tag `java-final`.
 
 ## Versioning
@@ -21,6 +23,12 @@ preserved at the tag `java-final`.
   Parquet footer's `created_by`, the archive names, the image tags and the image labels
   all carry it. There is no version file to bump. A build from a source checkout reports
   `devel`.
+- **Every module is tagged with it.** Go requires a nested module's version tag to carry its
+  directory, so release `0.4.0` is three tags at one commit: `v0.4.0` (the root module, and the
+  tag that triggers the workflow), `reader/v0.4.0` and `objfile/v0.4.0`. `just release` creates
+  all three, one for each `go.mod` below the root, and the workflow's `source` job fails unless
+  every one of them is on `origin` and names the tagged commit. Each module is at version 0: no
+  API promise yet.
 - **The binaries are checked against it.** The build job fails unless each linux/amd64
   binary prints exactly `swath X.Y.Z (<commit>)` or `swath-replay X.Y.Z (<commit>)`,
   and the publish job checks the same of each pushed image digest.
@@ -67,7 +75,8 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 ## What gates a release
 
-The `source` job verifies tag SHA and main ancestry, then independently requires a successful
+The `source` job verifies that every module's tag names the event's commit and that the commit is
+an ancestor of main, then independently requires a successful
 **`go-full-gate`** from that exact commit's `ci.yml` main push run. This gate certifies all Go modules,
 race shards, non-race checks, platforms, cross-builds, images and replay fixtures. Being on main or
 having a green PR is insufficient. The verifier selects the newest run and its current attempt;
@@ -131,7 +140,7 @@ substitute its version.
 3. On a clean checkout of `main` at that commit, tag and push:
    ```sh
    just release 0.4.0-rc.1
-   git push origin v0.4.0-rc.1
+   git push --atomic origin v0.4.0-rc.1 objfile/v0.4.0-rc.1 reader/v0.4.0-rc.1
    ```
 4. Approve the `public-release` environment when the `Release` run waits on it.
 5. Check that the SBOM lists the Go modules, not Java artifacts: the names include `stdlib`
@@ -168,15 +177,20 @@ do not repair the published candidate by hand.
    just release 0.4.0
    ```
    The recipe checks the version's form, the branch, a clean tree, that `HEAD` is on
-   `origin/main`, that the tag is new locally and on `origin`, and the release notes, then
-   creates the annotated tag `v0.4.0`. It makes no commit and does **not** push.
-4. Push the tag to trigger the release pipeline:
+   `origin/main`, that each tag is new locally and on `origin`, and the release notes, then
+   creates the annotated tags `v0.4.0`, `objfile/v0.4.0` and `reader/v0.4.0`. It makes no
+   commit and does **not** push.
+4. Push the tags in one atomic push, as the recipe prints it; `v0.4.0` triggers the release
+   pipeline:
    ```sh
-   git push origin v0.4.0
+   git push --atomic origin v0.4.0 objfile/v0.4.0 reader/v0.4.0
    ```
-5. The `Release` workflow first proves the tag commit is an ancestor of `origin/main`, requires
-   its successful full Go qualification, and checks the release notes, then runs the Go gate and builds the assets once on that exact
-   tag SHA, and then waits on the protected `public-release` environment. **Approve it.**
+   If a module tag is missing, the `source` job fails and names the tags it needs; push the
+   missing one and rerun the job, which reads the tags from `origin`, not from the push event.
+5. The `Release` workflow first proves that every module's tag names the tagged commit and
+   that it is an ancestor of `origin/main`, requires its successful full Go qualification,
+   and checks the release notes, then runs the Go gate and builds the assets once on that
+   exact tag SHA, and then waits on the protected `public-release` environment. **Approve it.**
    The publish job then pushes both images by digest, smokes those digests, tags them,
    signs and attests everything, creates the GitHub release as a **draft**, runs the
    verification commands below against what it just published, and only then un-drafts

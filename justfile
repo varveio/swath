@@ -5,17 +5,20 @@
 help:
     @just --list
 
-# Prepare a release: tag main's HEAD as vVERSION. Accepts X.Y.Z or a X.Y.Z-rc.N release
-# candidate; no other pre-release identifiers and no build metadata, matching what the
-# release workflow enforces.
+# Prepare a release: tag main's HEAD as vVERSION, and as DIR/vVERSION for each nested module
+# (reader/vVERSION, objfile/vVERSION). Accepts X.Y.Z or a X.Y.Z-rc.N release candidate; no
+# other pre-release identifiers and no build metadata, matching what the release workflow
+# enforces.
 #
 # The tag is the version's one source: the release workflow stamps it into every binary
 # (build.sh, $SWATH_VERSION), the archive names and the image tags, so there is no version
 # file to bump and no commit to make. The tagged commit must already be on origin/main, as the
-# workflow's ancestry guard requires.
+# workflow's ancestry guard requires, and the workflow refuses a release whose module tags are
+# missing or name another commit.
 #
-# Does NOT push — review, then `git push origin vX.Y.Z`. An -rc.N tag publishes only its own
-# container tags and a GitHub pre-release, and is NOT promoted: the final tag is a fresh build.
+# Does NOT push — review, then push the tags together with the command it prints. An -rc.N
+# release publishes only its own container tags and a GitHub pre-release, and is NOT promoted:
+# the final tag is a fresh build.
 # See RELEASING.md.
 release VERSION:
     #!/usr/bin/env bash
@@ -34,17 +37,24 @@ release VERSION:
     if ! git merge-base --is-ancestor HEAD origin/main; then
         echo "error: HEAD is not on origin/main; push or pull first -- the release workflow refuses a tag outside main" >&2; exit 2
     fi
-    if git rev-parse -q --verify "refs/tags/v{{VERSION}}" >/dev/null; then
-        echo "error: tag v{{VERSION}} already exists locally" >&2; exit 2
-    fi
-    if git ls-remote --exit-code --tags origin "refs/tags/v{{VERSION}}" >/dev/null 2>&1; then
-        echo "error: tag v{{VERSION}} already exists on origin" >&2; exit 2
-    fi
+    tags=$(./scripts/ci/verify-release-source.sh tags "v{{VERSION}}")
+    tags=${tags//$'\n'/ }
+    for tag in $tags; do
+        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "error: tag $tag already exists locally" >&2; exit 2
+        fi
+        if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "error: tag $tag already exists on origin" >&2; exit 2
+        fi
+    done
     ./scripts/ci/verify-release-notes.sh "{{VERSION}}" docs/ops/dev/RELEASE_NOTES.md
-    git tag -a "v{{VERSION}}" -m "swath v{{VERSION}}"
+    for tag in $tags; do
+        git tag -a "$tag" -m "swath $tag"
+    done
     echo
-    echo "Tagged v{{VERSION}} at $(git rev-parse --short HEAD)."
-    echo "Review it, then: git push origin v{{VERSION}}"
+    echo "Tagged $tags at $(git rev-parse --short HEAD)."
+    echo "Review them, then push them in one push (the release workflow requires all of them):"
+    echo "  git push --atomic origin $tags"
     if [[ "{{VERSION}}" == *-rc.* ]]; then
         echo
         echo "This is a PRE-RELEASE: it publishes the X.Y.Z-rc.N container tags only —"
