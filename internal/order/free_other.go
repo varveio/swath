@@ -5,5 +5,5 @@
 
 package order
 
-// freeBytes is not measured on this platform: only the cap and ENOSPC hold.
-func freeBytes(string) int64 { return 1<<63 - 1 }
+// statFree is not measured on this platform: only the cap and ENOSPC hold.
+func statFree(string) int64 { return 1<<63 - 1 }

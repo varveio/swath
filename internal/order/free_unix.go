@@ -7,9 +7,9 @@ package order
 
 import "syscall"
 
-// freeBytes is the space available to an unprivileged writer on dir's
+// statFree is the space available to an unprivileged writer on dir's
 // filesystem; on error it reports unlimited (the cap and ENOSPC still hold).
-func freeBytes(dir string) int64 {
+func statFree(dir string) int64 {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return 1<<63 - 1

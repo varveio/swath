@@ -208,7 +208,7 @@ type SpillLimits struct {
 	// Uncompressed writes spill frames without zstd (level 1 by default: it
 	// still finds the ETag and key-suffix bytes delta coding leaves).
 	Uncompressed bool
-	Max          int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
+	Max          int64 // cap on live spill bytes, fixed (0: a cap that follows the spill filesystem's free space, spillMax; negative: none)
 	Reserve      int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
 }
 
@@ -246,11 +246,24 @@ type Spill struct {
 	// end included); RefusedSpells the intervals that ended.
 	RefusedNs     int64 `json:"refused_ns"`
 	RefusedSpells int64 `json:"refused_spells"`
-	// MaxBytes is the cap on live spill bytes in effect (0: none);
-	// ReserveBytes the free space spill left on its filesystem (0: none).
-	MaxBytes     int64 `json:"max_bytes"`
-	ReserveBytes int64 `json:"reserve_bytes"`
-	PeakReaders  int64 `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
+	// MaxBytes is the cap on live spill bytes in effect at the end (0:
+	// none), StartMaxBytes the cap the run started with; ReserveBytes the
+	// free space spill left on its filesystem (0: none). MaxBy is what
+	// set the cap (CapBudget, CapDisk, CapDiskHalf, CapNone); a cap set by
+	// the disk follows it: a frame it would refuse re-reads the free
+	// space, and MaxRaised counts the times the cap rose (the filesystem
+	// grew, or other files on it were removed). While such a cap holds
+	// the run back (a frame refused, workers waiting on it) the
+	// free space is also reread every 2 s: MaxRechecks counts those reads,
+	// MaxRecheckRaised those that raised the cap.
+	MaxBytes         int64  `json:"max_bytes"`
+	StartMaxBytes    int64  `json:"start_max_bytes"`
+	MaxBy            string `json:"max_by"`
+	MaxRaised        int64  `json:"max_raised"`
+	MaxRechecks      int64  `json:"max_rechecks"`
+	MaxRecheckRaised int64  `json:"max_recheck_raised"`
+	ReserveBytes     int64  `json:"reserve_bytes"`
+	PeakReaders      int64  `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
 	// ReadHandles is the spill read handles' account: every read of a
 	// spill file (a frame at an offset, a trailer, the drainer's reader)
 	// leases its file's one descriptor, kept open between reads.
@@ -271,32 +284,62 @@ type Spill struct {
 	FSType string `json:"fs_type,omitempty"`
 }
 
-// spillMax is the live spill cap for spill under dir: the configured one,
-// none for a negative one, else half the space free on dir's filesystem
-// (its nearest existing ancestor) when the run starts, after the reserve.
-// retained is the bytes of the certified spill a resume recovered there:
-// they count as free, being spill the cap already holds (their bytes are
-// charged to it), so a same-disk resume has the cap its killed run had.
-func spillMax(l SpillLimits, dir string, retained int64) int64 {
+// What set the spill cap (Spill.MaxBy).
+const (
+	CapBudget   = "spill_budget" // --spill-budget: fixed
+	CapDisk     = "disk"         // the default for a dataset in a bucket: the spill filesystem's free space after the reserve, following it
+	CapDiskHalf = "disk_half"    // the default otherwise (the filesystem shared): half of that, following it
+	CapNone     = "none"         // no cap: a library caller's negative Max, or free space that cannot be measured
+)
+
+// spillMax is the live spill cap a run starts with for spill under dir,
+// and the share of the disk it follows (order.Options.SpillShare; 0: a
+// fixed cap): the configured one, none for a negative one, else the space
+// free on dir's filesystem (its nearest existing ancestor) after the
+// reserve, all of it, or half of it when the filesystem is shared: a
+// dataset on disk spills under its directory and a text file beside
+// itself, so the parts or the file need the room; a stream spills under
+// $TMPDIR, which other programs use. Only a dataset in a bucket, whose
+// parts are uploaded from memory, leaves spill the whole filesystem.
+// The default follows the disk: the order stage re-derives it from the
+// free space when it would refuse a frame, so a filesystem grown under a
+// live run is used. retained is the bytes of the certified spill a resume
+// recovered there: they count as free, being spill the cap already holds
+// (their bytes are charged to it), so a same-disk resume has the cap its
+// killed run had.
+func spillMax(l SpillLimits, dir string, retained int64, shared bool) (max, share int64) {
 	switch {
 	case l.Max > 0:
-		return l.Max
+		return l.Max, 0
 	case l.Max < 0:
-		return 0
+		return 0, 0
 	}
 	free := freeBytes(existing(dir))
 	if free == order.Unlimited {
-		return 0
+		return 0, 0
 	}
-	return halfFree(free+retained, l.Reserve)
+	share = 1
+	if shared {
+		share = 2
+	}
+	return order.DiskCap(free+retained, l.Reserve, share), share
+}
+
+// capBy names what set a run's spill cap (Spill.MaxBy).
+func capBy(oopt order.Options) string {
+	switch {
+	case oopt.SpillShare == 1:
+		return CapDisk
+	case oopt.SpillShare > 1:
+		return CapDiskHalf
+	case oopt.SpillMax > 0:
+		return CapBudget
+	}
+	return CapNone
 }
 
 // freeBytes is order.FreeBytes (tests replace it).
 var freeBytes = order.FreeBytes
-
-// halfFree is the default spill cap with free bytes free: half of them
-// after the reserve, at least one byte.
-func halfFree(free, reserve int64) int64 { return max(1, (free-reserve)/2) }
 
 // durableLimits is the durable spill's limits for a spill cap of max bytes
 // in dir (0: none, so the free space there, the retained certified spill
@@ -1132,7 +1175,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		oopt.SpillDir = filepath.Join(scratch, "spill")
 	}
 	if oopt.SpillDir != "" {
-		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir, jr.cacheOf().AcceptedBytes())
+		oopt.SpillMax, oopt.SpillShare = spillMax(cfg.Limits.Spill, oopt.SpillDir, jr.cacheOf().AcceptedBytes(), cfg.Output.Remote == nil)
 		// Warned at the first spill, not here: most runs never spill, and
 		// a usage error found later must come alone.
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
@@ -1320,7 +1363,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			RefusedNs: int64(ost.SpillRefusedTime), RefusedSpells: ost.SpillRefusedSpells,
-			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), MaxRaised: ost.SpillMaxRaised, MaxRechecks: ost.SpillMaxRechecks, MaxRecheckRaised: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {

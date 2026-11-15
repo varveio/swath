@@ -253,9 +253,11 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 ```
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `resources.spill.refused` above 0
-([the first bad pattern](production.md#three-bad-patterns)). Stop it and resume on a larger disk or with a
-larger `--spill-budget` (with the default cap, a plain resume on a larger disk takes half its free space), or let
-it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
+([the first bad pattern](production.md#three-bad-patterns)). With the default cap, grow the spill filesystem
+under the running process: the cap follows the disk, and listing continues once the next frame finds the room
+(`resources.spill.max_raised`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
+the room (a plain resume keeps the recorded cap; with the default cap it derives one from the free space it
+finds), or let it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
 the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
 `stopped by --spill-wait-timeout 30m0s: resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 

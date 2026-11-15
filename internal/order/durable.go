@@ -138,7 +138,7 @@ type DurableLimits struct {
 
 // What bounds an attempt's durable spill limits (DurableReport.LimitedBy).
 const (
-	limitSpillCap  = "spill_cap"  // the spill cap (--spill-budget, or half the free space)
+	limitSpillCap  = "spill_cap"  // the spill cap at start (--spill-budget, or the default that follows the disk)
 	limitFreeSpace = "free_space" // no spill cap: the spill filesystem's free space
 	limitMetadata  = "metadata"   // the spill would allow more (16 GiB or more): the metadata ceiling, 262,144 slots
 	limitFixed     = "fixed"      // neither known: 10,000 certificates, H 40,000

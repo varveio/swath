@@ -278,8 +278,90 @@ func TestSpillDiskBudget(t *testing.T) {
 	if none.SpillRows != 0 || none.SpillRefused == 0 {
 		t.Fatalf("reserve: %d rows spilled, %d refused", none.SpillRows, none.SpillRefused)
 	}
+	// A cap that follows the disk, started at the same limit on a disk
+	// that has grown since: its first frame past the limit re-reads the
+	// free space and the cap rises instead of refusing, with the same
+	// output; the gauge and Stats carry the cap in effect.
+	old := freeBytes
+	defer func() { freeBytes = old }()
+	freeBytes = func(string) int64 { return 1 << 40 }
+	g := &Gauges{}
+	grown := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit, SpillShare: 1, Gauges: g}, false)
+	if grown.SpillRefused != 0 || grown.SpillMaxRaised != 1 || grown.SpillMax < 1<<40 || g.Snapshot().SpillMaxBytes != grown.SpillMax || grown.SpillPeak <= limit {
+		t.Fatalf("cap following the disk from %d: peak %d, refused %d, raised %d to %d (gauge %d)", limit, grown.SpillPeak, grown.SpillRefused,
+			grown.SpillMaxRaised, grown.SpillMax, g.Snapshot().SpillMaxBytes)
+	}
 	if ents := readDir(t, dir); len(ents) != 0 {
 		t.Fatalf("spill files left: %d", len(ents))
+	}
+}
+
+// TestSpillCapFollowsDisk: a cap that follows the disk (Options.SpillShare)
+// refuses frames once spill fills its share of the filesystem's room, and
+// when the filesystem grows the next frame is admitted without a restart:
+// the cap rises (once), the refusal ends, and the following frames fill
+// the new room until they are refused again. A fixed cap (--spill-budget)
+// does not rise on the same growth, nor does a following one when the free
+// space cannot be measured. The filesystem is the test's: its size less
+// the frames admitted is the free space.
+func TestSpillCapFollowsDisk(t *testing.T) {
+	const reserve, frame = 1000, 1000
+	var size, held int64
+	old := freeBytes
+	t.Cleanup(func() { freeBytes = old })
+	freeBytes = func(string) int64 { return size - held }
+	fill := func(s *spiller[tp]) (admitted int) {
+		t.Helper()
+		for s.admit(frame, false) {
+			held += frame
+			admitted++
+		}
+		return admitted
+	}
+	for _, tc := range []struct {
+		share         int64
+		before, after int // frames admitted on 10,000 bytes, then after growing to 20,000
+		raised        int64
+	}{
+		{1, 9, 10, 1}, // all the room after the reserve: 9,000, then 19,000
+		{2, 4, 5, 1},  // half of it: 4,500, then 9,500
+		{0, 4, 0, 0},  // fixed at the share's 4,500
+	} {
+		size, held = 10_000, 0
+		share := tc.share // the start's
+		if share == 0 {
+			share = 2
+		}
+		s, err := newSpiller(&testSchema, t.TempDir(), false, false, DiskCap(size, reserve, share), reserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.share = tc.share
+		if n := fill(s); n != tc.before || !s.full.Load() || s.refused.Load() != 1 || s.raised.Load() != 0 {
+			t.Fatalf("share %d on %d bytes: %d frames admitted (want %d), full %v, refused %d, raised %d", tc.share, size, n, tc.before, s.full.Load(), s.refused.Load(), s.raised.Load())
+		}
+		size = 20_000 // the filesystem grown under the live run
+		if n := fill(s); n != tc.after || s.raised.Load() != tc.raised {
+			t.Fatalf("share %d grown to %d bytes: %d frames admitted (want %d), raised %d (want %d), cap %d", tc.share, size, n, tc.after, s.raised.Load(), tc.raised, s.max.Load())
+		}
+		if want := DiskCap(size, reserve, share); tc.share > 0 && s.max.Load() != want {
+			t.Fatalf("share %d: cap %d, want %d", tc.share, s.max.Load(), want)
+		}
+		if _, spells, open := s.refusedTime(); tc.share > 0 && (spells != 1 || !open) {
+			t.Fatalf("share %d: %d refused spells ended (open %v): the rise must end the first refusal, the last frame open another", tc.share, spells, open)
+		}
+		s.close()
+	}
+	// Free space not measured: the cap holds.
+	freeBytes = func(string) int64 { return Unlimited }
+	s, err := newSpiller(&testSchema, t.TempDir(), false, false, frame, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	s.share = 1
+	if !s.admit(frame, false) || s.admit(frame, false) || s.raised.Load() != 0 {
+		t.Fatalf("unmeasured free space: cap %d raised %d times", s.max.Load(), s.raised.Load())
 	}
 }
 

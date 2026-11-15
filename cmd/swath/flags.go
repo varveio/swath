@@ -157,8 +157,8 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "bytes buffered for sorted output; not a total-memory limit",
 		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
 	def(source.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
-		Usage: "cap on spill (default: half the output filesystem's free space)",
-		Long:  "Set it when the output filesystem is shared or small. Past it, or at the reserve, listing waits instead of spilling."})
+		Usage: "fixed cap on spill (default: follows the spill disk's free space)",
+		Long:  "By default spill may use the spill filesystem's free space after a reserve (half of it unless the dataset is in a bucket, as the output shares it), re-read while it holds listing back, so a disk grown under a live run is used. Set it when the filesystem is shared with other work. Past it, or at the reserve, listing waits instead of spilling."})
 	def(source.Flag{Name: "part-size", Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: source.GroupPerformance, Commands: writing,
 		Usage: "target size of a Parquet part",
 		Long:  "Smaller parts for readers that load whole parts, larger for fewer files on a very large listing."})

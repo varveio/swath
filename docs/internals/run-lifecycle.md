@@ -90,7 +90,7 @@ once spill has stood refused while workers wait on it (in publish or at admissio
 (`order.spill_pressure_since` in the progress file; a wait that comes back within 30 s keeps its start), it
 prints the error event `spill_pressure`, and again every 30 minutes while the wait lasts. With
 `--spill-wait-timeout` it stops the run at that length: exit 74, `cause` `spill_budget`, resumable as a full
-disk is, with more disk or a larger `--spill-budget`. Both act only while workers wait at that moment: a run
+disk is, with more disk or a larger `--spill-budget`. With the default cap, a disk grown under the run ends the wait: the cap follows it ([ordering](ordering.md#spill)). Both act only while workers wait at that moment: a run
 that recovered, or whose listing is done (the segment tail, the commit), is neither told nor stopped.
 
 A finite `--max-duration` belongs on every unattended attempt (the default, 0, has no limit): the watchdog

@@ -213,9 +213,10 @@ func (o *run[R, P]) windowRows() (float64, string) {
 	return rows, by
 }
 
-// storageRows is what the spill cap and the row budget give the window, and
-// the term that set it (mu held); spill without a cap gives no limit, and
-// the target sets the window.
+// storageRows is what the spill cap in effect (raised as it follows the
+// disk) and the row budget give the window, and the term that set it (mu
+// held); spill without a cap gives no limit, and the target sets the
+// window.
 func (o *run[R, P]) storageRows() (float64, string) {
 	w := o.win
 	mem := 0.0
@@ -225,7 +226,7 @@ func (o *run[R, P]) storageRows() (float64, string) {
 	switch {
 	case o.sp == nil:
 		return mem, WindowBudget
-	case o.sp.max <= 0:
+	case o.sp.max.Load() <= 0:
 		return math.Inf(1), ""
 	}
 	beta := w.sizes.RowBytes
@@ -235,7 +236,7 @@ func (o *run[R, P]) storageRows() (float64, string) {
 	if beta <= 0 {
 		beta = spillRowBytes
 	}
-	return float64(o.sp.max)/2/beta + mem, WindowSpillCap
+	return float64(o.sp.max.Load())/2/beta + mem, WindowSpillCap
 }
 
 // spillRefuses is the window's spill gate (mu held): a frame refused, or
@@ -260,15 +261,16 @@ func (o *run[R, P]) spillRefuses() bool {
 	if sp.full.Load() {
 		return true
 	}
-	if sp.max <= 0 {
+	m := sp.max.Load()
+	if m <= 0 {
 		return false
 	}
 	live := sp.live.Load()
-	if over := live - sp.max/2 - (behind - waiting); over > 0 && waiting > 0 {
+	if over := live - m/2 - (behind - waiting); over > 0 && waiting > 0 {
 		w.st.Evicted += sp.cache.trim(over)
 		_, waiting = sp.cache.Behind()
 	}
-	return live-waiting > sp.max/2
+	return live-waiting > m/2
 }
 
 // durable reports whether the run has a durable cache: only then can

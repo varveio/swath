@@ -171,9 +171,9 @@ resumes, and a text file `rows.tsv` is refused as text output.
   Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders.
 
 - <a id="option-spill-budget"></a>[`--spill-budget SIZE`](#option-spill-budget)\
-  cap on spill (default: half the output filesystem's free space)
+  fixed cap on spill (default: follows the spill disk's free space)
 
-  Set it when the output filesystem is shared or small. Past it, or at the reserve, listing waits instead of spilling.
+  By default spill may use the spill filesystem's free space after a reserve (half of it unless the dataset is in a bucket, as the output shares it), re-read while it holds listing back, so a disk grown under a live run is used. Set it when the filesystem is shared with other work. Past it, or at the reserve, listing waits instead of spilling.
 
 - <a id="option-part-interval"></a>[`--part-interval DURATION`](#option-part-interval)\
   close a part with rows after this long, full or not (default `30s`)
@@ -347,9 +347,13 @@ Performance:
                                 1GiB (128MiB when none is detected; invocation.sort_buffer says
                                 which). Raise it when spill is heavy and memory is free; to use less
                                 memory lower it with --workers and --encoders.
-      --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
-                                Set it when the output filesystem is shared or small. Past it, or at
-                                the reserve, listing waits instead of spilling.
+      --spill-budget SIZE     fixed cap on spill (default: follows the spill disk's free space)
+                                By default spill may use the spill filesystem's free space after a
+                                reserve (half of it unless the dataset is in a bucket, as the output
+                                shares it), re-read while it holds listing back, so a disk grown
+                                under a live run is used. Set it when the filesystem is shared with
+                                other work. Past it, or at the reserve, listing waits instead of
+                                spilling.
       --part-interval DURATION
                               close a part with rows after this long, full or not (default 30s)
                                 0: by size only. Lower it to close parts sooner on a slow listing
