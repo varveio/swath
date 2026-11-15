@@ -72,19 +72,33 @@ func hasScheme(path string) bool {
 // With -o FILE a --format that agrees with the file's name is accepted,
 // one that does not is refused, as is --format with a dataset directory.
 // --columns chooses TSV or JSONL columns: refused with the table and with a
-// dataset, and auto on a terminal is then TSV.
+// dataset, and auto on a terminal is then TSV. --no-header is TSV's, so
+// likewise, and refused with JSONL too.
 func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
-	c, err := resolveText(o, stdoutTTY && len(o.columns) == 0)
+	c, err := resolveText(o, stdoutTTY && len(o.columns) == 0 && !o.noHeader)
 	switch {
-	case err != nil || len(o.columns) == 0:
+	case err != nil || o.countOnly || c == nil && len(o.columns) == 0 && !o.noHeader:
 		return c, err
-	case c == nil:
+	case o.noHeader && c == nil:
+		return nil, fmt.Errorf("--no-header: -o %s is a dataset directory; the header line is TSV's", registry.Redact(o.out))
+	case o.noHeader && c.Format != textout.TSV:
+		return nil, errNoHeader(c.Format)
+	case len(o.columns) > 0 && c == nil:
 		return nil, fmt.Errorf("--columns: -o %s is a dataset directory, which holds every column; the columns are chosen for TSV and JSONL", registry.Redact(o.out))
-	case c.Format == textout.Table:
+	case len(o.columns) > 0 && c.Format == textout.Table:
 		return nil, errors.New("--columns: the table's columns are fixed; the columns are chosen for --format tsv or jsonl")
 	}
-	c.Columns = o.columns
+	c.Columns, c.NoHeader = o.columns, o.noHeader
 	return c, nil
+}
+
+// errNoHeader refuses --no-header with a format other than TSV.
+func errNoHeader(format string) error {
+	name := "the " + format
+	if format == textout.JSONL {
+		name = "JSONL"
+	}
+	return fmt.Errorf("--no-header leaves out TSV's header line: not with %s", name)
 }
 
 func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
@@ -189,10 +203,7 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	}
 	// A local tree's file with several hard links counts once, as du
 	// counts it, unless --count-links.
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes}
-	if o.allocated {
-		opt.BytesColumn = totals.AllocatedBytes
-	}
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, Primary: primaryFigure(o)}
 	if pf, err := registry.Lookup(root); err == nil {
 		opt.LinksOnce = pf.Scheme == "" && !o.countLinks
 		if pf.CheckTotals != nil {
@@ -201,26 +212,41 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			}
 		}
 	}
-	o.totals = &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}
+	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt)}
 	return nil
 }
 
+// primaryFigure is the figure swath du puts first and sorts by: the
+// allocated bytes with --allocated, else the size.
+func primaryFigure(o *options) string {
+	if o.allocated {
+		return totals.AllocatedBytes
+	}
+	return totals.Size
+}
+
 // totalsFormat is swath du's --format (auto: the table on a terminal, TSV
-// otherwise), its --sort checked.
+// otherwise, or TSV with --no-header), its --sort, its primary figure and
+// --no-header checked.
 func totalsFormat(o *options, stdoutTTY bool) (string, error) {
 	format := o.format
 	switch format {
 	case "", "auto":
 		format = textout.TSV
-		if stdoutTTY {
+		if stdoutTTY && !o.noHeader {
 			format = textout.Table
 		}
 	case textout.TSV, textout.Table, textout.JSONL:
 	default:
 		return "", fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
 	}
-	if o.sortBy != sortName && o.sortBy != sortSize {
+	switch {
+	case o.sortBy != sortName && o.sortBy != sortSize:
 		return "", fmt.Errorf("--sort %q: want name or size", o.sortBy)
+	case o.allocated && o.apparentSize:
+		return "", errors.New("--allocated and --apparent-size each choose the figure that comes first: give one")
+	case o.noHeader && format != textout.TSV:
+		return "", errNoHeader(format)
 	}
 	return format, nil
 }

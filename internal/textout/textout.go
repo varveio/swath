@@ -53,6 +53,8 @@ type Config struct {
 	// Columns, if set, are the TSV and JSONL columns by name, in order
 	// (the key's is KeyColumn); nil for the key and every schema column.
 	Columns []string
+	// NoHeader leaves out TSV's header line.
+	NoHeader bool
 	// Loc is the table's time zone (nil: time.Local); TSV and JSONL are
 	// UTC.
 	Loc *time.Location
@@ -351,7 +353,8 @@ func appendTime(dst []byte, micros int64) []byte {
 	return time.UnixMicro(micros).UTC().AppendFormat(dst, "2006-01-02T15:04:05.000000Z07:00")
 }
 
-// tableTime is a table's time layout, to the second in the reader's zone.
+// tableTime is a table's time layout, to the second in the reader's zone,
+// which the heading names.
 const tableTime = "2006-01-02 15:04:05"
 
 func appendLocal(dst []byte, micros int64, loc *time.Location) []byte {

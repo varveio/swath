@@ -269,11 +269,13 @@ sets no total-memory limit. Read `resources.peak_rss_bytes` in the report of a r
 lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without
 lowering the peak ([Running swath](running.md#memory)).
 
-## `swath du` shows a size of 0, or `-`
+## `swath du` shows a size of `-`
 
-With `--metadata names` a local walk reads no sizes: `unsized` counts the files without one, and the table
-shows `-`. With `--allocated` the bytes are in `allocated_size`, not `size`
-([Output](output.md#du-rows)).
+With `--metadata names` a local walk reads no sizes or blocks: `size` and `allocated_bytes` are null, the
+table shows `-`, and `size_missing` and `allocated_bytes_missing` count the files without them. Windows reads
+no blocks, and a bucket has none: `allocated_bytes` is null there, and the line under a local table says
+`on disk unknown`. A figure shown as `>= 12.0 KiB` leaves out
+the files that had no value for it ([Output](output.md#du-rows)).
 
 ## Entries could not be read
 

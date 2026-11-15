@@ -47,7 +47,7 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, f *fil
 		return read, fmt.Errorf("no provider of this build writes schema %s", id)
 	}
 	opt := t.Options()
-	need := []string{opt.BytesColumn, "last_modified", info.Containers.Column, spec.Versions.DeleteMarker}
+	need := []string{totals.Size, totals.AllocatedBytes, "last_modified", info.Containers.Column, spec.Versions.DeleteMarker}
 	if opt.LinksOnce {
 		need = append(need, "nlink", "dev", "inode")
 	}

@@ -21,6 +21,27 @@ Notable changes per release. The full human summary for the current release is i
   instead of 0.
 - Go port: a JSONL row of a local tree always has `key` and `key_base64` (and `link_target`,
   `link_target_base64`): the text, null when not UTF-8, and the base64 bytes, null when UTF-8.
+- Go port: `swath du`'s rows carry both byte figures under the dataset's names, `size` (the lengths) and
+  `allocated_bytes` (a local file's blocks), whatever `--allocated` says; `allocated_size` is gone. `unsized`
+  is replaced by `size_missing` and `allocated_bytes_missing`: a figure no counted object had is null, one
+  that some had is the sum of theirs beside the count of the others, and an empty prefix's is 0. A bucket's
+  `allocated_bytes` is null. The newest time under a prefix is `max_last_modified`; `list` rows and the dataset
+  keep `last_modified`. Every row adds `row_type` (`total` or `prefix`), `primary`, `sort` and `links_once`.
+  `--allocated` only puts the allocated bytes first and makes `--sort size` order by them; `--apparent-size`
+  selects the default, and the two together are refused. The run report's `output.totals` takes the same
+  names (`size`, `allocated_bytes`, the missing counts, `max_last_modified`, `primary`) in place of `bytes`,
+  `bytes_column` and `unsized`. `links_once` says whether the listing reads links (a local tree at stat or
+  statx, without `-l`), and the manifest records a local listing's metadata tier (`collected.metadata`), so a
+  dataset listed with `--metadata names` totals as the live run does, an empty one included. A name of a
+  hard-linked file counted under another name adds no time to `max_last_modified`.
+- Go port: the `swath du` table shows one figure, `size`, or `on disk` with `--allocated`, the counts with
+  grouped digits, no time, and each path indented two blanks a level; an unknown figure is `-`, a partial one
+  `>= ` its lower bound. For a local tree a line on stderr under the table gives the totals of both figures
+  (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table heads its local times
+  with the zone's abbreviation (`last_modified (CET)`) in place of `(local)`, and prints `-` for a missing value.
+- Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
+- Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
+  network filesystems) records it as null, not 0.
 - Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
   (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
   longer subject to in-place changes of the format. No code change from the commit pinned before.

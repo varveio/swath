@@ -586,17 +586,18 @@ type options struct {
 	term                   termOptions
 	format                 string
 	columns                []string        // --columns
+	noHeader               bool            // --no-header
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
 	partMaxRows            int64
 	seedFrom               string
-	// swath du's per-prefix totals: --depth, --max-prefixes, and the
-	// local --allocated, --count-links and --max-inodes; totals is their
-	// output, resolved.
-	depth, maxPrefixes, maxInodes int
-	allocated, countLinks         bool
-	sortBy                        string // --sort: sortName or sortSize
-	totals                        *totalsOut
+	// swath du's per-prefix totals: --depth, --max-prefixes,
+	// --apparent-size, and the local --allocated, --count-links and
+	// --max-inodes; totals is their output, resolved.
+	depth, maxPrefixes, maxInodes       int
+	allocated, apparentSize, countLinks bool
+	sortBy                              string // --sort: sortName or sortSize
+	totals                              *totalsOut
 	// swath du --from-dataset DIR [PREFIX]: the dataset directory, and the
 	// key prefix the totals are restricted to ("": the dataset's scope).
 	fromDataset, datasetPrefix string
@@ -616,24 +617,62 @@ const (
 )
 
 // totalsOut is where swath du writes its prefix rows: stdout, in format
-// (textout's TSV, JSONL or Table), by size when bySize (totals.SortBySize).
+// (textout's TSV, JSONL or Table), by size when sortBy is sortSize
+// (totals.SortBySize), TSV without its header line when noHeader.
 type totalsOut struct {
-	format string
-	bySize bool
-	tally  *totals.Tally
+	format   string
+	sortBy   string
+	noHeader bool
+	tally    *totals.Tally
 	// dataset is the JSON object JSONL rows read from a dataset carry
 	// (textout.TotalsLayout.Dataset); nil for a live run.
 	dataset []byte
 }
 
-// write writes the tally's rows to w.
+// write writes the tally's rows to w. The table shows one figure; for a
+// source with allocated bytes a line on stderr under it (unless -q, or
+// under --log-format json, whose rows are the machine's) gives the total
+// of both (figuresLine).
 func (t *totalsOut) write(w io.Writer) error {
-	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs(), Dataset: t.dataset}
+	opt := t.tally.Options()
+	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset}
 	rows := t.tally.Result()
-	if t.bySize {
-		totals.SortBySize(rows)
+	if t.sortBy == sortSize {
+		totals.SortBySize(rows, opt.Primary)
 	}
-	return textout.WriteTotals(w, t.format, l, rows)
+	if err := textout.WriteTotals(w, t.format, l, rows); err != nil || t.format != textout.Table || !t.tally.Allocated() {
+		return err
+	}
+	if lg := elog(); lg.quiet == 0 && !lg.json {
+		for i := range rows {
+			if rows[i].Depth == 0 {
+				noteKept(errOut, "  "+figuresLine(&rows[i], opt.Primary)+"\n")
+			}
+		}
+	}
+	return nil
+}
+
+// figuresLine is the total of both figures, the primary first, as the line
+// under a table that shows one: "100 MiB in 6 files · 36.4 MiB on disk",
+// or with --allocated "36.4 MiB on disk in 6 files · 100 MiB of data"; an
+// unknown figure says so, a partial one is marked (textout.TableFigure).
+func figuresLine(total *totals.Prefix, primary string) string {
+	size, alloc := "size unknown", textout.HeadingOnDisk+" unknown"
+	if total.HasSize {
+		size = textout.TableFigure(total, totals.Size)
+	}
+	if total.HasAllocated {
+		alloc = textout.TableFigure(total, totals.AllocatedBytes) + " " + textout.HeadingOnDisk
+	}
+	files := " in " + count(total.Objects) + " " + plural(total.Objects, "file", "files")
+	if primary == totals.AllocatedBytes {
+		if total.HasSize {
+			size += " of data"
+		}
+		return alloc + files + sep + size
+	}
+	return size + files + sep + alloc
 }
 
 // runtimeFlags may change on swath resume: they do not change the output

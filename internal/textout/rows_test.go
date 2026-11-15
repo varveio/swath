@@ -173,12 +173,12 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 
 // TestLocalTable: a local tree's table has the kind beside the time and
 // size (as wide as the widest kind name, so the key column never moves), a
-// missing value blank, and its keys escaped as in TSV.
+// missing value "-", and its keys escaped as in TSV.
 func TestLocalTable(t *testing.T) {
-	want := "last_modified (local)      size  kind          key\n" +
-		"2023-11-14 22:13:20    4.00 KiB  dir           dir\n" +
-		"                            0 B  symlink       dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
-		"                                 symlink       empty-link\n"
+	want := "last_modified (UTC)      size  kind          key\n" +
+		"2023-11-14 22:13:20  4.00 KiB  dir           dir\n" +
+		"-                         0 B  symlink       dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
+		"-                           -  symlink       empty-link\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &localfs.Schema, localRows); got != want {
 		t.Errorf("\n%q\nwant\n%q", got, want)
 	}

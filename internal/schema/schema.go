@@ -110,6 +110,11 @@ type Info struct {
 	// from it, so a listing's rows and a dataset's (swath du
 	// --from-dataset) are read by one rule.
 	Containers Match
+	// NamesTier, if set, is the metadata tier (a manifest's
+	// collected.metadata) whose rows carry names alone: no stat column, no
+	// link identity. swath du --from-dataset counts such a dataset's
+	// hard-linked files under every name, as the live run does.
+	NamesTier string
 }
 
 // Match selects the rows whose string column Column holds Value.

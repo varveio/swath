@@ -124,12 +124,16 @@ read whole and checked), and the orphans (objects this run created, by the gener
 manifest names): `orphans_deleted`, `orphans_gone` (absent, or replaced since: not this run's),
 `orphans_left` (a delete failed) and `orphans_unproven` (names allocated with no recorded creation, never
 touched). `totals` is a
-`swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
-`max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
-`objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
-markers), `unsized` (objects without a value in the bytes column: the sizes are then unknown), `links_once`
-(a local tree's hard-linked files counted once: without `--count-links` and `--metadata names`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
-them, each counted once) and `max_inodes` (their cap).
+`swath du` run's (absent otherwise), under the names of its rows ([du rows](../output.md#du-rows)): `depth`,
+`prefixes` (the rows printed, the total included), `max_prefixes` (the cap), `primary` (the figure `--sort size`
+orders by: `size`, or `allocated_bytes` with `--allocated`), the total's `objects` (directories excluded) and
+`dirs`, its `size` and `allocated_bytes` (null when unknown: no object had one, or a source without allocated
+bytes) with `size_missing` and `allocated_bytes_missing` (the objects counted without each), its
+`max_last_modified` (null when no object had a time), `not_objects` (rows counted as no object: directories,
+delete markers), `links_once` (a local tree's hard-linked files counted once: without `--count-links`, on rows
+that identify their links, which `--metadata names` and Windows do not read), `linked_rows` (rows with more
+than one hard link), `inodes` (the distinct inodes among them, each counted once) and `max_inodes` (their
+cap). The byte totals are JSON numbers that can exceed 2^53: read them as 64-bit integers.
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
 rows after filtering at the order stage's handoff (swath du, swath diag count: validated, counted rows).

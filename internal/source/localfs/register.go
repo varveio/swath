@@ -84,7 +84,7 @@ func checkTotals(options any, t *totals.Options) error {
 	if !ok {
 		return nil
 	}
-	if o.Fields == Names && t.BytesColumn == totals.AllocatedBytes {
+	if o.Fields == Names && t.Primary == totals.AllocatedBytes {
 		return errors.New("--allocated reads each entry's stat: not with --metadata names")
 	}
 	if o.Fields == Names || !statLinks {

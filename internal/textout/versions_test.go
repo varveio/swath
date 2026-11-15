@@ -83,17 +83,17 @@ func TestVersionsRows(t *testing.T) {
 // TestVersionsTable: the table shows a versions schema's roles from its
 // declaration: the version ID column under its own name, whether the row
 // is the latest, and a delete marker where the schema has them; a delete
-// marker's size is blank.
+// marker's size is "-".
 func TestVersionsTable(t *testing.T) {
-	s3want := "last_modified (local)      size  version_id  latest  delete_marker  key\n" +
-		"2023-11-14 22:13:20         1 B  new         true    false          k\n" +
-		"2023-11-14 22:13:20              null        false   true           k\n"
+	s3want := "last_modified (UTC)      size  version_id  latest  delete_marker  key\n" +
+		"2023-11-14 22:13:20       1 B  new         true    false          k\n" +
+		"2023-11-14 22:13:20         -  null        false   true           k\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &s3.VersionsSchema, s3versions); got != s3want {
 		t.Errorf("S3:\n%q\nwant\n%q", got, s3want)
 	}
-	gcswant := "last_modified (local)      size  generation  latest  key\n" +
-		"1970-01-01 00:00:00         1 B  1700000000000001  false   k\n" +
-		"                            2 B  1700000000000002  true    k\n"
+	gcswant := "last_modified (UTC)      size  generation  latest  key\n" +
+		"1970-01-01 00:00:00       1 B  1700000000000001  false   k\n" +
+		"-                         2 B  1700000000000002  true    k\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &gcs.GenerationSchema, gcsGenerations); got != gcswant {
 		t.Errorf("GCS:\n%q\nwant\n%q", got, gcswant)
 	}
