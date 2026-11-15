@@ -8,7 +8,7 @@ usage: localtree_table.py [--runs] OUT [OUT...]
 Columns: runs (exit 0 / all), wall, user and system CPU, peak RSS, spilled
 rows, frames, ranges, rows per frame, opens, opens per frame and per range, the spill
 read handles' hits and misses (reports that have them), the drain tail
-(resources.drain.tail_ns) and the median 1-minute load before the cells.
+(diagnostics.resources.drain.tail_ns) and the median 1-minute load before the cells.
 --runs prints every run instead of the medians: how much a listing spills
 varies with scheduling (on a loaded host a run may spill nothing), so
 compare per-file and per-frame counters run by run.
@@ -59,16 +59,16 @@ def main():
         rows = [((t, buf, f"{b} r{r['rep']}"), [(r, rep)]) for (t, buf, b), rs in rows for r, rep in rs]
     for (tree, buf, b), runs in rows:
         ok = [rep for r, rep in runs if r["exit"] == "0" and rep]
-        sp = lambda k: med([get(x, "resources.spill." + k) for x in ok])
+        sp = lambda k: med([get(x, "diagnostics.resources.spill." + k) for x in ok])
         srows, frames, opens = sp("rows"), sp("frames"), sp("opens")
-        hits = med([get(x, "resources.spill.read_handles.hits") for x in ok])
-        misses = med([get(x, "resources.spill.read_handles.misses") for x in ok])
-        tail = med([get(x, "resources.drain.tail_ns") for x in ok])
+        hits = med([get(x, "diagnostics.resources.spill.read_handles.hits") for x in ok])
+        misses = med([get(x, "diagnostics.resources.spill.read_handles.misses") for x in ok])
+        tail = med([get(x, "diagnostics.resources.drain.tail_ns") for x in ok])
         v = [tree, buf, b, f"{len(ok)}/{len(runs)}",
              med([get(x, "timings.wall_ms") / 1000 for x in ok]),
              med([get(x, "timings.user_cpu_ms") / 1000 for x in ok]),
              med([get(x, "timings.sys_cpu_ms") / 1000 for x in ok]),
-             med([get(x, "resources.peak_rss_bytes") / (1 << 20) for x in ok]),
+             med([get(x, "diagnostics.resources.peak_rss_bytes") / (1 << 20) for x in ok]),
              srows, frames, sp("ranges"),
              srows / frames if srows and frames else None,
              opens, opens / frames if opens and frames else None,

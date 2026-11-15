@@ -1355,12 +1355,12 @@ func (h *sizeHist) add(n int64) {
 
 // SizeQuantiles summarise a size distribution: P50, P90 and P99 are the
 // upper bounds of the power-of-two buckets holding those quantiles (a
-// quantile is at most its bound and more than half of it); Max is exact.
+// quantile is at most its bound and more than half of it); Max (peak) is exact.
 type SizeQuantiles struct {
 	P50 int64 `json:"p50"`
 	P90 int64 `json:"p90"`
 	P99 int64 `json:"p99"`
-	Max int64 `json:"max"`
+	Max int64 `json:"peak"`
 }
 
 func (h *sizeHist) quantiles() SizeQuantiles {

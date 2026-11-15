@@ -15,6 +15,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/reader"
 )
 
@@ -213,7 +214,7 @@ func ObjectBytes(parts []Part, sized bool) *int64 {
 // swathExtension is extensions.swath.
 type swathExtension struct {
 	Version              int              `json:"version"`
-	PublishedAt          time.Time        `json:"published_at"`
+	PublishedAt          jsontime.Time    `json:"published_at"`
 	Source               Source           `json:"source"`
 	Scope                Scope            `json:"scope"`
 	Coverage             Coverage         `json:"coverage"`
@@ -223,7 +224,7 @@ type swathExtension struct {
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
+	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: jsontime.Of(m.PublishedAt), Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
 		CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
@@ -258,7 +259,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		}
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
-		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, CommittedObjectBytes: x.CommittedObjectBytes,
+		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt.Time, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, CommittedObjectBytes: x.CommittedObjectBytes,
 		Filesystem: x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
@@ -290,14 +291,14 @@ type Scope struct {
 // directory inside a listed tree). A listing is not a point-in-time
 // snapshot: entries that changed while it ran may or may not be in it.
 type Coverage struct {
-	Complete          bool      `json:"complete"`    // the listing reached the end of the scope
-	StopReason        string    `json:"stop_reason"` // "completed", or why it stopped early
-	Unreadable        int64     `json:"unreadable"`  // entries missing because they could not be read
-	Exclusions        []string  `json:"exclusions"`
-	Filters           []string  `json:"filters"`
-	Snapshot          bool      `json:"snapshot"` // always false
-	ListingStartedAt  time.Time `json:"listing_started_at"`
-	ListingFinishedAt time.Time `json:"listing_finished_at"`
+	Complete          bool          `json:"complete"`    // the listing reached the end of the scope
+	StopReason        string        `json:"stop_reason"` // "completed", or why it stopped early
+	Unreadable        int64         `json:"unreadable"`  // entries missing because they could not be read
+	Exclusions        []string      `json:"exclusions"`
+	Filters           []string      `json:"filters"`
+	Snapshot          bool          `json:"snapshot"` // always false
+	ListingStartedAt  jsontime.Time `json:"listing_started_at"`
+	ListingFinishedAt jsontime.Time `json:"listing_finished_at"`
 }
 
 // FilesystemSpace is the space of the filesystem that holds a local
@@ -305,10 +306,10 @@ type Coverage struct {
 // ended. Free may exceed total on Windows, where a quota bounds the total
 // and the available bytes but not the free bytes.
 type FilesystemSpace struct {
-	TotalBytes     int64     `json:"total_bytes"`
-	FreeBytes      int64     `json:"free_bytes"`
-	AvailableBytes int64     `json:"available_bytes"`
-	MeasuredAt     time.Time `json:"measured_at"`
+	TotalBytes     int64         `json:"total_bytes"`
+	FreeBytes      int64         `json:"free_bytes"`
+	AvailableBytes int64         `json:"available_bytes"`
+	MeasuredAt     jsontime.Time `json:"measured_at"`
 }
 
 // ManifestPart is one part in the manifest: its path, relative to the

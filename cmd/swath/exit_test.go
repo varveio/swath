@@ -183,8 +183,10 @@ func TestExitCodes(t *testing.T) {
 	if o := outcome(stuck); o.Class != "stuck" || !o.Resumable {
 		t.Fatalf("stuck: %+v", o)
 	}
-	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"mutex_max_hold_ms"`)) {
-		t.Fatalf("progress file: %v %s", err, b)
+	// The progress file's last snapshot says the run failed.
+	var p listing.ProgressSnapshot
+	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"peak_mutex_hold_ns"`)) || p.State != listing.StateFailed {
+		t.Fatalf("progress file: %s", b)
 	}
 }
 

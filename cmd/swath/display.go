@@ -663,7 +663,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 	if json {
 		tty, width = false, 0
 	}
-	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started, tty: tty}
+	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.StartedAt.Time, tty: tty}
 	elog().start(start)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
@@ -677,7 +677,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun, dataset)
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.StartedAt.Time, noun, dataset)
 	return tt
 }
 

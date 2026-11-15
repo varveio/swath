@@ -6,7 +6,10 @@
 // resume identity and the Parquet footer's created_by all read it here.
 package buildinfo
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 // Tool is the tool's name in every identity (report, journal, footer,
 // User-Agent).
@@ -14,8 +17,8 @@ const Tool = "swath"
 
 // Version is the release version (X.Y.Z or X.Y.Z-rc.N), set at link time
 // by build.sh from $SWATH_VERSION (the release workflow passes its tag's
-// version); empty, the Go module version is used, which is devel for a
-// build from a source checkout.
+// version); empty, the Go module version is used without its leading v
+// (go install's v0.4.0 is 0.4.0), devel for a build from a source checkout.
 var Version string
 
 // Revision is the commit the binary was built from, set at link time by
@@ -42,7 +45,7 @@ func Read() Build {
 		return b
 	}
 	if v := info.Main.Version; Version == "" && v != "" && v != "(devel)" {
-		b.Version = v
+		b.Version = strings.TrimPrefix(v, "v") // the release's X.Y.Z, as build.sh stamps it
 	}
 	if b.Revision != "" {
 		return b

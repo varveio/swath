@@ -179,7 +179,7 @@ const (
 
 // Counters is the engine's tally: every engagement counter, in report
 // order; a provider's own counters (Description.Counters) follow. The run
-// report (source.stats.counters) and the provider tables in
+// report (diagnostics.source.stats.counters) and the provider tables in
 // docs/internals/counters.md are generated from them.
 var Counters = table([numCounters]counters.Def{
 	cObjects:                      d("objects", counters.Count, "objects", "objects listed (emitted rows)"),
@@ -230,7 +230,7 @@ var Counters = table([numCounters]counters.Def{
 	cSeedFromErrWithin:            d("seed.from.error.within_2x", counters.Count, "ranges", "prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included)", "seed_from"),
 	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (past its count the gauge estimates its remainder, and splits share it out)", "seed_from"),
 	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
-	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
+	cSeedFromErrMaxGrown:          d("seed.from.error.peak_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
 	cSeedFromPageSize:             d("seed.from.page_size", counters.Max, "keys", "the page size a counted prior set (the provider's largest; 0: not engaged)", "seed_from"),
 	cSeedFromTilePages:            d("seed.from.tile_pages", counters.Max, "pages", "the target pages per counted-prior tile (a planned run: TilePages, or --seed-from-tile-pages); a coarse first cut can exceed the target (0: not engaged)", "seed_from"),
 	cSeedFromHeld:                 d("seed.from.held_pages", counters.Count, "pages", "range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge", "seed_from"),
@@ -243,7 +243,7 @@ var Counters = table([numCounters]counters.Def{
 	cSplitPivotDensityBounded:     d("split.pivot.density.bounded", counters.Count, "splits", "accepted splits of bounded ranges whose pivot is the galloped density step (max(4, hunger) << generation page spans, at most halfway to hi), further than the anchor reflection", "split"),
 	cSplitPivotDensityFrontier:    d("split.pivot.density.frontier", counters.Count, "splits", "accepted frontier splits whose pivot is the galloped density step, further than the anchor reflection", "split"),
 	cSplitSliverRefused:           d("split.sliver_refused", counters.Count, "decisions", "splits not taken because the only pivot was a sliver just above the cursor (no density step, no safe midpoint): the range keeps listing and decides again after its next page", "split"),
-	cGallopMaxGen:                 d("split.gallop.max_generation", counters.Max, "generations", "highest gallop generation (consecutive upper children along a chain) of a range that split: its density stride is max(4, hunger) << generation page spans", "split"),
+	cGallopMaxGen:                 d("split.gallop.peak_generation", counters.Max, "generations", "highest gallop generation (consecutive upper children along a chain) of a range that split: its density stride is max(4, hunger) << generation page spans", "split"),
 	cGallopHalvings:               d("split.gallop.halvings", counters.Count, "halvings", "density stride halvings within decisions, after a target past the representable keys, a hole or outside (cursor, hi)", "split"),
 	cFrontierAnchored:             d("split.frontier.anchored", counters.Count, "splits", "accepted frontier splits whose chain has an anchor (a seed or resume tile's lo, or the chain's first pivot): the reflection doubles the covered distance", "split"),
 	cReflectCeiling:               d("split.reflect.ceiling", counters.Count, "decisions", "reflections at or past the range's ceiling (hi, or the scope's prefixCeil on the frontier): the pivot fell back to the midpoint between the cursor and the ceiling, and the upper child starts a new chain", "split"),
@@ -265,7 +265,7 @@ var Counters = table([numCounters]counters.Def{
 	cAwaitedWindow:                d("awaited.skipped.window", counters.Count, "pages", "awaited pages not split: idle workers, but the frontier window refusing tiles (split.skipped.window)", "seed_from"),
 	cSplitSkippedNoDemand:         d("split.skipped.no_demand", counters.Count, "decisions", "no idle worker (hunger <= 0)", "split"),
 	cSplitReasonSlowRange:         d("split.reason.slow_range", counters.Count, "splits", "--slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges'", "slow_split"),
-	cSlowMaxRangeLatency:          d("split.slow.max_range_latency_ns", counters.Max, "ns", "--slow-split: the highest page latency (EWMA) of a range", "slow_split"),
+	cSlowMaxRangeLatency:          d("split.slow.peak_range_latency_ns", counters.Max, "ns", "--slow-split: the highest page latency (EWMA) of a range", "slow_split"),
 	cSlowRunLatency:               d("split.slow.run_latency_ns", counters.Gauge, "ns", "--slow-split: the run's mean range page latency", "slow_split"),
 	cSplitSkippedOutranked:        d("split.skipped.outranked", counters.Count, "decisions", "larger ranges took the demand", "split"),
 	cSplitSkippedRemainder:        d("split.skipped.remainder", counters.Count, "decisions", "bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page)", "split"),
@@ -273,7 +273,7 @@ var Counters = table([numCounters]counters.Def{
 	cSplitSkippedUpperTiny:        d("split.skipped.upper_tiny", counters.Count, "decisions", "bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page)", "split"),
 	cSplitAdmittedPersistent:      d("split.admission.overridden", counters.Count, "decisions", "bounded split decisions the admission gates would refuse, taken because the range's previous 4 decisions (with demand) were refused: the policy kept proposing a pivot the gates refuse", "split"),
 	cSplitEstimateNone:            d("split.estimate_none", counters.Count, "decisions", "bounded split decisions past the guard without a density estimate (a page of fewer than 2 keys or no span): the admission gates did not apply", "split"),
-	cSplitMaxDepth:                d("split.max_depth", counters.Max, "splits", "longest chain of splits from a root or seed tile to a range: each step waits for a page, so at one page latency per step it bounds the wall time from below", "split"),
+	cSplitMaxDepth:                d("split.peak_depth", counters.Max, "splits", "longest chain of splits from a root or seed tile to a range: each step waits for a page, so at one page latency per step it bounds the wall time from below", "split"),
 	cLeaves:                       d("split.leaves", counters.Count, "ranges", "ranges that listed through their bound without splitting (the tiling's leaves)", "split"),
 	cLeafDepthSum:                 d("split.leaf_depth_sum", counters.Count, "splits", "sum of the leaves' depths: over split.leaves, the mean leaf depth", "split"),
 	cUnsplittable:                 d("split.unsplittable", counters.Count, "ranges", "ranges proven unsplittable: no pivot exists above a safe cursor (no_pivot); an unsafe cursor declines one page only", "split"),
@@ -312,8 +312,8 @@ var Counters = table([numCounters]counters.Def{
 	cReuseRanges:                  d("reuse.ranges", counters.Count, "ranges", "reused coverage certificates a resume replays from durable spill instead of listing them", "resume"),
 	cReuseGaps:                    d("reuse.gaps", counters.Count, "ranges", "ranges a resume with reused certificates lists: the gaps between them, tiled", "resume"),
 	cReuseBoundaryOverfetch:       d("reuse.boundary_overfetch_keys", counters.Count, "keys", "keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys)", "resume"),
-	cMaxActive:                    d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
-	cMaxQueued:                    d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
+	cMaxActive:                    d("peak_active", counters.Max, "ranges", "peak ranges in Expand at once"),
+	cMaxQueued:                    d("peak_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	cBusyNs:                       d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
 	cSinkWaitNs:                   d("sink_wait_ns", counters.Count, "ns", "time Expand spent handing rows to the order stage (backpressure)"),
 	cRequeues:                     d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
@@ -337,13 +337,13 @@ var Counters = table([numCounters]counters.Def{
 	cPrefixesNormalized:           d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 	cBoundDrops:                   d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys)"),
 	cMutexWait:                    d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),
-	cMutexMaxHold:                 d("mutex.max_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
+	cMutexMaxHold:                 d("mutex.peak_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
 	cGroupsOpenPages:              d("groups.open_pages", counters.Count, "pages", "pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split)", "groups"),
 	cGroupsFenceDeferred:          d("groups.fence_deferred", counters.Count, "pages", "page ends that declared no coverage fence because the hot key's group was still open (durable spill certifies only complete keys)", "groups"),
 	cGroupsHeldRows:               d("groups.held_rows", counters.Count, "rows", "rows of a page's trailing key held back until the next page proved the key complete", "groups"),
 	cGroupsRelistedRows:           d("groups.split_relisted_rows", counters.Count, "rows", "held rows dropped at a split, listed again by the lower child", "groups"),
 	cGroupsOverfetchRows:          d("groups.overfetch_rows", counters.Count, "rows", "rows above a range end read to close its last key group (excludes resume suppression and split relisting)", "groups"),
-	cGroupsMaxRows:                d("groups.max_rows", counters.Max, "rows", "the largest observed key group in emitted or held rows (all emission paths, before filters)", "groups"),
+	cGroupsMaxRows:                d("groups.peak_rows", counters.Max, "rows", "the largest observed key group in emitted or held rows (all emission paths, before filters)", "groups"),
 	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
 	cTraceEvents:                  d("trace.events", counters.Count, "events", "events the engine handed to the run trace (--trace)", "trace"),
 	cTraceDropped:                 d("trace.dropped", counters.Count, "events", "trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file", "trace"),

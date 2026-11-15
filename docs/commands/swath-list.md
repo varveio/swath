@@ -270,7 +270,7 @@ so in its manifest.
 - <a id="option-sort-buffer"></a>[`--sort-buffer SIZE`](#option-sort-buffer)\
   bytes buffered for sorted output; not a total-memory limit
 
-  Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders.
+  Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; the report's diagnostics.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders.
 
 - <a id="option-spill-budget"></a>[`--spill-budget SIZE`](#option-spill-budget)\
   fixed cap on spill (default: follows the spill disk's free space)
@@ -561,9 +561,10 @@ Performance:
                                 holds about one more; encoders are admitted against an allowance of
                                 their own, so this sizes rows only. Default: 1/16 of the least of
                                 detected physical memory, the cgroup's limit and GOMEMLIMIT, at most
-                                1GiB (128MiB when none is detected; invocation.sort_buffer says
-                                which). Raise it when spill is heavy and memory is free; to use less
-                                memory lower it with --workers and --encoders.
+                                1GiB (128MiB when none is detected; the report's
+                                diagnostics.sort_buffer says which). Raise it when spill is heavy
+                                and memory is free; to use less memory lower it with --workers and
+                                --encoders.
       --spill-budget SIZE     fixed cap on spill (default: follows the spill disk's free space)
                                 By default spill may use the spill filesystem's free space after a
                                 reserve (half of it unless the dataset is in a bucket, as the output

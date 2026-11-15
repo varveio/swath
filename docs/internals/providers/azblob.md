@@ -241,8 +241,8 @@ given (a default run's identity is as before they existed). Credentials may chan
 past the request timeout, cut to it) and `list_format.arrow_pages`, `.arrow_items`, `.xml_pages`, `.xml_items` (the
 valid listing pages each format carried and their blobs and prefixes; an XML page is the service declining Arrow), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
 `order_seeks`, `order_probes` (span reads that found no member), `order_overlap_rows`, `order_empty_pages` (empty
-continuing pages followed inside a span's read), `order_stack_max`, `order_buffer_rows_max`, `order_responses`,
-`order_chains_evicted`, `order_chains_max`, `order_short_pages` and `order_short_rows` (one read per page). **Connections**: the [shared pool](../clients.md#pool-construction), with provider-owned rotation of the
+continuing pages followed inside a span's read), `order_peak_stack`, `order_peak_buffer_rows`, `order_responses`,
+`order_chains_evicted`, `order_peak_chains`, `order_short_pages` and `order_short_rows` (one read per page). **Connections**: the [shared pool](../clients.md#pool-construction), with provider-owned rotation of the
 service and HTTP-client slices (`TestServicePool`, `TestServicePoolRoundRobin`). The client's anonymous note goes to the run's warnings.
 
 **Overload signals** (`client.Error.Failure`):

@@ -169,7 +169,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	l.read(o.fromDataset, read)
 	if read.Rows == 0 && o.datasetPrefix != "" {
-		l.warn(fmt.Sprintf("no key of the dataset starts with %q", o.datasetPrefix))
+		l.warn(warnPrefixNotFound, fmt.Sprintf("no key of the dataset starts with %q", o.datasetPrefix))
 	}
 	if err := t.write(stdout); brokenPipe(err) {
 		return nil // the reader closed stdout: exit 0, as a live swath du
@@ -182,7 +182,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	c := m.Coverage
 	switch {
 	case c == nil || c.Complete == nil:
-		l.warn("the dataset's manifest does not say whether its listing completed: the totals may leave entries out")
+		l.warn(warnCoverageUnknown, "the dataset's manifest does not say whether its listing completed: the totals may leave entries out")
 	case !*c.Complete:
 		why := "its listing did not complete"
 		if c.StopReason != nil {

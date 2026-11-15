@@ -15,7 +15,7 @@ and prints one line on stdout, its source counters first:
 
 ```text
 $ swath diag count s3://bkt --endpoint-url http://127.0.0.1:19777 --anonymous
-objects=60004 bytes=374790026 pages=166 requests=229 retries=0 splits=37 child_empty=36 max_active=63 truncated=false rows=60004 object_bytes=374790026 wall=0.180s user=0.33s sys=0.04s peak_rss=61.4MiB
+objects=60004 bytes=374790026 pages=166 requests=229 retries=0 splits=37 child_empty=36 peak_active=63 truncated=false rows=60004 object_bytes=374790026 wall=0.180s user=0.33s sys=0.04s peak_rss=61.4MiB
 $ swath diag count /data/photos
 files=4 dirs=3 bytes=470003 errors=0 rows=7 object_bytes=470003 wall=0.000s user=0.00s sys=0.00s peak_rss=24.9MiB
 ```
@@ -134,7 +134,7 @@ Diagnostics:
   `--workers` ([clients.md](clients.md#request-admission)).
 - **`--segment-workers`** replaces the processors rule for the workers writing the tail's parts; the encoders
   admitted after listing, the row budget and the descriptor limit still bound it
-  (`resources.drain.segments.workers_by` is `flag` when it set the count; [ordering.md](ordering.md#segments-parts-written-in-parallel-after-listing)).
+  (`diagnostics.resources.drain.segments.workers_by` is `flag` when it set the count; [ordering.md](ordering.md#segments-parts-written-in-parallel-after-listing)).
 - **Spill.** `--no-spill` turns spill off (listing waits on the sort buffer instead); `--spill-reserve` sets the
   free space spill leaves on its filesystem (derived by default: one part per encoder at full size, at least
   1 GiB); `--no-spill-compress` writes the frames uncompressed (by default zstd level 1 runs over the
@@ -158,7 +158,7 @@ Diagnostics:
 ## Phase profiles
 
 A sorted run has two phases with different work: listing, until the provider has finished (the report's
-`timings.listing_done_at`), and the drain's tail after it, in which the order stage replays spill and the
+`timings.provider_finished_at`), and the drain's tail after it, in which the order stage replays spill and the
 encoders write the remaining parts. The profiles are split at that boundary, so each phase is read on its own:
 
 | File | Holds |
@@ -171,9 +171,9 @@ encoders write the remaining parts. The profiles are split at that boundary, so 
 Go runs one CPU profile at a time, so there is no whole-run CPU profile beside the phases': `FILE` is the
 listing phase (it was the whole run before the split), and `go tool pprof FILE.listing FILE.tail` merges the two.
 The phase switch runs on a goroutine of its own, so the order stage does not wait for it; the listing phase's
-CPU profile therefore stops a little after the logical boundary (the report's `profiles.cpu_cut_delay_ns`, CPU
+CPU profile therefore stops a little after the logical boundary (the report's `diagnostics.profiles.cpu_cut_delay_ns`, CPU
 the listing file holds from the tail), and the tail's starts once the listing phase's has been written out (the
-gap between them, `profiles.cpu_gap_ns`, is in neither file). The commit waits for the switch before it takes
+gap between them, `diagnostics.profiles.cpu_gap_ns`, is in neither file). The commit waits for the switch before it takes
 its terminal gate, never inside it. The allocation profile is cumulative: `go tool pprof -base FILE.listing
 FILE.exit` is the tail's allocations, and each file is as of the latest garbage collection before it was written
 (the process forces none). A run that never reaches the boundary (a failed or stopped listing, `swath diag count`

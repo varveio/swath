@@ -25,6 +25,7 @@ import (
 	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -76,7 +77,7 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 		}
 	}
 	strip := func(m dataset.Manifest) string {
-		m.Parts, m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = nil, time.Time{}, time.Time{}, time.Time{}
+		m.Parts, m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = nil, time.Time{}, jsontime.Time{}, jsontime.Time{}
 		objects := "unknown"
 		if m.CommittedObjectBytes != nil {
 			objects = fmt.Sprint(*m.CommittedObjectBytes)

@@ -23,6 +23,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/objfile"
@@ -360,7 +361,7 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	}
 	rs.outcome = "resumed"
 	rs.commit = dataset.RemoteCommit{Outcome: "resumed", Identity: rec.ManifestIdentity, SHA256: rec.ManifestSHA256}
-	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: time.Now().UTC()},
+	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: jsontime.Of(time.Now())},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
 		Outcome:    Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}}
 	// The dataset is the manifest's: its rows, bytes and coverage, which
@@ -681,7 +682,7 @@ func (a *attempt) commitRemote(meta dataset.Meta, parts []dataset.Part, commit f
 		return err
 	}
 	if rc.MarkerErr != nil && cfg.Warn != nil {
-		cfg.Warn("the dataset is committed but the work directory's commit marker was not written: " + rc.MarkerErr.Error())
+		cfg.Warn(source.WarnCommitMarker, "the dataset is committed but the work directory's commit marker was not written: "+rc.MarkerErr.Error())
 	}
 	return nil
 }
@@ -705,7 +706,7 @@ func (a *attempt) finalizeRemote(parts []dataset.Part, rep *Report) error {
 		return err // tests: killed in the aftermath
 	}
 	if err != nil && cfg.Warn != nil {
-		cfg.Warn("the dataset is committed; its aftermath (orphan cleanup, run report) is not finished, and swath resume of the work directory finishes it: " + err.Error())
+		cfg.Warn(source.WarnAftermath, "the dataset is committed; its aftermath (orphan cleanup, run report) is not finished, and swath resume of the work directory finishes it: "+err.Error())
 	}
 	// The cut file comes last, within a bound of its own: reading the
 	// retained parts' key page index never takes the aftermath's time.

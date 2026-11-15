@@ -5,14 +5,20 @@ Every algorithm path counts its engagements. A provider declares its counters on
 `atomic.Int64` each (package `internal/counters`). That table is the one definition of every name, kind and
 meaning: the provider reads it out as one immutable `counters.Snapshot` (code reads `Get(id)`), and the run
 report renders the snapshot by iterating the table (`run.json` →
-`source.stats.counters`: `features` and `values`, flat stable names), and the table below is
+`diagnostics.source.stats.counters`: `features` and `values`, flat names), and the table below is
 generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestDocsCounters`). One
 adapter sits beside it: the HTTP client's counters (`objhttp.Counters`, the limiter's and the rate cap's) are
 kept in the client, which a provider may share or replace, and copied into the table when the provider
 snapshots, each by its named ID (`objhttp.ClientCounter`, end sentinel `NumCounters`; `Counts.Store`), so
 no position carries a meaning and `TestCounterTable` refuses an unfilled or doubly filled entry. A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
-a boolean, `gauge` a value derived when the provider snapshots (the attempt latency percentiles). Names: a dotted group, a snake_case leaf; high-water marks start with `max_`, durations end in `_ns`.
+a boolean, `gauge` a value derived when the provider snapshots (the attempt latency percentiles). Names: a dotted group, a snake_case leaf; high-water marks start with `peak_` (`max_` names only a limit), durations end in `_ns`.
+
+**Every name on this page is a diagnostic.** The counters, and every member of the run report's
+`diagnostics` they sit in, follow the algorithm: a release renames, adds and removes them as the algorithm
+changes, without a new `report_version` ([run report](../reference/run-report.md#diagnostics)). They are for a
+person explaining a run, and for tests and benchmarks pinned to a build, not for a program that must keep working
+across releases.
 
 **Feature state is separate from engagement; off, absent and zero are different.** A counter that measures
 a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
@@ -26,7 +32,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
   `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 
-The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
+The report's `diagnostics.resources` follow the same rule: `features.spill` is false and the `spill` object absent with
 `swath diag list --no-spill` or a count, `features.order` is false for `swath du` and `swath diag count` (rows counted, not
 ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
 abandons by reason, retirements, retained bytes, its limits with what they derive from (`slots`,
@@ -70,7 +76,7 @@ for the report only: no decision reads whether a range is awaited.
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
 | `publish_wait_ns`, `peak_publish_waiters` | ns, goroutines | emitters waiting in publish on a full budget (each a worker still in its range's `Expand`, so the range engine counts it active), summed over them, and the most at once (live: `progress.json` `order.publish_waiters`) |
 | `admission_wait_ns`, `peak_admission_waiters` | ns, goroutines | workers waiting to claim a queued range while the budget and spill were used; with `publish_wait_ns`, `budget_wait_ns` (live: `order.admission_waiters`) |
-| `idle_wait_ns`, `peak_idle_workers` | ns, goroutines | workers with nothing queued to list, read-ahead waits included, over the whole run (`drain.worker_idle_after_listing_done_ns` is its part after listing; live: `order.idle_workers`) |
+| `idle_wait_ns`, `peak_idle_workers` | ns, goroutines | workers with nothing queued to list, read-ahead waits included, over the whole run (`drain.worker_idle_after_provider_finished_ns` is its part after listing; live: `order.idle_workers`) |
 | `window.tiles`, `window.forced`, `window.grown` | tiles | a run planned from a counted prior ([the frontier window](ordering.md#the-frontier-window); absent otherwise): tiles admitted; those the drainer admitted past a refusal, having drained every other (a window smaller than a tile admits only these); tiles whose rows reached 4 times the prior's (each stopped admission until the frontier passed it) |
 | `window.rows`, `window.bound_by` | rows, name | the window's rows when last evaluated and what set them: `rows` (the target, 8,000,000), `set` (`swath diag list --seed-from-window-rows`), each only under what the storage gives: `spill_cap` (half the spill cap over a spilled row's bytes, with what the row budget holds), `budget` (spill off: what the row budget holds alone) |
 | `window.waits.rows`, `.spill`, `.growth` | waits | workers' waits at the window, by the refusal that held them: the tiles' charges and the next tile past the window's rows; live spill, less the drained certificates waiting for K, past half its cap, or a frame refused; a grown tile held |
@@ -83,7 +89,7 @@ for the report only: no decision reads whether a range is awaited.
 | `spill.read_handles.hits`, `.misses`, `.raced` | leases | reads of a spill file (a frame at an offset, a trailer, the drainer's reader; not a recovered certificate's replay) served by the file's open descriptor, and those that opened it (one open each, two when the first is refused with EMFILE/ENFILE); `raced`: misses whose open lost to a concurrent one for the same file (closed at once). `hits / (hits + misses)` is the reuse rate; a range that spills one frame can at best share its frame read with its trailer read |
 | `spill.read_handles.evictions.capacity`, `.retired`, `.truncated`, `.low_fd`, `.closed` | handles | handles closed out of the cache: idle past the cap (`order.MaxSpillReaders` descriptors, least recently used first), the file drained (removed, or handed back to the durable cache), the file truncated (an ENOSPC rollback), idle when an open failed for want of descriptors (the cache then keeps none for the rest of the run), cached when the run stopped or its output's identity check failed (a leased one stays usable until its release; retirement does not revoke reads) |
 | `spill.read_handles.peak_open` | descriptors | the most spill read descriptors the cache held open at once, leased or idle (opens under way not counted; `spill.peak_readers` adds certificate replays). `order.MaxSpillReaders` is the idle-retention target: with every handle leased (more segment workers than 16) it is exceeded |
-| `spill.frame_bytes`, `spill.frame_rows` | bytes, rows | row frames written by size (`p50`, `p90`, `p99`: the bound of the power-of-two bucket holding the quantile, so the quantile is at most it and more than half of it; `max`: exact). `spill.rows / spill.frames` is the mean |
+| `spill.frame_bytes`, `spill.frame_rows` | bytes, rows | row frames written by size (`p50`, `p90`, `p99`: the bound of the power-of-two bucket holding the quantile, so the quantile is at most it and more than half of it; `peak`: exact). `spill.rows / spill.frames` is the mean |
 | `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--no-spill-compress`), `plain+zstd` or `plain` (`--spill-plain`) |
 | `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
@@ -91,29 +97,29 @@ for the report only: no decision reads whether a range is awaited.
 | `spill.max_by`, `spill.start_max_bytes`, `spill.max_bytes`, `spill.max_raised`, `spill.max_rechecks`, `spill.max_recheck_raised` | name, bytes, bytes, rises, reads, rises | what set the spill cap: `spill_budget` (`--spill-budget`, fixed), `disk` (the default for a dataset in a bucket: the spill filesystem's free space after the reserve), `disk_half` (the default otherwise, the filesystem shared with the output or, for a stream, other programs' temporary files: half of it), `none`; the cap the run started with; the cap in effect at the end; the times the cap rose (the filesystem grew, or other files on it went), each ending a standing refusal and waking the waiters; the follower's rereads of the free space every 2 s while the cap held the run back (a frame refused, workers at the frontier window, in publish or at admission), and those that raised the cap (the rest rose at a refused frame). `max_bytes` above `start_max_bytes` is a disk grown under the live run; 0 rises with `refused` above 0 is a cap that bound on a disk that stayed as it was ([ordering.md](ordering.md#spill)) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and a run that spills there warns at its first spill |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
-| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
-| `timings.listing_done_at` | time | the provider finished: every range expanded, none in flight (a resume's reused certificates are not listed: it is when the gaps around them are); absent if it never did; `listing_finished_at` is the order stage's end, after the drain |
-| `drain.tail_ns` | ns | from `listing_done_at` to the drain's last row: the part of the run in which only the drain was left |
-| `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time after `listing_done_at` (nothing queued to list, read-ahead waits included), summed over workers |
+| `peak_frontier_stuck_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
+| `timings.provider_finished_at` | time | the provider finished: every range expanded, none in flight (a resume's reused certificates are not listed: it is when the gaps around them are); absent if it never did; `listing_finished_at` is the order stage's end, after the drain |
+| `drain.tail_ns` | ns | from `provider_finished_at` to the drain's last row: the part of the run in which only the drain was left |
+| `drain.worker_idle_after_provider_finished_ns` | ns | the workers' idle time after `provider_finished_at` (nothing queued to list, read-ahead waits included), summed over workers |
 | `drain.replay_read_ns`, `drain.replay_decode_ns` | ns | the drainer reading spilled frames itself, and the part of it spent decoding (trailers included); the drainer's times accumulate over the whole run, not the tail alone |
 | `drain.ahead_wait_ns`, `drain.order_check_ns`, `drain.sink_write_ns` | ns | the drainer waiting for a frame the read-ahead was reading; the stream-wide order guard; handing batches to the sink (`encoder_wait_ns` included) |
-| `drain.writer_before_listing_done.parts`, `.rows` | parts, rows | Parquet parts published before `listing_done_at`, and their rows (absent when listing never finished). Approximate at the boundary: a part published as listing ends may fall on either side |
-| `drain.writer_before_listing_done.encode_ns`, `.output_ns` | ns | the encoders' time on the batches written before `listing_done_at`: building and compressing pages and hashing (`encode_ns`), and writing to the part's file or upload with the sync and close that complete it (`output_ns`) |
+| `drain.writer_before_provider_finished.parts`, `.rows` | parts, rows | Parquet parts published before `provider_finished_at`, and their rows (absent when listing never finished). Approximate at the boundary: a part published as listing ends may fall on either side |
+| `drain.writer_before_provider_finished.encode_ns`, `.output_ns` | ns | the encoders' time on the batches written before `provider_finished_at`: building and compressing pages and hashing (`encode_ns`), and writing to the part's file or upload with the sync and close that complete it (`output_ns`) |
 | `drain.read_ahead.frames`, `drain.read_ahead.rows` | frames, rows | spilled frames idle workers read and decoded ahead of the drainer (feature: `spill`) |
 | `drain.read_ahead.drainer_frames`, `drain.read_ahead.unplanned_frames` | frames | frames planned and taken over unread by the drainer; frames it reached with nothing planned (both read by the drainer; with `frames`, every frame spilled, each once) |
 | `drain.read_ahead.drainer_waits`, `drain.read_ahead.capped_waits` | waits | the drainer waiting for a frame being read; workers waiting at the read-ahead's share of the row budget |
 | `drain.read_ahead.read_ns`, `drain.read_ahead.decode_ns` | ns | the workers' read-ahead time, and the part of it spent decoding |
 | `drain.read_ahead.max_reads` | reads | reads allowed at once: 8, at most `GOMAXPROCS` - 1; 0 is off (one processor: the drainer replays alone) |
 | `drain.segments.reason` | reason | the segment-parallel replay after listing: `engaged`, or why not: `one_processor` (GOMAXPROCS 2 or less), `one_encoder`, `single_part`, `not_planned` (the router's rule not stated before the drain ended), `row_budget` (the row budget holds one segment worker only), `listing_active` (the drain ended before listing did: a stopped run) (absent without a dataset) |
-| `drain.segments.segments`, `.workers`, `.rows`, `.max_rows`, `.seam_checks` | parts, workers, rows, rows, seams | segments written (one part each), the workers writing them, their rows and the largest segment's, the seams checked |
-| `drain.segments.time_ns`, `.max_time_ns`, `.plan_ns` | ns | segments' time summed (open to close) and the longest; cutting the rest into segments |
+| `drain.segments.segments`, `.workers`, `.rows`, `.peak_rows`, `.seam_checks` | parts, workers, rows, rows, seams | segments written (one part each), the workers writing them, their rows and the largest segment's, the seams checked |
+| `drain.segments.time_ns`, `.peak_time_ns`, `.plan_ns` | ns | segments' time summed (open to close) and the longest; cutting the rest into segments |
 | `drain.segments.read_ns`, `.decode_ns`, `.write_ns`, `.max_workers` | ns, workers | of `time_ns`: spill frames read (and decoded), batches handed to the parts (encoder queue waits included); the workers' cap (`listing.segmentWorkers`) |
 | `drain.segments.durable_files_read`, `.durable_boundaries` | files, boundaries | durable spill files (`order.Cache`) whose frames the segments read, a resume's reused certificates included, and the segment boundaries that fall inside one of their frames |
 | `drain.segments.certificates_read`, `.certified_rows`, `.certificate_scan_ns` | certificates, rows, ns | on a resume: the reused certificates the segments replayed (those the drainer had not reached when listing ended; `spill.durable.resume.replayed_certificates` counts the drainer's too), their rows above K (in `rows`), and the plan's time reading them before the cut (in `plan_ns`) |
 | `drain.segments.deferred_rows` | rows | versions schemas: rows a planned segment boundary moved past because they continued the group of the key before it (no part ends inside a key) |
 | `drain.segments.tree_bytes` | bytes | what the tree held when the segments were planned: not the segments' budget, which they take beside it (two budgets in all, at most) |
 | `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `flag` (`swath diag list --segment-workers`), `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
-| `drain.segments.budget_waits`, `.budget_wait_ns`, `.max_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit (a resume's certificate scans too, before each certificate), and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered, the frames being scanned) |
+| `drain.segments.budget_waits`, `.budget_wait_ns`, `.peak_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit (a resume's certificate scans too, before each certificate), and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered, the frames being scanned) |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `drain.encoder_allowance_bytes`, `.encoder_writer_bytes`, `.encoder_upload_bytes` | bytes | the memory encoders are admitted against (1/16 of memory, whatever `--sort-buffer` says) and one encoder's prices: its writer, and a dataset in a bucket's upload buffer (a GCS chunk, an S3 part or an Azure block) |
 | `drain.encoders_at_start_bound_by`, `.encoders_after_listing_bound_by` | name | what bound each count: `memory` (the allowance), `cpu` (GOMAXPROCS), `descriptors`, `minimum` (one), `explicit`; after listing, the start's when listing did not raise the count |
@@ -129,8 +135,8 @@ A text run's sink (run summary, `output.text`):
 | `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
 | `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `encoder_allowance` (16 MiB each of the encoder allowance carries fewer), `encoders` (asked), `gzip` (one stream) |
 
-A count (`swath du`, `swath diag count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
-and `frontier_stuck_max_ns` are 0 and `spill` is absent.
+A count (`swath du`, `swath diag count`) does not order (`features.order` false): `peak_buffered_bytes`, `peak_ahead_rows`
+and `peak_frontier_stuck_ns` are 0 and `spill` is absent.
 
 Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 
@@ -183,7 +189,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.from.error.within_2x` | count | ranges | seed_from | prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included) |
 | `seed.from.error.grown` | count | ranges | seed_from | prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (past its count the gauge estimates its remainder, and splits share it out) |
 | `seed.from.error.shrunk` | count | ranges | seed_from | prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied |
-| `seed.from.error.max_grown` | max | x | seed_from | the largest ratio of a prior tile's listed keys to the prior's expectation, rounded |
+| `seed.from.error.peak_grown` | max | x | seed_from | the largest ratio of a prior tile's listed keys to the prior's expectation, rounded |
 | `seed.from.page_size` | max | keys | seed_from | the page size a counted prior set (the provider's largest; 0: not engaged) |
 | `seed.from.tile_pages` | max | pages | seed_from | the target pages per counted-prior tile (a planned run: TilePages, or --seed-from-tile-pages); a coarse first cut can exceed the target (0: not engaged) |
 | `seed.from.held_pages` | count | pages | seed_from | range pages after which the prior's count (its expected keys less those listed) stayed the range's remainder estimate instead of the page's gauge |
@@ -200,7 +206,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.pivot.density.bounded` | count | splits | split | accepted splits of bounded ranges whose pivot is the galloped density step (max(4, hunger) << generation page spans, at most halfway to hi), further than the anchor reflection |
 | `split.pivot.density.frontier` | count | splits | split | accepted frontier splits whose pivot is the galloped density step, further than the anchor reflection |
 | `split.sliver_refused` | count | decisions | split | splits not taken because the only pivot was a sliver just above the cursor (no density step, no safe midpoint): the range keeps listing and decides again after its next page |
-| `split.gallop.max_generation` | max | generations | split | highest gallop generation (consecutive upper children along a chain) of a range that split: its density stride is max(4, hunger) << generation page spans |
+| `split.gallop.peak_generation` | max | generations | split | highest gallop generation (consecutive upper children along a chain) of a range that split: its density stride is max(4, hunger) << generation page spans |
 | `split.gallop.halvings` | count | halvings | split | density stride halvings within decisions, after a target past the representable keys, a hole or outside (cursor, hi) |
 | `split.frontier.anchored` | count | splits | split | accepted frontier splits whose chain has an anchor (a seed or resume tile's lo, or the chain's first pivot): the reflection doubles the covered distance |
 | `split.reflect.ceiling` | count | decisions | split | reflections at or past the range's ceiling (hi, or the scope's prefixCeil on the frontier): the pivot fell back to the midpoint between the cursor and the ceiling, and the upper child starts a new chain |
@@ -220,7 +226,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.rejected.unsafe_pivot` | count | decisions | split | guard: the provider vetoes the pivot as a bound |
 | `split.skipped.no_demand` | count | decisions | split | no idle worker (hunger <= 0) |
 | `split.reason.slow_range` | count | splits | slow_split | --slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges' |
-| `split.slow.max_range_latency_ns` | max | ns | slow_split | --slow-split: the highest page latency (EWMA) of a range |
+| `split.slow.peak_range_latency_ns` | max | ns | slow_split | --slow-split: the highest page latency (EWMA) of a range |
 | `split.slow.run_latency_ns` | gauge | ns | slow_split | --slow-split: the run's mean range page latency |
 | `split.skipped.outranked` | count | decisions | split | larger ranges took the demand |
 | `split.skipped.remainder` | count | decisions | split | bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page) |
@@ -228,7 +234,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.skipped.upper_tiny` | count | decisions | split | bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page) |
 | `split.estimate_none` | count | decisions | split | bounded split decisions past the guard without a density estimate (a page of fewer than 2 keys or no span): the admission gates did not apply |
 | `split.admission.overridden` | count | decisions | split | bounded split decisions the admission gates would refuse, taken because the range's previous 4 decisions (with demand) were refused: the policy kept proposing a pivot the gates refuse |
-| `split.max_depth` | max | splits | split | longest chain of splits from a root or seed tile to a range: each step waits for a page, so at one page latency per step it bounds the wall time from below |
+| `split.peak_depth` | max | splits | split | longest chain of splits from a root or seed tile to a range: each step waits for a page, so at one page latency per step it bounds the wall time from below |
 | `split.leaves` | count | ranges | split | ranges that listed through their bound without splitting (the tiling's leaves) |
 | `split.leaf_depth_sum` | count | splits | split | sum of the leaves' depths: over split.leaves, the mean leaf depth |
 | `split.unsplittable` | count | ranges | split | ranges proven unsplittable: no pivot exists above a safe cursor (no_pivot); an unsafe cursor declines one page only |
@@ -269,8 +275,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `reuse.ranges` | count | ranges | resume | reused coverage certificates a resume replays from durable spill instead of listing them |
 | `reuse.gaps` | count | ranges | resume | ranges a resume with reused certificates lists: the gaps between them, tiled |
 | `reuse.boundary_overfetch_keys` | count | keys | resume | keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys) |
-| `max_active` | max | ranges |  | peak ranges in Expand at once |
-| `max_queued` | max | ranges | split | peak ranges queued for a worker |
+| `peak_active` | max | ranges |  | peak ranges in Expand at once |
+| `peak_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |
 | `sink_wait_ns` | count | ns |  | time Expand spent handing rows to the order stage (backpressure) |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
@@ -294,12 +300,12 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
-| `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
+| `mutex.peak_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
 | `groups.open_pages` | count | pages | groups | pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split) |
 | `groups.fence_deferred` | count | pages | groups | page ends that declared no coverage fence because the hot key's group was still open (durable spill certifies only complete keys) |
 | `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
 | `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
-| `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
+| `groups.peak_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
 | `groups.overfetch_rows` | count | rows | groups | rows above a range end read to close its last key group (excludes resume suppression and split relisting) |
 | `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
 | `trace.events` | count | events | trace | events the engine handed to the run trace (--trace) |
@@ -311,7 +317,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `unreachable.attempts` | count | requests |  | attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while nothing in the run had answered |
 | `unreachable.stops` | count | calls |  | calls stopped as unreachable: nothing in the run had answered, and connections had failed so for 30s (at most half --stall-timeout; exit 75, cause unreachable) |
-| `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
+| `inflight.peak_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
 | `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
 | `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
 | `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
@@ -330,7 +336,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
-| `limiter.max_depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `limiter.peak_depth` | max | permits | limiter | most permits the limit stood below the worker count |
 | `slow_start.doubles` | count | steps | slow_start | --adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
 | `slow_start.ramp_ns` | max | ns | slow_start | --adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
 | `slow_start.end_limit` | max | permits | slow_start | --adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping) |

@@ -27,7 +27,7 @@ func openArgs(t *testing.T, args ...string) (*opened[Object], error) {
 	if err := f.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(string) {}})
+	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(string, string) {}})
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func TestAnonymousNote(t *testing.T) {
 	if err := f.Parse([]string{"--anonymous", "--endpoint-url=http://store.example"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(s string) { warned = append(warned, s) }}); err != nil {
+	if _, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(_, s string) { warned = append(warned, s) }}); err != nil {
 		t.Fatal(err)
 	}
 	want := "--anonymous: ignoring the S3 credentials in the environment (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE)"

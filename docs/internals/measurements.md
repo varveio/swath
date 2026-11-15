@@ -178,7 +178,7 @@ stated, on n4-highcpu-16 Spot VMs (GCP Batch). These are diagnostic
 runs outside the study harness: no receipts. The ideal is `ideal64 = (pages/64 + 7 + seed round trips) × 50 ms`
 (one seed round trip in the candidate's ideal, none in the baseline's).
 
-- **Baseline:** `577c7c2` (`01dd55b`, the Go port as merged, plus the `split.max_depth` counter), on 251 lists.
+- **Baseline:** `577c7c2` (`01dd55b`, the Go port as merged, plus the `split.peak_depth` counter), on 251 lists.
 - **Candidate 1:** `091c4534`: the anchor reflection and the gallop, the refused sliver, structure probes on
   their evidence, the seed's pagination, descent and resume seeding with `--seed` on, and the order-stage stop
   latch. Not in it: the retained-bound copies and `order.Count`, the review fixes, the admission gates. Run on
@@ -194,7 +194,7 @@ runs outside the study harness: no receipts. The ideal is `ideal64 = (pages/64 +
 | wall / ideal64, p90 | ≤ 3.0 | 14.2 | **1.82** | 1.93 |
 | wall / ideal64, worst | ≤ 5 | 45.7 | **2.5** | 5.2 |
 | requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | 1.58 / 1.69 | **1.10 / 1.41** | 1.16 / 1.45 |
-| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 3 of 232 | **185 / 150 of 201** | 136 / 60 of 201 |
+| `split.peak_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 3 of 232 | **185 / 150 of 201** | 136 / 60 of 201 |
 | mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | 20 (median) | **56.8** | 55.5 |
 | regressions against the baseline: wall > 1.05x / requests > 1.10x | 0 / 0 | – | **0 / 2** (noaa-ghcn-pds +12 %, mogreps-g +11 %, both about 1M keys) | 0 / 2 |
 | lists where Go is slower than Java | 0 | 24 of 41 | **2 of 200** (fcp-indi 183 against 130 s, noaa-goes19 154 against 147 s); Go / Java wall median 0.31 | 4 of 200 |
@@ -230,7 +230,7 @@ then `swath resume`, compared row for row; and `--spill-max` at a tenth of the d
 | completed within the cap | all | **201 of 201**, every arm |
 | wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.19 / 1.76 / 8.1** (haisslab, an admission regression) |
 | requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.07 / 1.35** |
-| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 181 / 156 of 201 |
+| `split.peak_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 181 / 156 of 201 |
 | mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **61.9** |
 | regressions against the baseline: wall / requests | 0 / 0 | **3 / 0** (haisslab 18 → 48 s, common-screens 115 → 192 s, spacenet 13 → 13 s) |
 | lists where Go is slower than Java | 0 | **3 of 199** (common-screens, haisslab, nexrad-arco 86 against 67 s) |
@@ -255,7 +255,7 @@ no sorted-Parquet or kill arm ran on this build's 201 and 50):
 | completed within the cap | all | **201** | **50** |
 | wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.20 / 1.67 / 2.3** | **1.19 / 1.50 / 2.2** |
 | requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.08 / 1.35** | **1.09 / 1.37** |
-| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 186 / 154 | 49 / 42 |
+| `split.peak_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 186 / 154 | 49 / 42 |
 | mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **60.7** | **61.1** |
 | regressions against the baseline: wall / requests | 0 / 0 | **0 / 0** | **0 / 0** |
 | lists where Go is slower than Java | 0 | **0 of 199** (Go / Java wall median 0.29) | **0 of 50** (median 0.26) |
@@ -352,7 +352,7 @@ buckets in AWS us-east-1: cross-cloud, the same geography, one run each, Go then
 `--count-only --max-duration 15m` at the defaults (64 workers); Java `--format=discard --concurrency=64`. Attempt
 latency as Go measured it: p50 84 ms, p99 168 ms on nbm; p50 117 ms, p99 268 ms on fourcastnetgfs.
 
-| Bucket | Objects | Go wall | Go requests (per 1k keys) | Go mean in flight / `split.max_depth` / RSS | Java wall | Java requests | Java in flight |
+| Bucket | Objects | Go wall | Go requests (per 1k keys) | Go mean in flight / `split.peak_depth` / RSS | Java wall | Java requests | Java in flight |
 |---|---:|---:|---:|---|---:|---:|---:|
 | noaa-nbm-grib2-pds | 69,132,677 | **91 s** | 69,772 (1.01) | 63 / 16 / 74 MB | 99 s | 70,454 | 56 |
 | noaa-nws-fourcastnetgfs-pds | 4,081,170 | **12 s** | 5,446 (1.33) | 47 / 59 / 64 MB | 57 s | 5,008 | 9 |
@@ -390,7 +390,7 @@ that day.
 **Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
 medians over the lists):
 
-| Arm | Wall s | Against count-only at 64 | Mean active | `split.max_depth` | Requests / 1k |
+| Arm | Wall s | Against count-only at 64 | Mean active | `split.peak_depth` | Requests / 1k |
 |---|---:|---:|---:|---:|---:|
 | count-only, 64 workers | 41.5 | 1.00 | 63 | 38 | 1.019 |
 | count-only, 256 | 12.9 | 0.31 | 237 | 49 | 1.074 |
@@ -450,7 +450,7 @@ cold run's dataset (one part, its key page index read: 1,954 cuts merged into 25
 dataset. Rows equal keys in every run; the seeded datasets are byte-identical to the cold ones (same parts, same
 digests).
 
-| Arm | Wall, s (3 runs) | Requests / 1k keys | `split.max_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
+| Arm | Wall, s (3 runs) | Requests / 1k keys | `split.peak_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
 |---|---|---|---|---|---|---|---|
 | cold, 2.0M | 4.03, 4.03, 4.01 | 1.140–1.148 | 25–27 | 49–56 | 263–279 | 39.0–39.7 | – |
 | seeded, 2.0M | 2.68, 3.85, 3.11 | 1.112–1.113 | 2 | 0 | 29–34 | 57.8–60.5 | 255 / 0 |
@@ -466,7 +466,7 @@ against 2), and the run still beats the cold one. The seeded walls vary with the
 **The whole corpus** (run `warm1`, 2026-11-07; `fe7347e7`, the 251 production lists, 64 workers, fake at 50 ms,
 sorted Parquet, n4-highcpu-16): a cold run to a dataset, then the same list seeded from it.
 
-| Arm | Wall / ideal64 median, p90 | Against cold, median, p90 | Requests / 1k median, p90 | `split.max_depth` median | Mean active | Identical |
+| Arm | Wall / ideal64 median, p90 | Against cold, median, p90 | Requests / 1k median, p90 | `split.peak_depth` median | Mean active | Identical |
 |---|---|---|---|---:|---:|---:|
 | cold | 1.47, 1.96 | – | 1.076, 1.349 | 29 | 48 | 251 of 251 |
 | seeded from the cold dataset | 1.11, 1.19 | 0.76, 0.96 | 1.019, 1.153 | 3 | 60 | 251 of 251 |
@@ -2331,7 +2331,7 @@ progress logs; they are individual runs, not a benchmark.
 - **Ample disk.** 35 buckets, 50.6 billion objects in all, completed. At the peak 96 to 99 % of the rows were
   ahead of the output (usgs-lidar-public: 1.949 of 1.973 billion; 21 of its 677 parts were published before
   listing ended). Spill peaked at 18 to 22 bytes per row, about the size of the Parquet output.
-  `resources.spill.refused` and `resources.budget_wait_ns` were 0 in every run.
+  `diagnostics.resources.spill.refused` and `diagnostics.resources.budget_wait_ns` were 0 in every run.
 - **A cap too small.** Three buckets of 29.6, 10.3 and 8.4 billion objects on a 100 GiB disk (a 91 GiB spill
   cap) at 2,048 workers fell from about 7,000 requests a second to about 10 once the cap filled. After the cap,
   rows listed per second equalled rows written per second, at about 8,000 to 12,000: one range paged serially.
@@ -2391,7 +2391,7 @@ because its tiles were all queued at once: uncapped, it changed the spill peak b
 
 ### Where workers wait under a cap
 
-With the wait-site counters of [#549](https://github.com/varveio/swath/pull/549) (`resources.publish_wait_ns`,
+With the wait-site counters of [#549](https://github.com/varveio/swath/pull/549) (`diagnostics.resources.publish_wait_ns`,
 `admission_wait_ns`, `idle_wait_ns`; the range engine's `awaited.*`), capped runs of the same lists:
 
 - **64 workers.** 93 % of worker time was blocked publishing (emitters with a refused frame, still inside their

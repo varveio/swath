@@ -113,7 +113,7 @@ func TestPercentKeysListInParallel(t *testing.T) {
 			continue
 		}
 		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
-			t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
+			t.Errorf("split.peak_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
 		}
 		if st.MeanActive < 0.6*ctl.MeanActive || g(cSplitRejectedUnsafeCursor) != 0 || g(cDensityRefusedAlphabet) != 0 ||
 			g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier) == 0 {
@@ -176,7 +176,7 @@ func TestPrefixedFrontierSplits(t *testing.T) {
 		t.Fatalf("the prefixed frontier never split: %d frontier splits, %d anchored", st.Get(cSplitAcceptedFrontier), st.Get(cFrontierAnchored))
 	}
 	if d := st.Get(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
-		t.Fatalf("split.max_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
+		t.Fatalf("split.peak_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
 	}
 }
 
@@ -454,7 +454,7 @@ func structureEngages(t *testing.T, inline bool) {
 		switch name {
 		case "date", "nbm":
 			if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 3) {
-				t.Errorf("%s: split.max_depth %d over %d", name, d, depthBound(len(keys), shapePage, 3))
+				t.Errorf("%s: split.peak_depth %d over %d", name, d, depthBound(len(keys), shapePage, 3))
 			}
 			if g(cStructureSentFrontier) == 0 {
 				t.Errorf("%s: %s never fired", name, Counters[cStructureSentFrontier].Key)

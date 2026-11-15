@@ -16,12 +16,12 @@ The fields most runs need:
 |---|---|
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([Exit codes](exit-codes.md)) |
 | `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.unreadable` and `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
-| `attempt.id` | this attempt; `error.json` carries the same |
+| `attempt.id`, `run.id` | this attempt, and the run it belongs to (the same for a run and its resumes); `error.json`, `progress.json` and the log events carry the same |
 | `output.rows_committed`, `output.committed_object_bytes` | the committed dataset's rows and the sizes of its objects, after a resume too |
-| `output.object_bytes` | the bytes of the objects this attempt listed |
+| `output.object_bytes` | the bytes of the objects this attempt listed, each name once (a hard-linked file once per link) |
 | `output.totals` | `swath du`'s totals (the rows themselves are only on stdout) |
 | `requests.http_attempts`, `cost.cost_usd` | requests made, and their cost at the provider's reference list rate |
-| `resources.peak_rss_bytes` | the process's peak memory |
+| `diagnostics.resources.peak_rss_bytes` | the process's peak memory (a [diagnostic](#diagnostics)) |
 | `timings.wall_ms` | the run's duration |
 
 `--report FILE` may not name a directory, a file in a directory that does not exist, the text output file,
@@ -31,17 +31,25 @@ the output directory, such as `DIR/attempt-1.json`, is accepted. A report that c
 fails the command (exit 1). `--report -` where stdout carries rows is refused (exit 2) and prints nothing on
 stdout.
 
+Every time in these files, and in the manifest, the journal and the log events, is RFC 3339 in UTC with exactly
+six fraction digits (`2026-11-15T12:00:00.137198Z`): one width, so the strings sort as the times do.
+
 ## Progress file
 
 While a dataset run holds its output, `DIR/.swath/progress.json` is rewritten every 2 seconds by an atomic
-rename; the progress line on the terminal samples the same snapshot. A supervisor watches that file;
-`DIR/run.json` follows the commit.
+rename; the progress line on the terminal samples the same snapshot. When the run ends, while it still holds the
+output, the file is written once more with its final counts and `state` `done` or `failed`; a file whose `state`
+is neither, read after its run ended, is the last snapshot of a process that was killed. A supervisor watches that
+file; `DIR/run.json` follows the commit. Its counts carry the run report's names.
 
 | Field | Meaning |
 |---|---|
-| `rows` | rows listed so far (a local tree's entries, directories included; with `--all-versions`, versions and delete markers) |
-| `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
-| `parts` | parts published |
+| `progress_version` | 1 |
+| `attempt_id`, `run_id` | the report's `attempt.id` and `run.id` (`run_id` once the run has opened its output) |
+| `state` | `listing` (a resume's verification of its retained parts included), `draining` (the provider finished; the order stage hands on the rows it holds), `publishing` (the last part is written; the manifest is being committed), `done` (the dataset committed), `failed` |
+| `rows_fetched` | rows listed so far (a local tree's entries, directories included; with `--all-versions`, versions and delete markers) |
+| `rows_emitted`, `rows_encoded` | rows handed to the encoders, rows written into parts |
+| `parts_written` | parts published |
 | `verified_bytes` | a resume's bytes of retained parts checked so far |
 | `scanned_bytes` | a resume's bytes of reused certificates its segments have read before their cut ([ordering.md](../internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | `advance` | the sum of the above; rises in every phase |
@@ -50,12 +58,12 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `empty_chain_pages` | empty continuing pages past the first 1,024 of their run: answered, followed, not progress |
 | `throttles`, `timeouts` | throttle failures; timeout failures, including credential waits before HTTP accounting starts |
 | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
-| `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
-| `rows_retained` | rows a resume kept from the interrupted run (not in `rows`) |
-| `requests`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](../internals/clients.md#retry-policy-and-accounting)) |
+| `mutex_wait_ns`, `peak_mutex_hold_ns` | the range engine's decision mutex: summed wait, longest hold |
+| `rows_retained` | rows a resume kept from the interrupted run (not in `rows_fetched`) |
+| `http_attempts`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](../internals/clients.md#retry-policy-and-accounting)) |
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
-| `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
-| `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
+| `cost_usd`, `rate_per_1k_usd` | `http_attempts` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
+| `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin; `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
 | `order.publish_waiters`, `order.admission_waiters`, `order.idle_workers` | the order stage's waiters now, each with a `peak_` twin: emitters waiting in publish on a full budget (a worker still listing its range), workers waiting to claim a queued range (budget and spill used), workers with nothing queued to list |
 | `order.spill_pressure_since` | when listing began to wait on a full spill cap: spill refused while workers wait on it, in publish or at admission (present only while they do, and not after listing is done; a wait that comes back within 30 s keeps its start); at 2 minutes of it the `spill_pressure` event says so ([log events](log-events.md)) |
 | `order.spill_max_bytes`, `order.spill_reserve_bytes` | the spill cap in effect (the default cap rises as it follows a disk grown under the run), and the free space spill leaves on its filesystem (0: none) |
@@ -69,45 +77,48 @@ and what `--report -` prints. It is operational: a dataset is read by its manife
 this report. It accounts for this invocation (rows it fetched
 and emitted, requests it made) separately from the dataset (rows retained from an interrupted run, durable,
 committed). Durations are integers with the unit in the name; a measurement that was not taken is absent,
-never zero.
+never zero. Its members are its stable core, which changes only with a new `report_version`, but for
+[`diagnostics`](#diagnostics): how the pipeline ran, under names that follow the algorithm and may change in any
+release.
 
 | Field | Meaning |
 |---|---|
 | `report_version` | 1 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
-| `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; for a dataset, `cuts_file`, how its cut file was taken: `read` (its cuts are the prior), `absent`, or `refused` with `cuts_refused` saying why ([dataset.md](../dataset.md#the-cut-file)); without it `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
+| `attempt` (`id`, `started_at`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
+| `run` (`id`) | the run this attempt belongs to: the journal's run id, the same for the run and every resume of it (for a dataset in a bucket, the `RUN` of its `data/RUN/ATTEMPT/` parts); a run without a journal is its one attempt, and has the attempt's id. Absent for an attempt that stopped before its output was opened; `error.json` carries the same |
+| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `metadata` (the metadata tier, `--metadata`), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output; how it was chosen is `diagnostics.sort_buffer`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; for a dataset, `cuts_file`, how its cut file was taken: `read` (its cuts are the prior), `absent`, or `refused` with `cuts_refused` saying why ([dataset.md](../dataset.md#the-cut-file)); without it `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `unreadable` (the count of entries that could not be read: the rows and totals leave them out; the manifest's `coverage.unreadable`), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` ([exit-codes.md](exit-codes.md)) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential |
 
 **Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
-end, `wall_ms` between them; `session_ms` is the whole invocation, from `attempt.started` (credential lookup,
+end, `wall_ms` between them; `session_ms` is the whole invocation, from `attempt.started_at` (credential lookup,
 a resume's verification and publication included). The phases follow one another: `listing_ms` from
 `started_at` to `listing_finished_at`, the end of the order stage (every row listed and handed on in order; it
 includes the setup and the order stage's drain after the last request), then `drain_ms` until the encoders have
 written and closed the last part, then `publication_ms` until the manifest is installed (`drain_ms` and
-`publication_ms` absent without a committed dataset). `seed_ms` overlaps `listing_ms` at its start: the range
-engine's seed, from its first delimiter request to its tiles (absent where none ran). `user_cpu_ms` and
-`sys_cpu_ms` are the process's CPU times (absent where the platform does not measure them).
+`publication_ms` absent without a committed dataset). `provider_finished_at` is when the provider finished, every
+range listed and none in flight (absent if it never did): the drain's tail lies between it and
+`listing_finished_at`. `user_cpu_ms` and `sys_cpu_ms` are the process's CPU times (absent where the platform does
+not measure them).
 
 **Rows and bytes** (`output`). `rows_fetched` is what this invocation listed from the source, `rows_filtered`
 what the filters dropped of it, `rows_emitted` what was handed on in order (swath du, swath diag count: counted). On a fresh run
 that succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`. A resume also hands on the rows it replays
 from certified spill files, which it did not list: on a resume that succeeded, `rows_fetched` − `rows_filtered`
-+ `resources.spill.durable.resume.replayed_rows` = `rows_emitted`. A run that stopped has also fetched rows
++ `diagnostics.resources.spill.durable.resume.replayed_rows` = `rows_emitted`. A run that stopped has also fetched rows
 ahead of the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
 the committed dataset (`rows_retained` + `rows_emitted`; a resume that finds the dataset already committed, by
 an earlier attempt, takes it from the manifest and retains and emits nothing itself). `parts_written` and
 `parts_retained` count parts.
-`object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept). On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
+`object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept), each name once: a file with several hard links counts once per link, where `swath du`'s `totals.bytes` counts it once. On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `committed_object_bytes` is the committed dataset's object bytes,
 the same sum over every row of it, as the manifest's `extensions.swath.committed_object_bytes` states it: retained parts
 and rows replayed from spill included, each row once whatever retries listed it. It is absent unless the dataset
 was committed, and absent when unknown: a schema without a size column, or a resumed run whose retained parts
-were recorded by a build that did not count them. 0 is a real total (no rows, or only empty objects). `text` is a text run's: `format`, `destination`, `compression`,
-`rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `encoder_allowance`, `encoders`, `gzip`). `remote` is a
+were recorded by a build that did not count them. 0 is a real total (no rows, or only empty objects). `text` is a text run's: `format`, `destination` (the file,
+or `-` for stdout), `compression`, `rows`, `bytes` (delivered, compressed). `remote` is a
 dataset written to a bucket's (`-o gs://...`, `-o s3://...` or `-o az://...`, absent otherwise; [dataset.md](../dataset.md#a-dataset-in-a-bucket)):
 `destination` (the root's URI, and ` at ` its endpoint when one is set), `work_dir`, `commit` (`created`;
 `confirmed`: the creation's answer was lost or refused and the manifest read back is the run's candidate;
@@ -152,7 +163,7 @@ retry and engine requeue use its stored transient signal. Other service errors r
 and provider code or reason in the message without a separate report label. Invalid pages remain protocol
 violations; caller cancellation keeps its stop disposition.
 
-**Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
+**Requests** (`requests`, `cost`; absent for a source that makes no requests). `http_attempts`
 is the one request count: every counted HTTP attempt (pages, probes, client retries, engine requeues).
 `retries` counts retry-loop repetitions, `throttles` counts throttle failures and `timeouts` counts
 timeout failures. Credential waits can fail before HTTP accounting starts, so `retries` and `timeouts`
@@ -161,15 +172,30 @@ stderr lines dropped because stderr did not drain. See
 [retry accounting](../internals/clients.md#retry-policy-and-accounting). `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint-url` spells it); both `null` on a
-custom endpoint, whose tariff is unknown, and for every Azure Blob run (no tariff estimate). `keys_per_sec` is `rows_emitted` over `listing_ms`;
-`http_attempts_per_1k_rows` is `http_attempts` per 1,000 `rows_fetched` (`null` without a row). Latency
-percentiles and in-flight time are the provider's counters (`source.stats.counters.values` `inflight.p50_ns`,
-`inflight.p90_ns`, `inflight.p99_ns`, `inflight.busy_ns`).
+custom endpoint, whose tariff is unknown, and for every Azure Blob run (no tariff estimate). Latency
+percentiles and in-flight time are the provider's counters (`diagnostics.source.stats.counters.values`
+`inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`, `inflight.busy_ns`).
+
+### Diagnostics
+
+`diagnostics` is how the pipeline ran: what bounded it, where it waited, what the provider's algorithm did. Its
+names follow the algorithm ([internals/counters.md](../internals/counters.md)) and may change in any release
+without a new `report_version`; a program that reads them is pinned to a build.
+
+`sort_buffer` is how `invocation.sort_buffer_bytes` was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of
+memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and
+`bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`,
+`cgroup_bytes`, `go_memory_limit_bytes`. `seed_ms` overlaps `timings.listing_ms` at its start: the range engine's
+seed, from its first delimiter request to its tiles (absent where none ran). `text` is a text run's sink:
+`sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor` (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`:
+`cores`, `encoder_allowance`, `encoders`, `gzip`). `efficiency`: `keys_per_sec` is `output.rows_emitted` over
+`timings.listing_ms`; `http_attempts_per_1k_rows` is `requests.http_attempts` per 1,000 `output.rows_fetched`
+(`null` without a row).
 
 **Resources** (`resources`). `peak_rss_bytes` (with `rusage_available`), `peak_heap_live_bytes` (sampled every
-100 ms), `max_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`
+100 ms), `peak_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`
 (the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
-output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
+output's; absent for swath du and swath diag count), `peak_ahead_rows`, `peak_frontier_stuck_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), the order stage's waits by site, each
 summed over goroutines with the most goroutines waiting there at once: `publish_wait_ns` and `peak_publish_waiters`
 (emitters waiting in publish on a full budget), `admission_wait_ns` and `peak_admission_waiters` (workers waiting to
@@ -181,7 +207,7 @@ off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `f
 open at the end included), `refused_spells` (those intervals that ended), `max_by` (what set the cap: `spill_budget`, fixed; by default `disk`, the spill filesystem's free space after the reserve, for a dataset in a bucket, or `disk_half`, half of it otherwise (the filesystem shared with the output, or for a stream with other programs' temporary files), both following the disk; `none`), `start_max_bytes` (the cap the run started with), `max_bytes` (the cap in effect at the end), `max_raised` (the times the cap rose: a disk grown under the run), `max_rechecks` and `max_recheck_raised` (rereads of the free space every 2 s while such a cap held the run back, and those that raised it), `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
 handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
-the power-of-two bucket holding it, and `max`), `dir`, `fs_type`, and with durable spill
+the power-of-two bucket holding it, and `peak`, exact), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `limit_bytes` (the spill both derive from, one slot per
 64 KiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
@@ -195,13 +221,13 @@ metadata bound), `abandoned` (by reason), `sealed_files`,
 drain: its tail once listing is done, and the drainer's times over the whole run
 ([internals/ordering.md](../internals/ordering.md), every field in
 [internals/counters.md](../internals/counters.md)): `tail_ns`,
-`worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
-`order_check_ns` and `sink_write_ns`; `writer_before_listing_done` (the Parquet writer up to `listing_done_at`; absent
+`worker_idle_after_provider_finished_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
+`order_check_ns` and `sink_write_ns`; `writer_before_provider_finished` (the Parquet writer up to `timings.provider_finished_at`; absent
 when listing never finished): `parts` and `rows` published, and the encoders' time on the batches written, `encode_ns`
 encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
-`segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
-`decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
+`segments`, `workers`, `rows`, `peak_rows`, `seam_checks`, `time_ns`, `peak_time_ns`, `plan_ns`, `read_ns`,
+`decode_ns`, `write_ns`, `max_workers` (the cap), `budget_waits`, `budget_wait_ns`, `peak_held_bytes`, `workers_by`,
 `per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`, and on a
 resume the reused certificates the segments replayed: `certificates_read`, `certified_rows`, `certificate_scan_ns`); and `encoders_at_start`, `encoders_after_listing`,
 `encoder_admission`, with what they were admitted against: `encoder_allowance_bytes` (1/16 of memory, whatever
@@ -219,7 +245,7 @@ waiting for the prior to be read), `peak_tiles`, `peak_credit_rows` (the rows ch
 the tiles held),
 `peak_behind_bytes` (the most live spill behind the output: drained durable files not yet unlinked), `evicted`
 (drained certificates the window evicted while live spill was past half the cap) and `wakes` (wakes of a held
-worker on the paths that engage only with durable spill: `spill`, `read_ahead`, `read_ahead_share`). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+worker on the paths that engage only with durable spill: `spill`, `read_ahead`, `read_ahead_share`).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).
@@ -234,7 +260,7 @@ before listing.
 
 **Profiles** (`profiles`, development only). Present when `SWATH_CPUPROFILE` or `SWATH_MEMPROFILE` is set
 ([diagnostics.md](../internals/diagnostics.md#phase-profiles)): `phase_boundary_at`, the logical boundary between
-the phases (the event `timings.listing_done_at` records, microseconds later; absent when listing never finished),
+the phases (the event `timings.provider_finished_at` records, microseconds later; absent when listing never finished),
 `cpu_cut_delay_ns` (from the boundary to the listing phase's CPU profile's stop: the listing file holds that much
 of the tail), `cpu_gap_ns` (from that stop to the tail's CPU profile's start, which neither covers),
 `mem_profile_rate` (bytes allocated per memory profile sample, 0: none), and `files`, each with `kind`

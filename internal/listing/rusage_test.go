@@ -19,11 +19,14 @@ func TestRusageFieldShape(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var m struct{ Timings, Resources map[string]any }
+		var m struct {
+			Timings     map[string]any
+			Diagnostics struct{ Resources map[string]any }
+		}
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
-		return m.Timings, m.Resources
+		return m.Timings, m.Diagnostics.Resources
 	}
 	var r Report
 	r.setRusage(0, 0, 0, false)
@@ -34,10 +37,10 @@ func TestRusageFieldShape(t *testing.T) {
 		}
 	}
 	if v, ok := res["peak_rss_bytes"]; ok {
-		t.Errorf("unavailable: resources.peak_rss_bytes = %v, want absent", v)
+		t.Errorf("unavailable: diagnostics.resources.peak_rss_bytes = %v, want absent", v)
 	}
 	if res["rusage_available"] != false {
-		t.Errorf("unavailable: resources.rusage_available = %v, want false", res["rusage_available"])
+		t.Errorf("unavailable: diagnostics.resources.rusage_available = %v, want false", res["rusage_available"])
 	}
 	r.setRusage(0, 1500*time.Millisecond, 4096, true)
 	tm, res = fields(&r)

@@ -31,6 +31,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
@@ -409,7 +410,7 @@ func (s *Spec) Resolve(now time.Time) {
 			continue
 		}
 		if d, err := source.ParseDuration(strings.TrimSpace(*t)); err == nil && d >= 0 {
-			*t = now.Add(-d).UTC().Truncate(time.Second).Format(time.RFC3339)
+			*t = jsontime.Format(now.Add(-d).Truncate(time.Second))
 		}
 	}
 }

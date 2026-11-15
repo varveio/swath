@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +23,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
@@ -60,16 +64,14 @@ const (
 type eventLog struct {
 	json           bool
 	verbose, quiet int
-	attempt        string // the run's attempt id ("" before a run has one)
+	attempt        string        // the run's attempt id ("" before a run has one)
+	run            func() string // the run's id once it is known (nil: none)
 }
 
 var logs atomic.Pointer[eventLog]
 
 // logClock is the events' time (tests fix it).
 var logClock = time.Now
-
-// tsLayout is an event's ts: RFC 3339 in UTC, to the millisecond.
-const tsLayout = "2006-01-02T15:04:05.000Z07:00"
 
 // elog is the log in force: text at the default verbosity until a
 // command line sets it (setLog).
@@ -80,9 +82,17 @@ func elog() *eventLog {
 	return &eventLog{}
 }
 
-// setLog sets the log from the terminal flags; attempt is the run's id.
+// setLog sets the log from the terminal flags; attempt is the attempt's id.
 func setLog(t termOptions, attempt string) {
 	logs.Store(&eventLog{json: t.logFormat == logJSON, verbose: t.verbose, quiet: t.quiet, attempt: attempt})
+}
+
+// logRun names the run in every later event: run reads its id ("" until
+// it is known).
+func logRun(run func() string) {
+	l := *elog()
+	l.run = run
+	logs.Store(&l)
 }
 
 // shows says whether an event at level is printed: errors unless -qq,
@@ -106,8 +116,33 @@ func (l *eventLog) event(level, event, msg string, fields any) {
 	}
 }
 
-// warn prints a warning.
-func (l *eventLog) warn(msg string) { l.event(lvWarn, evWarning, msg, nil) }
+// The command's own warning codes: a warning event's code member
+// (source.WarningCodes are the pipeline's and the providers').
+const (
+	warnRequestFailures   = "request_failures"   // requests failing with one cause, none answered, for 10 s
+	warnUnreadable        = "unreadable"         // entries that could not be read
+	warnStacks            = "stacks"             // a goroutine dump
+	warnNoProgress        = "no_progress"        // half the stall timeout without progress
+	warnStuck             = "stuck"              // the stall timeout: the run stops as stuck
+	warnForcedExit        = "forced_exit"        // still stopping after the shutdown grace
+	warnOutcomeUnrecorded = "outcome_unrecorded" // the outcome is not recorded in error.json
+	warnTrace             = "trace_unwritten"    // --trace: the trace file is not written whole
+	warnProfile           = "profile_unwritten"  // SWATH_CPUPROFILE, SWATH_MEMPROFILE: a profile is not written
+	warnPrefixNotFound    = "prefix_not_found"   // du --from-dataset: no key starts with the prefix
+	warnCoverageUnknown   = "coverage_unknown"   // du --from-dataset: the manifest does not say whether its listing completed
+)
+
+// warningCodes are the codes above, for the documentation's check.
+var warningCodes = []string{warnRequestFailures, warnUnreadable, warnStacks, warnNoProgress, warnStuck, warnForcedExit,
+	warnOutcomeUnrecorded, warnTrace, warnProfile, warnPrefixNotFound, warnCoverageUnknown}
+
+// warningFields are a warning event's without fields of its own.
+type warningFields struct {
+	Code string `json:"code"`
+}
+
+// warn prints a warning: code is a warn* or source.Warn* code.
+func (l *eventLog) warn(code, msg string) { l.event(lvWarn, evWarning, msg, warningFields{code}) }
 
 // print writes an event: in text "swath: MSG" ("swath: warning: MSG" for
 // a warning), in json its object (line).
@@ -127,17 +162,23 @@ func (l *eventLog) print(level, event, msg string, fields any) {
 	send(errOut, p+escapeControl(msg)+"\n")
 }
 
-// line is an event as one JSON object: ts, level, event, attempt, msg,
-// then the members of fields (a struct or map marshalled as an object).
+// line is an event as one JSON object: ts, level, event, attempt_id,
+// run_id, msg, then the members of fields (a struct or map marshalled as
+// an object).
 func (l *eventLog) line(level, event, msg string, fields any) string {
 	str := func(b []byte, k, v string) []byte {
 		return append(append(b, `,"`+k+`":`...), marshal(v)...)
 	}
-	b := []byte(`{"ts":"` + logClock().UTC().Format(tsLayout) + `"`)
+	b := []byte(`{"ts":"` + jsontime.Format(logClock()) + `"`)
 	b = str(b, "level", level)
 	b = str(b, "event", event)
 	if l.attempt != "" {
-		b = str(b, "attempt", l.attempt)
+		b = str(b, "attempt_id", l.attempt)
+	}
+	if l.run != nil {
+		if id := l.run(); id != "" {
+			b = str(b, "run_id", id)
+		}
 	}
 	b = str(b, "msg", msg)
 	if f := marshal(fields); len(f) > 2 && f[0] == '{' {
@@ -183,8 +224,9 @@ const (
 	modeCount   = "count"   // nothing: swath diag count
 )
 
-// startFields are a start event's: the source, what the run writes (mode)
-// and where (destination: a path, "stdout", or none).
+// startFields are a start event's: the source (as the report and the
+// manifest spell it), what the run writes (mode) and where (destination: a
+// path, "-" for stdout, or none).
 type startFields struct {
 	Source      string `json:"source"`
 	Mode        string `json:"mode"`
@@ -198,6 +240,8 @@ func (f startFields) words() string {
 		return "as totals"
 	case modeCount:
 		return "as a count"
+	case modeRows:
+		return "to stdout"
 	}
 	return "to " + f.Destination
 }
@@ -216,15 +260,20 @@ func (l *eventLog) start(f startFields) {
 	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+l.attempt+")\n")
 }
 
-// startOf is a run's start event: src, and what it writes where.
-func startOf(src string, o options, dir string) startFields {
+// startOf is a run's start event: src, and what it writes where. A local
+// src is made absolute, as the provider opens it (the report's
+// invocation.source, the manifest's source.uri).
+func startOf(src string, local bool, o options, dir string) startFields {
+	if abs, err := filepath.Abs(src); local && err == nil {
+		src = abs
+	}
 	switch {
 	case o.totals != nil:
-		return startFields{src, modeTotals, "stdout"}
+		return startFields{src, modeTotals, "-"}
 	case o.countOnly:
 		return startFields{src, modeCount, ""}
 	case o.text != nil && o.text.Path == "":
-		return startFields{src, modeRows, "stdout"}
+		return startFields{src, modeRows, "-"}
 	case o.text != nil:
 		return startFields{src, modeFile, o.text.Path}
 	}
@@ -232,8 +281,9 @@ func startOf(src string, o options, dir string) startFields {
 }
 
 // progress prints a progress record: the snapshot's fields after msg,
-// the record's text.
+// the record's text, but for its ids, which the envelope carries.
 func (l *eventLog) progress(s listing.ProgressSnapshot, msg string) {
+	s.AttemptID, s.RunID = "", ""
 	l.print(lvInfo, evProgress, msg, s)
 }
 
@@ -345,6 +395,26 @@ func (w *failureWatch) until(e source.Exchange) string {
 	return ""
 }
 
+// exchangeClass is a failed exchange's class, as the run report's
+// remote.retry_classes: unreachable (the connection refused, its host not
+// found or unroutable: source.Unreachable), timeout, connection (another
+// transport failure), or http_STATUS for an answer of 400 or more; ""
+// for one below.
+func exchangeClass(e source.Exchange) string {
+	var ne net.Error
+	switch {
+	case e.Err == nil && e.Status >= 400:
+		return "http_" + strconv.Itoa(e.Status)
+	case e.Err == nil:
+		return ""
+	case source.Unreachable(e.Err):
+		return source.CauseUnreachable
+	case errors.Is(e.Err, context.DeadlineExceeded), errors.As(e.Err, &ne) && ne.Timeout():
+		return "timeout"
+	}
+	return "connection"
+}
+
 // exchangeCause is a failed exchange's cause ("" for an answer): the
 // innermost transport error, or a 5xx or 429 status.
 func exchangeCause(e source.Exchange) string {
@@ -399,15 +469,18 @@ func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	if l := elog(); due && l.shows(lvWarn) {
 		w.warnings.Add(1)
 		l.event(lvWarn, evWarning, fmt.Sprintf("%s %s (retrying; %d attempts%s)", w.provider, key, n, w.until(e)),
-			failureFields{host, cause, n})
+			failureFields{warnRequestFailures, host, exchangeClass(e), cause, n})
 	}
 }
 
-// failureFields are a persistent-failure warning's.
+// failureFields are a persistent-failure warning's: the failure's class
+// (exchangeClass) and its text.
 type failureFields struct {
-	Host     string `json:"host"`
-	Cause    string `json:"cause"`
-	Attempts int64  `json:"attempts"`
+	Code         string `json:"code"`
+	Host         string `json:"host"`
+	Cause        string `json:"cause"`
+	Error        string `json:"error"`
+	HTTPAttempts int64  `json:"http_attempts"`
 }
 
 // outstanding names the cause that has failed every request for at least
@@ -456,11 +529,11 @@ type spillWatch struct {
 
 // spillFields are a spill_pressure event's.
 type spillFields struct {
-	Since             time.Time `json:"since"`
-	SpillBytes        int64     `json:"spill_bytes"`
-	SpillMaxBytes     int64     `json:"spill_max_bytes"`
-	SpillReserveBytes int64     `json:"spill_reserve_bytes"`
-	OutputRowsPerS    float64   `json:"output_rows_per_s"`
+	Since             jsontime.Time `json:"since"`
+	SpillBytes        int64         `json:"spill_bytes"`
+	SpillMaxBytes     int64         `json:"spill_max_bytes"`
+	SpillReserveBytes int64         `json:"spill_reserve_bytes"`
+	OutputRowsPerS    float64       `json:"output_rows_per_s"`
 }
 
 // check takes the progress snapshot s at now: it prints the event when one
@@ -474,7 +547,7 @@ func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
 		return nil // not waiting now (or listing done): nothing is due; a spell that comes back keeps its count
 	}
 	g := s.Order
-	if since := *g.SpillPressureSince; !since.Equal(w.since) {
+	if since := g.SpillPressureSince.Time; !since.Equal(w.since) {
 		w.since, w.told, w.from, w.rows = since, time.Time{}, now, s.Ordered
 	}
 	held := now.Sub(w.since)
@@ -482,7 +555,7 @@ func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
 	if !stop && (held < spillPressureFor || (!w.told.IsZero() && now.Sub(w.told) < spillPressureEvery)) {
 		return nil
 	}
-	f := spillFields{Since: w.since, SpillBytes: g.SpillLiveBytes, SpillMaxBytes: g.SpillMaxBytes, SpillReserveBytes: g.SpillReserveBytes}
+	f := spillFields{Since: jsontime.Of(w.since), SpillBytes: g.SpillLiveBytes, SpillMaxBytes: g.SpillMaxBytes, SpillReserveBytes: g.SpillReserveBytes}
 	if d := now.Sub(w.from); d > 0 {
 		f.OutputRowsPerS = float64(s.Ordered-w.rows) / d.Seconds()
 	}
@@ -514,14 +587,16 @@ func (f spillFields) capText() string {
 	return t
 }
 
-// requestFields are a request event's.
+// requestFields are a request event's: a failed exchange's class
+// (exchangeClass) and, without an answer, the transport's error.
 type requestFields struct {
-	Op        string  `json:"op"`
-	Host      string  `json:"host"`
-	Path      string  `json:"path"`
-	Status    int     `json:"status,omitempty"`
-	Cause     string  `json:"cause,omitempty"`
-	LatencyMs float64 `json:"latency_ms"`
+	Op        string `json:"op"`
+	Host      string `json:"host"`
+	Path      string `json:"path"`
+	Status    int    `json:"status,omitempty"`
+	Cause     string `json:"cause,omitempty"`
+	Error     string `json:"error,omitempty"`
+	LatencyUs int64  `json:"latency_us"`
 }
 
 // request logs one exchange: every one with -vvv, a failed one (no
@@ -531,28 +606,29 @@ func (l *eventLog) request(e source.Exchange) {
 	if l.quiet > 0 || l.verbose < 2 || (l.verbose == 2 && !failed) {
 		return
 	}
-	f := requestFields{Op: e.Method, Status: e.Status, LatencyMs: float64(e.Latency.Microseconds()) / 1000}
+	f := requestFields{Op: e.Method, Status: e.Status, Cause: exchangeClass(e), LatencyUs: e.Latency.Microseconds()}
 	if e.URL != nil {
 		f.Host, f.Path = e.URL.Host, requestPath(e.URL)
 	}
 	what := fmt.Sprint(e.Status)
 	if e.Err != nil {
-		f.Cause = exchangeCause(e)
-		what = f.Cause
+		f.Error = exchangeCause(e)
+		what = f.Error
 	}
 	l.print(lvDebug, evRequest, fmt.Sprintf("request %s %s%s: %s (%s)", f.Op, f.Host, f.Path, what, e.Latency.Round(time.Millisecond)), f)
 }
 
 // retryFields are a retry event's: the request's host and path (redacted
-// as a request event's) match it to its request event.
+// as a request event's) match it to its request event; cause is the
+// failure's class (the outcome's cause vocabulary), error its text.
 type retryFields struct {
 	Host   string `json:"host,omitempty"`
 	Path   string `json:"path,omitempty"`
-	Try    int    `json:"try"` // the call's attempt, from 1 (attempt is the run's id)
-	Class  string `json:"class"`
+	Try    int    `json:"try"` // the call's attempt, from 1
 	Status int    `json:"status,omitempty"`
 	Code   string `json:"code,omitempty"`
 	Cause  string `json:"cause"`
+	Error  string `json:"error"`
 	Retry  bool   `json:"retry"`
 	WaitMs int64  `json:"wait_ms,omitempty"`
 }
@@ -562,9 +638,9 @@ func (l *eventLog) retry(f source.Failed) {
 	if !l.shows(lvDebug) {
 		return
 	}
-	r := retryFields{Try: f.Attempt, Class: f.Class, Status: f.Status, Code: f.Code, Retry: f.Retry, WaitMs: f.Wait.Milliseconds()}
+	r := retryFields{Try: f.Attempt, Cause: f.Class, Status: f.Status, Code: f.Code, Retry: f.Retry, WaitMs: f.Wait.Milliseconds()}
 	if f.Cause != nil {
-		r.Cause = f.Cause.Error()
+		r.Error = f.Cause.Error()
 	}
 	on := ""
 	if f.URL != nil {
@@ -575,7 +651,7 @@ func (l *eventLog) retry(f source.Failed) {
 	if f.Retry {
 		next = "retrying in " + f.Wait.Round(time.Millisecond).String()
 	}
-	l.print(lvDebug, evRetry, fmt.Sprintf("attempt %d%s failed (%s): %s; %s", f.Attempt, on, r.Class, r.Cause, next), r)
+	l.print(lvDebug, evRetry, fmt.Sprintf("attempt %d%s failed (%s): %s; %s", f.Attempt, on, r.Cause, r.Error, next), r)
 }
 
 // watchRequests installs the request log and the persistent-failure
@@ -631,6 +707,7 @@ const unreadableShown = 5
 
 // unreadableFields are an unreadable-entries warning's.
 type unreadableFields struct {
+	Code       string   `json:"code"`
 	Unreadable int64    `json:"unreadable"`
 	Samples    []string `json:"samples,omitempty"`
 }
@@ -654,13 +731,13 @@ func reportUnreadable(r *listing.Report) {
 	samples = samples[:min(len(samples), unreadableShown)]
 	const msg = "unreadable entries"
 	if l.json {
-		l.print(lvWarn, evWarning, msg, unreadableFields{n, samples})
+		l.print(lvWarn, evWarning, msg, unreadableFields{warnUnreadable, n, samples})
 		return
 	}
 	if len(samples) == 0 {
 		return // the error line counts them; the report's source counters say why
 	}
-	l.warn(msg + ":")
+	l.warn(warnUnreadable, msg+":")
 	for _, s := range samples {
 		noteKept(errOut, indent+escapeControl(s)+"\n")
 	}

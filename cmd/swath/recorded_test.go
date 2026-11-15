@@ -126,13 +126,15 @@ func TestResumeTakesDiagnosticDiskFlags(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	var r struct {
-		Resources struct {
-			Spill *struct {
-				ReserveBytes int64 `json:"reserve_bytes"`
+		Diagnostics struct {
+			Resources struct {
+				Spill *struct {
+					ReserveBytes int64 `json:"reserve_bytes"`
+				}
 			}
 		}
 	}
-	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Resources.Spill == nil || r.Resources.Spill.ReserveBytes != 3<<20 {
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Diagnostics.Resources.Spill == nil || r.Diagnostics.Resources.Spill.ReserveBytes != 3<<20 {
 		t.Fatalf("report: %v %s", err, out.String())
 	}
 	if !dataset.Committed(dir) {

@@ -57,7 +57,7 @@ func TestS3Dataset(t *testing.T) {
 		}
 		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
 			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsEmitted ||
-			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
+			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt.Time) {
 			t.Fatalf("manifest %+v", m)
 		}
 		var run Report
@@ -128,26 +128,26 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		}
 		return v.(map[string]any)
 	}
-	vals := []string{"source", "stats", "counters", "values"}
+	vals := []string{"diagnostics", "source", "stats", "counters", "values"}
 	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds"), NoJournal: datasettest.NoJournal()}, Limits: Limits{Workers: 4}})
-	if !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
+	if !has(on, append(vals, "seed.cuts")...) || !has(on, "diagnostics", "resources", "spill", "rows") || !has(on, "diagnostics", "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
-	if f := feat(on, "source", "stats", "counters", "features"); f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
+	if f := feat(on, "diagnostics", "source", "stats", "counters", "features"); f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
 		t.Fatalf("features = %v", f)
 	}
-	if f := feat(on, "resources", "features"); f["spill"] != true {
+	if f := feat(on, "diagnostics", "resources", "features"); f["spill"] != true {
 		t.Fatalf("pipeline features = %v", f)
 	}
 	cfg := Config{Source: SourceConfig{Options: &S3Config{}}, Limits: Limits{Workers: 4, Spill: SpillLimits{Off: true}}}
 	m := run(cfg)
-	if has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
+	if has(m, append(vals, "seed.cuts")...) || has(m, "diagnostics", "resources", "spill") || has(m, "diagnostics", "resources", "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)
 	}
-	if f := feat(m, "source", "stats", "counters", "features"); f["seed"] != false || f["split"] != true {
+	if f := feat(m, "diagnostics", "source", "stats", "counters", "features"); f["seed"] != false || f["split"] != true {
 		t.Fatalf("features = %v", f)
 	}
-	if f := feat(m, "resources", "features"); f["spill"] != false {
+	if f := feat(m, "diagnostics", "resources", "features"); f["spill"] != false {
 		t.Fatalf("pipeline features = %v", f)
 	}
 }

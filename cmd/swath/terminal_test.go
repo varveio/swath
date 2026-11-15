@@ -10,11 +10,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -22,7 +24,7 @@ import (
 func snap() listing.ProgressSnapshot {
 	usd := 0.0125
 	return listing.ProgressSnapshot{Rows: 1234567, Retained: 1000, Parts: 3, Requests: 2500, Inflight: 17, DurationMs: 10_000,
-		StartedAt: time.Unix(1, 0), CostUSD: &usd, CostRatePer1kUSD: 0.005}
+		StartedAt: jsontime.Of(time.Unix(1, 0)), CostUSD: &usd, CostRatePer1kUSD: 0.005}
 }
 
 // TestProgressRecord: Java's listing record (phase, objects with the
@@ -188,11 +190,11 @@ func TestStatsBlock(t *testing.T) {
 	per := 1.5
 	usd := 0.01
 	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
-		Output:     listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
-		Resources:  listing.Resources{PeakRSSBytes: &rss},
-		Requests:   &listing.Requests{HTTPAttempts: 2000},
-		Cost:       &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
-		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}
+		Output:   listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
+		Requests: &listing.Requests{HTTPAttempts: 2000},
+		Cost:     &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
+		Diagnostics: listing.Diagnostics{Resources: listing.Resources{PeakRSSBytes: &rss},
+			Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}}
 	store := rowNouns(false, false)
 	got := statsLines(r, false, store)
 	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · in flight avg 0.00 · peak 0",
@@ -240,15 +242,18 @@ func TestStatsBlock(t *testing.T) {
 }
 
 // TestReportContinuity: a run's report carries requests.http_attempts
-// (every HTTP attempt) with the labelled estimate only on a known tariff, efficiency,
-// session_ms and args_hash (the same for the same identity, another for
-// another prefix); --stats prints the block on stderr, the summary line
-// stays on stdout, and progress.json carries the request account.
+// (every HTTP attempt) with the labelled estimate only on a known tariff,
+// diagnostics.efficiency, session_ms, args_hash (the same for the same
+// identity, another for another prefix) and the run's id; --stats prints
+// the block on stderr, the summary line stays on stdout, and progress.json
+// carries the request account and, once the run ended, its final counts.
 func TestReportContinuity(t *testing.T) {
 	url := s3test.Bucket(t, []string{"a/1", "a/2", "b/1"})
 	stderr := captureStderr(t)
 	type rep struct {
-		ArgsHash string `json:"args_hash"`
+		ArgsHash string              `json:"args_hash"`
+		Attempt  struct{ ID string } `json:"attempt"`
+		Run      *struct{ ID string }
 		Requests *struct {
 			HTTPAttempts int64 `json:"http_attempts"`
 		}
@@ -256,46 +261,65 @@ func TestReportContinuity(t *testing.T) {
 			CostUSD *float64 `json:"cost_usd"`
 			Basis   *struct{ Source string }
 		}
-		Efficiency *struct {
-			KeysPerSec float64  `json:"keys_per_sec"`
-			Per1k      *float64 `json:"http_attempts_per_1k_rows"`
+		Diagnostics struct {
+			Efficiency *struct {
+				KeysPerSec float64  `json:"keys_per_sec"`
+				Per1k      *float64 `json:"http_attempts_per_1k_rows"`
+			}
+		}
+		Output struct {
+			RowsFetched int64 `json:"rows_fetched"`
 		}
 		Timings struct {
-			SessionMs int64 `json:"session_ms"`
-			WallMs    int64 `json:"wall_ms"`
+			StartedAt string `json:"started_at"`
+			SessionMs int64  `json:"session_ms"`
+			WallMs    int64  `json:"wall_ms"`
 		}
 	}
-	list := func(src string, extra ...string) (rep, string) {
+	list := func(src string, extra ...string) (rep, string, string) {
 		t.Helper()
 		var out bytes.Buffer
-		file := filepath.Join(t.TempDir(), "r.json")
-		args := append([]string{src, "--endpoint-url", url, "--s3-path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
+		file, ds := filepath.Join(t.TempDir(), "r.json"), filepath.Join(t.TempDir(), "ds")
+		args := append([]string{src, "--endpoint-url", url, "--s3-path-style", "--anonymous", "-o", ds, "--report", file}, extra...)
 		args = append(args, unjournaled...)
 		if err := run(context.Background(), args, &out, diagList); err != nil {
 			t.Fatal(err)
 		}
 		var r rep
 		readJSON(t, file, &r)
-		return r, out.String()
+		return r, out.String(), ds
 	}
-	r, out := list("s3://bkt", "--stats")
+	r, out, ds := list("s3://bkt", "--stats")
 	if r.Requests == nil || r.Requests.HTTPAttempts < 1 || r.Cost == nil || r.Cost.CostUSD != nil || r.Cost.Basis != nil {
 		t.Fatalf("cost on a custom endpoint: %+v", r.Cost)
 	}
-	if r.Efficiency == nil || r.Efficiency.Per1k == nil || *r.Efficiency.Per1k <= 0 || len(r.ArgsHash) != 64 || r.Timings.SessionMs < r.Timings.WallMs {
+	e := r.Diagnostics.Efficiency
+	if e == nil || e.Per1k == nil || *e.Per1k <= 0 || len(r.ArgsHash) != 64 || r.Timings.SessionMs < r.Timings.WallMs {
 		t.Fatalf("report %+v", r)
+	}
+	// The run's id is its journal's (without one, the attempt's); every
+	// time has six fraction digits.
+	if r.Run == nil || len(r.Run.ID) != 32 || (r.Run.ID == r.Attempt.ID) != (len(unjournaled) > 0) || !regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$`).MatchString(r.Timings.StartedAt) {
+		t.Fatalf("run %+v, attempt %+v, started_at %q", r.Run, r.Attempt, r.Timings.StartedAt)
+	}
+	// The progress file's last snapshot: the run's final counts, done.
+	var p listing.ProgressSnapshot
+	readJSON(t, filepath.Join(ds, progressName), &p)
+	if p.ProgressVersion != listing.ProgressVersion || p.State != listing.StateDone || p.AttemptID != r.Attempt.ID || p.RunID != r.Run.ID ||
+		p.Rows != r.Output.RowsFetched || p.Requests != r.Requests.HTTPAttempts {
+		t.Fatalf("progress.json %+v, report %+v", p, r)
 	}
 	if out != "" || !strings.Contains(stderr.String(), "3 objects in ") || !strings.Contains(stderr.String(), "API calls") {
 		t.Fatalf("stdout %q stderr %q", out, stderr.String())
 	}
-	again, _ := list("s3://bkt")
-	other, _ := list("s3://bkt/a/")
+	again, _, _ := list("s3://bkt")
+	other, _, _ := list("s3://bkt/a/")
 	if again.ArgsHash != r.ArgsHash || other.ArgsHash == r.ArgsHash {
 		t.Fatalf("args_hash %s %s %s", r.ArgsHash, again.ArgsHash, other.ArgsHash)
 	}
 	// progress.json's request fields.
 	s, _ := json.Marshal(snap())
-	for _, k := range []string{`"requests":2500`, `"inflight":17`, `"limit":0`, `"retries":0`, `"rows_retained":1000`, `"cost_rate_per_1k_usd":0.005`} {
+	for _, k := range []string{`"http_attempts":2500`, `"inflight":17`, `"limit":0`, `"retries":0`, `"rows_retained":1000`, `"rate_per_1k_usd":0.005`} {
 		if !bytes.Contains(s, []byte(k)) {
 			t.Fatalf("progress.json lacks %s: %s", k, s)
 		}

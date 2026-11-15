@@ -200,22 +200,24 @@ type campaignReport struct {
 		RowsCommitted int64 `json:"rows_committed"`
 		Bytes         int64 `json:"bytes"`
 	} `json:"output"`
-	Resources struct {
-		Spill struct {
-			Durable *order.DurableReport `json:"durable"`
-		} `json:"spill"`
-	} `json:"resources"`
-	Source struct {
-		Stats struct {
-			Counters struct {
-				Values map[string]any `json:"values"`
-			} `json:"counters"`
-		} `json:"stats"`
-	} `json:"source"`
+	Diagnostics struct {
+		Resources struct {
+			Spill struct {
+				Durable *order.DurableReport `json:"durable"`
+			} `json:"spill"`
+		} `json:"resources"`
+		Source struct {
+			Stats struct {
+				Counters struct {
+					Values map[string]any `json:"values"`
+				} `json:"counters"`
+			} `json:"stats"`
+		} `json:"source"`
+	} `json:"diagnostics"`
 }
 
 func (r *campaignReport) value(name string) int64 {
-	f, _ := r.Source.Stats.Counters.Values[name].(float64)
+	f, _ := r.Diagnostics.Source.Stats.Counters.Values[name].(float64)
 	return int64(f)
 }
 
@@ -395,7 +397,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 	}
 	sameParts(t, "cold", ref, coldDir)
 	coldReq := cold.value("requests")
-	d := cold.Resources.Spill.Durable
+	d := cold.Diagnostics.Resources.Spill.Durable
 	if d == nil || d.SealedFiles == 0 {
 		t.Fatalf("the cold run sealed no certificate: %+v", d)
 	}
@@ -448,7 +450,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 				// Reconciliation.
 				o := r.Output
 				var replayed, accepted, rejected int64
-				if d := r.Resources.Spill.Durable; d != nil && d.Resume != nil {
+				if d := r.Diagnostics.Resources.Spill.Durable; d != nil && d.Resume != nil {
 					replayed, accepted = d.Resume.ReplayedRows, d.Resume.Accepted
 					for _, n := range d.Resume.Rejected {
 						rejected += n
@@ -549,7 +551,7 @@ func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref
 		// are among them, and it replays at least the part's rows from
 		// them. With reuse off (Sol's --spill-budget 1MiB overlay) nothing is
 		// accepted and this fails.
-		d := r.Resources.Spill.Durable
+		d := r.Diagnostics.Resources.Spill.Durable
 		if d == nil || d.Resume == nil {
 			t.Fatalf("the resume after %s reports no durable spill: its rows were not replayed", at)
 		}

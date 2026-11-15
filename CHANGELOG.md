@@ -5,6 +5,37 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: the run report has a stable core and one `diagnostics` member. `report_version` 1 covers
+  `build`, `attempt`, `run`, `invocation`, `outcome`, `timings`, `output`, `args_hash`, `requests` and `cost`;
+  everything that describes how the pipeline ran (`resources`, `source` with the provider's counters,
+  `efficiency`, `history`, `profiles`, `sort_buffer`, `seed_ms`, a text run's sink) moved under `diagnostics`,
+  whose names follow the algorithm and may change in any release. `jq .resources.peak_rss_bytes` is now
+  `jq .diagnostics.resources.peak_rss_bytes`.
+- Go port: a run has an id: the report's `run.id`, the same for a run and every resume of it (the journal's
+  run UUID; a run without a journal has its attempt's id), also in `error.json`, `progress.json` and the log
+  events' `run_id`.
+- Go port: every time in a JSON file or event (report, `run.json`, `error.json`, `progress.json`, the manifest,
+  the journal, the log's `ts`, a resolved `--modified-since` in `coverage.filters`) is RFC 3339 in UTC with
+  exactly six fraction digits: `2026-11-15T12:00:00.137198Z`, never `…28.1371984Z` or `…28Z`.
+- Go port: report and log names, one vocabulary: `attempt.started` is `attempt.started_at`;
+  `timings.listing_done_at` is `timings.provider_finished_at`; `invocation.fields` is `invocation.metadata`;
+  a high-water mark starts with `peak_` and `max_` names only a limit (`peak_buffered_bytes`,
+  `peak_frontier_stuck_ns`, segments' `peak_rows`, `peak_time_ns`, `peak_held_bytes`, frame sizes' `peak`, the
+  counters `split.peak_depth`, `peak_active`, `peak_queued`, `mutex.peak_hold_ns`, `groups.peak_rows`,
+  `inflight.peak_active`, `limiter.peak_depth`, ...); `build.version` and `--version` print `0.4.0`, never
+  `v0.4.0`.
+- Go port: `progress.json` has `progress_version`, `attempt_id`, `run_id` and `state` (`listing`, `draining`,
+  `publishing`, `done`, `failed`), is written a last time with the final counts when the run ends, and names its
+  counts as the report does: `rows_fetched`, `rows_emitted`, `rows_encoded`, `parts_written`, `http_attempts`,
+  `rate_per_1k_usd`, `order.spill_bytes`; `mutex_wait_ms` and `mutex_max_hold_ms` (floats) are integer
+  `mutex_wait_ns` and `peak_mutex_hold_ns`.
+- Go port: `--log-format json`: the envelope's `attempt` is `attempt_id`, with `run_id` beside it; every
+  `warning` has a `code`; `cause` is always a label (a retry's failure class, a request's `http_STATUS`,
+  `timeout`, `connection` or `unreachable`) and the free text is `error`; `retry.class` is gone (it is
+  `cause`); a request's `latency_ms` (a float) is integer `latency_us`; a persistent failure's `attempts` is
+  `http_attempts`; `start.destination` is `-` for stdout and `start.source` is spelled as the manifest's
+  `source.uri` (a local path absolute).
+
 - Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
   (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
   longer subject to in-place changes of the format. No code change from the commit pinned before.

@@ -32,6 +32,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
@@ -111,11 +112,11 @@ func main() {
 				if ok {
 					chosen.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
-				elog().warn(fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
+				elog().warn(warnForcedExit, fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
 				if ok {
 					forcedAccount(f, s, why)
 				} else {
-					elog().warn("the run's result could not be read in time; no outcome is written")
+					elog().warn(warnOutcomeUnrecorded, "the run's result could not be read in time; no outcome is written")
 				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
 				exit(int(chosen.Load()))
@@ -176,7 +177,7 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 func newAttempt() *listing.Attempt {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
-	return &listing.Attempt{ID: hex.EncodeToString(b[:]), Started: time.Now().UTC()}
+	return &listing.Attempt{ID: hex.EncodeToString(b[:]), StartedAt: jsontime.Of(time.Now())}
 }
 
 // cfgOut is the output directory a run with o would own ("" for swath
@@ -940,7 +941,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
-		Warn:    func(m string) { elog().warn(m) },
+		Warn:    func(c, m string) { elog().warn(c, m) },
 	}
 	if t := o.totals; t != nil {
 		// swath du's rows are its output: written once the count is
@@ -958,7 +959,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
 			Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	}
-	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(m) })
+	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(warnProfile, m) })
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
 	}
@@ -995,6 +996,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
+	logRun(cfg.Progress.RunID)
 	fw := newFailureWatch(pf.Title, o.stall)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
@@ -1026,7 +1028,8 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
-		term.account(&sum, err) // a no-op for the accounted report Settle gets
+		writeProgress(cfg.Output.Dir, cfg.Progress) // its final snapshot: done or failed
+		term.account(&sum, err)                     // a no-op for the accounted report Settle gets
 		if werr := writeOutcome(cfg.Output.Dir, outcomeOf(sum)); werr != nil {
 			unrecorded = "write " + errorName + ": " + werr.Error()
 		} else {
@@ -1036,7 +1039,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// The empty scheme is a local path. stdout carries rows to a reader on
 	// the same screen: swath list's text there, and swath du's table.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
 	if o.totals != nil {
 		tt.saveHint = savedInventory(given, o)
@@ -1084,7 +1087,7 @@ func closeTrace(w *runtrace.Writer, f *os.File, path, status, class string) {
 		err = cerr
 	}
 	if err != nil {
-		elog().warn("--trace " + path + ": " + err.Error())
+		elog().warn(warnTrace, "--trace "+path+": "+err.Error())
 	}
 }
 

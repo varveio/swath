@@ -262,7 +262,7 @@ func TestSingleUnsafeCursorDoesNotDisableLaterSplits(t *testing.T) {
 	splits := func(st Stats) int64 { return st.Get(cSplitAcceptedBounded) + st.Get(cSplitAcceptedFrontier) }
 	check := func(name string, want []string, got []string, st Stats) {
 		t.Helper()
-		t.Logf("%s: rows=%d splits=%d unsafe_rejections=%d max_active=%d", name, len(got), splits(st), st.Get(cSplitRejectedUnsafeCursor), st.Get(cMaxActive))
+		t.Logf("%s: rows=%d splits=%d unsafe_rejections=%d peak_active=%d", name, len(got), splits(st), st.Get(cSplitRejectedUnsafeCursor), st.Get(cMaxActive))
 		if !slices.Equal(got, want) {
 			t.Fatalf("%s: rows differ (%d, want %d)", name, len(got), len(want))
 		}
@@ -378,10 +378,10 @@ func TestT6BalanceSmoke(t *testing.T) {
 	}
 	checkTiling(t, "T6", leaves)
 	accepted := st.Get(cSplitAcceptedBounded) + st.Get(cSplitAcceptedFrontier)
-	t.Logf("max_active=%d accepted=%d (bounded %d, frontier %d) child_empty=%+v requests=%d",
+	t.Logf("peak_active=%d accepted=%d (bounded %d, frontier %d) child_empty=%+v requests=%d",
 		st.Get(cMaxActive), accepted, st.Get(cSplitAcceptedBounded), st.Get(cSplitAcceptedFrontier), st.Counters, st.Get(cRequests))
 	if st.Get(cMaxActive) < 12 || accepted == 0 {
-		t.Fatalf("parallelism did not engage: max_active=%d accepted=%d", st.Get(cMaxActive), accepted)
+		t.Fatalf("parallelism did not engage: peak_active=%d accepted=%d", st.Get(cMaxActive), accepted)
 	}
 }
 

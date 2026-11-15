@@ -16,7 +16,7 @@ import (
 // move under contention (the scale gate's "decision-mutex wait"): one
 // goroutine holds it 50 ms while four others wait, so the summed wait is
 // at least 4 × 40 ms and the longest hold at least 50 ms, in Contention
-// and in the counter table (mutex.wait_ns, mutex.max_hold_ns); a real
+// and in the counter table (mutex.wait_ns, mutex.peak_hold_ns); a real
 // listing also records them. Before, nothing recorded either.
 func TestDecisionMutexCounters(t *testing.T) {
 	p, err := New(Options{Workers: 4}, Description[Object]{Target: "test", Listing: Listing}, fetchFrom(newSorted(keysN(3000), false, 1)))

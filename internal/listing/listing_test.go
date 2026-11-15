@@ -81,7 +81,7 @@ func TestEndToEnd(t *testing.T) {
 	// the platforms that measure it.
 	switch fs := m.Filesystem; runtime.GOOS {
 	case "linux", "darwin", "windows":
-		if fs == nil || fs.TotalBytes <= 0 || fs.AvailableBytes > fs.TotalBytes || fs.MeasuredAt.Before(m.Coverage.ListingStartedAt) {
+		if fs == nil || fs.TotalBytes <= 0 || fs.AvailableBytes > fs.TotalBytes || fs.MeasuredAt.Before(m.Coverage.ListingStartedAt.Time) {
 			t.Fatalf("filesystem %+v", fs)
 		}
 	default:

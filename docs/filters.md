@@ -99,8 +99,8 @@ off; excludes never change it. Azure Blob lists the whole source and filters the
 exclusions do not change listing requests.
 
 Local and mounted trees also avoid traversing subtrees covered by recursive exclude globs, as described
-above. Their run report records the rule classification in `source.stats.pruning` and the directories
-not entered in `source.stats.pruned_dirs`. Reading the parent and the excluded directory's metadata can
+above. Their run report records the rule classification in `diagnostics.source.stats.pruning` and the directories
+not entered in `diagnostics.source.stats.pruned_dirs`. Reading the parent and the excluded directory's metadata can
 still occur; errors below it are no longer encountered. No count or byte total is inferred for unvisited
 descendants.
 

@@ -496,7 +496,7 @@ func TestAdmissionFallback(t *testing.T) {
 		}
 		var warned []string
 		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: cl, Flat: c.flat}, Workers: 1,
-			Warn: func(s string) { warned = append(warned, s) }})
+			Warn: func(_, s string) { warned = append(warned, s) }})
 		switch {
 		case c.admitted == "":
 			if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" ||
@@ -555,7 +555,7 @@ func TestAdmitSharedKeyUnknown(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	for _, flat := range []bool{false, true} {
-		p, err := New(context.Background(), Options{Account: "acct", Container: "c", Endpoint: srv.URL, Flat: flat, Workers: 1, Warn: func(string) {}})
+		p, err := New(context.Background(), Options{Account: "acct", Container: "c", Endpoint: srv.URL, Flat: flat, Workers: 1, Warn: func(string, string) {}})
 		switch {
 		case !flat && !errors.Is(err, source.ErrUnsupported):
 			t.Fatalf("not asserted: %v, want a refusal", err)
@@ -635,7 +635,7 @@ func TestIdentity(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a", "b"})
 	ident := func(root, ep, sas string) (source.Identity, source.Locator) {
 		t.Helper()
-		src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Endpoint: ep, SAS: sas, Anonymous: sas == "" && !strings.Contains(root, "sig=")}, Workers: 1, Warn: func(string) {}})
+		src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Endpoint: ep, SAS: sas, Anonymous: sas == "" && !strings.Contains(root, "sig=")}, Workers: 1, Warn: func(string, string) {}})
 		if err != nil {
 			t.Fatal(err)
 		}

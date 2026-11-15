@@ -29,7 +29,7 @@ func openFlags(t *testing.T, warned *[]string, args ...string) (registry.Source,
 	if err := fs.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	return open(context.Background(), registry.Request{Root: "gs://bkt", Options: o, Workers: 1, Warn: func(s string) { *warned = append(*warned, s) }})
+	return open(context.Background(), registry.Request{Root: "gs://bkt", Options: o, Workers: 1, Warn: func(_, s string) { *warned = append(*warned, s) }})
 }
 
 // TestAnonymousCredentialConflict: --anonymous beside
