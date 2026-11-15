@@ -1100,8 +1100,7 @@ func TestSegmentsCompletedPartsReleaseStorage(t *testing.T) {
 		spill  bool
 	}{{"spilled", 2 << 20, true}, {"memory", 64 << 20, false}} {
 		f := &frontier{slowPages: 1, siblings: 40, sibPages: 1, rows: 1000, long: 1}
-		f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-		f.left.Store(int64(f.siblings))
+		heldUntilOthersDone(t, f)
 		shared := &Shared{}
 		s := &queuedSink{partSink: &partSink{limit: 30_000, encoders: 4, queue: 2}, shared: shared}
 		runtime.GC()
@@ -1163,8 +1162,7 @@ func TestSegmentsCutAtKeyChanges(t *testing.T) {
 				t.Helper()
 				withProcs(t, procs)
 				f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100, group: 7}
-				f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-				f.left.Store(int64(f.siblings))
+				heldUntilOthersDone(t, f)
 				s := &partSink{limit: tc.limit, maxRows: tc.maxRows, groups: true, encoders: 4}
 				opt := Options{Workers: 8, Budget: 500, SpillDir: t.TempDir(), Groups: true}
 				if tc.memory {
