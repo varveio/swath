@@ -34,6 +34,26 @@ features:
     linkText: The swath dataset
 ---
 
+## One listing, replayed
+
+<!-- The media are in site/static/media/, copied into the site after the build; bound, so the build does not
+     try to bundle them. -->
+<figure class="swath-replay">
+  <video controls muted playsinline preload="none" :poster="'/media/noaa-gestofs-pds-replay-poster.jpg'"
+    :src="'/media/noaa-gestofs-pds-replay.mp4'" aria-label="A 36-second replay of a swath listing of s3://noaa-gestofs-pds, rendered from its run trace">
+    The replay is an MP4 video your browser does not play.
+  </video>
+  <figcaption>
+    The same bucket, listed a minute before the run above with its trace on (37,064,981 objects in 53.7 s,
+    39,026 requests, 64 workers) and replayed from that trace: one of the 257 key ranges swath started from
+    held 64.5% of the objects, and swath split it 1,904 times while listing it, each time a worker was idle.
+  </figcaption>
+</figure>
+
+Both runs were on 2026-11-15 from a 4-vCPU cloud VM. The bucket is still being written to (its newest object
+was under an hour old), so a run today shows other numbers. [How this was measured](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)
+and [how the replay is made](../tools/explainer/README.md).
+
 ## What swath is
 
 swath is an open-source command-line tool that lists object stores and filesystems in parallel. It reads
@@ -75,6 +95,9 @@ A public NOAA prefix of 5,252 objects, with no account: `--anonymous` sends no c
 swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 | head
 ```
+
+The whole bucket, as at the top of this page, is about 37 million objects: that run took 53 seconds from a
+4-vCPU cloud VM and made 39,191 requests against the public bucket. Start with a prefix.
 
 `-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
 depths of a big bucket, list it once with `-o DIR` and total the saved inventory with

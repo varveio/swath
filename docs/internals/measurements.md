@@ -638,6 +638,36 @@ own duration, which leaves out JVM start-up, shutdown and post-run work.
 **Reproduce:** the same argv against the live buckets, alternating the tools; `bench/diffds.py` against the
 recording.
 
+## A public bucket for the home page (noaa-gestofs-pds, 2026-11-15)
+
+The runs behind the home page's terminal example and replay video. `s3://noaa-gestofs-pds` (AWS us-east-1,
+public), listed anonymously on 2026-11-15 from a 4-vCPU cloud VM with 7.7 GiB of RAM, shared with other work
+(its region was not recorded), by main at `d8fbe439` built with `CGO_ENABLED=0 go build ./cmd/swath`, at the
+defaults (64 workers, seeded), one run each, one after the other, with no dataset written:
+
+```bash
+swath diag count s3://noaa-gestofs-pds/ --anonymous --s3-region us-east-1 \
+  --trace noaa-gestofs-pds.trace.jsonl --report count.report.json --no-progress --color never --max-duration 20m
+swath du s3://noaa-gestofs-pds/ -d 1 --sort size --anonymous --s3-region us-east-1 \
+  --format table --stats --no-progress --color never --report du.report.json
+```
+
+| Run (started, UTC) | Objects | Bytes | Requests | Wall | Peak RSS |
+|---|---:|---:|---:|---:|---:|
+| `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 (1.38 PiB) | 39,026 | 53.7 s | 111 MiB |
+| `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB |
+
+- No retries, throttles or timeouts in either run; in flight averaged 60.5 and 60.7 of 64. The `du` run found
+  2,169 top-level prefixes; `_post_processing/` held 21,315,345 of the objects.
+- The trace has 48,284 events and dropped none: the seed tiled the bucket into 257 ranges with 3 requests, and
+  the run made 2,226 splits, all on demand (idle workers). The heaviest seed range held 64.5% of the objects
+  (`tools/explainer`'s lineage weight) and 1,904 of the splits.
+- The home page's video is `tools/explainer`'s `strip` style rendered from that trace (`--video`), captured
+  at 30 frames/s with `capture-video.js` and encoded with libx264 (CRF 23): 36.5 s, 1080x1350, 1.2 MB.
+
+One run each, from one VM on one day, against a bucket that is still being written to: an observation, not a
+rate.
+
 ## Throttling through the fault proxy
 
 History: the pre-merge build, whose limiter cut on every throttle answer and grew only after 10 s without one

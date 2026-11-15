@@ -199,3 +199,35 @@ html:has(.swath-dev-banner) {
     font-weight: 600;
   }
 }
+
+/* The home page's replay video (site/static/media/): a 4:5 clip, kept to a readable size. */
+.swath-replay {
+  margin: 16px 0 0;
+}
+.swath-replay video {
+  display: block;
+  width: 100%;
+  max-width: 432px;
+  aspect-ratio: 4 / 5;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: #f0f0eb;
+}
+.swath-replay figcaption {
+  margin-top: 8px;
+  max-width: 640px;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+@media (min-width: 960px) {
+  .swath-replay {
+    display: grid;
+    grid-template-columns: 432px minmax(0, 1fr);
+    gap: 32px;
+    align-items: center;
+  }
+  .swath-replay figcaption {
+    margin-top: 0;
+  }
+}

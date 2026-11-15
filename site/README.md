@@ -14,8 +14,8 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `index.md` | The home page, served at `/`. |
 | `moved/` | Short pages for addresses that were published once or that readers type (`/docs/sources`, `/docs/commands/`, `/docs/reference/`, `/field-guide/`, `/runs/noaa-gestofs-pds/`): each says where the content is now, and forwards where one page replaces it. `MOVED` in `.vitepress/config.mts` maps them; they are not in search or the sitemap. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
-| `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
-| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
+| `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm), the development-docs notice and the home page's terminal example (`index.ts`); no custom components. |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, and `media/`: the home page's replay video and its poster, rendered by [`tools/explainer`](../tools/explainer/README.md) from the run in [the measurements](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15). |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
 | `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 

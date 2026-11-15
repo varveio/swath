@@ -10,13 +10,25 @@ import '@fontsource-variable/inter/opsz.css'
 import '@fontsource-variable/geist-mono/wght.css'
 import './custom.css'
 
-// Real output of `swath du -d 1 ~/Downloads` on a sample tree, verified with 0.4.0-rc.2 and main.
-const HERO_COMMAND = 'swath du -d 1 ~/Downloads'
-const HERO_OUTPUT = `    size  files  dirs  last_modified (local)  path
-3.00 GiB      2     0  2026-11-10 18:42:00    datasets/
-1.72 GiB      2     0  2026-11-10 18:42:00    installers/
- 960 MiB    240     1  2026-11-10 18:42:00    photos/
-5.66 GiB    245     4  2026-11-10 18:42:00    (total)`
+// Real output of a live `swath du` of a public bucket on 2026-11-15, with main at d8fbe439 (the run in
+// docs/internals/measurements.md, "A public bucket for the home page"). Prefix rows and the cost line are left
+// out where the lines read "…"; nothing else is changed.
+const HERO_CAPTION = 'A live run on a public NOAA bucket, 2026-11-15: totals per prefix, largest first. … marks lines left out.'
+const HERO_COMMAND = 'swath du s3://noaa-gestofs-pds/ -d 1 --sort size \\\n    --anonymous --s3-region us-east-1'
+const HERO_OUTPUT = `    size   objects  last_modified (local)  prefix
+ 217 TiB   2139038  2026-08-28 19:43:10    _para4/
+ 146 TiB   1416203  2026-09-26 10:30:08    _para/
+ 103 TiB     27538  2026-07-30 12:15:24    _para2/
+59.1 TiB    249640  2026-06-03 06:59:57    _hindcast_archive/
+8.38 TiB      2422  2024-09-20 13:37:44    _archive/
+5.50 TiB    156590  2025-12-11 18:37:31    _not_active/
+2.67 TiB  21315345  2026-11-15 11:10:09    _post_processing/
+       …  (2,162 more prefixes)
+1.38 PiB  37064981  2026-11-15 11:10:09    (total)
+  37,064,981 objects in 53.0s · 699,313 keys/s
+  39,191 API calls · in flight avg 60.71 · peak 64
+  …
+  peak RSS 109 MiB`
 
 interface DevDocsNotice {
   text: string
@@ -40,7 +52,7 @@ const DevDocsBanner = defineComponent({
 
 const HeroTerminal = () =>
   h('figure', { class: 'swath-terminal' }, [
-    h('figcaption', { class: 'swath-terminal-caption' }, 'Example: totals per directory, one level down'),
+    h('figcaption', { class: 'swath-terminal-caption' }, HERO_CAPTION),
     h('pre', { tabindex: 0 }, [
       h('code', [h('span', { class: 'swath-terminal-prompt', 'aria-hidden': 'true' }, '$ '), HERO_COMMAND, '\n', HERO_OUTPUT]),
     ]),
