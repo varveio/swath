@@ -63,12 +63,18 @@ func (a *ahead) Retrieve(ctx context.Context) (c aws.Credentials, err error) {
 			c, err = aws.Credentials{}, fmt.Errorf("the credential source panicked: %v", r)
 		}
 	}()
-	if inv, ok := a.p.(interface{ Invalidate() }); ok {
+	inv, cached := a.p.(interface{ Invalidate() })
+	if cached {
 		inv.Invalidate()
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	if c, err = a.p.Retrieve(ctx); err != nil {
+		if u := errors.Unwrap(err); cached && u != nil {
+			// The cache above says "failed to refresh cached credentials"
+			// too: the source's error, once.
+			err = u
+		}
 		return aws.Credentials{}, err
 	}
 	if c.CanExpire {
