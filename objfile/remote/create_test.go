@@ -11,8 +11,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +24,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/storage"
 
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/objfile/azblob"
@@ -196,6 +200,79 @@ func TestOpenDestinationTokenBounded(t *testing.T) {
 			}
 			if took := time.Since(start); took > 30*time.Second { // the request timeout on each of the read's bounded attempts
 				t.Fatalf("the open waited %v on the token endpoint", took)
+			}
+		})
+	}
+}
+
+// TestGCSDefaultCredentialsKeepLibraryClient: Application Default
+// Credentials are detected without a client of ours, which would replace
+// the library's own (an X.509 workload identity configuration's mTLS
+// client): a token request slower than RequestTimeout still succeeds,
+// reading and writing, while the same key given as CredentialsFile, whose
+// requests go through the client RequestTimeout bounds, fails.
+func TestGCSDefaultCredentialsKeepLibraryClient(t *testing.T) {
+	if c := gcsDetectOptions(storage.ScopeReadOnly).Client; c != nil {
+		t.Fatal("credentials are detected with a client of ours")
+	}
+	f := gcsfake.New("bkt")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			select {
+			case <-time.After(time.Second):
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
+			return
+		}
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
+	sa := serviceAccountFile(t, srv.URL+"/token")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", sa)
+	o := Options{Endpoint: srv.URL + "/storage/v1/", RequestTimeout: 200 * time.Millisecond}
+	open := map[string]func(Options) (objfile.Opener, func() error, error){
+		"OpenWith": func(o Options) (objfile.Opener, func() error, error) {
+			s, err := OpenWith(context.Background(), "gs://bkt/ds", o)
+			if err != nil {
+				return nil, nil, err
+			}
+			return s, s.Close, nil
+		},
+		"OpenDestination": func(o Options) (objfile.Opener, func() error, error) {
+			d, err := OpenDestination(context.Background(), "gs://bkt/ds", o)
+			if err != nil {
+				return nil, nil, err
+			}
+			return d, d.Close, nil
+		},
+	}
+	for name, open := range open {
+		t.Run(name, func(t *testing.T) {
+			for _, file := range []string{"", sa} {
+				o := o
+				o.CredentialsFile = file
+				s, closeFn, err := open(o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wait := 10 * time.Second // past the slow token request
+				if file != "" {
+					wait = 3 * time.Second // a Store retries the refused token until its context ends
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), wait)
+				_, err = s.Open(ctx, "missing")
+				cancel()
+				closeFn()
+				if file == "" && !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("Application Default Credentials: %v, want the object's absence past a slow token request", err)
+				}
+				if file != "" && (err == nil || errors.Is(err, fs.ErrNotExist)) {
+					t.Errorf("CredentialsFile: %v, want the token request bounded by RequestTimeout", err)
+				}
 			}
 		})
 	}

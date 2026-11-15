@@ -252,13 +252,16 @@ func gcsClient(ctx context.Context, pool http.RoundTripper, o Options, scope str
 // else Application Default Credentials. They are the new auth library's
 // (cloud.google.com/go/auth), which fetches each token with the context of
 // the request that needs it, so a Store opened with a request's context
-// refreshes its token after that request ends. Their token exchanges go
-// through a client of their own, bounded by the request timeout (headers
-// and body); their debug logging is off whatever the environment says (it
-// would print tokens and signed assertions).
+// refreshes its token after that request ends. Their debug logging is off
+// whatever the environment says (it would print tokens and signed
+// assertions).
+//
+// Application Default Credentials keep the library's own clients
+// (gcsDetectOptions); the file's token exchanges, which use the client
+// given as it is, go through one of their own bounded by the request
+// timeout (headers and body).
 func gcsCredentials(o Options, scope string) (*auth.Credentials, error) {
-	dopts := &credentials.DetectOptions{Scopes: []string{scope}, Logger: quietLog,
-		Client: &http.Client{Timeout: o.timeout(), Transport: http.DefaultTransport.(*http.Transport).Clone()}}
+	dopts := gcsDetectOptions(scope)
 	if o.CredentialsFile == "" {
 		creds, err := credentials.DetectDefault(dopts)
 		if err != nil {
@@ -266,6 +269,7 @@ func gcsCredentials(o Options, scope string) (*auth.Credentials, error) {
 		}
 		return creds, nil
 	}
+	dopts.Client = &http.Client{Timeout: o.timeout(), Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	b, err := os.ReadFile(o.CredentialsFile)
 	if err != nil {
 		return nil, fmt.Errorf("remote: credentials: %w", err)
@@ -281,6 +285,16 @@ func gcsCredentials(o Options, scope string) (*auth.Credentials, error) {
 		return nil, fmt.Errorf("remote: credentials %s: %w", o.CredentialsFile, err)
 	}
 	return creds, nil
+}
+
+// gcsDetectOptions are the options credentials are detected with: scope,
+// quietLog, and no client. Given one, the library would use it for every
+// credential type instead of its own: an X.509 workload identity
+// configuration (use_default_certificate_config) would lose its mTLS client
+// and fail its token exchange; on Compute Engine the metadata server has a
+// client of its own anyway.
+func gcsDetectOptions(scope string) *credentials.DetectOptions {
+	return &credentials.DetectOptions{Scopes: []string{scope}, Logger: quietLog}
 }
 
 // quietLog is the GCS clients' and credentials' logger: it emits nothing.

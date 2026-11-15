@@ -61,14 +61,21 @@ type Options struct {
 	// A caller that freezes the route resolves it once and passes both, so
 	// the environment is not read again. gs:// only.
 	Emulator bool
-	// RequestTimeout bounds the wait for response headers after sending a
-	// request (0: DefaultRequestTimeout). It also bounds GCS and Azure
-	// token exchanges, and the S3 credential chain's requests (STS, SSO,
-	// container and instance roles), which go through the location's client
-	// and its response-header timeout. It does not bound a read's or an
-	// upload's body transfer, or all its retries. Bound those with the
-	// operation's context; S3 multipart initiation and abort cleanup use
-	// S3Write.AbortTimeout independently.
+	// RequestTimeout bounds the wait for a storage request's response
+	// headers after it is sent; zero or negative is DefaultRequestTimeout,
+	// and there is no unlimited value. Once the headers arrive, the body
+	// may take longer: bound a read's or an upload's whole transfer, and
+	// all its retries, with the operation's context. S3 multipart
+	// initiation and abort cleanup use S3Write.AbortTimeout independently.
+	// The S3 credential chain's requests (STS, SSO, container and instance
+	// roles) go through the location's client, so their headers are bounded
+	// the same way. It also bounds each whole token request (headers and
+	// body) of a GCS CredentialsFile, and of Azure's DefaultAzureCredential
+	// where it requests tokens over HTTP (not the developer tools it may
+	// run). It does not bound GCS Application Default Credentials, which
+	// keep the auth library's clients: 30 seconds per token request, the
+	// metadata server's own on Compute Engine, an mTLS client for X.509
+	// workload identity.
 	RequestTimeout time.Duration
 	// Region (s3://) is the bucket's region, which requests are signed for;
 	// "" is AWS_REGION, AWS_DEFAULT_REGION or the profile's, else (for

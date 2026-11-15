@@ -10,9 +10,11 @@ Notable changes per release. The full human summary for the current release is i
   profile, an Azure SAS and a request timeout; `remote.Open` is `OpenWith` with the zero `Options`. An Azure
   container on a custom endpoint, Azurite's or the replay server's, can now be read (#384). `Options` replaces
   `DestinationOptions`, so `OpenDestination` takes the same struct; its write fields (`GCSWrite`, `S3Write`,
-  `AzureWrite`) are the destination's only. A store `Open` builds now bounds each request's wait for response
-  headers, and its token exchanges, by `DefaultRequestTimeout` (2 minutes) unless `RequestTimeout` says
-  otherwise; GCS reads load their credentials as the destination does.
+  `AzureWrite`) are the destination's only. A store `Open` builds now waits at most `DefaultRequestTimeout`
+  (2 minutes) for a response's headers, and Azure's token requests are bounded by it; `RequestTimeout` changes
+  it, and zero or negative is the default (there is no unlimited value). GCS Application Default Credentials,
+  for reads and now for destinations too, keep the auth library's own clients, so an X.509 workload identity
+  configuration gets its mTLS client; only a `CredentialsFile`'s token requests are bounded by `RequestTimeout`.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
