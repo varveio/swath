@@ -160,6 +160,11 @@ func (c *Client) failure(actx, ctx context.Context, s *objhttp.Capture, err erro
 		if e.Status == http.StatusBadRequest {
 			e.Query = s.URL.RawQuery // a malformed request names itself
 		}
+		if e.Message == "" && e.Reason == "" && s.URL != nil {
+			// No error envelope (a proxy's or a wrong endpoint's answer):
+			// the status's text and the path asked for say what failed.
+			e.Message = http.StatusText(e.Status) + " for " + s.URL.Path
+		}
 		return e
 	case s.Status == http.StatusOK:
 		return fmt.Errorf("%w: %w", objhttp.ErrSyntax, err)

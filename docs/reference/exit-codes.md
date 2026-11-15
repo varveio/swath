@@ -99,7 +99,7 @@ owned the output, the disk refused the write) leaves the previous one, and says 
 `outcome.unrecorded`. `error.json` is removed when a later run or resume commits the dataset (exit 0 or 3).
 
 A usage error or refusal (exit 2), and a failure before any request was answered (a missing bucket or
-directory, credentials that do not load), print one line on stderr and no statistics:
+directory, credentials that do not load), print one line on stderr and no closing lines:
 
 ```text
 swath: nosuchdir: no such file or directory

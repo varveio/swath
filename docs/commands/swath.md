@@ -104,27 +104,39 @@ sends the rows to stdout. Everything else goes to stderr:
 - **The progress line**, on a terminal that does not also show the rows, redrawn every second:
 
   ```text
-  listing · 31,000 objects · 30,989 keys/s (avg 15,500) · 0 parts · 1 in flight · 2.0s elapsed · 80 API calls
+  listing · 33,010 objects · 5.30 TiB · 3.0s elapsed · 14,012 keys/s (avg 11,003) · 0 in flight · 84 API calls
   ```
 
-  A local tree counts `entries` (and `entries/s`), `--all-versions` counts `rows`. When stderr is not a
+  The objects listed and their bytes come first, then the elapsed time and the rate, the parts a dataset run
+  has published, and last, for an object store, the requests in flight and sent and the cost estimate; a
+  narrow terminal drops fields from the end. While every request fails, the cause being retried takes the
+  rate's place (`retrying: connection refused`). A local tree counts `entries` (and `entries/s`),
+  `--all-versions` counts `rows`. When stderr is not a
   terminal, `--progress` appends the same record as a line every 30 seconds (`--progress-interval` sets it).
   There is no percentage or ETA: a listing does not know its total in advance. A warning erases the line and
   it is drawn again below.
-- **The statistics**, at the end of a run that took over 1.5 seconds, wrote output or did not complete:
+- **The closing lines**, at the end of a run that took over 1.5 seconds, wrote output or did not complete:
 
   ```text
-    60,004 objects in 0.2s · 317,481 keys/s
-    214 API calls · in flight avg 28.06 · peak 58
-    1 file · 142 KiB written · peak RSS 91.3 MiB
+    complete: 60,010 objects, 5.55 TiB in 8.4s · 7,183 keys/s → all.tsv (4.83 MiB)
   ```
 
-  A run that did not complete starts with its verdict, the cause in it (`partial: 1 unreadable entry`,
-  `stopped: --max-duration reached`, `interrupted`), and, when it can be resumed, the command to do it; the
-  warnings that explain it come before the block. `--stats` and `--no-stats` force them on or off. `--color`
-  colors the progress line and the statistics (the verdict in red).
+  The first line is the verdict (`complete`, or with its cause `partial: 1 unreadable entry`,
+  `stopped: --max-duration reached`, `interrupted`), then what the run counted and the bytes listed when
+  known (none when a size is unknown, as with `--metadata names`), the time it took, the rate for a run of
+  2 seconds or more, and where the output went (nothing for stdout). Rows the filters dropped follow the ones
+  kept (`3 objects kept, 1 filtered out`); `swath du` counts from its total row (`7 files, 9 directories`),
+  which counts a hard-linked file once, and gives the filters' account in rows after it
+  (`1 file (2 entries kept, 1 filtered out)`); a dataset run that stopped says what it saved for a resume
+  beside what it listed (`7,003 saved, 12,003 listed`), and a resume gives the dataset's total with the rows
+  from earlier attempts apart. A dataset run adds a `next:` line: `swath show DIR · swath du --from-dataset
+  DIR` once committed, `swath resume DIR` when it can be resumed. The warnings that explain a verdict come
+  before the lines. `--stats` prints them always, followed by the run's statistics: the API calls with the
+  mean and peak in flight, the throttles and retries when any, the cost estimate, and the peak RSS.
+  `--no-stats` leaves the closing lines out. `--color` colors the progress line and the closing lines (the
+  verdict in red when the output is partial or missing).
 
-`-v` adds a line saying where the rows go (`swath: listing s3://bkt to all.tsv.zst (attempt 57ee...)`) and
+`-v` adds a line saying where the rows go (`swath: listing s3://bkt to all.tsv.zst (attempt 57ee1c0a)`) and
 shows progress as appended records; `-vv` adds every failed request and retry with its cause; `-vvv` every
 request, its credentials and tokens redacted. `-q` drops the warnings and the automatic progress and
 statistics; `-qq` also drops the final error line, leaving the exit code and the reports.
@@ -154,19 +166,19 @@ are described above.
   -vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted).
 
 - <a id="option-quiet"></a>[`-q, --quiet`](#option-quiet)\
-  no warnings, no automatic progress or statistics (-qq: no errors)
+  no warnings, no automatic progress or closing lines (-qq: no errors)
 
   With -qq the exit code and the reports stand alone.
 
 - <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
-  color progress, statistics, the help and du's view (default `auto`)
+  color progress, closing lines, the help and du's view (default `auto`)
 
   auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
 
 - <a id="option-log-format"></a>[`--log-format text|json`](#option-log-format)\
   stderr as text, or json: one JSON object per line (default `text`)
 
-  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block.
+  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines.
 
 <details>
 <summary>Plain text, in the <code>--help</code> layout</summary>
@@ -175,15 +187,15 @@ are described above.
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
-  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+  -q, --quiet                 no warnings, no automatic progress or closing lines (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
       --color auto|always|never
-                              color progress, statistics, the help and du's view (default auto)
+                              color progress, closing lines, the help and du's view (default auto)
                                 auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                 forces it.
       --log-format text|json  stderr as text, or json: one JSON object per line (default text)
                                 json: warnings, the start line, progress records, the request log
-                                and the outcome as events, no redrawn line or statistics block.
+                                and the outcome as events, no redrawn line or closing lines.
 ```
 
 </details>

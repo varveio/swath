@@ -23,7 +23,8 @@ import (
 
 // The terminal surface on stderr, as Java swath's: a live progress record
 // (redrawn in place on a terminal, appended as lines elsewhere), the
-// end-of-run statistics block (--stats), verbosity (-v, -q) and colour.
+// closing lines (with --stats the run's statistics), verbosity (-v, -q)
+// and colour.
 // Everything here renders the snapshot the progress file is written from,
 // or the final report: nothing reads the listing workers' state.
 
@@ -77,7 +78,7 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 		Usage: "a start line, progress records; -vv, -vvv: the request log",
 		Long:  "-vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted)."})
 	source.Define(f, source.Flag{Name: "quiet", Short: "q", Value: source.Counter(&t.quiet), Group: g,
-		Usage: "no warnings, no automatic progress or statistics (-qq: no errors)",
+		Usage: "no warnings, no automatic progress or closing lines (-qq: no errors)",
 		Long:  "With -qq the exit code and the reports stand alone."})
 	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
 		Usage: "show progress on stderr (default: a terminal that rows do not share)",
@@ -87,17 +88,17 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 		Usage: "how often progress is printed (at least 1s); implies --progress",
 		Long:  "Default 1s while the line redraws on a terminal, 30s for appended records."})
 	source.Define(f, source.Flag{Name: "stats", Value: triFlag{&t.stats, false}, Group: g,
-		Usage: "print the end-of-run statistics on stderr",
-		Long:  "Default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe."})
-	source.Define(f, source.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no end-of-run statistics on stderr"})
+		Usage: "print the closing lines on stderr, with the run's statistics",
+		Long:  "The closing lines (the verdict, the count, the time, where the output went, what to run next) print by default for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe. --stats prints them always, followed by the requests, in flight, throttles, retries, the estimate and the peak RSS."})
+	source.Define(f, source.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no closing lines on stderr"})
 	t.color = "auto"
 	source.Define(f, source.Flag{Name: "color", Value: source.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
-		Usage: "color progress, statistics, the help and du's view",
+		Usage: "color progress, closing lines, the help and du's view",
 		Long:  "auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it."})
 	t.logFormat = logText
 	source.Define(f, source.Flag{Name: "log-format", Value: source.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
 		Usage: "stderr as text, or json: one JSON object per line",
-		Long:  "json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block."})
+		Long:  "json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines."})
 }
 
 // registerGlobal defines the global flags alone (globalFlags), for a
@@ -146,6 +147,18 @@ var stderrTerminal = func() (bool, int) {
 
 // stdoutTerminal reports whether fd 1 is a terminal (the --format auto choice).
 var stdoutTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
+// stdoutWidth is the width of the terminal on fd 1, 0 when it is none.
+func stdoutWidth() int {
+	if !stdoutTerminal() {
+		return 0
+	}
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 0
+	}
+	return w
+}
 
 // colorEnabled is Java's resolution: always and never decide; auto is off
 // with a non-empty NO_COLOR (no-color.org) or TERM=dumb, on with CLICOLOR_FORCE, else on a terminal.
@@ -288,10 +301,13 @@ func rowNouns(local, versions bool) nouns {
 func (n nouns) of(rows int64) string { return count(rows) + " " + plural(rows, n.row, n.rows) }
 
 // progressParts is one record's fields, most important first: the phase,
-// its counters (rows called by n; the parts published, for a run that
-// writes a dataset), then elapsed time, API calls and the estimate. No
-// percentage or ETA: a listing has no honest denominator. No key text.
-func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, n nouns, dataset bool) []string {
+// the rows listed (called by n; a resume's recovered rows apart) and their
+// bytes, the elapsed time, the rate (or, while every request fails, the
+// cause retried: failing), the parts published for a run that writes a
+// dataset, then the requests in flight and sent, and the estimate, for a
+// source that makes requests. No percentage or ETA: a listing has no
+// honest denominator. No key text.
+func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, n nouns, dataset bool, failing string) []string {
 	phase := "listing"
 	switch {
 	case s.StartedAt.IsZero():
@@ -301,23 +317,33 @@ func progressParts(s listing.ProgressSnapshot, session time.Duration, live float
 	}
 	parts := []string{phase}
 	if phase == "verifying" {
-		parts = append(parts, textout.Size(s.Verified)+" verified")
+		parts = append(parts, textout.Size(s.Verified)+" verified", elapsed(session)+" elapsed")
 	} else {
 		rows := n.of(s.Rows)
 		if s.Retained > 0 {
 			rows += " (+" + count(s.Retained) + " recovered)"
 		}
-		avg := 0.0
-		if s.DurationMs > 0 {
-			avg = float64(s.Rows) * 1000 / float64(s.DurationMs)
+		parts = append(parts, rows)
+		if b := s.ObjectBytes; b != nil && *b > 0 {
+			parts = append(parts, textout.Size(*b))
 		}
-		parts = append(parts, rows, fmt.Sprintf("%s %s (avg %s)", count(int64(live+0.5)), n.rate, count(int64(avg+0.5))))
+		parts = append(parts, elapsed(session)+" elapsed")
+		if failing != "" {
+			parts = append(parts, "retrying: "+failing)
+		} else {
+			avg := 0.0
+			if s.DurationMs > 0 {
+				avg = float64(s.Rows) * 1000 / float64(s.DurationMs)
+			}
+			parts = append(parts, fmt.Sprintf("%s %s (avg %s)", count(int64(live+0.5)), n.rate, count(int64(avg+0.5))))
+		}
 		if dataset {
 			parts = append(parts, count(s.Parts)+" "+plural(s.Parts, "part", "parts"))
 		}
-		parts = append(parts, count(s.Inflight)+" in flight")
 	}
-	parts = append(parts, elapsed(session)+" elapsed", count(s.Requests)+" API calls")
+	if s.Requests > 0 {
+		parts = append(parts, count(s.Inflight)+" in flight", count(s.Requests)+" "+plural(s.Requests, "API call", "API calls"))
+	}
 	if s.CostUSD != nil && s.Requests > 0 && s.CostRatePer1kUSD > 0 {
 		parts = append(parts, costText(*s.CostUSD, s.CostRatePer1kUSD))
 	}
@@ -337,6 +363,9 @@ type display struct {
 	noun     nouns
 	dataset  bool // the run writes a dataset: its parts are shown
 	erase    bool // rows follow on the same terminal: stop clears the line
+	// failing is the cause every request fails with at a moment
+	// (failureWatch.retrying), shown in place of the rate; nil: none.
+	failing func(time.Time) string
 
 	samples chan listing.ProgressSnapshot
 	stopped chan struct{}
@@ -392,12 +421,20 @@ func progressInterval(t termOptions, redraw bool) time.Duration {
 	return max(d, time.Second)
 }
 
-func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun nouns, dataset bool) *display {
-	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun, dataset: dataset,
+func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun nouns, dataset bool, failing func(time.Time) string) *display {
+	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun, dataset: dataset, failing: failing,
 		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
 	d.done.Add(1)
 	go d.loop()
 	return d
+}
+
+// retrying is the cause every request fails with at now ("" when none).
+func (d *display) retrying(now time.Time) string {
+	if d.failing == nil {
+		return ""
+	}
+	return d.failing(now)
 }
 
 // offer hands the display a sample; it never blocks.
@@ -444,7 +481,7 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 		live = float64(s.Rows) * 1000 / float64(s.DurationMs)
 	}
 	d.last, d.prevObj, d.prevAt = now, s.Rows, now
-	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun, d.dataset)
+	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun, d.dataset, d.retrying(now))
 	if l := elog(); l.json {
 		l.progress(s, strings.Join(parts, sep))
 		return
@@ -567,7 +604,7 @@ func showStats(t termOptions, r *listing.Report, brokenPipe bool) bool {
 		r.Outcome.ExitCode != exitOK
 }
 
-// resumableStops are the stops whose statistics end with resume advice.
+// resumableStops are the stops whose closing lines end with resume advice.
 var resumableStops = map[string]bool{"interrupted": true, "terminated": true, "deadline": true, "stuck": true, "disk_full": true}
 
 // coverageVerdict is the verdict on an output's coverage, in the one
@@ -622,43 +659,169 @@ func runVerdict(o listing.Outcome) string {
 	return "failed"
 }
 
-// statsLines is the end-of-run block, Java's lines from the report: a
-// disposition for a run that did not complete, the headline (objects,
-// time, keys/s), the request economy, faults when any, the estimate, and
-// the output.
-func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
-	var lines []string
+// rateMin is the shortest run whose closing line gives a rate: below it
+// the rate is mostly the setup's and the clock's resolution.
+const rateMin = 2 * time.Second
+
+// statsLines is the closing block: the result line, then a next line
+// (closingNext), then with detail (--stats) the run's statistics
+// (closingDetail). The result line is the verdict, what the run counted
+// (closingCount) and the bytes listed when known, the time the
+// invocation took and, from rateMin on, the rate over that time, and
+// where the output went (closingDest).
+func statsLines(r *listing.Report, brokenPipe bool, n nouns, detail bool) []string {
 	o := r.Outcome
+	verdict := ""
 	switch {
 	case brokenPipe:
-		lines = append(lines, coverageVerdict(false, listing.StopDownstreamClosed, 0))
-	case o.ExitCode != exitOK || o.Class == listing.ClassIncomplete:
-		d := runVerdict(o)
-		if o.Resumable && resumableStops[o.Class] && r.Invocation.Out != "" {
-			d += " — resume: swath resume " + shellOperand(r.Invocation.Out)
-		}
-		lines = append(lines, d)
-		if o.Class == "refused" || o.Class == "usage" {
-			// Refused before it ran: the disposition is the whole record,
-			// as Java's refused resume (a body would be a block of zeros).
-			return lines
+		verdict = coverageVerdict(false, listing.StopDownstreamClosed, 0)
+	case o.ExitCode == exitOK && (o.Class == "" || o.Class == listing.ClassOK):
+		verdict = coverageVerdict(o.Complete, o.StopReason, o.Unreadables())
+	default:
+		verdict = runVerdict(o)
+		if o.Class == listing.ClassRefused || o.Class == listing.ClassUsage {
+			// Refused before it ran: the verdict is the whole record.
+			return []string{verdict}
 		}
 	}
-	run := time.Duration(r.Timings.WallMs) * time.Millisecond
-	session := time.Duration(r.Timings.SessionMs) * time.Millisecond
-	kps := 0.0
-	if r.Efficiency != nil {
-		kps = r.Efficiency.KeysPerSec
-	} else if r.Timings.ListingMs > 0 {
-		kps = float64(r.Output.RowsEmitted) * 1000 / float64(r.Timings.ListingMs)
+	took := time.Duration(r.Timings.SessionMs) * time.Millisecond
+	if took == 0 {
+		took = time.Duration(r.Timings.WallMs) * time.Millisecond
 	}
-	head := n.of(r.Output.RowsEmitted) + " in " + elapsed(run) + sep + count(int64(kps+0.5)) + " " + n.rate
-	if session-run > time.Second {
-		head += sep + elapsed(session) + " total"
+	head := closingCount(r, n) + " in " + elapsed(took)
+	if fetched := r.Output.RowsFetched; took >= rateMin && fetched > 0 {
+		head += sep + count(int64(float64(fetched)/took.Seconds()+0.5)) + " " + n.rate
 	}
-	lines = append(lines, head)
+	joiner := ": "
+	if strings.Contains(verdict, ":") {
+		joiner = "; "
+	}
+	lines := []string{verdict + joiner + head + closingDest(r)}
+	if next := closingNext(r); next != "" {
+		lines = append(lines, "next: "+next)
+	}
+	if detail {
+		lines = append(lines, closingDetail(r)...)
+	}
+	return lines
+}
+
+// saved says a dataset run stopped with parts kept for swath resume.
+func saved(r *listing.Report) bool {
+	o := r.Outcome
+	return r.Output.Text == nil && r.Invocation.Out != "" && o.Status != listing.StatusCommitted && o.Resumable && resumableStops[o.Class]
+}
+
+// closingCount is what a run counted, for the result line: under swath du
+// the total row's files and directories (or objects), for a dataset run
+// that stopped the rows saved for swath resume beside those listed, for a
+// resume the dataset's rows with those from earlier attempts apart;
+// otherwise the rows listed. The rows the filters dropped follow the ones
+// kept, and the bytes listed (a dataset's, or the total row's size) when
+// they are known.
+func closingCount(r *listing.Report, n nouns) string {
+	out := &r.Output
+	if saved(r) {
+		return count(out.RowsDurable) + " saved, " + count(out.RowsFetched+out.RowsRetained) + " listed"
+	}
+	var s string
+	var bytes *int64
+	switch t := out.Totals; {
+	case t != nil && n == rowNouns(true, false): // a local tree's, as its table counts them
+		s = count(t.Objects) + " " + plural(t.Objects, "file", "files")
+		if t.Dirs > 0 {
+			s += ", " + count(t.Dirs) + " " + plural(t.Dirs, "directory", "directories")
+		}
+	case t != nil:
+		s = n.of(t.Objects)
+	case out.RowsCommitted > 0:
+		s = n.of(out.RowsCommitted)
+	default:
+		s = n.of(out.RowsEmitted + out.RowsRetained)
+	}
+	// Bytes only where every size counted is known: a sum short of an
+	// unknown size is no total.
+	switch t := out.Totals; {
+	case t != nil:
+		if t.Size != nil && t.SizeMissing == 0 {
+			bytes = t.Size
+		}
+	case r.Outcome.Status == listing.StatusCommitted:
+		bytes = out.CommittedObjectBytes
+	case out.RowsRetained == 0:
+		bytes = out.ObjectBytes
+	}
+	if out.RowsRetained > 0 {
+		s += " (" + count(out.RowsRetained) + " from earlier attempts)"
+	}
+	switch {
+	case out.RowsFiltered > 0 && out.Totals != nil:
+		// The totals count files once however many names they have: the
+		// filters' account is in rows.
+		s += " (" + n.of(out.RowsEmitted) + " kept, " + count(out.RowsFiltered) + " filtered out)"
+	case out.RowsFiltered > 0:
+		s += " kept, " + count(out.RowsFiltered) + " filtered out"
+	}
+	if bytes != nil {
+		s += ", " + textout.Size(*bytes)
+	}
+	return s
+}
+
+// closingDest is where the output went: " → " a dataset with its parts and
+// their bytes, or a text file with its bytes; nothing for stdout, swath
+// du's rows and a count. A text file that a stopped run discarded says so.
+func closingDest(r *listing.Report) string {
+	out, o := &r.Output, r.Outcome
+	if t := out.Text; t != nil {
+		switch {
+		case t.Destination == "-":
+			return ""
+		case o.Status == listing.StatusWritten:
+			return " → " + escapeControl(t.Destination) + " (" + textout.Size(t.Bytes) + ")"
+		}
+		return ", no file written"
+	}
+	dir := r.Invocation.Out
+	if dir == "" || o.Status != listing.StatusCommitted && !saved(r) {
+		return ""
+	}
+	if rem := out.Remote; rem != nil && o.Status == listing.StatusCommitted {
+		dir = rem.Destination
+	}
+	parts := int64(out.PartsWritten + out.PartsRetained)
+	if parts == 0 {
+		return " → " + escapeControl(dir)
+	}
+	return " → " + escapeControl(dir) + " (" + count(parts) + " " + plural(parts, "part", "parts") + ", " + textout.Size(out.OutputBytes) + ")"
+}
+
+// closingNext is the commands a person runs next: swath resume for a
+// stopped run that can resume, swath show and swath du --from-dataset
+// for a committed dataset (swath show alone for one in a bucket, given
+// its work directory); "" otherwise.
+func closingNext(r *listing.Report) string {
+	o, dir := r.Outcome, r.Invocation.Out
+	switch {
+	case dir == "" || r.Output.Text != nil:
+		return ""
+	case o.Resumable && resumableStops[o.Class]:
+		return "swath resume " + shellOperand(dir)
+	case o.Status != listing.StatusCommitted:
+		return ""
+	case r.Output.Remote != nil:
+		return "swath show " + shellOperand(dir)
+	}
+	return "swath show " + shellOperand(dir) + sep + "swath du --from-dataset " + shellOperand(dir)
+}
+
+// closingDetail is the run's statistics (--stats): the requests and the
+// mean and peak in flight, the throttles and retries when any, the
+// estimate, and the peak RSS.
+func closingDetail(r *listing.Report) []string {
+	var lines []string
 	q := r.Live()
-	if r.Requests != nil {
+	if r.Requests != nil && r.Requests.HTTPAttempts > 0 {
 		avg := 0.0
 		if ms := r.Timings.ListingMs; ms > 0 {
 			avg = float64(q.InflightNs) / float64(ms*1e6)
@@ -667,44 +830,35 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 		lines = append(lines, fmt.Sprintf("%s %s%sin flight avg %.2f%speak %s",
 			count(n), plural(n, "API call", "API calls"), sep, avg, sep, count(q.InflightMax)))
 	}
-	if n := o.Unreadables(); q.Throttles > 0 || q.Retries > 0 || n > 0 {
-		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"unreadable "+count(n))
+	var faults []string
+	if rq := r.Requests; rq != nil && rq.Throttles > 0 {
+		faults = append(faults, "throttled "+count(rq.Throttles))
+	}
+	if rq := r.Requests; rq != nil && rq.Retries > 0 {
+		faults = append(faults, "retried "+count(rq.Retries))
+	}
+	if len(faults) > 0 {
+		lines = append(lines, strings.Join(faults, sep))
 	}
 	if c := r.Cost; c != nil && c.CostUSD != nil && c.Basis != nil && r.Requests != nil && r.Requests.HTTPAttempts > 0 {
 		lines = append(lines, costText(*c.CostUSD, c.Basis.RatePer1kUSD))
 	}
-	var out []string
-	written := r.Output.OutputBytes
-	if t := r.Output.Text; t != nil && t.Destination != "-" && o.Status == listing.StatusWritten {
-		out, written = append(out, "1 file"), t.Bytes
-	} else if t != nil && t.Destination != "-" {
-		out, written = append(out, "no file written"), 0 // a stopped run discards its file
-	} else if parts := int64(r.Output.PartsWritten + r.Output.PartsRetained); parts > 0 {
-		out = append(out, count(parts)+" "+plural(parts, "part", "parts"))
-	}
-	if written > 0 {
-		out = append(out, textout.Size(written)+" written")
-	}
 	if rss := r.Process.PeakRSSBytes; rss != nil && *rss > 0 {
-		out = append(out, "peak RSS "+textout.Size(*rss))
-	}
-	if len(out) > 0 {
-		lines = append(lines, strings.Join(out, sep))
+		lines = append(lines, "peak RSS "+textout.Size(*rss))
 	}
 	return lines
 }
 
-// writeStats prints the block, indented and styled as Java's: the
-// verdict red when the run failed or its output is partial (alarm), the
-// headline accented, the rest dim.
-func writeStats(w io.Writer, lines []string, pal palette, hasDisposition, alarm bool) {
+// writeStats prints the block, indented: the result line red when the run
+// failed or its output is partial (alarm), else accented; the rest dim.
+func writeStats(w io.Writer, lines []string, pal palette, alarm bool) {
 	var b strings.Builder
 	for i, l := range lines {
 		s := pal.dim(l)
 		switch {
-		case hasDisposition && i == 0 && alarm:
+		case i == 0 && alarm:
 			s = pal.red(l)
-		case (hasDisposition && i == 1) || (!hasDisposition && i == 0):
+		case i == 0:
 			s = pal.accent(l)
 		}
 		b.WriteString(indent + s + "\n")
@@ -721,9 +875,10 @@ type termUI struct {
 	prev    io.Writer // errOut before the run
 	coord   *stderrCoord
 	noun    nouns
-	dataset bool      // the run writes a dataset (its progress shows parts)
-	began   time.Time // the invocation's start
-	tty     bool      // stderr is a terminal (and not --log-format json)
+	dataset bool                   // the run writes a dataset (its progress shows parts)
+	began   time.Time              // the invocation's start
+	failing func(time.Time) string // display.failing
+	tty     bool                   // stderr is a terminal (and not --log-format json)
 	// saveHint, for a live swath du, is the commands that save its source
 	// once and total the saved rows (savedInventory): the statistics end
 	// with them after a large listing (hintRows).
@@ -735,13 +890,13 @@ type termUI struct {
 // rows says stdout is a terminal that carries the run's rows
 // (progressPrefs). Under --log-format json nothing is redrawn or coloured:
 // progress records are appended events.
-func startTerminal(t termOptions, att *listing.Attempt, start startFields, dataset bool, noun nouns, rows bool) *termUI {
+func startTerminal(t termOptions, att *listing.Attempt, start startFields, dataset bool, noun nouns, rows bool, failing func(time.Time) string) *termUI {
 	tty, width := stderrTerminal()
 	json := t.logFormat == logJSON
 	if json {
 		tty, width = false, 0
 	}
-	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.StartedAt.Time, tty: tty}
+	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.StartedAt.Time, tty: tty, failing: failing}
 	elog().start(start)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
@@ -755,7 +910,7 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.StartedAt.Time, noun, dataset)
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.StartedAt.Time, noun, dataset, failing)
 	return tt
 }
 
@@ -765,9 +920,9 @@ func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
 	if tt == nil || elog().json || !showStats(tt.opt, r, brokenPipe) {
 		return
 	}
-	lines := statsLines(r, brokenPipe, tt.noun)
+	lines := statsLines(r, brokenPipe, tt.noun, tt.opt.stats.set && tt.opt.stats.on)
 	failed := brokenPipe || r.Outcome.ExitCode != exitOK || r.Outcome.Class == listing.ClassIncomplete
-	writeStats(errOut, lines, tt.pal, failed, failed && !brokenPipe)
+	writeStats(errOut, lines, tt.pal, failed && !brokenPipe)
 	if n := r.Output.RowsEmitted; tt.saveHint != nil && tt.tty && tt.opt.quiet == 0 && !failed && n >= hintRows {
 		var b strings.Builder
 		b.WriteString(tt.pal.dim("hint: this run listed "+approx(n)+" "+tt.noun.rows+"; to explore them again without relisting, save an inventory once and total that:") + "\n")
@@ -801,7 +956,12 @@ func (tt *termUI) status(s listing.ProgressSnapshot) {
 	if s.DurationMs > 0 {
 		avg = float64(s.Rows) * 1000 / float64(s.DurationMs)
 	}
-	parts := progressParts(s, time.Since(tt.began), avg, tt.noun, tt.dataset)
+	now := time.Now()
+	failing := ""
+	if tt.failing != nil {
+		failing = tt.failing(now)
+	}
+	parts := progressParts(s, now.Sub(tt.began), avg, tt.noun, tt.dataset, failing)
 	if l := elog(); l.json {
 		l.progress(s, strings.Join(parts, sep))
 		return

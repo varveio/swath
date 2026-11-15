@@ -118,15 +118,16 @@ func TestAnswers(t *testing.T) {
 		// proxy) is not labelled.
 		{"404", jsonError(404, 404, "notFound"), objhttp.ClassNotFound, final, nil, &answer{404, "notFound", "m"}},
 		{"404 no reason", body(404, `{"error":{"code":404,"message":"no route"}}`), objhttp.ClassOther, final, nil, &answer{404, "", "no route"}},
-		{"404 not JSON", body(404, `Not Found`), objhttp.ClassOther, final, nil, &answer{404, "", ""}},
+		{"404 not JSON", body(404, `Not Found`), objhttp.ClassOther, final, nil, &answer{404, "", "Not Found for /storage/v1/b/b/o"}},
 		{"404 another reason", jsonError(404, 404, "noSuchUpload"), objhttp.ClassOther, final, nil, &answer{404, "noSuchUpload", "m"}},
 		// The Guard keeps a cut error answer's status and the bytes read:
 		// the status decides, as for the complete answer (a body cut before
-		// its reason gives none).
-		{"403 connection cut mid-body", cutError(403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "", ""}},
-		{"503 connection cut mid-body", cutError(503, "backendError"), objhttp.ClassOther, retried, nil, &answer{503, "", ""}},
+		// its reason gives none). An answer without an error envelope says
+		// its status's text and the path asked for.
+		{"403 connection cut mid-body", cutError(403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "", "Forbidden for /storage/v1/b/b/o"}},
+		{"503 connection cut mid-body", cutError(503, "backendError"), objhttp.ClassOther, retried, nil, &answer{503, "", "Service Unavailable for /storage/v1/b/b/o"}},
 		{"400", jsonError(400, 400, "invalid"), objhttp.ClassOther, final, nil, &answer{400, "invalid", "m"}},
-		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", ""}},
+		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", "Unauthorized for /storage/v1/b/b/o"}},
 		// the HTTP status, not the body's code (googleapi.Error.Code)
 		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassOther, retried, nil, &answer{503, "invalid", "m"}},
 		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassNotFound, final, nil, &answer{404, "notFound", "m"}},

@@ -260,8 +260,15 @@ func (l *eventLog) start(f startFields) {
 		l.print(lvInfo, evStart, msg, f)
 		return
 	}
-	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+l.attempt+")\n")
+	id := l.attempt
+	if len(id) > shortAttempt {
+		id = id[:shortAttempt] // the start of the id run.json and the report hold whole
+	}
+	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+id+")\n")
 }
+
+// shortAttempt is the attempt id's characters the text start line shows.
+const shortAttempt = 8
 
 // startOf is a run's start event: src, and what it writes where. A local
 // src is made absolute, as the provider opens it (the report's
@@ -525,6 +532,31 @@ func (w *failureWatch) outstanding(now time.Time) string {
 		return ""
 	}
 	return fmt.Sprintf("%s %s (%d attempts)", w.provider, best, n)
+}
+
+// retryingFor is how long a cause fails every request, after some were
+// answered, before the progress line shows it in place of the rate
+// (retrying): a moment's errors among answers are not a stall.
+const retryingFor = 2 * time.Second
+
+// retrying is the cause every request has failed with since the last
+// answer, while none was ever answered or for at least retryingFor up to
+// now: the one with the most attempts, without its host ("" when none).
+func (w *failureWatch) retrying(now time.Time) string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	answers := w.answers.Load()
+	best, n := "", int64(0)
+	for k, s := range w.streaks {
+		if s.answers == answers && (answers == 0 || now.Sub(s.first) >= retryingFor) && s.n > n {
+			best, n = k, s.n
+		}
+	}
+	_, cause, _ := strings.Cut(best, ": ")
+	return cause
 }
 
 // spillPressureFor is how long listing waits on a full spill cap before

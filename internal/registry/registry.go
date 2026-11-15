@@ -212,13 +212,25 @@ type Env struct {
 	// Totals, if set, sums the counted rows per key prefix (swath du); it
 	// needs Count.
 	Totals *totals.Tally
+	// Unreadable, if set, is told the key prefix of each directory the
+	// source could not read (a local tree's; safe for concurrent use):
+	// swath du marks its row (totals.Tally.Unreadable).
+	Unreadable func(prefix string)
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a
-// size column (Run sets it before listing; read it after Run returns).
+// size column (Run sets it before listing); Unknown counts the objects
+// whose size was null (the names metadata tier), which leave Bytes short.
 type Sizes struct {
 	Bytes    atomic.Int64
-	Measured bool
+	Unknown  atomic.Int64
+	Measured atomic.Bool
+}
+
+// Known is the bytes summed, false when the schema has no size column or
+// an object's size was unknown.
+func (s *Sizes) Known() (int64, bool) {
+	return s.Bytes.Load(), s.Measured.Load() && s.Unknown.Load() == 0
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -290,8 +302,8 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	}
 	if env.Sizes != nil && !env.Empty {
 		if size := schema.ObjectSize(b.s); size != nil {
-			env.Sizes.Measured = true
-			p = newSized(p, size, &env.Sizes.Bytes)
+			env.Sizes.Measured.Store(true)
+			p = newSized(p, size, env.Sizes)
 		}
 	}
 	if env.Totals != nil && !env.Count {

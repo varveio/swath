@@ -66,8 +66,8 @@ func TestWrappersForwardDurableSpill(t *testing.T) {
 	size := func(*retPayload) (int64, bool) { return 1, true }
 	for name, p := range map[string]source.Provider[any, retPayload]{
 		"filtered":        newFiltered[retPayload](fencingProvider{}, func(*schema.Row[retPayload]) bool { return true }, &retSchema, &n),
-		"sized":           newSized[retPayload](fencingProvider{}, size, &n),
-		"sized(filtered)": newSized(newFiltered[retPayload](fencingProvider{}, func(*schema.Row[retPayload]) bool { return true }, &retSchema, &n), size, &n),
+		"sized":           newSized[retPayload](fencingProvider{}, size, &Sizes{}),
+		"sized(filtered)": newSized(newFiltered[retPayload](fencingProvider{}, func(*schema.Row[retPayload]) bool { return true }, &retSchema, &n), size, &Sizes{}),
 	} {
 		if f, ok := p.(source.Fencing); !ok || !f.Fences() {
 			t.Errorf("%s: Fences not forwarded", name)

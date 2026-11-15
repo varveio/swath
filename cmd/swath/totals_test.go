@@ -186,7 +186,7 @@ func TestDu(t *testing.T) {
 		" 5 B      1     0  " + newestLocal + "    a/b/\n" +
 		" 1 B      1     0  " + olderLocal + "  c/\n" +
 		" 0 B      0     0  " + none + "  e/\n" +
-		" 9 B      4     4  " + newestLocal + "  (total)\n"
+		" 9 B      4     4  " + newestLocal + "  " + root + " (total)\n"
 	onDisk := regexp.MustCompile(`^  9 B in 4 files · [0-9.]+ [KMG]?i?B on disk\n$`)
 	if runtime.GOOS == "windows" { // no blocks read
 		onDisk = regexp.MustCompile(`^  9 B in 4 files · on disk unknown\n$`)
@@ -322,7 +322,7 @@ func TestDuNamesOnly(t *testing.T) {
 			"   -      2     1  " + none + "  a/\n" +
 			"   -      1     0  " + none + "  c/\n" +
 			" 0 B      0     0  " + none + "  e/\n" +
-			"   -      4     4  " + none + "  (total)\n",
+			"   -      4     4  " + none + "  " + root + " (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -360,14 +360,15 @@ func TestDuJSONL(t *testing.T) {
 	stderr := captureStderr(t)
 	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil || strings.Contains(stderr.String(), "on disk") ||
 		!regexp.MustCompile(`^ *size  objects  last_modified \([^)]+\)  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
-		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \d{4}-\d\d-\d\d \d\d:\d\d:\d\d  \(total\)\n$`).MatchString(out.String()) {
+		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \d{4}-\d\d-\d\d \d\d:\d\d:\d\d  s3://bkt \(total\)\n$`).MatchString(out.String()) {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }
 
 // TestDuOrigin: depth counts from the prefix the source names, up to its
-// last '/', and the rows keep the keys' spelling; an --include that
-// narrows the listed prefix does not move it.
+// last '/', and the rows keep the keys' spelling; the total's prefix is
+// the one the source names whole; an --include that narrows the listed
+// prefix does not move them.
 func TestDuOrigin(t *testing.T) {
 	keys := []string{"logs/2026/01/a", "logs/2026/01/b/c", "logs/2026/02/d", "logs/2026/top", "logs/2027/x", "other/y"}
 	end := s3test.Bucket(t, keys)
@@ -389,8 +390,8 @@ func TestDuOrigin(t *testing.T) {
 		want string
 	}{
 		{[]string{"s3://bkt/logs/2026/", "-d", "1"}, "0:logs/2026/ 4,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
-		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/ 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
-		{[]string{"s3://bkt/logs", "-d", "1"}, "0: 5,1:logs/ 5"},
+		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/0 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
+		{[]string{"s3://bkt/logs", "-d", "1"}, "0:logs 5,1:logs/ 5"},
 		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "2026/**"}, "0:logs/ 4,1:logs/2026/ 4"},
 		{[]string{"s3://bkt", "-d", "2"}, "0: 6,1:logs/ 5,2:logs/2026/ 4,2:logs/2027/ 1,1:other/ 1"},
 	} {

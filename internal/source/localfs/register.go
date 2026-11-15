@@ -195,6 +195,7 @@ func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parque
 	o.p.mu.Lock()
 	o.p.stats.Pruning = &plan
 	o.p.mu.Unlock()
+	o.p.unreadable = env.Unreadable
 	if env.Count {
 		o.p.unsorted = true
 		env.Order.Unordered = true

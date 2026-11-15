@@ -12,25 +12,32 @@ swath show DIR [OPTIONS]
 
 ## Description
 
-For a committed dataset, `swath show` prints the manifest's summary: the format and schema, the source and
-scope, the coverage, and the parts, rows and key range.
+For a committed dataset, `swath show` prints the manifest's summary for people, in reading order: the verdict
+first, then labelled lines for the source, when it was listed (local time, the zone named), what the dataset
+holds (its rows, the bytes of the objects they list when every size is known, and the key range, clipped to
+a terminal's width and left out where it cannot fit), the
+coverage, and last how it is stored (the Parquet parts and their bytes, the SeekParquet format and the swath
+schema):
 
 ```text
-$ swath show inv
-dataset inv: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
-key key unique=true, published 2026-11-10T12:40:24Z
-source /tmp/swath-docs-check/photos, scope whole ""
-coverage: complete
-1 part, 7 rows, 3832 bytes, keys "2025/" .. "notes.txt"
+$ swath show media-inventory
+media-inventory: complete
+  source    /home/you/media (whole tree)
+  listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
+  contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
+  coverage  nothing unreadable; no filters; no exclusions
+  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
 ```
 
-The coverage line is `complete` when nothing is missing: the listing reached the end of its scope and read
-every entry. Otherwise it is `partial:` and what is missing: `partial: 2 unreadable entries` (entries that
-could not be read), `partial: --max-keys reached`. The filters the run applied follow it (`; filtered: ...`),
-and what was left out by design (`; excluded: ...`, an output directory inside the tree). A complete dataset
-without filters covers the `source` and `scope` on the line above it, minus its exclusions
+The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
+entry. Otherwise it is `partial:` and what is missing: `partial: 2 unreadable entries` (entries that could not
+be read), `partial: --max-keys reached`. The coverage line counts the unreadable entries, names the filters the
+run applied by their rules (`filtered: include=*.jpg, min_size=200k`), and what was left out by design
+(`excluded: ...`, an output directory inside the tree). A complete dataset without filters covers the source
+on the line below the verdict, minus its exclusions
 ([Understand your results](../results.md#coverage-and-unreadable-entries),
-[The swath dataset](../dataset.md#the-swath-extension)).
+[The swath dataset](../dataset.md#the-swath-extension)). There is no machine form of this summary: a program
+reads `manifest.json`.
 
 For the work directory of a dataset written to a bucket (`-o s3://...`, `gs://...` or `az://...` with
 `--work-dir DIR`), it prints the same summary of the manifest the run committed there, under the destination
@@ -39,20 +46,21 @@ and whether its cleanup is finished (`finalized`) or a `swath resume DIR` still 
 
 ```text
 $ swath show work
-dataset s3://out/inv/: SeekParquet format 0 draft 1, swath schema swath/s3-objects/v1, swath metadata version 1
-...
+s3://out/inv/: complete
+  ...
 committed from the work directory work (finalized)
 ```
 
-For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts committed
-so far and where `swath resume` will continue:
+For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts saved so
+far and where `swath resume` will continue:
 
 ```text
 $ swath show logs-inventory
-interrupted run in logs-inventory (journal version 1, started 2026-11-10T12:40:50Z)
-command: swath list --endpoint-url=http://127.0.0.1:19777 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
-identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part size 67108864, source s3://bkt/logs/, endpoint http://127.0.0.1:19777, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
-1 part committed, 1000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
+logs-inventory: interrupted run
+  started   2026-11-15 21:04:35 CET (journal version 1)
+  command   swath list --endpoint-url=http://127.0.0.1:19480 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
+  identity  provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part size 64.0 MiB, source s3://bkt/logs/, endpoint http://127.0.0.1:19480, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
+  saved     1 part, 1,000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
 ```
 
 The command is recorded in its canonical spelling, each option `--name=value`, then SOURCE. It is printed as a
@@ -102,8 +110,9 @@ the run report, `progress.json`, `error.json` and the manifest instead.
 
 ## Exit status
 
-0 when it printed the summary; 1 when DIR holds neither a dataset nor an interrupted run, or with `--journal`
-on a committed dataset (which keeps no journal); 2 for a usage error.
+0 when it printed the summary, or with `--journal` the journal (an interrupted run's, or the one a committed
+dataset's run kept); 1 when DIR does not exist, holds neither a dataset nor an interrupted run, or with
+`--journal` holds no journal (a committed dataset whose run kept none); 2 for a usage error.
 
 ## Files
 

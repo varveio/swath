@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -436,7 +437,8 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 		t.Fatalf("dataset: coverage %+v, error.json %v", c, eerr)
 	}
 	out.Reset()
-	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage: partial: 1 unreadable entry\n") {
+	if err := show([]string{dir}, &out); err != nil || !strings.HasPrefix(out.String(), dir+": partial: 1 unreadable entry\n") ||
+		!strings.Contains(out.String(), "\n  coverage  1 entry unreadable; ") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
 	// swath resume of it exits 3, and its report keeps the count and says
@@ -479,12 +481,18 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 			t.Fatalf("%s: exit %d, stderr %q", q, code, stderr.String())
 		}
 	}
-	// The statistics: the warning, then the block whose verdict names what
-	// is missing, then the error line.
+	// The closing lines: the warning, then the verdict naming what is
+	// missing with the total row's counts, then the error line.
 	stderr.Reset()
 	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--stats", "--no-progress"}, &out)); code != exitIncomplete ||
-		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry\n") || !strings.HasSuffix(stderr.String(), end) {
+		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry; 1 file, 1 directory, 2 B in ") || !strings.HasSuffix(stderr.String(), end) {
 		t.Fatalf("--stats: exit %d, stderr %q", code, stderr.String())
+	}
+	// The table marks the directory it could not read, not as empty.
+	out.Reset()
+	if code := conclude(runDu(context.Background(), []string{root, "-d", "1", "--format=table", "-q"}, &out)); code != exitIncomplete ||
+		!regexp.MustCompile(`(?m)^ +- +- +- +- +locked/$`).MatchString(out.String()) {
+		t.Fatalf("table: exit %d, stdout %q", code, out.String())
 	}
 	// The outcome event tells partial from complete without parsing msg.
 	stderr.Reset()

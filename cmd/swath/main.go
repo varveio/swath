@@ -506,6 +506,11 @@ type totalsOut struct {
 	// view, if set, draws the tally's adaptive view instead of the table
 	// (duView).
 	view *viewOut
+	// scope is the total row's prefix in TSV and JSONL, the key prefix
+	// SOURCE names (logs/2026/0, beyond the origin depth counts from), and
+	// label what the table's total row names: SOURCE as typed, as the view
+	// names it.
+	scope, label string
 }
 
 // write writes the tally's rows to w. The table shows one figure; for a
@@ -521,8 +526,14 @@ func (t *totalsOut) write(w io.Writer) error {
 		}
 	}
 	opt := t.tally.Options()
-	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset}
+	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset,
+		Total: escapeControl(t.label)}
 	rows := t.tally.Result()
+	for i := range rows {
+		if rows[i].Depth == 0 {
+			rows[i].Prefix = t.scope
+		}
+	}
 	if t.sortBy == sortSize {
 		totals.SortBySize(rows, opt.Primary)
 	}
@@ -874,10 +885,17 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, usageError{err})
 	}
 	given := root // as typed, before an --include narrows it: the hint's SOURCE
+	if l := elog(); o.du && pf.Scheme == "" && l.quiet == 0 && !l.json && dataset.Committed(root) {
+		// swath du DIR totals DIR's own files, as asked; a person who
+		// meant the listing a dataset holds learns the command for it.
+		noteKept(errOut, "hint: "+escapeControl(root)+" is a swath dataset; to total what it lists: swath du --from-dataset "+shellOperand(root)+"\n")
+	}
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
-		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
+		// A text file is always replaced (written beside its name and
+		// renamed into place): --overwrite asks for what happens anyway.
+		Output: listing.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
 			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}, SegmentWorkers: o.segmentWorkers},
 		Argv:    argv,
@@ -983,7 +1001,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// the same screen while swath list's text goes there; swath du's table
 	// comes after its listing, when the live line is gone.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal(), fw.retrying)
 	defer tt.close()
 	if t := o.totals; t != nil {
 		if tt.disp != nil && stdoutTerminal() {
