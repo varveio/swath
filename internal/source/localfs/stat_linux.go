@@ -33,20 +33,6 @@ func statAt(dirfd int, name string, f Fields, r *Entry) error {
 	return nil
 }
 
-// readlinkAt reads a symlink target relative to dirfd.
-func readlinkAt(dirfd int, name string) (string, error) {
-	for size := 256; ; size *= 2 {
-		buf := make([]byte, size)
-		n, err := unix.Readlinkat(dirfd, name, buf)
-		if err != nil {
-			return "", err
-		}
-		if n < size {
-			return string(buf[:n]), nil
-		}
-	}
-}
-
 // dtKinds maps d_type values (0..15) to kinds; unlisted values are unknown.
 var dtKinds = [16]Kind{
 	unix.DT_REG: KindFile, unix.DT_DIR: KindDir, unix.DT_LNK: KindSymlink,

@@ -5,7 +5,6 @@ package localfs
 
 import (
 	"io/fs"
-	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -13,13 +12,11 @@ import (
 	"github.com/varveio/swath/internal/schema"
 )
 
-// statEntry fills r from one fstatat of d relative to its open directory,
-// never following a symlink. os.DirEntry.Info on darwin is an lstat of the
-// full path, which resolves every component again for each entry and
-// leaves out the fields below that os.FileInfo does not expose.
-func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
+// statAt fills r from one fstatat of name relative to dirfd, never
+// following a symlink: every stat column and the birth time, at any tier.
+func statAt(dirfd int, name string, _ Fields, r *Entry) error {
 	var s unix.Stat_t
-	if err := unix.Fstatat(int(dir.Fd()), d.Name(), &s, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	if err := unix.Fstatat(dirfd, name, &s, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return err
 	}
 	fillStat(r, &s)

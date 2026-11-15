@@ -69,5 +69,10 @@ repeat.
   reason.
 - A directory's row carries its own size (`st_size` on Unix); `swath du` counts directories separately and
   leaves their sizes out of its byte totals.
+- Paths longer than the system takes at once (4,096 bytes on Linux, 1,024 on macOS) are listed: such a
+  directory is opened one name at a time below the root, never following a symbolic link. A key is at most
+  32,768 bytes: an entry with a longer one is left out and counted as unreadable (the cause names
+  `passes the limit of 32768`), a directory with everything below it. A single name longer than the
+  filesystem allows (255 bytes on most) stays an error. Windows takes long paths as they are.
 - A walk is not a snapshot: entries created, changed or removed while swath walks may or may not appear, and
   one removed during the walk is not counted as unreadable.

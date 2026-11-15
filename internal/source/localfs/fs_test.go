@@ -317,14 +317,15 @@ func TestOpenCheckedRejectsSymlinkedChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	var st Stats
-	if f, ok := openChecked(Range{path: link, prefix: "x/"}, &st); ok {
+	p := &Provider{}
+	if f, ok, _ := p.openChecked(context.Background(), Range{path: link, prefix: "x/"}, &st); ok {
 		f.Close()
 		t.Fatal("symlinked child directory was opened")
 	}
 	if st.Unsafe != 1 {
 		t.Fatalf("unsafe count %d", st.Unsafe)
 	}
-	if f, ok := openChecked(Range{path: link}, &st); !ok { // the root may be a symlink
+	if f, ok, _ := p.openChecked(context.Background(), Range{path: link}, &st); !ok { // the root may be a symlink
 		t.Fatal("symlinked root refused")
 	} else {
 		f.Close()

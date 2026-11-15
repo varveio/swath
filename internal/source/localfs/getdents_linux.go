@@ -132,7 +132,12 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		return p.emit(r, rows, e, st)
 	}
 	fd, err := openDir(r.path, r.prefix != "")
-	if err != nil {
+	if tooLong(err) {
+		var ok bool
+		if fd, ok, err = p.openLong(ctx, r, st); !ok {
+			return err
+		}
+	} else if err != nil {
 		st.note(&st.OpenErrors, r.path, err)
 		p.unreadableDir(r)
 		return nil
