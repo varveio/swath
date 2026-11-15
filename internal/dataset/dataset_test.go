@@ -317,7 +317,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source", "version"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"collected", "coverage", "published_at", "scope", "source", "version"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
 		}
 		if !bytes.HasPrefix(raw["extensions"], []byte(`{"swath":{"version":1,`)) {
