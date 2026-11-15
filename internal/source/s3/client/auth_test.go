@@ -32,6 +32,13 @@ func (p onePerRequest) Retrieve(context.Context) (aws.Credentials, error) {
 	return aws.Credentials{AccessKeyID: fmt.Sprintf("AKTEST%d", n), SecretAccessKey: "s", SessionToken: fmt.Sprintf("token%d", n), Source: "test"}, nil
 }
 
+func (p onePerRequest) Get(ctx context.Context) (aws.Credentials, uint64, error) {
+	c, err := p.Retrieve(ctx)
+	return c, 0, err
+}
+func (onePerRequest) Renew(context.Context, uint64) error  { return nil }
+func (onePerRequest) Refreshes() (refreshes, forced int64) { return 0, 0 }
+
 // TestCredentialsRetrievedOncePerAttempt: the credentials are looked up
 // once per attempt, before it is counted, and the request is signed with
 // them: the SDK does not look them up again inside the counted call.

@@ -277,7 +277,7 @@ func versionsPermission(err error) bool {
 	}
 	switch f.Code {
 	case "NoSuchBucket", "PermanentRedirect", "AuthorizationHeaderMalformed",
-		"InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "TokenRefreshRequired":
+		"InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "ExpiredTokenException", "InvalidToken", "TokenRefreshRequired":
 		return false
 	}
 	return f.Status == 403 || f.Code == "AccessDenied" || f.Code == "AllAccessDisabled"

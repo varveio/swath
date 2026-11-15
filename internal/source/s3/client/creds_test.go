@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/objhttp"
+	objs3 "github.com/varveio/swath/objfile/s3"
 )
 
 // TestCredentialSources keeps the credential-service region independent of
@@ -408,8 +409,8 @@ func TestCredentialDiscovered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("profile %q: %v", c.profile, err)
 		}
-		a.credentials = refusal
-		if _, _, err := a.ready(context.Background()); discovered(t, err) != c.want {
+		a.credentials = objs3.RefreshAhead(refusal)
+		if _, _, _, err := a.ready(context.Background()); discovered(t, err) != c.want {
 			t.Errorf("profile %q: a refused refresh is discovered %v, want %v", c.profile, !c.want, c.want)
 		}
 	}

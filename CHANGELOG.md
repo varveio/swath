@@ -5,6 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: S3 credentials that expire (an assumed role, web identity, SSO, `credential_process`, container
+  credentials, an instance role) are refreshed ahead of their expiry, by the smaller of 5 minutes and a quarter
+  of their lifetime, for the source and for a bucket destination. Before, they were used until the instant
+  they expired, so a request signed just before could be refused with `ExpiredToken`, and a listing longer
+  than its credentials' session stopped with cause `auth`. An expired-token answer to such credentials now
+  renews them, once for all the requests refused for the same credentials, and the source's request is retried
+  once; keys that do not refresh still stop the run with cause `auth`, saying so. The run report counts
+  `credentials.refreshes` and `credentials.expired_refreshes` (#523).
 - Go port: the default spill cap follows the disk. Without `--spill-budget` spill may use the spill filesystem's
   free space after the reserve: all of it for a dataset in a bucket, whose parts are uploaded from memory, and
   half of it otherwise (the parts, the text file, or for a stream other programs' temporary files share the

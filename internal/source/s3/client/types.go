@@ -91,6 +91,10 @@ type Error struct {
 	Message   string
 	RequestID string
 	Region    string // x-amz-bucket-region, when the server names it
+	// Renewed: an expired-token answer after which the credentials were
+	// renewed, retried once (auth.expired).
+	Renewed bool
+	Note    string // what swath adds about the answer, or ""
 }
 
 func (e *Error) Error() string {
@@ -100,6 +104,9 @@ func (e *Error) Error() string {
 	}
 	if e.Region != "" {
 		s += " (the bucket is in " + e.Region + ": give --s3-region " + e.Region + ")"
+	}
+	if e.Note != "" {
+		s += " (" + e.Note + ")"
 	}
 	if e.RequestID != "" {
 		s += " (request id " + e.RequestID + ")"

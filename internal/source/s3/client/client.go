@@ -186,6 +186,16 @@ func (c *Client) Credentials() (source string, anonymous bool) {
 	return c.auth.source, c.auth.anonymous
 }
 
+// CredentialRefreshes is how many times new credentials were taken into
+// use after the first lookup, and how many of those refreshes an
+// expired-token answer forced.
+func (c *Client) CredentialRefreshes() (refreshes, forced int64) {
+	if c.auth.credentials == nil {
+		return 0, 0
+	}
+	return c.auth.credentials.Refreshes()
+}
+
 // Note is a one-time warning for the user, or "".
 func (c *Client) Note() string { return c.auth.note }
 
@@ -213,8 +223,9 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
+	var renewed bool // an expired-token answer renews the credentials once per call (auth.expired)
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) {
-		return attempt(c, ctx, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, &renewed, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
 		})
@@ -241,8 +252,9 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
+	var renewed bool
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*VersionPage, error) {
-		return attempt(c, ctx, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, &renewed, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err
 		})
@@ -276,11 +288,12 @@ func bearerHeader(req *http.Request) error {
 // The attempt is counted from just before the call until it returns (the
 // Guard has read and checked the body by then). The Guard captures a 200's
 // body and hands the SDK replace in its place; parse decodes the captured
-// body.
-func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
+// body. An expired-token answer may renew the credentials, once per call
+// (renewed; auth.expired), and is then retried.
+func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
-	tok, creds, err := c.auth.ready(actx)
+	tok, creds, gen, err := c.auth.ready(actx)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +320,7 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 		v, err = parse(capture.Body)
 	}
 	if err != nil {
-		err = c.failure(actx, ctx, err)
-		return nil, err
+		return nil, c.auth.expired(actx, c.failure(actx, ctx, err), creds, gen, renewed)
 	}
 	return v, nil
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/counters"
 	"github.com/varveio/swath/internal/source/keyrange"
-	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/source/s3/client"
 )
 
 // Counters is the S3 tally in report order, assembled for documentation and ID checks.
@@ -46,8 +46,8 @@ func TestDocsCounters(t *testing.T) {
 // TestCountersMatchIDs: one client counter definition per ID; keys unique
 // across the engine's and the client's.
 func TestCountersMatchIDs(t *testing.T) {
-	if len(clientCounters) != int(objhttp.NumCounters) {
-		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), objhttp.NumCounters)
+	if len(clientCounters) != cCredentialExpired+1 {
+		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cCredentialExpired+1)
 	}
 	seen := map[string]bool{}
 	for _, d := range Counters {
@@ -55,5 +55,20 @@ func TestCountersMatchIDs(t *testing.T) {
 			t.Fatalf("duplicate key %s", d.Key)
 		}
 		seen[d.Key] = true
+	}
+}
+
+// refreshing is a stub client that reports credential refreshes.
+type refreshing struct{ stub }
+
+func (*refreshing) CredentialRefreshes() (int64, int64) { return 3, 1 }
+
+// TestCredentialRefreshCounters: a client's credential refreshes reach the
+// report's counters.
+func TestCredentialRefreshCounters(t *testing.T) {
+	page := &client.Page{Contents: []client.Object{{Key: "a"}}}
+	_, st := list(t, Options{Bucket: "b", Client: &refreshing{stub{pages: []*client.Page{page}}}, Policy: keyrange.Policy{Sequential: true}}, 1)
+	if st.Counters.Value("credentials.refreshes") != 3 || st.Counters.Value("credentials.expired_refreshes") != 1 {
+		t.Fatalf("refreshes %d, expired %d", st.Counters.Value("credentials.refreshes"), st.Counters.Value("credentials.expired_refreshes"))
 	}
 }

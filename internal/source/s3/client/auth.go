@@ -22,12 +22,18 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/tokensource"
+	objs3 "github.com/varveio/swath/objfile/s3"
 )
 
 // Credentials come from the AWS SDK's config module: its default chain
 // (environment, shared config and credentials files and profiles, SSO, web
 // identity, credential processes, assume-role through stscreds, container
 // credentials, IMDSv2). The SDK's service client signs with them (SigV4).
+// objs3.RefreshAhead, shared with a bucket destination, refreshes them
+// ahead of their expiry (by the smaller of 5 minutes and a quarter of their
+// lifetime) under the SDK's cache. An expired-token answer to credentials
+// that can expire renews them, once for every request refused for the same
+// generation, and the request is retried once (auth.expired).
 
 // credentialWait bounds the first credential lookup: a slow token exchange
 // is waited for, never taken for absence.
@@ -35,9 +41,9 @@ const credentialWait = 30 * time.Second
 
 // auth is the resolved region and credentials a client signs with.
 type auth struct {
-	credentials aws.CredentialsProvider // nil: anonymous or bearer; cached by the SDK until expiry
-	source      string                  // where the credentials come from (never the secret)
-	region      string                  // the signing region
+	credentials objs3.RenewableCredentials // nil: anonymous or bearer
+	source      string                     // where the credentials come from (never the secret)
+	region      string                     // the signing region
 	anonymous   bool
 	bearer      *tokensource.Shared // --s3-bearer-token-command: sent instead of a signature
 	note        string              // a one-time warning for the user, or ""
@@ -80,7 +86,10 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	// credential chain (STS for web identity and assumed roles) keeps the
 	// environment's or the profile's region, else us-east-1, so a bucket in
 	// another region never moves the STS endpoint.
-	opts = append(opts, config.WithDefaultRegion("us-east-1"))
+	// The SDK's cache keeps no window of its own (it has 5 minutes for
+	// container credentials): objs3.RefreshAhead refreshes ahead.
+	opts = append(opts, config.WithDefaultRegion("us-east-1"),
+		config.WithCredentialsCacheOptions(func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = 0 }))
 	if cfg.Anonymous || cfg.Bearer != nil {
 		opts = append(opts, config.WithCredentialsProvider(aws.AnonymousCredentials{}))
 	} else if why := partialEnvCredentials(); why != "" {
@@ -120,7 +129,8 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	}
 	lookup, cancel := context.WithTimeout(ctx, credentialWait)
 	defer cancel()
-	c, err := retrieve(lookup, ac.Credentials, tf)
+	creds := objs3.RefreshAhead(ac.Credentials)
+	c, err := retrieve(lookup, creds, tf)
 	switch {
 	case ctx.Err() != nil:
 		// The caller gave up (a signal, its deadline): not a verdict on
@@ -129,7 +139,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	case err != nil:
 		return nil, &objhttp.CredentialError{Source: src, Discovered: a.discovered, Err: err}
 	}
-	a.credentials, a.source = ac.Credentials, c.Source
+	a.credentials, a.source = creds, c.Source
 	return a, nil
 }
 
@@ -240,26 +250,69 @@ func anonymousNote(cfg Config) string {
 }
 
 // ready fetches what a request needs before it is sent: the bearer token
-// (token), or the credentials (cached by the SDK until expiry; the zero
-// value when anonymous). A failure is a *objhttp.CredentialError: a request
-// is never sent without them.
-func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, err error) {
+// (token), or the credentials and their generation (refreshed ahead of
+// their expiry; the zero value when anonymous). A failure is a
+// *objhttp.CredentialError: a request is never sent without them.
+func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, gen uint64, err error) {
 	switch {
 	case a.bearer != nil:
 		tok, err := a.bearer.Token(ctx)
 		if err != nil {
-			return "", creds, &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: err}
+			return "", creds, 0, &objhttp.CredentialError{Source: "--s3-bearer-token-command", Err: err}
 		}
-		return tok.AccessToken, creds, nil
+		return tok.AccessToken, creds, 0, nil
 	case a.anonymous:
-		return "", creds, nil
+		return "", creds, 0, nil
 	}
-	creds, err = a.credentials.Retrieve(ctx)
+	creds, gen, err = a.credentials.Get(ctx)
 	if err != nil {
-		return "", creds, &objhttp.CredentialError{Source: a.source, Discovered: a.discovered, Transient: transientRefresh(err),
-			Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
+		return "", creds, 0, a.refreshError(err)
 	}
-	return "", creds, nil
+	return "", creds, gen, nil
+}
+
+// refreshError is a failed lookup's *objhttp.CredentialError.
+func (a *auth) refreshError(err error) error {
+	return &objhttp.CredentialError{Source: a.source, Discovered: a.discovered, Transient: transientRefresh(err),
+		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
+}
+
+// expiredToken: S3 (and an S3-compatible store) answered that the
+// request's session token had expired.
+func expiredToken(code string) bool {
+	switch code {
+	case "ExpiredToken", "ExpiredTokenException", "TokenRefreshRequired":
+		return true
+	}
+	return false
+}
+
+// expired qualifies an attempt's failure err, the answer to a request
+// signed with signed, of generation gen. An expired-token answer to
+// credentials that can expire renews them (once for every request refused
+// for gen) and is retried, once per call (*renewed): they may have expired
+// on the request's way, or by a server clock ahead of this host's. A
+// renewal that fails is the attempt's credential failure. To credentials
+// that do not refresh (keys in the environment or a profile, a session
+// token included), or a second time in one call, the answer stays an auth
+// failure, with a note saying which.
+func (a *auth) expired(ctx context.Context, err error, signed aws.Credentials, gen uint64, renewed *bool) error {
+	var e *Error
+	if a.credentials == nil || !errors.As(err, &e) || !expiredToken(e.Code) {
+		return err
+	}
+	switch {
+	case !signed.CanExpire:
+		e.Note = "the credentials from " + a.source + " do not refresh: renew them"
+	case *renewed:
+		e.Note = "refused again after the credentials from " + a.source + " were refreshed"
+	default:
+		*renewed, e.Renewed = true, true
+		if rerr := a.credentials.Renew(ctx, gen); rerr != nil {
+			return a.refreshError(rerr)
+		}
+	}
+	return err
 }
 
 // transientRefresh: a credential service's (STS, IMDS, SSO, container
