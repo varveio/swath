@@ -77,7 +77,7 @@ duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
 ```
 
 `complete` is true when nothing is missing: the listing reached the end of its scope (`stop_reason`
-`completed`) and read every entry (`unreadable` 0). Filters do not make it partial: an inventory is complete for
+`end_of_scope`) and read every entry (`unreadable` 0). Filters do not make it partial: an inventory is complete for
 the filters it records, so check that `filters` and `exclusions` are empty, or that you accept them. Check too that the manifest's
 `source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
 ([the swath extension](#the-swath-extension)).
@@ -273,7 +273,7 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
       "published_at": "2026-11-08T18:00:00.123456Z",
       "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
       "scope": {"kind": "prefix", "prefix": "logs/"},
-      "coverage": {"complete": true, "stop_reason": "completed", "unreadable": 0,
+      "coverage": {"complete": true, "stop_reason": "end_of_scope", "unreadable": 0,
                    "exclusions": [],
                    "filters": [{"filter": "modified_since", "value": "2026-11-01T00:00:00.000000Z"}],
                    "listing_started_at": "…", "listing_finished_at": "…"},
@@ -311,7 +311,7 @@ module's. JSON readers must not depend on that order.
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | Nothing is missing: the listing reached the end of its scope and `unreadable` is 0. Filters and exclusions are recorded beside it; they do not make it false | the application |
-| `coverage.stop_reason` | `completed` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys`, `unreported`, ...) | the application |
+| `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys`, `unreported`, ...) | the application |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
 | `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |

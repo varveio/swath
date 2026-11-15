@@ -368,7 +368,7 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	}
 	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Run: rs.runInfo(), Timings: Timings{StartedAt: jsontime.Of(time.Now())},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
-		Outcome:    Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: "completed"}}
+		Outcome:    Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: source.StopEndOfScope}}
 	// The dataset is the manifest's: its rows, bytes and coverage, which
 	// this invocation neither listed nor wrote.
 	var m dataset.Manifest

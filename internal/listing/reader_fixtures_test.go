@@ -111,7 +111,7 @@ func writeVerifierFixtures[P any](t *testing.T, base, kind string, original sche
 			t.Fatal(err)
 		}
 		meta := dataset.Meta{SchemaID: original.ID, Groups: original.Groups, Source: dataset.Source{Kind: kind, URI: "fixture://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
-			Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}}
+			Coverage: dataset.Coverage{Complete: true, StopReason: "end_of_scope", Exclusions: []string{}, Filters: []reader.Filter{}}}
 		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte("{}\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -194,7 +194,7 @@ func writeSeekFixture[P any](t *testing.T, dir, kind string, s *schema.Schema[P]
 		t.Fatal(err)
 	}
 	meta := dataset.Meta{SchemaID: s.ID, Groups: s.Groups, Source: dataset.Source{Kind: kind, URI: "fixture://" + filepath.Base(dir)},
-		Scope: dataset.Scope{Kind: "whole"}, Coverage: dataset.Coverage{Complete: true, StopReason: "completed"}}
+		Scope: dataset.Scope{Kind: "whole"}, Coverage: dataset.Coverage{Complete: true, StopReason: "end_of_scope"}}
 	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 		t.Fatal(err)
 	}

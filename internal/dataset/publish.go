@@ -300,7 +300,7 @@ type Scope struct {
 // be in it.
 type Coverage struct {
 	Complete          bool            `json:"complete"`    // the listing reached the end of the scope, and unreadable is 0
-	StopReason        string          `json:"stop_reason"` // "completed" (the end of the scope reached), or why it stopped early
+	StopReason        string          `json:"stop_reason"` // "end_of_scope" (the end of the scope reached), or why it stopped early
 	Unreadable        int64           `json:"unreadable"`  // entries missing because they could not be read
 	Exclusions        []string        `json:"exclusions"`
 	Filters           []reader.Filter `json:"filters"`

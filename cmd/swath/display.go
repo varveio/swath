@@ -582,11 +582,11 @@ func coverageVerdict(complete bool, stopReason string, unreadable int64) string 
 		return "complete"
 	}
 	switch stopReason {
-	case "max_keys":
+	case source.StopMaxKeys:
 		return "partial: --max-keys reached"
 	case listing.StopDownstreamClosed:
 		return "partial: the reader closed the output"
-	case "", "completed":
+	case "", source.StopEndOfScope:
 		return "partial: the listing did not reach the end of its scope"
 	}
 	return "partial: the listing stopped early (" + stopReason + ")"

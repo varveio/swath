@@ -339,7 +339,7 @@ func storedName(dir, name string) string {
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	unreadable := st.Errors() - st.ReadlinkErrors - st.Vanished
-	cov := source.Coverage{Target: o.p.root, Complete: unreadable == 0, StopReason: "completed", Unreadable: unreadable}
+	cov := source.Coverage{Target: o.p.root, Complete: unreadable == 0, StopReason: source.StopEndOfScope, Unreadable: unreadable}
 	cov.Exclusions = slices.Sorted(maps.Keys(o.p.opt.Skip))
 	if o.p.opt.OneFilesystem {
 		// The tree is listed only as far as its filesystem reaches; the

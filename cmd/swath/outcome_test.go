@@ -569,7 +569,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	check := func(how string, rep listing.Report) {
 		t.Helper()
 		o := rep.Outcome
-		if o.Class != "ok" || o.ExitCode != exitOK || o.Status != "committed" || !o.Complete || o.StopReason != "completed" || o.Resumable || o.Error != "" {
+		if o.Class != "ok" || o.ExitCode != exitOK || o.Status != "committed" || !o.Complete || o.StopReason != "end_of_scope" || o.Resumable || o.Error != "" {
 			t.Fatalf("%s: report outcome %+v", how, o)
 		}
 		if got := dirTree(t, dir); !maps.Equal(want, got) {

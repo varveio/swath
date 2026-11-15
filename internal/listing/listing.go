@@ -1668,7 +1668,11 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 				if err := install(); err != nil {
 					return err
 				}
-				return dataset.InstallNext(into)
+				if err := dataset.InstallNext(into); err != nil {
+					return err
+				}
+				sum.Output.Replaced = true
+				return nil
 			})
 		}
 	}

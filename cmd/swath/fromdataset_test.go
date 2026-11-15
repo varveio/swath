@@ -416,7 +416,7 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 	rows := &parquetRows{rows: []parquet.Row{s.Deconstruct(nil, &noKindRow{Key: []byte("dir/"), Size: &size, LastModified: &at})}}
 	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
 		"source": map[string]any{"kind": "local", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
-		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
+		"coverage": map[string]any{"complete": true, "stop_reason": "end_of_scope", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,8 +61,8 @@ func TestReplaceKeepsPreviousUntilCommit(t *testing.T) {
 	before := fakeS3(t, 3000)
 	after := fakeS3(t, 2000)
 	out := filepath.Join(t.TempDir(), "ds")
-	if _, err := Run(context.Background(), crashConfig(before, out, false)); err != nil {
-		t.Fatal(err)
+	if first, err := Run(context.Background(), crashConfig(before, out, false)); err != nil || first.Output.Replaced {
+		t.Fatalf("first run: %v, replaced %v", err, first.Output.Replaced)
 	}
 	old, oldKeys := visible(t, out), checkContract(t, out)
 	if len(oldKeys) != 3000 {
@@ -94,12 +94,12 @@ func TestReplaceKeepsPreviousUntilCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if keys := checkContract(t, out); len(keys) != 2000 || sum.Invocation.Out != out || sum.Output.PartsRetained == 0 {
+	if keys := checkContract(t, out); len(keys) != 2000 || sum.Invocation.Out != out || sum.Output.PartsRetained == 0 || !sum.Output.Replaced {
 		t.Fatalf("after the resume: %d keys, out %q, %d parts retained", len(keys), sum.Invocation.Out, sum.Output.PartsRetained)
 	}
 	var rep Report
 	readJSON(t, filepath.Join(out, dataset.ReportName), &rep)
-	if rep.Invocation.Out != out || !rep.Invocation.Resume {
+	if rep.Invocation.Out != out || !rep.Invocation.Resume || !rep.Output.Replaced {
 		t.Fatalf("run.json invocation %+v", rep.Invocation)
 	}
 	if _, err := os.Lstat(dataset.NextDir(out)); !os.IsNotExist(err) || dataset.Staged(out) {

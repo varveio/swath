@@ -74,7 +74,7 @@ func swathExtension() map[string]any {
 		"published_at": "2026-11-09T10:00:00Z",
 		"source":       map[string]any{"kind": "s3", "uri": "s3://b", "container": "b"},
 		"scope":        map[string]any{"kind": "whole"},
-		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0,
+		"coverage": map[string]any{"complete": true, "stop_reason": "end_of_scope", "unreadable": 0,
 			"exclusions": []string{"out/"}, "filters": []string{}},
 	}
 }

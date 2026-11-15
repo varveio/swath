@@ -509,7 +509,7 @@ func TestPruneUnreadableDescendant(t *testing.T) {
 			stats := report.Stats.(*Stats)
 			// Complete means nothing is missing: an unreadable entry makes
 			// the coverage partial although the walk reached its end.
-			if c := report.Coverage; stats.OpenErrors != 1 || c.Unreadable != 1 || c.Complete || c.StopReason != "completed" {
+			if c := report.Coverage; stats.OpenErrors != 1 || c.Unreadable != 1 || c.Complete || c.StopReason != "end_of_scope" {
 				t.Fatalf("control open errors=%d coverage %+v, want 1 open error, 1 unreadable, not complete", stats.OpenErrors, c)
 			}
 			spec := filter.Spec{Exclude: []string{"dir/**"}}

@@ -289,7 +289,7 @@ type Outcome struct {
 	// end of it and no entry was unreadable (filters aside: they are
 	// recorded, never a gap).
 	Complete bool `json:"complete"`
-	// StopReason is how the listing ended: "completed" (it reached the end
+	// StopReason is how the listing ended: "end_of_scope" (it reached the end
 	// of its scope), or why it stopped early (max_keys, downstream_closed);
 	// absent for a run that wrote no output.
 	StopReason string `json:"stop_reason,omitempty"`
@@ -381,6 +381,10 @@ type Output struct {
 	RowsDurable   int64 `json:"rows_durable"`
 	PartsWritten  int   `json:"parts_written"` // written by this invocation (after a failure: journaled, durable)
 	PartsRetained int   `json:"parts_retained"`
+	// Replaced: the committed dataset replaced a previous one in the
+	// output (--overwrite), which stayed readable until this commit
+	// installed it in its place (dataset.InstallNext).
+	Replaced bool `json:"replaced,omitempty"`
 	// ObjectBytes sums the sizes of the objects the order stage accepted
 	// from this invocation (the size column; absent for a schema without
 	// one), every name once: a local file with several hard links counts

@@ -412,7 +412,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "completed" || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
+	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
 		t.Fatalf("report outcome %+v", o)
 	}
 	// A listing, text or a dataset, ends the same way.
@@ -432,7 +432,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
 	_, eerr := os.Stat(filepath.Join(dir, errorName))
-	if c := m.Coverage; c.Unreadable != 1 || c.Complete || c.StopReason != "completed" || !os.IsNotExist(eerr) {
+	if c := m.Coverage; c.Unreadable != 1 || c.Complete || c.StopReason != "end_of_scope" || !os.IsNotExist(eerr) {
 		t.Fatalf("dataset: coverage %+v, error.json %v", c, eerr)
 	}
 	out.Reset()
@@ -450,7 +450,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	}
 	rep = listing.Report{}
 	readJSON(t, resumed, &rep)
-	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "completed" || o.ExitCode != exitIncomplete || o.Error != want {
+	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Error != want {
 		t.Fatalf("resume report outcome %+v", o)
 	}
 	// swath diag count prints its partial counts, then exits 3 (it printed
@@ -494,7 +494,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
 	var ev map[string]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil || ev["event"] != "outcome" || ev["class"] != "incomplete" || ev["status"] != "committed" ||
-		ev["complete"] != false || ev["stop_reason"] != "completed" || ev["unreadable"] != 1.0 || ev["msg"] != strings.TrimSuffix(strings.TrimPrefix(end, "swath: "), "\n") || ev["message"] != nil {
+		ev["complete"] != false || ev["stop_reason"] != "end_of_scope" || ev["unreadable"] != 1.0 || ev["msg"] != strings.TrimSuffix(strings.TrimPrefix(end, "swath: "), "\n") || ev["message"] != nil {
 		t.Fatalf("outcome event %v (%v): %s", ev, err, stderr.String())
 	}
 	stderr.Reset()
@@ -504,7 +504,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	lines = strings.Split(strings.TrimSpace(stderr.String()), "\n")
 	ev = nil
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil || ev["class"] != "ok" || ev["status"] != "listed" || ev["complete"] != true ||
-		ev["stop_reason"] != "completed" || ev["unreadable"] != 0.0 {
+		ev["stop_reason"] != "end_of_scope" || ev["unreadable"] != 0.0 {
 		t.Fatalf("outcome event %v (%v): %s", ev, err, stderr.String())
 	}
 }

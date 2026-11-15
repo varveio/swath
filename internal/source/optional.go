@@ -233,5 +233,11 @@ type Coverage struct {
 	Exclusions []string        // left out by design (an output directory inside a listed tree)
 	Unreadable int64           // entries missing from the listing because they could not be read
 	Complete   bool            // the listing reached the end of its scope and read every entry (Unreadable 0)
-	StopReason string          // "completed" (it reached the end of its scope), or why it stopped early
+	StopReason string          // StopEndOfScope, or why it stopped early (StopMaxKeys)
 }
+
+// Coverage stop reasons: how a listing ended.
+const (
+	StopEndOfScope = "end_of_scope" // it reached the end of its scope (whatever it could not read)
+	StopMaxKeys    = "max_keys"     // a key limit stopped it
+)

@@ -20,12 +20,12 @@ func TestCommittedOutcome(t *testing.T) {
 		class string
 		code  int
 	}{
-		{dataset.Coverage{Complete: true, StopReason: "completed"}, ClassOK, 0},
+		{dataset.Coverage{Complete: true, StopReason: "end_of_scope"}, ClassOK, 0},
 		{dataset.Coverage{Complete: false, StopReason: "max_keys"}, ClassIncomplete, 3},
 		{dataset.Coverage{Complete: false, StopReason: "unreported"}, ClassIncomplete, 3},
-		{dataset.Coverage{Complete: false, StopReason: "completed", Unreadable: 2}, ClassIncomplete, 3},
+		{dataset.Coverage{Complete: false, StopReason: "end_of_scope", Unreadable: 2}, ClassIncomplete, 3},
 	} {
-		o := Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: "completed"}
+		o := Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: "end_of_scope"}
 		committedOutcome(&o, c.cov)
 		if o.Class != c.class || o.ExitCode != c.code || o.Complete != c.cov.Complete || o.StopReason != c.cov.StopReason || o.Unreadables() != c.cov.Unreadable || o.Status != StatusCommitted {
 			t.Fatalf("%+v: outcome %+v", c.cov, o)

@@ -46,7 +46,8 @@ Notable changes per release. The full human summary for the current release is i
   old one, whose parts are removed after; a run that fails or is stopped leaves the previous dataset whole, and
   a stopped object-store run waits there for `swath resume DIR` (`swath show DIR` names it). Before,
   `--overwrite` removed the previous dataset before listing anything, so a typo in the source or endpoint lost
-  the last good inventory.
+  the last good inventory. The run report's `output.replaced` is true when the commit replaced a previous
+  dataset.
 - Go port: a dataset run that no request ever answered (exit 75, cause `unreachable`: a mistyped endpoint, a
   service not up) and that published no part removes its journal and work files, so the corrected command runs
   on the same `-o`; it left an interrupted run that refused the corrected command, while a resume refused another
@@ -68,8 +69,8 @@ Notable changes per release. The full human summary for the current release is i
   The manifest's `coverage.complete`, the report's `outcome.complete`, the `outcome` log event, `swath show` and
   `swath du --from-dataset` say false for a dataset with unreadable entries (before: true, beside
   `unreadable` 1); filters do not make a dataset partial. The outcome class `completed` is `ok` (a `| head` run
-  is `ok` with `complete` false). `stop_reason` is a coverage reason only, absent for a run that wrote no
-  output (before: its class), and `outcome.unreadable` is absent before the source reported. A partial dataset
+  is `ok` with `complete` false). `stop_reason` is a coverage reason only (`end_of_scope`, renamed from
+  `completed`; `max_keys`; `downstream_closed`), absent for a run that wrote no output (before: its class), and `outcome.unreadable` is absent before the source reported. A partial dataset
   (exit 3) gets no `error.json`: its manifest's coverage says what is missing. The `outcome` event adds
   `status`, `complete`, `stop_reason` and `unreadable` and drops `message` (it repeated `msg`). A person reads
   one verdict everywhere: `complete`, `partial: 1 unreadable entry`, `partial: --max-keys reached`, `stopped:

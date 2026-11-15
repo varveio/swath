@@ -66,7 +66,7 @@ func TestPruneCommandParquet(t *testing.T) {
 			manifest := readManifest(t, dir)
 			filters := []string{"exclude=a/**", "exclude=x", "exclude_regex=^never$"}
 			if !slices.Equal(filter.Texts(manifest.Coverage.Filters), filters) || manifest.Coverage.Unreadable != 0 ||
-				!manifest.Coverage.Complete || manifest.Coverage.StopReason != "completed" {
+				!manifest.Coverage.Complete || manifest.Coverage.StopReason != "end_of_scope" {
 				t.Fatalf("coverage %+v, want original filters %q and complete coverage", manifest.Coverage, filters)
 			}
 			report := checkCommandPruning(t, filepath.Join(dir, dataset.ReportName), 1, 5, 1, 4)

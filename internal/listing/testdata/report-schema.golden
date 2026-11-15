@@ -262,6 +262,7 @@ output.remote.upload_wait_ns int64
 output.remote.uploads int64
 output.remote.uploads_aborted int64
 output.remote.work_dir string
+output.replaced bool
 output.rows_committed int64
 output.rows_durable int64
 output.rows_emitted int64
