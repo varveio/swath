@@ -23,6 +23,15 @@ type Time struct{ time.Time }
 // Of is t as a Time, in UTC.
 func Of(t time.Time) Time { return Time{t.UTC()} }
 
+// OfPtr is *t as a Time, nil for nil.
+func OfPtr(t *time.Time) *Time {
+	if t == nil {
+		return nil
+	}
+	v := Of(*t)
+	return &v
+}
+
 // MarshalJSON writes t in Layout.
 func (t Time) MarshalJSON() ([]byte, error) {
 	b := make([]byte, 0, len(Layout)+2)
