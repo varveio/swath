@@ -119,6 +119,7 @@ func TestDuFromDatasetLocal(t *testing.T) {
 			[]string{"--from-dataset", names, "--include", "none", "--format", format})
 	}
 	liveAndSaved(t, []string{root, "-d", "1", "--no-header"}, []string{"--from-dataset", ds, "-d", "1", "--no-header"})
+	liveAndSaved(t, []string{root, "--max-depth", "1"}, []string{"--from-dataset", ds, "--max-depth", "1"}) // GNU du's spelling
 	// PREFIX restricts the totals to its keys, the depth counted from it;
 	// the rows keep the dataset's keys.
 	got, err := duRun(t, "--from-dataset", ds, "a/", "-d", "1", "--format", "tsv")

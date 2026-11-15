@@ -105,7 +105,7 @@ func checkDatasetName(name string) error {
 
 // schemeTypo refuses a path whose first segment is a provider's scheme and
 // a colon (s3:/bkt/x): a URL typed with one slash, which would otherwise be
-// a local path. It names the URL meant.
+// a local path. It names the URL meant, and the spelling of the local path.
 func schemeTypo(path string) error {
 	first, rest, _ := strings.Cut(filepath.ToSlash(path), "/")
 	scheme, ok := strings.CutSuffix(first, ":")
@@ -114,7 +114,7 @@ func schemeTypo(path string) error {
 	}
 	for _, f := range registry.Factories() {
 		if f.Scheme != "" && strings.EqualFold(scheme, f.Scheme) {
-			return fmt.Errorf("%s is a local path (did you mean %s?)", registry.Redact(path), registry.Redact(f.Scheme+"://"+strings.TrimLeft(rest, "/")))
+			return fmt.Errorf("%s is a local path (did you mean %s? for a local directory write ./%s)", registry.Redact(path), registry.Redact(f.Scheme+"://"+strings.TrimLeft(rest, "/")), registry.Redact(path))
 		}
 	}
 	return nil

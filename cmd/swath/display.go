@@ -336,6 +336,7 @@ type display struct {
 	started  time.Time // the invocation's start: the elapsed time shown
 	noun     nouns
 	dataset  bool // the run writes a dataset: its parts are shown
+	erase    bool // rows follow on the same terminal: stop clears the line
 
 	samples chan listing.ProgressSnapshot
 	stopped chan struct{}
@@ -455,8 +456,10 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 	}
 }
 
-// stop ends the display; a redrawn line is erased, so what follows on
-// stderr (the statistics, an error) starts on a clean line.
+// stop ends the display: the last redrawn line stays, ended by a newline,
+// so what follows on stderr (the statistics, an error) starts on a clean
+// line; with erase, rows follow on the same terminal (swath du's table)
+// and the line is cleared instead.
 func (d *display) stop() {
 	if d == nil {
 		return
@@ -464,7 +467,11 @@ func (d *display) stop() {
 	d.once.Do(func() {
 		close(d.stopped)
 		d.done.Wait()
-		d.out.finish()
+		if d.erase {
+			d.out.erase()
+		} else {
+			d.out.finish()
+		}
 	})
 }
 
@@ -526,6 +533,17 @@ func (c *stderrCoord) finish() {
 	defer c.mu.Unlock()
 	if c.line != "" {
 		note(c.w, "\n")
+	}
+	c.line, c.done = "", true
+}
+
+// erase ends the progress line for good and clears it, the cursor at the
+// start of the empty line.
+func (c *stderrCoord) erase() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.line != "" {
+		note(c.w, "\r"+eraseLine)
 	}
 	c.line, c.done = "", true
 }

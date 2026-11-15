@@ -142,8 +142,8 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"file:///data/x"}, "unsupported source file:// (did you mean " + filepath.FromSlash("/data/x") + "?)"},
 		{[]string{"https://example.com/x"}, "unsupported source https://; SOURCE is a local directory or file, "},
 		{[]string{"abfs://c@acct.dfs.core.windows.net/"}, "unsupported source abfs://; SOURCE is"},
-		{[]string{"s3:/bkt/x"}, "s3:/bkt/x is a local path (did you mean s3://bkt/x?)"},
-		{[]string{"GS:/bkt"}, "GS:/bkt is a local path (did you mean gs://bkt?)"},
+		{[]string{"s3:/bkt/x"}, "s3:/bkt/x is a local path (did you mean s3://bkt/x? for a local directory write ./s3:/bkt/x)"},
+		{[]string{"GS:/bkt"}, "GS:/bkt is a local path (did you mean gs://bkt? for a local directory write ./GS:/bkt)"},
 		{[]string{"/d", "-h"}, "-h is help; sizes are already human-readable in the table"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},
@@ -753,6 +753,9 @@ func TestCommandSpellings(t *testing.T) {
 			t.Errorf("du %q: %v, depth %d", args, err, o.depth)
 		}
 	}
+	if _, root, err := parseList([]string{"./s3:/x"}, io.Discard, du); err != nil || root != "./s3:/x" {
+		t.Errorf("./s3:/x, the local spelling the refusal names: %v, %q", err, root)
+	}
 	for _, cmd := range []command{list, du} {
 		o, _, err := parseList([]string{t.TempDir(), "-x"}, io.Discard, cmd)
 		if err != nil || !slices.Contains(o.argv, "--one-file-system") {
@@ -790,7 +793,7 @@ func TestOutputNameRules(t *testing.T) {
 		{in("z.tsv.GZ"), "tsv", ""},
 		{in("z.JSONL.Zst"), "jsonl", ""},
 		{in("z.out"), "", ""},
-		{"s3:/bkt/x", "", "-o s3:/bkt/x is a local path (did you mean s3://bkt/x?)"},
+		{"s3:/bkt/x", "", "-o s3:/bkt/x is a local path (did you mean s3://bkt/x? for a local directory write ./s3:/bkt/x)"},
 		{file, "", "-o " + file + ": " + file + " is a file, and a dataset is a directory; rows go to a file named .tsv or .jsonl"},
 		{in("out.tsv") + "/", "", "is a file, and a dataset is a directory"},
 		{os.DevNull, "", "swath diag count lists without writing"},

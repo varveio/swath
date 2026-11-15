@@ -924,6 +924,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
 	defer tt.close()
 	if t := o.totals; t != nil {
+		if tt.disp != nil && stdoutTerminal() {
+			tt.disp.erase = true // the table comes after the line, on the same screen
+		}
 		tt.saveHint = savedInventory(given, o)
 		// swath du's rows are its output: written once the count is
 		// complete, before the run's end and outcome are settled, after the

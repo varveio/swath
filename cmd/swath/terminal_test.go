@@ -102,6 +102,17 @@ func TestProgressRedrawAndAppend(t *testing.T) {
 		!strings.HasSuffix(got, "\n") {
 		t.Fatalf("redraw output %q", got)
 	}
+	// Rows that follow on the same terminal (swath du's table) find the
+	// line cleared, the cursor at its start, whichever path stops it.
+	tty.Reset()
+	d = &display{out: &stderrCoord{w: &tty}, redraw: true, erase: true, width: func() int { return 200 }, interval: time.Second, started: time.Now(),
+		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
+	d.render(snap(), now)
+	d.stop()
+	d.render(snap(), now.Add(time.Second))
+	if got := tty.String(); !strings.HasSuffix(got, "\r\x1b[2K") || strings.Contains(got, "\n") || strings.Count(got, "listing") != 1 {
+		t.Fatalf("erased output %q", got)
+	}
 	var log bytes.Buffer
 	d = &display{out: &stderrCoord{w: &log}, interval: 30 * time.Second, started: time.Now()}
 	d.render(snap(), now)
