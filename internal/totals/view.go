@@ -72,12 +72,51 @@ type vsum struct {
 	// hasNewest: an object under it has a time.
 	hasNewest bool
 	pinned    bool // holds a hard-linked object, whose bytes come at the end
+	// recent is its children with the newest times, at most recentKids, the
+	// newest first: a fold's newest time is the first one not shown.
+	recent []kidTime
 }
 
-// add adds o's sums to s, its children included.
+// recentKids is the children a node remembers the times of, the newest:
+// more than a terminal shows of one parent but in a rare view.
+const recentKids = 32
+
+// kidTime is a child's newest time.
+type kidTime struct {
+	name string
+	at   int64
+}
+
+// noteKid takes a child's newest time (a run's piece of it: the newest
+// piece is the child's), name copied if kept.
+func (s *vsum) noteKid(name string, at int64) {
+	if len(s.recent) == recentKids && at <= s.recent[len(s.recent)-1].at {
+		return
+	}
+	i := slices.IndexFunc(s.recent, func(k kidTime) bool { return k.name == name })
+	if i >= 0 {
+		if at <= s.recent[i].at {
+			return
+		}
+		s.recent = slices.Delete(s.recent, i, i+1)
+	} else {
+		name = strings.Clone(name)
+		if len(s.recent) == recentKids {
+			s.recent = s.recent[:len(s.recent)-1]
+		}
+	}
+	j, _ := slices.BinarySearchFunc(s.recent, at, func(k kidTime, at int64) int { return cmp.Compare(at, k.at) })
+	s.recent = slices.Insert(s.recent, j, kidTime{name, at})
+}
+
+// add adds o's sums to s, its children included: o is another piece of
+// the same node.
 func (s *vsum) add(o *vsum) {
 	s.include(o)
 	s.children += o.children
+	for _, k := range o.recent {
+		s.noteKid(k.name, k.at)
+	}
 }
 
 // include adds what o holds to s, a node above it: everything but o's
@@ -573,6 +612,9 @@ func (r *ViewRun) Add(row *Row) {
 	} else {
 		r.addUnordered(&c, leaf, link)
 	}
+	if c.children == 1 && c.hasNewest { // its own child, as the deepest node's
+		r.deepest().noteKid(row.Key, c.newest)
+	}
 }
 
 func (r *ViewRun) addOrdered(c *vsum, leaf, link bool) {
@@ -604,6 +646,9 @@ func (r *ViewRun) popTo(n int, ending bool) {
 		if len(r.stack) > 1 {
 			p := &r.stack[len(r.stack)-2]
 			p.s.include(&f.s)
+			if f.s.hasNewest {
+				p.s.noteKid(f.name, f.s.newest)
+			}
 			if !f.left && !ending {
 				p.s.children++
 			}
@@ -669,12 +714,31 @@ func (r *ViewRun) addUnordered(c *vsum, leaf, link bool) {
 		n.s.include(c)
 		n.s.pinned = n.s.pinned || link
 	}
+	if c.hasNewest {
+		for d, n := range r.cache[:prefixes] {
+			if d+1 < len(r.chain) {
+				n.s.noteKid(r.chain[d+1], c.newest)
+			}
+		}
+	}
 	deepest := &r.cache[prefixes-1].s
 	deepest.children += c.children
 	if leaf {
 		deepest.children++
 		r.complete(r.chain[len(r.chain)-1], len(r.chain)-1, c)
 	}
+}
+
+// deepest is the row's deepest prefix's sums in the run.
+func (r *ViewRun) deepest() *vsum {
+	if r.ordered {
+		return &r.stack[len(r.stack)-1].s
+	}
+	n := len(r.chain)
+	if len(r.cache) < n {
+		n = len(r.cache)
+	}
+	return &r.cache[n-1].s
 }
 
 // Flush owns the names the run still needs: call it before the rows added
@@ -753,6 +817,7 @@ type ViewNode struct {
 	// microseconds, valid with HasNewest (max_last_modified).
 	Newest    int64
 	HasNewest bool
+	recent    []kidTime // its children's newest times, the newest first (vsum.recent)
 }
 
 // View is the tally's adaptive view (Options.View): call it after the
@@ -800,6 +865,11 @@ func (t *Tally) View() *View {
 				all[strings.Clone(name)] = n
 			}
 			n.include(&s)
+			if d > 0 && s.hasNewest {
+				if p := all[parentOf(name)]; p != nil {
+					p.noteKid(name, s.newest)
+				}
+			}
 		}
 	}
 	total := all[v.origin]
@@ -810,7 +880,7 @@ func (t *Tally) View() *View {
 		if v.lowered && d == maxDepth {
 			c = -1
 		}
-		return ViewNode{Key: k, Depth: d, Bytes: n.bytes, Objects: n.objects, Missing: n.missing, Children: c, Newest: n.newest, HasNewest: n.hasNewest}
+		return ViewNode{Key: k, Depth: d, Bytes: n.bytes, Objects: n.objects, Missing: n.missing, Children: c, Newest: n.newest, HasNewest: n.hasNewest, recent: n.recent}
 	}
 	out.Total = node(v.origin, total)
 	// The viewKeep largest of each depth among the nodes held with bytes
@@ -866,7 +936,9 @@ type ViewRow struct {
 	// children's one more.
 	Level                   int
 	Bytes, Objects, Missing int64
-	// Newest and HasNewest are a node's (ViewNode); a fold line has none.
+	// Newest and HasNewest are a node's (ViewNode), or a fold's the newest
+	// of what it holds (unknown, in a rare view, when the thirty-two
+	// newest children of its parent are all shown).
 	Newest    int64
 	HasNewest bool
 	// Fold: the rest of the parent's children, More of them (-1: an
@@ -986,6 +1058,27 @@ func (v *View) Select(rows int) []ViewRow {
 			parts = append(parts, part{s.n.Bytes - s.bytes, pt.i, true})
 		}
 	}
+	// foldNewest is the newest time among the children of s not shown:
+	// s's own when no child shown has it, else the first of its newest
+	// children (recent) not shown; unknown when those are all shown.
+	foldNewest := func(s *sel, shownNewest int64, shownTimed bool) (int64, bool) {
+		if !s.n.HasNewest {
+			return 0, false
+		}
+		if !shownTimed || s.n.Newest > shownNewest {
+			return s.n.Newest, true
+		}
+		names := map[string]bool{}
+		for _, i := range s.kids[:s.next] {
+			names[nodes[i].n.Key] = true
+		}
+		for _, k := range s.n.recent {
+			if !names[k.name] {
+				return k.at, true
+			}
+		}
+		return 0, false
+	}
 	var out []ViewRow
 	var walk func(i, level int)
 	walk = func(i, level int) {
@@ -1003,13 +1096,19 @@ func (v *View) Select(rows int) []ViewRow {
 		if s.n.Children < 0 {
 			f.More = -1
 		}
+		var shownNewest int64
+		shownTimed := false
 		for _, k := range s.kids[:s.next] {
 			walk(k, level+1)
 			f.Bytes -= nodes[k].n.Bytes
 			f.Objects -= nodes[k].n.Objects
 			f.Missing -= nodes[k].n.Missing
+			if kn := nodes[k].n; kn.HasNewest && (!shownTimed || kn.Newest > shownNewest) {
+				shownNewest, shownTimed = kn.Newest, true
+			}
 		}
 		if folds(s) > 0 {
+			f.Newest, f.HasNewest = foldNewest(s, shownNewest, shownTimed)
 			out = append(out, f)
 		}
 	}

@@ -59,11 +59,11 @@ func (t *totalsOut) writeView(w io.Writer, v *totals.View) error {
 	if height > 0 {
 		lines = max(viewMinLines, height-viewMargin)
 	}
-	rows := v.Select(lines)
+	rows := v.Select(lines - 1) // under the heading
 	for i := range rows {
 		rows[i].Name = escapeControl(rows[i].Name) // a name is the listing's: it may hold controls
 	}
-	if err := textout.WriteView(w, textout.ViewLayout{Label: t.view.label, Width: width, Color: t.view.color}, rows); err != nil {
+	if err := textout.WriteView(w, textout.ViewLayout{Label: t.view.label, Local: t.tally.Dirs(), Width: width, Color: t.view.color}, rows); err != nil {
 		return err
 	}
 	lg := elog()

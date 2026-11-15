@@ -59,15 +59,17 @@ func viewTree(t *testing.T) string {
 // viewTime is viewTree's files' time but data/c.bin's, an hour later.
 var viewTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-// TestDuView: bare swath du on a terminal draws the view: the total first
-// under SOURCE, the largest nodes at any depth by size as far as the lines
-// go (here logs/ stays whole, x fits), each parent's rest folded into one
-// "(N more)" line, a bar when the width allows and
-// color as --color and NO_COLOR say; the line under it gives the total.
-// -d, an explicit --format and a pipe keep the rows.
+// TestDuView: bare swath du on a terminal draws the view under a
+// heading: the total first under SOURCE, the largest nodes at any depth by
+// size as far as the lines go (here logs/ stays whole, x fits), each with
+// its count of files, its share, a bar, its newest date and its path, each
+// parent's rest folded into one "(N more)" line; the columns go as the
+// width shrinks (the bar, then the share, then the date), color as --color
+// and NO_COLOR say; the line under it gives the total. -d, --sort, an
+// explicit --format and a pipe keep the rows.
 func TestDuView(t *testing.T) {
 	root := viewTree(t)
-	viewTerminal(t, 200, 13) // the temporary directory's name is not cut; eight lines
+	viewTerminal(t, 200, 14) // the temporary directory's name is not cut; a heading and eight lines
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("TERM", "xterm") // not dumb, which turns color off
 	stderr := captureStderr(t)
@@ -75,19 +77,20 @@ func TestDuView(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	// The times are local, to the second, the zone named once.
+	// The dates are local, the zone named once.
 	zone, _ := time.Now().Zone()
-	at, later := viewTime.Local().Format(time.DateTime), viewTime.Add(time.Hour).Local().Format(time.DateTime)
+	at, later := viewTime.Local().Format(time.DateOnly), viewTime.Add(time.Hour).Local().Format(time.DateOnly)
 	pad := strings.Repeat(" ", 1+len(zone))
 	want := "" +
-		"9.38 KiB   100%  ██████████████████████████████  " + later + " " + zone + "  ROOT\n" +
-		"9.28 KiB  98.9%  █████████████████████████████▋  " + later + pad + "    data/\n" +
-		"8.79 KiB  93.7%  ████████████████████████████    " + at + pad + "      raw/\n" +
-		"5.86 KiB  62.5%  ██████████████████▋             " + at + pad + "        a.bin\n" +
-		"2.93 KiB  31.2%  █████████▎                      " + at + pad + "        b.bin\n" +
-		"   500 B   5.2%  █▌                              " + later + pad + "      c.bin\n" +
-		"   100 B   1.0%  ▎                               " + at + pad + "    logs/\n" +
-		"     1 B   0.0%                                  " + at + pad + "    x\n"
+		"    size  files  share                        newest" + strings.Repeat(" ", len(pad)+4) + "  path\n" +
+		"9.38 KiB     14   100%  ████████████████████  " + later + " " + zone + "  ROOT\n" +
+		"9.28 KiB      3  98.9%  ███████████████████▊  " + later + pad + "    data/\n" +
+		"8.79 KiB      2  93.7%  ██████████████████▋   " + at + pad + "      raw/\n" +
+		"5.86 KiB      1  62.5%  ████████████▍         " + at + pad + "        a.bin\n" +
+		"2.93 KiB      1  31.2%  ██████▏               " + at + pad + "        b.bin\n" +
+		"   500 B      1   5.2%  █                     " + later + pad + "      c.bin\n" +
+		"   100 B     10   1.0%  ▏                     " + at + pad + "    logs/\n" +
+		"     1 B      1   0.0%                        " + at + pad + "    x\n"
 	if got := strings.Replace(out.String(), root, "ROOT", 1); got != want {
 		t.Fatalf("view\n%s\nwant\n%s", got, want)
 	}
@@ -95,23 +98,29 @@ func TestDuView(t *testing.T) {
 		t.Fatalf("stderr %q", stderr.String())
 	}
 
-	// The width: neither time nor bar at 40 columns, both at 80 and 120;
-	// no line wider than the terminal.
-	for _, width := range []int{40, 80, 120} {
-		viewTerminal(t, width, 24)
+	// The width: from 100 columns a bar of 20 cells, at 80 of up to 10,
+	// at 60 none, at 40 neither the share nor the date; the size, the
+	// count and the path always; no line wider than the terminal.
+	for _, tc := range []struct {
+		width            int
+		bar, share, date bool
+	}{{40, false, false, false}, {60, false, true, true}, {80, true, true, true}, {100, true, true, true}, {120, true, true, true}} {
+		viewTerminal(t, tc.width, 24)
 		out.Reset()
 		if err := runDu(context.Background(), []string{root, "--no-stats", "-q"}, &out); err != nil {
 			t.Fatal(err)
 		}
 		lines := strings.Split(strings.TrimSuffix(strings.Replace(out.String(), root, "ROOT", 1), "\n"), "\n")
 		for _, l := range lines {
-			if n := utf8.RuneCountInString(l); n > width {
-				t.Errorf("width %d: %q is %d wide", width, l, n)
+			if n := utf8.RuneCountInString(l); n > tc.width {
+				t.Errorf("width %d: %q is %d wide", tc.width, l, n)
 			}
 		}
-		bar, timed := strings.Contains(out.String(), "█"), strings.Contains(out.String(), at)
-		if len(lines) != 18 || bar != (width > 40) || timed != (width > 40) {
-			t.Errorf("width %d: %d lines, bar %v, time %v\n%s", width, len(lines), bar, timed, out.String())
+		head := lines[0]
+		cells := strings.Count(lines[1], "█")
+		if len(lines) != 19 || cells > 0 != tc.bar || tc.width >= 100 && cells != 20 || tc.width == 80 && cells > 10 ||
+			strings.Contains(head, "share") != tc.share || strings.Contains(head, "newest") != tc.date || !strings.HasSuffix(head, "  path") {
+			t.Errorf("width %d: %d lines, bar %d cells\n%s", tc.width, len(lines), cells, out.String())
 		}
 	}
 
@@ -228,10 +237,12 @@ func TestDuViewFromDataset(t *testing.T) {
 		if err := runDu(context.Background(), append([]string{"--from-dataset", dir, "--no-stats", "-q"}, tc.du...), &saved); err != nil {
 			t.Fatal(err)
 		}
-		l, _, _ := strings.Cut(live.String(), "\n")
-		s, _, _ := strings.Cut(saved.String(), "\n")
+		lh, lv, _ := strings.Cut(live.String(), "\n") // the heading, then the total's line
+		sh, sv, _ := strings.Cut(saved.String(), "\n")
+		l, lrest, _ := strings.Cut(lv, "\n")
+		s, srest, _ := strings.Cut(sv, "\n")
 		if !strings.HasSuffix(l, src[0]) || !strings.HasSuffix(s, dir) ||
-			strings.SplitN(live.String(), "\n", 2)[1] != strings.SplitN(saved.String(), "\n", 2)[1] || strings.Count(live.String(), "\n") < 3 {
+			lh != sh || lrest != srest || strings.Count(live.String(), "\n") < 4 {
 			t.Fatalf("%s: live\n%s\nsaved\n%s", src[0], live.String(), saved.String())
 		}
 	}
@@ -264,7 +275,7 @@ func TestDuViewNames(t *testing.T) {
 				t.Errorf("width %d: %q is %d wide", width, l, n)
 			}
 		}
-		_, below, _ := strings.Cut(out.String(), "\n") // the total's line names the temporary directory, which may be cut
+		below := strings.SplitN(out.String(), "\n", 3)[2] // past the heading and the total's line, which names the temporary directory and may be cut
 		if cut := strings.Contains(below, "…"); cut != (width == 40) {
 			t.Errorf("width %d: cut %v\n%s", width, cut, out.String())
 		}
@@ -289,8 +300,10 @@ func TestDuViewFromDatasetSource(t *testing.T) {
 	if err := runDu(context.Background(), []string{"--from-dataset", dir, sub, "--no-stats", "-q"}, &saved); err != nil {
 		t.Fatal(err)
 	}
-	l, lrest, _ := strings.Cut(live.String(), "\n")
-	s, srest, _ := strings.Cut(saved.String(), "\n")
+	_, lv, _ := strings.Cut(live.String(), "\n") // past the heading
+	_, sv, _ := strings.Cut(saved.String(), "\n")
+	l, lrest, _ := strings.Cut(lv, "\n")
+	s, srest, _ := strings.Cut(sv, "\n")
 	if !strings.HasSuffix(l, sub) || !strings.HasSuffix(s, sub) || lrest != srest || !strings.Contains(lrest, "raw/") || strings.Contains(lrest, "logs/") {
 		t.Fatalf("live\n%s\nsaved\n%s", live.String(), saved.String())
 	}

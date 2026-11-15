@@ -20,6 +20,8 @@ type exactNode struct {
 	timed                   bool
 	kids                    map[string]bool
 	self                    int64 // objects named as the prefix itself (or outside the origin)
+	selfNewest              int64 // their newest time, with selfTimed
+	selfTimed               bool
 }
 
 // exactTree is the view's nodes computed the plain way: every node of every
@@ -92,6 +94,9 @@ func exactTree(origin string, rows []Row, linksOnce bool) map[string]*exactNode 
 				continue
 			}
 			seen[id] = true
+		}
+		if d := tree[chain[len(chain)-1]]; !leaf && r.HasMtime && (!d.selfTimed || r.Mtime > d.selfNewest) {
+			d.selfNewest, d.selfTimed = r.Mtime, true
 		}
 		for _, k := range chain {
 			n := tree[k]
@@ -482,9 +487,13 @@ func TestViewSelect(t *testing.T) {
 		if len(lines) > limit {
 			t.Fatalf("seed %d: %d lines over %d", seed, len(lines), limit)
 		}
-		// Rebuild each parent's lines and check that they add up.
+		// Rebuild each parent's lines and check that they add up, and that
+		// a fold's time is the newest among the children not shown.
+		tree := exactTree("", rows, false)
 		type level struct {
 			row                ViewRow
+			key                string // the line's node (the last of a shared line)
+			shown              map[string]bool
 			bytes, objs, lines int64
 			prev               int64
 		}
@@ -515,9 +524,31 @@ func TestViewSelect(t *testing.T) {
 				if r.Fold && (r.More < 1 || r.Bytes == 0 || i+1 < len(lines) && lines[i+1].Level == r.Level) {
 					t.Fatalf("seed %d: fold %+v", seed, r)
 				}
+				if r.Fold {
+					e := tree[p.key]
+					at, timed := e.selfNewest, e.selfTimed
+					for k := range e.kids {
+						if n := tree[k]; !p.shown[k] && n.timed && (!timed || n.newest > at) {
+							at, timed = n.newest, true
+						}
+					}
+					if r.HasNewest != timed || timed && r.Newest != at {
+						t.Fatalf("seed %d: fold under %q has newest %v %d, want %v %d", seed, p.key, r.HasNewest, r.Newest, timed, at)
+					}
+				} else {
+					seg := r.Name
+					if i := strings.IndexByte(seg, '/'); i >= 0 {
+						seg = seg[:i+1]
+					}
+					p.shown[p.key+seg] = true
+				}
 			}
 			if !r.Fold {
-				stack = append(stack, &level{row: r})
+				key := ""
+				if r.Level > 0 {
+					key = stack[r.Level-1].key + r.Name
+				}
+				stack = append(stack, &level{row: r, key: key, shown: map[string]bool{}})
 			}
 		}
 		closeTo(0)
@@ -559,7 +590,7 @@ func TestViewLocalBudget(t *testing.T) {
 	if lv.Lowered || sv.Lowered || len(live.view.open) != 1 || heldNow(live.view) != live.view.held {
 		t.Fatalf("lowered %v %v, %d partial, held %d (counted %d)", lv.Lowered, sv.Lowered, len(live.view.open), live.view.held, heldNow(live.view))
 	}
-	if !slices.Equal(lv.Nodes, sv.Nodes) || lv.Total != sv.Total || len(lv.Nodes) != 2*viewKeep || lv.Total.Children != 2001 {
+	if !sameNodes(lv.Nodes, sv.Nodes) || !sameNode(lv.Total, sv.Total) || len(lv.Nodes) != 2*viewKeep || lv.Total.Children != 2001 {
 		t.Fatalf("live %+v %+v\nsaved %+v %+v", lv.Total, lv.Nodes, sv.Total, sv.Nodes)
 	}
 	checkView(t, lv, "", exactTree("", all, false))
@@ -676,8 +707,16 @@ func TestViewCoveredRuns(t *testing.T) {
 	one := New(Options{View: true, MaxPrefixes: 10})
 	feed(one, [][]Row{all}, true, rand.New(rand.NewPCG(1, 1)))
 	got, want := tl.View(), one.View()
-	if got.Total != want.Total || !slices.Equal(got.Nodes, want.Nodes) {
+	if !sameNode(got.Total, want.Total) || !sameNodes(got.Nodes, want.Nodes) {
 		t.Fatalf("covered runs %+v %d nodes, one run %+v %d nodes", got.Total, len(got.Nodes), want.Total, len(want.Nodes))
 	}
 	checkView(t, got, "", exactTree("", all, false))
 }
+
+// sameNode compares two nodes' sums, children and time.
+func sameNode(a, b ViewNode) bool {
+	return a.Key == b.Key && a.Depth == b.Depth && a.Bytes == b.Bytes && a.Objects == b.Objects && a.Missing == b.Missing &&
+		a.Children == b.Children && a.Newest == b.Newest && a.HasNewest == b.HasNewest
+}
+
+func sameNodes(a, b []ViewNode) bool { return slices.EqualFunc(a, b, sameNode) }

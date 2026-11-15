@@ -21,44 +21,52 @@ nothing on disk.
 ### The view
 
 Bare `swath du SOURCE` on a terminal answers "where are the bytes": a tree of the largest prefixes and objects,
-largest first, each under its parent with its share of the total and, where the terminal is wide enough, a bar
-of that share and the newest modification time below it (`max_last_modified`, local, to the second, the zone
-named on the first line):
+largest first, each under its parent. Each line gives the size, the count of objects below it (`files` on a
+local tree, three significant digits: `12.0k`), its share of the total, a bar of that share, the date of the
+newest modification below it (`max_last_modified`, local, the zone named on the total's line) and the path,
+indented two blanks a level under its parent's, under one dim heading:
 
 ```text
 $ swath du s3://demo-lake
- 384 GiB   100%  ██████████████████████████████  2025-11-15 09:46:40 UTC  s3://demo-lake
- 164 GiB  42.7%  ████████████▊                   2025-11-15 09:46:40        backups/
-39.0 GiB  10.2%  ███                             2025-11-15 09:46:40          db-2025-05-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-02-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-04-01.dump
-27.0 GiB   7.0%  ██                              2025-11-15 09:46:40          db-2025-03-01.dump
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40          db-2025-01-01.dump
-2.00 KiB   0.0%                                                               (1 more)
- 164 GiB  42.6%  ████████████▊                   2025-11-15 09:46:40        warehouse/
- 159 GiB  41.5%  ████████████▍                   2025-11-15 09:46:40          events/year=2025/
-4.16 GiB   1.1%  ▎                               2025-11-15 09:46:40          sessions/year=2025/
-27.7 GiB   7.2%  ██▏                             2025-11-15 09:46:40        logs/api/2025/
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40        images/
-4.54 GiB   1.2%  ▎                               2025-11-15 09:46:40        tmp/
-5.00 KiB   0.0%                                  2025-11-15 09:46:40        index.html
+    size  objects  share                        newest          path
+ 384 GiB     130k   100%  ████████████████████  2025-11-15 UTC  s3://demo-lake
+ 164 GiB        6  42.7%  ████████▌             2025-11-15        backups/
+39.0 GiB        1  10.2%  ██                    2025-11-15          db-2025-05-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-02-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-04-01.dump
+27.0 GiB        1   7.0%  █▍                    2025-11-15          db-2025-03-01.dump
+24.0 GiB        1   6.3%  █▎                    2025-11-15          db-2025-01-01.dump
+2.00 KiB        1   0.0%                        2025-11-15          (1 more)
+ 164 GiB    2.18k  42.6%  ████████▌             2025-11-15        warehouse/
+ 159 GiB    1.85k  41.5%  ████████▎             2025-11-15          events/year=2025/
+14.4 GiB      159   3.8%  ▊                     2025-11-15            month=12/
+ 145 GiB    1.69k  37.8%  ███████▌              2025-11-15            (11 more)
+4.16 GiB      336   1.1%  ▏                     2025-11-15          sessions/year=2025/
+27.7 GiB    8.06k   7.2%  █▍                    2025-11-15        logs/api/2025/
+24.0 GiB     120k   6.3%  █▎                    2025-11-15        images/
+4.54 GiB      201   1.2%  ▏                     2025-11-15        (2 more)
   384 GiB in 130,453 objects
 ```
 
-Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are
-and what they hold together, so the lines under a parent always add up to it. Nothing is hidden without being
-counted; only a `(N more)` line of 0 bytes is left out. A name is written as the other terminal lines write
-it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
-terminal's width. A prefix with a single child shares its line with it (`logs/api/2025/`). The view fills the
-terminal's height, less a few lines, from the largest down: line by line, a fold or a prefix shown whole gives
-its largest child (a prefix a fold for the rest too), the one whose child is the largest; a fold of many small
-prefixes that together outweigh one line's share of the view gives them first, so a wide level of small
-prefixes is shown as far as the lines go rather than as one fold. What does not fit is in the `(N more)`
-lines. One figure drives the whole view, its
-order, shares and bars: the size, or the allocated bytes with `--allocated`. A line on stderr under it gives the
-total once, with the other figure where the source has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q`
-leaves it out. Color follows `--color` and `NO_COLOR`. As the terminal narrows the bar is left out first, then
-the time; a `(N more)` line has no time.
+Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are,
+what they hold together (size, count, share) and their newest date, so the lines under a parent always add up
+to it. Nothing is hidden without being counted; only a `(N more)` line of 0 bytes is left out. A prefix with a
+single child shares its line with it (`logs/api/2025/`). The view fills the terminal's height, less a few
+lines, from the largest down: line by line, a fold or a prefix shown whole gives its largest child (a prefix a
+fold for the rest too), the one whose child is the largest; a fold of many small prefixes that together
+outweigh one line's share of the view gives them first, so a wide level of small prefixes is shown as far as
+the lines go rather than as one fold. What does not fit is in the `(N more)` lines.
+
+The columns fit the terminal's width, and a line never wraps: from 100 columns the bar has 20 cells (the rest
+goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
+then the date. The size, the count and the path always stay; a path is written as the other terminal lines
+write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass
+the width.
+
+One figure drives the whole view, its order, shares and bars: the size, or the allocated bytes with
+`--allocated`. A line on stderr under it gives the total once, exactly, with the other figure where the source
+has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q` leaves it out. Color follows `--color` and
+`NO_COLOR`.
 
 Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
 one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
