@@ -52,7 +52,8 @@ var eighths = [...]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
 // newest modification below it (max_last_modified) and its path, indented
 // two blanks a level under its parent's, the total first under the label.
 // A fold line reads "(N more)": the rest of its parent's children, their
-// sums and their newest date. As the width shrinks the bar narrows and goes,
+// sums and their newest date. A "!" after the size marks a line whose sums
+// leave out a directory that could not be read, at or below it. As the width shrinks the bar narrows and goes,
 // then the share, then the date; the size, the count and the path stay,
 // the path cut in the middle where the line would pass the width, so no
 // line wraps. The sizes are the table's (TableFigure: binary units, ">= "
@@ -76,7 +77,7 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	shares := make([]string, len(rows))
 	dates := make([]string, len(rows))
 	sizeW, countW, shareW, dateW, nameW := len(sizeHead), len(countHead), len(shareHead), len(dateHead), 0
-	timed := false
+	timed, marked := false, false
 	for i := range rows {
 		r := &rows[i]
 		switch {
@@ -106,6 +107,7 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 		case !r.Fold:
 			dates[i] = missingCell
 		}
+		marked = marked || r.Unreadable
 		sizeW = max(sizeW, len(sizes[i]))
 		countW = max(countW, len(counts[i]))
 		shareW = max(shareW, len(shares[i]))
@@ -122,6 +124,9 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	shown := struct{ share, date bool }{true, timed}
 	before := func() int {
 		n := sizeW + len(viewGutter) + countW + len(viewGutter)
+		if marked {
+			n += 2
+		}
 		if shown.share {
 			n += shareW + len(viewGutter)
 		}
@@ -150,12 +155,15 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
 	// line writes a line; dim: the heading or a fold, dimmed in color.
-	line := func(size, count, shr string, bar func([]byte) []byte, date, name string, dim bool) error {
+	line := func(size string, mark byte, count, shr string, bar func([]byte) []byte, date, name string, dim bool) error {
 		b = b[:0]
 		if dim && l.Color {
 			b = append(b, "\x1b[2m"...)
 		}
 		b = appendPadded(b, []byte(size), sizeW)
+		if marked {
+			b = append(b, ' ', mark)
+		}
 		b = appendPadded(append(b, viewGutter...), []byte(count), countW)
 		if shown.share {
 			b = appendPadded(append(b, viewGutter...), []byte(shr), shareW)
@@ -191,7 +199,7 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	if bar > 0 {
 		head = blank
 	}
-	if err := line(sizeHead, countHead, shareHead, head, dateHead, pathHead, true); err != nil {
+	if err := line(sizeHead, ' ', countHead, shareHead, head, dateHead, pathHead, true); err != nil {
 		return err
 	}
 	for i := range rows {
@@ -205,7 +213,11 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 			indent += " "
 		}
 		name := indent + clip(names[i], width-cols-2*r.Level)
-		if err := line(sizes[i], counts[i], shares[i], drawn, dates[i], name, r.Fold); err != nil {
+		mark := byte(' ')
+		if r.Unreadable {
+			mark = '!'
+		}
+		if err := line(sizes[i], mark, counts[i], shares[i], drawn, dates[i], name, r.Fold); err != nil {
 			return err
 		}
 	}

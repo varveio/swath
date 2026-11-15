@@ -6,6 +6,7 @@ package totals
 import (
 	"cmp"
 	"container/heap"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -163,6 +164,9 @@ type view struct {
 	held    int
 	lowered bool
 	stats   ViewStats
+	// unreadable is the directories the source could not read
+	// (Tally.Unreadable): the lines above them miss what they hold.
+	unreadable map[string]bool
 }
 
 // kheap is a depth's remembered nodes, a min-heap by size.
@@ -225,7 +229,7 @@ type ViewStats struct {
 
 func newView(opt *Options) *view {
 	v := &view{origin: opt.Origin, primary: opt.Primary, budget: opt.MaxPrefixes, open: map[string]*onode{}, kept: map[string]vsum{}, pins: map[string]vsum{},
-		byLo: map[string]*ival{}, byHi: map[string]*ival{}}
+		byLo: map[string]*ival{}, byHi: map[string]*ival{}, unreadable: map[string]bool{}}
 	v.maxDepth.Store(noLimit)
 	v.open[v.origin] = &onode{}
 	return v
@@ -804,6 +808,9 @@ type View struct {
 	MaxDepth int
 	Lowered  bool
 	Stats    ViewStats
+	// Unreadable is the directories the source could not read
+	// (Tally.Unreadable), sorted.
+	Unreadable []string
 }
 
 // ViewNode is a node's sums. Children is the prefixes and objects directly
@@ -817,7 +824,10 @@ type ViewNode struct {
 	// microseconds, valid with HasNewest (max_last_modified).
 	Newest    int64
 	HasNewest bool
-	recent    []kidTime // its children's newest times, the newest first (vsum.recent)
+	// Unreadable: a directory at or below it could not be read, so its
+	// sums leave out what that held.
+	Unreadable bool
+	recent     []kidTime // its children's newest times, the newest first (vsum.recent)
 }
 
 // View is the tally's adaptive view (Options.View): call it after the
@@ -882,7 +892,13 @@ func (t *Tally) View() *View {
 		}
 		return ViewNode{Key: k, Depth: d, Bytes: n.bytes, Objects: n.objects, Missing: n.missing, Children: c, Newest: n.newest, HasNewest: n.hasNewest, recent: n.recent}
 	}
+	out.Unreadable = slices.Sorted(maps.Keys(v.unreadable))
+	below := func(k string) bool { // a directory unreadable at or below k
+		i, _ := slices.BinarySearch(out.Unreadable, k)
+		return i < len(out.Unreadable) && strings.HasPrefix(out.Unreadable[i], k)
+	}
 	out.Total = node(v.origin, total)
+	out.Total.Unreadable = len(out.Unreadable) > 0
 	// The viewKeep largest of each depth among the nodes held with bytes
 	// (complete ones were kept the same way; partial and pinned ones join
 	// them now): the same nodes however the listing ran. Then only those
@@ -919,7 +935,9 @@ func (t *Tally) View() *View {
 	for _, k := range keys {
 		if held[parentOf(k)] {
 			held[k] = true
-			out.Nodes = append(out.Nodes, node(k, all[k]))
+			n := node(k, all[k])
+			n.Unreadable = strings.HasSuffix(k, "/") && below(k)
+			out.Nodes = append(out.Nodes, n)
 		}
 	}
 	return out
@@ -936,6 +954,9 @@ type ViewRow struct {
 	// children's one more.
 	Level                   int
 	Bytes, Objects, Missing int64
+	// Unreadable: a directory at or below the line's node (a fold: below a
+	// child it holds) could not be read.
+	Unreadable bool
 	// Newest and HasNewest are a node's (ViewNode), or a fold's the newest
 	// of what it holds (unknown, in a rare view, when the thirty-two
 	// newest children of its parent are all shown).
@@ -992,13 +1013,37 @@ func (v *View) Select(rows int) []ViewRow {
 		slices.SortFunc(nodes[i].kids, bigger)
 	}
 	shown := func(s *sel) int64 { return int64(s.next) }
+	// hiddenUnreadable reports whether a child of s not shown holds a
+	// directory that could not be read.
+	hiddenUnreadable := func(s *sel) bool {
+		if !s.n.Unreadable {
+			return false
+		}
+		shownKey := map[string]bool{}
+		for _, k := range s.kids[:s.next] {
+			shownKey[nodes[k].n.Key] = true
+		}
+		i, _ := slices.BinarySearch(v.Unreadable, s.n.Key)
+		for ; i < len(v.Unreadable) && strings.HasPrefix(v.Unreadable[i], s.n.Key); i++ {
+			u := v.Unreadable[i]
+			if u == s.n.Key {
+				continue // s itself: its line is marked
+			}
+			j := strings.IndexByte(u[len(s.n.Key):], '/')
+			if !shownKey[u[:len(s.n.Key)+j+1]] {
+				return true
+			}
+		}
+		return false
+	}
 	// folds is the fold lines s needs: one when it lists children (the
-	// total always does) and some not shown hold bytes.
+	// total always does) and some not shown hold bytes or a directory that
+	// could not be read.
 	folds := func(s *sel) int {
 		if s.next == 0 && s != &nodes[0] {
 			return 0
 		}
-		if (s.n.Children < 0 || shown(s) < s.n.Children) && s.bytes < s.n.Bytes {
+		if (s.n.Children < 0 || shown(s) < s.n.Children) && (s.bytes < s.n.Bytes || hiddenUnreadable(s)) {
 			return 1
 		}
 		return 0
@@ -1091,7 +1136,8 @@ func (v *View) Select(rows int) []ViewRow {
 			s = &nodes[s.kids[0]]
 			name += s.n.Key[len(parentOf(s.n.Key)):]
 		}
-		out = append(out, ViewRow{Name: name, Level: level, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest})
+		out = append(out, ViewRow{Name: name, Level: level, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
+			Unreadable: s.n.Unreadable})
 		f := ViewRow{Level: level + 1, Fold: true, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, More: s.n.Children - shown(s)}
 		if s.n.Children < 0 {
 			f.More = -1
@@ -1109,6 +1155,7 @@ func (v *View) Select(rows int) []ViewRow {
 		}
 		if folds(s) > 0 {
 			f.Newest, f.HasNewest = foldNewest(s, shownNewest, shownTimed)
+			f.Unreadable = hiddenUnreadable(s)
 			out = append(out, f)
 		}
 	}

@@ -195,7 +195,9 @@ Notable changes per release. The full human summary for the current release is i
   with its size, its count of objects or files (`12.0k`), its share of the total, a bar (20 cells from 100
   columns), the date of its newest object (local, the zone named once) and its path. As the terminal narrows the
   bar goes, then the share, then the date; the size, the count and the path stay, a long path cut in the middle,
-  so no line wraps. Color follows `--color` and `NO_COLOR`. Each parent's other children fold into one
+  so no line wraps. A `!` after the size marks a line whose sums leave out a directory that could not be read,
+  and one line under the view says so (`-v` names them); the view leaves room for every line printed after it,
+  so its top stays on screen. Color follows `--color` and `NO_COLOR`. Each parent's other children fold into one
   `(N more)` line carrying their sums and newest date, so every level adds up; a wide level of small prefixes is
   shown as far as it outweighs what is below the large ones. Every figure is exact; memory stays small because
   a complete prefix (inside one range, or a local directory whose listing ended) is kept only among the 100
@@ -203,6 +205,9 @@ Notable changes per release. The full human summary for the current release is i
   A pipe, `-d N`, `--sort` and an explicit `--format` print the rows as before. The run report's
   `diagnostics.totals_view` counts what the view kept, dropped and merged across ranges. The idea of the tree
   with shares is `dust`'s and `pdu`'s (both Apache-2.0), implemented from their documented behavior.
+- Go port: the warning that names entries that could not be read gives a path below SOURCE relative to it, and
+  when the closing line's verdict says the output is partial, no error line repeats it (it remains under `-q`,
+  which prints no closing line).
 - Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
 - Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
   network filesystems) records it as null, not 0.

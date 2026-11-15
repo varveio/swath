@@ -541,9 +541,17 @@ func (t *Tally) prefix(p string, c *cell) Prefix {
 
 // Unreadable records that the source could not read the directory whose
 // key prefix is p (ending in '/'), whose row is then marked: the prefixes
-// of rows the tally holds at most, those within Depth of the origin. It
-// is safe for concurrent use.
+// of rows the tally holds at most, those within Depth of the origin, and
+// for the view those of every depth (up to MaxPrefixes of them), whose
+// lines above them it marks. It is safe for concurrent use.
 func (t *Tally) Unreadable(p string) {
+	if v := t.view; v != nil && strings.HasPrefix(p, t.opt.Origin) {
+		v.mu.Lock()
+		if len(v.unreadable) < v.budget {
+			v.unreadable[strings.Clone(p)] = true
+		}
+		v.mu.Unlock()
+	}
 	if !strings.HasPrefix(p, t.opt.Origin) || strings.Count(p[len(t.opt.Origin):], "/") > t.opt.Depth {
 		return
 	}

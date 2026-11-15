@@ -771,3 +771,28 @@ func TestViewCoveredEmptyRuns(t *testing.T) {
 	slices.SortFunc(all, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 	checkView(t, tl.View(), "", exactTree("", all, false))
 }
+
+// TestViewUnreadable: a directory that could not be read marks every node
+// at or above it, and a fold holding it, kept even at 0 bytes.
+func TestViewUnreadable(t *testing.T) {
+	var rows []Row
+	for i := range 20 {
+		rows = append(rows, Row{Key: fmt.Sprintf("a/%02d", i), Object: true, Size: int64(100 - i), HasSize: true})
+	}
+	rows = append(rows, Row{Key: "b/big", Object: true, Size: 10_000, HasSize: true}, Row{Key: "z/", Dir: true})
+	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	tl := New(Options{View: true})
+	tl.Unreadable("a/locked/")
+	tl.Unreadable("z/")
+	feed(tl, [][]Row{rows}, true, rand.New(rand.NewPCG(1, 1)))
+	v := tl.View()
+	got := map[string]bool{}
+	for _, l := range v.Select(8) {
+		got[fmt.Sprintf("%d %s %v %v", l.Level, l.Name, l.Fold, l.Unreadable)] = true
+	}
+	for _, want := range []string{"0  false true", "1 a/ false true", "1 b/big false false", "2 00 false false", "2  true true", "1  true true"} {
+		if !got[want] {
+			t.Errorf("no line %q in %v", want, got)
+		}
+	}
+}

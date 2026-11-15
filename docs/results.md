@@ -83,8 +83,9 @@ names of the same file.
 ## Coverage and unreadable entries
 
 An entry swath cannot read, such as a directory without read permission, is missing from the output with
-everything below it. The rest is still listed and written; swath names the entry on stderr, ends with a line
-that counts the missing entries (it is printed under `-q` too), and exits with code 3:
+everything below it. The rest is still listed and written; swath names the entry on stderr (relative to
+SOURCE), its closing line's verdict counts the missing entries, and it exits with code 3. Under `-q`, which prints
+no closing line, a last line `swath: N entries could not be read and are missing from the output` says it:
 
 ```text
 $ swath du -d 1 media
@@ -96,9 +97,8 @@ $ swath du -d 1 media
  100 MiB      6     6  2026-11-02 10:30:00  media (total)
   100 MiB in 6 files · 36.4 MiB on disk
 swath: warning: unreadable entries:
-  /home/you/media/private: permission denied
+  private: permission denied
   partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
-swath: 1 entry could not be read and is missing from the output
 ```
 
 `swath du`'s table marks the directory it could not read with `-` for its size and counts, not `0`.

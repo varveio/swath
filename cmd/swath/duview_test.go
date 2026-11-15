@@ -69,7 +69,7 @@ var viewTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // explicit --format and a pipe keep the rows.
 func TestDuView(t *testing.T) {
 	root := viewTree(t)
-	viewTerminal(t, 200, 14) // the temporary directory's name is not cut; a heading and eight lines
+	viewTerminal(t, 200, 11) // the temporary directory's name is not cut; a heading and eight lines, the figures line and the prompt
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("TERM", "xterm") // not dumb, which turns color off
 	stderr := captureStderr(t)
@@ -147,7 +147,7 @@ func TestDuView(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--no-stats", "-q", "--color", "never"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(out.String(), "\n"); n > 8 {
+	if n := strings.Count(out.String(), "\n"); n > 9 { // 10 rows less the prompt (-q)
 		t.Errorf("a 10-line terminal got %d lines", n)
 	}
 
@@ -339,7 +339,7 @@ func TestDuViewWideBucket(t *testing.T) {
 			top++
 		}
 	}
-	if len(lines) != 25 || top < 15 || !strings.HasSuffix(lines[len(lines)-1], "more)") {
+	if len(lines) != 29 || top < 15 || !strings.HasSuffix(lines[len(lines)-1], "more)") { // 30 rows less the prompt (-q)
 		t.Fatalf("%d lines, %d top-level prefixes\n%s", len(lines), top, out.String())
 	}
 }

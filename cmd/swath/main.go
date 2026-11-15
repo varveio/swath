@@ -1039,7 +1039,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			elog().warn(warnPrefixNotFound, fmt.Sprintf("no key starts with %q", p))
 		}
 	}
-	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
+	end := runEnd{source: given, settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
 	if cfg.Trace != nil {
 		// After the dataset, run.json and --report: the run's accounts
@@ -1079,6 +1079,7 @@ func (o *options) versions() bool {
 // listing request was answered or a directory read; failing the
 // persistent request failure outstanding at its end (failureWatch).
 type runEnd struct {
+	source     string // SOURCE as typed: unreadable paths below it are shown relative to it
 	settled    bool
 	unrecorded string
 	started    bool
@@ -1151,9 +1152,14 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	rerr := writeReport(o.report, sum, stdout)
 	// Entries left out say so, whatever the statistics' gating, before the
 	// closing block whose verdict they explain.
-	reportUnreadable(&sum)
+	var view *viewOut
+	if o.totals != nil {
+		view = o.totals.view
+	}
+	reportUnreadable(&sum, end.source, view)
+	closed := false // the closing block's verdict states what is missing
 	if !brief || o.term.stats.set {
-		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
+		closed = tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	}
 	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
 		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
@@ -1167,7 +1173,10 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if failing != "" {
 			err = fmt.Errorf("%w%s", err, failing)
 		}
-		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
+		// A partial output's verdict is the closing line's when it
+		// printed: no second line says it.
+		stated := closed && errors.Is(err, errIncomplete)
+		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out, stated: stated}, rerr)
 	case rerr != nil:
 		return reportFailed(nil, rerr)
 	}

@@ -63,6 +63,9 @@ then the date. The size, the count and the path always stay; a path is written a
 write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass
 the width.
 
+The view leaves room for every line printed after it (the line of totals, the unreadable line, the closing
+line, the prompt), wrapped lines counted as they wrap, so its heading and total stay on screen.
+
 One figure drives the whole view, its order, shares and bars: the size, or the allocated bytes with
 `--allocated`. A line on stderr under it gives the total once, exactly, with the other figure where the source
 has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q` leaves it out. Color follows `--color` and
@@ -144,8 +147,11 @@ Memory grows with the number of distinct prefixes, not objects. A run that would
 `--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
 
 Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
-the rest, names the entries on stderr and exits 3 ([exit codes](../reference/exit-codes.md)). In the table, a
-directory that could not be read shows `-` for its size and counts.
+the rest, names the entries on stderr (relative to SOURCE) and exits 3 ([exit codes](../reference/exit-codes.md)).
+In the table, a directory that could not be read shows `-` for its size and counts. The view marks with `!` after
+the size every line whose sums leave out such a directory, at or below it (a `(N more)` line too when one of the
+children it holds does), and says so in one line under it instead of naming them:
+`! 5 directories could not be read (marked ! above); -v lists them`.
 
 ### Totals from a saved dataset
 
