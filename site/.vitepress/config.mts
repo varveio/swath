@@ -35,8 +35,6 @@ const MOVED: Record<string, string> = {
   'site/moved/sources.md': 'docs/sources.md',
   'site/moved/commands.md': 'docs/commands/index.md',
   'site/moved/reference.md': 'docs/reference/index.md',
-  'site/moved/field-guide.md': 'field-guide/index.md',
-  'site/moved/noaa-gestofs-pds.md': 'runs/noaa-gestofs-pds/index.md',
 }
 
 // Only docs/ and the site's own pages are published: every other top-level entry is
@@ -208,6 +206,7 @@ export default defineConfig({
   srcExclude,
   rewrites: {
     'site/index.md': 'index.md',
+    'site/field-guide/index.md': 'field-guide/index.md',
     'docs/README.md': 'docs/index.md',
     'docs/sources/README.md': 'docs/sources/index.md',
     ...MOVED,
@@ -283,7 +282,7 @@ export default defineConfig({
     nav: [
       { text: 'Docs', link: '/docs/start-here', activeMatch: '^/docs/(?!commands/)' },
       { text: 'Commands', link: '/docs/commands/swath', activeMatch: '^/docs/commands/' },
-      // The Go field guide and run explainer get a slot here once they exist.
+      { text: 'Field guide', link: '/field-guide/', activeMatch: '^/field-guide/' },
       { text: 'Releases', link: `${GITHUB}/releases` },
     ],
     socialLinks: [{ icon: 'github', link: GITHUB }],

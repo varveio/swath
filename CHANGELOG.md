@@ -5,6 +5,9 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Site: a field guide at `/field-guide/` on how the Go engine divides, orders and resumes a listing, on the home
+  page's run, and that run's report at `/runs/noaa-gestofs-pds/`, linked from the replay. The explainer's report
+  names its run in its title and description and has a `main` landmark and a skip link.
 - Go port: a run's closing lines state the result: `complete: 60,010 objects, 5.55 TiB in 4.2s · 14,391 keys/s
   → ds1 (1 part, 279 KiB)`, then `next: swath show ds1 · swath du --from-dataset ds1` (or `swath resume DIR`).
   No rate under 2 s, the rate over the time printed; filtered runs say `3 objects kept, 1 filtered out`, an
