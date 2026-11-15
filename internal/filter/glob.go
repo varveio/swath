@@ -216,26 +216,32 @@ func globLiteral(p string) (string, bool) {
 //   - a leading ^: a glob matches its whole key, so it never needs an anchor
 //     (a key starting with ^ is written \^);
 //   - a final $: likewise (a key ending in $ is written \$ or [$]);
-//   - \. \d \D \w \W \s \S: in a glob a backslash only quotes, and these
+//   - \d \D \w \W \s \S: in a glob a backslash only quotes, and these
 //     characters need no quoting, so the author meant a class (a literal one
 //     is written without the backslash);
+//   - .* with \.: a regex's any name and literal dot (.*\.gz), as no glob
+//     writes it (the glob is *.gz);
 //   - a | between ( and ): an alternation group (a glob's is {a,b}; a literal
 //     | is written \| or [|]).
 //
-// Not signs: .* (a glob for names starting with a dot), + ? and a bare
-// ( ) | or $ elsewhere, which are valid in keys.
+// Not signs: \. alone (a quoted dot, *\.gz), .* alone (a glob for names
+// starting with a dot), + ? and a bare ( ) | or $ elsewhere, which are
+// valid in keys.
 func regexSign(p string) (sign, glob string) {
 	if strings.HasPrefix(p, "^") {
 		return "a leading ^", `\^`
 	}
-	open, bar := false, false
+	open, bar, dotStar, dot := false, false, false, false
 	for i := 0; i < len(p); i++ {
 		switch c := p[i]; c {
 		case '\\':
-			if i+1 < len(p) && strings.IndexByte(".dDwWsS", p[i+1]) >= 0 {
+			if i+1 < len(p) && strings.IndexByte("dDwWsS", p[i+1]) >= 0 {
 				return `\` + p[i+1:i+2], p[i+1 : i+2]
 			}
+			dot = dot || i+1 < len(p) && p[i+1] == '.'
 			i++
+		case '.':
+			dotStar = dotStar || i+1 < len(p) && p[i+1] == '*'
 		case '[':
 			j := i + 1
 			if j < len(p) && p[j] == '!' {
@@ -261,6 +267,9 @@ func regexSign(p string) (sign, glob string) {
 				return "a trailing $", `\$`
 			}
 		}
+	}
+	if dotStar && dot {
+		return `.* with \.`, `* for .*`
 	}
 	return "", ""
 }
