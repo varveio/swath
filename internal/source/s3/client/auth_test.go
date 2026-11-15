@@ -32,7 +32,10 @@ func (p onePerRequest) Retrieve(context.Context) (aws.Credentials, error) {
 	return aws.Credentials{AccessKeyID: fmt.Sprintf("AKTEST%d", n), SecretAccessKey: "s", SessionToken: fmt.Sprintf("token%d", n), Source: "test"}, nil
 }
 
-func (onePerRequest) Generation() uint64                   { return 0 }
+func (p onePerRequest) Get(ctx context.Context) (aws.Credentials, uint64, error) {
+	c, err := p.Retrieve(ctx)
+	return c, 0, err
+}
 func (onePerRequest) Renew(context.Context, uint64) error  { return nil }
 func (onePerRequest) Refreshes() (refreshes, forced int64) { return 0, 0 }
 

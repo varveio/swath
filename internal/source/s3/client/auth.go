@@ -264,14 +264,11 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 	case a.anonymous:
 		return "", creds, 0, nil
 	}
-	creds, err = a.credentials.Retrieve(ctx)
+	creds, gen, err = a.credentials.Get(ctx)
 	if err != nil {
 		return "", creds, 0, a.refreshError(err)
 	}
-	// Read after the lookup, the generation names the credentials signed
-	// with, or one later when a refresh landed in between (a renewal then
-	// fetches once more: renew).
-	return "", creds, a.credentials.Generation(), nil
+	return "", creds, gen, nil
 }
 
 // refreshError is a failed lookup's *objhttp.CredentialError.
