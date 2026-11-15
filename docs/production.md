@@ -16,7 +16,7 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
   point readers at it once its `manifest.json` exists ([Overwrite and refresh](resume-and-refresh.md#overwrite-and-refresh)).
-- `--seed-from` names the previous night's dataset (warm start, below). Leave it out on the first night.
+- `--seed-from` names the previous night's dataset ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). Leave it out on the first night.
 - `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
   kill deadline above `--max-duration` plus 20 s.
