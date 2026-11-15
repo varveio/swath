@@ -48,7 +48,7 @@ so far and where `swath resume` will continue:
 
 ```text
 $ swath show logs-inventory
-interrupted run in logs-inventory (journal version 9, started 2026-11-10T12:40:50Z)
+interrupted run in logs-inventory (journal version 1, started 2026-11-10T12:40:50Z)
 command: swath list --endpoint-url=http://127.0.0.1:19777 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
 identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part size 67108864, source s3://bkt/logs/, endpoint http://127.0.0.1:19777, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
 1 part committed, 1000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"

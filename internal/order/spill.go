@@ -368,7 +368,7 @@ type spillFile struct {
 	// back that claims more is malformed, refused before any allocation.
 	most, mostOwned atomic.Int64
 
-	// A durable file (d set): its version-2 frames are written through the
+	// A durable file (d set): its frames are written through the
 	// output root, crc is the CRC-32C of every byte written (owner only),
 	// capturing is set from its C frame until the seal or an abandon.
 	d                    *Cert

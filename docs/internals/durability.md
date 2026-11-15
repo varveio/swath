@@ -187,7 +187,7 @@ part at a time:
 1. writes the claim receipt `.swath/remote/claims/part-NNNNN.json` (the object name, its identity, the
    `PartInfo`, and the reproduction inputs: rows, columns, `created_by`), durable;
 2. appends and fsyncs the journal record, which names the object and its identity (`Record.Object`,
-   `Identity`; journal version 10);
+   `Identity`);
 3. moves K: only now may the order stage's durable spill retire certificates K covers.
 
 Upload completion, durable claim, journal sync, then K: the remote analogue of seal, claim, record, rename.
@@ -481,23 +481,8 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 10 (version 3 made the identity provider-neutral, version 4 writes part
-bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
-refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
-hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
-record would skip listing; version 7 marks the claimed-part protocol: a version 6 run left the part of its
-last record at the unclaimed temporary name until the rename into `data/`, and version 7 recovery protects
-only the claimed name, so it would remove that acknowledged part as unrecorded when the last record is torn or
-lost and could then commit a changed replacement; a version 6 journal is refused before recovery reads,
-moves or removes any part or touches the journal; version 8 adds the run UUID to the header, made when the
-run starts and kept across every resume, and keeps the durable spill across a resume; version 9 records each
-part's SHA-256 where earlier versions recorded its MD5, so recovery, which compares a retained part with its
-record by that digest, refuses versions 7 and 8 before it touches anything, as an earlier build refuses
-version 9; version 10 names a bucket dataset's part objects in its records and its destination in the
-identity, and this build still reads version 9, a local dataset's journal without them; a record's
-`object_bytes` was added within version 10, optional both ways: a build that predates it ignores it, and this
-build resumes records without it, leaving the dataset's object bytes unknown).
-An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
+the payload, and the payload (JSON); journal version 1. A record's `object_bytes` is optional: a record without it leaves the dataset's object bytes unknown.
+A journal of another version is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
 `--overwrite`. The first frame is the header (tool, format, identity, creation time, and the run UUID).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
