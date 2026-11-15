@@ -12,12 +12,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/varveio/swath/internal/source/s3/s3test"
-	objs3 "github.com/varveio/swath/objfile/s3"
 )
 
 // onePerRequest is a credentials provider that fails a second lookup for
@@ -31,10 +29,12 @@ func (p onePerRequest) Retrieve(context.Context) (aws.Credentials, error) {
 	if n > p.sent.Load()+1 {
 		return aws.Credentials{}, errors.New("a second lookup for one request")
 	}
-	// Expired as soon as fetched: the next request fetches again.
-	return aws.Credentials{AccessKeyID: fmt.Sprintf("AKTEST%d", n), SecretAccessKey: "s", SessionToken: fmt.Sprintf("token%d", n), Source: "test",
-		CanExpire: true, Expires: time.Now()}, nil
+	return aws.Credentials{AccessKeyID: fmt.Sprintf("AKTEST%d", n), SecretAccessKey: "s", SessionToken: fmt.Sprintf("token%d", n), Source: "test"}, nil
 }
+
+func (onePerRequest) Generation() uint64                   { return 0 }
+func (onePerRequest) Renew(context.Context, uint64) error  { return nil }
+func (onePerRequest) Refreshes() (refreshes, forced int64) { return 0, 0 }
 
 // TestCredentialsRetrievedOncePerAttempt: the credentials are looked up
 // once per attempt, before it is counted, and the request is signed with
@@ -55,7 +55,7 @@ func TestCredentialsRetrievedOncePerAttempt(t *testing.T) {
 		io.WriteString(w, okPage)
 	}))
 	c := newTest(t, testConfig(url))
-	c.auth.credentials, c.auth.anonymous, c.auth.source = objs3.RefreshAhead(onePerRequest{&retrieved, &sent}), false, "test"
+	c.auth.credentials, c.auth.anonymous, c.auth.source = onePerRequest{&retrieved, &sent}, false, "test"
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 		t.Fatal(err)
 	}

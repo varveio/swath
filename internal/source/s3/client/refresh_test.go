@@ -180,8 +180,7 @@ func TestExpiredAnswerBounded(t *testing.T) {
 
 // TestCredentialChainRefreshesAhead: credentials from the SDK's chain (web
 // identity through STS) are refreshed ahead of their expiry: ones valid for
-// 4 seconds are replaced after 3, a request then signing with them while
-// the refresh runs, and the next with the new ones.
+// 4 seconds are replaced after 3.
 func TestCredentialChainRefreshesAhead(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -213,17 +212,8 @@ func TestCredentialChainRefreshesAhead(t *testing.T) {
 		t.Fatalf("first request signed with %s", k)
 	}
 	time.Sleep(3200 * time.Millisecond)
-	if k := list(); k != "AK1" {
-		t.Fatalf("while refreshing: signed with %s", k)
-	}
-	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
-		if refreshes, _ := c.CredentialRefreshes(); refreshes == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 	if k := list(); k != "AK2" || n.Load() != 2 {
-		t.Fatalf("after the refresh: signed with %s, %d STS calls", k, n.Load())
+		t.Fatalf("after 3 seconds: signed with %s, %d STS calls", k, n.Load())
 	}
 	if refreshes, forced := c.CredentialRefreshes(); refreshes != 1 || forced != 0 {
 		t.Fatalf("%d refreshes, %d forced", refreshes, forced)

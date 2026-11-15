@@ -5,174 +5,125 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// MaxRefreshWindow is the most time before their expiry that credentials
-// are refreshed: a request is never signed with credentials that may
-// expire on its way or by the server's clock. Credentials that live less
-// than four times as long are refreshed when a quarter of their lifetime
-// is left, so a short lifetime is not refreshed on every request.
-const MaxRefreshWindow = 5 * time.Minute
-
-// Credentials are the credentials requests sign with, refreshed ahead of
-// their expiry: when the smaller of MaxRefreshWindow and a quarter of the
-// lifetime they had when fetched is left. One refresh runs at a time; while
-// it runs, requests sign with the credentials still valid, and wait for it
-// only when there are none. A refresh ahead that fails keeps the current
-// credentials, tried again after refreshRetry, until they expire.
-//
-// Renew answers a service's refusal of credentials as expired: one renewal
-// per generation of credentials, whose outcome every request refused for
-// that generation shares. Each wait ends with the caller's context.
-//
-// It is an aws.CredentialsProvider. The provider it wraps is fetched again
-// for each refresh: one that caches (aws.CredentialsCache) is invalidated
-// first, and should have no expiry window of its own.
-type Credentials struct {
-	p   aws.CredentialsProvider
-	now func() time.Time
-
-	mu      sync.Mutex
-	cur     aws.Credentials
-	ok      bool      // cur may be signed with (fetched, and not refused after a failed renewal)
-	due     time.Time // when cur is refreshed ahead (the zero time: never)
-	gen     uint64    // the generation of cur: credentials installed so far
-	flight  *fetch    // the fetch in progress, or nil
-	refused *fetch    // the last renewal that failed, with the generation it renewed
-
-	installed, forced atomic.Int64
+// RenewableCredentials are credentials refreshed ahead of their expiry
+// (RefreshAhead), which a request refused as expired can renew.
+type RenewableCredentials interface {
+	aws.CredentialsProvider
+	// Generation is how many times credentials were fetched: read right
+	// after Retrieve, it names those a request signs with.
+	Generation() uint64
+	// Renew fetches new credentials after a request signed with
+	// generation gen was refused as expired, unless that was done since.
+	Renew(ctx context.Context, gen uint64) error
+	// Refreshes is how many times credentials were fetched after the
+	// first, and how many of those fetches Renew forced.
+	Refreshes() (refreshes, forced int64)
 }
-
-// fetch is one fetch of the provider; done closes when it ends.
-type fetch struct {
-	done  chan struct{}
-	gen   uint64 // the generation it replaces
-	renew bool   // a renewal: a failure leaves no credentials to sign with
-	creds aws.Credentials
-	err   error
-}
-
-// refreshRetry is how long after a failed refresh ahead the next is tried,
-// while the current credentials are still valid.
-const refreshRetry = 10 * time.Second
 
 // RefreshAhead returns p's credentials, refreshed ahead of their expiry.
-func RefreshAhead(p aws.CredentialsProvider) *Credentials {
-	return &Credentials{p: p, now: time.Now}
+// An aws.CredentialsCache does the caching: one fetch at a time, the
+// others waiting each until its own context ends. Below it, each fetch
+// moves the credentials' expiry earlier by the smaller of 5 minutes and a
+// quarter of the lifetime they had when fetched, so a request is never
+// signed with credentials that may expire on its way or by the server's
+// clock, and a short lifetime is fetched once, not on every request. A
+// fetch that returns credentials already expired, panics or runs past
+// fetchTimeout is an error. p is fetched afresh each time: a cache (the
+// one config.LoadDefaultConfig returns) is invalidated first, and should
+// have no expiry window of its own.
+func RefreshAhead(p aws.CredentialsProvider) RenewableCredentials {
+	a := &ahead{p: p, now: time.Now}
+	return &renewable{CredentialsCache: aws.NewCredentialsCache(a), a: a, lock: make(chan struct{}, 1)}
 }
 
-// Retrieve is aws.CredentialsProvider's Retrieve.
-func (c *Credentials) Retrieve(ctx context.Context) (aws.Credentials, error) {
-	creds, _, err := c.Get(ctx)
-	return creds, err
+// fetchTimeout bounds one fetch of the provider: a source that never
+// answers does not hold every request's credentials for good.
+const fetchTimeout = 2 * time.Minute
+
+// ahead is the provider under the cache: each fetch's expiry moved earlier.
+type ahead struct {
+	p   aws.CredentialsProvider
+	now func() time.Time
+	gen atomic.Uint64 // fetches that returned usable credentials
 }
 
-// Get returns the credentials to sign with and their generation, for a
-// later Renew.
-func (c *Credentials) Get(ctx context.Context) (aws.Credentials, uint64, error) {
-	c.mu.Lock()
-	now := c.now()
-	valid := c.ok && (!c.cur.CanExpire || now.Before(c.cur.Expires))
-	if valid {
-		if c.flight == nil && !c.due.IsZero() && !now.Before(c.due) {
-			c.start(ctx, false)
+func (a *ahead) Retrieve(ctx context.Context) (c aws.Credentials, err error) {
+	// The cache fetches on a goroutine of its own, where a panic could not
+	// be recovered by any caller.
+	defer func() {
+		if r := recover(); r != nil {
+			c, err = aws.Credentials{}, fmt.Errorf("the credential source panicked: %v", r)
 		}
-		creds, gen := c.cur, c.gen
-		c.mu.Unlock()
-		return creds, gen, nil
-	}
-	f := c.flight
-	if f == nil {
-		f = c.start(ctx, false)
-	}
-	c.mu.Unlock()
-	if err := wait(ctx, f); err != nil {
-		return aws.Credentials{}, 0, err
-	}
-	return f.creds, f.gen + 1, f.err
-}
-
-// Renew answers the refusal of generation gen's credentials as expired: it
-// fetches new ones unless that was done for gen already, and returns that
-// fetch's error. A renewal that fails leaves no credentials to sign with:
-// the next Get fetches again.
-func (c *Credentials) Renew(ctx context.Context, gen uint64) error {
-	c.mu.Lock()
-	var f *fetch
-	switch {
-	case c.gen != gen:
-		c.mu.Unlock()
-		return nil // renewed (or refreshed) since
-	case c.flight != nil:
-		f = c.flight // replacing gen
-		f.renew = true
-	case c.refused != nil && c.refused.gen == gen:
-		f = c.refused
-	default:
-		f = c.start(ctx, true)
-	}
-	c.mu.Unlock()
-	if err := wait(ctx, f); err != nil {
-		return err
-	}
-	return f.err
-}
-
-// Refreshes is how many times credentials were installed after the first,
-// and how many renewals were fetched.
-func (c *Credentials) Refreshes() (refreshes, forced int64) {
-	return max(c.installed.Load()-1, 0), c.forced.Load()
-}
-
-// start begins a fetch replacing generation c.gen; c.mu is held. It runs
-// apart from ctx's cancellation: those waiting on it stop at their own.
-func (c *Credentials) start(ctx context.Context, renew bool) *fetch {
-	f := &fetch{done: make(chan struct{}), gen: c.gen, renew: renew}
-	if renew {
-		c.forced.Add(1)
-	}
-	c.flight = f
-	go c.run(context.WithoutCancel(ctx), f)
-	return f
-}
-
-func (c *Credentials) run(ctx context.Context, f *fetch) {
-	if inv, ok := c.p.(interface{ Invalidate() }); ok {
+	}()
+	if inv, ok := a.p.(interface{ Invalidate() }); ok {
 		inv.Invalidate()
 	}
-	creds, err := c.p.Retrieve(ctx)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	f.creds, f.err = creds, err
-	now := c.now()
-	switch {
-	case err == nil:
-		c.cur, c.ok, c.gen, c.due = creds, true, c.gen+1, time.Time{}
-		if creds.CanExpire {
-			c.due = creds.Expires.Add(-min(MaxRefreshWindow, creds.Expires.Sub(now)/4))
-		}
-		c.installed.Add(1)
-	case f.renew:
-		c.ok, c.refused = false, f
-	case c.ok:
-		c.due = now.Add(refreshRetry)
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+	if c, err = a.p.Retrieve(ctx); err != nil {
+		return aws.Credentials{}, err
 	}
-	c.flight = nil
-	close(f.done)
+	if c.CanExpire {
+		life := c.Expires.Sub(a.now())
+		if life <= 0 {
+			return aws.Credentials{}, errExpired
+		}
+		c.Expires = c.Expires.Add(-min(5*time.Minute, life/4))
+	}
+	a.gen.Add(1)
+	return c, nil
 }
 
-// wait waits for f or for ctx's end.
-func wait(ctx context.Context, f *fetch) error {
+var errExpired = errors.New("the credential source returned credentials that have already expired")
+
+// renewable is RefreshAhead's credentials.
+type renewable struct {
+	*aws.CredentialsCache
+	a      *ahead
+	lock   chan struct{} // one renewal at a time, waited for until the caller's context ends
+	forced atomic.Int64
+	failed struct { // the last renewal that failed (under lock)
+		gen uint64
+		err error
+	}
+}
+
+func (r *renewable) Generation() uint64 { return r.a.gen.Load() }
+
+func (r *renewable) Refreshes() (refreshes, forced int64) {
+	return max(int64(r.a.gen.Load())-1, 0), r.forced.Load()
+}
+
+// Renew renews generation gen once: the requests refused for it that ask
+// while or after one renewal runs find the generation moved on, or share
+// its error when it failed. A request that read the generation just after
+// a refresh, though it signed before it, may renew once more.
+func (r *renewable) Renew(ctx context.Context, gen uint64) error {
 	select {
-	case <-f.done:
-		return nil
+	case r.lock <- struct{}{}:
 	case <-ctx.Done():
 		return fmt.Errorf("credentials: %w", context.Cause(ctx))
 	}
+	defer func() { <-r.lock }()
+	switch {
+	case r.a.gen.Load() != gen:
+		return nil
+	case r.failed.err != nil && r.failed.gen == gen:
+		return r.failed.err
+	}
+	r.forced.Add(1)
+	r.Invalidate()
+	_, err := r.Retrieve(ctx)
+	if err != nil && ctx.Err() == nil {
+		r.failed.gen, r.failed.err = gen, err
+	}
+	return err
 }

@@ -29,11 +29,10 @@ import (
 // (environment, shared config and credentials files and profiles, SSO, web
 // identity, credential processes, assume-role through stscreds, container
 // credentials, IMDSv2). The SDK's service client signs with them (SigV4).
-// They are held by objs3.Credentials, shared with a bucket destination:
-// refreshed ahead of their expiry (by the smaller of 5 minutes and a
-// quarter of their lifetime), one refresh at a time, while requests sign
-// with those still valid. An expired-token answer to credentials that can
-// expire renews them, once for every request refused for the same
+// objs3.RefreshAhead, shared with a bucket destination, refreshes them
+// ahead of their expiry (by the smaller of 5 minutes and a quarter of their
+// lifetime) under the SDK's cache. An expired-token answer to credentials
+// that can expire renews them, once for every request refused for the same
 // generation, and the request is retried once (auth.expired).
 
 // credentialWait bounds the first credential lookup: a slow token exchange
@@ -42,7 +41,7 @@ const credentialWait = 30 * time.Second
 
 // auth is the resolved region and credentials a client signs with.
 type auth struct {
-	credentials *objs3.Credentials // nil: anonymous or bearer
+	credentials objs3.RenewableCredentials // nil: anonymous or bearer
 	source      string             // where the credentials come from (never the secret)
 	region      string             // the signing region
 	anonymous   bool
@@ -88,7 +87,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	// environment's or the profile's region, else us-east-1, so a bucket in
 	// another region never moves the STS endpoint.
 	// The SDK's cache keeps no window of its own (it has 5 minutes for
-	// container credentials): objs3.Credentials refreshes ahead.
+	// container credentials): objs3.RefreshAhead refreshes ahead.
 	opts = append(opts, config.WithDefaultRegion("us-east-1"),
 		config.WithCredentialsCacheOptions(func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = 0 }))
 	if cfg.Anonymous || cfg.Bearer != nil {
@@ -265,11 +264,14 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 	case a.anonymous:
 		return "", creds, 0, nil
 	}
-	creds, gen, err = a.credentials.Get(ctx)
+	creds, err = a.credentials.Retrieve(ctx)
 	if err != nil {
 		return "", creds, 0, a.refreshError(err)
 	}
-	return "", creds, gen, nil
+	// Read after the lookup, the generation names the credentials signed
+	// with, or one later when a refresh landed in between (a renewal then
+	// fetches once more: renew).
+	return "", creds, a.credentials.Generation(), nil
 }
 
 // refreshError is a failed lookup's *objhttp.CredentialError.

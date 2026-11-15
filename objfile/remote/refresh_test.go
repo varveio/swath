@@ -18,8 +18,7 @@ import (
 
 // TestOpenDestinationS3RefreshesAhead: a destination's expiring
 // credentials (web identity through STS here) are refreshed ahead of their
-// expiry: ones valid for 4 seconds are replaced after 3, a write then
-// signing with them while the refresh runs, and the next with the new ones.
+// expiry: ones valid for 4 seconds are replaced after 3.
 func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	awsEnv(t)
 	dir := t.TempDir()
@@ -65,14 +64,6 @@ func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	time.Sleep(3200 * time.Millisecond)
 	if _, err := d.Writer().PutIfAbsent(context.Background(), "b", []byte("b")); err != nil {
 		t.Fatal(err)
-	}
-	// The writes after it sign with the new credentials once installed,
-	// still before the first expire.
-	for i := 0; !signed("AKWEB2") && i < 50; i++ {
-		if _, err := d.Writer().PutIfAbsent(context.Background(), fmt.Sprint("c", i), []byte("c")); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 	if !signed("AKWEB2") || calls.Load() != 2 {
 		t.Fatalf("after 3 seconds: %d STS calls, AKWEB2 signed %v", calls.Load(), signed("AKWEB2"))
