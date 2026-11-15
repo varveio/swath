@@ -385,6 +385,31 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 	}
 }
 
+// TestResumeRefusesV03Run: a directory an interrupted 0.3 run left (its
+// state file and staging) is refused by resume, directly and through
+// --resume, with a message that says why, and is left as it was.
+func TestResumeRefusesV03Run(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(10), 0)
+	dir := filepath.Join(t.TempDir(), "ds")
+	os.MkdirAll(filepath.Join(dir, "_staging"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "data"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".swath-state.json"), []byte("{}"), 0o644)
+	want := dirTree(t, dir)
+	ctx := context.Background()
+	if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, dataset.ErrPriorRelease) || !strings.Contains(err.Error(), "0.3") {
+		t.Fatalf("resume: %v", err)
+	}
+	err := runWith(ctx, command{}, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "-o", dir}, io.Discard, nil, true, nil)
+	if !errors.Is(err, dataset.ErrPriorRelease) {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got := dirTree(t, dir); !maps.Equal(want, got) {
+		t.Fatalf("changed:\nbefore %v\nafter  %v", want, got)
+	}
+}
+
 // TestAttemptIdentifiesTheOutcome: error.json and the report a supervisor
 // names (--report) carry the same attempt. When a later attempt cannot
 // write error.json (its temporary file cannot be created), the old

@@ -207,3 +207,60 @@ func globLiteral(p string) (string, bool) {
 	}
 	return b.String(), true
 }
+
+// regexSign is what in glob p marks it as a regular expression carried over
+// from a tool whose --include and --exclude took regular expressions, or ""
+// for a glob. Only what a key glob would not contain is a sign, and each
+// has a spelling that stays a glob, which the refusal gives:
+//
+//   - a leading ^: a glob matches its whole key, so it never needs an anchor
+//     (a key starting with ^ is written \^);
+//   - a final $: likewise (a key ending in $ is written \$ or [$]);
+//   - \. \d \D \w \W \s \S: in a glob a backslash only quotes, and these
+//     characters need no quoting, so the author meant a class (a literal one
+//     is written without the backslash);
+//   - a | between ( and ): an alternation group (a glob's is {a,b}; a literal
+//     | is written \| or [|]).
+//
+// Not signs: .* (a glob for names starting with a dot), + ? and a bare
+// ( ) | or $ elsewhere, which are valid in keys.
+func regexSign(p string) (sign, glob string) {
+	if strings.HasPrefix(p, "^") {
+		return "a leading ^", `\^`
+	}
+	open, bar := false, false
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; c {
+		case '\\':
+			if i+1 < len(p) && strings.IndexByte(".dDwWsS", p[i+1]) >= 0 {
+				return `\` + p[i+1:i+2], p[i+1 : i+2]
+			}
+			i++
+		case '[':
+			j := i + 1
+			if j < len(p) && p[j] == '!' {
+				j++
+			}
+			if j < len(p) && p[j] == ']' {
+				j++
+			}
+			if k := strings.IndexByte(p[min(j, len(p)):], ']'); k >= 0 {
+				i = j + k
+			}
+		case '(':
+			open, bar = true, false
+		case '|':
+			bar = open
+		case ')':
+			if open && bar {
+				return "an alternation (a|b)", `{a,b}`
+			}
+			open, bar = false, false
+		case '$':
+			if i == len(p)-1 {
+				return "a trailing $", `\$`
+			}
+		}
+	}
+	return "", ""
+}
