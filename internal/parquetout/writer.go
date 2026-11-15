@@ -47,8 +47,15 @@ func EncoderBytes[P any](s *schema.Schema[P]) int64 {
 var DefaultEncoderBytes = encoderBytes(0, unboundedKeyBytes, 16)
 
 // unboundedKeyBytes prices a key without a cap (schema.Info.MaxKeyBytes
-// 0: a local path, at most PATH_MAX on Linux).
+// 0: a local path, PATH_MAX on Linux). A local key can be longer (a tree
+// deeper than PATH_MAX, to the provider's own cap): pageKeyBytes keeps a
+// page of such keys within the price.
 const unboundedKeyBytes = 4096
+
+// pageKeyBytes cuts a page by its keys' bytes as well as its rows
+// (pageRows): the most keys of unboundedKeyBytes a page holds, the page
+// writerBytes prices. Keys within the price never reach it.
+const pageKeyBytes = pageRows * unboundedKeyBytes
 
 // The writer's and its codec state's working sets are measurements, not
 // values derived from the libraries: parquet-go v0.32.0 and
@@ -108,7 +115,8 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: the seekparquet module's part writer
 // (write.NewPart, at the version go.mod pins) on parquet-go v0.32.0, with
-// this schema binding and codec: v2 pages of 1,024 rows,
+// this schema binding and codec: v2 pages of 1,024 rows (or 4 MiB of keys,
+// which no key within the price reaches),
 // 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
 // SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
@@ -152,6 +160,7 @@ type writer[P any] struct {
 	fill   func(column int, values []pq.Value) // fillPage, bound once
 	capped []int                               // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	page   []schema.Row[P]                     // the page being filled; the module borrows it during WritePage
+	keys   int                                 // the bytes of the page's keys (pageKeyBytes)
 	// size reads a row's object size (schema.ObjectSize; nil for a schema
 	// without a size column), objects sums it over the rows written: the
 	// part's dataset.Part.ObjectBytes, unless an object's size was null
@@ -250,7 +259,8 @@ func (w *writer[P]) write(rows []schema.Row[P]) error {
 			}
 		}
 		w.page = append(w.page, rows[i])
-		if len(w.page) == pageRows {
+		w.keys += len(rows[i].Key)
+		if len(w.page) == pageRows || w.keys >= pageKeyBytes {
 			if err := w.flushPage(); err != nil {
 				return err
 			}
@@ -273,7 +283,7 @@ func (w *writer[P]) flushPage() error {
 	w.ends = append(w.ends, dataset.PageEnd{Key: strings.Clone(w.page[len(w.page)-1].Key), Rows: w.rows})
 	err := w.part.WritePage(len(w.page), w.fill)
 	clear(w.page) // drop the rows' strings: the provider's arenas
-	w.page = w.page[:0]
+	w.page, w.keys = w.page[:0], 0
 	return err
 }
 
