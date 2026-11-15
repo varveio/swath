@@ -26,7 +26,7 @@ rc.2 release binary and a build of the code these pages describe.
 |---|---|---|
 | An entry cannot be read (a directory without permission) | warning `1 entry could not be read: the output leaves them out` (`the totals` for `swath du`), exit 0; nothing with `-q` | warning, then `swath: 1 entry could not be read and is missing from the output`, also with `-q`; exit 3 (`incomplete`) |
 | The source directory itself cannot be read | warning, empty totals or listing, exit 0 | `swath: DIR: permission denied`, exit 1 |
-| `swath show` | `coverage ... skipped=1 ...` | `coverage: partial: 1 unreadable entry` |
+| `swath show` | `coverage ... skipped=1 ...` | `DIR: partial: 1 unreadable entry`, and `coverage  1 entry unreadable; ...` |
 | The manifest | `extensions.swath.coverage.skipped_entries`, `complete` true | `extensions.swath.coverage.unreadable`, `complete` false |
 | The run report | version 5: `outcome.unreadable` is true or false and `outcome.entry_errors` the count; class `completed` | version 7: `outcome.unreadable` is the count, `complete` false; class `incomplete` |
 
@@ -41,7 +41,7 @@ rc.2 release binary and a build of the code these pages describe.
 | An endpoint that refuses connections or whose host is not found (a mistyped `--endpoint-url`) | retries for the whole `--stall-timeout`, 10 minutes by default (still retrying after 2 minutes here) | stops after about 30 seconds, exit 75 (cause `unreachable`), naming the endpoint and the cause |
 | The spill directory is on tmpfs (`TMPDIR=/dev/shm`) | warns at the start of every run that could spill | warns only when a run first spills |
 | `swath show FILE` on a file that is not a dataset | `journal: open FILE: not a directory` | `FILE holds neither a dataset nor an interrupted run` |
-| `--max-duration` ends a text-file run | the statistics count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |
+| `--max-duration` ends a text-file run | the closing lines count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |
 
 These pages also describe four changes not checked here by running rc.2: `swath du`'s rows carry both byte
 figures (`size`, `allocated_bytes`) and `max_last_modified`, and the list table names its time zone

@@ -139,7 +139,7 @@ A dataset run of an object store stopped by a signal (130, 143), `--max-duration
 (75), a full disk or `--spill-wait-timeout` (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
 A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
-statistics say `no file written`. After `--max-duration` the last line says which applies:
+closing lines say `no file written`. After `--max-duration` the last line says which applies:
 
 ```text
 swath: deadline: --max-duration reached (swath resume inv --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)

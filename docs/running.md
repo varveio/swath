@@ -144,18 +144,19 @@ uninterrupted one.
 ## Watching a run
 
 **On a terminal.** swath draws one progress line on stderr, redrawn every second: phase, objects (with rows a
-resume recovered), live and average keys/s, parts, requests in flight, elapsed time, API calls and a cost
-estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
+resume recovered), their bytes so far, elapsed time, live and average keys/s (while every request fails, the
+cause retried instead), parts, then requests in flight, API calls and a cost estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
 (`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
 automatic progress and the warnings off, `--no-progress` turns progress off everywhere. While `swath list`'s
 rows go to the same terminal there is no line, and `--progress` is refused; `swath du` draws it while it lists
 and erases it before its table. At the end, runs over
-1.5 s, runs that wrote output and runs that did not complete print the statistics on stderr (objects,
-time, keys/s, API calls, mean and peak in flight, throttles and retries when any, the estimate, the parts or
-file written, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
-A run that did not complete starts the block with its verdict, the cause in it (`partial: 1 unreadable entry`,
-`stopped: --max-duration reached`, `interrupted`), and the `swath resume DIR` command when it is resumable;
-warnings come before the block.
+1.5 s, runs that wrote output and runs that did not complete print their closing lines on stderr: the verdict
+(`complete`, or with its cause `partial: 1 unreadable entry`, `stopped: --max-duration reached`,
+`interrupted`), the objects and bytes listed, the time and (from 2 s) the rate, and the output written, then
+`next:` with `swath resume DIR` for a resumable stop, or `swath show` and `swath du --from-dataset` for a
+committed dataset ([closing lines](commands/swath.md#stdout-and-stderr)). `--stats` prints them always and adds
+the statistics (API calls, mean and peak in flight, throttles and retries when any, the estimate, peak RSS),
+also for a supervisor's log; `--no-stats` drops them. Warnings come before the lines.
 stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live

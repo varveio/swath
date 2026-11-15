@@ -102,22 +102,28 @@ to row. No column name ends in `_base64`.
 
 ### The table
 
-For reading on a terminal: the time to the second in local time (`TZ` sets the zone), its heading naming the
-zone by its abbreviation (`last_modified (CET)`), the size in binary units, the local tree's `kind`, the version
-columns with `--all-versions`, and the key last, escaped as in TSV. A missing value is `-`. TSV, JSONL and the
-dataset keep times in UTC.
+For reading on a terminal: the size in binary units, the time to the second in local time (`TZ` sets the
+zone), its heading naming the zone by its abbreviation (`last_modified (CET)`), the local tree's `kind`, the
+version columns with `--all-versions`, and the key last, escaped as in TSV. A local tree's key column is headed
+`path`, as in `swath du`'s table, and a symbolic link's row ends in ` -> ` and its target, escaped the same way.
+A missing value is `-`. TSV, JSONL and the dataset keep times in UTC.
 
 ```text
 $ TZ=UTC swath list /data/photos
-last_modified (UTC)      size  kind          key
-2026-11-02 09:30:00  4.00 KiB  dir           2025/
-2026-03-01 10:00:00   293 KiB  file          2025/a.jpg
-2026-11-02 09:30:00  4.00 KiB  dir           2025/raw/
-2026-03-01 10:00:00   117 KiB  file          2025/raw/b.cr2
-2026-11-02 09:30:00  4.00 KiB  dir           2026/
-2026-11-02 09:30:00  48.8 KiB  file          2026/c.jpg
-2026-11-02 09:30:00       3 B  file          notes.txt
+    size  last_modified (UTC)  kind     path
+4.00 KiB  2026-11-02 09:30:00  dir      2025/
+ 293 KiB  2026-03-01 10:00:00  file     2025/a.jpg
+4.00 KiB  2026-11-02 09:30:00  dir      2025/raw/
+ 117 KiB  2026-03-01 10:00:00  file     2025/raw/b.cr2
+4.00 KiB  2026-11-02 09:30:00  dir      2026/
+48.8 KiB  2026-11-02 09:30:00  file     2026/c.jpg
+    10 B  2026-11-02 09:30:00  symlink  latest.jpg -> 2026/c.jpg
+     3 B  2026-11-02 09:30:00  file     notes.txt
 ```
+
+Both tables, this one and [`swath du`'s](#du-rows), put the size first and the name last, the time just
+before the name and what describes it (the kind, the version columns); `swath du`'s counts come between the
+size and the time. A missing value is `-` in both.
 
 `--columns` and `--no-header` do not apply to the table; with either on a terminal, `auto` prints TSV.
 
@@ -173,7 +179,7 @@ prefix	1	1	0	50000	0	53248	0	2026-11-02T09:30:00.000000Z	size	name	true	2026/
 | `primary` | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
 | `sort` | the order of the rows, `name` or `size` (`--sort`) |
 | `links_once` | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
-| `prefix` | the prefix, up to and including its `/`; the total's is SOURCE's prefix up to its last `/`, empty for a whole bucket or tree |
+| `prefix` | the prefix, up to and including its `/`; the total's is the key prefix SOURCE names (`logs/2026/0` for `s3://bucket/logs/2026/0`), empty for a whole bucket or tree |
 
 Every row has both figures, whichever `--allocated` puts first. A figure that no object under the prefix had is
 null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones there
@@ -218,7 +224,8 @@ to three significant digits in binary units and groups the counts' digits (`60,0
 calls its objects `files` and its prefixes `path`, and indents each path two blanks a level below the first.
 It shows `max_last_modified` as the [list table](#the-table) shows times: local, to the second, under a heading
 that names the zone, `-` when no object had one. An unknown figure is `-`, and a partial one is a lower bound,
-`>= 12.0 KiB`. For a source with allocated bytes, a line on stderr under the table gives the total of both
+`>= 12.0 KiB`. A directory that could not be read shows `-` for its figure and its counts, and the warning
+on stderr names it. The total row, last, names the SOURCE as typed (`/data/photos (total)`). For a source with allocated bytes, a line on stderr under the table gives the total of both
 figures, the shown one first, so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
 
 ```text
@@ -227,11 +234,11 @@ $ swath du -d 2 /data/photos
  410 KiB      2     1  2026-03-01 11:00:00  2025/
  117 KiB      1     0  2026-03-01 11:00:00    2025/raw/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      4     3  2026-11-02 10:30:00  (total)
-  459 KiB in 4 files · 472 KiB on disk
+ 459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
+  459 KiB in 5 files · 472 KiB on disk
 ```
 
-With `--allocated` the line reads `472 KiB on disk in 4 files · 459 KiB of data`; when no file's allocated bytes
+With `--allocated` the line reads `472 KiB on disk in 5 files · 459 KiB of data`; when no file's allocated bytes
 were read, `on disk unknown`. A bucket's table has no such line:
 
 ```text
@@ -239,7 +246,7 @@ $ swath du -d 1 s3://bucket
    size  objects  last_modified (CET)  prefix
 357 MiB   60,000  2026-11-15 06:59:58  logs/
    18 B        3  2026-01-01 01:00:00  weird/
-357 MiB   60,004  2026-11-15 06:59:58  (total)
+357 MiB   60,004  2026-11-15 06:59:58  s3://bucket (total)
 ```
 
 The table fits 80 columns at `-d 2` while a path stays within about 34 characters; a longer path is printed

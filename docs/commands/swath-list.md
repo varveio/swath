@@ -348,7 +348,7 @@ so in its manifest.
   -vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted).
 
 - <a id="option-quiet"></a>[`-q, --quiet`](#option-quiet)\
-  no warnings, no automatic progress or statistics (-qq: no errors)
+  no warnings, no automatic progress or closing lines (-qq: no errors)
 
   With -qq the exit code and the reports stand alone.
 
@@ -366,22 +366,22 @@ so in its manifest.
   Default 1s while the line redraws on a terminal, 30s for appended records.
 
 - <a id="option-stats"></a>[`--stats`](#option-stats)\
-  print the end-of-run statistics on stderr
+  print the closing lines on stderr, with the run's statistics
 
-  Default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe.
+  The closing lines (the verdict, the count, the time, where the output went, what to run next) print by default for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe. --stats prints them always, followed by the requests, in flight, throttles, retries, the estimate and the peak RSS.
 
 - <a id="option-no-stats"></a>[`--no-stats`](#option-no-stats)\
-  no end-of-run statistics on stderr
+  no closing lines on stderr
 
 - <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
-  color progress, statistics, the help and du's view (default `auto`)
+  color progress, closing lines, the help and du's view (default `auto`)
 
   auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
 
 - <a id="option-log-format"></a>[`--log-format text|json`](#option-log-format)\
   stderr as text, or json: one JSON object per line (default `text`)
 
-  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block.
+  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines.
 
 <details>
 <summary>Plain text, in the <code>--help</code> layout</summary>
@@ -643,7 +643,7 @@ Reporting:
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
-  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+  -q, --quiet                 no warnings, no automatic progress or closing lines (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
       --progress              show progress on stderr (default: a terminal that rows do not share)
                                 Not by default with -q or -v (which appends progress records), nor
@@ -654,17 +654,21 @@ Reporting:
                               how often progress is printed (at least 1s); implies --progress
                                 Default 1s while the line redraws on a terminal, 30s for appended
                                 records.
-      --stats                 print the end-of-run statistics on stderr
-                                Default: for runs over 1.5 s, runs that write output, and runs that
-                                do not complete; not with -q, nor after a closed downstream pipe.
-      --no-stats              no end-of-run statistics on stderr
+      --stats                 print the closing lines on stderr, with the run's statistics
+                                The closing lines (the verdict, the count, the time, where the
+                                output went, what to run next) print by default for runs over 1.5 s,
+                                runs that write output, and runs that do not complete; not with -q,
+                                nor after a closed downstream pipe. --stats prints them always,
+                                followed by the requests, in flight, throttles, retries, the
+                                estimate and the peak RSS.
+      --no-stats              no closing lines on stderr
       --color auto|always|never
-                              color progress, statistics, the help and du's view (default auto)
+                              color progress, closing lines, the help and du's view (default auto)
                                 auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                 forces it.
       --log-format text|json  stderr as text, or json: one JSON object per line (default text)
                                 json: warnings, the start line, progress records, the request log
-                                and the outcome as events, no redrawn line or statistics block.
+                                and the outcome as events, no redrawn line or closing lines.
 ```
 
 </details>

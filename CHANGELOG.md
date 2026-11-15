@@ -5,6 +5,26 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a run's closing lines state the result: `complete: 60,010 objects, 5.55 TiB in 4.2s · 14,391 keys/s
+  → ds1 (1 part, 279 KiB)`, then `next: swath show ds1 · swath du --from-dataset ds1` (or `swath resume DIR`).
+  No rate under 2 s, the rate over the time printed; filtered runs say `3 objects kept, 1 filtered out`, an
+  interrupted one `7,003 saved, 12,003 listed`, a resume the dataset's total with the rows from earlier attempts,
+  `swath du` its total row's counts. API calls, in flight, throttles, retries, the estimate and peak RSS print
+  only with `--stats`, and only those that happened.
+- Go port: the progress line reads objects, bytes so far, elapsed, rate, then parts and (for an object store)
+  in flight and API calls; while every request fails it shows `retrying: CAUSE` instead of `0 keys/s`.
+- Go port: `swath show` prints the verdict first, then labelled lines in reading order (source, listed in local
+  time, contents with the object bytes and grouped counts, coverage with the filters' rules, storage last);
+  `swath show MISSING` says `no such file or directory`.
+- Go port: `swath list`'s table puts the size first, as `swath du`'s does, heads a local tree's keys `path`,
+  sizes `kind` to the usual kinds, and ends a symlink's row with ` -> TARGET`.
+- Go port: `swath du`'s table names its total row by SOURCE as typed (`s3://bkt/logs/2026/0 (total)`), marks a
+  directory it could not read `-`, and TSV/JSONL give the total the key prefix SOURCE names (`logs/2026/0`).
+  `swath du DIR` on a dataset directory prints a hint naming `--from-dataset`.
+- Go port: a GCS error answer without an error body names its HTTP status text and path; `-v`'s start line
+  shows the attempt id's first 8 characters; `swath du --from-dataset`'s label gives the listing time in local
+  time.
+
 - Releases tag the nested Go modules with swath's version: `reader/vX.Y.Z` and `objfile/vX.Y.Z` beside `vX.Y.Z`,
   all at one commit, so `go get github.com/varveio/swath/reader@v0.4.0` works. Both modules are at version 0, with
   no API promise. `just release` creates the three tags; the release workflow refuses a release whose module tags

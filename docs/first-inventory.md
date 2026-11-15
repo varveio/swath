@@ -16,7 +16,7 @@ swath du -d 1 media
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 100 MiB      6     5  2026-11-02 10:30:00  (total)
+ 100 MiB      6     5  2026-11-02 10:30:00  media (total)
   100 MiB in 6 files · 36.4 MiB on disk
 ```
 
@@ -46,10 +46,10 @@ swath list media --columns key,size,kind,last_modified | head -5
 
 ```text
 key	size	kind	last_modified
-archive/	4096	DIR	2026-11-02T09:30:00.000000Z
-archive/disk.img	67108864	FILE	2026-11-02T09:30:00.000000Z
-archive/notes-latest.tar	800000	FILE	2026-11-02T09:30:00.000000Z
-archive/notes.tar	800000	FILE	2026-11-02T09:30:00.000000Z
+archive/	4096	dir	2026-11-02T09:30:00.000000Z
+archive/disk.img	67108864	file	2026-11-02T09:30:00.000000Z
+archive/notes-latest.tar	800000	file	2026-11-02T09:30:00.000000Z
+archive/notes.tar	800000	file	2026-11-02T09:30:00.000000Z
 ```
 
 There is one row per entry, files and directories both, in ascending byte order of the key. A key is the path
@@ -65,9 +65,12 @@ swath list media -o media-inventory
 ```
 
 ```text
-  12 entries in 0.0s · 2,400 entries/s
-  1 part · 4.03 KiB written · peak RSS 45.4 MiB
+  complete: 12 entries, 101 MiB in 0.0s → media-inventory (1 part, 4.05 KiB)
+  next: swath show media-inventory · swath du --from-dataset media-inventory
 ```
+
+The closing lines give the verdict (`complete`), what was listed and its bytes (the hard-linked file counts
+under both its names here), the time, and where the dataset went, then what to run next.
 
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
@@ -89,17 +92,18 @@ swath show media-inventory
 ```
 
 ```text
-dataset media-inventory: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
-key key unique=true, published 2026-11-13T20:16:47Z
-source /home/you/media, scope whole ""
-coverage: complete
-1 part, 12 rows, 4125 bytes, keys "archive/" .. "videos/trip.mp4"
+media-inventory: complete
+  source    /home/you/media (whole tree)
+  listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
+  contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
+  coverage  nothing unreadable; no filters; no exclusions
+  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
 ```
 
-`swath show` reads the manifest, not the rows. The lines say which schema the rows follow, when the dataset
-was published, what was listed, how completely, and what the parts hold. Here `coverage: complete`, with no
-filters or exclusions after it, means the dataset covers the whole tree. Read the coverage line before you rely
-on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains it.
+`swath show` reads the manifest, not the rows. The first line is the verdict; then what was listed, when, what
+the dataset holds, how completely, and last how it is stored. Here `complete`, with nothing unreadable and no
+filters or exclusions, means the dataset covers the whole tree. Read the verdict and the coverage before you
+rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains them.
 
 To read the rows themselves, open the parts with DuckDB, Python or another Parquet
 reader ([the swath dataset](dataset.md)).
