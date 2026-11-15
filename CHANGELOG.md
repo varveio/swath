@@ -13,6 +13,10 @@ Notable changes per release. The full human summary for the current release is i
   only with `--stats`, and only those that happened.
 - Go port: the progress line reads objects, bytes so far, elapsed, rate, then parts and (for an object store)
   in flight and API calls; while every request fails it shows `retrying: CAUSE` instead of `0 keys/s`.
+  `progress.json` and the JSON `progress` event carry the bytes so far as `object_bytes`, the report's
+  `output.object_bytes` while the run lists.
+- Go port: `swath list -o FILE --overwrite` (or `-o -`) is accepted: a text file is always replaced, which
+  `--overwrite` asks for anyway (it stopped with `invalid configuration: replace needs an output directory`).
 - Go port: `swath show` prints the verdict first, then labelled lines in reading order (source, listed in local
   time, contents with the object bytes and grouped counts, coverage with the filters' rules, storage last);
   `swath show MISSING` says `no such file or directory`.

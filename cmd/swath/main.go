@@ -893,7 +893,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
-		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
+		// A text file is always replaced (written beside its name and
+		// renamed into place): --overwrite asks for what happens anyway.
+		Output: listing.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
 			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}, SegmentWorkers: o.segmentWorkers},
 		Argv:    argv,

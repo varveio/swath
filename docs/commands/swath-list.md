@@ -38,7 +38,7 @@ in a listing of its parent: at the `--metadata` tier, and a symbolic link as the
 A dataset directory must be new or empty; `--overwrite` replaces a previous swath dataset there, and
 nothing else, keeping it readable until the new one commits ([Overwrite and
 refresh](../running.md#overwrite-and-refresh)). A text file is written beside its name and renamed into place when complete, so a failed run
-leaves the previous file as it was. A reader that closes stdout early (`| head`) ends the run with exit 0.
+leaves the previous file as it was; it always replaces the file, with or without `--overwrite`. A reader that closes stdout early (`| head`) ends the run with exit 0.
 
 Only a dataset run of an object store keeps a journal: if it is interrupted, [`swath resume`](swath-resume.md)
 continues it. Text output and local trees are run again.

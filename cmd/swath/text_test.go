@@ -277,6 +277,21 @@ func TestLocalTextEndToEnd(t *testing.T) {
 			t.Fatalf("%s: %.120q", name, b)
 		}
 	}
+	// A text file is always replaced; --overwrite asks for just that, and
+	// is accepted for a file as for stdout.
+	stale := filepath.Join(dir, "rows.tsv")
+	if err := os.WriteFile(stale, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []string{stale, "-"} {
+		out.Reset()
+		if err := run(context.Background(), []string{root, "-o", o, "--overwrite", "--no-stats"}, &out, false); err != nil {
+			t.Fatalf("-o %s --overwrite: %v", o, err)
+		}
+	}
+	if b, _ := os.ReadFile(stale); !strings.HasPrefix(string(b), "key\tsize\t") || !strings.HasPrefix(out.String(), "key\tsize\t") {
+		t.Fatalf("--overwrite: file %.40q, stdout %.40q", b, out.String())
+	}
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tfile\t",
 		"jsonl": `{"key":"a/b/f","key_base64":null,"size":null,"last_modified":null,"kind":"file",`,

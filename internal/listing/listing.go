@@ -1030,7 +1030,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes
 	if cfg.Progress != nil {
-		cfg.Progress.bytes.Store(&sizes.Bytes)
+		cfg.Progress.sizes.Store(sizes)
 	}
 	versions := &registry.VersionCounts{}
 	env.Versions = versions
@@ -1046,7 +1046,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	a.sum.Resources.PeakHeapLiveBytes = heap()
 	a.router = router
 	a.sum.Output.RowsFetched = src.Listed()
-	if sizes.Measured {
+	if sizes.Measured.Load() {
 		b := sizes.Bytes.Load()
 		a.sum.Output.ObjectBytes = &b
 	}

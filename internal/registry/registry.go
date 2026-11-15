@@ -222,7 +222,7 @@ type Env struct {
 // size column (Run sets it before listing; read it after Run returns).
 type Sizes struct {
 	Bytes    atomic.Int64
-	Measured bool
+	Measured atomic.Bool
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -294,7 +294,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	}
 	if env.Sizes != nil && !env.Empty {
 		if size := schema.ObjectSize(b.s); size != nil {
-			env.Sizes.Measured = true
+			env.Sizes.Measured.Store(true)
 			p = newSized(p, size, &env.Sizes.Bytes)
 		}
 	}

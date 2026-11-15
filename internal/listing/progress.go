@@ -12,6 +12,7 @@ import (
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -35,9 +36,9 @@ type Progress struct {
 	requests atomic.Pointer[func() source.Requests]
 	tariff   atomic.Uint64 // math.Float64bits
 	retained atomic.Int64  // rows kept from the interrupted run (resume)
-	// bytes is the order stage's sum of the sizes of the rows it accepted
+	// sizes is the order stage's sum of the sizes of the rows it accepted
 	// (registry.Sizes), nil before it starts.
-	bytes    atomic.Pointer[atomic.Int64]
+	sizes    atomic.Pointer[registry.Sizes]
 	ordered  atomic.Int64
 	encoded  atomic.Int64
 	parts    atomic.Int64
@@ -179,9 +180,9 @@ type ProgressSnapshot struct {
 	// listed by this attempt, so not in Rows).
 	Retained int64 `json:"rows_retained"`
 	// ObjectBytes is the sizes of the objects listed so far summed, as the
-	// order stage accepted them (the report's object_bytes): the terminal
-	// line's, not the progress file's.
-	ObjectBytes int64 `json:"-"`
+	// order stage accepted them: the report's output.object_bytes so far
+	// (absent for a schema without a size column, and before listing).
+	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 	// Requests (http_attempts), Retries, Inflight and Limit are the source's HTTP account
 	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
 	// retries, requeues), attempts repeated, attempts in flight now, and
@@ -251,8 +252,9 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		}
 	}
 	s.Retained = p.retained.Load()
-	if b := p.bytes.Load(); b != nil {
-		s.ObjectBytes = b.Load()
+	if z := p.sizes.Load(); z != nil && z.Measured.Load() {
+		b := z.Bytes.Load()
+		s.ObjectBytes = &b
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()

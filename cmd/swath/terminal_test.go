@@ -42,7 +42,8 @@ func snap() listing.ProgressSnapshot {
 func TestProgressRecord(t *testing.T) {
 	store := rowNouns(false, false)
 	s := snap()
-	s.ObjectBytes = 5 << 30
+	b := int64(5 << 30)
+	s.ObjectBytes = &b
 	parts := progressParts(s, 75*time.Second, 2000, store, true, "")
 	want := []string{"listing", "1,234,567 objects (+1,000 recovered)", "5.00 GiB", "1m15s elapsed", "2,000 keys/s (avg 123,457)", "3 parts", "17 in flight",
 		"2,500 API calls", "~$0.013 (est. @ $0.005/1k LIST)"}
@@ -343,7 +344,7 @@ func TestReportContinuity(t *testing.T) {
 	var p listing.ProgressSnapshot
 	readJSON(t, filepath.Join(ds, progressName), &p)
 	if p.ProgressVersion != listing.ProgressVersion || p.State != listing.StateDone || p.AttemptID != r.Attempt.ID || p.RunID != r.Run.ID ||
-		p.Rows != r.Output.RowsFetched || p.Requests != r.Requests.HTTPAttempts {
+		p.Rows != r.Output.RowsFetched || p.Requests != r.Requests.HTTPAttempts || p.ObjectBytes == nil || *p.ObjectBytes != 9 {
 		t.Fatalf("progress.json %+v, report %+v", p, r)
 	}
 	if out != "" || !strings.Contains(stderr.String(), "complete: 3 objects, 9 B in ") || !strings.Contains(stderr.String(), "API calls") {
@@ -354,9 +355,12 @@ func TestReportContinuity(t *testing.T) {
 	if again.ArgsHash != r.ArgsHash || other.ArgsHash == r.ArgsHash {
 		t.Fatalf("args_hash %s %s %s", r.ArgsHash, again.ArgsHash, other.ArgsHash)
 	}
-	// progress.json's request fields.
-	s, _ := json.Marshal(snap())
-	for _, k := range []string{`"http_attempts":2500`, `"inflight":17`, `"limit":0`, `"retries":0`, `"rows_retained":1000`, `"rate_per_1k_usd":0.005`} {
+	// progress.json's request fields, and the object bytes so far.
+	withBytes := snap()
+	five := int64(5)
+	withBytes.ObjectBytes = &five
+	s, _ := json.Marshal(withBytes)
+	for _, k := range []string{`"object_bytes":5`, `"http_attempts":2500`, `"inflight":17`, `"limit":0`, `"retries":0`, `"rows_retained":1000`, `"rate_per_1k_usd":0.005`} {
 		if !bytes.Contains(s, []byte(k)) {
 			t.Fatalf("progress.json lacks %s: %s", k, s)
 		}

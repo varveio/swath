@@ -80,8 +80,10 @@ func TestDocsLogEvents(t *testing.T) {
 	logRun(func() string { return "0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a" })
 	l := elog()
 	l.start(startFields{"s3://bucket/logs/", modeRows, "-"})
+	objectBytes := int64(1_234_567_890)
 	l.progress(listing.ProgressSnapshot{ProgressVersion: listing.ProgressVersion, AttemptID: "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f", State: listing.StateListing, Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
-		StartedAt: jsontime.Of(at.Add(-time.Minute)), AsOf: jsontime.Of(at), DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
+		ObjectBytes: &objectBytes, StartedAt: jsontime.Of(at.Add(-time.Minute)), AsOf: jsontime.Of(at), DurationMs: 60000, PartAgeMs: 60000},
+		"listing · 120,000 objects · 1.15 GiB · 1m00s elapsed · 2,000 keys/s (avg 2,000) · 8 in flight · 122 API calls")
 	w := newFailureWatch("S3", 10*time.Minute)
 	refused := source.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
 	for i := range 14 {

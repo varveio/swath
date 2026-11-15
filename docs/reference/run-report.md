@@ -63,6 +63,7 @@ file; `DIR/run.json` follows the commit. Its counts carry the run report's names
 | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
 | `mutex_wait_ns`, `max_mutex_hold_ns` | the range engine's decision mutex: summed wait, longest hold |
 | `rows_retained` | rows a resume kept from the interrupted run (not in `rows_fetched`) |
+| `object_bytes` | the sizes of the objects handed on so far, summed: the report's `output.object_bytes` so far (absent for a schema without a size column, and before listing starts) |
 | `http_attempts`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](../internals/clients.md#retry-policy-and-accounting)) |
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
 | `cost_usd`, `rate_per_1k_usd` | `http_attempts` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |

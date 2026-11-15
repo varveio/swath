@@ -324,8 +324,8 @@ func progressParts(s listing.ProgressSnapshot, session time.Duration, live float
 			rows += " (+" + count(s.Retained) + " recovered)"
 		}
 		parts = append(parts, rows)
-		if s.ObjectBytes > 0 {
-			parts = append(parts, textout.Size(s.ObjectBytes))
+		if b := s.ObjectBytes; b != nil && *b > 0 {
+			parts = append(parts, textout.Size(*b))
 		}
 		parts = append(parts, elapsed(session)+" elapsed")
 		if failing != "" {
