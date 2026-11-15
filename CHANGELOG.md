@@ -5,6 +5,8 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a run stopped while its parts were still publishing no longer lets a later part add its page ends to
+  the cut file's cuts beside an earlier part still adding its own (a data race, seen under the race detector).
 - Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
   (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
   longer subject to in-place changes of the format. No code change from the commit pinned before.
