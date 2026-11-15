@@ -111,6 +111,10 @@ func (r viewRun[P]) Write(ctx context.Context, rows []schema.Row[P]) error {
 
 func (r viewRun[P]) End() { r.v.End() }
 
+// From and Through take the interval the run covers (order.CoveredRun).
+func (r viewRun[P]) From(lo string)              { r.v.From(lo) }
+func (r viewRun[P]) Through(hi string, top bool) { r.v.Through(hi, top) }
+
 func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	return k.write(ctx, segs, nil)
 }

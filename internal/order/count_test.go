@@ -373,3 +373,79 @@ func TestCountSubtrees(t *testing.T) {
 		}
 	}
 }
+
+// spanScript is two ranges that declare their intervals, as the range
+// engine's do: the root (⊥, ⊤] lists a and b and splits after b; its
+// child (b, ⊤] lists c and d and returns.
+type spanScript struct{}
+
+func (spanScript) Root() fr { return fr{0} }
+
+func (spanScript) Expand(_ context.Context, r fr, e source.Emitter[fr, tp]) error {
+	f := e.(source.Fencer)
+	if r.i == 0 {
+		f.Span("", "", true)
+		if err := e.Rows([]schema.Row[tp]{{Key: "a"}, {Key: "b"}}); err != nil {
+			return err
+		}
+		f.Fence("b", false)
+		return e.Child(fr{1})
+	}
+	f.Span("b", "", true)
+	return e.Rows([]schema.Row[tp]{{Key: "c"}, {Key: "d"}})
+}
+
+// coverSink records each run's interval.
+type coverSink struct {
+	runSink
+	got []string
+}
+
+func (s *coverSink) Run() RangeRun[tp] {
+	return &coverRun{recordedRun: recordedRun{s: &s.runSink}, c: s}
+}
+
+type coverRun struct {
+	recordedRun
+	c        *coverSink
+	from, to string
+}
+
+func (r *coverRun) From(lo string) { r.from = "(" + lo }
+
+func (r *coverRun) Through(hi string, top bool) {
+	r.to = hi + "]"
+	if top {
+		r.to = "⊤]"
+	}
+}
+
+func (r *coverRun) End() {
+	r.recordedRun.End()
+	r.c.mu.Lock()
+	r.c.got = append(r.c.got, strings.Join(r.keys, ",")+" "+r.from+","+r.to)
+	r.c.mu.Unlock()
+}
+
+// TestCountCoveredRuns: in an ordered count a CoveredRun is told the
+// interval its range's rows cover: from the range's span, through its last
+// row at a split or the span's end when the range returns. An unordered
+// count tells nothing.
+func TestCountCoveredRuns(t *testing.T) {
+	s := &coverSink{}
+	if _, err := CountWithSink(context.Background(), spanScript{}, nil, Options{Workers: 2}, s); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(s.got)
+	if want := []string{"a,b (,b]", "c,d (b,⊤]"}; !slices.Equal(s.got, want) {
+		t.Fatalf("runs %q, want %q", s.got, want)
+	}
+	s = &coverSink{}
+	if _, err := CountWithSink(context.Background(), spanScript{}, nil, Options{Workers: 2, Unordered: true}, s); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(s.got)
+	if want := []string{"a,b ,", "c,d ,"}; !slices.Equal(s.got, want) {
+		t.Fatalf("unordered runs %q, want %q", s.got, want)
+	}
+}

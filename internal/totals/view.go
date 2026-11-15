@@ -106,8 +106,12 @@ type view struct {
 
 	mu   sync.Mutex
 	open map[string]*onode // partial nodes, complete once their subtree or every run has ended
-	kept map[string]vsum   // complete nodes remembered: the viewKeep largest of their depth
-	pins map[string]vsum   // complete nodes holding a hard link, kept to the end
+	// byLo and byHi index the stretches of keys whose runs have all ended
+	// (cover), by bound: a partial node completes when the stretches
+	// around it join.
+	byLo, byHi map[string]*ival
+	kept       map[string]vsum // complete nodes remembered: the viewKeep largest of their depth
+	pins       map[string]vsum // complete nodes holding a hard link, kept to the end
 	// largest holds, per depth, kept's nodes by size, the smallest on top:
 	// past viewKeep of a depth the smallest is dropped.
 	largest []kheap
@@ -181,7 +185,8 @@ type ViewStats struct {
 }
 
 func newView(opt *Options) *view {
-	v := &view{origin: opt.Origin, primary: opt.Primary, budget: opt.MaxPrefixes, open: map[string]*onode{}, kept: map[string]vsum{}, pins: map[string]vsum{}}
+	v := &view{origin: opt.Origin, primary: opt.Primary, budget: opt.MaxPrefixes, open: map[string]*onode{}, kept: map[string]vsum{}, pins: map[string]vsum{},
+		byLo: map[string]*ival{}, byHi: map[string]*ival{}}
 	v.maxDepth.Store(noLimit)
 	v.open[v.origin] = &onode{}
 	return v
@@ -406,6 +411,78 @@ type ViewRun struct {
 	m       map[string]*named // unordered: the run's prefixes
 	any     bool              // Add was called: the run held rows
 	stats   ViewStats
+	// The interval the run covers, (lo, hi] (top: up to the last key),
+	// when its source tells it (From, Through): its edge nodes inside it
+	// are complete.
+	lo, hi        string
+	from, through bool
+	top           bool
+}
+
+// From takes the run's lower bound, exclusive (order.CoveredRun), before
+// its first row.
+func (r *ViewRun) From(lo string) { r.lo, r.from = lo, true }
+
+// Through takes the run's upper bound, inclusive (top: none), before End.
+func (r *ViewRun) Through(hi string, top bool) { r.hi, r.top, r.through = hi, top, true }
+
+// covers reports whether every key under the node name lies in (lo, hi]
+// (top: no upper bound): a prefix's keys sort from it to before the first
+// string past them all, an object's node is its one key.
+func covers(name, lo, hi string, top bool) bool {
+	if lo >= name {
+		return false
+	}
+	if top {
+		return true
+	}
+	if strings.HasSuffix(name, "/") {
+		return hi > name && !strings.HasPrefix(hi, name)
+	}
+	return hi >= name
+}
+
+// ival is a stretch of keys whose runs have all ended: (lo, hi], top for
+// no upper bound.
+type ival struct {
+	lo, hi string
+	top    bool
+}
+
+// cover records that the keys (lo, hi] are all summed (v.mu held), joins
+// the stretch with those it meets, and completes the partial nodes that
+// were cut where they meet and now lie inside: a node cut by a bound is
+// a prefix of it.
+func (v *view) cover(lo, hi string, top bool, max int) {
+	iv := &ival{lo, hi, top}
+	var joins []string
+	if left := v.byHi[lo]; left != nil {
+		delete(v.byHi, lo)
+		delete(v.byLo, left.lo)
+		iv.lo = left.lo
+		joins = append(joins, lo)
+	}
+	if right := v.byLo[hi]; !top && right != nil {
+		delete(v.byLo, hi)
+		if !right.top {
+			delete(v.byHi, right.hi)
+		}
+		iv.hi, iv.top = right.hi, right.top
+		joins = append(joins, hi)
+	}
+	v.byLo[iv.lo] = iv
+	if !iv.top {
+		v.byHi[iv.hi] = iv
+	}
+	r := ViewRun{v: v, max: max}
+	for _, b := range joins {
+		r.nodes(&Row{Key: b, Object: true})
+		for d := len(r.chain) - 1; d > 0; d-- {
+			if name := r.chain[d]; v.open[name] != nil && covers(name, iv.lo, iv.hi, iv.top) {
+				v.subtreeEnd(name)
+			}
+		}
+	}
 }
 
 // ViewRun starts a run of rows for the view (Options.View): ordered, the
@@ -531,10 +608,16 @@ func (r *ViewRun) popTo(n int, ending bool) {
 				p.s.children++
 			}
 		}
-		if f.left || ending {
-			r.partial(f.name, f.depth, &f.s)
-		} else {
+		// An edge node is complete too once the run's interval covers it.
+		whole := !f.left && !ending ||
+			f.depth > 0 && (!f.left || r.from && r.lo < f.name) && (!ending || r.through && covers(f.name, "", r.hi, r.top))
+		if len(r.stack) > 1 && whole && (f.left || ending) {
+			r.stack[len(r.stack)-2].s.children++ // counted here, never as a partial node
+		}
+		if whole {
 			r.complete(f.name, f.depth, &f.s)
+		} else {
+			r.partial(f.name, f.depth, &f.s)
 		}
 		r.stack = r.stack[:len(r.stack)-1]
 	}
@@ -610,6 +693,11 @@ func (r *ViewRun) End() {
 	r.Flush()
 	if r.ordered {
 		r.popTo(0, true)
+		if r.from && r.through {
+			r.v.mu.Lock()
+			r.v.cover(r.lo, r.hi, r.top, r.max)
+			r.v.mu.Unlock()
+		}
 	} else {
 		v := r.v
 		v.mu.Lock()

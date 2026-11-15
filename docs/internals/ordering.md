@@ -390,7 +390,15 @@ subdirectory as a child right after its own row, which ends the run there. `swat
 (`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
 before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
-across runs and complete at the end. An unordered count (the local source) gives no order inside a run: there
+across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
+declares its ranges' intervals (`source.Fencer.Span`, the range engine's), the interval its rows cover: from
+the range's lower bound, through its last row or fence at a split (the children start after it) or the range's
+end when it returns. The view completes an edge prefix inside that interval at once, records the intervals of
+the runs that ended, joining those that meet at a bound, and completes a partial prefix cut at a bound once the
+stretches on both sides have joined around it (`totals` `view.cover`): the partial prefixes held are then those
+cut by the bounds of ranges still listing, a few a range in flight, not one per range listed
+(`TestViewCoveredRuns`: 20,000 runs fed in order by eight workers hold at most 24; `TestCountCoveredRuns`). A
+dataset's shards are not told (a few, eight a worker): theirs complete at the end. An unordered count (the local source) gives no order inside a run: there
 only objects complete in a run. A sink that is also an `order.SubtreeSink` is told when a range that declared
 the prefix it owns (`source.Subtreer`, which every emitter adapter forwards: a local directory's range owns
 its prefix, its chunks and subdirectories being its descendants) has ended with every range it emitted: the

@@ -64,8 +64,9 @@ Every figure in the view is exact, and the memory does not grow with the listing
 one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
 subdirectories'. Of the complete prefixes and objects, the 100 largest of each depth are kept, far more than
 a terminal shows; one dropped for 100 larger ones of its depth is counted in its parent's bytes, and which are
-kept does not depend on the order the listing completes them in. A prefix cut by the edge
-of a range is summed across ranges and completes when the listing ends: a few a range. The local directories
+kept does not depend on the order the listing completes them in. A prefix cut by the edge of a range is summed
+across ranges and completes once the ranges on both sides of that edge have been listed, so only the ranges
+still listing hold such prefixes. The local directories
 being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
 `--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
 report's `diagnostics.totals_view` counts what was kept, dropped and merged.
