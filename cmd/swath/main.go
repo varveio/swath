@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -217,7 +218,11 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 			return nil
 		}
 	}
-	if err := dataset.ReplaceJSON(path, r, dataset.Durable); err != nil {
+	write := func() error { return dataset.ReplaceJSON(path, r, dataset.Durable) }
+	if streamed(path) {
+		write = func() error { return writeStream(path, r) }
+	}
+	if err := write(); err != nil {
 		// The attempt is named, so a supervisor never takes an older
 		// report (another attempt's) for this one's outcome.
 		id := ""
@@ -227,6 +232,34 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 		return fmt.Errorf("the report of attempt %s is not written to %s: %w", id, path, err)
 	}
 	return nil
+}
+
+// streamed says the report goes to path by writing it, never by renaming a
+// file over its name: an existing name that is not a regular file (a
+// device, a FIFO, a socket: /dev/stderr, a named pipe), or a descriptor's
+// name (/dev/fd/N, /proc/self/fd/N, resolved by checkSidePaths), whatever
+// it reaches.
+func streamed(path string) bool {
+	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
+		return true
+	}
+	dir := filepath.Dir(path)
+	return dir == "/dev" || dir == "/dev/fd" || filepath.Base(dir) == "fd" && filepath.Dir(filepath.Dir(dir)) == "/proc"
+}
+
+// writeStream writes r to path, opened as it is, in ReplaceJSON's
+// encoding.
+func writeStream(path string, r listing.Report) error {
+	b, err := dataset.EncodeJSON(r)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	return errors.Join(err, f.Close())
 }
 
 // reportFailed is the command's error once the report could not be

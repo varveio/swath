@@ -27,7 +27,9 @@ The fields most runs need:
 `--report FILE` may not name a directory, a file in a directory that does not exist, the text output file,
 one of the dataset directory's own entries (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/`)
 or a path inside another swath dataset: those are refused before listing, with exit 2. A name of its own in
-the output directory, such as `DIR/attempt-1.json`, is accepted. A report that cannot be written at the end
+the output directory, such as `DIR/attempt-1.json`, is accepted. A file is replaced whole (a temporary file
+renamed over it); a device, a descriptor or a named pipe (`/dev/stderr`, `/dev/fd/3`, a FIFO) is written as it
+is, so `--report /dev/stderr` streams the report where stdout carries rows. A report that cannot be written at the end
 fails the command (exit 1). `--report -` where stdout carries rows is refused (exit 2) and prints nothing on
 stdout.
 

@@ -5,6 +5,8 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `--report` naming a device, a descriptor or a named pipe (`/dev/stderr`, `/dev/fd/3`, a FIFO) is
+  written there; it failed after the run (exit 1), and a FIFO was replaced by a regular file.
 - Go port: `swath resume DIR` writes a report only when given `--report`; it no longer replays the run's
   recorded `--report`, which replaced the earlier attempt's report with its own.
 - Go port: a full quota (EDQUOT) exits 74 (`disk_full`, cause `no_space`) as a full disk does, and spill
