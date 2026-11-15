@@ -307,14 +307,14 @@
     sc.font="26px "+css("--mono"); sc.fillStyle=css("--ink2");
     sc.fillText("of the whole bucket", bx+bw/2, BH/2+66);
     sc.font="24px "+css("--mono");
-    sc.fillText(mm(SP[HEAVY][2])+" files · "+fmt(F.ratio)+"× the median guess", bx+bw/2, BH/2+104);
+    sc.fillText(mm(SP[HEAVY][2])+" objects · "+fmt(F.ratio)+"× the median guess", bx+bw/2, BH/2+104);
     sc.textAlign="start"; sc.globalAlpha=1;
   }
 
   /* The one thing on screen that is not a rendering of trace state: what the OWNERSHIP RULE
      alone implies for a range this size, were it never split. It asserts no timing and no speedup — only that one
      worker would hold it, which follows from the measured size plus "a range belongs to whoever
-     claimed it". Labelled as derived, and the card's provenance says so too. */
+     claimed it". Labeled as derived, and the card's provenance says so too. */
   function counterfactual(a){
     if(a<=0 || !SP.length) return;
     var bx=pos(SP[HEAVY][0],1)*SW, bw=(pos(SP[HEAVY][1],1)-pos(SP[HEAVY][0],1))*SW;
@@ -369,7 +369,7 @@
         : '<li><b>'+fmt(F.topWorkers)+'</b> of '+meta.workers+' workers entered that lineage</li>';
 
   var CARD='<div class="card"><div class="big">'+fmt(meta.totalKeys)+
-    '<br>files listed</div>'+
+    '<br>objects listed</div>'+
     '<div class="lede">One guessed key range held '+F.topShare+'% of them. '+
     'swath split it while listing, so every worker could help.</div><ul>'+
     '<li><b>'+fmt(F.seedCount)+'</b> guessed starting ranges</li>'+
@@ -378,7 +378,7 @@
     '</ul><div class="cta">swath.varve.io</div>'+
     '<div class="prov">swath — parallel object-store listing that rebalances itself while it runs.<br>'+
     'Every run state shown is rendered from the actual '+fmt(meta.events)+'-event trace; '+
-    'the labelled no-split panel is a derived consequence of range ownership, not a '+
+    'the labeled no-split panel is a derived consequence of range ownership, not a '+
     'recorded run. One recorded run of '+dur(D)+' — not a benchmark.<br>'+
     'github.com/varveio/swath'+
     '</div></div>';
@@ -437,7 +437,7 @@
      $("axis").textContent="one bucket · first key → last key";
      meter(n+" / "+meta.workers, "each square = one worker");
      say("swath · one real listing",
-         mm(meta.totalKeys)+" files. "+meta.workers+" workers.",
+         mm(meta.totalKeys)+" objects. "+meta.workers+" workers.",
          "The store hands them back in key order, a page at a time, and will not say how "+
          "they are spread across the bucket."); }},
 
@@ -460,21 +460,21 @@
      drawRun(S,null,g); heavyTag(g, land); axisKeys(g);
      $("axis").textContent = (g<=0) ? "plan view — "+fmt(F.seedCount)+" guesses shown equally"
        : (g<1 ? "same "+fmt(F.seedCount)+" boundaries · only the scale changes"
-              : "measured view — width = file count");
+              : "measured view — width = object count");
      meter(n+" / "+meta.workers, "workers listing");
      say("swath · one real listing",
-         g<0.30 ? "The guesses were drawn equally. The files were not."
+         g<0.30 ? "The guesses were drawn equally. The objects were not."
                 : "One guess held most of the bucket.",
-         g<0.30 ? "Re-drawing so that width is file count." : ""); }},
+         g<0.30 ? "Re-drawing so that width is object count." : ""); }},
 
    // ---- why that matters: what ownership alone would have meant ------------
    {t:14600, f:function(u){ stage(1); poolFade(1-ease(clamp(u/0.16)));
      var S=state(A1_END); drawPool(S);
      drawRun(S,null,1); axisKeys(1);
      counterfactual(Math.min(ease(clamp(u/0.22)), ease(clamp((1-u)/0.12)))); foot(FOOT_DERIVED);
-     $("axis").textContent="measured view — width = file count";
+     $("axis").textContent="measured view — width = object count";
      say("without splitting · what would happen",
-         "Without splitting, "+(SP.length?mm(SP[HEAVY][2]):"the heaviest range's files")+" would stay serial.",
+         "Without splitting, "+(SP.length?mm(SP[HEAVY][2]):"the heaviest range's objects")+" would stay serial.",
          "One worker would own this range start to finish. The other "+(meta.workers-1)+
          " could not share it, because a range belongs to whoever claimed it."); }},
 

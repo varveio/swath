@@ -7,15 +7,13 @@ column and field.
 
 ## Query an inventory with DuckDB
 
-Read the parts the manifest lists, not a glob of the directory: a directory can hold parts of a run that has
-not committed. This query lists the five largest files of a local inventory in `inventory/`:
+A committed inventory in a local directory holds exactly the parts its manifest lists, under `data/`, so a glob
+of them reads the whole dataset. This query lists the five largest files of a local inventory in `inventory/`:
 
 ```bash
 duckdb -c "
-  SET VARIABLE parts = (SELECT list('inventory/' || p.path)
-                        FROM (SELECT unnest(parts) AS p FROM read_json('inventory/manifest.json')));
   SELECT decode(key) AS key, size
-  FROM read_parquet(getvariable('parts'), union_by_name = true)
+  FROM read_parquet('inventory/data/*.parquet')
   WHERE kind = 'FILE'
   ORDER BY size DESC
   LIMIT 5;"
@@ -35,9 +33,29 @@ duckdb -c "
 ```
 
 A local tree's `key` is binary, since file names need not be UTF-8, so `decode(key)` reads it as text; an
-object store's `key` is text already, so write `key`, and leave out `kind`, which only a local tree has.
-`union_by_name = true` reads optional columns by name across parts. Each source's columns are in the
-[schema registry](#schema-registry).
+object store's `key` is text already, so write `key`, and leave out `kind`, which only a local tree has. Each
+source's columns are in the [schema registry](#schema-registry). A query that reads an optional column, one that
+some parts can lack, adds `union_by_name = true` so DuckDB matches columns by name across parts
+([Keys and order](#keys-and-order)).
+
+The glob is not enough in two cases. There, read the part list from `manifest.json`:
+
+- **The directory has no `manifest.json`.** Its run has not committed. An interrupted run's `data/` holds the
+  parts written so far, and a glob reads them as a partial listing without an error. `swath show DIR` says
+  whether a dataset is there and how complete it is ([below](#check-that-an-inventory-is-complete)).
+- **The dataset is in a bucket.** Its parts are under `data/RUN/ATTEMPT/`, and a run that was abandoned can
+  leave parts beside them that the manifest does not name ([a dataset in a bucket](#a-dataset-in-a-bucket)).
+
+```bash
+duckdb -c "
+  SET VARIABLE parts = (SELECT list('inventory/' || p.path)
+                        FROM (SELECT unnest(parts) AS p FROM read_json('inventory/manifest.json')));
+  SELECT decode(key) AS key, size
+  FROM read_parquet(getvariable('parts'), union_by_name = true)
+  WHERE kind = 'FILE'
+  ORDER BY size DESC
+  LIMIT 5;"
+```
 
 ## Check that an inventory is complete
 
@@ -414,11 +432,12 @@ the application.
 
 This section is for consumers that read the parts without `reader`: DuckDB, Python, Spark.
 
-- **Read the manifest's exact file list.** The dataset is the parts `manifest.json` lists, in the listed order.
-  It is not every file under `data/`: a run in progress publishes parts there before its commit, and an
-  overwrite removes them. Read the parts by name: optional columns can be absent from some parts (`read_parquet
-  ([...], union_by_name = true)` in DuckDB). Columns a schema id does not define may appear anywhere and are
-  ignored.
+- **The dataset is the parts `manifest.json` lists**, in the listed order. In a committed local directory those
+  are exactly the files under `data/`, so a glob reads them; elsewhere, read the manifest's list
+  ([Query an inventory with DuckDB](#query-an-inventory-with-duckdb)): a run in progress publishes parts under
+  `data/` before its commit, and a bucket prefix can hold parts no manifest names. Optional columns can be absent
+  from some parts (`read_parquet(..., union_by_name = true)` in DuckDB). Columns a schema id does not define may
+  appear anywhere and are ignored.
 - **Order is unsigned byte order.** Rows ascend by `key`'s bytes compared as unsigned bytes, within each part and
   across parts in manifest order. Keys are never normalized (Unicode, case, separators). Cloud keys are the
   provider's UTF-8 bytes. A local key is the name's bytes exactly as the kernel returned them, which need not be

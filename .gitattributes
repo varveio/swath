@@ -21,5 +21,6 @@
 *.parquet   binary
 *.png       binary
 *.jpg       binary
+*.mp4       binary
 *.gz        binary
 *.zst       binary

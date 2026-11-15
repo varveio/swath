@@ -370,7 +370,7 @@
          return {label:nm, value:s.keys, id:s.id};
        }), seedTotal, function(r){ return lineage(r.id); });
   document.getElementById("seed-cap").textContent =
-    "The "+M.seeds.length+" heaviest of "+fmt(F.seedCount)+" seed ranges, labelled by their "+
+    "The "+M.seeds.length+" heaviest of "+fmt(F.seedCount)+" seed ranges, labeled by their "+
     "bounds. Weight includes every range later split off it, traced through the split "+
     "genealogy — so this is the work each original guess was really responsible for. "+
     fmt(F.emptySeeds)+" seed ranges held no objects at all.";

@@ -8,11 +8,14 @@ publishes it as a GitHub Pages artifact. That makes the site reviewable alongsid
 and docs it describes -- and it makes the drift these checks look for fixable in the first
 place, because a behavior change and the page that explains it now land in one pull request.
 
-Five checks, each independently runnable with `--only`:
+Six checks, each independently runnable with `--only`:
 
-  links        every site-local href, asset and fragment resolves, every link into this
-               repository names a file (and heading) that exists here, and no contributor
-               page (docs/internals/, docs/ops/) is published
+  links        every site-local href, asset and fragment resolves (a video the deploy fetches
+               counts when data/media.json declares it), every link into this repository names
+               a file (and heading) that exists here, and no contributor page (docs/internals/,
+               docs/ops/) is published
+  media        the videos the deploy fetches from a release are declared, digest-pinned,
+               referenced by a page, and, when present in the checked tree, intact
   terminology  the public spelling and naming rules in docs/style.md, over the site
                and the current documentation -- not over code or dated evidence notes
   channel      the version the home page offers matches the channel record (and, on the
@@ -32,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
@@ -364,6 +368,11 @@ def check_links(site: Path, pages: list[Page], repo: Path) -> list[str]:
                            for page in pages if page.rel.startswith(UNPUBLISHED_PREFIXES)]
     ids_by_page = {p.rel: set(p.ids) | set(p.names) for p in pages}
     md_anchors: dict[str, set[str]] = {}
+    # The videos are not in git; the deploy fetches them from a release and verifies their
+    # digests (scripts/ci/fetch-site-media.sh). A declared path counts as resolvable so this
+    # check also runs on a tree built without them, and `media` holds the declaration to account.
+    manifest, _ = load_media_manifest(site)
+    fetched = {entry.get("path") for entry in manifest.get("files", [])}
 
     def resolve_local(page: Page, target: str) -> str:
         """Map a site-local URL path to the file a server would return for it.
@@ -438,12 +447,63 @@ def check_links(site: Path, pages: list[Page], repo: Path) -> list[str]:
             path = path.partition("?")[0]  # a query string is not part of the file path
             frag = unquote(frag)
             rel = resolve_local(page, path) if path else page.rel
-            if not (site / rel).is_file():
-                failures.append(f"{page.rel}: {where} -> {value} is missing from the site tree")
+            if not (site / rel).is_file() and rel not in fetched:
+                failures.append(f"{page.rel}: {where} -> {value} is missing from the site "
+                                f"tree and is not declared in data/media.json")
                 continue
             if frag:
                 check_fragment(page, rel, frag, where)
 
+    return failures
+
+
+def load_media_manifest(site: Path) -> tuple[dict, list[str]]:
+    """The pinned video assets (source: site/static/data/media.json): what the deploy fetches
+    and the digest it must see."""
+    record = site / "data" / "media.json"
+    if not record.exists():
+        return {}, [f"{record} is missing: the site cannot declare its off-repository media"]
+    try:
+        manifest = json.loads(record.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return {}, [f"data/media.json: does not parse: {exc}"]
+    return manifest, []
+
+
+def check_media(site: Path, pages: list[Page]) -> list[str]:
+    """Every off-repository video is declared, pinned, referenced, and (if here) intact."""
+    manifest, failures = load_media_manifest(site)
+    if not manifest:
+        return failures
+    if not manifest.get("release"):
+        failures.append("data/media.json: no release tag naming where the assets live")
+    declared = manifest.get("files")
+    if not isinstance(declared, list) or not declared:
+        return failures + ["data/media.json: files must be a non-empty list"]
+
+    referenced = {
+        value.lstrip("/").partition("#")[0]
+        for page in pages for _, _, value in page.links
+        if not value.startswith(SKIP_SCHEMES) and not re.match(r"^[a-z][a-z0-9+.-]*:", value)
+    }
+    for entry in declared:
+        path = entry.get("path", "")
+        if not path or not entry.get("asset"):
+            failures.append(f"data/media.json: an entry is missing path or asset: {entry}")
+            continue
+        if not re.fullmatch(r"[0-9a-f]{64}", entry.get("sha256", "")):
+            failures.append(f"data/media.json: {path} has no sha256 digest to verify against")
+        if path not in referenced:
+            failures.append(
+                f"data/media.json: {path} is declared but no page references it -- "
+                f"drop the entry or the release asset it pins")
+        local = site / path
+        if local.exists():
+            digest = hashlib.sha256(local.read_bytes()).hexdigest()
+            if digest != entry.get("sha256"):
+                failures.append(
+                    f"{path}: present in the checked tree but hashes to {digest}, "
+                    f"not the {entry.get('sha256')} pinned in data/media.json")
     return failures
 
 
@@ -602,7 +662,7 @@ def check_metadata(site: Path, pages: list[Page]) -> list[str]:
     return failures
 
 
-CHECKS = ("links", "terminology", "channel", "metadata", "a11y")
+CHECKS = ("links", "media", "terminology", "channel", "metadata", "a11y")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -630,6 +690,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     results: dict[str, list[str]] = {}
     if "links" in selected:
         results["links"] = check_links(site, pages, repo)
+    if "media" in selected:
+        results["media"] = check_media(site, pages)
     if "terminology" in selected:
         results["terminology"] = check_terminology(repo, pages)
     if "channel" in selected:
