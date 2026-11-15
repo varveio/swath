@@ -769,7 +769,8 @@ func evictOnce(t *testing.T, failed bool) {
 		t.Fatalf("not refused: %v", err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for sp.live.Load() >= live && time.Now().Before(deadline) {
+	// The credit lowers the live bytes, then clears the refusal: wait for both.
+	for (sp.live.Load() >= live || sp.full.Load()) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if h.c.st.RetiredEvicted.Load() != 1 || sp.live.Load() >= live || sp.full.Load() {

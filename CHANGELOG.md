@@ -12,6 +12,11 @@ Notable changes per release. The full human summary for the current release is i
   cap holds it back, so a disk grown under a live run (a cloud disk resized and its filesystem grown online) is used without a
   restart. `--spill-budget` is a fixed cap. The run report adds `resources.spill.max_by`, `start_max_bytes`,
   `max_raised`, `max_rechecks` and `max_recheck_raised`; `max_bytes` is the cap in effect at the end.
+- Go port: `--include` and `--exclude` refuse, with exit 2 before any listing, a glob that carries a sign of a
+  regular expression (a leading `^`, a final `$`, `\.`, `\d`, `(a|b)`), naming `--include-regex` or
+  `--exclude-regex`; a 0.3 command line no longer lists nothing and exits 0 (#526). A directory an interrupted
+  0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
+  `--overwrite`, and `swath resume` refuses it as written by 0.3.
 - Go port: a seeded run with many workers and a small spill cap no longer crawls on spill the output has passed.
   The frontier window held admission while live spill was past half the cap, and with durable spill most of that
   spill could be certificates already drained, waiting for the part holding their rows to publish, which no

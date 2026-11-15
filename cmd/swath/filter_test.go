@@ -144,7 +144,7 @@ func TestFilterRefusals(t *testing.T) {
 	var u usageError
 	for _, f := range [][]string{{"--metadata", "names", "--min-size", "1"}, {"--metadata", "names", "--max-size", "1M"},
 		{"--metadata", "names", "--modified-since", "7d"}, {"--metadata", "names", "--modified-until", "2026-01-01"}, {"--storage-class", "STANDARD"},
-		{"--include", "a**b"}, {"--exclude", ""}, {"--include", "{a,{b}}"}, {"--include-regex", "(a)\\1"}} {
+		{"--include", "a**b"}, {"--include", `\.parquet$`}, {"--exclude", "^tmp/"}, {"--exclude", ""}, {"--include", "{a,{b}}"}, {"--include-regex", "(a)\\1"}} {
 		if err := runDu(context.Background(), append([]string{root, "--no-stats"}, f...), io.Discard); !errors.As(err, &u) {
 			t.Errorf("%v: %v", f, err)
 		}

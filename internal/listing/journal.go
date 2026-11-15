@@ -157,6 +157,8 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 		return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
 	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir) && !(cfg.remote != nil && dataset.Unfinalized(cfg.Output.Dir)):
 		return nil, ErrComplete
+	case cfg.Output.Resume && dataset.InterruptedV03(cfg.Output.Dir):
+		return nil, dataset.ErrPriorRelease
 	case cfg.Output.Resume:
 		// An unfinished run has a journal file (a workspace alone, empty
 		// or holding only the lock, is nothing to resume, and is left as

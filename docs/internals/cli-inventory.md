@@ -30,7 +30,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include-regex` (Go RE2, found anywhere, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
+| `--include REGEX` | `--include-regex` (Go RE2, found anywhere, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added; a glob with a regex sign (leading `^`, final `$`, `\.`, `(a|b)`) is refused naming `--include-regex` | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
 | `--exclude REGEX` | `--exclude-regex` (Go RE2, repeatable); `--exclude GLOB` is a glob | renamed; globs added | 2026-11-10 (owner: as `--include`) |
 | `--min-size SIZE` | `--min-size` (`KB`, `MB` decimal, unlike Java; `K`, `KiB` binary) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
@@ -43,7 +43,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl`, stdout only (auto: the table on a terminal, TSV otherwise); with `-o` refused, the name decides | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features); stdout only 2026-11-06 (owner: text output in the shapes people already know): a file's name already says its format |
+| `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl`, for text rows (auto: the table on a terminal, TSV otherwise); with `-o` the file's name decides, and a `--format` that disagrees with it, or names a dataset directory, is refused (exit 2) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features); stdout only 2026-11-06 (owner: text output in the shapes people already know): a file's name already says its format |
 | `--format parquet` | none: the `-o` name selects the output ([output](../output.md#choosing-an-output)) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the `-o` name already decides) |
 | Text row fields `key size last_modified etag storage_class row_type` (+ JSONL `owner_id owner_display_name checksum_algorithm checksum_type`) | the source schema's columns: `key`, then every column in the dataset's order under its name, values as stored | renamed | 2026-11-06 the S3 API's object; 2026-11-10 (owner: text output works for every source through one interface, the schema) |
 | `row_type` (always `OBJECT`) | none | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (every row is an object) |
@@ -93,11 +93,11 @@ decision to add it later).
 | `--checkpoint auto` (`.swath/checkpoint.sqlite`) | journal at `DIR/.swath/journal`, on for S3, GCS and Azure Blob datasets where supported; local runs keep none | renamed | record journal replaces the SQLite checkpoint, 2026-11-05 |
 | `--checkpoint PATH` | none | removed | record journal replaces the SQLite checkpoint, 2026-11-05; not ported, 2026-11-06: no value now (the SQLite checkpoint surface) |
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
-| `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
+| `--restart` | none; `--overwrite` starts over an interrupted run, a 0.3 run's directory included (resume refuses that one: it was written by 0.3) | renamed | – |
 | `--overwrite`, `--force` | `--overwrite` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](../running.md#stopping-and-resuming) replaces the earlier prefix-only description |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
-| Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
+| Resume accepts a few operational options | accepts the listed runtime and operational flags only (the set is broader than Java's, which took `--tune`, `--stats`, `--progress`, the bearer flags and `-v`/`-q`/`--color`) | changed (broader) | – |
 | Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 3, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |
 | Java checkpoint files | not read | removed | no migration of Java checkpoint files, 2026-11-05 |
 | `dump-run` (hidden staging inspector) | `swath show [--journal] DIR` (manifest summary or journal dump) | renamed | staging not ported, 2026-11-05 |
@@ -118,7 +118,7 @@ decision to add it later).
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | the adaptive limit (default on) adapts concurrency to sustained throttling and recovery; `--no-adaptive-limit` removes the limit. [Request admission](clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
-| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default; [request admission](clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
+| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default (Java ramped by default); [request admission](clients.md#request-admission) owns its initial limit and growth rules. | changed (off by default) | – |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
