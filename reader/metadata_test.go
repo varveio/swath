@@ -36,7 +36,7 @@ func TestParseMetadata(t *testing.T) {
 	}
 	c := m.Coverage
 	if m.SchemaID != S3ObjectsV1 || !m.Swath || !m.PublishedAt.Equal(time.Date(2026, 11, 8, 18, 0, 0, 123456000, time.UTC)) ||
-		*m.Source.Kind != "s3" || *m.Source.URI != "s3://bucket/logs/" || *m.Source.Container != "bucket" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "logs/" ||
+		*m.Source.Kind != "s3" || *m.Source.URI != "s3://bucket/logs/" || *m.Source.Container != "bucket" || m.Source.Metadata != nil || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "logs/" ||
 		!*c.Complete || *c.StopReason != "completed" || *c.Unreadable != 0 || c.Exclusions == nil || c.Filters == nil || len(c.Filters) != 0 || *c.Snapshot ||
 		c.ListingStartedAt.Hour() != 17 || c.ListingFinishedAt.Minute() != 59 || m.CommittedObjectBytes == nil || *m.CommittedObjectBytes != 81234 {
 		t.Fatalf("parsed %+v", m)
@@ -69,13 +69,13 @@ func TestParseMetadata(t *testing.T) {
 	}
 
 	// Absent members are nil, present zero values are not.
-	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "source": {"kind": "local-fs", "uri": "/data"}, "scope": {"kind": "whole"},
+	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "source": {"kind": "local-fs", "uri": "/data", "metadata": "names"}, "scope": {"kind": "whole"},
 		"coverage": {"complete": false, "unreadable": 0}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	c = m.Coverage
-	if m.PublishedAt != nil || m.Source.Container != nil || m.Scope.Prefix != nil || c.Complete == nil || *c.Complete || c.Unreadable == nil ||
+	if m.PublishedAt != nil || m.Source.Container != nil || *m.Source.Metadata != "names" || m.Scope.Prefix != nil || c.Complete == nil || *c.Complete || c.Unreadable == nil ||
 		c.StopReason != nil || c.Filters != nil || c.Exclusions != nil || c.Snapshot != nil || c.ListingStartedAt != nil || m.CommittedObjectBytes != nil {
 		t.Fatalf("partial %+v %+v", m, *c)
 	}

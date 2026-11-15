@@ -299,7 +299,8 @@ func helpOf(cmd command) commandHelp {
 			about: "Total SOURCE's objects (a local tree's files), bytes and newest time, per prefix with -d N. " +
 				"Each run lists SOURCE again; --from-dataset DIR totals a dataset saved by swath list -o DIR instead.",
 			detail: "-d N totals each prefix down to N levels below SOURCE, a parent including its children, as du. A table on a terminal puts the total last; " +
-				"pipes default to TSV, --format jsonl selects JSONL, and both put the total first, at depth 0. Bytes are the objects' sizes as listed, not storage or billing. " + src,
+				"pipes default to TSV, --format jsonl selects JSONL, and both put the total first, at depth 0. Each row has the lengths (size) and a local tree's allocated bytes (allocated_bytes, on disk), " +
+				"not storage or billing. " + src,
 			examples: []string{"swath du " + a, "swath du -d 1 " + local, "swath du " + b + " --format jsonl", "swath du --from-dataset logs-inventory -d 2 --sort size"}}
 	}
 	return commandHelp{usage: []string{"list SOURCE [OPTIONS]", "ls SOURCE [OPTIONS]"},

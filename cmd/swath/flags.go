@@ -76,8 +76,12 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	source.Define(f, source.Flag{Name: "max-depth", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "the same as --depth"}).Hidden = true
 	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
-		Usage: "local: total the files' allocated bytes instead of their apparent size",
-		Long:  "The files' st_blocks x 512. A directory's own blocks are not counted, so a tree's total is below du's by them."})
+		Usage: "local: show and --sort size by the files' allocated bytes (on disk)",
+		Long: "The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. " +
+			"A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
+	def(source.Flag{Name: "apparent-size", Value: source.Switch(&o.apparentSize), Group: source.GroupTotals, Commands: []string{cmdDu},
+		Usage: "show and --sort size by the lengths (the default)",
+		Long:  "Not with --allocated."})
 	def(source.Flag{Name: "count-links", Short: "l", Value: source.Switch(&o.countLinks), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",
 		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there."})
@@ -102,6 +106,9 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "A name ending in .parquet is refused unless it ends in / (an explicit directory). A file's name says its format; a --format that agrees with it is accepted."})
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
 		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "on stdout: auto is the table on a terminal, TSV otherwise"})
+	def(source.Flag{Name: "no-header", Value: source.Switch(&o.noHeader), Group: source.GroupOutput, Commands: []string{cmdList, cmdDu, cmdDiagList},
+		Usage: "TSV: leave out the header line of column names",
+		Long:  "Not with the table, JSONL or a dataset; on a terminal the rows are then TSV."})
 	def(source.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: source.GroupOutput, Commands: writing,
 		Usage: "TSV and JSONL: these columns, in order (repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
@@ -570,9 +577,8 @@ func shownValue(fl *pflag.Flag, value string) string {
 // an unknown-flag error on swath du says in their place. A plain synonym
 // is the flag's source.Flag.Familiar instead.
 var duSpellings = map[string]string{
-	"s":             "the total alone is the default: --depth 0",
-	"summarize":     "the total alone is the default: --depth 0",
-	"apparent-size": "apparent sizes are the default; --allocated totals blocks",
+	"s":         "the total alone is the default: --depth 0",
+	"summarize": "the total alone is the default: --depth 0",
 }
 
 // oldSpellings are swath 0.3's flags that no flag stands for: what an

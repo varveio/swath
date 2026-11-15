@@ -111,7 +111,6 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--concurrency", "8"}, "unknown flag --concurrency (did you mean --workers?)"},
 		{[]string{"/d", "-s"}, "unknown flag -s (the total alone is the default: --depth 0)"},
 		{[]string{"/d", "--summarize"}, "unknown flag --summarize (the total alone is the default: --depth 0)"},
-		{[]string{"/d", "--apparent-size"}, "unknown flag --apparent-size (apparent sizes are the default; --allocated totals blocks)"},
 		{[]string{"s3://b", "--force-path-style"}, "unknown flag --force-path-style (did you mean --s3-path-style?)"},
 		{[]string{"s3://b", "--no-force-path-style"}, "unknown flag --no-force-path-style (did you mean --no-s3-path-style?)"},
 		{[]string{"s3://b", "--bearer-token-refresh-interval", "1h"}, "unknown flag --bearer-token-refresh-interval (did you mean --s3-bearer-token-refresh-interval?)"},

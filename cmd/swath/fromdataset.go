@@ -36,7 +36,7 @@ import (
 // totals', the output's, the filters' and the terminal's that rows already
 // listed can answer. Every other flag shapes a listing (a provider's, a
 // limit, the run report) and is refused, never ignored.
-var datasetFlags = []string{"from-dataset", "depth", "sort", "max-prefixes", "allocated", "count-links", "max-inodes", "format",
+var datasetFlags = []string{"from-dataset", "depth", "sort", "max-prefixes", "allocated", "apparent-size", "count-links", "max-inodes", "format", "no-header",
 	"include", "exclude", "include-regex", "exclude-regex", "min-size", "max-size", "modified-since", "modified-until", "storage-class",
 	"verbose", "quiet", "color", "log-format", "no-progress", "no-stats"}
 
@@ -150,14 +150,15 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		return usageError{fmt.Errorf("PREFIX %q is not inside the dataset's scope: it holds the keys under %q", prefix, scope)}
 	}
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !o.countLinks}
-	if o.allocated {
-		opt.BytesColumn = totals.AllocatedBytes
-	}
+	// A tree listed at the names tier has no link counts: its files count
+	// under every name, as a live names-tier swath du counts them.
+	names := info.NamesTier != "" && m.Source != nil && m.Source.Metadata != nil && *m.Source.Metadata == info.NamesTier
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
+		Primary: primaryFigure(&o)}
 	o.filter.Base = origin
 	format, _ := totalsFormat(&o, stdoutTerminal())
 	prov := provenanceOf(o.fromDataset, m)
-	t := &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}
+	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt)}
 	if t.dataset, err = json.Marshal(prov); err != nil {
 		return err
 	}
