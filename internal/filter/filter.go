@@ -42,7 +42,7 @@ type Spec struct {
 	IncludeRegex, ExcludeRegex []string
 	MinSize, MaxSize           string // size text (ParseSize): 1K, 256MB, 1.5GiB
 	// Since and Until are 2026-01-01, 2026-01-01T12:00:00 (or with a space
-	// for the T, as the tables print a time) or 2026-01-01T12:00:00Z, or a
+	// for the T) or 2026-01-01T12:00:00Z, or a
 	// duration before the run's start (7d), which Resolve replaces by the
 	// time it names.
 	Since, Until   string
@@ -417,7 +417,7 @@ func (s *Spec) Resolve(now time.Time) {
 }
 
 // ParseTime is an instant with Z or an offset, a date-time without one
-// taken as UTC (as the tables print times; a space may stand for the T), or
+// taken as UTC (a space may stand for the T), or
 // a date (its start, UTC); epoch microseconds.
 func ParseTime(text string) (int64, error) {
 	s := strings.TrimSpace(text)
@@ -429,7 +429,7 @@ func ParseTime(text string) (int64, error) {
 			return t.UnixMicro(), nil
 		}
 	}
-	return 0, errors.New("want a time such as 2026-01-01, 2026-01-01 12:00 or 2026-01-01T12:00:00Z (UTC without an offset), or a duration before now such as 7d")
+	return 0, errors.New("want a time such as 2026-01-01, 2026-01-01 12:00 or 2026-01-01T12:00:00Z, or a duration before now such as 7d")
 }
 
 // Equal reports whether two description lists are the same filters.

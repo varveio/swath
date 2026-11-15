@@ -187,7 +187,7 @@ sizes) with exit 2.
 - <a id="option-modified-since"></a>[`--modified-since TIME`](#option-modified-since)\
   keep objects or entries modified at or after TIME (2026-01-01, 7d)
 
-  2026-01-01, 2026-01-01T12:00, 2026-01-01 12:00:00 (the tables' form), with an offset or Z, or without one: UTC, as the tables print times. A duration (7d, 12h) is that long before the run started, recorded as the time it names.
+  2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00; an offset or Z, UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names.
 
 - <a id="option-modified-until"></a>[`--modified-until TIME`](#option-modified-until)\
   keep objects or entries modified at or before this time
@@ -461,10 +461,9 @@ Filters:
                                 KB, MB, GB, TB (decimal), any case.
       --max-size SIZE         keep objects or entries of at most this size
       --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                                2026-01-01, 2026-01-01T12:00, 2026-01-01 12:00:00 (the tables'
-                                form), with an offset or Z, or without one: UTC, as the tables print
-                                times. A duration (7d, 12h) is that long before the run started,
-                                recorded as the time it names.
+                                2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00; an offset or Z,
+                                UTC without one. A duration (7d, 12h) is that long before the run
+                                started, recorded as the time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
       --storage-class NAME[,NAME...]
                               keep objects in these storage classes (STANDARD,GLACIER; repeatable)

@@ -406,8 +406,7 @@ func TestTimes(t *testing.T) {
 	if a, b := us(t, "2026-01-01T12:00:00+02:00"), us(t, "2026-01-01T10:00"); a != b {
 		t.Errorf("offset %d, local %d", a, b)
 	}
-	// A time without an offset is UTC, as the tables print times, and
-	// their form, a space for the T, is read too.
+	// A space may stand for the T.
 	for _, in := range []string{"2026-01-01 10:00", "2026-01-01 10:00:00", "2026-01-01  10:00:00.000", "2026-01-01 10:00:00Z", "2026-01-01T10:00:00Z"} {
 		if got := us(t, in); got != us(t, "2026-01-01T10:00") {
 			t.Errorf("%q: %d", in, got)

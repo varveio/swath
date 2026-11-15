@@ -73,10 +73,10 @@ swath: --include-regex "(a|b)\\1": want a regular expression in Go's RE2 syntax:
 
 - `--min-size` and `--max-size` take a [SIZE](commands/swath.md#sizes-and-durations): `1M` and `1MiB` are
   binary, `1MB` decimal. They never match an S3 delete marker.
-- `--modified-since` and `--modified-until` take a date (`2026-01-01`), a time (`2026-01-01T12:00:00`, or
-  `2026-01-01 12:00` as the tables print one; with `Z` or an offset, or without one: UTC, the zone every
-  table prints), or a duration before the run started (`7d`, `12h`), which the run records as the time it
-  names, so a resume keeps the same bound. A row without a time is kept.
+- `--modified-since` and `--modified-until` take a date (`2026-01-01`), a time (`2026-01-01T12:00:00` or
+  `2026-01-01 12:00:00`, with `Z` or an offset; UTC without one), or a duration before the run started (`7d`,
+  `12h`), which the run records as the time it names, so a resume keeps the same bound. A row without a time
+  is kept.
 - `--storage-class` matches in any case. On S3 and GCS it is the storage class; on Azure Blob the access tier
   (`Hot`, `Cool`, `Cold`, `Archive`). A row without a class is in none and is dropped.
 
