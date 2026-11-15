@@ -71,8 +71,13 @@ func TestRefreshAheadOncePerLifetime(t *testing.T) {
 			for range 8 {
 				wg.Go(func() {
 					for time.Now().Before(end) {
+						// The clock is read before the call, as wall time
+						// like the cache's: one read after it can fall past
+						// an expiry the cache checked a moment before
+						// (macOS CI, 2026-11-15).
+						asked := time.Now().Round(0)
 						creds, err := c.Retrieve(context.Background())
-						if err != nil || !time.Now().Before(creds.Expires) {
+						if err != nil || !asked.Before(creds.Expires) {
 							t.Errorf("%v, expires %v", err, creds.Expires)
 							return
 						}
