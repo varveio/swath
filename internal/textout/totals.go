@@ -10,54 +10,78 @@ import (
 	"io"
 	"iter"
 	"strconv"
-	"time"
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/totals"
 )
 
 // The per-prefix totals' fields (swath du): TSV columns and JSONL members,
-// the same for every source. prefix_base64 replaces prefix for a prefix
-// that is not UTF-8 (a local name's bytes), which a JSON string cannot
-// carry exactly; allocated_size replaces size with --allocated; a local
-// tree's rows add dirs and unsized; JSONL totals read from a dataset add
-// dataset (TotalsLayout.Dataset).
+// the same for every source. The byte figures keep the dataset's names
+// (size, allocated_bytes), each with the objects that had no value for it;
+// the newest time under a prefix is max_last_modified, not a row's
+// last_modified. prefix_base64 replaces prefix for a prefix that is not
+// UTF-8 (a local name's bytes), which a JSON string cannot carry exactly; a
+// local tree's rows add dirs; JSONL totals read from a dataset add dataset
+// (TotalsLayout.Dataset).
 const (
-	FieldDepth         = "depth"
-	FieldPrefix        = "prefix"
-	FieldPrefixBase64  = FieldPrefix + Base64Suffix
-	FieldObjects       = "objects"
-	FieldDirs          = "dirs"
-	FieldSize          = "size"
-	FieldAllocatedSize = "allocated_size"
-	FieldUnsized       = "unsized"
-	FieldLastModified  = "last_modified"
-	FieldDataset       = "dataset"
+	FieldRowType               = "row_type"
+	FieldDepth                 = "depth"
+	FieldPrefix                = "prefix"
+	FieldPrefixBase64          = FieldPrefix + Base64Suffix
+	FieldObjects               = "objects"
+	FieldDirs                  = "dirs"
+	FieldSize                  = totals.Size
+	FieldSizeMissing           = totals.Size + missingSuffix
+	FieldAllocatedBytes        = totals.AllocatedBytes
+	FieldAllocatedBytesMissing = totals.AllocatedBytes + missingSuffix
+	FieldMaxLastModified       = "max_last_modified"
+	FieldPrimary               = "primary"
+	FieldSort                  = "sort"
+	FieldLinksOnce             = "links_once"
+	FieldDataset               = "dataset"
+
+	missingSuffix = "_missing"
 )
 
-// The table's headings are the fields' names, as the rows table's are the
-// schema's, but for what people read differently: a local tree's objects
-// are files under paths, and the times are the reader's local time
-// (headingLocalTime).
+// The row_type values: the total (depth 0, whose prefix is the source's,
+// empty for a whole bucket or tree) and every other prefix.
 const (
-	headingFiles = "files"
-	headingPath  = "path"
-	headingTotal = "(total)" // the total row's prefix in the table
+	RowTotal  = "total"
+	RowPrefix = "prefix"
 )
 
-// TotalsLayout is what the totals' rows hold besides the prefix, objects,
-// bytes and time, and how the table shows times.
+// The table's headings are the fields' names, but for what people read
+// differently: the apparent size beside the allocated bytes, a local
+// tree's objects as files under paths.
+const (
+	headingApparent = "size (apparent)" // size, beside the on-disk figure
+	headingOnDisk   = "on disk"         // allocated_bytes
+	headingFiles    = "files"
+	headingPath     = "path"
+	headingTotal    = "(total)" // the total row's prefix in the table
+	// partialMark marks a figure in the table that leaves out objects
+	// without a value: a lower bound.
+	partialMark = ">= "
+)
+
+// TotalsLayout is what the totals' rows hold besides the prefix, the
+// objects, the figures and the time.
 type TotalsLayout struct {
-	// Allocated: the bytes are allocated bytes (AllocatedSize), not the
-	// apparent size.
-	Allocated bool
+	// Primary is the figure --sort size orders by and the table puts
+	// first: totals.Size ("") or totals.AllocatedBytes. Sort is the order,
+	// "name" or "size", and LinksOnce whether hard-linked files counted
+	// once (totals.Tally.LinksOnce); every row carries the three.
+	Primary   string
+	Sort      string
+	LinksOnce bool
 	// Local: the source is a local tree, whose rows carry their Dirs and
-	// their Unsized (files the metadata tier read no size for: the names
-	// tier), and whose table calls the objects files.
+	// whose table calls the objects files.
 	Local bool
-	// Loc is the table's time zone (nil: time.Local); TSV and JSONL are
-	// UTC.
-	Loc *time.Location
+	// Allocated: the source has allocated bytes (totals.Tally.Allocated),
+	// so the table has their column; TSV and JSONL always do.
+	Allocated bool
+	// NoHeader leaves out TSV's header line.
+	NoHeader bool
 	// Dataset, if set, is a JSON object that every JSONL row carries as
 	// its last member, FieldDataset: where totals read from a saved
 	// dataset came from (swath du --from-dataset). TSV and the table have
@@ -65,63 +89,75 @@ type TotalsLayout struct {
 	Dataset []byte
 }
 
+func (l *TotalsLayout) primary() string {
+	if l.Primary == "" {
+		return totals.Size
+	}
+	return l.Primary
+}
+
 // WriteTotals writes per-prefix totals (swath du): TSV under a header line
-// and JSONL in the order given (byte order, the total first), each row's
-// depth first (0: the total), TSV's prefix last as du prints its path; or
-// the table, the total last, as du's and wc's. A row includes its
-// descendants, so only rows of one depth may be summed. TSV and JSONL
-// carry exact bytes and the rows' times (appendTime); size is the bytes of
-// the objects that had a size, and a local tree's unsized counts those
-// that had none (as rclone size's sizeless); the time is null (\N in TSV)
-// when no object under the prefix had one. TSV takes the rows' grammar
-// (appendTSV), so any name round-trips; in JSONL a prefix that is not
-// UTF-8 is prefix_base64, its exact bytes, instead of prefix. The table is
-// for reading: sizes in binary units ("-" when one is unknown), local
-// times to the second, the prefix (a local tree's path) last as du prints
-// it.
+// (unless NoHeader) and JSONL in the order given (byte order, the total
+// first), each row's type and depth first (0: the total), TSV's prefix
+// last as du prints its path; or the table, the total last, as du's and
+// wc's. A row includes its descendants, so only rows of one depth may be
+// summed. TSV and JSONL carry both byte figures, exact, each with the
+// objects that had no value for it: a figure is the sum of the values
+// there were, and null (\N in TSV) when no object under a non-empty prefix
+// had one; the time is null when no object had one. Every row repeats the
+// primary figure, the order and whether hard links counted once. TSV takes
+// the rows' grammar (appendTSV), so any name round-trips; in JSONL a
+// prefix that is not UTF-8 is prefix_base64, its exact bytes, instead of
+// prefix. The table is for reading: the figures in binary units, the
+// primary first ("-" when unknown, ">= " before a partial sum), the
+// allocated bytes only for a source that has them, no time, and the
+// prefix (a local tree's path) last, indented by its depth.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
 	var tw tableWidths
 	switch format {
 	case TSV:
-		b = append(b, FieldDepth+"\t"+FieldObjects...)
-		if l.Local {
-			b = append(b, "\t"+FieldDirs...)
+		if !l.NoHeader {
+			b = append(b, FieldRowType+"\t"+FieldDepth+"\t"+FieldObjects...)
+			if l.Local {
+				b = append(b, "\t"+FieldDirs...)
+			}
+			b = append(b, "\t"+FieldSize+"\t"+FieldSizeMissing+"\t"+FieldAllocatedBytes+"\t"+FieldAllocatedBytesMissing+
+				"\t"+FieldMaxLastModified+"\t"+FieldPrimary+"\t"+FieldSort+"\t"+FieldLinksOnce+"\t"+FieldPrefix+"\n"...)
 		}
-		b = append(append(b, '\t'), l.sizeField()...)
-		if l.Local {
-			b = append(b, "\t"+FieldUnsized...)
-		}
-		b = append(b, "\t"+FieldLastModified+"\t"+FieldPrefix+"\n"...)
 	case JSONL:
 	case Table:
-		tw = widths(l, rows)
-		b = tw.header(b, l)
+		tw = widths(&l, rows)
+		b = tw.header(b, &l)
 	default:
 		return fmt.Errorf("text output: per-prefix totals have no %q format", format)
 	}
 	for r := range totalsOrder(format, rows) {
 		switch format {
 		case TSV:
+			b = append(append(b, rowType(r)...), '\t')
 			b = strconv.AppendInt(b, int64(r.Depth), 10)
 			b = strconv.AppendInt(append(b, '\t'), r.Objects, 10)
 			if l.Local {
 				b = strconv.AppendInt(append(b, '\t'), r.Dirs, 10)
 			}
-			b = strconv.AppendInt(append(b, '\t'), r.Bytes, 10)
-			if l.Local {
-				b = strconv.AppendInt(append(b, '\t'), r.Unsized, 10)
-			}
+			b = appendTSVFigure(append(b, '\t'), r.Size, r.HasSize)
+			b = strconv.AppendInt(append(b, '\t'), r.SizeMissing, 10)
+			b = appendTSVFigure(append(b, '\t'), r.Allocated, r.HasAllocated)
+			b = strconv.AppendInt(append(b, '\t'), r.AllocatedMissing, 10)
 			b = append(b, '\t')
 			if r.HasNewest {
 				b = appendTime(b, r.Newest)
 			} else {
 				b = append(b, nullTSV...)
 			}
+			b = append(append(append(append(append(b, '\t'), l.primary()...), '\t'), l.Sort...), '\t')
+			b = strconv.AppendBool(b, l.LinksOnce)
 			b = appendTSV(append(b, '\t'), r.Prefix)
 		case JSONL:
-			b = strconv.AppendInt(append(b, `{"`+FieldDepth+`":`...), int64(r.Depth), 10)
+			b = append(append(append(b, `{"`+FieldRowType+`":"`...), rowType(r)...), '"')
+			b = strconv.AppendInt(append(b, `,"`+FieldDepth+`":`...), int64(r.Depth), 10)
 			if utf8.ValidString(r.Prefix) {
 				b = appendJSONString(append(b, `,"`+FieldPrefix+`":`...), r.Prefix)
 			} else {
@@ -132,21 +168,24 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 			if l.Local {
 				b = strconv.AppendInt(append(b, `,"`+FieldDirs+`":`...), r.Dirs, 10)
 			}
-			b = strconv.AppendInt(append(append(append(b, `,"`...), l.sizeField()...), `":`...), r.Bytes, 10)
-			if l.Local {
-				b = strconv.AppendInt(append(b, `,"`+FieldUnsized+`":`...), r.Unsized, 10)
-			}
+			b = appendJSONFigure(append(b, `,"`+FieldSize+`":`...), r.Size, r.HasSize)
+			b = strconv.AppendInt(append(b, `,"`+FieldSizeMissing+`":`...), r.SizeMissing, 10)
+			b = appendJSONFigure(append(b, `,"`+FieldAllocatedBytes+`":`...), r.Allocated, r.HasAllocated)
+			b = strconv.AppendInt(append(b, `,"`+FieldAllocatedBytesMissing+`":`...), r.AllocatedMissing, 10)
 			if r.HasNewest {
-				b = append(appendTime(append(b, `,"`+FieldLastModified+`":"`...), r.Newest), '"')
+				b = append(appendTime(append(b, `,"`+FieldMaxLastModified+`":"`...), r.Newest), '"')
 			} else {
-				b = append(b, `,"`+FieldLastModified+`":null`...)
+				b = append(b, `,"`+FieldMaxLastModified+`":null`...)
 			}
+			b = append(append(b, `,"`+FieldPrimary+`":"`...), l.primary()...)
+			b = append(append(b, `","`+FieldSort+`":"`...), l.Sort...)
+			b = strconv.AppendBool(append(b, `","`+FieldLinksOnce+`":`...), l.LinksOnce)
 			if l.Dataset != nil {
 				b = append(append(b, `,"`+FieldDataset+`":`...), l.Dataset...)
 			}
 			b = append(b, '}')
 		case Table:
-			b = tw.row(b, l, r)
+			b = tw.row(b, &l, r)
 		}
 		b = append(b, '\n')
 		if _, err := bw.Write(b); err != nil {
@@ -158,6 +197,30 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 		return err
 	}
 	return bw.Flush()
+}
+
+// rowType is r's row_type: the total (depth 0) or a prefix.
+func rowType(r *totals.Prefix) string {
+	if r.Depth == 0 {
+		return RowTotal
+	}
+	return RowPrefix
+}
+
+// appendTSVFigure appends a byte figure, \N when unknown.
+func appendTSVFigure(b []byte, n int64, ok bool) []byte {
+	if !ok {
+		return append(b, nullTSV...)
+	}
+	return strconv.AppendInt(b, n, 10)
+}
+
+// appendJSONFigure appends a byte figure, null when unknown.
+func appendJSONFigure(b []byte, n int64, ok bool) []byte {
+	if !ok {
+		return append(b, "null"...)
+	}
+	return strconv.AppendInt(b, n, 10)
 }
 
 // totalsOrder yields rows in format's order: as given, but for the table,
@@ -182,78 +245,95 @@ func totalsOrder(format string, rows []totals.Prefix) iter.Seq[*totals.Prefix] {
 	}
 }
 
-// sizeField is the bytes' field name.
-func (l TotalsLayout) sizeField() string {
-	if l.Allocated {
-		return FieldAllocatedSize
+// figures are the table's byte figures in order, by name: the primary
+// first, the allocated bytes only where the source has them.
+func (l *TotalsLayout) figures() []string {
+	switch {
+	case !l.Allocated:
+		return []string{totals.Size}
+	case l.primary() == totals.AllocatedBytes:
+		return []string{totals.AllocatedBytes, totals.Size}
+	}
+	return []string{totals.Size, totals.AllocatedBytes}
+}
+
+// heading is a figure's table heading: the size is plainly size where it
+// is the only one.
+func (l *TotalsLayout) heading(figure string) string {
+	switch {
+	case figure == totals.AllocatedBytes:
+		return headingOnDisk
+	case l.Allocated:
+		return headingApparent
 	}
 	return FieldSize
 }
 
 // tableWidths are the table's right-aligned columns' widths: each its
 // heading's or its widest value's.
-type tableWidths struct{ size, objects, dirs int }
+type tableWidths struct {
+	figures       [2]int // by l.figures' order
+	objects, dirs int
+}
 
-// timeWidth is the table's time column, as wide as the heading.
-const timeWidth = max(len(tableTime), len(headingLocalTime))
-
-func widths(l TotalsLayout, rows []totals.Prefix) tableWidths {
-	w := tableWidths{size: len(l.sizeField()), objects: len(headingFiles), dirs: len(FieldDirs)}
+func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
+	var w tableWidths
+	figs := l.figures()
+	for i, f := range figs {
+		w.figures[i] = len(l.heading(f))
+	}
+	w.objects, w.dirs = len(headingFiles), len(FieldDirs)
 	if !l.Local {
 		w.objects = len(FieldObjects)
 	}
-	var num [24]byte
+	var num [32]byte
 	for i := range rows {
 		r := &rows[i]
-		w.size = max(w.size, len(appendPrefixSize(num[:0], r)))
+		for j, f := range figs {
+			w.figures[j] = max(w.figures[j], len(appendTableFigure(num[:0], r, f)))
+		}
 		w.objects = max(w.objects, len(strconv.AppendInt(num[:0], r.Objects, 10)))
 		w.dirs = max(w.dirs, len(strconv.AppendInt(num[:0], r.Dirs, 10)))
 	}
 	return w
 }
 
-func (w tableWidths) header(b []byte, l TotalsLayout) []byte {
-	size, objects, prefix := l.sizeField(), FieldObjects, FieldPrefix
+func (w tableWidths) header(b []byte, l *TotalsLayout) []byte {
+	objects, prefix := FieldObjects, FieldPrefix
 	if l.Local {
 		objects, prefix = headingFiles, headingPath
 	}
-	b = appendPadded(b, []byte(size), w.size)
+	for i, f := range l.figures() {
+		if i > 0 {
+			b = append(b, "  "...)
+		}
+		b = appendPadded(b, []byte(l.heading(f)), w.figures[i])
+	}
 	b = appendPadded(append(b, "  "...), []byte(objects), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), []byte(FieldDirs), w.dirs)
 	}
-	b = append(b, "  "+headingLocalTime...)
-	for range timeWidth - len(headingLocalTime) {
-		b = append(b, ' ')
-	}
 	return append(append(b, "  "...), prefix+"\n"...)
 }
 
-func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix) []byte {
-	var num [24]byte
-	b = appendPadded(b, appendPrefixSize(num[:0], r), w.size)
+func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
+	var num [32]byte
+	for i, f := range l.figures() {
+		if i > 0 {
+			b = append(b, "  "...)
+		}
+		b = appendPadded(b, appendTableFigure(num[:0], r, f), w.figures[i])
+	}
 	b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Objects, 10), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Dirs, 10), w.dirs)
 	}
 	b = append(b, "  "...)
-	if r.HasNewest {
-		loc := l.Loc
-		if loc == nil {
-			loc = time.Local
-		}
-		b = appendLocal(b, r.Newest, loc)
-		for range timeWidth - len(tableTime) {
-			b = append(b, ' ')
-		}
-	} else {
-		for range timeWidth {
-			b = append(b, ' ')
-		}
-	}
-	b = append(b, "  "...)
 	if r.Depth == 0 {
 		return append(b, headingTotal...)
+	}
+	for range 2 * (r.Depth - 1) { // a level's rows under its parent's
+		b = append(b, ' ')
 	}
 	return appendTSV(b, r.Prefix)
 }
@@ -266,13 +346,22 @@ func appendPadded(b, s []byte, width int) []byte {
 	return append(b, s...)
 }
 
-// appendPrefixSize appends a prefix's size for the table: appendIEC, or
-// "-" when an object under it had no size.
-func appendPrefixSize(b []byte, r *totals.Prefix) []byte {
-	if !r.Sized() {
-		return append(b, '-')
+// appendTableFigure appends a prefix's figure for the table: appendIEC, "-"
+// when it is unknown, and after partialMark when objects without a value
+// leave it a lower bound.
+func appendTableFigure(b []byte, r *totals.Prefix, figure string) []byte {
+	n, ok := r.Figure(figure)
+	missing := r.SizeMissing
+	if figure == totals.AllocatedBytes {
+		missing = r.AllocatedMissing
 	}
-	return appendIEC(b, r.Bytes)
+	switch {
+	case !ok:
+		return append(b, missingCell...)
+	case missing > 0:
+		b = append(b, partialMark...)
+	}
+	return appendIEC(b, n)
 }
 
 // iecUnits are the binary units a table's sizes are given in.

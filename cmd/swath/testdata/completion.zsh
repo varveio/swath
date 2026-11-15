@@ -9,6 +9,7 @@ _swath_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--no-header[TSV: leave out the header line of column names]' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
@@ -83,13 +84,15 @@ _swath_list() {
 _swath_du() {
     _arguments \
         '(-d --depth)'{-d+,--depth=}'[also total each prefix down to N levels below SOURCE (0: the total)]:N: ' \
-        '--allocated[local: total the files'\'' allocated bytes instead of their apparent size]' \
+        '--allocated[local: the files'\'' allocated bytes first, and --sort size by them]' \
+        '--apparent-size[the files'\'' lengths first, and --sort size by them (the default)]' \
         '(-l --count-links)'{-l,--count-links}'[local: count a file with several hard links under each of its names]' \
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
         '--from-dataset=[total the dataset saved in DIR (swath list -o DIR) instead of listing]:DIR:_files -/' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--no-header[TSV: leave out the header line of column names]' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -150,6 +153,7 @@ _swath_diag_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--no-header[TSV: leave out the header line of column names]' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \
@@ -241,6 +245,7 @@ _swath_diag_count() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--no-header[TSV: leave out the header line of column names]' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--work-dir=[with a bucket -o: the local work directory (lock, journal, spill)]:DIR:_files -/' \

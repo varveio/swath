@@ -39,9 +39,9 @@ const (
 // the schema stores it. TSV is one header line of the names and a line of
 // fields per row (appendTSV); JSONL one object per row, its members in
 // column order, a null JSON null, and a string or binary value that is not
-// UTF-8 as NAME_base64. The table, for people, is the time in local time,
-// the size in binary units, the kind and version columns where the schema
-// has them, and the key last.
+// UTF-8 as NAME_base64. The table, for people, is the time in UTC to the
+// second, the size in binary units, the kind and version columns where the
+// schema has them, and the key last; a missing time or size is "-".
 type Sink[P any] struct {
 	o     *Out
 	cols  []column[P] // TSV and JSONL
@@ -69,7 +69,8 @@ type ProjectionError struct{ msg string }
 
 func (e *ProjectionError) Error() string { return e.msg }
 
-// NewSink binds o to schema s; a TSV output gets its header line here. It
+// NewSink binds o to schema s; a TSV output gets its header line here
+// (unless Config.NoHeader). It
 // refuses a projection (Config.Columns) that names a column s lacks, or
 // names one twice, listing s's columns, before any row is written
 // (ProjectionError).
@@ -97,7 +98,7 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 	case o.cfg.Format == Table && len(o.cfg.Columns) > 0:
 		return nil, errors.New("text output: the table's columns are fixed; columns are chosen for TSV and JSONL")
 	case o.cfg.Format == Table:
-		k.table = newTable(s, vers, o.cfg.Loc)
+		k.table = newTable(s, vers)
 		o.cfg.Formatters = 1 // its widths grow with the rows it formats
 		if _, err := o.bw.Write(k.table.header(nil)); err != nil {
 			return nil, err
@@ -116,7 +117,7 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 			k.cols = append(k.cols, all[j])
 		}
 	}
-	if o.cfg.Format == TSV {
+	if o.cfg.Format == TSV && !o.cfg.NoHeader {
 		var h []byte
 		for i := range k.cols {
 			if i > 0 {
@@ -270,24 +271,21 @@ type table[P any] struct {
 	vers        *schema.Versions[P]
 	idName      string
 	kindW, idW  int
-	loc         *time.Location
 }
 
-// The table's headings beyond the schema's column names: the time says it
-// is local; a versions schema's latest and delete-marker roles.
+// The table's headings beyond the schema's column names: a versions
+// schema's latest and delete-marker roles.
 const (
-	headingLocalTime    = mtimeColumn + " (local)"
 	headingLatest       = "latest"
 	headingDeleteMarker = "delete_marker"
 	// sizeWidth is the widest appendIEC value ("0.98 MiB").
 	sizeWidth = 8
+	// missingCell is a missing value in the table.
+	missingCell = "-"
 )
 
-func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Location) *table[P] {
-	t := &table[P]{vers: vers, loc: loc, kindW: len(kindColumn)}
-	if t.loc == nil {
-		t.loc = time.Local
-	}
+func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P]) *table[P] {
+	t := &table[P]{vers: vers, kindW: len(kindColumn)}
 	for _, c := range s.Columns {
 		switch c.Name {
 		case mtimeColumn:
@@ -309,7 +307,7 @@ func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Lo
 }
 
 func (t *table[P]) header(b []byte) []byte {
-	b = appendLeft(b, headingLocalTime, len(headingLocalTime))
+	b = appendLeft(b, mtimeColumn, tableTimeWidth)
 	b = appendPadded(append(b, "  "...), []byte(sizeColumn), sizeWidth)
 	if t.kind != nil {
 		b = appendLeft(append(b, "  "...), kindColumn, t.kindW)
@@ -328,13 +326,15 @@ func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 	p := &r.Data
 	start := len(b)
 	if v, ok := get(t.mtime, p); ok {
-		b = appendLocal(b, v, t.loc)
+		b = appendTableTime(b, v)
+	} else {
+		b = append(b, missingCell...)
 	}
-	b = pad(b, start, len(headingLocalTime))
+	b = pad(b, start, tableTimeWidth)
 	var num [24]byte
-	n := num[:0]
+	n := append(num[:0], missingCell...)
 	if v, ok := get(t.size, p); ok {
-		n = appendIEC(n, v)
+		n = appendIEC(num[:0], v)
 	}
 	b = appendPadded(append(b, "  "...), n, sizeWidth)
 	if t.kind != nil {

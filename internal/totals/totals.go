@@ -7,8 +7,10 @@
 // prefix of depth k is a key up to and including the k-th '/' after the
 // origin, and the origin itself, depth 0, is the total. Each prefix holds
 // the objects under it, the directories below it (a local tree's), their
-// bytes and the newest modification time among them, a parent including
-// its children. A key with fewer than N '/' counts in the prefixes it has.
+// two byte figures (the apparent size and a local file's allocated bytes,
+// each with the objects that had no value for it) and the newest
+// modification time among them, a parent including its children. A key
+// with fewer than N '/' counts in the prefixes it has.
 //
 // Rows arrive concurrently from independent ranges (order.CountWithSink's
 // sink): each goroutine sums its batch into a Batch, which merges into the
@@ -20,8 +22,9 @@
 //
 // With Options.LinksOnce, an object with more than one hard link (Row.Link)
 // is counted once per (device, inode), as du does by default: its object
-// and bytes go to the prefixes of the smallest key among its links (byte
-// order), so the result does not depend on which link a worker saw first.
+// and both byte figures go to the prefixes of the smallest key among its
+// links (byte order), so the result does not depend on which link a worker
+// saw first.
 // Only those inodes are remembered, and Options.MaxInodes caps them.
 package totals
 
@@ -32,6 +35,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // DefaultMaxPrefixes is the cap on distinct prefixes when Options gives
@@ -42,8 +46,9 @@ const DefaultMaxPrefixes = 1_000_000
 // Options gives none: about 100 MB at 60-byte keys.
 const DefaultMaxInodes = 1_000_000
 
-// The bytes columns a tally sums (Options.BytesColumn): the apparent size,
-// or a local entry's allocated bytes (st_blocks × 512, du's default).
+// The byte figures a tally sums, by their columns' names: the apparent
+// size, and a local entry's allocated bytes (st_blocks × 512, du's
+// default). Options.Primary names one of them.
 const (
 	Size           = "size"
 	AllocatedBytes = "allocated_bytes"
@@ -64,9 +69,10 @@ type Options struct {
 	// MaxInodes caps the hard-linked inodes LinksOnce remembers (0:
 	// DefaultMaxInodes).
 	MaxInodes int
-	// BytesColumn names the column the bytes are read from (the registry
-	// binds it; "" is Size). It is reported, not interpreted, here.
-	BytesColumn string
+	// Primary names the figure that orders prefixes by size (SortBySize)
+	// and that a count may not lack (the registry's binding): Size ("") or
+	// AllocatedBytes. Both figures are summed whichever it is.
+	Primary string
 	// LinksOnce counts an object with several hard links once (Row.Link).
 	LinksOnce bool
 }
@@ -102,15 +108,21 @@ type Row struct {
 	Object bool
 	// Dir marks a directory (not an object): it counts in its parents'
 	// Dirs, never in its own prefix's.
-	Dir      bool
-	Bytes    int64 // valid with HasBytes
-	HasBytes bool
-	Mtime    int64 // epoch microseconds; valid with HasMtime
-	HasMtime bool
+	Dir          bool
+	Size         int64 // valid with HasSize
+	HasSize      bool
+	Allocated    int64 // allocated bytes; valid with HasAllocated
+	HasAllocated bool
+	Mtime        int64 // epoch microseconds; valid with HasMtime
+	HasMtime     bool
 	// Link marks an object with more than one hard link, identified by
 	// its device and inode; with Options.LinksOnce it counts once.
 	Link       bool
 	Dev, Inode int64
+	// Unidentified marks an object whose links LinksOnce cannot tell
+	// apart (no link count, device or inode: the names tier, Windows): it
+	// counts under its name, and the tally no longer claims LinksOnce.
+	Unidentified bool
 }
 
 // Prefix is one prefix's totals.
@@ -121,38 +133,65 @@ type Prefix struct {
 	Depth   int
 	Objects int64
 	Dirs    int64 // directories below the prefix (a local tree's)
-	Bytes   int64 // the bytes of the objects that had a size: the whole size when Unsized is 0
-	// Unsized is the objects under the prefix with no value in the bytes
-	// column (the names metadata tier): Bytes leaves them out.
-	Unsized int64
-	Newest  int64 // epoch microseconds; valid with HasNewest
+	// Size is the apparent bytes of the objects that had a size, and
+	// SizeMissing the objects that had none (the names metadata tier):
+	// Size is the whole size when it is 0. HasSize is false when the
+	// figure is unknown: every object under the prefix lacked one (an
+	// empty prefix's is a known 0).
+	Size        int64
+	SizeMissing int64
+	HasSize     bool
+	// Allocated, AllocatedMissing and HasAllocated are the same for the
+	// allocated bytes; HasAllocated is false throughout for a source
+	// without them (Tally.SetAllocated).
+	Allocated        int64
+	AllocatedMissing int64
+	HasAllocated     bool
+	Newest           int64 // epoch microseconds; valid with HasNewest
 	// HasNewest is false when no object under the prefix has a time (no
 	// object at all, or a metadata tier that reads none).
 	HasNewest bool
 }
 
-// Sized reports whether Bytes is the prefix's whole size: every object
-// under it had a value in the bytes column.
-func (p *Prefix) Sized() bool { return p.Unsized == 0 }
+// Figure is the prefix's bytes in the figure named (Size or
+// AllocatedBytes), and false when that figure is unknown.
+func (p *Prefix) Figure(name string) (int64, bool) {
+	if name == AllocatedBytes {
+		return p.Allocated, p.HasAllocated
+	}
+	return p.Size, p.HasSize
+}
 
-// Stats is the tally's account for the run report (output.totals).
+// known reports whether a figure with missing objects of p's is known:
+// some object had a value, or there is no object (0).
+func (p *Prefix) known(missing int64) bool { return p.Objects == 0 || missing < p.Objects }
+
+// Stats is the tally's account for the run report (output.totals): the
+// total's row under the rows' names, and the tally's own counts.
 type Stats struct {
 	Depth       int    `json:"depth"`
 	Prefixes    int64  `json:"prefixes"`     // distinct prefixes, the total included: the rows printed
 	MaxPrefixes int64  `json:"max_prefixes"` // the cap in effect
-	BytesColumn string `json:"bytes_column"` // the column summed: size, or allocated_bytes
+	Primary     string `json:"primary"`      // the figure --sort size orders by: size, or allocated_bytes
 	Objects     int64  `json:"objects"`      // objects counted in the total
-	Bytes       int64  `json:"bytes"`        // their bytes
 	Dirs        int64  `json:"dirs"`         // directories counted in the total (a local tree's)
+	// Size and AllocatedBytes are the total's figures, nil when unknown
+	// (Prefix.HasSize, HasAllocated); the missing counts are the objects
+	// without a value for each.
+	Size                  *int64 `json:"size"`
+	SizeMissing           int64  `json:"size_missing"`
+	AllocatedBytes        *int64 `json:"allocated_bytes"`
+	AllocatedBytesMissing int64  `json:"allocated_bytes_missing"`
+	// MaxLastModified is the newest time among the objects counted, nil
+	// when none had one.
+	MaxLastModified *time.Time `json:"max_last_modified"`
 	// NotObjects counts rows that are not objects (directories, delete
 	// markers): listed under their prefixes, not counted as objects.
 	NotObjects int64 `json:"not_objects"`
-	// Unsized counts objects without a value in the bytes column (the
-	// names tier): counted with no bytes, so the sizes are unknown.
-	Unsized int64 `json:"unsized"`
-	// LinksOnce: objects with several hard links were counted once;
-	// LinkedRows is the rows with more than one link, Inodes the distinct
-	// inodes among them (each one object), MaxInodes their cap.
+	// LinksOnce: objects with several hard links were counted once
+	// (Tally.LinksOnce); LinkedRows is the rows with more than one link,
+	// Inodes the distinct inodes among them (each one object), MaxInodes
+	// their cap.
 	LinksOnce  bool  `json:"links_once"`
 	LinkedRows int64 `json:"linked_rows"`
 	Inodes     int64 `json:"inodes"`
@@ -187,22 +226,23 @@ type inode struct{ dev, ino int64 }
 // linked is a hard-linked inode's owner: the smallest key among its links
 // seen, and the bytes it counts once.
 type linked struct {
-	key   string
-	bytes int64
-	sized bool
+	key string
+	c   cell // the object and its byte figures
 }
 
 // cell is one prefix's sums.
 type cell struct {
-	objects, dirs, bytes, unsized, newest int64
-	hasNewest                             bool
+	objects, dirs, size, sizeMissing, alloc, allocMissing, newest int64
+	hasNewest                                                     bool
 }
 
 func (c *cell) add(o *cell) {
 	c.objects += o.objects
 	c.dirs += o.dirs
-	c.bytes += o.bytes
-	c.unsized += o.unsized
+	c.size += o.size
+	c.sizeMissing += o.sizeMissing
+	c.alloc += o.alloc
+	c.allocMissing += o.allocMissing
 	if o.hasNewest && (!c.hasNewest || o.newest > c.newest) {
 		c.newest, c.hasNewest = o.newest, true
 	}
@@ -218,9 +258,11 @@ type Tally struct {
 	links map[inode]*linked // LinksOnce: the hard-linked inodes, until finish adds them
 	done  bool              // finish has added the links
 	dirs  bool              // the source has directories (Dirs)
+	alloc bool              // the source has allocated bytes (Allocated)
 	err   error             // the first LimitError: every later merge returns it
 	notObjects,
-	linkedRows int64
+	linkedRows,
+	unidentified int64
 }
 
 // New returns an empty tally.
@@ -231,8 +273,8 @@ func New(opt Options) *Tally {
 	if opt.MaxInodes <= 0 {
 		opt.MaxInodes = DefaultMaxInodes
 	}
-	if opt.BytesColumn == "" {
-		opt.BytesColumn = Size
+	if opt.Primary == "" {
+		opt.Primary = Size
 	}
 	t := &Tally{opt: opt, cells: map[string]*cell{}, links: map[inode]*linked{}}
 	t.pool.New = func() any { return &Batch{t: t} }
@@ -258,6 +300,35 @@ func (t *Tally) Dirs() bool {
 	return t.dirs
 }
 
+// SetAllocated records that the source's rows carry allocated bytes (a
+// local tree's), so its totals have that figure; without it every
+// prefix's is unknown. The binding to a schema calls it, before the first
+// Batch.
+func (t *Tally) SetAllocated() {
+	t.mu.Lock()
+	t.alloc = true
+	t.mu.Unlock()
+}
+
+// Allocated reports whether the source's rows carry allocated bytes
+// (SetAllocated).
+func (t *Tally) Allocated() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.alloc
+}
+
+// LinksOnce reports whether objects with several hard links were counted
+// once: Options.LinksOnce, unless an object's links could not be told apart
+// (Row.Unidentified), so the totals are the same whether a tree is listed
+// live or read from a dataset listed at the names tier. Call it after the
+// last Flush.
+func (t *Tally) LinksOnce() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.opt.LinksOnce && t.unidentified == 0
+}
+
 // Batch sums one goroutine's rows before they merge into the tally. Rows
 // in a range ascend, so consecutive rows share their prefixes: a batch
 // keeps one entry per run of equal prefix at each level, and merges them
@@ -271,15 +342,15 @@ type Batch struct {
 	cur []int
 	// links are the batch's hard-linked objects (LinksOnce), their keys
 	// views until Flush.
-	links      []linkRow
-	notObjects int64
+	links        []linkRow
+	notObjects   int64
+	unidentified int64
 }
 
 type linkRow struct {
-	id    inode
-	key   string
-	bytes int64
-	sized bool
+	id  inode
+	key string
+	c   cell
 }
 
 type entry struct {
@@ -298,7 +369,7 @@ func (b *Batch) reset() {
 	for i := range b.cur {
 		b.cur[i] = -1
 	}
-	b.notObjects = 0
+	b.notObjects, b.unidentified = 0, 0
 }
 
 // Add sums one row into the batch.
@@ -307,19 +378,27 @@ func (b *Batch) Add(r *Row) {
 	switch {
 	case r.Object:
 		c.objects = 1
-		if r.HasBytes {
-			c.bytes = r.Bytes
+		if r.HasSize {
+			c.size = r.Size
 		} else {
-			c.unsized = 1
+			c.sizeMissing = 1
 		}
-		c.newest, c.hasNewest = r.Mtime, r.HasMtime
+		if r.HasAllocated {
+			c.alloc = r.Allocated
+		} else {
+			c.allocMissing = 1
+		}
+		if r.Unidentified {
+			b.unidentified++
+		}
 		if r.Link && b.t.opt.LinksOnce {
-			// The object and its bytes are added once, at finish, under
+			// The object and its figures are added once, at finish, under
 			// the smallest of its keys; the time is every link's (an
 			// inode has one), so it applies here.
-			b.links = append(b.links, linkRow{id: inode{r.Dev, r.Inode}, key: r.Key, bytes: c.bytes, sized: r.HasBytes})
-			c.objects, c.bytes, c.unsized = 0, 0, 0
+			b.links = append(b.links, linkRow{id: inode{r.Dev, r.Inode}, key: r.Key, c: c})
+			c = cell{}
 		}
+		c.newest, c.hasNewest = r.Mtime, r.HasMtime
 	case r.Dir:
 		b.notObjects++
 		c.dirs = 1
@@ -384,13 +463,14 @@ func (b *Batch) Flush() error {
 			err = &LimitError{Depth: t.opt.Depth, Max: t.opt.MaxInodes, Inodes: true}
 			t.err = err
 		case m == nil:
-			t.links[l.id] = &linked{key: strings.Clone(l.key), bytes: l.bytes, sized: l.sized}
+			t.links[l.id] = &linked{key: strings.Clone(l.key), c: l.c}
 		case l.key < m.key:
-			m.key, m.bytes, m.sized = strings.Clone(l.key), l.bytes, l.sized
+			m.key, m.c = strings.Clone(l.key), l.c
 		}
 	}
 	t.linkedRows += int64(len(b.links))
 	t.notObjects += b.notObjects
+	t.unidentified += b.unidentified
 	t.mu.Unlock()
 	b.reset()
 	t.pool.Put(b)
@@ -406,13 +486,9 @@ func (t *Tally) finish() {
 	}
 	t.done = true
 	for _, l := range t.links {
-		add := cell{objects: 1, bytes: l.bytes}
-		if !l.sized {
-			add.unsized = 1
-		}
 		for _, p := range t.opt.prefixes(l.key) {
 			if c := t.cells[p]; c != nil { // nil only after a LimitError
-				c.add(&add)
+				c.add(&l.c)
 			}
 		}
 	}
@@ -429,22 +505,31 @@ func (t *Tally) Result() []Prefix {
 	t.finish()
 	out := make([]Prefix, 0, max(1, len(t.cells)))
 	if t.cells[t.opt.Origin] == nil {
-		out = append(out, Prefix{Prefix: t.opt.Origin}) // depth 0
+		out = append(out, t.prefix(t.opt.Origin, &cell{})) // depth 0
 	}
 	for p, c := range t.cells {
-		out = append(out, Prefix{Prefix: p, Depth: strings.Count(p[len(t.opt.Origin):], "/"), Objects: c.objects, Dirs: c.dirs, Bytes: c.bytes,
-			Unsized: c.unsized, Newest: c.newest, HasNewest: c.hasNewest})
+		out = append(out, t.prefix(p, c))
 	}
 	slices.SortFunc(out, func(a, b Prefix) int { return cmp.Compare(a.Prefix, b.Prefix) })
 	return out
 }
 
+// prefix is cell c's row, for prefix p.
+func (t *Tally) prefix(p string, c *cell) Prefix {
+	r := Prefix{Prefix: p, Depth: strings.Count(p[len(t.opt.Origin):], "/"), Objects: c.objects, Dirs: c.dirs,
+		Size: c.size, SizeMissing: c.sizeMissing, Allocated: c.alloc, AllocatedMissing: c.allocMissing, Newest: c.newest, HasNewest: c.hasNewest}
+	r.HasSize = r.known(r.SizeMissing)
+	r.HasAllocated = t.alloc && r.known(r.AllocatedMissing)
+	return r
+}
+
 // SortBySize reorders rows in Result's order (each prefix before the
-// prefixes below it) so that the rows below one parent come by size, the
-// largest first, the prefix in byte order on a tie, and a prefix of unknown
-// size (not Sized) after the sized ones; each row's own rows still follow
-// it, and the total stays first.
-func SortBySize(rows []Prefix) {
+// prefixes below it) so that the rows below one parent come by the figure
+// primary names (Prefix.Figure), the largest first, the prefix in byte
+// order on a tie, and a prefix whose figure is unknown after the others
+// (a partial sum ranks by the bytes it has); each row's own rows still
+// follow it, and the total stays first.
+func SortBySize(rows []Prefix, primary string) {
 	kids := make([][]int, len(rows)+1) // by row; the last for the rows without a parent
 	top := len(rows)
 	var stack []int
@@ -460,17 +545,18 @@ func SortBySize(rows []Prefix) {
 		stack = append(stack, i)
 	}
 	bigger := func(a, b int) int {
-		x, y := &rows[a], &rows[b]
+		x, xok := rows[a].Figure(primary)
+		y, yok := rows[b].Figure(primary)
 		switch {
-		case x.Sized() != y.Sized():
-			if x.Sized() {
+		case xok != yok:
+			if xok {
 				return -1
 			}
 			return 1
-		case x.Sized() && x.Bytes != y.Bytes:
-			return cmp.Compare(y.Bytes, x.Bytes)
+		case xok && x != y:
+			return cmp.Compare(y, x)
 		}
-		return cmp.Compare(x.Prefix, y.Prefix)
+		return cmp.Compare(rows[a].Prefix, rows[b].Prefix)
 	}
 	out := make([]Prefix, 0, len(rows))
 	var emit func(int)
@@ -491,10 +577,23 @@ func (t *Tally) Stats() Stats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.finish()
-	s := Stats{Depth: t.opt.Depth, Prefixes: int64(max(1, len(t.cells))), MaxPrefixes: int64(t.opt.MaxPrefixes), BytesColumn: t.opt.BytesColumn,
-		NotObjects: t.notObjects, LinksOnce: t.opt.LinksOnce, LinkedRows: t.linkedRows, Inodes: int64(len(t.links)), MaxInodes: int64(t.opt.MaxInodes)}
-	if c := t.cells[t.opt.Origin]; c != nil {
-		s.Objects, s.Bytes, s.Dirs, s.Unsized = c.objects, c.bytes, c.dirs, c.unsized
+	s := Stats{Depth: t.opt.Depth, Prefixes: int64(max(1, len(t.cells))), MaxPrefixes: int64(t.opt.MaxPrefixes), Primary: t.opt.Primary,
+		NotObjects: t.notObjects, LinksOnce: t.opt.LinksOnce && t.unidentified == 0, LinkedRows: t.linkedRows, Inodes: int64(len(t.links)), MaxInodes: int64(t.opt.MaxInodes)}
+	c := t.cells[t.opt.Origin]
+	if c == nil {
+		c = &cell{}
+	}
+	r := t.prefix(t.opt.Origin, c)
+	s.Objects, s.Dirs, s.SizeMissing, s.AllocatedBytesMissing = r.Objects, r.Dirs, r.SizeMissing, r.AllocatedMissing
+	if r.HasSize {
+		s.Size = &r.Size
+	}
+	if r.HasAllocated {
+		s.AllocatedBytes = &r.Allocated
+	}
+	if r.HasNewest {
+		at := time.UnixMicro(r.Newest).UTC()
+		s.MaxLastModified = &at
 	}
 	return s
 }

@@ -18,31 +18,49 @@ both the scope and the filters, so you can tell later what it was meant to hold 
 ## Apparent and allocated bytes
 
 `size` is a file's apparent size: its length, as `ls -l` shows it. It is not the disk space the file takes.
-In the example, `swath du` reports 100 MiB, but `swath du --allocated` reports 36.4 MiB, close to what
-`du -sh` prints for the same tree:
+`allocated_bytes`, the table's `on disk`, is the space the filesystem reports for it. `swath du` shows both: in
+the example the tree holds 100 MiB of file lengths in 36.4 MiB on disk, close to what `du -sh` prints for it.
+`--allocated` puts the allocated bytes first and makes `--sort size` order by them:
 
 ```text
-allocated_size  files  dirs  last_modified (local)  path
-       784 KiB      2     0  2026-11-02 09:30:00    archive/
-      6.11 MiB      3     2  2026-01-20 12:00:00    photos/
-      29.6 MiB      1     0  2026-11-02 09:30:00    videos/
-      36.4 MiB      6     5  2026-11-02 09:30:00    (total)
+$ swath du -d 1 media --allocated
+ on disk  size (apparent)  files  dirs  path
+ 784 KiB         64.8 MiB      2     0  archive/
+6.11 MiB         6.10 MiB      3     2  photos/
+29.6 MiB         29.6 MiB      1     0  videos/
+36.4 MiB          100 MiB      6     5  (total)
 ```
 
-The difference is a sparse 64 MiB disk image that occupies no blocks; compression and block rounding also
-make the two differ. Each row of `swath list` carries both, as `size` and `allocated_bytes`.
-A directory's row in `swath list` has its own size, but `swath du` counts directories separately and leaves
-their sizes out of its byte totals.
+Most of the difference is a sparse 64 MiB disk image that occupies no blocks. Each row of `swath list`
+carries both figures too, under the same names.
+
+`size` totals the lengths of the listed entries that are not directories; a symbolic link's is the link's
+own. `allocated_bytes` totals their filesystem-reported allocation, `st_blocks` × 512 bytes. It is what the
+filesystem says, not unique physical usage or the space a deletion would free:
+
+- Directory blocks, the source directory's included, are left out, so a tree's figure is below `du -sB1`'s by
+  them. A directory's row in `swath list` has its own size and blocks.
+- A file with several hard links counts once where its links can be identified, under its first name in byte
+  order; `-l` counts every name ([Hard links](#hard-links)).
+- Sparse files, compression, data stored inline in the metadata and cloud placeholder files can report less
+  allocation than their length, down to zero; block rounding and preallocation can report more.
+- Shared extents (deduplicated files, APFS clones, Btrfs and XFS reflinks) are counted for each file that
+  shares them, so a total can exceed the filesystem's capacity.
+- Network filesystems may report a synthetic allocation.
+- An unknown allocation is not zero. Windows and `--metadata names` read none: the figure is null (`-` in the
+  table), and `allocated_bytes_missing` counts the files without it.
 
 For an object store, `size` is the object's length as the listing reports it. It is not the stored or billed
-size: storage classes, minimum storage durations, versions and replication are outside it.
+size: storage classes, minimum storage durations, versions and replication are outside it. An object store has
+no `allocated_bytes`: the figure is null and the table leaves its column out.
 
 ## Hard links
 
 A file with several hard links has several names, and `swath list` writes each name as a row. `swath du`
 counts the file once, as `du` does, under the first of its names in byte order. In the example, `notes.tar`
 and `notes-latest.tar` are one file of 800,000 bytes, counted once; `-l` (`--count-links`) counts it under
-both names, and the total becomes 101 MiB. In a listing, the `inode`, `dev` and `nlink` columns identify
+both names, and the total becomes 101 MiB (37.2 MiB on disk). Each row's `links_once` says which way it
+counted. In a listing, the `inode`, `dev` and `nlink` columns identify
 names of the same file.
 
 > [!NOTE]
@@ -91,7 +109,7 @@ source that changes during the run. Each row records an entry as swath saw it wh
 created, changed or removed while swath lists may or may not appear. The manifest records when the listing
 started and finished (`coverage.listing_started_at`, `coverage.listing_finished_at`), and `swath show` prints
 when the dataset was published. `last_modified` is the entry's own modification time, not the time swath saw
-it.
+it; `swath du`'s `max_last_modified` is the newest of them under a prefix.
 
 ## Live and saved results
 

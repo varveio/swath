@@ -247,9 +247,11 @@ func TestColumns(t *testing.T) {
 
 // TestLocalTextEndToEnd: a local tree prints as text rows, to stdout and to a
 // .tsv or .jsonl file, under the local schema's names; with --metadata
-// names the fields it does not read are null in TSV and JSONL and blank in
-// the table. A run with -o prints nothing on stdout.
+// names the fields it does not read are null in TSV and JSONL and "-" in
+// the table, whose times are UTC whatever TZ says; --no-header leaves out
+// TSV's header line. A run with -o prints nothing on stdout.
 func TestLocalTextEndToEnd(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
 	root, _ := depthTree(t)
 	var out bytes.Buffer
 	if err := run(context.Background(), []string{root, "--no-stats"}, &out, false); err != nil {
@@ -275,12 +277,28 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tFILE\t",
 		"jsonl": `{"key":"a/b/f","size":null,"last_modified":null,"kind":"FILE",`,
-		"table": "                                 FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
+		"table": "-" + strings.Repeat(" ", 28) + "-  FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
 			t.Errorf("%s names: %v\n%s", format, err, out.String())
 		}
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{root, "--format", "table", "--no-stats"}, &out, false); err != nil ||
+		!strings.HasPrefix(out.String(), "last_modified             size  kind          key\n") || !strings.Contains(out.String(), "\n2026-01-02T04:04:05Z       5 B  FILE          a/b/f\n") {
+		t.Fatalf("table: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{root, "--no-header", "--columns", "key,size", "--no-stats"}, &out, false); err != nil || !strings.HasPrefix(out.String(), "a/\t") {
+		t.Fatalf("--no-header: %v %q", err, out.String())
+	}
+	file := filepath.Join(dir, "plain.tsv")
+	if err := run(context.Background(), []string{root, "-o", file, "--no-header", "--no-stats"}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(file); !strings.HasPrefix(string(b), "a/\t") || strings.Count(string(b), "\n") != 8 {
+		t.Fatalf("--no-header file: %q", b)
 	}
 	out.Reset()
 	if err := run(context.Background(), []string{root, "-o", filepath.Join(dir, "ds"), "--stats"}, &out, false); err != nil || out.Len() != 0 {
@@ -428,6 +446,12 @@ func TestResolveOutput(t *testing.T) {
 		{o: options{out: "x.tsv", format: "jsonl"}, failure: "names tsv"},
 		{o: options{format: "parquet"}, failure: "want auto, table, tsv or jsonl"},
 		{o: options{countOnly: true}},
+		{o: options{noHeader: true}, tty: true, format: "tsv"},
+		{o: options{noHeader: true, out: "x.tsv.gz"}, format: "tsv", path: "x.tsv.gz", comp: "gzip"},
+		{o: options{noHeader: true, format: "jsonl"}, failure: "--no-header leaves out TSV's header line: not with JSONL"},
+		{o: options{noHeader: true, format: "table"}, failure: "not with the table"},
+		{o: options{noHeader: true, out: "x.jsonl"}, failure: "not with JSONL"},
+		{o: options{noHeader: true, out: "ds"}, failure: "--no-header: -o ds is a dataset directory"},
 	} {
 		c, err := resolveOutput(&tc.o, tc.tty)
 		switch {
@@ -439,7 +463,7 @@ func TestResolveOutput(t *testing.T) {
 			t.Errorf("%d: %v", i, err)
 		case tc.format == "" && c != nil:
 			t.Errorf("%d: text %+v, want the dataset", i, c)
-		case tc.format != "" && (c == nil || c.Format != tc.format || c.Path != tc.path || c.Compression != tc.comp):
+		case tc.format != "" && (c == nil || c.Format != tc.format || c.Path != tc.path || c.Compression != tc.comp || c.NoHeader != tc.o.noHeader):
 			t.Errorf("%d: %+v", i, c)
 		}
 	}

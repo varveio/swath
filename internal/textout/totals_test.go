@@ -8,15 +8,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/internal/totals"
 )
 
 // TestIEC: a table's size keeps at most three significant digits across
-// the unit boundaries, moving to the next unit before a fourth digit.
+// the unit boundaries, moving to the next unit before a fourth digit; an
+// unknown figure is "-", a partial sum a lower bound.
 func TestIEC(t *testing.T) {
 	const k, m = 1024, 1024 * 1024
 	for n, want := range map[int64]string{
@@ -24,25 +25,33 @@ func TestIEC(t *testing.T) {
 		999 * k: "999 KiB", 999*k + k/2: "0.98 MiB", 1000 * k: "0.98 MiB", 1023 * k: "1.00 MiB", m: "1.00 MiB",
 		9996 * m / 1000: "10.0 MiB", 9996 * m / 100: "100 MiB", 9994 * m / 1000: "9.99 MiB", 1 << 62: "4.00 EiB",
 	} {
-		if got := string(appendPrefixSize(nil, &totals.Prefix{Bytes: n})); got != want {
+		if got := string(appendTableFigure(nil, &totals.Prefix{Objects: 1, Size: n, HasSize: true}, totals.Size)); got != want {
 			t.Errorf("%d: %q, want %q", n, got, want)
 		}
 	}
-	if got := string(appendPrefixSize(nil, &totals.Prefix{Bytes: 5, Unsized: 1})); got != "-" {
-		t.Errorf("unsized: %q", got)
+	for want, r := range map[string]totals.Prefix{
+		"-":           {Objects: 1, SizeMissing: 1},
+		">= 5 B":      {Objects: 2, Size: 5, SizeMissing: 1, HasSize: true},
+		"0 B":         {HasSize: true},
+		">= 12.0 KiB": {Objects: 3, Size: 12 * k, SizeMissing: 2, HasSize: true},
+	} {
+		if got := string(appendTableFigure(nil, &r, totals.Size)); got != want {
+			t.Errorf("%+v: %q, want %q", r, got, want)
+		}
 	}
 }
 
 // TestTotalsTSVEscapes: a TSV prefix takes the rows' grammar: a byte that
 // is not UTF-8 is \xHH, never the raw byte, and decodes back; a missing
-// time is \N.
+// time and a source without allocated bytes are \N.
 func TestTotalsTSVEscapes(t *testing.T) {
-	rows := []totals.Prefix{{Prefix: "bad\xff\t/", Depth: 1, Objects: 1, Bytes: 1}}
+	rows := []totals.Prefix{{Prefix: "bad\xff\t/", Depth: 1, Objects: 1, Size: 1, HasSize: true, AllocatedMissing: 1}}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, TSV, TotalsLayout{}, rows); err != nil {
+	if err := WriteTotals(&b, TSV, TotalsLayout{Sort: "name"}, rows); err != nil {
 		t.Fatal(err)
 	}
-	want := "depth\tobjects\tsize\tlast_modified\tprefix\n1\t1\t1\t\\N\tbad\\xff\\t/\n"
+	want := "row_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
+		"prefix\t1\t1\t1\t0\t\\N\t1\t\\N\tsize\tname\tfalse\tbad\\xff\\t/\n"
 	if b.String() != want {
 		t.Fatalf("%q\nwant %q", b.String(), want)
 	}
@@ -53,16 +62,17 @@ func TestTotalsTSVEscapes(t *testing.T) {
 }
 
 // TestTotalsJSONL: every line is JSON; a prefix that is not UTF-8 is
-// prefix_base64 alone, its exact bytes; size is the sized objects' bytes
-// and a local tree's unsized the others; a missing time is null.
+// prefix_base64 alone, its exact bytes; both figures are there, each with
+// its missing objects; a missing time is null; every row carries its type
+// and the run's primary figure, order and hard-link policy.
 func TestTotalsJSONL(t *testing.T) {
 	rows := []totals.Prefix{
-		{Prefix: "", Objects: 3, Bytes: 7, Newest: 1, HasNewest: true},
-		{Prefix: "caf\xc3\xa9/\"q\"\t/", Depth: 2, Objects: 1, Bytes: 2},
-		{Prefix: "bad\xff/", Depth: 1, Objects: 1, Unsized: 1},
+		{Prefix: "", Objects: 3, Size: 7, SizeMissing: 1, HasSize: true, Allocated: 8192, AllocatedMissing: 1, HasAllocated: true, Newest: 1, HasNewest: true},
+		{Prefix: "caf\xc3\xa9/\"q\"\t/", Depth: 2, Objects: 1, Size: 2, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Prefix: "bad\xff/", Depth: 1, Objects: 1, SizeMissing: 1, AllocatedMissing: 1},
 	}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true}, rows); err != nil {
+	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true, Allocated: true, Primary: totals.AllocatedBytes, Sort: "size", LinksOnce: true}, rows); err != nil {
 		t.Fatal(err)
 	}
 	var got []map[string]any
@@ -73,31 +83,43 @@ func TestTotalsJSONL(t *testing.T) {
 		}
 		got = append(got, m)
 	}
-	if len(got) != 3 || got[0][FieldDepth] != 0.0 || got[1][FieldDepth] != 2.0 || got[2][FieldDepth] != 1.0 ||
-		got[1][FieldPrefix] != rows[1].Prefix || got[1][FieldSize] != 2.0 || got[1][FieldLastModified] != nil {
+	if len(got) != 3 || got[0][FieldDepth] != 0.0 || got[0][FieldRowType] != RowTotal || got[1][FieldDepth] != 2.0 || got[1][FieldRowType] != RowPrefix ||
+		got[2][FieldDepth] != 1.0 || got[1][FieldPrefix] != rows[1].Prefix || got[1][FieldSize] != 2.0 || got[1][FieldAllocatedBytes] != 4096.0 ||
+		got[1][FieldMaxLastModified] != nil || got[0][FieldMaxLastModified] != "1970-01-01T00:00:00.000001Z" {
 		t.Fatalf("%v", got)
 	}
-	if !strings.HasPrefix(strings.Split(b.String(), "\n")[2], `{"depth":1,"prefix_base64":`) {
+	if want := `{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":0,"size":7,"size_missing":1,"allocated_bytes":8192,"allocated_bytes_missing":1,` +
+		`"max_last_modified":"1970-01-01T00:00:00.000001Z","primary":"allocated_bytes","sort":"size","links_once":true}`; strings.Split(b.String(), "\n")[0] != want {
 		t.Fatalf("member order: %q", b.String())
 	}
 	raw, err := base64.StdEncoding.DecodeString(got[2][FieldPrefixBase64].(string))
-	if err != nil || string(raw) != rows[2].Prefix || got[2][FieldPrefix] != nil || got[2][FieldSize] != 0.0 || got[2][FieldUnsized] != 1.0 {
+	if err != nil || string(raw) != rows[2].Prefix || got[2][FieldPrefix] != nil || got[2][FieldSize] != nil || got[2][FieldSizeMissing] != 1.0 ||
+		got[2][FieldAllocatedBytes] != nil || got[2][FieldAllocatedBytesMissing] != 1.0 {
 		t.Fatalf("%v (%v)", got[2], err)
 	}
 }
 
-// TestTotalsPartlySized: a prefix with some files sized and some not keeps
-// the known bytes in TSV and JSONL beside Unsized; the table, for reading,
-// shows its size as unknown.
-func TestTotalsPartlySized(t *testing.T) {
-	rows := []totals.Prefix{{Objects: 2, Bytes: 7, Unsized: 1}}
+// TestTotalsMissing: a figure some objects lacked is the sum of the others
+// beside their count in TSV and JSONL, and a lower bound in the table; one
+// every object lacked is null and "-"; an empty prefix's is 0.
+func TestTotalsMissing(t *testing.T) {
+	rows := []totals.Prefix{
+		{Objects: 2, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 2},
+		{Prefix: "e/", Depth: 1, HasSize: true, HasAllocated: true},
+	}
+	l := TotalsLayout{Local: true, Allocated: true, Sort: "name"}
 	for format, want := range map[string]string{
-		TSV:   "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t2\t0\t7\t1\t\\N\t\n",
-		JSONL: `{"depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"unsized":1,"last_modified":null}` + "\n",
-		Table: "size  files  dirs  last_modified (local)  path\n   -      2     0                         (total)\n",
+		TSV: "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
+			"total\t0\t2\t0\t7\t1\t\\N\t2\t\\N\tsize\tname\tfalse\t\n" +
+			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
+		JSONL: `{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
+			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n",
+		Table: "size (apparent)  on disk  files  dirs  path\n" +
+			"            0 B      0 B      0     0  e/\n" +
+			"         >= 7 B        -      2     0  (total)\n",
 	} {
 		var b bytes.Buffer
-		if err := WriteTotals(&b, format, TotalsLayout{Local: true}, rows); err != nil || b.String() != want {
+		if err := WriteTotals(&b, format, l, rows); err != nil || b.String() != want {
 			t.Errorf("%s: %v\n%q\nwant %q", format, err, b.String(), want)
 		}
 	}
@@ -107,14 +129,19 @@ func TestTotalsPartlySized(t *testing.T) {
 // tally's byte order, the total first); the table puts the total last,
 // found by its Depth, not its place, and leaves the rows as they were.
 func TestTotalsOrder(t *testing.T) {
-	rows := []totals.Prefix{{Prefix: "logs/", Objects: 3, Bytes: 3}, {Prefix: "logs/a/", Depth: 1, Objects: 1, Bytes: 1},
-		{Prefix: "logs/a/b/", Depth: 2, Objects: 1, Bytes: 1}, {Prefix: "logs/c/", Depth: 1, Objects: 2, Bytes: 2}}
+	rows := []totals.Prefix{{Prefix: "logs/", Objects: 3, Size: 3, HasSize: true}, {Prefix: "logs/a/", Depth: 1, Objects: 1, Size: 1, HasSize: true},
+		{Prefix: "logs/a/b/", Depth: 2, Objects: 1, Size: 1, HasSize: true}, {Prefix: "logs/c/", Depth: 1, Objects: 2, Size: 2, HasSize: true}}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, TSV, TotalsLayout{}, rows); err != nil {
+	if err := WriteTotals(&b, TSV, TotalsLayout{NoHeader: true}, rows); err != nil {
 		t.Fatal(err)
 	}
-	if want := "depth\tobjects\tsize\tlast_modified\tprefix\n0\t3\t3\t\\N\tlogs/\n1\t1\t1\t\\N\tlogs/a/\n2\t1\t1\t\\N\tlogs/a/b/\n1\t2\t2\t\\N\tlogs/c/\n"; b.String() != want {
-		t.Fatalf("tsv %q", b.String())
+	var tsv []string
+	for l := range strings.Lines(b.String()) {
+		f := strings.Split(strings.TrimSuffix(l, "\n"), "\t")
+		tsv = append(tsv, f[0]+" "+f[1]+" "+f[len(f)-1])
+	}
+	if got := strings.Join(tsv, ", "); got != "total 0 logs/, prefix 1 logs/a/, prefix 2 logs/a/b/, prefix 1 logs/c/" {
+		t.Fatalf("tsv %q", got)
 	}
 	b.Reset()
 	if err := WriteTotals(&b, JSONL, TotalsLayout{}, rows); err != nil {
@@ -122,7 +149,11 @@ func TestTotalsOrder(t *testing.T) {
 	}
 	var depths []string
 	for l := range strings.Lines(b.String()) {
-		depths = append(depths, l[len(`{"depth":`):len(`{"depth":`)+1])
+		var r struct{ Depth int }
+		if err := json.Unmarshal([]byte(l), &r); err != nil {
+			t.Fatal(err)
+		}
+		depths = append(depths, strconv.Itoa(r.Depth))
 	}
 	if got := strings.Join(depths, ""); got != "0121" {
 		t.Fatalf("jsonl order %q", got)
@@ -145,21 +176,41 @@ func TestTotalsOrder(t *testing.T) {
 	}
 }
 
-// TestTotalsTableLocalTime: the table's times are in the reader's zone (the
-// layout's), under a heading that says so; TSV's stay UTC.
-func TestTotalsTableLocalTime(t *testing.T) {
-	rows := []totals.Prefix{{Objects: 1, Bytes: 1, Newest: 0, HasNewest: true}}
-	var b bytes.Buffer
-	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil {
-		t.Fatal(err)
+// TestTotalsTable: a local tree's table puts the apparent size first and
+// the allocated bytes beside it, or the allocated bytes first when they are
+// the primary figure; a source without them has one plainly named size
+// column. The paths keep their whole text, indented two blanks a level
+// below the first; there is no time.
+func TestTotalsTable(t *testing.T) {
+	const mib = 1 << 20
+	rows := []totals.Prefix{
+		{Objects: 3, Dirs: 5, Size: 64*mib + 5000, HasSize: true, Allocated: 12288, HasAllocated: true, Newest: 1, HasNewest: true},
+		{Prefix: "archive/", Depth: 1, Objects: 2, Dirs: 1, Size: 64 * mib, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Prefix: "archive/vm/", Depth: 2, Objects: 1, Size: 64 * mib, HasSize: true, HasAllocated: true},
 	}
-	want := "size  objects  last_modified (local)  prefix\n" +
-		" 1 B        1  1970-01-01 02:00:00    (total)\n"
-	if b.String() != want {
-		t.Fatalf("%q\nwant %q", b.String(), want)
-	}
-	b.Reset()
-	if err := WriteTotals(&b, TSV, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil || !strings.HasSuffix(b.String(), "\t1970-01-01T00:00:00.000000Z\t\n") {
-		t.Fatalf("%v %q", err, b.String())
+	for name, c := range map[string]struct {
+		l    TotalsLayout
+		want string
+	}{
+		"local": {TotalsLayout{Local: true, Allocated: true}, "" +
+			"size (apparent)   on disk  files  dirs  path\n" +
+			"       64.0 MiB  4.00 KiB      2     1  archive/\n" +
+			"       64.0 MiB       0 B      1     0    archive/vm/\n" +
+			"       64.0 MiB  12.0 KiB      3     5  (total)\n"},
+		"allocated first": {TotalsLayout{Local: true, Allocated: true, Primary: totals.AllocatedBytes}, "" +
+			" on disk  size (apparent)  files  dirs  path\n" +
+			"4.00 KiB         64.0 MiB      2     1  archive/\n" +
+			"     0 B         64.0 MiB      1     0    archive/vm/\n" +
+			"12.0 KiB         64.0 MiB      3     5  (total)\n"},
+		"bucket": {TotalsLayout{}, "" +
+			"    size  objects  prefix\n" +
+			"64.0 MiB        2  archive/\n" +
+			"64.0 MiB        1    archive/vm/\n" +
+			"64.0 MiB        3  (total)\n"},
+	} {
+		var b bytes.Buffer
+		if err := WriteTotals(&b, Table, c.l, rows); err != nil || b.String() != c.want {
+			t.Errorf("%s: %v\n%s\nwant\n%s", name, err, b.String(), c.want)
+		}
 	}
 }

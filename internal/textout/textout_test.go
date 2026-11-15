@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/klauspost/compress/gzip"
@@ -82,8 +81,10 @@ func write(t *testing.T, cfg Config) []byte {
 // TestRowContract: the three formats over a schema's columns in its order
 // under its names: TSV with \N for a null and the TSV escapes, JSONL with
 // null and JSON's escapes, every time with six fraction digits in UTC; the
-// table's time in its zone, the size in binary units, a null blank.
+// table's time in UTC to the second with its Z whatever TZ says, the size
+// in binary units, a null "-"; TSV's header line left out on request.
 func TestRowContract(t *testing.T) {
+	t.Setenv("TZ", "Asia/Kolkata")
 	tsv := "key\tsize\tlast_modified\tetag\tstorage_class\towner_id\tgeneration\n" +
 		"a/b.txt\t12\t2023-11-14T22:13:20.000000Z\te1\tSTANDARD\t\\N\t7\n" +
 		"tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\t0\t\\N\t\\N\t\\N\t\\N\t7\n" +
@@ -91,17 +92,20 @@ func TestRowContract(t *testing.T) {
 	if got := string(write(t, Config{Format: TSV})); got != tsv {
 		t.Fatalf("tsv\n%q\nwant\n%q", got, tsv)
 	}
+	if got := string(write(t, Config{Format: TSV, NoHeader: true})); got != tsv[strings.IndexByte(tsv, '\n')+1:] {
+		t.Fatalf("tsv without its header\n%q", got)
+	}
 	jsonl := `{"key":"a/b.txt","size":12,"last_modified":"2023-11-14T22:13:20.000000Z","etag":"e1","storage_class":"STANDARD","owner_id":null,"generation":7}` + "\n" +
 		`{"key":"tab\there\nnl\\x<&>\"\u001b\u007fµ","size":0,"last_modified":null,"etag":null,"storage_class":null,"owner_id":null,"generation":7}` + "\n" +
 		`{"key":"µ","size":1099511627776,"last_modified":"2023-11-14T22:13:20.000120Z","etag":"e","storage_class":null,"owner_id":"o","generation":7}` + "\n"
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "last_modified (local)      size  key\n" +
-		"2023-11-14 23:13:20        12 B  a/b.txt\n" +
-		"                            0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
-		"2023-11-14 23:13:20    1.00 TiB  µ\n"
-	if got := string(write(t, Config{Format: Table, Loc: time.FixedZone("X", 3600)})); got != table {
+	table := "last_modified             size  key\n" +
+		"2023-11-14T22:13:20Z      12 B  a/b.txt\n" +
+		"-                          0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
+		"2023-11-14T22:13:20Z  1.00 TiB  µ\n"
+	if got := string(write(t, Config{Format: Table})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
 	}
 }

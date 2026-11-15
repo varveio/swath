@@ -84,22 +84,22 @@ func duTree(t *testing.T) string {
 }
 
 type duSums struct {
-	objects, dirs, bytes, newest int64
-	hasNewest                    bool
+	objects, dirs, size, alloc, newest int64
+	hasNewest                          bool
 }
 
 // duOracle walks root with lstat and sums every prefix down to depth by
-// brute force: each non-directory is an object (its size, or its blocks ×
-// 512 when allocated) under every prefix of its key; with once, a file of
-// several links counts under its smallest key only, its time under all;
-// a directory adds its own prefix and counts in its parents' dirs.
-func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[string]duSums {
+// brute force: each non-directory is an object (its size and its blocks ×
+// 512) under every prefix of its key; with once, a file of several links
+// counts under its smallest key only, its time under all; a directory adds
+// its own prefix and counts in its parents' dirs.
+func duOracle(t *testing.T, root string, depth int, once bool) map[string]duSums {
 	t.Helper()
 	type obj struct {
-		key         string
-		size, mtime int64
-		dir, multi  bool
-		dev, ino    uint64
+		key                string
+		size, alloc, mtime int64
+		dir, multi         bool
+		dev, ino           uint64
 	}
 	var objs []obj
 	owner := map[[2]uint64]string{}
@@ -112,11 +112,8 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
-		o := obj{key: filepath.ToSlash(rel), size: st.Size, mtime: st.Mtim.Sec*1_000_000 + st.Mtim.Nsec/1000, dir: d.IsDir(),
+		o := obj{key: filepath.ToSlash(rel), size: st.Size, alloc: st.Blocks * 512, mtime: st.Mtim.Sec*1_000_000 + st.Mtim.Nsec/1000, dir: d.IsDir(),
 			multi: !d.IsDir() && st.Nlink > 1, dev: uint64(st.Dev), ino: st.Ino}
-		if allocated {
-			o.size = st.Blocks * 512
-		}
 		if o.dir {
 			o.key += "/"
 		}
@@ -148,7 +145,8 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 			}
 			if counts {
 				s.objects++
-				s.bytes += o.size
+				s.size += o.size
+				s.alloc += o.alloc
 			}
 			if !o.dir && (!s.hasNewest || o.mtime > s.newest) {
 				s.newest, s.hasNewest = o.mtime, true
@@ -159,13 +157,14 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 	return sums
 }
 
-// TestDuMatchesLstat: swath du over a real tree, with and without
-// --allocated, counting a hard-linked file once (the default, as du) or
-// under every name (-l, --count-links), at several depths, equals the
+// TestDuMatchesLstat: swath du over a real tree with a sparse file and hard
+// links, counting a hard-linked file once (the default, as du) or under
+// every name (-l, --count-links), at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
-// in JSONL (a name that is not UTF-8 as prefix_base64). Before, every name
-// counted by default. With --metadata names, which
-// reads no links, every name counts.
+// in JSONL (a name that is not UTF-8 as prefix_base64): both figures in
+// every row, the apparent size and the allocated bytes, whichever is the
+// primary (--allocated), and the row says which, and whether links counted
+// once. With --metadata names, which reads no links, every name counts.
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
@@ -173,18 +172,17 @@ func TestDuMatchesLstat(t *testing.T) {
 			for _, once := range []bool{false, true} {
 				t.Run(fmt.Sprintf("depth%d/allocated=%v/once=%v", depth, allocated, once), func(t *testing.T) {
 					args := []string{root, "-d", strconv.Itoa(depth), "--no-stats", "--workers", "3"}
+					primary := "size"
 					if allocated {
-						args = append(args, "--allocated")
+						args, primary = append(args, "--allocated"), "allocated_bytes"
+					} else if depth%2 == 1 {
+						args = append(args, "--apparent-size")
 					}
 					if !once {
 						args = append(args, []string{"--count-links", "-l"}[depth%2])
 					}
-					want := duOracle(t, root, depth, allocated, once)
-					size := "size"
-					if allocated {
-						size = "allocated_size"
-					}
-					check := func(prefix string, objects, dirs, bytes int64, modified string, prev *string, first bool) {
+					want := duOracle(t, root, depth, once)
+					check := func(prefix string, objects, dirs, size, alloc int64, modified string, prev *string, first bool) {
 						t.Helper()
 						if !first && prefix <= *prev {
 							t.Fatalf("row %q after %q", prefix, *prev)
@@ -199,31 +197,33 @@ func TestDuMatchesLstat(t *testing.T) {
 							newest = at.UnixMicro()
 						}
 						w, ok := want[prefix]
-						if !ok || objects != w.objects || dirs != w.dirs || bytes != w.bytes || (modified != "") != w.hasNewest || newest != w.newest {
-							t.Errorf("%q: got %d objects, %d dirs, %d bytes, newest %q; want %+v", prefix, objects, dirs, bytes, modified, w)
+						if !ok || objects != w.objects || dirs != w.dirs || size != w.size || alloc != w.alloc || (modified != "") != w.hasNewest || newest != w.newest {
+							t.Errorf("%q: got %d objects, %d dirs, %d bytes, %d allocated, newest %q; want %+v", prefix, objects, dirs, size, alloc, modified, w)
 						}
 					}
 					var out bytes.Buffer
 					if err := runDu(context.Background(), append(args, "--format", "tsv"), &out); err != nil {
 						t.Fatal(err)
 					}
-					lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-					if lines[0] != "depth\tobjects\tdirs\t"+size+"\tunsized\tlast_modified\tprefix" || len(lines)-1 != len(want) {
-						t.Fatalf("%d rows for %d prefixes:\n%s", len(lines)-1, len(want), out.String())
+					rows := duTSV(t, out.String())
+					if !strings.HasPrefix(out.String(), "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n") ||
+						len(rows) != len(want) {
+						t.Fatalf("%d rows for %d prefixes:\n%s", len(rows), len(want), out.String())
 					}
 					prev := ""
-					for i, l := range lines[1:] {
-						f := strings.Split(l, "\t")
-						if len(f) != 7 || f[4] != "0" || f[0] != strconv.Itoa(strings.Count(f[6], "/")) {
-							t.Fatalf("row %q", l)
-						}
-						n := func(s string) int64 { v, _ := strconv.ParseInt(s, 10, 64); return v }
-						prefix, _, err := textout.UnescapeTSV(f[6])
+					for i, r := range rows {
+						prefix, _, err := textout.UnescapeTSV(r["prefix"])
 						if err != nil {
 							t.Fatal(err)
 						}
-						modified, _, _ := textout.UnescapeTSV(f[5]) // "" for a null
-						check(prefix, n(f[1]), n(f[2]), n(f[3]), modified, &prev, i == 0)
+						if r["size_missing"] != "0" || r["allocated_bytes_missing"] != "0" || r["depth"] != strconv.Itoa(strings.Count(prefix, "/")) ||
+							r["row_type"] != map[bool]string{true: "total", false: "prefix"}[i == 0] || r["primary"] != primary || r["sort"] != "name" ||
+							r["links_once"] != strconv.FormatBool(once) {
+							t.Fatalf("row %v", r)
+						}
+						n := func(s string) int64 { v, _ := strconv.ParseInt(s, 10, 64); return v }
+						modified, _, _ := textout.UnescapeTSV(r["max_last_modified"]) // "" for a null
+						check(prefix, n(r["objects"]), n(r["dirs"]), n(r["size"]), n(r["allocated_bytes"]), modified, &prev, i == 0)
 					}
 					// JSONL: the same rows, each line JSON; the prefix as
 					// text when it is UTF-8, else its exact bytes in base64.
@@ -231,7 +231,7 @@ func TestDuMatchesLstat(t *testing.T) {
 					if err := runDu(context.Background(), append(args, "--format", "jsonl"), &out); err != nil {
 						t.Fatal(err)
 					}
-					rows := 0
+					n := 0
 					prev = ""
 					for l := range strings.Lines(out.String()) {
 						var r map[string]any
@@ -248,15 +248,16 @@ func TestDuMatchesLstat(t *testing.T) {
 							}
 							prefix = string(raw)
 						}
-						modified, _ := r["last_modified"].(string)
-						if r["unsized"] != 0.0 || r["depth"] != float64(strings.Count(prefix, "/")) {
-							t.Fatalf("%q: unsized or depth", l)
+						modified, _ := r["max_last_modified"].(string)
+						if r["size_missing"] != 0.0 || r["allocated_bytes_missing"] != 0.0 || r["depth"] != float64(strings.Count(prefix, "/")) ||
+							r["primary"] != primary || r["links_once"] != once {
+							t.Fatalf("%q: missing values, depth or context", l)
 						}
-						check(prefix, int64(r["objects"].(float64)), int64(r["dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
-						rows++
+						check(prefix, int64(r["objects"].(float64)), int64(r["dirs"].(float64)), int64(r["size"].(float64)), int64(r["allocated_bytes"].(float64)), modified, &prev, n == 0)
+						n++
 					}
-					if rows != len(want) {
-						t.Fatalf("%d JSONL rows for %d prefixes", rows, len(want))
+					if n != len(want) {
+						t.Fatalf("%d JSONL rows for %d prefixes", n, len(want))
 					}
 				})
 			}
@@ -266,19 +267,31 @@ func TestDuMatchesLstat(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--metadata", "names", "--format=tsv", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if w := duOracle(t, root, 0, false, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\n0\t%d\t%d\t0\t%d\t", w.objects, w.dirs, w.objects)) {
+	if w := duOracle(t, root, 0, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\ntotal\t0\t%d\t%d\t\\N\t%d\t\\N\t%d\t", w.objects, w.dirs, w.objects, w.objects)) {
 		t.Fatalf("--metadata names: %q, want every name of %+v", out.String(), w)
 	}
-	// The sparse file is where the two byte counts part.
-	var app, alloc bytes.Buffer
-	if err := runDu(context.Background(), []string{filepath.Join(root, "s"), "--format=tsv", "--no-stats"}, &app); err != nil {
-		t.Fatal(err)
+	// The sparse file is where the two figures part: both in one row,
+	// whichever comes first.
+	for _, primary := range []string{"--apparent-size", "--allocated"} {
+		out.Reset()
+		if err := runDu(context.Background(), []string{filepath.Join(root, "s"), primary, "--format=tsv", "--no-stats"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		r := duTSV(t, out.String())[0]
+		if alloc, _ := strconv.ParseInt(r["allocated_bytes"], 10, 64); r["size"] != "8388612" || alloc >= 8388612 {
+			t.Fatalf("sparse %s: %v", primary, r)
+		}
 	}
-	if err := runDu(context.Background(), []string{filepath.Join(root, "s"), "--allocated", "--format=tsv", "--no-stats"}, &alloc); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(app.String(), "\t1\t0\t8388612\t") || strings.Contains(alloc.String(), "\t1\t0\t8388612\t") {
-		t.Fatalf("sparse: apparent %q, allocated %q", app.String(), alloc.String())
+	// --sort size orders by the primary figure: the sparse file's s/ is the
+	// largest by length, a/ by allocated bytes.
+	for primary, first := range map[string]string{"--apparent-size": "s/", "--allocated": "a/"} {
+		out.Reset()
+		if err := runDu(context.Background(), []string{root, "-d", "1", "--sort", "size", primary, "--format=tsv", "--no-stats"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		if r := duTSV(t, out.String()); r[1]["prefix"] != first || r[1]["sort"] != "size" {
+			t.Fatalf("%s: by size %v", primary, r)
+		}
 	}
 }
 
@@ -336,7 +349,8 @@ func TestDuLocalRefusals(t *testing.T) {
 	// listing stopped there.
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--allocated", "--one-file-system", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t8\t9\t") || strings.Count(out.String(), "\n") != 2 { // hard links once
+		!strings.HasPrefix(out.String(), "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\ntotal\t0\t8\t9\t") ||
+		!strings.Contains(out.String(), "\tallocated_bytes\tname\ttrue\t\n") || strings.Count(out.String(), "\n") != 2 { // hard links once
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
@@ -388,7 +402,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	// D7: the entry is named with its cause, and the report says the
 	// totals are short although the listing completed.
 	if code := conclude(err); code != exitIncomplete ||
-		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
+		!strings.Contains(out.String(), "\ntotal\t0\t1\t1\t2\t0\t") ||
 		!strings.HasSuffix(stderr.String(), warning+end) {
 		t.Fatalf("du: exit %d, stdout %q stderr %q", code, out.String(), stderr.String())
 	}

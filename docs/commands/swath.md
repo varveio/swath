@@ -233,7 +233,6 @@ What each one means and what to do: [Exit codes](../reference/exit-codes.md).
 | `NO_COLOR` | set and not empty: no color with `--color auto` |
 | `CLICOLOR_FORCE` | color even when stderr is not a terminal |
 | `TERM` | `dumb`: no color with `--color auto` |
-| `TZ` | the time zone of the tables' local times |
 | `TMPDIR` | where text rows on stdout spill (see [Running swath](../running.md#sizing-a-run)) |
 | `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [Sources](../sources/README.md) |
 | `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE` | write Go CPU and allocation profiles to that file and beside it, split at the end of listing: `FILE.listing`, `FILE.tail` (CPU), `FILE.exit` (allocations); `SWATH_MEMPROFILERATE` sets the allocation sample rate ([phase profiles](../internals/diagnostics.md#phase-profiles)) |

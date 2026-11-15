@@ -586,17 +586,18 @@ type options struct {
 	term                   termOptions
 	format                 string
 	columns                []string        // --columns
+	noHeader               bool            // --no-header
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
 	partMaxRows            int64
 	seedFrom               string
-	// swath du's per-prefix totals: --depth, --max-prefixes, and the
-	// local --allocated, --count-links and --max-inodes; totals is their
-	// output, resolved.
-	depth, maxPrefixes, maxInodes int
-	allocated, countLinks         bool
-	sortBy                        string // --sort: sortName or sortSize
-	totals                        *totalsOut
+	// swath du's per-prefix totals: --depth, --max-prefixes,
+	// --apparent-size, and the local --allocated, --count-links and
+	// --max-inodes; totals is their output, resolved.
+	depth, maxPrefixes, maxInodes       int
+	allocated, apparentSize, countLinks bool
+	sortBy                              string // --sort: sortName or sortSize
+	totals                              *totalsOut
 	// swath du --from-dataset DIR [PREFIX]: the dataset directory, and the
 	// key prefix the totals are restricted to ("": the dataset's scope).
 	fromDataset, datasetPrefix string
@@ -616,11 +617,13 @@ const (
 )
 
 // totalsOut is where swath du writes its prefix rows: stdout, in format
-// (textout's TSV, JSONL or Table), by size when bySize (totals.SortBySize).
+// (textout's TSV, JSONL or Table), by size when sortBy is sortSize
+// (totals.SortBySize), TSV without its header line when noHeader.
 type totalsOut struct {
-	format string
-	bySize bool
-	tally  *totals.Tally
+	format   string
+	sortBy   string
+	noHeader bool
+	tally    *totals.Tally
 	// dataset is the JSON object JSONL rows read from a dataset carry
 	// (textout.TotalsLayout.Dataset); nil for a live run.
 	dataset []byte
@@ -628,10 +631,12 @@ type totalsOut struct {
 
 // write writes the tally's rows to w.
 func (t *totalsOut) write(w io.Writer) error {
-	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs(), Dataset: t.dataset}
+	opt := t.tally.Options()
+	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), Allocated: t.tally.Allocated(),
+		NoHeader: t.noHeader, Dataset: t.dataset}
 	rows := t.tally.Result()
-	if t.bySize {
-		totals.SortBySize(rows)
+	if t.sortBy == sortSize {
+		totals.SortBySize(rows, opt.Primary)
 	}
 	return textout.WriteTotals(w, t.format, l, rows)
 }

@@ -57,7 +57,8 @@ empty string nor zero.
 
 ### TSV
 
-One header line of the column names, then one line per row, the fields separated by tabs:
+One header line of the column names (`--no-header` leaves it out), then one line per row, the fields separated
+by tabs:
 
 ```text
 key	size	last_modified	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
@@ -94,23 +95,23 @@ No column name ends in `_base64`.
 
 ### The table
 
-For reading on a terminal: the time to the second in local time (`TZ` sets the zone), the size in binary
-units, the local tree's `kind`, the version columns with `--all-versions`, and the key last, escaped as in TSV.
-A missing value is blank.
+For reading on a terminal: the time in UTC to the second, with its `Z`, whatever the machine's time zone, the
+size in binary units, the local tree's `kind`, the version columns with `--all-versions`, and the key last,
+escaped as in TSV. A missing value is `-`.
 
 ```text
 $ swath list /data/photos
-last_modified (local)      size  kind          key
-2026-11-02 09:30:00    4.00 KiB  DIR           2025/
-2026-03-01 10:00:00     293 KiB  FILE          2025/a.jpg
-2026-11-02 09:30:00    4.00 KiB  DIR           2025/raw/
-2026-03-01 10:00:00     117 KiB  FILE          2025/raw/b.cr2
-2026-11-02 09:30:00    4.00 KiB  DIR           2026/
-2026-11-02 09:30:00    48.8 KiB  FILE          2026/c.jpg
-2026-11-02 09:30:00         3 B  FILE          notes.txt
+last_modified             size  kind          key
+2026-11-02T09:30:00Z  4.00 KiB  DIR           2025/
+2026-03-01T10:00:00Z   293 KiB  FILE          2025/a.jpg
+2026-11-02T09:30:00Z  4.00 KiB  DIR           2025/raw/
+2026-03-01T10:00:00Z   117 KiB  FILE          2025/raw/b.cr2
+2026-11-02T09:30:00Z  4.00 KiB  DIR           2026/
+2026-11-02T09:30:00Z  48.8 KiB  FILE          2026/c.jpg
+2026-11-02T09:30:00Z       3 B  FILE          notes.txt
 ```
 
-`--columns` does not apply to the table; with `--columns` on a terminal, `auto` prints TSV.
+`--columns` and `--no-header` do not apply to the table; with either on a terminal, `auto` prints TSV.
 
 ### Reading text rows in DuckDB
 
@@ -139,71 +140,93 @@ byte that is not valid UTF-8. `contains(replace(key, '\\', ''), '\x')` finds tho
 
 ## du rows
 
-`swath du` prints, for the total and each prefix down to `-d N`, the objects under it, their bytes and the
-newest modification time among them (a local tree adds its directories and the files without a size):
+`swath du` prints, for the total and each prefix down to `-d N`, the objects under it, two byte figures and the
+newest modification time among them (a local tree adds its directories):
 
 ```text
 $ swath du -d 1 /data/photos --format tsv
-depth	objects	dirs	size	unsized	last_modified	prefix
-0	4	3	470003	0	2026-11-02T09:30:00.000000Z	
-1	2	1	420000	0	2026-03-01T10:00:00.000000Z	2025/
-1	1	0	50000	0	2026-11-02T09:30:00.000000Z	2026/
+row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
+total	0	4	3	470003	0	483328	0	2026-11-02T09:30:00.000000Z	size	name	true	
+prefix	1	2	1	420000	0	425984	0	2026-03-01T10:00:00.000000Z	size	name	true	2025/
+prefix	1	1	0	50000	0	53248	0	2026-11-02T09:30:00.000000Z	size	name	true	2026/
 ```
 
 | Field | Meaning |
 |---|---|
+| `row_type` | `total` for the total, `prefix` for every other row |
 | `depth` | the row's level below SOURCE; 0 is the total |
 | `objects` | the objects under the prefix (a local tree's files and other entries, never its directories) |
 | `dirs` | the directories below the prefix (local trees only) |
-| `size` | the bytes of the objects that had a size (`allocated_size` with `--allocated`) |
-| `unsized` | the objects that had no size (local trees only) |
-| `last_modified` | the newest modification time under the prefix; null when none had one |
+| `size` | the sum of the objects' lengths, as the dataset's `size` column holds them |
+| `size_missing` | the objects counted that had no length (a local walk with `--metadata names`) |
+| `allocated_bytes` | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
+| `allocated_bytes_missing` | the objects counted that had no allocated bytes |
+| `max_last_modified` | the newest `last_modified` among the objects counted under the prefix; directories and S3 delete markers do not count; null when no object had one |
+| `primary` | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
+| `sort` | the order of the rows, `name` or `size` (`--sort`) |
+| `links_once` | `true` when a file with several hard links was counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket |
 | `prefix` | the prefix, up to and including its `/`; the total's is SOURCE's prefix up to its last `/`, empty for a whole bucket or tree |
 
-TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; JSONL has the same
-fields (`prefix_base64` for a prefix that is not valid UTF-8). Totals read from a saved dataset
-(`swath du --from-dataset`) add a last JSONL member, `dataset`: the directory (`path`), the listed `source`, the
-`schema_id`, `listing_started_at` and `listing_finished_at`, and the listing's coverage from its manifest
-(`complete`, `stop_reason`, `unreadable`, `filters`, `exclusions`; null where the manifest does not say),
-so a stored row still says it was not a live listing and how complete it was. Both sort the rows by prefix in byte order, the
-total first and each parent before its children; the table puts the total last. Select the total by
-`depth`, not by its place: `jq 'select(.depth == 0) | .size'`. An object-store source has no `dirs` and
-`unsized` fields.
+Every row has both figures, whichever `--allocated` puts first. A figure that no object under the prefix had is
+null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones there
+were, and its `*_missing` count says how many it leaves out. An empty prefix has 0 of each.
+
+TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; `--no-header` leaves
+out its header line. JSONL has the same fields, the prefix after `depth` (`prefix_base64` for a prefix that is
+not valid UTF-8). Totals read from a saved dataset (`swath du --from-dataset`) add a last JSONL member,
+`dataset`: the directory (`path`), the listed `source`, the `schema_id`, `listing_started_at` and
+`listing_finished_at`, and the listing's coverage from its manifest (`complete`, `stop_reason`, `unreadable`,
+`filters`, `exclusions`; null where the manifest does not say), so a stored row still says it was not a live
+listing and how complete it was. Both sort the rows by prefix in byte order, the total first and each parent
+before its children; the table puts the total last. Select the total by `row_type`, not by its place:
+`jq 'select(.row_type == "total") | .size'`. An object-store source has no `dirs` field.
 
 Read the totals with care:
 
 - **Each row includes everything below it.** Add up rows of one depth only: the depth-1 rows together leave out
   the objects directly under SOURCE, and all rows together count an object once per level it is under.
-- **`size` 0 with `unsized` above 0 means the sizes were not read**, not that the files are empty: with
-  `--metadata names` a local walk reads names only. Any `unsized` above 0 means `size` leaves those files out;
-  the table shows such a size as `-`:
+- **A null figure was not read**, which is not an empty file: with `--metadata names` a local walk reads names
+  only, so both figures are null beside their counts:
 
   ```text
   $ swath du /data/photos --metadata names --format jsonl
-  {"depth":0,"prefix":"","objects":4,"dirs":3,"size":0,"unsized":4,"last_modified":null}
+  {"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":3,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":4,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
   ```
 
-- **`--allocated` renames the field.** The bytes are then `allocated_size` (the files' blocks on disk), not `size`; a script that reads `size` finds no such field:
-
-  ```text
-  $ swath du /data/photos --allocated --format jsonl
-  {"depth":0,"prefix":"","objects":4,"dirs":3,"allocated_size":483328,"unsized":0,"last_modified":"2026-11-02T09:30:00.000000Z"}
-  ```
-
-- **The bytes are object sizes as listed**: not storage consumed, compression, replicas or a bill. A local
-  directory's own size is in no total.
+- **`size` is not disk use.** It is the objects' lengths as listed: not storage consumed, compression, replicas
+  or a bill. `allocated_bytes` is closer to `du`'s figure, with limits of its own
+  ([Apparent and allocated bytes](results.md#apparent-and-allocated-bytes)). A local directory's own size and
+  blocks are in no total.
+- **`max_last_modified` is not a directory's time.** It is the newest of the objects' own `last_modified`, the
+  column `swath list` prints for each row.
 - **Filters apply first**, to every row, directories included ([Filters](filters.md)).
 
-The table rounds sizes to three significant digits in binary units, calls a local tree's objects `files` and
-its prefixes `path`, and shows times in local time:
+The table rounds the figures to three significant digits in binary units. A local tree's table puts the
+apparent size first, `size (apparent)`, then the allocated bytes, `on disk` (`--allocated` swaps them), calls its
+objects `files` and its prefixes `path`, and indents each path two blanks a level below the first. It shows no
+time. An unknown figure is `-`, and a partial one is a lower bound, `>= 12.0 KiB`:
+
+```text
+$ swath du -d 2 /data/photos
+size (apparent)   on disk  files  dirs  path
+        410 KiB   416 KiB      2     1  2025/
+        117 KiB   120 KiB      1     0    2025/raw/
+       48.8 KiB  52.0 KiB      1     0  2026/
+        459 KiB   472 KiB      4     3  (total)
+```
+
+A source without allocated bytes has one figure, `size`:
 
 ```text
 $ swath du -d 1 s3://bucket
-   size  objects  last_modified (local)  prefix
-357 MiB    60000  2026-02-09 00:00:00    logs/
-   18 B        3  2026-01-01 00:00:00    weird/
-357 MiB    60004  2026-02-09 00:00:00    (total)
+   size  objects  prefix
+357 MiB    60000  logs/
+   18 B        3  weird/
+357 MiB    60004  (total)
 ```
+
+The table fits 80 columns at `-d 2` while a path stays within about 38 characters; a longer path is printed
+whole and wraps.
 
 The totals are printed when the count completes. A run that fails or stops before prints none; one that
 fails while they are written exits non-zero. `--report FILE` adds the total and the counts to the report's

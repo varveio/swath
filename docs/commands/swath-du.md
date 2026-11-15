@@ -1,6 +1,6 @@
 # swath du
 
-swath du totals SOURCE's objects (a local tree's files), bytes and newest time, per prefix down to a depth.
+swath du totals SOURCE's objects (a local tree's files), their lengths and allocated bytes, and their newest time, per prefix down to a depth.
 
 ## Synopsis
 
@@ -19,28 +19,32 @@ on disk.
 
 ```text
 $ swath du -d 1 /data/photos --format table
-    size  files  dirs  last_modified (local)  path
- 410 KiB      2     1  2026-03-01 10:00:00    2025/
-48.8 KiB      1     0  2026-11-02 09:30:00    2026/
- 459 KiB      4     3  2026-11-02 09:30:00    (total)
+size (apparent)   on disk  files  dirs  path
+        410 KiB   416 KiB      2     1  2025/
+       48.8 KiB  52.0 KiB      1     0  2026/
+        459 KiB   472 KiB      4     3  (total)
 ```
 
 A prefix ends at a `/`. Depth counts from SOURCE's prefix up to its last `/`: `s3://b/logs/2026/` counts from
 `logs/2026/`, `s3://b/logs` from the top of the bucket. A key with fewer than N slashes counts only in the
 prefixes it has. Each row includes everything below it, so add up rows of one depth only, never across depths.
 
-On a terminal the rows are a table with the total last; in a pipe they are TSV, and `--format jsonl` gives
-JSONL; both put the total first, at depth 0. The fields, and the care their totals need, are in
-[Output](../output.md#du-rows).
+On a terminal the rows are a table with the total last; in a pipe they are TSV (`--no-header` leaves out its
+header line), and `--format jsonl` gives JSONL; both put the total first, its `row_type` `total`. The fields,
+and the care their totals need, are in [Output](../output.md#du-rows).
 
-The bytes are the objects' sizes as listed: not the storage consumed, replicas or a bill. A local tree's
-directories are counted in `dirs`, never as objects, and their own size is in no total. With `--all-versions`
-every version is an object; an S3 delete marker adds its prefixes but no object, bytes or time.
+Every row has two byte figures: `size`, the objects' lengths as listed, and `allocated_bytes`, a local file's
+allocated blocks (`st_blocks` × 512; a sparse file counts its blocks, not its length), the table's `on disk`.
+Neither is the storage consumed, replicas or a bill ([Apparent and allocated
+bytes](../results.md#apparent-and-allocated-bytes)). A bucket has no allocated bytes: its rows carry them as
+null and its table leaves the column out. A local tree's directories are counted in `dirs`, never as objects,
+and their own size and blocks are in no total, so a tree's allocated bytes are below `du -sB1`'s by them. With
+`--all-versions` every version is an object; an S3 delete marker adds its prefixes but no object, bytes or
+time. `max_last_modified` is the newest time among the objects counted.
 
-On a local tree, `--allocated` totals the files' allocated blocks (`st_blocks` × 512; a sparse file counts its
-blocks, not its length) instead of their apparent size, and the field is then `allocated_size`. A directory's own
-blocks are in no total, so a tree's total is below `du -sB1`'s by them. `--allocated` needs each entry's stat, so
-`--metadata names` refuses it.
+The size comes first by default (`--apparent-size`). On a local tree, `--allocated` puts the allocated bytes
+first and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
+`--metadata names` refuses it, and a file whose filesystem reports no blocks fails the count.
 
 A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
 its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
@@ -74,10 +78,10 @@ for its SOURCE):
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
 swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12T10:00:03Z (3 hours ago); complete
-    size  files  dirs  last_modified (local)  path
- 410 KiB      2     1  2026-03-01 10:00:00    2025/
-48.8 KiB      1     0  2026-11-02 09:30:00    2026/
- 459 KiB      4     3  2026-11-02 09:30:00    (total)
+size (apparent)   on disk  files  dirs  path
+        410 KiB   416 KiB      2     1  2025/
+       48.8 KiB  52.0 KiB      1     0  2026/
+        459 KiB   472 KiB      4     3  (total)
 ```
 
 The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
@@ -98,14 +102,15 @@ the same facts ([Output](../output.md#du-rows)). A dataset whose listing did not
 `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
 counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
-`-l` counts every name.
+`-l` counts every name. A dataset listed with `--metadata names` holds no lengths, blocks or links, so its rows
+are those of a live `--metadata names` run: both figures null and `links_once` false.
 
 `--from-dataset` reads a committed local dataset directory. A dataset in a bucket is refused as not supported
 yet. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
 handle it. The options that shape a listing are refused by name: provider, credential, performance, limit and
 report options, and `--all-versions`, since the dataset's schema decides that. So are `--allocated`,
 `--count-links` and `--storage-class` when the dataset's schema has no column for them. The filters, the
-totals options, `--format` and the terminal options `-v`, `-q`, `--color`, `--log-format`, `--no-progress`
+totals options, `--format`, `--no-header` and the terminal options `-v`, `-q`, `--color`, `--log-format`, `--no-progress`
 and `--no-stats` apply. A duration in `--modified-since` counts back from now, not from the listing.
 
 ## Options
@@ -122,9 +127,14 @@ sizes) with exit 2.
   A prefix ends at a '/'; each includes what is below it, as du.
 
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
-  local: total the files' allocated bytes instead of their apparent size
+  local: the files' allocated bytes first, and --sort size by them
 
-  The files' st_blocks x 512. A directory's own blocks are not counted, so a tree's total is below du's by them.
+  The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, so a tree's total is below du's by them. Each file must have them: --metadata names is refused, and a file without them fails the count.
+
+- <a id="option-apparent-size"></a>[`--apparent-size`](#option-apparent-size)\
+  the files' lengths first, and --sort size by them (the default)
+
+  Not with --allocated.
 
 - <a id="option-count-links"></a>[`-l, --count-links`](#option-count-links)\
   local: count a file with several hard links under each of its names
@@ -155,6 +165,11 @@ sizes) with exit 2.
 
 - <a id="option-format"></a>[`--format auto|table|tsv|jsonl`](#option-format)\
   on stdout: auto is the table on a terminal, TSV otherwise
+
+- <a id="option-no-header"></a>[`--no-header`](#option-no-header)\
+  TSV: leave out the header line of column names
+
+  Not with the table, JSONL or a dataset; on a terminal the rows are then TSV.
 
 ### Filters
 
@@ -409,9 +424,14 @@ sizes) with exit 2.
 Totals:
   -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
                                 A prefix ends at a '/'; each includes what is below it, as du.
-      --allocated             local: total the files' allocated bytes instead of their apparent size
-                                The files' st_blocks x 512. A directory's own blocks are not
-                                counted, so a tree's total is below du's by them.
+      --allocated             local: the files' allocated bytes first, and --sort size by them
+                                The files' st_blocks x 512, the table's on disk; every row carries
+                                both figures whichever comes first. A directory's own blocks are not
+                                counted, so a tree's total is below du's by them. Each file must
+                                have them: --metadata names is refused, and a file without them
+                                fails the count.
+      --apparent-size         the files' lengths first, and --sort size by them (the default)
+                                Not with --allocated.
   -l, --count-links           local: count a file with several hard links under each of its names
                                 By default such a file counts once, as du counts it, under the first
                                 of its names in byte order. The names metadata tier, and Windows,
@@ -437,6 +457,9 @@ Totals:
 Output:
       --format auto|table|tsv|jsonl
                               on stdout: auto is the table on a terminal, TSV otherwise
+      --no-header             TSV: leave out the header line of column names
+                                Not with the table, JSONL or a dataset; on a terminal the rows are
+                                then TSV.
 
 Filters:
       --include GLOB          keep keys this glob matches (repeatable: any of them)
@@ -674,8 +697,7 @@ dataset's listing did not cover its scope. An interrupted `swath du` is run agai
 
 ## Environment
 
-`TZ` sets the time zone of the table's times; see also [swath(1)](swath.md#environment) and
-[Sources](../sources/README.md).
+See [swath(1)](swath.md#environment) and [Sources](../sources/README.md).
 
 ## See also
 
