@@ -149,8 +149,8 @@ html:has(.swath-dev-banner) {
   color: #46aaba;
 }
 
-/* Generated option lists are long, wide preformatted text: a code block is capped in height
-   and scrolls inside itself in both directions, so a long list does not run off the page. */
+/* A long code block (the plain-text --help under a command's options, a long example) is capped
+   in height and scrolls inside itself in both directions, so it does not run off the page. */
 .vp-doc div[class*='language-'] {
   max-height: 70vh;
   overflow: auto;

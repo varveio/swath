@@ -197,22 +197,37 @@ func shown(fl *pflag.Flag, cmd command) bool {
 	return !cmd.diag || cmd.count
 }
 
-// writeGroups prints the flags of f that keep says, by group.
-func writeGroups(b *strings.Builder, f *pflag.FlagSet, s helpStyle, keep func(*pflag.Flag) bool) {
+// flagGroup is one help group's title and flags, in the help's order.
+type flagGroup struct {
+	title string
+	flags []*pflag.Flag
+}
+
+// groupFlags is the flags of f that keep says, by group in groupOrder, and
+// all of them.
+func groupFlags(f *pflag.FlagSet, keep func(*pflag.Flag) bool) (gs []flagGroup, all []*pflag.Flag) {
 	by := map[string][]*pflag.Flag{}
-	var all []*pflag.Flag
 	f.VisitAll(func(fl *pflag.Flag) {
 		if keep(fl) {
 			by[groupOf(fl)] = append(by[groupOf(fl)], fl)
 			all = append(all, fl)
 		}
 	})
-	col := column(all)
 	for _, g := range groupOrder() {
 		if len(by[g]) > 0 {
-			s.heading(b, g)
-			writeFlags(b, by[g], s, col)
+			gs = append(gs, flagGroup{g, by[g]})
 		}
+	}
+	return gs, all
+}
+
+// writeGroups prints the flags of f that keep says, by group.
+func writeGroups(b *strings.Builder, f *pflag.FlagSet, s helpStyle, keep func(*pflag.Flag) bool) {
+	gs, all := groupFlags(f, keep)
+	col := column(all)
+	for _, g := range gs {
+		s.heading(b, g.title)
+		writeFlags(b, g.flags, s, col)
 	}
 }
 

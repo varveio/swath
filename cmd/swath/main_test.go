@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/spf13/pflag"
 
@@ -215,15 +216,25 @@ func TestSize(t *testing.T) {
 	}
 }
 
-// TestDocsCLIFlags keeps each command page's option list (docs/commands/)
-// and the diagnostic options (docs/internals/diagnostics.md) generated
-// from the flag set, as --help prints them: run with UPDATE=1 to rewrite
-// them.
+// TestDocsCLIFlags keeps each command page's options (docs/commands/) and
+// the diagnostic options (docs/internals/diagnostics.md) generated from
+// the flag set: a page's as Markdown (optionList.markdown) with the text
+// --help prints collapsed under it, the diagnostics' as that text. UPDATE=1
+// rewrites them.
 func TestDocsCLIFlags(t *testing.T) {
-	groups := func(diag bool, keep func(*pflag.Flag) bool) string {
+	// grouped is the flags keep says, by help group.
+	grouped := func(diag bool, keep func(*pflag.Flag) bool) optionList {
+		f := newFlags(&options{}, diag)
+		gs, _ := groupFlags(f, keep)
 		var b strings.Builder
-		writeGroups(&b, newFlags(&options{}, diag), docStyle, keep)
-		return strings.TrimPrefix(b.String(), "\n")
+		writeGroups(&b, f, docStyle, keep)
+		return optionList{gs, strings.TrimPrefix(b.String(), "\n")}
+	}
+	// flat is flags in one list without a heading.
+	flat := func(flags []*pflag.Flag) optionList {
+		var b strings.Builder
+		writeFlags(&b, flags, docStyle, column(flags))
+		return optionList{[]flagGroup{{flags: flags}}, b.String()}
 	}
 	var global []*pflag.Flag
 	newFlags(&options{}, false).VisitAll(func(fl *pflag.Flag) {
@@ -231,29 +242,107 @@ func TestDocsCLIFlags(t *testing.T) {
 			global = append(global, fl)
 		}
 	})
-	var root strings.Builder
-	writeFlags(&root, global, docStyle, column(global))
+	var journal bool
 	diagnostic := func(fl *pflag.Flag) bool { return groupOf(fl) == source.GroupDiagnostics }
-	for _, b := range []struct{ path, marker, text string }{
-		{"commands/swath.md", "flags", root.String()},
-		{"commands/swath-list.md", "flags", groups(false, func(fl *pflag.Flag) bool { return shown(fl, command{}) })},
-		{"commands/swath-du.md", "flags", groups(false, func(fl *pflag.Flag) bool { return shown(fl, command{count: true, du: true}) })},
-		{"commands/swath-resume.md", "flags", groups(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && !diagnostic(fl) })},
-		{"internals/diagnostics.md", "diag-list", groups(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true}) })},
-		{"internals/diagnostics.md", "diag-count", groups(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true, count: true}) && diagnostic(fl) })},
-		{"internals/diagnostics.md", "diag-resume", groups(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && diagnostic(fl) })},
+	for _, b := range []struct {
+		path, marker string
+		list         optionList
+	}{
+		{"commands/swath.md", "flags", flat(global)},
+		{"commands/swath-list.md", "flags", grouped(false, func(fl *pflag.Flag) bool { return shown(fl, command{}) })},
+		{"commands/swath-du.md", "flags", grouped(false, func(fl *pflag.Flag) bool { return shown(fl, command{count: true, du: true}) })},
+		{"commands/swath-resume.md", "flags", grouped(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && !diagnostic(fl) })},
+		{"commands/swath-show.md", "flags", flat(showFlags(pflag.NewFlagSet("show", pflag.ContinueOnError), &journal))},
+		{"internals/diagnostics.md", "diag-list", grouped(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true}) })},
+		{"internals/diagnostics.md", "diag-count", grouped(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true, count: true}) && diagnostic(fl) })},
+		{"internals/diagnostics.md", "diag-resume", grouped(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && diagnostic(fl) })},
 	} {
-		if strings.Contains(b.text, " \t") {
+		if strings.Contains(b.list.text, " \t") {
 			t.Fatalf("the usage has a space before a tab (git diff --check flags it in docs/%s)", b.path)
 		}
-		docBlock(t, b.path, b.marker, "text", b.text)
+		if strings.HasPrefix(b.path, "commands/") {
+			docSection(t, b.path, b.marker, b.list.markdown())
+		} else {
+			docBlock(t, b.path, b.marker, "text", b.list.text)
+		}
 	}
 }
 
+// optionList is a command's options by help group (one untitled group for
+// a flat list), and the text --help prints for them.
+type optionList struct {
+	groups []flagGroup
+	text   string
+}
+
+// markdown is a command page's options: a heading per titled group and an
+// item per flag, its names linked to its own anchor (option-NAME), its
+// help line and default, and its further text; then the --help text in a
+// collapsed block.
+func (l optionList) markdown() string {
+	var b strings.Builder
+	for _, g := range l.groups {
+		if g.title != "" {
+			b.WriteString("### " + g.title + "\n\n")
+		}
+		for _, fl := range g.flags {
+			d := source.Described(fl)
+			names, _ := flagNames(fl, helpStyle{})
+			id := "option-" + fl.Name
+			// A backslash ending a line is a hard line break.
+			fmt.Fprintf(&b, "- <a id=\"%s\"></a>[%s](#%s)\\\n  %s", id, mdCode(strings.TrimSpace(names)), id, mdText(d.Usage))
+			if d.Default != "" {
+				b.WriteString(" (default " + mdCode(d.Default) + ")")
+			}
+			b.WriteString("\n\n")
+			if d.Long != "" {
+				b.WriteString("  " + mdText(d.Long) + "\n\n")
+			}
+		}
+	}
+	b.WriteString("<details>\n<summary>Plain text, in the <code>--help</code> layout</summary>\n\n```text\n" + l.text + "```\n\n</details>\n")
+	return b.String()
+}
+
+// mdCode is s as a Markdown code span.
+func mdCode(s string) string {
+	if strings.Contains(s, "`") {
+		return "`` " + s + " ``"
+	}
+	return "`" + s + "`"
+}
+
+// mdText is help text as Markdown that renders as the same text: the
+// characters that would start emphasis, a link, HTML, an entity or code
+// escaped (an underscore inside a word starts nothing: AWS_REGION), and a
+// list or heading marker that begins the text.
+func mdText(s string) string {
+	word := func(i int) bool {
+		return i >= 0 && i < len(s) && (unicode.IsLetter(rune(s[i])) || unicode.IsDigit(rune(s[i])))
+	}
+	var b strings.Builder
+	for i, r := range s {
+		switch {
+		case r == '_' && word(i-1) && word(i+1):
+		case strings.ContainsRune("\\`*_[]<>&~", r), i == 0 && strings.ContainsRune("-+#", r) && strings.HasPrefix(s[1:], " "):
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // docBlock keeps the block between docs/name's "<!-- marker:begin -->"
-// and "<!-- marker:end -->" lines equal to text, fenced as lang: UPDATE=1
-// rewrites it, else a stale block fails the test.
+// and "<!-- marker:end -->" lines equal to text, fenced as lang (docSection).
 func docBlock(t *testing.T, name, marker, lang, text string) {
+	t.Helper()
+	docSection(t, name, marker, "```"+lang+"\n"+text+"```\n")
+}
+
+// docSection keeps what is between docs/name's "<!-- marker:begin -->"
+// and "<!-- marker:end -->" lines equal to body: UPDATE=1 rewrites it,
+// else a stale section fails the test.
+func docSection(t *testing.T, name, marker, body string) {
 	t.Helper()
 	path := docs.Path(t, name)
 	begin, end := "<!-- "+marker+":begin -->\n", "<!-- "+marker+":end -->"
@@ -266,7 +355,7 @@ func docBlock(t *testing.T, name, marker, lang, text string) {
 	if i < 0 || j < i {
 		t.Fatalf("docs/%s lacks the %s markers", name, marker)
 	}
-	want := s[:i+len(begin)] + "```" + lang + "\n" + text + "```\n" + s[j:]
+	want := s[:i+len(begin)] + body + s[j:]
 	if want == s {
 		return
 	}
