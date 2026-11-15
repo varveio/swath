@@ -98,7 +98,7 @@ was published, what was listed, how completely, and what the parts hold. Here `c
 before you rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains
 each field. 0.4.0-rc.2 prints `skipped=0` where this prints `unreadable=0`.
 
-To read the rows themselves, open the parts the manifest lists with DuckDB, Python or another Parquet
+To read the rows themselves, open the parts with DuckDB, Python or another Parquet
 reader ([the swath dataset](dataset.md)).
 
 ## 5. Total the saved inventory
