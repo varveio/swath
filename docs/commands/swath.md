@@ -143,6 +143,29 @@ These options are taken by every command, before or after the command word. `-h,
 are described above.
 
 <!-- flags:begin -->
+- <a id="option-verbose"></a>[`-v, --verbose`](#option-verbose)\
+  a start line, progress records; -vv, -vvv: the request log
+
+  -vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted).
+
+- <a id="option-quiet"></a>[`-q, --quiet`](#option-quiet)\
+  no warnings, no automatic progress or statistics (-qq: no errors)
+
+  With -qq the exit code and the reports stand alone.
+
+- <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
+  color the progress line, the statistics and the help (default `auto`)
+
+  auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
+
+- <a id="option-log-format"></a>[`--log-format text|json`](#option-log-format)\
+  stderr as text, or json: one JSON object per line (default `text`)
+
+  json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block.
+
+<details>
+<summary>Plain text, in the <code>--help</code> layout</summary>
+
 ```text
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
@@ -157,6 +180,8 @@ are described above.
                                 json: warnings, the start line, progress records, the request log
                                 and the outcome as events, no redrawn line or statistics block.
 ```
+
+</details>
 <!-- flags:end -->
 
 ## Examples

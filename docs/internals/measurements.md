@@ -2357,8 +2357,10 @@ dataset ([the frontier window](ordering.md#the-frontier-window)):
 - **Stale seed:** with 5 % of the keyspace grown tenfold since the prior, the capped run completes. A grown region
   larger than the cap can hold still refuses frames and crawls: seen with caps of 2 to 6 MB.
 - **Many workers, a small cap:** on a list of 145 million keys at 2,048 workers, a 57 MB cap took 219 s against
-  78 s uncapped, while admission waited on spill: the window admits no tile while live spill is past half the
-  cap or a frame is refused, and thousands of workers wait at it.
+  78 s uncapped, while admission waited on spill: the window admitted no tile while live spill was past half the
+  cap, and that spill was mostly durable certificates behind the output waiting for their part to publish, so
+  the drainer forced 84 tiles one at a time. The gate now leaves those out and evicts them under pressure
+  ([spill behind the output](ordering.md#the-frontier-window), #535); not yet re-measured.
 
 Every completed run was key-identical to the unseeded one.
 
