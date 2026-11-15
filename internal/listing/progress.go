@@ -93,6 +93,10 @@ func (p *Progress) identify(att *Attempt, run *RunInfo) {
 	p.ids.Store(&ids)
 }
 
+// Started reports whether the run has started listing (a refusal under
+// the output's lock never does).
+func (p *Progress) Started() bool { return p != nil && p.started.Load() != 0 }
+
 // RunID is the id of the run p is the progress of ("" before its output
 // is opened).
 func (p *Progress) RunID() string {

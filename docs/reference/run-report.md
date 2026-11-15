@@ -37,8 +37,9 @@ six fraction digits (`2026-11-15T12:00:00.137198Z`): one width, so the strings s
 ## Progress file
 
 While a dataset run holds its output, `DIR/.swath/progress.json` is rewritten every 2 seconds by an atomic
-rename; the progress line on the terminal samples the same snapshot. When the run ends, while it still holds the
-output, the file is written once more with its final counts and `state` `done` or `failed`; a file whose `state`
+rename; the progress line on the terminal samples the same snapshot. When a run that started listing ends, while
+it still holds the output, the file is written once more with its final counts and `state` `done` or `failed` (an
+attempt refused before it listed, such as a resume of an unresumable run, leaves the file as it was); a file whose `state`
 is neither, read after its run ended, is the last snapshot of a process that was killed. A supervisor watches that
 file; `DIR/run.json` follows the commit. Its counts carry the run report's names.
 

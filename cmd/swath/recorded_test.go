@@ -87,13 +87,15 @@ func TestResumeRenamedFlag(t *testing.T) {
 			var r struct {
 				Invocation struct {
 					SortBufferBytes int64 `json:"sort_buffer_bytes"`
-					SortBuffer      struct {
+				}
+				Diagnostics struct {
+					SortBuffer struct {
 						Reason string `json:"reason"`
 					} `json:"sort_buffer"`
 				}
 			}
-			if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Invocation.SortBufferBytes != tc.want || r.Invocation.SortBuffer.Reason != listing.BudgetExplicit {
-				t.Fatalf("report: %v %+v, want %d bytes, explicit", err, r.Invocation, tc.want)
+			if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Invocation.SortBufferBytes != tc.want || r.Diagnostics.SortBuffer.Reason != listing.BudgetExplicit {
+				t.Fatalf("report: %v %+v %+v, want %d bytes, explicit", err, r.Invocation, r.Diagnostics, tc.want)
 			}
 			if !dataset.Committed(dir) {
 				t.Fatal("not committed")
