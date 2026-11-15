@@ -60,7 +60,8 @@ report; treat its outcome as unknown, never as the one in an older `error.json`.
 ## The outcome of record
 
 The outcome of an attempt is its exit code plus the report it wrote to `--report FILE` (on failure too). Give
-each attempt a fresh path outside the output directory. The report's `outcome` has `class`, `exit_code`,
+each attempt a fresh path outside the output directory: `swath resume` writes a report only when given
+`--report`, never to the path the run recorded. The report's `outcome` has `class`, `exit_code`,
 `resumable`, `cause`, `complete` (nothing is missing from the output), `stop_reason`, and `attempt.id` names the
 attempt ([Run report and progress file](run-report.md)).
 

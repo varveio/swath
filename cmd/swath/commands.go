@@ -126,7 +126,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		return stop(usageError{fmt.Errorf("resume: the run in %s was recorded with --%s, which this build does not take (renamed or removed): finish it with the build that started it, or start over with swath list --overwrite", dir, name)})
 	}
 	// The recorded flags without --overwrite (the output is resumed, not
-	// replaced), then the overrides, then the directory as given (it may
+	// replaced) and without --report (each attempt's report is its own: a
+	// resume writes one only when given one, never over the earlier
+	// attempt's), then the overrides, then the directory as given (it may
 	// have moved: the dataset directory, or a bucket dataset's work
 	// directory, whose -o stays as recorded), then SOURCE.
 	var cmd []string
@@ -134,7 +136,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	remote := false      // a bucket -o: DIR is its work directory, the bucket stays as recorded
 	for _, a := range flags {
 		name, v, eq := strings.Cut(strings.TrimPrefix(a, "--"), "=")
-		if name == "overwrite" && (!eq || v == "true") {
+		if name == "overwrite" && (!eq || v == "true") || name == "report" {
 			continue
 		}
 		if name == "work-dir" {

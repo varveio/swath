@@ -450,6 +450,9 @@ Continue it with more workers, a deadline and a fresh report path:
 swath resume logs-inventory --workers 128 --max-duration 1h --report /var/log/swath/attempt-2.json
 ```
 
+A resume writes a report only when it is given `--report`: the run's recorded `--report` is not replayed, so
+the earlier attempt's report stays as it was.
+
 Continue a run whose SAS token is not recorded:
 
 ```bash

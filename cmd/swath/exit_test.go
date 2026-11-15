@@ -325,6 +325,56 @@ func TestDiskFullExits74(t *testing.T) {
 	}
 }
 
+// TestResumeKeepsTheRunsReport: swath resume does not replay the run's
+// recorded --report. A plain resume leaves the first attempt's report as it
+// was and writes none; a resume given --report writes its own there. Before,
+// a plain resume replaced the first attempt's report with its own (C-C6).
+func TestResumeKeepsTheRunsReport(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	out := filepath.Join(t.TempDir(), "ds")
+	first := filepath.Join(t.TempDir(), "first.json")
+	var n atomic.Int64
+	restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+		if op == "write" && strings.HasSuffix(file, ".parquet") && n.Add(1) == 4 {
+			return len(b) / 2, syscall.ENOSPC
+		}
+		return 0, nil
+	})
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--part-size", "4KiB", "--part-interval", "0",
+		"--report", first, "-o", out}, io.Discard, true)
+	restore()
+	if c := exitCode(t, err); c != exitDiskFull {
+		t.Fatalf("exit %d (%v)", c, err)
+	}
+	was, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(ctx, []string{out}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if now, err := os.ReadFile(first); err != nil || !bytes.Equal(now, was) {
+		t.Fatalf("the first attempt's report changed: %v\n%s", err, now)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(first)); len(ents) != 1 {
+		t.Fatalf("the resume wrote a report: %v", ents)
+	}
+	// A resume of the committed dataset given a report writes it.
+	second := filepath.Join(t.TempDir(), "second.json")
+	if err := resume(ctx, []string{out, "--report", second}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	var rep listing.Report
+	readJSON(t, second, &rep)
+	if !rep.Invocation.Resume || rep.Outcome.Class != listing.ClassOK || !rep.Outcome.Complete {
+		t.Fatalf("second report: %+v", rep.Outcome)
+	}
+}
+
 // sameParts requires out's data/ to hold ref's parts byte for byte.
 func sameParts(t *testing.T, at, ref, out string) {
 	t.Helper()
