@@ -1,8 +1,83 @@
 # Total a source
 
 `swath du` totals a source's objects (a local tree's files), their bytes and their newest time, per prefix
-down to a depth, or reads the same totals back from a saved dataset. The rows' fields and the care their totals
+down to a depth; on a terminal it draws the view of where the bytes are; it can also read the same totals
+back from a saved dataset. The rows' fields and the care their totals
 need are in [Output](output.md#du-rows); every option is in [swath du](commands/swath-du.md).
+
+## The view
+
+Bare `swath du SOURCE` on a terminal answers "where are the bytes": a tree of the largest prefixes and objects,
+largest first, each under its parent. Each line gives the size, the count of objects below it (`files` on a
+local tree, three significant digits: `12.0k`), its share of the total, a bar of that share, the date of the
+newest modification below it (`max_last_modified`, local, the zone named on the total's line) and the path,
+indented two blanks a level under its parent's, under one dim heading:
+
+```text
+$ swath du s3://demo-lake
+    size  objects  share                        newest          path
+ 384 GiB     130k   100%  ████████████████████  2025-11-15 UTC  s3://demo-lake
+ 164 GiB        6  42.7%  ████████▌             2025-11-15        backups/
+39.0 GiB        1  10.2%  ██                    2025-11-15          db-2025-05-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-02-01.dump
+37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-04-01.dump
+27.0 GiB        1   7.0%  █▍                    2025-11-15          db-2025-03-01.dump
+24.0 GiB        1   6.3%  █▎                    2025-11-15          db-2025-01-01.dump
+2.00 KiB        1   0.0%                        2025-11-15          (1 more)
+ 164 GiB    2.18k  42.6%  ████████▌             2025-11-15        warehouse/
+ 159 GiB    1.85k  41.5%  ████████▎             2025-11-15          events/year=2025/
+14.4 GiB      159   3.8%  ▊                     2025-11-15            month=12/
+ 145 GiB    1.69k  37.8%  ███████▌              2025-11-15            (11 more)
+4.16 GiB      336   1.1%  ▏                     2025-11-15          sessions/year=2025/
+27.7 GiB    8.06k   7.2%  █▍                    2025-11-15        logs/api/2025/
+24.0 GiB     120k   6.3%  █▎                    2025-11-15        images/
+4.54 GiB      201   1.2%  ▏                     2025-11-15        (2 more)
+  384 GiB in 130,453 objects
+```
+
+Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are,
+what they hold together (size, count, share) and their newest date, so the lines under a parent always add up
+to it. Nothing is hidden without being counted; only a `(N more)` line of 0 bytes is left out. A prefix with a
+single child shares its line with it (`logs/api/2025/`). The view fills the terminal's height, less a few
+lines, from the largest down: line by line, a fold or a prefix shown whole gives its largest child (a prefix a
+fold for the rest too), the one whose child is the largest; a fold of many small prefixes that together
+outweigh one line's share of the view gives them first, so a wide level of small prefixes is shown as far as
+the lines go rather than as one fold. What does not fit is in the `(N more)` lines.
+
+The columns fit the terminal's width, and a line never wraps: from 100 columns the bar has 20 cells (the rest
+goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
+then the date. The size, the count and the path always stay; a path is written as the other terminal lines
+write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass
+the width.
+
+The view leaves room for every line printed after it (the line of totals, the unreadable line, the closing
+line, the prompt), wrapped lines counted as they wrap, so its heading and total stay on screen.
+
+One figure drives the whole view, its order, shares and bars: the size, or the allocated bytes with
+`--allocated`. A line on stderr under it gives the total once, exactly, with the other figure where the source
+has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q` leaves it out. Color follows `--color` and
+`NO_COLOR`.
+
+Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
+one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
+subdirectories'. Of the complete prefixes and objects, the 100 largest of each depth are kept, far more than
+a terminal shows; one dropped for 100 larger ones of its depth is counted in its parent's bytes, and which are
+kept does not depend on the order the listing completes them in. A prefix cut by the edge of a range is summed
+across ranges and completes once the ranges on both sides of that edge have been listed, so only the ranges
+still listing hold such prefixes. The local directories
+being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
+`--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
+report's `diagnostics.totals_view` counts what was kept, dropped and merged.
+
+The view is for reading. In a pipe `swath du` prints its rows (TSV) as before, and an explicit `-d N`
+(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows.
+`--from-dataset` draws the same view from a saved dataset, line for line.
+
+The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
+[pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
+behavior. It differs in what it leaves out: dust shows the largest entries of the whole tree whatever their
+parents, and pdu hides entries below 1 % of the total; swath folds each parent's smaller children into a
+counted line.
 
 ## Totals per prefix
 
@@ -64,8 +139,11 @@ Memory grows with the number of distinct prefixes, not objects. A run that would
 `--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
 
 Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
-the rest, names the entries on stderr and exits 3 ([exit codes](reference/exit-codes.md)). In the table, a
-directory that could not be read shows `-` for its size and counts.
+the rest, names the entries on stderr (relative to SOURCE) and exits 3 ([exit codes](reference/exit-codes.md)).
+In the table, a directory that could not be read shows `-` for its size and counts. The view marks with `!` after
+the size every line whose sums leave out such a directory, at or below it (a `(N more)` line too when one of the
+children it holds does), and says so in one line under it instead of naming them:
+`! 5 directories could not be read (marked ! above); -v lists them`.
 
 ## Totals from a saved dataset
 

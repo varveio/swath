@@ -21,59 +21,9 @@ nothing on disk.
 ### The view
 
 Bare `swath du SOURCE` on a terminal answers "where are the bytes": a tree of the largest prefixes and objects,
-largest first, each under its parent with its share of the total and, where the terminal is wide enough, a bar
-of that share and the newest modification time below it (`max_last_modified`, local, to the second, the zone
-named on the first line):
-
-```text
-$ swath du s3://demo-lake
- 384 GiB   100%  ██████████████████████████████  2025-11-15 09:46:40 UTC  s3://demo-lake
- 164 GiB  42.7%  ████████████▊                   2025-11-15 09:46:40        backups/
-39.0 GiB  10.2%  ███                             2025-11-15 09:46:40          db-2025-05-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-02-01.dump
-37.0 GiB   9.6%  ██▉                             2025-11-15 09:46:40          db-2025-04-01.dump
-27.0 GiB   7.0%  ██                              2025-11-15 09:46:40          db-2025-03-01.dump
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40          db-2025-01-01.dump
-2.00 KiB   0.0%                                                               (1 more)
- 164 GiB  42.6%  ████████████▊                   2025-11-15 09:46:40        warehouse/
- 159 GiB  41.5%  ████████████▍                   2025-11-15 09:46:40          events/year=2025/
-4.16 GiB   1.1%  ▎                                                            (1 more)
-27.7 GiB   7.2%  ██▏                             2025-11-15 09:46:40        logs/api/2025/
-24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40        images/
-4.54 GiB   1.2%  ▎                                                          (2 more)
-  384 GiB in 130,453 objects
-```
-
-Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are
-and what they hold together, so the lines under a parent always add up to it. Nothing is hidden without being
-counted; only a `(N more)` line of 0 bytes is left out. A name is written as the other terminal lines write
-it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
-terminal's width. A prefix with a single child shares its line with it (`logs/api/2025/`). The view fills the terminal's
-height, less a few lines; what does not fit is in the `(N more)` lines. One figure drives the whole view, its
-order, shares and bars: the size, or the allocated bytes with `--allocated`. A line on stderr under it gives the
-total once, with the other figure where the source has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q`
-leaves it out. Color follows `--color` and `NO_COLOR`. As the terminal narrows the bar is left out first, then
-the time; a `(N more)` line has no time.
-
-Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
-one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
-subdirectories'. A complete prefix below 1 % of the bytes seen so far is dropped: the total can only be larger,
-so it is below 1 % of the total too, and its bytes are already counted in its parent's. Of the rest, the 100
-largest of each depth are kept: a prefix of 1 % of the total is always among them. A prefix cut by the edge
-of a range is summed across ranges and completes when the listing ends: a few a range. The local directories
-being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
-`--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
-report's `diagnostics.totals_view` counts what was kept, dropped and merged.
-
-The view is for reading. In a pipe `swath du` prints its rows (TSV) as before, and an explicit `-d N`
-(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows. `--from-dataset` draws the same view from a saved
-dataset, line for line.
-
-The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
-[pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
-behavior. It differs in what it leaves out: dust shows the largest entries of the whole tree whatever their
-parents, and pdu hides entries below 1 % of the total; swath folds each parent's smaller children into a
-counted line.
+largest first, each under its parent, with its size, count, share of the total, a bar and the newest date. What
+it shows, what it folds into `(N more)` lines and how it fits the terminal are in
+[Total a source](../totals.md#the-view).
 
 How depth counts, the two byte figures, hard links, filters, memory and unreadable entries are in
 [Total a source](../totals.md#totals-per-prefix).

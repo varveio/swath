@@ -452,7 +452,7 @@ complete, so its total is final. The prefixes at a run's two ends are partial; t
 runs and are complete when the listing ends. A complete prefix below 1% of the bytes seen so far is dropped,
 since it is below 1% of the total too; of the rest, the view keeps the 100 largest at each depth. A dropped
 prefix's bytes are already counted in its parent's. Each parent's other children are folded into one counted
-`(N more)` line, so every level adds up ([the view](../../docs/commands/swath-du.md#the-view)).
+`(N more)` line, so every level adds up ([the view](../../docs/totals.md#the-view)).
 
 <figure class="swath-figure">
 <svg viewBox="0 0 480 136" role="img" aria-labelledby="fg-du-title fg-du-desc">

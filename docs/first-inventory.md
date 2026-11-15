@@ -79,7 +79,7 @@ manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 dire
 two of the names are one hard-linked file.
 
 A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),
-it still writes the dataset, ends with `swath: N entries could not be read and are missing from the output`
+it still writes the dataset, names them on stderr, ends with the closing line `partial: N unreadable entries; …`
 and exits 3 ([exit codes](reference/exit-codes.md)); step 4 shows how the dataset records it.
 
 The output directory must be new or empty. Keep it outside the tree you list; if it is inside, swath skips it
