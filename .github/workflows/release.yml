@@ -35,15 +35,29 @@ jobs:
           ./scripts/ci/verify-release-notes.sh --self-test
 
       # Ancestor, rather than equality with origin/main: `just release` tags a commit already
-      # on main, and main may have moved on by the time the tag is pushed.
-      - name: Verify tag SHA and origin/main ancestry
+      # on main, and main may have moved on by the time the tag is pushed. A release tags every
+      # module: vX.Y.Z for this one and DIR/vX.Y.Z for each nested module (reader, objfile),
+      # all created by `just release` and pushed together. They are fetched from origin here,
+      # not taken from the event, so a rerun after pushing a missing tag sees it.
+      - name: Verify every module's tag SHA and origin/main ancestry
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            "+${GITHUB_REF}:refs/remotes/release/event-tag" \
-            +refs/heads/main:refs/remotes/origin/main
-          ./scripts/ci/verify-release-source.sh \
-            "$GITHUB_SHA" refs/remotes/release/event-tag refs/remotes/origin/main
+          tags=$(./scripts/ci/verify-release-source.sh tags "$GITHUB_REF_NAME")
+          tags=${tags//$'\n'/ }
+          refspecs=(+refs/heads/main:refs/remotes/origin/main)
+          refs=()
+          for tag in $tags; do
+            refspecs+=("+refs/tags/${tag}:refs/remotes/release/${tag}")
+            refs+=("refs/remotes/release/${tag}")
+          done
+          git fetch --no-tags origin "${refspecs[@]}" || {
+            echo "::error::a release needs all of its tags on origin: $tags (just release creates them and prints the push)"
+            exit 1
+          }
+          ./scripts/ci/verify-release-source.sh "$GITHUB_SHA" refs/remotes/origin/main "${refs[@]}" || {
+            echo "::error::every one of $tags must name the tagged commit $GITHUB_SHA"
+            exit 1
+          }
 
       - name: Require full Go validation of the tagged commit
         env:

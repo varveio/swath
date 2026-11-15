@@ -31,7 +31,9 @@ gate: it exists so a suspected flake is measured by repetition instead of being 
 
 `release.yml` ships the Go implementation. It does not trust the `ci.yml`
 run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
-passed full Go validation. It separately verifies that the tag is an ancestor of `main` and requires
+passed full Go validation. It separately verifies that the tag is an ancestor of `main`, that the
+nested modules' tags of the same version (`reader/vX.Y.Z`, `objfile/vX.Y.Z`) name the same commit,
+and requires
 `go-full-gate` from the exact commit's main push run. It then reruns `go vet`
 and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes

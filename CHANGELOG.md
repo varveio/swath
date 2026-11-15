@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Releases tag the nested Go modules with swath's version: `reader/vX.Y.Z` and `objfile/vX.Y.Z` beside `vX.Y.Z`,
+  all at one commit, so `go get github.com/varveio/swath/reader@v0.4.0` works. Both modules are at version 0, with
+  no API promise. `just release` creates the three tags; the release workflow refuses a release whose module tags
+  are missing or name another commit.
 - Go port: `swath du -h DIR` and `swath list SOURCE -h` are refused (exit 2) instead of printing help with exit 0:
   `-h is help; sizes are already human-readable in the table`. `-h` alone, and `--help` anywhere, still print
   help; `swath` alone prints its short help.
