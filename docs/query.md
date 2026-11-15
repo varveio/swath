@@ -123,14 +123,8 @@ duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
 `complete` is true when nothing is missing: the listing reached the end of its scope (`stop_reason`
 `end_of_scope`) and read every entry (`unreadable` 0). Filters do not make it partial: an inventory is complete for
 the filters it records, so check that `filters` and `exclusions` are empty, or that you accept them. Check too that the manifest's
-`source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
-([the swath extension](dataset.md#the-swath-extension)).
-
-A reader starts only once `manifest.json` exists and reads the parts it lists. An
-application that needs the whole source checks the coverage: `coverage.complete` true (nothing missing: the end
-of the scope reached and no entry unreadable), `coverage.filters` empty, `scope.kind` `whole`, the `source` it
-expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
-([The swath dataset](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
+`source` and `scope` are the ones you expect (`scope.kind` `whole` for the whole source), and treat a missing
+field as unknown, not as 0 ([the swath extension](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.
 
 ## Verify a dataset

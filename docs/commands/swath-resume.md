@@ -30,7 +30,7 @@ logs-inventory is already complete: nothing to resume
 ```
 
 The rows saved are the ones in published parts, which the resume keeps; the rows listed and not yet published
-are listed again. The `next:` line quotes a DIR the shell would split or expand (a path with a space; single quotes, double
+are listed again, except those a validated spill file still holds. The `next:` line quotes a DIR the shell would split or expand (a path with a space; single quotes, double
 quotes on Windows), and spells
 one that begins with `-` as `./-DIR`, so it can be pasted as printed. [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
