@@ -914,11 +914,12 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 	return tt
 }
 
-// stats prints the end-of-run block when the preferences call for it;
-// under --log-format json the outcome event stands for it.
-func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
+// stats prints the end-of-run block when the preferences call for it, and
+// reports whether it did; under --log-format json the outcome event stands
+// for it.
+func (tt *termUI) stats(r *listing.Report, brokenPipe bool) bool {
 	if tt == nil || elog().json || !showStats(tt.opt, r, brokenPipe) {
-		return
+		return false
 	}
 	lines := statsLines(r, brokenPipe, tt.noun, tt.opt.stats.set && tt.opt.stats.on)
 	failed := brokenPipe || r.Outcome.ExitCode != exitOK || r.Outcome.Class == listing.ClassIncomplete
@@ -931,6 +932,7 @@ func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
 		}
 		noteKept(errOut, b.String())
 	}
+	return true
 }
 
 // hintRows is the rows a live swath du lists before its statistics suggest

@@ -287,14 +287,17 @@ the files that had no value for it ([Output](output.md#du-rows)).
 ## Entries could not be read
 
 ```text
+$ swath list /data -o inventory
 swath: warning: unreadable entries:
-  /data/locked: permission denied
-swath: 1 entry could not be read and is missing from the output
+  locked: permission denied
+  partial: 1 unreadable entry; …
 ```
 
 A local walk that cannot read some entries (permissions, a directory replaced while the walk ran) leaves them
-out, names up to five on stderr with their cause, and exits 3 (class `incomplete`); the last line counts them, and
-`-q` keeps it. The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
+out, names up to five on stderr with their cause (a path below SOURCE relative to it), and exits 3 (class
+`incomplete`); the closing line's verdict counts them. Under `-q`, which prints no closing line, the last line
+says it instead: `swath: 1 entry could not be read and is missing from the output`. `swath du`'s view marks
+the lines whose sums leave them out with `!`, and says so in one line under it (`-v` names them). The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
 its row, an entry removed during the walk is no longer part of the tree, and one the include and exclude rules
 leave out by its name is not selected: none of them counts. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's

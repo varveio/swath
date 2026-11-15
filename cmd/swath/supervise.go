@@ -62,11 +62,14 @@ func (e *incompleteError) Error() string        { return e.msg }
 func (e *incompleteError) Is(target error) bool { return target == errIncomplete }
 
 // unreadableError is a run that left out n entries it could not read.
-func unreadableError(n int64) error {
+func unreadableError(n int64) error { return &incompleteError{unreadableMessage(n)} }
+
+// unreadableMessage is unreadableError's message.
+func unreadableMessage(n int64) string {
 	if n == 1 {
-		return &incompleteError{"1 entry could not be read and is missing from the output"}
+		return "1 entry could not be read and is missing from the output"
 	}
-	return &incompleteError{count(n) + " entries could not be read and are missing from the output"}
+	return count(n) + " entries could not be read and are missing from the output"
 }
 
 // Stuck causes (error.json and the report's outcome cause on 75): what
@@ -414,6 +417,9 @@ type exitError struct {
 	error
 	code int
 	out  outcome
+	// stated: the closing line already said it (a partial output's
+	// verdict); conclude prints no error line.
+	stated bool
 }
 
 func (e *exitError) Unwrap() error { return e.error }

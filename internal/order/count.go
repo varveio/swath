@@ -105,6 +105,21 @@ type RangeRun[P any] interface {
 	End()
 }
 
+// CoveredRun is a RangeRun told the interval of keys its rows cover, when
+// the provider declares its ranges' intervals (source.Fencer: the range
+// engine's) in an ordered count: From before its first row, the range's
+// lower bound (exclusive), and Through before End, its upper bound
+// (inclusive; top: up to the last key): the range's own end when it
+// returned, else, at a split, its last row or fence, which the children
+// start after. No key of another run lies in (lo, hi]: runs whose
+// intervals meet at a bound cover the keys between them whole. Only a
+// range's first run is told; a range that sent the sink no row opens an
+// empty run to tell its interval (at a split, when it fenced one).
+type CoveredRun interface {
+	From(lo string)
+	Through(hi string, top bool)
+}
+
 // SubtreeSink is a RangeSink also told when a range that declared the
 // prefix it owns (source.Subtreer: a local directory's) has ended together
 // with every range it emitted, recursively: each run of their rows has
@@ -173,7 +188,7 @@ func (c *counter[R, P]) worker() {
 		c.mu.Unlock()
 		e := &countEmitter[R, P]{c: c, node: node}
 		err := c.p.Expand(c.ctx, r, e)
-		e.end()
+		e.end(true)
 		c.mu.Lock()
 		c.busy--
 		c.g.nodes.add(-1)
@@ -240,9 +255,15 @@ type countEmitter[R, P any] struct {
 	kids    []R
 	node    *subtree    // the range's place in the tree (counter.trees)
 	run     RangeRun[P] // the open run (counter.runs), nil until the range's next rows
-	last    string      // the range's last key so far (a view of its page; dropped with the emitter)
-	hasLast bool
-	sent    bool // last is a row's key (not Options.After): in group mode the next may repeat it
+	ran     bool        // a run was opened
+	covered CoveredRun  // the open run, told its interval
+	// The range's span and its last fence (source.Fencer), for its first
+	// run in an ordered count.
+	lo, hi, fence        string
+	top, spanned, fenced bool
+	last                 string // the range's last key so far (a view of its page; dropped with the emitter)
+	hasLast              bool
+	sent                 bool // last is a row's key (not Options.After): in group mode the next may repeat it
 }
 
 func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
@@ -280,6 +301,11 @@ func (e *countEmitter[R, P]) add(rows []schema.Row[P], names int64) error {
 	case c.runs != nil:
 		if e.run == nil {
 			e.run = c.runs.Run()
+			if cr, ok := e.run.(CoveredRun); ok && e.spanned && !e.ran && !c.opt.Unordered {
+				cr.From(e.lo)
+				e.covered = cr
+			}
+			e.ran = true
 		}
 		if err := e.run.Write(c.ctx, rows); err != nil {
 			return err
@@ -303,7 +329,7 @@ func (e *countEmitter[R, P]) add(rows []schema.Row[P], names int64) error {
 // stop, if any, so a provider emitting only children (a wide directory
 // with --no-dirs) stops at its next child.
 func (e *countEmitter[R, P]) Child(r R) error {
-	e.end() // the child's rows sort after the range's so far, before its next
+	e.end(false) // the child's rows sort after the range's so far, before its next
 	e.kids = append(e.kids, r)
 	e.c.g.nodes.add(1)
 	if e.c.halted() {
@@ -319,11 +345,50 @@ func (e *countEmitter[R, P]) Subtree(prefix string) {
 	}
 }
 
-// end ends the range's open run, if any.
-func (e *countEmitter[R, P]) end() {
-	if e.run != nil {
-		e.run.End()
-		e.run = nil
+// end ends the range's open run, if any: at a child (the range split
+// after its last row: the run covers up to it) or when the range returned
+// (it covers up to its span's end).
+func (e *countEmitter[R, P]) end(returned bool) {
+	c := e.c
+	if e.run == nil && !e.ran && e.spanned && c.runs != nil && !c.opt.Unordered && (returned || e.fenced) {
+		// A range whose interval held no row the sink saw (none listed,
+		// or every one filtered out) still covers it: an empty run says
+		// so, so that the runs around it meet.
+		e.run, e.ran = c.runs.Run(), true
+		if e.covered, _ = e.run.(CoveredRun); e.covered != nil {
+			e.covered.From(e.lo)
+		}
+	}
+	if e.run == nil {
+		return
+	}
+	if cr := e.covered; cr != nil {
+		switch {
+		case returned:
+			cr.Through(e.hi, e.top)
+		case e.fenced:
+			// Every row up to the last fence was emitted, the filters'
+			// drops too.
+			cr.Through(strings.Clone(max(e.last, e.fence)), false)
+		default:
+			cr.Through(strings.Clone(e.last), false)
+		}
+		e.covered = nil
+	}
+	e.run.End()
+	e.run = nil
+}
+
+// Span takes the range's interval (source.Fencer): its first run covers
+// from lo.
+func (e *countEmitter[R, P]) Span(lo, hi string, open bool) {
+	e.lo, e.hi, e.top, e.spanned = strings.Clone(lo), strings.Clone(hi), open, true
+}
+
+// Fence takes a coverage fence (source.Fencer): every row up to x emitted.
+func (e *countEmitter[R, P]) Fence(x string, top bool) {
+	if !top && x > e.fence {
+		e.fence, e.fenced = x, true
 	}
 }
 
