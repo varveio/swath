@@ -128,8 +128,8 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	sub := filepath.Join(root, "a")
 	below := []string{sub, sub + string(filepath.Separator)}
 	whole := []string{root, filepath.Join(sub, "..")}
-	if runtime.GOOS == "windows" { // the same paths, as Windows takes them
-		below = append(below, filepath.ToSlash(sub), strings.ToUpper(sub))
+	if runtime.GOOS == "windows" { // the same paths, as Windows takes them: the root in any case, the names below it as listed
+		below = append(below, filepath.ToSlash(sub), filepath.Join(strings.ToUpper(root), "a"))
 		whole = append(whole, filepath.ToSlash(root), strings.ToUpper(root))
 	}
 	for _, a := range below {

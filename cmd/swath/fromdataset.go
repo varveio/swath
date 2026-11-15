@@ -210,7 +210,8 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 // SOURCE, names in the dataset in dir: arg is the dataset's source as its
 // manifest records it (source.uri) or a path or URL below it, in the form a
 // live swath du takes it. A local path is made absolute and taken relative
-// to the source's root, as a directory ("a/b/"); a URL's key prefix is its
+// to the source's root (filepath.Rel: in any case on Windows; the names
+// below it are keys, as listed), as a directory ("a/b/"); a URL's key prefix is its
 // provider's (registry.Factory.KeyPrefix), the source's or one that starts
 // with it, in the same bucket or container. Any other arg is refused,
 // naming the source.
