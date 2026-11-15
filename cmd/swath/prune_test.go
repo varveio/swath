@@ -92,17 +92,18 @@ func TestPruneCommandDu(t *testing.T) {
 				t.Fatal(err)
 			}
 			const older = "2026-01-02T03:04:05.000000Z"
-			want := "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n" +
-				"0\t1\t3\t1\t0\t" + older + "\t\n" +
-				"1\t0\t0\t0\t0\t\\N\ta/\n" +
-				"1\t1\t0\t1\t0\t" + older + "\tc/\n" +
-				"1\t0\t0\t0\t0\t\\N\te/\n"
-			if out.String() != want {
+			tail := "\tsize\tname\t" + linksOnce + "\t"
+			want := "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
+				"total\t0\t1\t3\t1\t0\t" + older + tail + "\n" +
+				"prefix\t1\t0\t0\t0\t0\t\\N" + tail + "a/\n" +
+				"prefix\t1\t1\t0\t1\t0\t" + older + tail + "c/\n" +
+				"prefix\t1\t0\t0\t0\t0\t\\N" + tail + "e/\n"
+			if dropColumns(out.String(), "allocated_bytes", "allocated_bytes_missing") != want {
 				t.Fatalf("du totals:\n%s\nwant:\n%s", out.String(), want)
 			}
 			report := checkCommandPruning(t, reportPath, 1, 5, 1, 4)
 			totals := report.Output.Totals
-			if totals == nil || totals.Objects != 1 || totals.Dirs != 3 || totals.Bytes != 1 || totals.Prefixes != 4 {
+			if totals == nil || totals.Objects != 1 || totals.Dirs != 3 || totals.Size == nil || *totals.Size != 1 || totals.Prefixes != 4 {
 				t.Fatalf("report totals %+v", totals)
 			}
 		})

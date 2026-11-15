@@ -65,6 +65,23 @@ func dtypeOf(k Kind) uint8 {
 	return unix.DT_UNKNOWN
 }
 
+// statxPresence pairs the statx fields an Entry reads with the presence
+// they give. The kernel may leave a requested field out (a filesystem
+// that does not keep it: blocks on some network filesystems); its value
+// is then null, never the zero statx leaves.
+var statxPresence = [...]struct {
+	mask uint32
+	has  Presence
+}{
+	{unix.STATX_SIZE, HasSize}, {unix.STATX_MTIME, HasMtime}, {unix.STATX_MODE, HasMode},
+	{unix.STATX_UID, HasUID}, {unix.STATX_GID, HasGID}, {unix.STATX_NLINK, HasNlink},
+	{unix.STATX_INO, HasInode}, {unix.STATX_BLOCKS, HasBlocks}, {unix.STATX_CTIME, HasCtime},
+	{unix.STATX_ATIME, HasAtime}, {unix.STATX_BTIME, HasBtime},
+}
+
+// fillStatx fills r from s, each value present only where s.Mask says the
+// kernel returned it; the device, and the file type the walk checks
+// against the directory entry's, are always returned.
 func fillStatx(r *Entry, s *unix.Statx_t) {
 	r.Kind = kindOfMode(uint32(s.Mode))
 	r.Size = int64(s.Size)
@@ -74,10 +91,12 @@ func fillStatx(r *Entry, s *unix.Statx_t) {
 	r.Mtime = schema.Micros(s.Mtime.Sec, int64(s.Mtime.Nsec))
 	r.Ctime = schema.Micros(s.Ctime.Sec, int64(s.Ctime.Nsec))
 	r.Atime = schema.Micros(s.Atime.Sec, int64(s.Atime.Nsec))
-	r.Present |= HasStat
-	if s.Mask&unix.STATX_BTIME != 0 {
-		r.Btime = schema.Micros(s.Btime.Sec, int64(s.Btime.Nsec))
-		r.Present |= HasBtime
+	r.Btime = schema.Micros(s.Btime.Sec, int64(s.Btime.Nsec))
+	r.Present |= HasDev
+	for _, f := range statxPresence {
+		if s.Mask&f.mask != 0 {
+			r.Present |= f.has
+		}
 	}
 }
 

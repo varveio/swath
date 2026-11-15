@@ -58,6 +58,11 @@ so in its manifest.
 - <a id="option-format"></a>[`--format auto|table|tsv|jsonl`](#option-format)\
   on stdout: auto is the table on a terminal, TSV otherwise
 
+- <a id="option-no-header"></a>[`--no-header`](#option-no-header)\
+  TSV: leave out the header line of column names
+
+  Not with the table, JSONL or a dataset; on a terminal the rows are then TSV.
+
 - <a id="option-columns"></a>[`--columns NAME[,NAME...]`](#option-columns)\
   TSV and JSONL: these columns, in order (repeatable)
 
@@ -388,6 +393,9 @@ Output:
                                 agrees with it is accepted.
       --format auto|table|tsv|jsonl
                               on stdout: auto is the table on a terminal, TSV otherwise
+      --no-header             TSV: leave out the header line of column names
+                                Not with the table, JSONL or a dataset; on a terminal the rows are
+                                then TSV.
       --columns NAME[,NAME...]
                               TSV and JSONL: these columns, in order (repeatable)
                                 By the dataset's column names; a name the source's schema lacks is

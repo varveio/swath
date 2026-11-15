@@ -50,7 +50,7 @@ func versionsSource(t *testing.T, rows []s3.VersionRow, workers, page int) regis
 // every counted row per prefix, through concurrent workers and pages that
 // split prefixes: a delete marker is no object, a version is one (a size
 // each), the filters apply first, and the versions counts still run beside
-// it.
+// it. A bucket has no allocated bytes: that figure is unknown throughout.
 func TestCountTotals(t *testing.T) {
 	var rows []s3.VersionRow
 	want := map[string][2]int64{} // prefix: objects, bytes, at depth 2
@@ -88,7 +88,13 @@ func TestCountTotals(t *testing.T) {
 				}
 				got := map[string][2]int64{}
 				for _, p := range tl.Result() {
-					got[p.Prefix] = [2]int64{p.Objects, p.Bytes}
+					got[p.Prefix] = [2]int64{p.Objects, p.Size}
+					if p.HasAllocated || p.AllocatedMissing != p.Objects {
+						t.Fatalf("%q: allocated bytes %+v", p.Prefix, p)
+					}
+				}
+				if tl.Allocated() {
+					t.Fatal("a bucket's tally has allocated bytes")
 				}
 				if fmt.Sprint(got) != fmt.Sprint(want) {
 					t.Fatalf("got %v\nwant %v", got, want)
@@ -116,15 +122,15 @@ func prefixes(key string, depth int) []string {
 }
 
 // TestTotalsNeedCountAndColumn: totals are refused on a run that is not a
-// count, on a schema without the column they sum, and, counting links
+// count, by allocated bytes on a schema without them, and, counting links
 // once, without the columns that identify a file.
 func TestTotalsNeedCountAndColumn(t *testing.T) {
 	src := versionsSource(t, nil, 1, 10)
 	if _, _, err := src.Run(context.Background(), registry.Env{Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{})}); err == nil || !strings.Contains(err.Error(), "need a count") {
 		t.Fatalf("not a count: %v", err)
 	}
-	_, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{BytesColumn: "allocated_bytes"})})
-	if err == nil || !strings.Contains(err.Error(), "need the allocated_bytes column") {
+	_, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{Primary: totals.AllocatedBytes})})
+	if err == nil || !strings.Contains(err.Error(), "by allocated_bytes need that column") {
 		t.Fatalf("no column: %v", err)
 	}
 	_, _, err = src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{LinksOnce: true})})

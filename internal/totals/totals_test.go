@@ -14,16 +14,11 @@ import (
 	"unsafe"
 )
 
-// brute is the oracle: every prefix of every key, summed one row at a time.
-func brute(rows []Row, depth int) []Prefix {
-	return bruteWith(rows, Options{Depth: depth}, func(Row) bool { return true })
-}
-
-// bruteWith is brute under opt's depth and origin, where an object counts
-// (as an object, with its bytes) only if counts says so; its time counts in
-// any case. A directory counts in its parents' Dirs, a key outside the
-// origin in the total alone.
-func bruteWith(rows []Row, opt Options, counts func(Row) bool) []Prefix {
+// bruteWith is the oracle: every prefix of every key, summed one row at a
+// time, under opt's depth and origin, where an object counts (as an
+// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, a key outside the origin
+// in the total alone. alloc: the source has allocated bytes.
+func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
 	for _, r := range rows {
 		key := r.Key
@@ -59,14 +54,19 @@ func bruteWith(rows []Row, opt Options, counts func(Row) bool) []Prefix {
 			}
 			if counts(r) {
 				p.Objects++
-				if r.HasBytes {
-					p.Bytes += r.Bytes
+				if r.HasSize {
+					p.Size += r.Size
 				} else {
-					p.Unsized++
+					p.SizeMissing++
 				}
-			}
-			if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
-				p.Newest, p.HasNewest = r.Mtime, true
+				if r.HasAllocated {
+					p.Allocated += r.Allocated
+				} else {
+					p.AllocatedMissing++
+				}
+				if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
+					p.Newest, p.HasNewest = r.Mtime, true
+				}
 			}
 		}
 	}
@@ -75,6 +75,8 @@ func bruteWith(rows []Row, opt Options, counts func(Row) bool) []Prefix {
 	}
 	var out []Prefix
 	for _, p := range m {
+		p.HasSize = p.Objects == 0 || p.SizeMissing < p.Objects
+		p.HasAllocated = alloc && (p.Objects == 0 || p.AllocatedMissing < p.Objects)
 		out = append(out, *p)
 	}
 	slices.SortFunc(out, func(a, b Prefix) int { return strings.Compare(a.Prefix, b.Prefix) })
@@ -102,9 +104,10 @@ func randomRows(rng *rand.Rand, n int) []Row {
 			continue
 		}
 		seen[k] = true
-		r := Row{Key: k, Object: rng.IntN(6) != 0, Bytes: rng.Int64N(1 << 40), HasBytes: rng.IntN(10) != 0}
+		r := Row{Key: k, Object: rng.IntN(6) != 0, Size: rng.Int64N(1 << 40), HasSize: rng.IntN(10) != 0,
+			Allocated: rng.Int64N(1 << 40), HasAllocated: rng.IntN(4) != 0}
 		if !r.Object {
-			r.Dir, r.Bytes, r.HasBytes = rng.IntN(2) == 0, 0, false
+			r.Dir, r.Size, r.HasSize, r.Allocated, r.HasAllocated = rng.IntN(2) == 0, 0, false, 0, false
 		}
 		if rng.IntN(8) != 0 {
 			r.Mtime, r.HasMtime = rng.Int64N(1<<50)-1<<49, true // negative times too
@@ -118,15 +121,21 @@ func randomRows(rng *rand.Rand, n int) []Row {
 // TestTallyMatchesBruteForce: rows split into random batches, flushed by
 // concurrent goroutines in any order (sorted within a batch, as a range's,
 // or shuffled), give the brute-force totals at every depth and origin, in
-// byte order.
+// byte order: both figures, each with its missing objects, and a figure
+// unknown only where every object lacked it (the allocated bytes
+// throughout for a source without them).
 func TestTallyMatchesBruteForce(t *testing.T) {
 	for seed := range uint64(20) {
 		rng := rand.New(rand.NewPCG(seed, 7))
 		rows := randomRows(rng, 1+rng.IntN(600))
 		for _, depth := range []int{0, 1, 2, 3, 7} {
 			origin := []string{"", "a/", "a/b/", "\xff/"}[rng.IntN(4)]
-			want := bruteWith(rows, Options{Depth: depth, Origin: origin}, func(Row) bool { return true })
+			alloc := seed%3 != 0
+			want := bruteWith(rows, Options{Depth: depth, Origin: origin}, alloc, func(Row) bool { return true })
 			tl := New(Options{Depth: depth, Origin: origin})
+			if alloc {
+				tl.SetAllocated()
+			}
 			var batches [][]Row
 			for rest := rows; len(rest) > 0; {
 				n := min(len(rest), 1+rng.IntN(40))
@@ -160,9 +169,11 @@ func TestTallyMatchesBruteForce(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("seed %d depth %d origin %q: %d prefixes, want %d\ngot  %+v\nwant %+v", seed, depth, origin, len(got), len(want), got, want)
 			}
-			st := tl.Stats()
-			if st.Prefixes != int64(len(want)) || st.Objects != want[0].Objects || st.Bytes != want[0].Bytes || st.Dirs != want[0].Dirs ||
-				st.Unsized != want[0].Unsized || st.Depth != depth {
+			st, w := tl.Stats(), want[0]
+			if st.Prefixes != int64(len(want)) || st.Objects != w.Objects || (st.Size != nil) != w.HasSize || st.Size != nil && *st.Size != w.Size ||
+				(st.AllocatedBytes != nil) != w.HasAllocated || st.AllocatedBytes != nil && *st.AllocatedBytes != w.Allocated || st.Dirs != w.Dirs ||
+				st.SizeMissing != w.SizeMissing || st.AllocatedBytesMissing != w.AllocatedMissing || st.Depth != depth || st.Primary != Size ||
+				(st.MaxLastModified != nil) != w.HasNewest || st.MaxLastModified != nil && st.MaxLastModified.UnixMicro() != w.Newest {
 				t.Fatalf("seed %d depth %d: stats %+v", seed, depth, st)
 			}
 		}
@@ -175,11 +186,11 @@ func TestShortKeysAndDepth(t *testing.T) {
 	tl := New(Options{Depth: 3})
 	b := tl.Batch()
 	for _, r := range []Row{
-		{Key: "top", Object: true, Bytes: 1, HasBytes: true},
+		{Key: "top", Object: true, Size: 1, HasSize: true},
 		{Key: "a/", Object: false}, // a delete marker
 		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own
-		{Key: "a/x", Object: true, Bytes: 2, HasBytes: true, Mtime: 5, HasMtime: true},
-		{Key: "a/b/c/d/e", Object: true, Bytes: 4, HasBytes: true, Mtime: 9, HasMtime: true},
+		{Key: "a/x", Object: true, Size: 2, HasSize: true, Mtime: 5, HasMtime: true},
+		{Key: "a/b/c/d/e", Object: true, Size: 4, HasSize: true, Mtime: 9, HasMtime: true},
 		{Key: "a/b/y", Object: true}, // no bytes, no time
 	} {
 		b.Add(&r)
@@ -188,22 +199,25 @@ func TestShortKeysAndDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Prefix{
-		{Prefix: "", Objects: 4, Dirs: 1, Bytes: 7, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Bytes: 6, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/", Depth: 2, Objects: 2, Bytes: 4, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/c/", Depth: 3, Objects: 1, Bytes: 4, Newest: 9, HasNewest: true},
+		{Prefix: "", Objects: 4, Dirs: 1, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 4, Newest: 9, HasNewest: true},
+		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Size: 6, SizeMissing: 1, HasSize: true, AllocatedMissing: 3, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/", Depth: 2, Objects: 2, Size: 4, SizeMissing: 1, HasSize: true, AllocatedMissing: 2, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/c/", Depth: 3, Objects: 1, Size: 4, HasSize: true, AllocatedMissing: 1, Newest: 9, HasNewest: true},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
 	}
-	if st := tl.Stats(); st.NotObjects != 2 || st.Dirs != 1 || st.Unsized != 1 || st.Prefixes != 4 {
+	if st := tl.Stats(); st.NotObjects != 2 || st.Dirs != 1 || st.SizeMissing != 1 || st.Prefixes != 4 || st.AllocatedBytes != nil {
 		t.Fatalf("stats %+v", st)
 	}
-	// An empty tally still has its total.
-	if got := New(Options{Depth: 2}).Result(); !reflect.DeepEqual(got, []Prefix{{}}) {
+	// An empty tally still has its total: a size of 0, and allocated
+	// bytes of 0 only for a source that has them.
+	if got := New(Options{Depth: 2}).Result(); !reflect.DeepEqual(got, []Prefix{{HasSize: true}}) {
 		t.Fatalf("empty: %+v", got)
 	}
-	if got := New(Options{Depth: 2, Origin: "logs/"}).Result(); !reflect.DeepEqual(got, []Prefix{{Prefix: "logs/"}}) {
+	withAlloc := New(Options{Depth: 2, Origin: "logs/"})
+	withAlloc.SetAllocated()
+	if got := withAlloc.Result(); !reflect.DeepEqual(got, []Prefix{{Prefix: "logs/", HasSize: true, HasAllocated: true}}) {
 		t.Fatalf("empty under an origin: %+v", got)
 	}
 }
@@ -214,15 +228,15 @@ func TestOrigin(t *testing.T) {
 	tl := New(Options{Depth: 1, Origin: "logs/2026/"})
 	b := tl.Batch()
 	for _, k := range []string{"logs/2026/", "logs/2026/01/a", "logs/2026/01/b/c", "logs/2026/02/d", "logs/2026/top"} {
-		b.Add(&Row{Key: k, Object: true, Bytes: 1, HasBytes: true})
+		b.Add(&Row{Key: k, Object: true, Size: 1, HasSize: true})
 	}
 	if err := b.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	want := []Prefix{
-		{Prefix: "logs/2026/", Objects: 5, Bytes: 5},
-		{Prefix: "logs/2026/01/", Depth: 1, Objects: 2, Bytes: 2},
-		{Prefix: "logs/2026/02/", Depth: 1, Objects: 1, Bytes: 1},
+		{Prefix: "logs/2026/", Objects: 5, Size: 5, HasSize: true, AllocatedMissing: 5},
+		{Prefix: "logs/2026/01/", Depth: 1, Objects: 2, Size: 2, HasSize: true, AllocatedMissing: 2},
+		{Prefix: "logs/2026/02/", Depth: 1, Objects: 1, Size: 1, HasSize: true, AllocatedMissing: 1},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
@@ -333,10 +347,10 @@ func TestBatchKeepsNoKeys(t *testing.T) {
 }
 
 // TestLinksOnceMatchesBruteForce: with LinksOnce, an object of several
-// hard links counts once, its object and bytes (or its unknown size) under
-// the smallest of its keys and its time under every link, whichever batch
-// or goroutine saw which link first, whether its links are inside the
-// origin or not; without LinksOnce every link counts.
+// hard links counts once, its object and both figures (or their missing
+// values) under the smallest of its keys and its time under every link,
+// whichever batch or goroutine saw which link first, whether its links are
+// inside the origin or not; without LinksOnce every link counts.
 func TestLinksOnceMatchesBruteForce(t *testing.T) {
 	for seed := range uint64(20) {
 		rng := rand.New(rand.NewPCG(seed, 11))
@@ -346,11 +360,12 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 			if rows[i].Object && rng.IntN(3) == 0 {
 				id := int64(rng.IntN(inodes))
 				rows[i].Link, rows[i].Dev, rows[i].Inode = true, id%2, id
-				rows[i].Bytes, rows[i].HasBytes = 1000+id, id%4 != 0 // one inode, one size, some unknown
+				rows[i].Size, rows[i].HasSize = 1000+id, id%4 != 0 // one inode, one size, some unknown
+				rows[i].Allocated, rows[i].HasAllocated = 4096*id, id%3 != 0
 			}
 		}
 		// The oracle: each inode counts under its smallest key; its other
-		// links add their time only.
+		// links add nothing, not even their time.
 		owner := map[[2]int64]string{}
 		for _, r := range rows {
 			id := [2]int64{r.Dev, r.Inode}
@@ -369,6 +384,7 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 			for _, linksOnce := range []bool{false, true} {
 				opt := Options{Depth: depth, LinksOnce: linksOnce, Origin: []string{"", "a/", "\xff/"}[rng.IntN(3)]}
 				tl := New(opt)
+				tl.SetAllocated()
 				shuffled := slices.Clone(rows)
 				rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 				var wg sync.WaitGroup
@@ -386,19 +402,43 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 					})
 				}
 				wg.Wait()
-				want := bruteWith(rows, opt, func(Row) bool { return true })
+				want := bruteWith(rows, opt, true, func(Row) bool { return true })
 				if linksOnce {
-					want = bruteWith(rows, opt, counted)
+					want = bruteWith(rows, opt, true, counted)
 				}
 				got := tl.Result()
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("seed %d depth %d once %v origin %q:\ngot  %+v\nwant %+v", seed, depth, linksOnce, opt.Origin, got, want)
 				}
 				st := tl.Stats()
-				if linksOnce && (st.LinkedRows != links || st.Inodes != int64(len(owner)) || !st.LinksOnce) || !linksOnce && (st.LinkedRows != 0 || st.Inodes != 0) {
+				if linksOnce && (st.LinkedRows != links || st.Inodes != int64(len(owner)) || !st.LinksOnce || !tl.LinksOnce()) ||
+					!linksOnce && (st.LinkedRows != 0 || st.Inodes != 0 || st.LinksOnce || tl.LinksOnce()) {
 					t.Fatalf("seed %d: stats %+v, %d links over %d inodes", seed, st, links, len(owner))
 				}
 			}
+		}
+	}
+}
+
+// TestLinkAliasTime: a name of a hard-linked file that is not counted
+// adds no time to its prefix; with every name counted, every name's time
+// counts.
+func TestLinkAliasTime(t *testing.T) {
+	for _, once := range []bool{true, false} {
+		tl := New(Options{Depth: 1, LinksOnce: once})
+		b := tl.Batch()
+		for _, k := range []string{"a/f", "b/alias"} {
+			b.Add(&Row{Key: k, Object: true, Size: 5, HasSize: true, Mtime: 100, HasMtime: true, Link: true, Dev: 1, Inode: 7})
+		}
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r := tl.Result()
+		if len(r) != 3 || r[2].Prefix != "b/" || r[1].Objects != 1 || !r[1].HasNewest {
+			t.Fatalf("once %v: %+v", once, r)
+		}
+		if alias := r[2]; once && (alias.Objects != 0 || alias.HasNewest) || !once && (alias.Objects != 1 || !alias.HasNewest || alias.Newest != 100) {
+			t.Fatalf("once %v: b/ %+v", once, alias)
 		}
 	}
 }
@@ -417,17 +457,45 @@ func TestInodeCap(t *testing.T) {
 	}
 }
 
-// TestSortBySize: below each parent the largest first, ties by prefix,
-// unknown sizes last; a row's own rows stay under it and the total first.
+// TestSortBySize: below each parent the largest first by the primary
+// figure, ties by prefix, unknown figures last and a partial sum by its
+// bytes; a row's own rows stay under it and the total first.
 func TestSortBySize(t *testing.T) {
-	rows := []Prefix{{Prefix: "", Bytes: 100}, {Prefix: "a/", Depth: 1, Bytes: 10}, {Prefix: "a/x/", Depth: 2, Bytes: 1}, {Prefix: "a/y/", Depth: 2, Bytes: 9},
-		{Prefix: "b/", Depth: 1, Bytes: 50}, {Prefix: "c/", Depth: 1, Bytes: 10}, {Prefix: "d/", Depth: 1, Bytes: 99, Unsized: 1}, {Prefix: "e/", Depth: 1}}
-	SortBySize(rows)
-	var got []string
-	for _, r := range rows {
-		got = append(got, r.Prefix)
+	sized := func(p string, depth int, size, alloc int64) Prefix {
+		return Prefix{Prefix: p, Depth: depth, Objects: 1, Size: size, HasSize: true, Allocated: alloc, HasAllocated: true}
 	}
-	if want := []string{"", "b/", "a/", "a/y/", "a/x/", "c/", "e/", "d/"}; !slices.Equal(got, want) {
-		t.Fatalf("order %q, want %q", got, want)
+	rows := []Prefix{sized("", 0, 100, 100), sized("a/", 1, 10, 60), sized("a/x/", 2, 1, 1), sized("a/y/", 2, 9, 9),
+		sized("b/", 1, 50, 50), sized("c/", 1, 10, 10), {Prefix: "d/", Depth: 1, Objects: 1, SizeMissing: 1, AllocatedMissing: 1},
+		{Prefix: "e/", Depth: 1, HasSize: true, HasAllocated: true}, {Prefix: "f/", Depth: 1, Objects: 3, Size: 20, SizeMissing: 2, HasSize: true, AllocatedMissing: 3}}
+	for primary, want := range map[string][]string{
+		Size:           {"", "b/", "f/", "a/", "a/y/", "a/x/", "c/", "e/", "d/"},
+		AllocatedBytes: {"", "a/", "a/y/", "a/x/", "b/", "c/", "e/", "d/", "f/"},
+	} {
+		rs := slices.Clone(rows)
+		SortBySize(rs, primary)
+		var got []string
+		for _, r := range rs {
+			got = append(got, r.Prefix)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: order %q, want %q", primary, got, want)
+		}
+	}
+}
+
+// TestUnidentifiedLinks: an object whose links cannot be told apart counts
+// under its name, and the tally no longer claims to count links once.
+func TestUnidentifiedLinks(t *testing.T) {
+	tl := New(Options{LinksOnce: true})
+	b := tl.Batch()
+	b.Add(&Row{Key: "a", Object: true, Size: 1, HasSize: true, Unidentified: true})
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if tl.LinksOnce() || tl.Stats().LinksOnce || tl.Result()[0].Objects != 1 {
+		t.Fatalf("links once %v, %+v", tl.LinksOnce(), tl.Result())
+	}
+	if empty := New(Options{LinksOnce: true}); !empty.LinksOnce() {
+		t.Fatal("an empty tally keeps its option")
 	}
 }

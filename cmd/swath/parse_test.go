@@ -111,7 +111,6 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"/d", "--max-depth=2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
 		{[]string{"/d", "-s"}, "unknown flag -s (the total alone is the default: --depth 0)"},
 		{[]string{"/d", "--summarize"}, "unknown flag --summarize (the total alone is the default: --depth 0)"},
-		{[]string{"/d", "--apparent-size"}, "unknown flag --apparent-size (apparent sizes are the default; --allocated totals blocks)"},
 		{[]string{"/d", "-x"}, "unknown flag -x (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},

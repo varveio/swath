@@ -12,22 +12,26 @@ swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  last_modified (local)  path
-64.8 MiB      2     0  2026-11-02 09:30:00    archive/
-6.10 MiB      3     2  2026-01-20 12:00:00    photos/
-29.6 MiB      1     0  2026-11-02 09:30:00    videos/
- 100 MiB      6     5  2026-11-02 09:30:00    (total)
+    size  files  dirs  path
+64.8 MiB      2     0  archive/
+6.10 MiB      3     2  photos/
+29.6 MiB      1     0  videos/
+ 100 MiB      6     5  (total)
+  100 MiB in 6 files · 36.4 MiB on disk
 ```
 
-Each row totals everything below it, as `du` does: its files, its directories, their bytes and the newest
-modification time. `-d 1` limits the breakdown to one level. It does not limit the walk: swath still reads the
-whole tree, and every row and the total include everything below them. Without `-d` you get the total alone.
-`--sort size` puts the largest first.
+Each row totals everything below it, as `du` does: its files, its directories and their bytes. `-d 1` limits
+the breakdown to one level. It does not limit the walk: swath still reads the whole tree, and every row and
+the total include everything below them. Without `-d` you get the total alone. `--sort size` puts the largest
+first.
 
-The sizes are apparent bytes, the length of each file as `ls -l` shows it, not the disk space it takes. Here
-`archive/` holds a sparse 64 MiB disk image that takes almost no disk space, and two names for one hard-linked
-file, counted once, as `du` counts it. `--allocated` totals allocated bytes and `-l` (`--count-links`) counts
-every name. [Understand your results](results.md) explains both.
+The sizes are apparent bytes, the length of each file as `ls -l` shows it; the last line adds the space the
+filesystem reports for the whole tree, on disk, close to what `du` prints. Here `archive/` holds a sparse
+64 MiB disk image that takes almost no disk space, and two names for one hard-linked file, counted once, as
+`du` counts it. `--allocated` shows the on-disk figure instead and sorts by it, and `-l` (`--count-links`)
+counts every name.
+[Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
+newest modification time ([Output](output.md#du-rows)).
 
 > [!NOTE]
 > 0.4.0-rc.2 counts a hard-linked file under each of its names: there `archive/` shows 65.5 MiB in 3 files and

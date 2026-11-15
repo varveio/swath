@@ -78,6 +78,7 @@ type SourceInfo struct {
 	Kind      *string `json:"kind"`      // "s3", "gcs", "azblob", "local-fs"
 	URI       *string `json:"uri"`       // s3://bucket/prefix, gs://…, az://account/container/…, or the absolute root path
 	Container *string `json:"container"` // the bucket or container name; absent for a filesystem
+	Metadata  *string `json:"metadata"`  // the metadata tier a filesystem was listed at: "names", "stat" or "statx"; absent for a bucket
 }
 
 // Scope is the part of the source the listing was asked for.

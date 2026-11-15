@@ -286,10 +286,11 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
 }
 ```
 
-A local listing's extension also records its filesystem's space (`filesystem`), for example:
+A local listing's extension also records its metadata tier (`source.metadata`) and its filesystem's space
+(`filesystem`), for example:
 
 ```json
-"source": {"kind": "local-fs", "uri": "/System/Volumes/Data"},
+"source": {"kind": "local-fs", "uri": "/System/Volumes/Data", "metadata": "stat"},
 "filesystem": {"total_bytes": 994662584320, "free_bytes": 462012616704,
                "available_bytes": 430573547520, "measured_at": "2026-11-12T20:50:36.03Z"}
 ```
@@ -304,6 +305,7 @@ module's. JSON readers must not depend on that order.
 | `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | the application; `--seed-from` |
 | `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | the application: an Azure container's name is unique only within its account, which only `source.uri` records |
 | `source.container` | The bucket, or the Azure container's name; absent for a filesystem | the application; `--seed-from` |
+| `source.metadata` | The metadata tier a filesystem was listed at (`--metadata`): `names`, `stat` or `statx`. At `names` every stat column is null; absent for a bucket. Added under `version` 1 | the application; `reader` (`Metadata.Source.Metadata`); `swath du --from-dataset`, which counts hard-linked files under every name at `names`, as the live run does |
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | The listing reached the end of its scope | the application |
@@ -473,7 +475,7 @@ This section is for consumers that read the parts without `reader`: DuckDB, Pyth
   of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k` and `StartExclusive`), which skips the group's
   remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
 - **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
-  so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.
+  so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `size_missing`.
   SeekParquet reductions also skip nulls and absent values; request their counters to enforce an
   application's completeness policy, and check each result's status before using its value.
 

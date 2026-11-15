@@ -63,9 +63,11 @@ func liveAndSaved(t *testing.T, live, saved []string) {
 }
 
 // TestDuFromDatasetLocal: swath du --from-dataset prints what swath du of
-// the tree prints, for every depth, order and format, with the bytes
-// columns, hard links counted once and filters; plain swath du of the
-// dataset directory still totals its files.
+// the tree prints, for every depth, order and format, with either primary
+// figure, hard links counted once and filters, and from a dataset listed
+// at the names tier (no sizes, blocks or links) what the live names-tier
+// run prints; plain swath du of the dataset directory still totals its
+// files.
 func TestDuFromDatasetLocal(t *testing.T) {
 	stderr := captureStderr(t)
 	root, _ := depthTree(t)
@@ -76,7 +78,7 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}}
+	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}, {"--apparent-size"}}
 	if runtime.GOOS != "windows" { // Windows reads no allocated bytes, link count or inode
 		extras = append(extras, []string{"--allocated"}, []string{"-l"})
 	}
@@ -90,6 +92,33 @@ func TestDuFromDatasetLocal(t *testing.T) {
 			}
 		}
 	}
+	names := filepath.Join(t.TempDir(), "names")
+	if err := run(context.Background(), []string{root, "-o", names, "--metadata", "names", "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	for depth := range 3 {
+		for _, format := range []string{"tsv", "jsonl", "table"} {
+			flags := []string{"-d", strconv.Itoa(depth), "--format", format}
+			liveAndSaved(t, append([]string{root, "--metadata", "names"}, flags...), append([]string{"--from-dataset", names}, flags...))
+		}
+	}
+	// With nothing counted (an empty tree, every object filtered out) the
+	// names tier's links_once is still the live run's: the manifest
+	// records the tier.
+	empty, emptyNames := t.TempDir(), filepath.Join(t.TempDir(), "empty")
+	if err := run(context.Background(), []string{empty, "-o", emptyNames, "--metadata", "names", "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var em dataset.Manifest
+	if readJSON(t, filepath.Join(emptyNames, dataset.ManifestName), &em); em.Source.Metadata != "names" {
+		t.Fatalf("manifest source %+v", em.Source)
+	}
+	for _, format := range []string{"tsv", "jsonl"} {
+		liveAndSaved(t, []string{empty, "--metadata", "names", "--format", format}, []string{"--from-dataset", emptyNames, "--format", format})
+		liveAndSaved(t, []string{root, "--metadata", "names", "--include", "none", "--format", format},
+			[]string{"--from-dataset", names, "--include", "none", "--format", format})
+	}
+	liveAndSaved(t, []string{root, "-d", "1", "--no-header"}, []string{"--from-dataset", ds, "-d", "1", "--no-header"})
 	// PREFIX restricts the totals to its keys, the depth counted from it;
 	// the rows keep the dataset's keys.
 	got, err := duRun(t, "--from-dataset", ds, "a/", "-d", "1", "--format", "tsv")
@@ -128,7 +157,7 @@ func TestDuFromDatasetLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = duRun(t, ds, "-d", "1", "--format", "tsv")
-	if err != nil || !strings.HasSuffix(got, "\tdata/\n") || !strings.Contains(got, "\n0\t"+strconv.Itoa(files)+"\t") {
+	if err != nil || !strings.HasSuffix(got, "\tdata/\n") || !strings.Contains(got, "\ntotal\t0\t"+strconv.Itoa(files)+"\t") {
 		t.Fatalf("du DIR: %v %d files\n%s", err, files, got)
 	}
 }
@@ -220,6 +249,8 @@ func TestDuFromDatasetRefusals(t *testing.T) {
 		{[]string{"-o", "x"}, "--output: not with --from-dataset"},
 		{[]string{"--storage-class", "STANDARD"}, "--storage-class: the dataset's schema swath/local-entries/v1 has no storage class column"},
 		{[]string{"--format", "csv"}, `--format "csv": want auto, table, tsv or jsonl`},
+		{[]string{"--allocated", "--apparent-size"}, "--allocated and --apparent-size each choose the figure that comes first"},
+		{[]string{"--no-header", "--format", "jsonl"}, "not with JSONL"},
 		{[]string{"a/", "b/"}, `unexpected argument "b/"`},
 		{[]string{"s3://bkt/logs/"}, `PREFIX "s3://bkt/logs/": a key prefix within the dataset`},
 	} {
@@ -264,7 +295,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete || !strings.Contains(err.Error(), "the dataset is a partial listing: its listing did not complete (max_keys)") {
 		t.Fatalf("exit: %v", err)
 	}
-	if !strings.HasPrefix(got, "depth\tobjects\tsize\tlast_modified\tprefix\n0\t10\t") {
+	if !strings.HasPrefix(got, "row_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\ntotal\t0\t10\t") {
 		t.Fatalf("stdout: %q", got)
 	}
 	if s := stderr.String(); !strings.Contains(s, "; INCOMPLETE (max_keys)\n") {
@@ -298,7 +329,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	stderr.Reset()
 	got, err = duRun(t, "--from-dataset", local, "--format", "tsv")
 	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete ||
-		err.Error() != "2 entries could not be read when the dataset was listed: the totals leave them out" || !strings.HasPrefix(got, "depth\t") {
+		err.Error() != "2 entries could not be read when the dataset was listed: the totals leave them out" || !strings.HasPrefix(got, "row_type\t") {
 		t.Fatalf("unreadable: %v, stdout %q", err, got)
 	}
 	if s := stderr.String(); !strings.Contains(s, "; complete, 2 unreadable") {
@@ -336,7 +367,7 @@ func TestDuFromDatasetInterruptedOutput(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(context.Background())
 		w := &cancelWriter{cancel: cancel}
 		err := runDu(ctx, append(args, "-d", "1", "--format", "tsv", "--no-stats"), w)
-		if exitOf(err) != exitInterrupted || !strings.HasPrefix(w.String(), "depth\t") {
+		if exitOf(err) != exitInterrupted || !strings.HasPrefix(w.String(), "row_type\t") {
 			t.Errorf("%q: exit %d (%v), stdout %q", args, exitOf(err), err, w.String())
 		}
 		cancel(nil)
