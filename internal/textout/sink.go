@@ -288,11 +288,8 @@ const (
 )
 
 func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Location) *table[P] {
-	if loc == nil {
-		loc = time.Local
-	}
-	zone, _ := time.Now().In(loc).Zone()
-	t := &table[P]{vers: vers, kindW: len(kindColumn), loc: loc, timeHeading: mtimeColumn + " (" + zone + ")"}
+	t := &table[P]{vers: vers, kindW: len(kindColumn)}
+	t.loc, t.timeHeading = tableClock(loc)
 	t.timeW = max(len(t.timeHeading), len(tableTime))
 	for _, c := range s.Columns {
 		switch c.Name {

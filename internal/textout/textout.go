@@ -357,6 +357,17 @@ func appendTime(dst []byte, micros int64) []byte {
 // which the heading names.
 const tableTime = "2006-01-02 15:04:05"
 
+// tableClock is a table's zone, loc or (nil) time.Local, and its time
+// heading, which names the zone by its abbreviation now: last_modified
+// (CET).
+func tableClock(loc *time.Location) (*time.Location, string) {
+	if loc == nil {
+		loc = time.Local
+	}
+	zone, _ := time.Now().In(loc).Zone()
+	return loc, mtimeColumn + " (" + zone + ")"
+}
+
 func appendLocal(dst []byte, micros int64, loc *time.Location) []byte {
 	return time.UnixMicro(micros).In(loc).AppendFormat(dst, tableTime)
 }
