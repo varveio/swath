@@ -674,7 +674,8 @@ duckdb -column -c "SELECT
   - No retries, throttles or timeouts.
   - In flight averaged 52.3 of 64.
   - Spill wrote 795 MB (delta+zstd) of 4.4 GB logical, peaking at 618 MB. The frontier wait was 41.3 s.
-  - Listing ended at 54 s and publication took 7.6 s more.
+  - The last range ended at 53.1 s (the trace's last `completed` event; the report's `listing_done_at`); draining,
+    publication and finalization continued for about 7.8 s.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
 - **The run at 12:32** shared the VM with other work: the load average was 12.7 when it ended. It took twice
