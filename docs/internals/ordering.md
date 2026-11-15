@@ -215,8 +215,8 @@ the larger of `est` and `held`; it is released, in key order, once the drainer h
 range in it drained) and nothing of it is held.
 
 **Admission.** A worker with nothing queued admits the next tile, and lists it, when the charges of the tiles
-held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (the cap in effect,
-risen as it follows the disk) and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
+held, with the next tile's `est`, fit the window's rows; live spill, less the drained certificates waiting for K,
+is at most half its cap (the cap in effect, risen as it follows the disk) and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
 ahead of a grown one until the frontier passes it). Otherwise it waits at the window (`window`) holding no
 range. The window's rows are a target of 8,000,000 (`rows`; `swath diag list --seed-from-window-rows` sets
 another, `set`), but never more than what the storage gives: half the spill cap over a spilled row's bytes (the
@@ -240,9 +240,31 @@ overfetch. Measured on a production list of 85.9M keys at 2,048 workers under a 
 rule: the held workers sliced the admitted tiles below a page (48,190 bounded splits, 27,447 empty upper children,
 47 % of the keys overfetched, 1.39 requests per 1,000 keys against 1.08 uncapped) (`TestPlanManyWorkersFewTiles`:
 256 workers, a window of a few tiles, the requests of one worker). The workers at the window wait on a condition
-of their own and are woken as room comes back, one per tile released, one when the tile refused fits, the next
-after each admission, one per child queued, and all at a stop or the plan's end, not at every step of the
-drainer.
+of their own and are woken as room comes back, one per tile released, one when the tile refused fits its rows
+(with durable spill, also one once the spill gate that refused a tile no longer refuses), the next after each
+admission, one per child queued, one per spill credit, and all at a stop or the plan's end, not at every step of
+the drainer.
+
+**Spill behind the output.** A durable certificate the drainer has passed stays on disk, charged to the live
+spill, until the part holding its last row publishes (K covers it): with a 30 s part interval and 64 MiB parts,
+tens of MB of a small cap can lie behind the output, which no drain lowers. Counted against the gate it held
+admission with nothing ahead to write: the drainer drained every admitted tile and forced the next one, a tile at
+a time (145 million keys at 2,048 workers, 57 MB cap: 219 s against 78 s uncapped, 84 forced admissions,
+[measurements](measurements.md#the-seeded-frontier-window); it appeared when the slots went from one per MiB to
+one per 64 KiB of the cap, #560, so most spilled ranges became certificates). The gate leaves those certificates
+out, and while live spill is past half the cap it evicts them, oldest first, as a refused frame does
+(`window.evicted`; a crash then relists their keys); until the unlinks return the credit the window waits, so
+the spill ahead of the output, not the spill behind it, holds the window. The files already retired and awaiting
+their unlink count as credit on its way: a check before the flusher's next cycle evicts only past them
+(`TestWindowEvictsOnlyTheExcess`). Where the spill a window of 8M rows
+needs at that concurrency is past half the cap, the window holds fewer tiles, admitted in order as the spill
+ahead drains (`window.spill_rows` is the mean rows the tiles held were charged over the admission probes the
+spill gate refused, a forced admission's included) (`TestWindowShrinksToTheSpillCap`: 64 workers, a 48 KiB cap, every eighth tile stalled,
+certificates whose K never comes; no frame refused, no tile forced, where the gate counting them forced 295 of
+320). The wake paths added with this gate (the spill gate no longer refusing, and the read-ahead's planning and
+its return under half its share waking a worker at the window, below) engage only with durable spill
+(`window.wakes`); without a durable cache (no journal, or a cap under 16 MiB) nothing lies behind the output,
+the gate is live spill past half the cap, and the window wakes as before.
 
 **The plan.** The range engine reads the prior lazily (a dataset's page index part by part, at most two parts
 ahead of the plan, from the first part ending after a resume key; a cut file from memory), checks every cut as
@@ -263,9 +285,8 @@ with exact counts: admission gates tiles, not the listing inside a tile admitted
 splits, whose lower range stalls while an upper range lists 100,000 poorly compressible rows of about 1 KiB, puts
 some 100 MB ahead of the output whatever the window; past the cap, its frames are refused as on any run (a
 stale prior's grown region larger than the cap crawled so with caps of 2 to 6 MB). Under a small cap many workers
-also slow a planned run: past half the cap no tile is admitted, so the workers wait at the window (`spill`)
-while the tiles admitted drain (145 million keys at 2,048 workers: 219 s with a 57 MB cap against 78 s
-uncapped, [measurements](measurements.md#the-seeded-frontier-window)). The rows still leave through the one
+hold fewer tiles under a small cap: past half the cap (the certificates behind the output aside) no tile is
+admitted, so the workers wait at the window (`spill`) while the tiles admitted drain. The rows still leave through the one
 part writer, so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
 plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
 run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
@@ -273,10 +294,11 @@ run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIs
 The report's `resources.window` ([counters.md](counters.md#order-stage-and-encoders-run-summary-top-level))
 counts the tiles admitted and forced, the tiles grown, the window's rows and what set them, the waits at the
 window by the refusal that held them, the drainer's wait for the plan, and the peaks of the tiles held, the
-rows charged to them and the bytes held at an admission. Tests: `order` `TestWindowBoundsRowsAhead` (a stalled
+rows charged to them and the bytes held at an admission, and under the spill gate the window it allowed, the most
+spill seen behind the output and the certificates it evicted. Tests: `order` `TestWindowBoundsRowsAhead` (a stalled
 frontier: workers wait at the window holding no range, the tiles held stay within it, the run completes when
 released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
-`TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`; `keyrange` `TestPlanTilesAsTilePrior`,
+`TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`, `TestWindowShrinksToTheSpillCap`; `keyrange` `TestPlanTilesAsTilePrior`,
 `TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `listing` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
 too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
 `TestSIGKILLAtEveryPoint` (`s3-planned`).
@@ -297,13 +319,16 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 | segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
-| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on or the window's measure grows (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit; all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
+| window (its own) | a worker, nothing queued, the [frontier window](#the-frontier-window) refusing the plan's next tile | one waiter at a time: a tile released (one per tile), the refused tile fitting once rows are handed on or the window's measure grows, and with durable spill the spill ahead drains (checked at the drainer's steps and at every publish), the first rows measured, another worker's admission, a child queued (one per child), spill credit, with durable spill frames planned for the read-ahead (one per read it can start); all at a stop or the plan's end or failure | `TestWindowBoundsRowsAhead`, `TestWindowCancelWhileWaiting` |
 | plan (`drain`) | the drainer, every admitted tile drained, the plan's next tile not yet read | the prior's reader handing on a batch, ending or failing (its wake), a stop | `TestPlanWaitWakes` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
 not woken per frame: planning signals as many idle workers as can start a read when it queued frames
 (refilling at half of its window), and the drainer wakes the workers held at the share once the read-ahead
-holds half of it. A release of drained
+holds half of it. With durable spill, each signal also wakes a worker held at the frontier window, which waits
+on its own condition: refused again, it reads ahead before it waits (`window.wakes.read_ahead`,
+`.read_ahead_share`). Without durable spill it does not (`keyrange` `TestPlanStaleManyWorkersSmallCap`: no such
+wake). A release of drained
 bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
@@ -887,7 +912,9 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   retired (`published`) once K reaches `ce` and its reader has closed, whichever comes last; neither waits on
   the other (`TestDurableRetireDefer`). A drained certificate stays charged to the live spill bytes until
   its unlink; a refused frame evicts the oldest drained one (`evicted`, never an undrained file:
-  `TestDurableEviction`). A live-only durable file is unlinked when drained.
+  `TestDurableEviction`), and so does the frontier window while live spill is past half the cap, oldest first
+  until enough is evicted, the files retired and not yet unlinked counted as evicted
+  ([spill behind the output](#the-frontier-window)). A live-only durable file is unlinked when drained.
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by

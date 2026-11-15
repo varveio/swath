@@ -214,7 +214,12 @@ drainer past a refusal, `grown` (tiles whose rows reached 4 times the prior's), 
 evaluated) and `bound_by` (`rows`, the 8M target; `set`, `--seed-from-window-rows`; `spill_cap`; `budget`), `waits` (workers' waits at the window by the
 refusal that held them: `rows`, `spill`, `growth`), `wait_ns` and `peak_waiters`, `plan_wait_ns` (the drainer
 waiting for the prior to be read), `peak_tiles`, `peak_credit_rows` (the rows charged to the tiles held) and
-`peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
+`peak_retained_bytes` (the bytes the order stage held, in memory and live spill, at an admission), `spill_rows`
+(the mean, over the admission probes the spill gate refused, forced admissions' included, of the rows charged to
+the tiles held),
+`peak_behind_bytes` (the most live spill behind the output: drained durable files not yet unlinked), `evicted`
+(drained certificates the window evicted while live spill was past half the cap) and `wakes` (wakes of a held
+worker on the paths that engage only with durable spill: `spill`, `read_ahead`, `read_ahead_share`). In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](../internals/counters.md)).

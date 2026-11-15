@@ -757,7 +757,9 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		// The plan root is never claimed: it stays open, counted, until the
 		// plan ends, its tiles admitted as its children (window.go).
 		root.state = expanding
-		o.win = &window[R, P]{plan: plan, root: root, sizes: plan.Sizes(), st: WindowStats{Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0}}}
+		o.win = &window[R, P]{plan: plan, root: root, sizes: plan.Sizes(), st: WindowStats{
+			Waits: map[string]int64{WindowRows: 0, WindowSpill: 0, WindowGrowth: 0},
+			Wakes: map[string]int64{WakeSpill: 0, WakeReadAhead: 0, WakeReadAheadShare: 0}}}
 		defer plan.Start(ctx, func() {
 			o.mu.Lock()
 			o.work.Broadcast()
@@ -813,7 +815,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.PublishWait, st.AdmissionWait, st.IdleWait = o.publishWait, o.admissionWait, o.idleWait
 	st.PeakPublishWaiters, st.PeakAdmissionWaiters, st.PeakIdleWorkers = o.g.publishWait.peak.Load(), o.g.admissionWait.peak.Load(), o.g.idleWait.peak.Load()
 	st.DistinctKeys = o.distinct
-	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.sp != nil && o.sp.cache != nil
+	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.durable()
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	st.ListingDone, st.DrainEnd, st.IdleAfter = o.listedAt, o.drainEnd, o.idleAfter
