@@ -254,8 +254,10 @@ A run that is far short of spill room keeps going at the output's pace, which on
 few rows a second. After 2 minutes of it swath prints, and repeats every 30 minutes while it lasts:
 
 ```text
-swath: spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it (spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE), or let it run: it finishes, slowly
+swath: spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it (spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; the cap follows the spill disk: grow the disk, or free space on it, and listing continues, or let it run: it finishes, slowly
 ```
+
+With a `--spill-budget` the remedy reads `stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `diagnostics.resources.spill.refused` above 0
 ([the first bad pattern](production.md#three-bad-patterns)). With the default cap, grow the spill filesystem

@@ -5,6 +5,8 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: with the default spill cap, the `spill_pressure` event's remedy is to grow the spill disk, or free space
+  on it, as listing then continues; with a `--spill-budget` it still says to stop and resume with more.
 - Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
   rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular
