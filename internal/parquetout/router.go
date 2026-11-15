@@ -691,6 +691,13 @@ func (r *Router[P]) encode(p *part[P]) {
 	} else if len(r.done) > 0 {
 		base, before = r.opt.Resume.Rows, &r.done[len(r.done)-1]
 	}
+	if r.aborted.Load() {
+		// A part that saw the abort returns without waiting for the part
+		// before it, which may still be publishing (a publication under
+		// way finishes): a part given its turn after the abort neither
+		// publishes nor adds to r.cuts.
+		return
+	}
 	p.rows += base
 	// Adjacency before publication: a part is checked against the part it
 	// follows (the resumed seam included) before Publish records or renames
