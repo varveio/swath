@@ -449,3 +449,49 @@ func TestCountCoveredRuns(t *testing.T) {
 		t.Fatalf("unordered runs %q, want %q", s.got, want)
 	}
 }
+
+// emptyScript is ranges that declare their intervals and list nothing in
+// some: the root (⊥, b] lists a, b and splits; its first child (b, m] is
+// empty and splits at its fence x; the next child (x, m] is empty and
+// returns; the last (m, ⊤] lists z.
+type emptyScript struct{}
+
+func (emptyScript) Root() fr { return fr{0} }
+
+func (emptyScript) Expand(_ context.Context, r fr, e source.Emitter[fr, tp]) error {
+	f := e.(source.Fencer)
+	switch r.i {
+	case 0:
+		f.Span("", "", true)
+		if err := e.Rows([]schema.Row[tp]{{Key: "a"}, {Key: "b"}}); err != nil {
+			return err
+		}
+		if err := e.Child(fr{1}); err != nil {
+			return err
+		}
+		return e.Child(fr{3})
+	case 1:
+		f.Span("b", "m", false)
+		f.Fence("x", false)
+		return e.Child(fr{2})
+	case 2:
+		f.Span("x", "m", false)
+		return nil
+	}
+	f.Span("m", "", true)
+	return e.Rows([]schema.Row[tp]{{Key: "z"}})
+}
+
+// TestCountCoveredEmpty: a range that listed no row still tells its
+// interval, through an empty run: up to its fence at a split, up to its end
+// when it returns; so the intervals of a count tile its keys.
+func TestCountCoveredEmpty(t *testing.T) {
+	s := &coverSink{}
+	if _, err := CountWithSink(context.Background(), emptyScript{}, nil, Options{Workers: 2}, s); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(s.got)
+	if want := []string{" (b,x]", " (x,m]", "a,b (,b]", "z (m,⊤]"}; !slices.Equal(s.got, want) {
+		t.Fatalf("runs %q, want %q", s.got, want)
+	}
+}

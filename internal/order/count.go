@@ -113,7 +113,8 @@ type RangeRun[P any] interface {
 // returned, else, at a split, its last row or fence, which the children
 // start after. No key of another run lies in (lo, hi]: runs whose
 // intervals meet at a bound cover the keys between them whole. Only a
-// range's first run is told.
+// range's first run is told; a range that sent the sink no row opens an
+// empty run to tell its interval (at a split, when it fenced one).
 type CoveredRun interface {
 	From(lo string)
 	Through(hi string, top bool)
@@ -348,16 +349,27 @@ func (e *countEmitter[R, P]) Subtree(prefix string) {
 // after its last row: the run covers up to it) or when the range returned
 // (it covers up to its span's end).
 func (e *countEmitter[R, P]) end(returned bool) {
+	c := e.c
+	if e.run == nil && !e.ran && e.spanned && c.runs != nil && !c.opt.Unordered && (returned || e.fenced) {
+		// A range whose interval held no row the sink saw (none listed,
+		// or every one filtered out) still covers it: an empty run says
+		// so, so that the runs around it meet.
+		e.run, e.ran = c.runs.Run(), true
+		if e.covered, _ = e.run.(CoveredRun); e.covered != nil {
+			e.covered.From(e.lo)
+		}
+	}
 	if e.run == nil {
 		return
 	}
 	if cr := e.covered; cr != nil {
-		hi := max(e.last, e.fence) // every row up to the last fence was emitted, the filters' drops too
 		switch {
 		case returned:
 			cr.Through(e.hi, e.top)
 		case e.fenced:
-			cr.Through(strings.Clone(hi), false)
+			// Every row up to the last fence was emitted, the filters'
+			// drops too.
+			cr.Through(strings.Clone(max(e.last, e.fence)), false)
 		default:
 			cr.Through(strings.Clone(e.last), false)
 		}

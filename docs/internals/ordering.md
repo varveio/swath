@@ -393,7 +393,9 @@ otherwise dropped, its bytes already in its parent; the prefixes at a run's two 
 across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
 declares its ranges' intervals (`source.Fencer.Span`, the range engine's), the interval its rows cover: from
 the range's lower bound, through its last row or fence at a split (the children start after it) or the range's
-end when it returns. The view completes an edge prefix inside that interval at once, records the intervals of
+end when it returns; a range that listed no row the sink sees (none in its interval, or all filtered out) tells
+its interval through an empty run, so that the intervals around it meet (`TestCountCoveredEmpty`,
+`TestViewCoveredEmptyRuns`). The view completes an edge prefix inside that interval at once, records the intervals of
 the runs that ended, joining those that meet at a bound, and completes a partial prefix cut at a bound once the
 stretches on both sides have joined around it (`totals` `view.cover`): the partial prefixes held are then those
 cut by the bounds of ranges still listing, a few a range in flight, not one per range listed

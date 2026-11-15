@@ -720,3 +720,54 @@ func sameNode(a, b ViewNode) bool {
 }
 
 func sameNodes(a, b []ViewNode) bool { return slices.EqualFunc(a, b, sameNode) }
+
+// TestViewCoveredEmptyRuns: intervals that hold no row (a sparse key space,
+// or rows all filtered out) still meet their neighbors: 2,001 runs, every
+// other one empty and inside the prefix its neighbors share, leave no
+// partial node and one stretch once they have all ended.
+func TestViewCoveredEmptyRuns(t *testing.T) {
+	type cut struct {
+		lo, hi string
+		top    bool
+		rows   []Row
+	}
+	var cuts []cut
+	lo := ""
+	for i := range 1000 {
+		key := fmt.Sprintf("p%04d/a", i)
+		cuts = append(cuts, cut{lo: lo, hi: key, rows: []Row{{Key: key, Object: true, Size: int64(i + 1), HasSize: true}}})
+		cuts = append(cuts, cut{lo: key, hi: fmt.Sprintf("p%04d/z", i)}) // inside p<i>/, empty
+		lo = fmt.Sprintf("p%04d/z", i)
+	}
+	cuts = append(cuts, cut{lo: lo, top: true})
+	tl := New(Options{View: true})
+	rng := rand.New(rand.NewPCG(4, 4))
+	rng.Shuffle(len(cuts), func(i, j int) { cuts[i], cuts[j] = cuts[j], cuts[i] })
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for _, c := range cuts {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			r := tl.ViewRun(true)
+			r.From(c.lo)
+			for i := range c.rows {
+				r.Add(&c.rows[i])
+			}
+			r.Flush()
+			r.Through(c.hi, c.top)
+			r.End()
+		})
+	}
+	wg.Wait()
+	v := tl.view
+	if len(v.open) != 1 || len(v.byLo) != 1 {
+		t.Fatalf("%d partial nodes, %d stretches", len(v.open), len(v.byLo))
+	}
+	var all []Row
+	for _, c := range cuts {
+		all = append(all, c.rows...)
+	}
+	slices.SortFunc(all, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	checkView(t, tl.View(), "", exactTree("", all, false))
+}
