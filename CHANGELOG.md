@@ -9,6 +9,8 @@ Notable changes per release. The full human summary for the current release is i
   listing (seed, owner-side splits, the sorted stream, commit before emit; still frames with reduced motion), a
   diagram per section, and two figures from the home page's run (its 257 starting ranges, and requests in flight
   over time on the range that held 64.5% of the bucket). Its claims are corrected against the code.
+- Go port: with the default spill cap, the `spill_pressure` event's remedy is to grow the spill disk, or free space
+  on it, as listing then continues; with a `--spill-budget` it still says to stop and resume with more.
 - Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
   rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular
