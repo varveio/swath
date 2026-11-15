@@ -18,7 +18,7 @@ Notable changes per release. The full human summary for the current release is i
   options (`modified_since`, `one_file_system`, ...; `null` for a switch), its times with six fraction digits;
   `coverage.snapshot` is gone. A new `collected` records the metadata tier and the optional columns the run
   asked for, and `committed_object_bytes` is absent when an object's size was not read (`--metadata names`)
-  instead of 0.
+  instead of 0. `swath du --from-dataset`'s `dataset` member and event carry the filters in the same objects.
 - Go port: a JSONL row of a local tree always has `key` and `key_base64` (and `link_target`,
   `link_target_base64`): the text, null when not UTF-8, and the base64 bytes, null when UTF-8.
 - Go port: `swath du`'s rows carry both byte figures under the dataset's names, `size` (the lengths) and

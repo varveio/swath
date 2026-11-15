@@ -141,6 +141,18 @@ func TestDuFromDatasetLocal(t *testing.T) {
 		row.Dataset.SchemaID != "swath/local-entries/v1" || row.Dataset.ListingFinishedAt == nil {
 		t.Fatalf("JSONL: %v %s", err, got)
 	}
+	// A filtered dataset's rows carry its filters as its manifest records
+	// them, one object each; stderr names them.
+	filtered := filepath.Join(t.TempDir(), "filtered")
+	if err := run(context.Background(), []string{root, "-o", filtered, "--exclude", "x", "--no-dirs", "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	got, err = duRun(t, "--from-dataset", filtered, "--format", "jsonl")
+	if want := `"filters":[{"filter":"no_dirs","value":null},{"filter":"exclude","value":"x"}]`; err != nil || !strings.Contains(got, want) ||
+		!strings.Contains(stderr.String(), "; filtered: no_dirs, exclude=x") {
+		t.Fatalf("filtered JSONL: %v %s\nstderr: %s", err, got, stderr.String())
+	}
 	// -q leaves stderr empty.
 	stderr.Reset()
 	if _, err := duRun(t, "--from-dataset", ds, "-q"); err != nil || stderr.Len() != 0 {

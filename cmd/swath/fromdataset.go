@@ -210,16 +210,16 @@ func datasetIncomplete(msg string) error {
 // manifest does not say), the JSONL rows' dataset member and the dataset
 // event's fields.
 type provenance struct {
-	Path              string     `json:"path"`
-	Source            *string    `json:"source"`
-	SchemaID          string     `json:"schema_id"`
-	ListingStartedAt  *time.Time `json:"listing_started_at"`
-	ListingFinishedAt *time.Time `json:"listing_finished_at"`
-	Complete          *bool      `json:"complete"`
-	StopReason        *string    `json:"stop_reason"`
-	Unreadable        *int64     `json:"unreadable"`
-	Filters           []string   `json:"filters"`
-	Exclusions        []string   `json:"exclusions"`
+	Path              string          `json:"path"`
+	Source            *string         `json:"source"`
+	SchemaID          string          `json:"schema_id"`
+	ListingStartedAt  *time.Time      `json:"listing_started_at"`
+	ListingFinishedAt *time.Time      `json:"listing_finished_at"`
+	Complete          *bool           `json:"complete"`
+	StopReason        *string         `json:"stop_reason"`
+	Unreadable        *int64          `json:"unreadable"`
+	Filters           []reader.Filter `json:"filters"`
+	Exclusions        []string        `json:"exclusions"`
 }
 
 func provenanceOf(dir string, m reader.Metadata) provenance {
@@ -230,7 +230,7 @@ func provenanceOf(dir string, m reader.Metadata) provenance {
 	}
 	if c := m.Coverage; c != nil {
 		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.Unreadable = c.ListingStartedAt, c.ListingFinishedAt, c.Complete, c.StopReason, c.Unreadable
-		p.Filters, p.Exclusions = filter.Texts(c.Filters), c.Exclusions
+		p.Filters, p.Exclusions = c.Filters, c.Exclusions
 	}
 	return p
 }
@@ -293,7 +293,7 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 		msg += ", " + count(*p.Unreadable) + " unreadable"
 	}
 	if len(p.Filters) > 0 {
-		msg += "; filtered: " + strings.Join(p.Filters, ", ")
+		msg += "; filtered: " + strings.Join(filter.Texts(p.Filters), ", ")
 	}
 	if len(p.Exclusions) > 0 {
 		msg += "; excluded: " + strings.Join(p.Exclusions, ", ")
