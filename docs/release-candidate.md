@@ -17,7 +17,7 @@ rc.2 release binary and a build of the code these pages describe.
 | `swath du` on a tree with hard links | counts a file under each of its names; `--count-links-once` counts it once | counts it once, as `du` does; `-l` (`--count-links`) counts every name |
 | `swath diag list --trace FILE` | not available: `unknown flag --trace` | writes a trace of an object-store listing |
 | `-o NAME.parquet` | writes a dataset directory with that name | refused: use a name without `.parquet`, or end it with `/` |
-| `swath du --max-depth`, `-s`, `--apparent-size`, `-x` | `unknown flag` | names the swath option that stands for it, for example `--depth N` |
+| `swath du --max-depth`, `-s`, `-x` | `unknown flag` | names the swath option that stands for it, for example `--depth N` |
 
 ## Entries that could not be read
 
@@ -42,7 +42,9 @@ rc.2 release binary and a build of the code these pages describe.
 | `swath show FILE` on a file that is not a dataset | `journal: open FILE: not a directory` | `FILE holds neither a dataset nor an interrupted run` |
 | `--max-duration` ends a text-file run | the statistics count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |
 
-These pages also describe three changes not checked here by running rc.2: a `swath du` of a million rows or
+These pages also describe four changes not checked here by running rc.2: `swath du`'s rows carry both byte
+figures (`size`, `allocated_bytes`) and `max_last_modified`, and the list table names its time zone
+([Output](output.md#du-rows)); a `swath du` of a million rows or
 more on a terminal ends with a hint to save an inventory and total it with `--from-dataset`; a run stopped by
 Ctrl-C or `SIGTERM` now ends by that signal (the shell still reports 130 or 143), where rc.2 exited with the
 code; and a stuck run without an output directory writes its goroutine dump to a file in the temporary
