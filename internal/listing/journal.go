@@ -75,6 +75,9 @@ type runJournal struct {
 	// remote is a remote dataset's run (nil for a local dataset): its
 	// parts are uploaded, claimed by receipt and recorded by object name.
 	remote *remoteState
+	// discarded: the run removed its own files (discardUnanswered), and
+	// leaves no outcome in the output.
+	discarded bool
 }
 
 // rooted opens jr.root (once, before the router starts) and checks the
@@ -167,6 +170,12 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 			return nil, ErrNothingToResume
 		}
 	default:
+		if into := cfg.Output.into; into != "" {
+			// The dataset a replacement replaces is one it may replace.
+			if _, err := dataset.Usable(into, path, id.SchemaID, true); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := dataset.Usable(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
@@ -285,7 +294,10 @@ const (
 	UnrecordedComplete = unrecordedComplete
 	UnrecordedNoRun    = unrecordedNoRun
 	UnrecordedNoOutput = "the invocation has no output directory"
-	unrecordedRefused  = "refused before owning the output, which is left as it was"
+	// UnrecordedDiscarded: nothing in the run was answered, and it removed
+	// its own files (runJournal.discardUnanswered).
+	UnrecordedDiscarded = "nothing in the run was answered: it removed its files, so the output holds no run"
+	unrecordedRefused   = "refused before owning the output, which is left as it was"
 )
 
 // unowned is why an invocation whose output could not be opened (err, from
@@ -1028,10 +1040,46 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	cfg.Progress.End(err)
 	// The outcome goes into the output only while its pathname is still
 	// the directory this process locked.
-	if cfg.Settle != nil && jr.verify() == nil {
+	if cfg.Settle != nil && !jr.discarded && jr.verify() == nil {
 		cfg.Settle(rep, err)
 	}
 	jr.release(cfg)
+}
+
+// discardUnanswered removes the run's own files when nothing in it was
+// ever answered (err is source.ErrUnreachable: a mistyped endpoint, a
+// service not up) and its journal holds no part, so the directory holds no
+// run and the corrected command runs on the same output; a journal with
+// parts is kept for swath resume. It reports whether it removed them: the
+// journal, the workspace (the lock kept, released by close) and the empty
+// data directory. The progress file's writer is stopped first, so nothing
+// writes into the workspace after.
+func (jr *runJournal) discardUnanswered(cfg Config, err error) bool {
+	if jr == nil || jr.j == nil || !errors.Is(err, source.ErrUnreachable) || jr.resumedParts() > 0 || jr.acked.parts.Load() > 0 {
+		return false
+	}
+	cfg.Progress.own(nil)
+	if jr.cache != nil {
+		jr.cache.Close()
+		jr.cache = nil
+	}
+	_ = jr.j.Close()
+	jr.j = nil
+	r, rerr := jr.rooted()
+	if rerr != nil {
+		return false
+	}
+	if resetWorkspace(r) != nil {
+		return false
+	}
+	if err := r.Remove(dataset.DataDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	// A removal a power loss undoes leaves the run as it was: resumable.
+	_ = dataset.SyncDirIn(r, dataset.Workspace)
+	_ = dataset.SyncDirIn(r, ".")
+	jr.discarded = true
+	return true
 }
 
 // runInfo is the run an attempt of cfg belongs to: its journal's run (a

@@ -44,6 +44,42 @@ Notable changes per release. The full human summary for the current release is i
   `cause`); a request's `latency_ms` (a float) is integer `latency_us`; a persistent failure's `attempts` is
   `http_attempts`; `start.destination` is `-` for stdout and `start.source` is spelled as the manifest's
   `source.uri` (a local path absolute).
+- Go port: `--overwrite` of a committed dataset keeps it readable until the new one commits. The new run
+  lists into the output's workspace (`.swath/next/`) and its commit installs the new dataset in place of the
+  old one, whose parts are removed after; a run that fails or is stopped leaves the previous dataset whole, and
+  a stopped object-store run waits there for `swath resume DIR` (`swath show DIR` names it). Before,
+  `--overwrite` removed the previous dataset before listing anything, so a typo in the source or endpoint lost
+  the last good inventory. The run report's `output.replaced` is true when the commit replaced a previous
+  dataset.
+- Go port: a dataset run that no request ever answered (exit 75, cause `unreachable`: a mistyped endpoint, a
+  service not up) and that published no part removes its journal and work files, so the corrected command runs
+  on the same `-o`; it left an interrupted run that refused the corrected command, while a resume refused another
+  endpoint. A resume of a run with parts keeps its journal.
+- Go port: SIGHUP (a closed terminal or SSH session) stops a run as SIGTERM does: its outcome is recorded (class
+  `terminated`, `stop_source` `sighup`), and the process dies by the signal (129); it killed the run with no
+  outcome, report or `error.json`. Under `nohup` it stays ignored. The exit codes page says that exit 2 with no
+  outcome is a crash (a panic, SIGQUIT), resumed as a kill.
+- Go port: `--report` naming a device, a descriptor or a named pipe (`/dev/stderr`, `/dev/fd/3`, a FIFO) is
+  written there; it failed after the run (exit 1), and a FIFO was replaced by a regular file.
+- Go port: `swath resume DIR` writes a report only when given `--report`; it no longer replays the run's
+  recorded `--report`, which replaced the earlier attempt's report with its own.
+- Go port: a full quota (EDQUOT) exits 74 (`disk_full`, cause `no_space`) as a full disk does, and spill
+  waits on it as on a full disk; it was exit 1 and ended the run (#518). An exit-1 run's `resumable` says
+  what `swath resume` does: true for a journaled run stopped by `auth`, `access_denied` or a disk error, once
+  the cause is fixed (it said false while resume continued it); false for `not_found`, `region_redirect` and
+  another process's output (#517).
+- Go port: `complete` means nothing is missing: the listing reached the end of its scope and read every entry.
+  The manifest's `coverage.complete`, the report's `outcome.complete`, the `outcome` log event, `swath show` and
+  `swath du --from-dataset` say false for a dataset with unreadable entries (before: true, beside
+  `unreadable` 1); filters do not make a dataset partial. The outcome class `completed` is `ok` (a `| head` run
+  is `ok` with `complete` false). `stop_reason` is a coverage reason only (`end_of_scope`, renamed from
+  `completed`; `max_keys`; `downstream_closed`), absent for a run that wrote no output (before: its class), and `outcome.unreadable` is absent before the source reported. A partial dataset
+  (exit 3) gets no `error.json`: its manifest's coverage says what is missing. The `outcome` event adds
+  `status`, `complete`, `stop_reason` and `unreadable` and drops `message` (it repeated `msg`). A person reads
+  one verdict everywhere: `complete`, `partial: 1 unreadable entry`, `partial: --max-keys reached`, `stopped:
+  --max-duration reached`, `interrupted`, in the closing block (before: `INCOMPLETE (class)`), `swath show`'s
+  coverage line (before: `complete=true stop=completed unreadable=1 ...`) and `swath du --from-dataset`'s
+  dataset line; the warnings that explain it now print before the closing block.
 - Go port: `swath du -h DIR` and `swath list SOURCE -h` are refused (exit 2) instead of printing help with exit 0:
   `-h is help; sizes are already human-readable in the table`. `-h` alone, and `--help` anywhere, still print
   help; `swath` alone prints its short help.

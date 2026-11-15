@@ -66,6 +66,9 @@ type eventLog struct {
 	verbose, quiet int
 	attempt        string        // the run's attempt id ("" before a run has one)
 	run            func() string // the run's id once it is known (nil: none)
+	// result is the outcome of a run that ended without an error (ended),
+	// which the outcome event reports: its status and coverage.
+	result atomic.Pointer[outcome]
 }
 
 var logs atomic.Pointer[eventLog]
@@ -287,14 +290,22 @@ func (l *eventLog) progress(s listing.ProgressSnapshot, msg string) {
 	l.print(lvInfo, evProgress, msg, s)
 }
 
-// outcomeFields are an outcome event's.
+// outcomeFields are an outcome event's: how the command ended, what
+// became of its output and the output's coverage (msg holds the message).
 type outcomeFields struct {
-	Class     string `json:"class"`
-	ExitCode  int    `json:"exit_code"`
-	Resumable bool   `json:"resumable"`
-	Cause     string `json:"cause,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Class      string `json:"class"`
+	ExitCode   int    `json:"exit_code"`
+	Resumable  bool   `json:"resumable"`
+	Cause      string `json:"cause,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Complete   bool   `json:"complete"`
+	StopReason string `json:"stop_reason,omitempty"`
+	Unreadable *int64 `json:"unreadable,omitempty"`
 }
+
+// ended records the outcome of a run that ends without an error, for the
+// outcome event (conclude).
+func (l *eventLog) ended(o outcome) { l.result.Store(&o) }
 
 // conclude ends a command on stderr and returns its exit code. In text a
 // failure prints "swath: MESSAGE" (and a usage error's help hint), with
@@ -305,11 +316,14 @@ func conclude(err error) int {
 		err = nil
 	}
 	l := elog()
-	o := outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
+	o := outcome{Class: listing.ClassOK, ExitCode: exitOK}
 	var ee *exitError
 	var u usageError
 	switch {
 	case err == nil:
+		if r := l.result.Load(); r != nil {
+			o = *r
+		}
 	case errors.As(err, &ee):
 		o = ee.out
 	case errors.As(err, &u):
@@ -317,7 +331,9 @@ func conclude(err error) int {
 	default:
 		o = outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: err.Error()}
 	}
-	if cr := (*credentialRefusal)(nil); errors.As(err, &cr) && !l.shows(lvInfo) {
+	cr := (*credentialRefusal)(nil)
+	refused := errors.As(err, &cr)
+	if refused && !l.shows(lvInfo) {
 		o.Message = cr.Error() // the cause is -v's
 	}
 	if l.quiet >= 2 {
@@ -326,10 +342,16 @@ func conclude(err error) int {
 	if l.json {
 		if err != nil || l.attempt != "" {
 			level, msg := lvInfo, o.Class
-			if err != nil {
+			switch {
+			case refused && l.shows(lvInfo):
+				level, msg = lvError, o.Message // -v: the refusal's whole cause
+			case err != nil:
 				level, msg = lvError, err.Error()
 			}
-			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Message}))
+			if o.Status == "" && o.ExitCode != exitOK {
+				o.Status = listing.StatusFailed // stopped before a run accounted it
+			}
+			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Status, o.Complete, o.StopReason, o.Unreadable}))
 		}
 		return o.ExitCode
 	}
@@ -717,7 +739,7 @@ type unreadableFields struct {
 // the count of the rest. Their count is the run's error line (exit 3,
 // unreadableError), which -q keeps.
 func reportUnreadable(r *listing.Report) {
-	n := r.Outcome.Unreadable
+	n := r.Outcome.Unreadables()
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {
 		return

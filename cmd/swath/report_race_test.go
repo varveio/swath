@@ -108,7 +108,7 @@ func TestOutcomeFilesDurable(t *testing.T) {
 	mu.Lock()
 	dirSyncs = nil
 	mu.Unlock()
-	if err := writeOutcome(dir, outcome{ExitCode: exitCompleted}); err != nil {
+	if err := writeOutcome(dir, outcome{ExitCode: exitOK}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {

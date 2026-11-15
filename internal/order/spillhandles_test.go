@@ -287,10 +287,17 @@ func TestHandlesStop(t *testing.T) {
 	}
 }
 
-// TestHandlesTruncation: a frame torn by ENOSPC is truncated away; the
-// file's read handle, opened before, is retired with it, and the frames
-// written after it read back exact through a new one.
+// TestHandlesTruncation: a frame torn by ENOSPC, or by EDQUOT (a full
+// quota, which ended the run before), is truncated away; the file's read
+// handle, opened before, is retired with it, and the frames written after
+// it read back exact through a new one.
 func TestHandlesTruncation(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EDQUOT} {
+		t.Run(errno.Error(), func(t *testing.T) { handlesTruncation(t, errno) })
+	}
+}
+
+func handlesTruncation(t *testing.T, errno syscall.Errno) {
 	s, err := newSpiller(&testSchema, t.TempDir(), false, true, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +313,7 @@ func TestHandlesTruncation(t *testing.T) {
 	}
 	restore := faults.SetIO(func(op, _ string, b []byte) (int, error) {
 		if op == "write" {
-			return len(b) / 2, syscall.ENOSPC
+			return len(b) / 2, errno
 		}
 		return 0, nil
 	})

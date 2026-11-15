@@ -15,11 +15,12 @@ import (
 func kill() { _ = syscall.Kill(os.Getpid(), syscall.SIGKILL) }
 
 // exit ends the process with code. A run a signal stopped (exitInterrupted,
-// exitTerminated) dies by that signal once it has cleaned up: the handler is
-// reset and the signal raised again, so a calling shell loop stops as it
-// would for any command killed by it (the shell still reports 130 or 143).
+// exitTerminated, exitHangup) dies by that signal once it has cleaned up:
+// the handler is reset and the signal raised again, so a calling shell loop
+// stops as it would for any command killed by it (the shell still reports
+// 130, 143 or 129).
 func exit(code int) {
-	sig := map[int]syscall.Signal{exitInterrupted: syscall.SIGINT, exitTerminated: syscall.SIGTERM}[code]
+	sig := map[int]syscall.Signal{exitInterrupted: syscall.SIGINT, exitTerminated: syscall.SIGTERM, exitHangup: syscall.SIGHUP}[code]
 	if sig != 0 {
 		signal.Reset(sig)
 		_ = syscall.Kill(os.Getpid(), sig)

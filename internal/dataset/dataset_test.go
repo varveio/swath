@@ -282,7 +282,7 @@ func TestManifestShape(t *testing.T) {
 		out := t.TempDir()
 		touch(t, filepath.Join(out, DataDir, "x"))
 		touch(t, TempPath(out, 0))
-		cov := Coverage{Complete: true, StopReason: "completed"}
+		cov := Coverage{Complete: true, StopReason: "end_of_scope"}
 		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", SHA256: strings.Repeat("0123456789abcdef", 4)}}
 		if err := Publish(out, Meta{SchemaID: id, Groups: groups, Source: Source{Kind: "s3", URI: "s3://b/", Container: "b"}, Scope: Scope{Kind: "whole"}, Coverage: cov}, []Part{part}, nil); err != nil {
 			t.Fatal(err)
@@ -328,13 +328,13 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
-		if !m.Current() || m.MetadataVersion != reader.MetadataVersion || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
+		if !m.Current() || m.MetadataVersion != reader.MetadataVersion || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "end_of_scope" || m.Source.Container != "b" ||
 			len(m.Parts) != 1 || m.Parts[0].SHA256 != part.SHA256 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
 		}
 	}
 	legacy := `{"format":"swath-dataset","format_version":2,"schema_id":"x/v1","published_at":"2026-11-05T18:00:00Z",
-		"source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},"coverage":{"complete":true,"stop_reason":"completed"},
+		"source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},"coverage":{"complete":true,"stop_reason":"end_of_scope"},
 		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ==","md5":"ab"}]}`
 	var m Manifest
 	if err := json.Unmarshal([]byte(legacy), &m); err == nil {
@@ -426,7 +426,7 @@ func TestManifestObjectBytes(t *testing.T) {
 	for _, want := range []*int64{nil, n(0), n(12345)} {
 		m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: id,
 			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Source: Source{Kind: "s3", URI: "s3://b/"}, Scope: Scope{Kind: "whole"},
-			Coverage: Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}, CommittedObjectBytes: want,
+			Coverage: Coverage{Complete: true, StopReason: "end_of_scope", Exclusions: []string{}, Filters: []reader.Filter{}}, CommittedObjectBytes: want,
 			Parts: []ManifestPart{{Path: "data/part-00000.parquet", PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b", SHA256: strings.Repeat("0123456789abcdef", 4)}}}}
 		b, err := json.Marshal(m)
 		if err != nil {
@@ -471,7 +471,7 @@ func TestManifestFilesystem(t *testing.T) {
 	at := jsontime.Of(time.Date(2026, 11, 13, 10, 0, 0, 123456000, time.UTC))
 	for _, want := range []*FilesystemSpace{nil, {TotalBytes: 1 << 40, FreeBytes: 0, AvailableBytes: 0, MeasuredAt: at}, {TotalBytes: 100, FreeBytes: 500, AvailableBytes: 80, MeasuredAt: at}} {
 		meta := Meta{SchemaID: id, Source: Source{Kind: "local", URI: "/data"}, Scope: Scope{Kind: "whole"},
-			Coverage: Coverage{Complete: true, StopReason: "completed"}, Filesystem: want}
+			Coverage: Coverage{Complete: true, StopReason: "end_of_scope"}, Filesystem: want}
 		m := newManifest(meta, nil, func(int, Part) string { return "" })
 		b, err := json.Marshal(m)
 		if err != nil {

@@ -9,13 +9,17 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/dataset/datasettest"
+	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -178,10 +182,16 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 	}
 }
 
-// TestUnreachableResumes: a dataset run against an endpoint that is not up
-// yet stops as unreachable (exit 75) with its journal intact and resumable,
-// and swath resume lists it once the endpoint answers.
-func TestUnreachableResumes(t *testing.T) {
+// TestUnreachableLeavesNoRun: a dataset run against an endpoint that never
+// answers (a mistyped --endpoint-url, a service not up) stops as
+// unreachable (exit 75) and removes its journal and work files: nothing was
+// published, the outcome is not resumable and the report says why it is in
+// no error.json, and the corrected command runs on the same -o. Before, the
+// directory held an interrupted run that refused the corrected command,
+// and a resume, which refuses another endpoint, could not fix it (C-S2). A
+// resume of a run with parts keeps its journal when the endpoint stops
+// answering: it is still resumable.
+func TestUnreachableLeavesNoRun(t *testing.T) {
 	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
@@ -189,29 +199,148 @@ func TestUnreachableResumes(t *testing.T) {
 	host := closedPort(t)
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err := run(context.Background(), []string{"s3://bkt/", "--endpoint-url", "http://" + host, "--s3-path-style", "--s3-region", "us-east-1", "--anonymous",
-		"--report", report, "-o", dir}, io.Discard, false)
+	args := func(ep string, extra ...string) []string {
+		return append([]string{"s3://bkt/", "--endpoint-url", ep, "--s3-path-style", "--s3-region", "us-east-1", "--anonymous", "-o", dir}, extra...)
+	}
+	err := run(context.Background(), args("http://"+host, "--report", report), io.Discard, false)
 	if code := exitCode(t, err); code != exitStuck {
 		t.Fatalf("exit %d (%v)", code, err)
 	}
 	var rep unreachableReport
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.Class != listing.ClassStuck || o.Cause != source.CauseUnreachable || !o.Resumable {
+	if o := rep.Outcome; o.Class != listing.ClassStuck || o.Cause != source.CauseUnreachable || o.Resumable || o.Unrecorded != listing.UnrecordedDiscarded {
 		t.Fatalf("outcome %+v", o)
 	}
-	var saved listing.Outcome
-	readJSON(t, filepath.Join(dir, errorName), &saved)
-	if saved.Cause != source.CauseUnreachable || !saved.Resumable {
-		t.Fatalf("error.json %+v", saved)
+	if ents := dirNames(t, dir); len(ents) != 1 || ents[0] != dataset.Workspace || dataset.Resumable(dir) {
+		t.Fatalf("the unanswered run left %v", ents)
 	}
-	ln, lerr := net.Listen("tcp", host)
-	if lerr != nil {
-		t.Skipf("the port was taken meanwhile: %v", lerr)
+	if ws := dirNames(t, filepath.Join(dir, dataset.Workspace)); len(ws) != 1 || ws[0] != dataset.LockName {
+		t.Fatalf("the unanswered run left %v in the workspace", ws)
 	}
-	srv := &http.Server{Handler: s3test.Handler(s3test.Backend(t, s3test.Keys(5, 1)))}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	if err := dispatch(context.Background(), []string{"resume", dir}, io.Discard); err != nil {
-		t.Fatalf("resume once the endpoint answers: %v", err)
+	// The corrected command runs on the same output.
+	srv := httptest.NewServer(s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11))))
+	if err := run(context.Background(), args(srv.URL, "--part-size", "4KiB", "--part-interval", "0"), io.Discard, false); err != nil {
+		t.Fatalf("the corrected command: %v", err)
+	}
+	// A run with parts: stopped after them, then resumed while the
+	// endpoint refuses connections. Its journal stays: resumable.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int64
+	restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+		if op == "write" && filepath.Base(file) == "journal" && n.Add(1) == 3 { // the header and a record before it
+			return len(b) / 2, syscall.ENOSPC
+		}
+		return 0, nil
+	})
+	err = run(context.Background(), args(srv.URL, "--part-size", "4KiB", "--part-interval", "0"), io.Discard, false)
+	restore()
+	if code := exitCode(t, err); code != exitDiskFull {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	srv.Close()
+	err = dispatch(context.Background(), []string{"resume", dir, "--report", report}, io.Discard)
+	if code := exitCode(t, err); code != exitStuck {
+		t.Fatalf("resume: exit %d (%v)", code, err)
+	}
+	rep = unreachableReport{}
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.Cause != source.CauseUnreachable || !o.Resumable || !dataset.Resumable(dir) {
+		t.Fatalf("resume with parts: outcome %+v, resumable dir %v", o, dataset.Resumable(dir))
+	}
+}
+
+// dirNames is dir's entries' names.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(ents))
+	for i, e := range ents {
+		names[i] = e.Name()
+	}
+	return names
+}
+
+// TestOverwriteKeepsThePreviousDataset: --overwrite of a dataset with a
+// command that cannot run (an endpoint nothing answers) leaves the previous
+// dataset as it was: swath show and swath du --from-dataset read it, and
+// the failed attempt leaves nothing to continue. One stopped by its
+// deadline leaves it too, beside its own run, which swath show names and
+// swath resume finishes and installs. Before, --overwrite removed the
+// previous dataset first, and either failure left the directory without
+// one (C-S1).
+func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureSyncStderr(t)
+	s3test.NoCredentials(t)
+	shortGrace(t, 500*time.Millisecond)
+	tree := t.TempDir()
+	mk := func(name string) {
+		if err := os.WriteFile(filepath.Join(tree, name), []byte("12"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("a")
+	mk("b")
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{tree, "-o", dir}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var was strings.Builder
+	if err := show([]string{dir}, &was); err != nil {
+		t.Fatal(err)
+	}
+	s3args := func(ep string, extra ...string) []string {
+		return append([]string{"s3://bkt/", "--endpoint-url", ep, "--s3-path-style", "--s3-region", "us-east-1", "--anonymous", "-o", dir, "--overwrite"}, extra...)
+	}
+	err := run(context.Background(), s3args("http://"+closedPort(t)), io.Discard, false)
+	if code := exitCode(t, err); code != exitStuck {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	var now strings.Builder
+	if err := show([]string{dir}, &now); err != nil || now.String() != was.String() {
+		t.Fatalf("show after the failed overwrite: %v\n%s\nwas\n%s", err, now.String(), was.String())
+	}
+	if got, err := duRun(t, "--from-dataset", dir, "--format", "tsv"); err != nil || !strings.Contains(got, "\ntotal\t0\t2\t") {
+		t.Fatalf("du --from-dataset after the failed overwrite: %v\n%q", err, got)
+	}
+	if dataset.Staged(dir) {
+		t.Fatal("the unanswered overwrite left a run")
+	}
+	// Stopped by its deadline: the previous dataset stands beside the
+	// replacement's run, which a resume finishes and installs.
+	var slow atomic.Bool
+	slow.Store(true)
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow.Load() {
+			time.Sleep(400 * time.Millisecond)
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	err = run(context.Background(), s3args(srv.URL, "--workers", "1", "--part-size", "4KiB", "--part-interval", "0", "--max-duration", "1s"), io.Discard, false)
+	if code := exitCode(t, err); code != exitDeadline {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	now.Reset()
+	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+dir+" continues it") {
+		t.Fatalf("show after the stopped overwrite: %v\n%s", err, now.String())
+	}
+	slow.Store(false)
+	report := filepath.Join(t.TempDir(), "report.json")
+	if err := dispatch(context.Background(), []string{"resume", dir, "--report", report}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	now.Reset()
+	if err := show([]string{dir}, &now); err != nil || rep.Outcome.Class != listing.ClassOK || rep.Invocation.Out != dir || !rep.Output.Replaced ||
+		!strings.Contains(now.String(), "source s3://bkt/") || !strings.Contains(now.String(), "3000 rows") || dataset.Staged(dir) {
+		t.Fatalf("after the resume: %v %+v\n%s", err, rep.Outcome, now.String())
 	}
 }

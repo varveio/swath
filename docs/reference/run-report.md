@@ -15,7 +15,7 @@ The fields most runs need:
 | Field | What it says |
 |---|---|
 | `outcome.class`, `outcome.exit_code`, `outcome.cause` | how the attempt ended ([Exit codes](exit-codes.md)) |
-| `outcome.complete` | the listing reached the end of its scope; it is true for a filtered run too, and entries that could not be read are not counted against it (`outcome.unreadable`, the dataset's `coverage.unreadable` and `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
+| `outcome.complete` | nothing is missing from the output: the listing reached the end of its scope and read every entry (`outcome.unreadable` 0). A filtered run is complete for its filters (the dataset's `coverage.filters`: [whole-source check](../results.md#coverage-and-unreadable-entries)) |
 | `attempt.id`, `run.id` | this attempt, and the run it belongs to (the same for a run and its resumes); `error.json`, `progress.json` and the log events carry the same |
 | `output.rows_committed`, `output.committed_object_bytes` | the committed dataset's rows and the sizes of its objects, after a resume too |
 | `output.object_bytes` | the bytes of the objects this attempt listed, each name once (a hard-linked file once per link) |
@@ -27,7 +27,9 @@ The fields most runs need:
 `--report FILE` may not name a directory, a file in a directory that does not exist, the text output file,
 one of the dataset directory's own entries (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/`)
 or a path inside another swath dataset: those are refused before listing, with exit 2. A name of its own in
-the output directory, such as `DIR/attempt-1.json`, is accepted. A report that cannot be written at the end
+the output directory, such as `DIR/attempt-1.json`, is accepted. A file is replaced whole (a temporary file
+renamed over it); a device, a descriptor or a named pipe (`/dev/stderr`, `/dev/fd/3`, a FIFO) is written as it
+is, so `--report /dev/stderr` streams the report where stdout carries rows. A report that cannot be written at the end
 fails the command (exit 1). `--report -` where stdout carries rows is refused (exit 2) and prints nothing on
 stdout.
 
@@ -92,7 +94,7 @@ segment's `max_time_ns`).
 | `attempt` (`id`, `started_at`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `run` (`id`) | the run this attempt belongs to: the journal's run id, the same for the run and every resume of it (for a dataset in a bucket, the `RUN` of its `data/RUN/ATTEMPT/` parts); a run without a journal is its one attempt, and has the attempt's id. Absent for an attempt that stopped before its output was opened; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `metadata` (the metadata tier, `--metadata`), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output; how it was chosen is `diagnostics.sort_buffer`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; for a dataset, `cuts_file`, how its cut file was taken: `read` (its cuts are the prior), `absent`, or `refused` with `cuts_refused` saying why ([dataset.md](../dataset.md#the-cut-file)); without it `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
-| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `unreadable` (the count of entries that could not be read: the rows and totals leave them out; the manifest's `coverage.unreadable`), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` ([exit-codes.md](exit-codes.md)) |
+| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete` (nothing is missing from the output: the listing reached the end of its scope and `unreadable` is 0; false for a run that wrote no output; the manifest's `coverage.complete`), `stop_reason` (how the listing ended: `end_of_scope` at the end of its scope, `max_keys`, `downstream_closed`; absent for a run that wrote no output, whose `class` says why), `stop_source`, `unreadable` (the count of entries that could not be read: the rows and totals leave them out; the manifest's `coverage.unreadable`; absent before the source reported), `class` (`ok` when the command did what it was asked, `| head` included: [exit-codes.md](exit-codes.md)), `exit_code`, `resumable`, `cause`, `unrecorded` |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential |
 
 **Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
@@ -119,7 +121,9 @@ ahead of the frontier that it never emitted. `rows_retained` is kept from an int
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
 the committed dataset (`rows_retained` + `rows_emitted`; a resume that finds the dataset already committed, by
 an earlier attempt, takes it from the manifest and retains and emits nothing itself). `parts_written` and
-`parts_retained` count parts.
+`parts_retained` count parts. `replaced` is true when the committed dataset replaced a previous one in the
+output (`--overwrite`), which stayed readable until this commit installed the new one in its place
+([Overwrite and refresh](../running.md#overwrite-and-refresh)); absent otherwise.
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept), each name once: a file with several hard links counts once per link, where `swath du`'s `totals.bytes` counts it once. On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `committed_object_bytes` is the committed dataset's object bytes,
 the same sum over every row of it, as the manifest's `extensions.swath.committed_object_bytes` states it: retained parts

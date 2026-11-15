@@ -596,7 +596,7 @@ func TestShowRemoteWorkDir(t *testing.T) {
 		t.Fatalf("show: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n")
-	if len(lines) != 6 || !strings.HasPrefix(lines[0], "dataset s3://out/inv/ at "+dst.URL+": SeekParquet format ") || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") ||
+	if len(lines) != 6 || !strings.HasPrefix(lines[0], "dataset s3://out/inv/ at "+dst.URL+": SeekParquet format ") || lines[3] != "coverage: complete" ||
 		!strings.Contains(lines[4], " 3 rows, ") || lines[5] != "committed from the work directory "+work+" (finalized)" {
 		t.Fatalf("show:\n%s", shown.String())
 	}

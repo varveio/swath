@@ -128,7 +128,7 @@ func TestCloseAbandonsStalledFile(t *testing.T) {
 		w.Event("e").Int("i", int64(i)).Emit()
 	}
 	start := time.Now()
-	err := w.Close(100*time.Millisecond, "committed", "completed")
+	err := w.Close(100*time.Millisecond, "committed", "ok")
 	if took := time.Since(start); took > 5*time.Second {
 		t.Fatalf("Close took %s on a stalled file", took)
 	}

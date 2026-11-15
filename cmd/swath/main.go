@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,6 +83,11 @@ func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	if !signal.Ignored(syscall.SIGHUP) {
+		// A closed terminal or SSH session stops the run as SIGTERM does,
+		// its outcome recorded; under nohup the hangup stays ignored.
+		signal.Notify(sigs, syscall.SIGHUP)
+	}
 	// A closed stdout pipe is an error to the writer, not a fatal signal:
 	// a text stream whose reader went away ends with exit 0.
 	signal.Ignore(syscall.SIGPIPE)
@@ -128,15 +134,18 @@ func main() {
 		case sig := <-sigs:
 			cancel(&signalError{sig}) // graceful: the run stops and cleans up
 			code := exitInterrupted
-			if sig == syscall.SIGTERM {
+			switch sig {
+			case syscall.SIGTERM:
 				code = exitTerminated
+			case syscall.SIGHUP:
+				code = exitHangup
 			}
 			exitAfterGrace(code, sig.String())
 		}
 	}()
 	statusOnSignal()
 	testHooks()
-	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitCompleted {
+	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitOK {
 		exit(code)
 	}
 }
@@ -150,8 +159,8 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 	var pe *textout.ProjectionError
 	switch {
 	case err == nil && sum.Outcome.StopReason == listing.StopDownstreamClosed:
-	case err == nil && sum.Outcome.Unreadable > 0:
-		err = unreadableError(sum.Outcome.Unreadable)
+	case err == nil && sum.Outcome.Unreadables() > 0:
+		err = unreadableError(sum.Outcome.Unreadables())
 	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
 	case err == nil && !sum.Outcome.Complete:
@@ -218,7 +227,11 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 			return nil
 		}
 	}
-	if err := dataset.ReplaceJSON(path, r, dataset.Durable); err != nil {
+	write := func() error { return dataset.ReplaceJSON(path, r, dataset.Durable) }
+	if streamed(path) {
+		write = func() error { return writeStream(path, r) }
+	}
+	if err := write(); err != nil {
 		// The attempt is named, so a supervisor never takes an older
 		// report (another attempt's) for this one's outcome.
 		id := ""
@@ -228,6 +241,34 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 		return fmt.Errorf("the report of attempt %s is not written to %s: %w", id, path, err)
 	}
 	return nil
+}
+
+// streamed says the report goes to path by writing it, never by renaming a
+// file over its name: an existing name that is not a regular file (a
+// device, a FIFO, a socket: /dev/stderr, a named pipe), or a descriptor's
+// name (/dev/fd/N, /proc/self/fd/N, resolved by checkSidePaths), whatever
+// it reaches.
+func streamed(path string) bool {
+	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
+		return true
+	}
+	dir := filepath.Dir(path)
+	return dir == "/dev" || dir == "/dev/fd" || filepath.Base(dir) == "fd" && filepath.Dir(filepath.Dir(dir)) == "/proc"
+}
+
+// writeStream writes r to path, opened as it is, in ReplaceJSON's
+// encoding.
+func writeStream(path string, r listing.Report) error {
+	b, err := dataset.EncodeJSON(r)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	return errors.Join(err, f.Close())
 }
 
 // reportFailed is the command's error once the report could not be
@@ -255,6 +296,7 @@ func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
+	o = o.withCoverage(r.Outcome)
 	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, writeReport(report, r, stdout))
 }
 
@@ -1021,7 +1063,7 @@ type runEnd struct {
 // statistics stand.
 func oneLine(sum listing.Report, out outcome, started bool) bool {
 	switch {
-	case out.ExitCode == exitCompleted:
+	case out.ExitCode == exitOK:
 		return false
 	case out.ExitCode == exitUsage:
 		return true
@@ -1045,11 +1087,12 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		failing = "; every request was failing: " + end.failing
 		out.Message += failing
 	}
-	if err != nil && out.ExitCode == exitCompleted {
+	if err != nil && out.ExitCode == exitOK {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
 		account(&sum.Outcome, out)
 		alreadyComplete(stdout, o.report, dir, &sum)
+		elog().ended(out.withCoverage(sum.Outcome))
 		return reportFailed(nil, writeReport(o.report, sum, stdout))
 	}
 	if dir != "" && !settled && (err != nil || unrecorded != "") {
@@ -1062,7 +1105,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if unrecorded == "" {
 			unrecorded = "stopped before owning the output"
 		}
-		if !brief || o.term.verbose > 0 {
+		if (!brief || o.term.verbose > 0) && unrecorded != listing.UnrecordedDiscarded {
 			reportUnrecorded(dir, unrecorded)
 		}
 	}
@@ -1071,13 +1114,18 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		committedAccount(dir, &sum)
 	}
 	sum.Outcome.Unrecorded = unrecorded
+	out = out.withCoverage(sum.Outcome)
+	if err == nil {
+		elog().ended(out)
+	}
 	// The report goes out on failure too: its outcome names the error.
 	rerr := writeReport(o.report, sum, stdout)
+	// Entries left out say so, whatever the statistics' gating, before the
+	// closing block whose verdict they explain.
+	reportUnreadable(&sum)
 	if !brief || o.term.stats.set {
 		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	}
-	// Entries left out say so, whatever the statistics' gating.
-	reportUnreadable(&sum)
 	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
 		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
 	}

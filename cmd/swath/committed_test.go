@@ -48,7 +48,7 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 	if has := strings.Contains(string(raw), `"committed_object_bytes"`); has != (want != nil) {
 		t.Fatalf("%s: committed_object_bytes present %v", name, has)
 	}
-	class, code := listing.ClassCompleted, exitCompleted
+	class, code := listing.ClassOK, exitOK
 	if !m.Coverage.Complete {
 		class, code = listing.ClassIncomplete, exitIncomplete
 	}
@@ -181,11 +181,11 @@ func TestRemoteResumeFindsCommit(t *testing.T) {
 			}
 			report := filepath.Join(t.TempDir(), "report.json")
 			err = resume(ctx, []string{work, "--report", report, "--output-gcs-credentials-file", serviceAccount(t, "tok2")}, io.Discard)
-			code := exitCompleted
+			code := exitOK
 			if err != nil {
 				code = exitCode(t, err)
 			}
-			if wantCode := map[bool]int{true: exitCompleted, false: exitIncomplete}[m.Coverage.Complete]; code != wantCode {
+			if wantCode := map[bool]int{true: exitOK, false: exitIncomplete}[m.Coverage.Complete]; code != wantCode {
 				t.Fatalf("resume: exit %d, want %d (%v)", code, wantCode, err)
 			}
 			b, err := os.ReadFile(report)

@@ -61,6 +61,7 @@ import (
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/replay/legacy/javaera"
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/source"
 )
 
 // SchemaID is the schema id of every dataset Run writes: key, size,
@@ -301,7 +302,7 @@ func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Sc
 		SchemaID: sch.ID,
 		Source:   dataset.Source{Kind: "capture", URI: filepath.ToSlash(capture)},
 		Scope:    dataset.Scope{Kind: "whole"},
-		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: jsontime.Of(start), ListingFinishedAt: jsontime.Of(time.Now())},
+		Coverage: dataset.Coverage{Complete: true, StopReason: source.StopEndOfScope, ListingStartedAt: jsontime.Of(start), ListingFinishedAt: jsontime.Of(time.Now())},
 	}
 	// The manifest is the commit: it is installed only while the output is
 	// still the directory locked.

@@ -64,7 +64,7 @@ func seedFrom(cfg Config, src registry.Source) (*Prior, error) {
 	if !ok {
 		return nil, bad("the %s source does not list in key ranges", src.Locator().Kind)
 	}
-	if cfg.Output.Dir != "" && samePath(path, cfg.Output.Dir) {
+	if out := cfg.Output.final(); out != "" && samePath(path, out) {
 		return nil, bad("the prior is the output directory (write each refresh to a new directory)")
 	}
 	fi, err := os.Stat(path)

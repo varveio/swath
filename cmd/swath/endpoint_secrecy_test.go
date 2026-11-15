@@ -132,7 +132,7 @@ func TestSecretsNeverEchoed(t *testing.T) {
 				if args[0] == "list" || args[0] == "resume" {
 					argv = append(argv, "--report", report)
 				}
-				if code := conclude(dispatch(context.Background(), argv, &stdout)); code == exitCompleted {
+				if code := conclude(dispatch(context.Background(), argv, &stdout)); code == exitOK {
 					t.Fatalf("exit 0; stderr %q", stderr.String())
 				}
 				raw, _ := os.ReadFile(report)
@@ -304,7 +304,7 @@ func TestSecrecyRunOutputs(t *testing.T) {
 				argv := append(append([]string{"--log-format", format, "-vvv"}, cmd...), c.args...)
 				argv = append(append(argv, "--stall-timeout", "1s", "--report", "-", "-o", filepath.Join(t.TempDir(), "ds")), unjournaled...)
 				var stdout bytes.Buffer
-				if code := conclude(dispatch(t.Context(), argv, &stdout)); code == exitCompleted {
+				if code := conclude(dispatch(t.Context(), argv, &stdout)); code == exitOK {
 					t.Fatalf("exit 0; stderr %q", stderr.String())
 				}
 				for what, b := range map[string][]byte{"stderr": []byte(stderr.String()), "stdout": stdout.Bytes()} {
@@ -321,7 +321,7 @@ func TestSecrecyRunOutputs(t *testing.T) {
 				for _, ev := range []string{evRequest, evRetry, evWarning, evOutcome} {
 					want := `"event":"` + ev + `"`
 					if format == logText {
-						want = map[string]string{evRequest: "swath: request GET ", evRetry: "swath: attempt 1 ", evWarning: "swath: warning: Azure Blob ", evOutcome: "INCOMPLETE (stuck)"}[ev]
+						want = map[string]string{evRequest: "swath: request GET ", evRetry: "swath: attempt 1 ", evWarning: "swath: warning: Azure Blob ", evOutcome: "stopped: no progress within --stall-timeout"}[ev]
 					}
 					if !strings.Contains(stderr.String(), want) {
 						t.Errorf("no %s event (%q) on stderr: %s", ev, want, stderr.String())
@@ -383,7 +383,7 @@ func TestSecretValuesNeverEchoed(t *testing.T) {
 			}
 			args = append(append(args, "--report", report, "--max-duration", "2s"), unjournaled...)
 			var stdout bytes.Buffer
-			if code := conclude(dispatch(context.Background(), args, &stdout)); code == exitCompleted {
+			if code := conclude(dispatch(context.Background(), args, &stdout)); code == exitOK {
 				t.Errorf("%s %s %q: exit 0", format, r.root, r.args)
 			}
 			logs.Store(nil)

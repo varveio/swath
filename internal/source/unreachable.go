@@ -28,6 +28,14 @@ var ErrUnreachable = errors.New("unreachable")
 // ErrUnreachable.
 const CauseUnreachable = "unreachable"
 
+// Causes whose fix is another command, not a resume: the bucket or
+// container does not exist, or is in another region (the bucket and the
+// region are a run's identity). objhttp labels its failures with them.
+const (
+	CauseNotFound       = "not_found"
+	CauseRegionRedirect = "region_redirect"
+)
+
 // Unreachable reports a connection that failed deterministically before
 // any HTTP exchange: refused, the host not found, or no route to the
 // network or host. Repeating it gives the same answer until someone starts

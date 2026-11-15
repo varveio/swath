@@ -88,9 +88,10 @@ type Scope struct {
 	Prefix *string `json:"prefix"` // with "prefix"
 }
 
-// Coverage records how much of the scope the listing reached: whether it
-// completed, why it stopped, how many entries it could not read, and the filters
-// that limited it (a filesystem listing kept to one filesystem records
+// Coverage records how much of the scope the listing reached: whether it is
+// complete (nothing missing: the end of the scope reached and no entry
+// unreadable), why it stopped, how many entries it could not read, and the
+// filters that limited it (a filesystem listing kept to one filesystem records
 // one_file_system). Exclusions name what the listing left out by design
 // (an output directory inside a listed tree). A listing is not a
 // point-in-time snapshot: entries that changed while it ran may or may

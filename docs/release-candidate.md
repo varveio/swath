@@ -26,9 +26,9 @@ rc.2 release binary and a build of the code these pages describe.
 |---|---|---|
 | An entry cannot be read (a directory without permission) | warning `1 entry could not be read: the output leaves them out` (`the totals` for `swath du`), exit 0; nothing with `-q` | warning, then `swath: 1 entry could not be read and is missing from the output`, also with `-q`; exit 3 (`incomplete`) |
 | The source directory itself cannot be read | warning, empty totals or listing, exit 0 | `swath: DIR: permission denied`, exit 1 |
-| `swath show` | `coverage ... skipped=1 ...` | `coverage ... unreadable=1 ...` |
-| The manifest | `extensions.swath.coverage.skipped_entries` | `extensions.swath.coverage.unreadable` |
-| The run report | version 5: `outcome.unreadable` is true or false and `outcome.entry_errors` the count; class `completed` | version 7: `outcome.unreadable` is the count; class `incomplete` |
+| `swath show` | `coverage ... skipped=1 ...` | `coverage: partial: 1 unreadable entry` |
+| The manifest | `extensions.swath.coverage.skipped_entries`, `complete` true | `extensions.swath.coverage.unreadable`, `complete` false |
+| The run report | version 5: `outcome.unreadable` is true or false and `outcome.entry_errors` the count; class `completed` | version 7: `outcome.unreadable` is the count, `complete` false; class `incomplete` |
 
 ## Listings
 

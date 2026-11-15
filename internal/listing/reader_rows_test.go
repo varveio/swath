@@ -104,7 +104,7 @@ func TestReaderDecodesS3Objects(t *testing.T) {
 		t.Fatalf("decoded\n%+v\nwant\n%+v", got, want)
 	}
 	if meta.SchemaID != reader.S3ObjectsV1 || !meta.Swath || meta.PublishedAt == nil || *meta.Source.Kind != "s3" || meta.Source.Container != nil ||
-		*meta.Scope.Kind != "whole" || meta.Scope.Prefix != nil || !*meta.Coverage.Complete || *meta.Coverage.StopReason != "completed" ||
+		*meta.Scope.Kind != "whole" || meta.Scope.Prefix != nil || !*meta.Coverage.Complete || *meta.Coverage.StopReason != "end_of_scope" ||
 		*meta.Coverage.Unreadable != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 ||
 		meta.Collected == nil || meta.Collected.Metadata != nil || meta.Collected.Columns == nil || len(meta.Collected.Columns) != 0 {
 		t.Fatalf("metadata %+v", meta)

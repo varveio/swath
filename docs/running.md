@@ -153,7 +153,9 @@ and erases it before its table. At the end, runs over
 1.5 s, runs that wrote output and runs that did not complete print the statistics on stderr (objects,
 time, keys/s, API calls, mean and peak in flight, throttles and retries when any, the estimate, the parts or
 file written, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
-An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
+A run that did not complete starts the block with its verdict, the cause in it (`partial: 1 unreadable entry`,
+`stopped: --max-duration reached`, `interrupted`), and the `swath resume DIR` command when it is resumable;
+warnings come before the block.
 stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
@@ -227,15 +229,17 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 
 ## Stopping and resuming
 
-A dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
+A dataset run of an object store that stops with exit 74, 75, 124, 129, 130 or 143 can be resumed, and so can
+one that stopped with exit 1 when its outcome says `resumable` (a fixed credential or permission); what a
 supervisor does with each code is in [Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
 "Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
 again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
 
-**Signals.** SIGINT and SIGTERM stop the run gracefully: published parts and the journal stay, and
-`error.json` and the report are written. Only the first signal counts; the forced exit follows 15 s later. SIGKILL, a panic or an
-OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
+**Signals.** SIGINT, SIGTERM and SIGHUP (a closed terminal or SSH session; not under `nohup`) stop the run
+gracefully: published parts and the journal stay, and `error.json` and the report are written. Only the first
+signal counts; the forced exit follows 15 s later. SIGKILL, a panic, SIGQUIT or an OOM kill loses nothing
+durable: the journal is crash-safe and the resume reconciles.
 
 **The workspace.** `DIR/.swath/` holds `lock` (one process per output), `journal` (`swath show --journal`),
 `parts/` (encoded parts not yet published), `spill/` (disposable spill, removed by the next run, and
@@ -298,14 +302,18 @@ was. Restore the original environment, or start over.
 
 ## Overwrite and refresh
 
-`--overwrite` is destructive, not atomic. Under the output lock, before anything is listed, it removes the
-previous `manifest.json` and then the rest of the old dataset. From then until the new manifest is installed
-the path holds no dataset, and a failed run leaves none.
+`--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into the
+output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
+whose parts are removed after. A run that fails or is stopped leaves the previous dataset as it was; a stopped
+object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new `--overwrite`
+starts it over. The previous dataset stays whole until the new manifest is installed. The installation
+reuses the part paths (`data/part-NNNNN.parquet`), so a reader that is reading the dataset while it runs can
+find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
 
-Where readers must always find a dataset (a periodic refresh), write each run to a new directory and never
-overwrite it. Switch readers through a pointer outside the datasets (a generation file, a database row, a
-symlink swapped by rename) once the new directory's `manifest.json` exists, and delete an old generation only
-when no reader uses it.
+Where readers must always find a dataset, even then (a periodic refresh read around the clock), write each run
+to a new directory and never overwrite it. Switch readers through a pointer outside the datasets (a generation
+file, a database row, a symlink swapped by rename) once the new directory's `manifest.json` exists, and delete
+an old generation only when no reader uses it.
 
 ### Seeding a refresh from the previous dataset
 
@@ -347,8 +355,8 @@ it. The report's `invocation.prior` names what was used.
 ## Reading the output
 
 A reader starts only once `manifest.json` exists and reads the parts it lists (never a glob of `data/`). An
-application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
-`completed`, `coverage.unreadable` 0, `coverage.filters` empty, `scope.kind` `whole`, the `source` it
+application that needs the whole source checks the coverage: `coverage.complete` true (nothing missing: the end
+of the scope reached and no entry unreadable), `coverage.filters` empty, `scope.kind` `whole`, the `source` it
 expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
 ([The swath dataset](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.

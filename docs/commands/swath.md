@@ -119,9 +119,10 @@ sends the rows to stdout. Everything else goes to stderr:
     1 file · 142 KiB written · peak RSS 91.3 MiB
   ```
 
-  A run that did not complete starts with `INCOMPLETE (class)` and, when it can be resumed, the command to do
-  it. `--stats` and `--no-stats` force them on or off. `--color` colors the progress line and the statistics
-  (`INCOMPLETE` in red).
+  A run that did not complete starts with its verdict, the cause in it (`partial: 1 unreadable entry`,
+  `stopped: --max-duration reached`, `interrupted`), and, when it can be resumed, the command to do it; the
+  warnings that explain it come before the block. `--stats` and `--no-stats` force them on or off. `--color`
+  colors the progress line and the statistics (the verdict in red).
 
 `-v` adds a line saying where the rows go (`swath: listing s3://bkt to all.tsv.zst (attempt 57ee...)`) and
 shows progress as appended records; `-vv` adds every failed request and retry with its cause; `-vvv` every

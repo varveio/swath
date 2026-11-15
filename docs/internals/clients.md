@@ -37,7 +37,9 @@ clients are described in [providers.md](providers.md) and the page of each provi
   or host) is retried as any transport failure until `source.UnreachableGrace` (30 s, at most half an explicit
   `--stall-timeout`) has passed since the run's first such failure; then the failure is final, class
   `unreachable` (`source.ErrUnreachable`), naming the endpoint's scheme and host and the cause, and the command
-  stops the run as stuck early: exit 75, cause `unreachable`, resumable as the journal allows. Any answer, from
+  stops the run as stuck early: exit 75, cause `unreachable`. A journal without parts is then removed with the
+  run's work files (`runJournal.discardUnanswered`: nothing was listed, so the corrected command runs on the same
+  output); one with parts stays, resumable. Any answer, from
   any client, turns it off for the rest of the run: the Guard records it as soon as a response's headers arrive,
   whatever the status and however slowly the body follows, and also a failure that is not deterministic (a
   timeout, a cut connection). A client first used later (a destination, a token endpoint) is then retried to the
@@ -45,7 +47,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
   counts: its endpoint is not the one listed. The state is one atomic: an answer and the expiry both move it by
   compare-and-swap, so no caller stops the run once an answer is recorded, and once off it costs one atomic load.
   A refused certificate needs no grace: it is never retried. The counters `unreachable.attempts` and
-  `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`, `TestUnreachableResumes`,
+  `unreachable.stops` show whether it engaged (`TestUnreachableEndpoint`, `TestUnreachableLeavesNoRun`,
   `TestUnreachableGraceRecovers`, `TestUnreachableAfterAnswer`, `TestUnreachableRunWide`,
   `TestUnreachableSlowAnswer`, `TestUnreachableAnswerRace`, `TestUnreachableStates`).
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's

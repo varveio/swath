@@ -155,6 +155,126 @@ func prepareOut(absOut string, replace bool) error {
 	return nil
 }
 
+// A run that replaces the committed dataset in out (--overwrite) leaves it
+// readable until the replacement is committed: it lists into NextDir(out),
+// a dataset directory of its own inside out's workspace, and its commit
+// installs that dataset in out (InstallNext); the replaced dataset's
+// entries are removed after (RemoveNext).
+const (
+	nextName     = "next"
+	retiringName = "retiring" // in NextDir: the replaced entries, while they are moved
+	retiredName  = "retired"  // in NextDir: the replaced entries, all moved
+)
+
+// NextDir is the dataset directory of the run that replaces out's dataset.
+func NextDir(out string) string { return filepath.Join(out, Workspace, nextName) }
+
+// InstallPending reports whether NextDir(out) holds a committed dataset not
+// yet installed in out (its manifest is still there).
+func InstallPending(out string) bool {
+	fi, err := os.Lstat(filepath.Join(NextDir(out), ManifestName))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// Staged reports whether out holds a replacement to continue (an
+// interrupted journaled run in NextDir(out)) or to install
+// (InstallPending); the leftovers of one installed are neither.
+func Staged(out string) bool {
+	if InstallPending(out) {
+		return true
+	}
+	if _, err := os.Lstat(filepath.Join(NextDir(out), retiredName)); err == nil {
+		return false
+	}
+	return Resumable(NextDir(out))
+}
+
+// NextFound reports whether out holds a replacement's directory: one to
+// continue (Staged), to install (InstallPending), or the leftovers of one
+// installed, which RemoveNext removes.
+func NextFound(out string) bool {
+	_, err := os.Lstat(NextDir(out))
+	return err == nil
+}
+
+// InstallNext installs the dataset committed in NextDir(out) in out, in
+// place of out's (nothing when none is pending): first every entry of out's
+// dataset moves into NextDir, the manifest first, so that from then on out
+// holds no committed dataset (the retired directory, renamed into place
+// once all are moved, records that); then the new dataset's data/ moves
+// into out, and its manifest last: that rename is the installation. Each
+// step is a rename, synced: a crash at any point leaves a state that
+// InstallNext, run again, finishes. The part paths are reused: a reader of
+// the old manifest during the installation can find its parts missing or
+// replaced. The caller holds out's lock.
+func InstallNext(out string) error {
+	if !InstallPending(out) {
+		return nil
+	}
+	next := NextDir(out)
+	retired := filepath.Join(next, retiredName)
+	if _, err := os.Lstat(retired); errors.Is(err, os.ErrNotExist) {
+		retiring := filepath.Join(next, retiringName)
+		if err := os.MkdirAll(retiring, 0o755); err != nil {
+			return fmt.Errorf("retire the replaced dataset: %w", err)
+		}
+		for _, n := range append(slices.Clone(commitEntries), ownEntries...) {
+			if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
+				if err := os.Rename(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
+					return fmt.Errorf("retire the replaced dataset: %w", err)
+				}
+			}
+		}
+		if err := errors.Join(syncDir(retiring), syncDir(out)); err != nil {
+			return fmt.Errorf("retire the replaced dataset: %w", err)
+		}
+		if err := os.Rename(retiring, retired); err != nil {
+			return fmt.Errorf("retire the replaced dataset: %w", err)
+		}
+		if err := syncDir(next); err != nil {
+			return fmt.Errorf("retire the replaced dataset: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("install the replacement: %w", err)
+	}
+	if err := faults.At("install-retired"); err != nil {
+		return err
+	}
+	for _, n := range ownEntries {
+		if n == ManifestName {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(next, n)); err == nil {
+			if err := os.Rename(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
+				return fmt.Errorf("install the replacement: %w", err)
+			}
+		}
+	}
+	if err := syncDir(out); err != nil {
+		return fmt.Errorf("install the replacement: %w", err)
+	}
+	if err := faults.At("install-data"); err != nil {
+		return err
+	}
+	if err := os.Rename(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
+		return fmt.Errorf("install the replacement: %w", err)
+	}
+	if err := syncDir(out); err != nil {
+		return fmt.Errorf("install the replacement: %w", err)
+	}
+	return nil
+}
+
+// RemoveNext removes what an installed replacement left in NextDir(out),
+// the replaced dataset among it, and the remains of a replacement that
+// holds nothing to continue or install; a replacement Staged is kept.
+func RemoveNext(out string) error {
+	if Staged(out) {
+		return nil
+	}
+	return os.RemoveAll(NextDir(out))
+}
+
 // LocateInside reports whether out (which must exist) lies below root, by
 // walking out's physical ancestors and comparing directory identity with
 // root. rel is out's '/'-separated path below root.

@@ -93,7 +93,7 @@ func localCacheFixture(t *testing.T) string {
 	mustDo(t, err)
 	mustDo(t, dataset.Publish(dir, dataset.Meta{SchemaID: localfs.Schema.ID, Groups: localfs.Schema.Groups,
 		Source: dataset.Source{Kind: "local", URI: "/fixture"}, Scope: dataset.Scope{Kind: "whole"},
-		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}}, parts, nil))
+		Coverage: dataset.Coverage{Complete: true, StopReason: "end_of_scope", Exclusions: []string{}, Filters: []reader.Filter{}}}, parts, nil))
 	return dir
 }
 
