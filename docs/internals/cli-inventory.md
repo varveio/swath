@@ -161,6 +161,7 @@ decision to add it later).
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
 | 143: SIGTERM | 143 `terminated` | kept | – |
+| SIGHUP: killed the process, no outcome | 129 `terminated`, `stop_source` `sighup`, as SIGTERM; ignored under `nohup` | added | 2026-11-15 interface audit (C-S5) |
 | Protocol violation outranks a resumable code and marks the run unresumable | exit 1, `cause` `protocol`, `resumable: false`; the journal's terminal `unresumable` frame; `swath resume` refuses | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `f29d047`) |
 
 ## Diagnostics

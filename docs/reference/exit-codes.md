@@ -12,16 +12,23 @@ directory whose run did not commit, `error.json` carry the same code with its cl
 | 74 | `disk_full` | a part, a journal record or the manifest could not be written: the filesystem or the quota is full (ENOSPC, EDQUOT; `cause` `no_space`); or listing waited on a full spill cap for `--spill-wait-timeout` (`cause` `spill_budget`) | yes, once there is space |
 | 75 | `stuck`, `unresolved` | `stuck`: no progress for `--stall-timeout` (10 minutes by default; a warning at half). `unresolved` (`cause` `commit_unresolved`): a dataset in a bucket whose manifest's creation could neither be confirmed nor refuted; every part is kept | yes |
 | 124 | `deadline` | `--max-duration` reached before the output was finished | yes |
+| 129 | `terminated` | SIGHUP: the terminal or SSH session closed (`stop_source` `sighup`). Under `nohup`, which ignores it, the run goes on | yes |
 | 130 | `interrupted` | SIGINT | yes |
 | 143 | `terminated` | SIGTERM | yes |
 
 "Resumable" means a dataset run of an object store, whose journal is intact: `swath resume DIR` continues it.
 A local tree, text output and `swath du` keep no journal and are run again.
 
-After SIGINT or SIGTERM swath stops and records its outcome, then on Linux and macOS dies by that signal, as
-any command a signal stops: a shell reports 130 or 143 and a shell loop around swath stops too, while a program
-that waits for it sees the signal (Python's `returncode` is -2 or -15). The report and `error.json` say 130 or 143.
-On Windows the process exits with the code. A forced exit after a signal (below) ends the same way.
+After SIGINT, SIGTERM or SIGHUP swath stops and records its outcome, then on Linux and macOS dies by that
+signal, as any command a signal stops: a shell reports 130, 143 or 129 and a shell loop around swath stops too,
+while a program that waits for it sees the signal (Python's `returncode` is -2, -15 or -1). The report and
+`error.json` say 130, 143 or 129. On Windows the process exits with the code. A forced exit after a signal
+(below) ends the same way.
+
+**A crash.** Exit 2 with no outcome (no `swath: outcome` line with `-v`, no `outcome` event, no report) is not
+a usage error: the Go runtime ended the process, on a panic or on SIGQUIT (`kill -QUIT` prints every
+goroutine's stack and exits 2). Nothing was recorded, as after a kill: treat it as one, and `swath resume DIR`
+continues a journaled run.
 
 The `cause` of exit 75 says what rose while nothing progressed:
 
@@ -45,12 +52,12 @@ answers.
 |---|---|
 | 0 | done |
 | 3 | the output is usable but partial: accept it, or fix the permissions and run again |
-| 130, 143 | `swath resume DIR --report NEW-FILE` |
+| 129, 130, 143 | `swath resume DIR --report NEW-FILE` |
 | 75 | resume once; a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
 | 74 | free space, or move the directory to a larger disk, then `swath resume DIR`; `spill_budget`: `swath resume DIR --spill-budget SIZE` with a larger cap, on a disk with room for it (a plain resume keeps a recorded `--spill-budget`; with the default cap it derives one from the free space it finds). With the default cap, growing the disk under the running process avoids the stop: the cap follows it |
 | 124 | resume only within a separate budget of attempts or total time: a source that keeps a run busy without finishing reaches 124 on every attempt; past the budget, a person |
 | 1 | a person fixes the cause; then `swath resume DIR` when the outcome is `resumable`, else a new run |
-| 2 | a person fixes the command |
+| 2 | a person fixes the command; with no outcome or report, a crash: as a kill, `swath resume DIR` |
 
 Give every unattended attempt a `--max-duration`, and set the supervisor's own kill deadline above
 `--max-duration` plus 20 seconds: after a stop swath waits up to 15 seconds for the run to stop, then records

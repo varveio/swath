@@ -229,15 +229,17 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 
 ## Stopping and resuming
 
-A dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
+A dataset run of an object store that stops with exit 74, 75, 124, 129, 130 or 143 can be resumed, and so can
+one that stopped with exit 1 when its outcome says `resumable` (a fixed credential or permission); what a
 supervisor does with each code is in [Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
 "Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
 again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
 
-**Signals.** SIGINT and SIGTERM stop the run gracefully: published parts and the journal stay, and
-`error.json` and the report are written. Only the first signal counts; the forced exit follows 15 s later. SIGKILL, a panic or an
-OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
+**Signals.** SIGINT, SIGTERM and SIGHUP (a closed terminal or SSH session; not under `nohup`) stop the run
+gracefully: published parts and the journal stay, and `error.json` and the report are written. Only the first
+signal counts; the forced exit follows 15 s later. SIGKILL, a panic, SIGQUIT or an OOM kill loses nothing
+durable: the journal is crash-safe and the resume reconciles.
 
 **The workspace.** `DIR/.swath/` holds `lock` (one process per output), `journal` (`swath show --journal`),
 `parts/` (encoded parts not yet published), `spill/` (disposable spill, removed by the next run, and

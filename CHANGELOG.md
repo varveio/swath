@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: SIGHUP (a closed terminal or SSH session) stops a run as SIGTERM does: its outcome is recorded (class
+  `terminated`, `stop_source` `sighup`), and the process dies by the signal (129); it killed the run with no
+  outcome, report or `error.json`. Under `nohup` it stays ignored. The exit codes page says that exit 2 with no
+  outcome is a crash (a panic, SIGQUIT), resumed as a kill.
 - Go port: `--report` naming a device, a descriptor or a named pipe (`/dev/stderr`, `/dev/fd/3`, a FIFO) is
   written there; it failed after the run (exit 1), and a FIFO was replaced by a regular file.
 - Go port: `swath resume DIR` writes a report only when given `--report`; it no longer replays the run's

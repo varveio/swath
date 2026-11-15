@@ -82,6 +82,11 @@ func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	if !signal.Ignored(syscall.SIGHUP) {
+		// A closed terminal or SSH session stops the run as SIGTERM does,
+		// its outcome recorded; under nohup the hangup stays ignored.
+		signal.Notify(sigs, syscall.SIGHUP)
+	}
 	// A closed stdout pipe is an error to the writer, not a fatal signal:
 	// a text stream whose reader went away ends with exit 0.
 	signal.Ignore(syscall.SIGPIPE)
@@ -128,8 +133,11 @@ func main() {
 		case sig := <-sigs:
 			cancel(&signalError{sig}) // graceful: the run stops and cleans up
 			code := exitInterrupted
-			if sig == syscall.SIGTERM {
+			switch sig {
+			case syscall.SIGTERM:
 				code = exitTerminated
+			case syscall.SIGHUP:
+				code = exitHangup
 			}
 			exitAfterGrace(code, sig.String())
 		}

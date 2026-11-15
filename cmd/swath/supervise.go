@@ -37,6 +37,7 @@ const (
 	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR), or --spill-wait-timeout; resumable when the journal is intact
 	exitStuck       = 75  // no progress for the stall timeout, or a bucket commit unresolved; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
+	exitHangup      = 129 // SIGHUP (a closed terminal or SSH session), as SIGTERM: a graceful stop; resumable
 	exitInterrupted = 130 // SIGINT
 	exitTerminated  = 143 // SIGTERM, a graceful stop; resumable
 )
@@ -223,6 +224,8 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, causeSpillBudget
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
 		o.Class, o.ExitCode = listing.ClassTerminated, exitTerminated
+	case errors.As(cause, &se) && se.sig == syscall.SIGHUP:
+		o.Class, o.ExitCode = listing.ClassTerminated, exitHangup
 	case errors.As(cause, &se):
 		o.Class, o.ExitCode = listing.ClassInterrupted, exitInterrupted
 	case errors.Is(err, listing.ErrComplete):
@@ -282,6 +285,8 @@ func stopSource(cause error) string {
 		return "spill_wait"
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
 		return "sigterm"
+	case errors.As(cause, &se) && se.sig == syscall.SIGHUP:
+		return "sighup"
 	case errors.As(cause, &se):
 		return "sigint"
 	}

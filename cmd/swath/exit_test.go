@@ -129,12 +129,13 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143 and 130: signals, graceful, resumable. The process dies by the
-	// signal once it has cleaned up (a shell sees 128+n), so a calling
-	// shell loop stops; before, it exited with the code. The interrupted
-	// run is traced: its trace parses and ends in run_end with the outcome.
+	// 143, 130 and 129: signals, graceful, resumable. The process dies by
+	// the signal once it has cleaned up (a shell sees 128+n), so a calling
+	// shell loop stops; before, it exited with the code, and a hangup (a
+	// dropped SSH session) killed it with no outcome. The interrupted run is
+	// traced: its trace parses and ends in run_end with the outcome.
 	slow.Store(true)
-	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted} {
+	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted, syscall.SIGHUP: exitHangup} {
 		dir := filepath.Join(t.TempDir(), "sig")
 		args := s3args("bkt", dir)
 		trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
@@ -150,7 +151,7 @@ func TestExitCodes(t *testing.T) {
 		if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
 			t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
 		}
-		if o := outcome(dir); o.ExitCode != want || !o.Resumable {
+		if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != listing.ClassTerminated || o.StopSource != "sighup") {
 			t.Fatalf("%v: %+v", sig, o)
 		}
 		if sig != syscall.SIGINT {
@@ -172,6 +173,18 @@ func TestExitCodes(t *testing.T) {
 		if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
 			t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
 		}
+	}
+	// Under nohup (SIGHUP ignored when swath starts) a hangup changes
+	// nothing: the run completes.
+	nohup := filepath.Join(t.TempDir(), "nohup")
+	cmd := exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, bin}, s3args("bkt", nohup)...)...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	cmd.Process.Signal(syscall.SIGHUP)
+	if c, _ := exitStatus(t, cmd.Wait()); c != exitOK || !dataset.Committed(nohup) {
+		t.Fatalf("nohup: exit %d, committed %v", c, dataset.Committed(nohup))
 	}
 	// 75: stuck, when nothing progresses for the stall timeout.
 	slow.Store(false)
