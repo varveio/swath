@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a dataset run that no request ever answered (exit 75, cause `unreachable`: a mistyped endpoint, a
+  service not up) and that published no part removes its journal and work files, so the corrected command runs
+  on the same `-o`; it left an interrupted run that refused the corrected command, while a resume refused another
+  endpoint. A resume of a run with parts keeps its journal.
 - Go port: SIGHUP (a closed terminal or SSH session) stops a run as SIGTERM does: its outcome is recorded (class
   `terminated`, `stop_source` `sighup`), and the process dies by the signal (129); it killed the run with no
   outcome, report or `error.json`. Under `nohup` it stays ignored. The exit codes page says that exit 2 with no

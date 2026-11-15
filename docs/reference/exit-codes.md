@@ -38,7 +38,7 @@ The `cause` of exit 75 says what rose while nothing progressed:
 | `stuck_timeouts` | requests kept running past `--request-timeout` |
 | `stuck_empty_chain` | the service kept answering empty pages with a new continuation token |
 | `stuck_no_rows` | none of these: requests failing or hanging, or a stopped pipeline |
-| `unreachable` | found early: nothing in the run has answered, and every connection was refused, its host not found or unroutable for 30 s (at most half `--stall-timeout`); the message names the endpoint |
+| `unreachable` | found early: nothing in the run has answered, and every connection was refused, its host not found or unroutable for 30 s (at most half `--stall-timeout`); the message names the endpoint. A run that had published no part removes its journal and work files and writes no `error.json` (`resumable` false): the corrected command runs on the same `-o` |
 
 The other causes are the provider's failure class (`auth`, `access_denied`, `not_found`, `region_redirect`, `throttle`, `timeout`,
 `parse`, `unsupported`), `protocol`, `no_space`, `spill_budget`, the limits named above, and a dataset in a bucket's `commit_unresolved`,
@@ -53,7 +53,7 @@ answers.
 | 0 | done |
 | 3 | the output is usable but partial: accept it, or fix the permissions and run again |
 | 129, 130, 143 | `swath resume DIR --report NEW-FILE` |
-| 75 | resume once; a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
+| 75 | resume once (`unreachable` and not `resumable`: fix the endpoint and run the command again); a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
 | 74 | free space, or move the directory to a larger disk, then `swath resume DIR`; `spill_budget`: `swath resume DIR --spill-budget SIZE` with a larger cap, on a disk with room for it (a plain resume keeps a recorded `--spill-budget`; with the default cap it derives one from the free space it finds). With the default cap, growing the disk under the running process avoids the stop: the cap follows it |
 | 124 | resume only within a separate budget of attempts or total time: a source that keeps a run busy without finishing reaches 124 on every attempt; past the budget, a person |
 | 1 | a person fixes the cause; then `swath resume DIR` when the outcome is `resumable`, else a new run |

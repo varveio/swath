@@ -763,6 +763,9 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		return rep, err
 	}
 	rep, err := owned(ctx, cfg, sum, src, s, jr)
+	if jr.discardUnanswered(cfg, err) {
+		rep.Outcome.Unrecorded = UnrecordedDiscarded
+	}
 	cfg.finalize(&rep, err)
 	jr.close(cfg, rep, err)
 	return rep, err

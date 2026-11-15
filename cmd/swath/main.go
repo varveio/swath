@@ -1097,7 +1097,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if unrecorded == "" {
 			unrecorded = "stopped before owning the output"
 		}
-		if !brief || o.term.verbose > 0 {
+		if (!brief || o.term.verbose > 0) && unrecorded != listing.UnrecordedDiscarded {
 			reportUnrecorded(dir, unrecorded)
 		}
 	}
