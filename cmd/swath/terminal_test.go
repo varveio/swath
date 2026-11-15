@@ -232,7 +232,7 @@ func TestStatsBlock(t *testing.T) {
 	}
 	r.Outcome = listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}
 	r.Invocation.Out = "/data/ds"
-	if l := statsLines(r, false, store); l[0] != "INCOMPLETE (deadline) — resume: swath resume /data/ds" {
+	if l := statsLines(r, false, store); l[0] != "stopped: --max-duration reached — resume: swath resume /data/ds" {
 		t.Fatalf("disposition %q", l[0])
 	}
 	short := &listing.Report{Timings: listing.Timings{SessionMs: 100}}

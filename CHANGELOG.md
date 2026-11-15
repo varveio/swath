@@ -5,6 +5,18 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `complete` means nothing is missing: the listing reached the end of its scope and read every entry.
+  The manifest's `coverage.complete`, the report's `outcome.complete`, the `outcome` log event, `swath show` and
+  `swath du --from-dataset` say false for a dataset with unreadable entries (before: true, beside
+  `unreadable` 1); filters do not make a dataset partial. The outcome class `completed` is `ok` (a `| head` run
+  is `ok` with `complete` false). `stop_reason` is a coverage reason only, absent for a run that wrote no
+  output (before: its class), and `outcome.unreadable` is absent before the source reported. A partial dataset
+  (exit 3) gets no `error.json`: its manifest's coverage says what is missing. The `outcome` event adds
+  `status`, `complete`, `stop_reason` and `unreadable` and drops `message` (it repeated `msg`). A person reads
+  one verdict everywhere: `complete`, `partial: 1 unreadable entry`, `partial: --max-keys reached`, `stopped:
+  --max-duration reached`, `interrupted`, in the closing block (before: `INCOMPLETE (class)`), `swath show`'s
+  coverage line (before: `complete=true stop=completed unreadable=1 ...`) and `swath du --from-dataset`'s
+  dataset line; the warnings that explain it now print before the closing block.
 - Go port: `swath du -h DIR` and `swath list SOURCE -h` are refused (exit 2) instead of printing help with exit 0:
   `-h is help; sizes are already human-readable in the table`. `-h` alone, and `--help` anywhere, still print
   help; `swath` alone prints its short help.

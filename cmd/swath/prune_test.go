@@ -38,7 +38,7 @@ func checkCommandPruning(t *testing.T, path string, pruned, fetched, filtered, e
 		stats.Pruning.RecursiveGlobs != 1 || stats.Pruning.RowOnlyGlobs != 1 || stats.Pruning.RegexRules != 1 {
 		t.Fatalf("source %q stats %+v pruning %+v", report.Source.Name, stats, stats.Pruning)
 	}
-	if stats.Errors() != 0 || report.Outcome.Unreadable != 0 {
+	if stats.Errors() != 0 || report.Outcome.Unreadables() != 0 {
 		t.Fatalf("intentional pruning counted as unreadable: %+v", report)
 	}
 	return report

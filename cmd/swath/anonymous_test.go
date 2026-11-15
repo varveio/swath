@@ -188,12 +188,12 @@ func TestCredentialRefusalShown(t *testing.T) {
 		}
 		return slices.Collect(strings.Lines(stderr.String()))
 	}
-	event := func(l string) (msg, message string) {
-		var ev struct{ Msg, Message string }
+	event := func(l string) (msg string) {
+		var ev struct{ Msg string }
 		if json.Unmarshal([]byte(l), &ev) != nil {
 			t.Fatalf("not an event: %s", l)
 		}
-		return ev.Msg, ev.Message
+		return ev.Msg
 	}
 	for _, term := range []termOptions{{}, {quiet: 1}} {
 		if got := show(term); !slices.Equal(got, []string{"swath: " + brief + "\n"}) {
@@ -211,13 +211,13 @@ func TestCredentialRefusalShown(t *testing.T) {
 	}
 	if got := show(termOptions{logFormat: logJSON}); len(got) != 1 {
 		t.Errorf("json: %q", got)
-	} else if msg, message := event(got[0]); msg != brief || message != brief {
-		t.Errorf("json: msg %q, message %q", msg, message)
+	} else if msg := event(got[0]); msg != brief {
+		t.Errorf("json: msg %q", msg)
 	}
 	if got := show(termOptions{logFormat: logJSON, verbose: 1}); len(got) != 1 {
 		t.Errorf("json -v: %q", got)
-	} else if msg, message := event(got[0]); msg != line || message != cause.Error() {
-		t.Errorf("json -v: msg %q, message %q", msg, message)
+	} else if msg := event(got[0]); msg != cause.Error() {
+		t.Errorf("json -v: msg %q", msg)
 	}
 	for _, err := range []error{
 		&objhttp.CredentialError{Source: "Entra ID, DefaultAzureCredential", Discovered: true, Transient: true, Err: errors.New("token endpoint: 503")},

@@ -135,7 +135,7 @@ func main() {
 	}()
 	statusOnSignal()
 	testHooks()
-	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitCompleted {
+	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitOK {
 		exit(code)
 	}
 }
@@ -149,8 +149,8 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 	var pe *textout.ProjectionError
 	switch {
 	case err == nil && sum.Outcome.StopReason == listing.StopDownstreamClosed:
-	case err == nil && sum.Outcome.Unreadable > 0:
-		err = unreadableError(sum.Outcome.Unreadable)
+	case err == nil && sum.Outcome.Unreadables() > 0:
+		err = unreadableError(sum.Outcome.Unreadables())
 	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
 	case err == nil && !sum.Outcome.Complete:
@@ -254,6 +254,7 @@ func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
+	o = o.withCoverage(r.Outcome)
 	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, writeReport(report, r, stdout))
 }
 
@@ -1013,7 +1014,7 @@ type runEnd struct {
 // statistics stand.
 func oneLine(sum listing.Report, out outcome, started bool) bool {
 	switch {
-	case out.ExitCode == exitCompleted:
+	case out.ExitCode == exitOK:
 		return false
 	case out.ExitCode == exitUsage:
 		return true
@@ -1037,11 +1038,12 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		failing = "; every request was failing: " + end.failing
 		out.Message += failing
 	}
-	if err != nil && out.ExitCode == exitCompleted {
+	if err != nil && out.ExitCode == exitOK {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
 		account(&sum.Outcome, out)
 		alreadyComplete(stdout, o.report, dir, &sum)
+		elog().ended(out.withCoverage(sum.Outcome))
 		return reportFailed(nil, writeReport(o.report, sum, stdout))
 	}
 	if dir != "" && !settled && (err != nil || unrecorded != "") {
@@ -1063,13 +1065,18 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		committedAccount(dir, &sum)
 	}
 	sum.Outcome.Unrecorded = unrecorded
+	out = out.withCoverage(sum.Outcome)
+	if err == nil {
+		elog().ended(out)
+	}
 	// The report goes out on failure too: its outcome names the error.
 	rerr := writeReport(o.report, sum, stdout)
+	// Entries left out say so, whatever the statistics' gating, before the
+	// closing block whose verdict they explain.
+	reportUnreadable(&sum)
 	if !brief || o.term.stats.set {
 		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	}
-	// Entries left out say so, whatever the statistics' gating.
-	reportUnreadable(&sum)
 	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
 		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
 	}

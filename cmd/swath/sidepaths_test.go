@@ -25,7 +25,7 @@ func exitOf(err error) int {
 	var u usageError
 	switch {
 	case err == nil:
-		return exitCompleted
+		return exitOK
 	case errors.As(err, &ee):
 		return ee.code
 	case errors.As(err, &u):

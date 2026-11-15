@@ -564,11 +564,63 @@ func showStats(t termOptions, r *listing.Report, brokenPipe bool) bool {
 	}
 	return time.Duration(r.Timings.SessionMs)*time.Millisecond > autoStatsMin ||
 		r.Output.PartsWritten+r.Output.PartsRetained > 0 || (r.Output.Text != nil && r.Output.Text.Destination != "-" && r.Output.Text.Bytes > 0) ||
-		r.Outcome.ExitCode != exitCompleted
+		r.Outcome.ExitCode != exitOK
 }
 
 // resumableStops are the stops whose statistics end with resume advice.
 var resumableStops = map[string]bool{"interrupted": true, "terminated": true, "deadline": true, "stuck": true, "disk_full": true}
+
+// coverageVerdict is the verdict on an output's coverage, in the one
+// vocabulary a person reads a run or a dataset in (the closing block,
+// swath show, swath du --from-dataset): "complete" when nothing is
+// missing, else "partial: " and what is.
+func coverageVerdict(complete bool, stopReason string, unreadable int64) string {
+	switch {
+	case unreadable > 0:
+		return "partial: " + plural(unreadable, "1 unreadable entry", count(unreadable)+" unreadable entries")
+	case complete:
+		return "complete"
+	}
+	switch stopReason {
+	case "max_keys":
+		return "partial: --max-keys reached"
+	case listing.StopDownstreamClosed:
+		return "partial: the reader closed the output"
+	case "", "completed":
+		return "partial: the listing did not reach the end of its scope"
+	}
+	return "partial: the listing stopped early (" + stopReason + ")"
+}
+
+// runVerdict is a run's verdict line: its coverage when it wrote its
+// output, else how it stopped, with the cause.
+func runVerdict(o listing.Outcome) string {
+	switch o.Class {
+	case listing.ClassOK, listing.ClassIncomplete:
+		return coverageVerdict(o.Complete, o.StopReason, o.Unreadables())
+	case listing.ClassDeadline:
+		return "stopped: --max-duration reached"
+	case listing.ClassStuck:
+		if o.Cause == source.CauseUnreachable {
+			return "stopped: the endpoint cannot be reached"
+		}
+		return "stopped: no progress within --stall-timeout"
+	case listing.ClassUnresolved:
+		return "stopped: the bucket commit is unresolved"
+	case listing.ClassDiskFull:
+		if o.Cause == causeSpillBudget {
+			return "stopped: --spill-wait-timeout reached"
+		}
+		return "stopped: the disk is full"
+	case listing.ClassInterrupted:
+		return "interrupted"
+	case listing.ClassTerminated:
+		return "interrupted: " + strings.ToUpper(strings.TrimSuffix(o.StopSource, "+forced_exit"))
+	case listing.ClassRefused, listing.ClassUsage:
+		return "refused"
+	}
+	return "failed"
+}
 
 // statsLines is the end-of-run block, Java's lines from the report: a
 // disposition for a run that did not complete, the headline (objects,
@@ -579,9 +631,9 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	o := r.Outcome
 	switch {
 	case brokenPipe:
-		lines = append(lines, "stopped early — downstream closed")
-	case o.ExitCode != exitCompleted || o.Class == "incomplete":
-		d := "INCOMPLETE (" + o.Class + ")"
+		lines = append(lines, coverageVerdict(false, listing.StopDownstreamClosed, 0))
+	case o.ExitCode != exitOK || o.Class == listing.ClassIncomplete:
+		d := runVerdict(o)
 		if o.Resumable && resumableStops[o.Class] && r.Invocation.Out != "" {
 			d += " — resume: swath resume " + shellOperand(r.Invocation.Out)
 		}
@@ -615,8 +667,8 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 		lines = append(lines, fmt.Sprintf("%s %s%sin flight avg %.2f%speak %s",
 			count(n), plural(n, "API call", "API calls"), sep, avg, sep, count(q.InflightMax)))
 	}
-	if q.Throttles > 0 || q.Retries > 0 || o.Unreadable > 0 {
-		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"unreadable "+count(o.Unreadable))
+	if n := o.Unreadables(); q.Throttles > 0 || q.Retries > 0 || n > 0 {
+		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"unreadable "+count(n))
 	}
 	if c := r.Cost; c != nil && c.CostUSD != nil && c.Basis != nil && r.Requests != nil && r.Requests.HTTPAttempts > 0 {
 		lines = append(lines, costText(*c.CostUSD, c.Basis.RatePer1kUSD))
@@ -643,20 +695,21 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 }
 
 // writeStats prints the block, indented and styled as Java's: the
-// disposition red when INCOMPLETE, the headline accented, the rest dim.
-func writeStats(w io.Writer, lines []string, pal palette, hasDisposition bool) {
+// verdict red when the run failed or its output is partial (alarm), the
+// headline accented, the rest dim.
+func writeStats(w io.Writer, lines []string, pal palette, hasDisposition, alarm bool) {
 	var b strings.Builder
 	for i, l := range lines {
 		s := pal.dim(l)
 		switch {
-		case hasDisposition && i == 0 && strings.HasPrefix(l, "INCOMPLETE"):
+		case hasDisposition && i == 0 && alarm:
 			s = pal.red(l)
 		case (hasDisposition && i == 1) || (!hasDisposition && i == 0):
 			s = pal.accent(l)
 		}
 		b.WriteString(indent + s + "\n")
 	}
-	noteKept(w, b.String()) // the run's account, which an INCOMPLETE run needs read
+	noteKept(w, b.String()) // the run's account, which a partial or failed run needs read
 }
 
 // termUI is one run's stderr surface: the progress display (nil when
@@ -713,8 +766,8 @@ func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
 		return
 	}
 	lines := statsLines(r, brokenPipe, tt.noun)
-	failed := brokenPipe || r.Outcome.ExitCode != exitCompleted || r.Outcome.Class == "incomplete"
-	writeStats(errOut, lines, tt.pal, failed)
+	failed := brokenPipe || r.Outcome.ExitCode != exitOK || r.Outcome.Class == listing.ClassIncomplete
+	writeStats(errOut, lines, tt.pal, failed, failed && !brokenPipe)
 	if n := r.Output.RowsEmitted; tt.saveHint != nil && tt.tty && tt.opt.quiet == 0 && !failed && n >= hintRows {
 		var b strings.Builder
 		b.WriteString(tt.pal.dim("hint: this run listed "+approx(n)+" "+tt.noun.rows+"; to explore them again without relisting, save an inventory once and total that:") + "\n")

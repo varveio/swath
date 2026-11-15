@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
@@ -259,9 +260,10 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	if errors.Is(err, listing.ErrComplete) {
 		committedAccount(dir, &r)
 	}
-	done := o.ExitCode == exitCompleted
+	done := o.ExitCode == exitOK
 	if done {
 		alreadyComplete(stdout, report, dir, &r)
+		elog().ended(o.withCoverage(r.Outcome))
 	} else if recorded, why := settleOutside(dir, seen, o); !recorded {
 		// A refusal is one line on stderr (conclude); -v adds why the
 		// outcome is not in error.json.
@@ -274,6 +276,7 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	if done {
 		return reportFailed(nil, rerr)
 	}
+	o = o.withCoverage(r.Outcome)
 	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, rerr)
 }
 
@@ -373,7 +376,14 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
 		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
-		fmt.Fprintf(stdout, "coverage complete=%v stop=%s unreadable=%d filters=%d exclusions=%d\n", c.Complete, c.StopReason, c.Unreadable, len(c.Filters), len(c.Exclusions))
+		fmt.Fprintf(stdout, "coverage: %s", coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
+		if len(c.Filters) > 0 {
+			fmt.Fprintf(stdout, "; filtered: %s", strings.Join(filter.Texts(c.Filters), ", "))
+		}
+		if len(c.Exclusions) > 0 {
+			fmt.Fprintf(stdout, "; excluded: %s", strings.Join(c.Exclusions, ", "))
+		}
+		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "%d %s, %d %s, %d %s", len(m.Parts), plural(len(m.Parts), "part", "parts"), rows, plural(rows, "row", "rows"), bytes, plural(bytes, "byte", "bytes"))
 		if n := len(m.Parts); n > 0 {
 			fmt.Fprintf(stdout, ", keys %q .. %q", string(m.Parts[0].MinKey), string(m.Parts[n-1].MaxKey))

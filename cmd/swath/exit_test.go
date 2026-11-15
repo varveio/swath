@@ -87,7 +87,7 @@ func TestExitCodes(t *testing.T) {
 
 	// 0: completed; no error.json.
 	ok := filepath.Join(t.TempDir(), "ok")
-	if c := code(exec.Command(bin, "list", src, "-o", ok).Run()); c != exitCompleted {
+	if c := code(exec.Command(bin, "list", src, "-o", ok).Run()); c != exitOK {
 		t.Fatalf("completed: exit %d", c)
 	}
 	if _, err := os.Stat(filepath.Join(ok, errorName)); !os.IsNotExist(err) {
@@ -112,8 +112,8 @@ func TestExitCodes(t *testing.T) {
 	if c := code(exec.Command(bin, pargs...).Run()); c != exitIncomplete {
 		t.Fatalf("partial: exit %d", c)
 	}
-	if o := outcome(part); o.Class != "incomplete" || o.Resumable {
-		t.Fatalf("partial: %+v", o)
+	if _, err := os.Stat(filepath.Join(part, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("partial: error.json beside the committed dataset: %v", err)
 	}
 	// 124: the deadline, resumable.
 	dl := filepath.Join(t.TempDir(), "deadline")
@@ -445,7 +445,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 
 // TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
 // dataset whose coverage says incomplete, exits 3 with class incomplete
-// (not resumable), keeps no journal, and swath resume refuses it as
+// (not resumable), writes no error.json, keeps no journal, and swath resume refuses it as
 // complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
 func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	captureStderr(t)
@@ -457,9 +457,10 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	if c := exitCode(t, err); c != exitIncomplete {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
 	}
-	var o outcome
-	if b, err := os.ReadFile(filepath.Join(dir, errorName)); err != nil || json.Unmarshal(b, &o) != nil || o.Class != "incomplete" || o.Resumable {
-		t.Fatalf("capped run: error.json %v %+v", err, o)
+	// The manifest's coverage says what is missing: no error.json beside
+	// the committed dataset.
+	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("capped run: error.json %v", err)
 	}
 	var m dataset.Manifest
 	if b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName)); err != nil || json.Unmarshal(b, &m) != nil {
@@ -480,7 +481,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	// 3, class incomplete, not resumable.
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
-	if msg := dir + " holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
+	if msg := dir + " is a finalized sample, partial: --max-keys reached: it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
 		exitCode(t, err) != exitIncomplete || err.Error() != msg {
 		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
 	}

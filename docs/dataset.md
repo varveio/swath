@@ -76,8 +76,9 @@ duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
 └──────────┴─────────────┴────────────┴─────────┴────────────┘
 ```
 
-The inventory holds its whole scope when `complete` is true, `stop_reason` is `completed`, `unreadable` is 0,
-and `filters` and `exclusions` are empty, or you accept its exclusions explicitly. Check too that the manifest's
+`complete` is true when nothing is missing: the listing reached the end of its scope (`stop_reason`
+`completed`) and read every entry (`unreadable` 0). Filters do not make it partial: an inventory is complete for
+the filters it records, so check that `filters` and `exclusions` are empty, or that you accept them. Check too that the manifest's
 `source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
 ([the swath extension](#the-swath-extension)).
 
@@ -186,7 +187,9 @@ own is inspectable Parquet, not evidence that a dataset exists, is complete, or 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
 lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`), `run.json`
 (the run report: operational, written after the commit and never part of the dataset), and `.swath/` (the run's
-private workspace, which readers ignore). The full tree and the publication order are in
+private workspace, which readers ignore). A directory whose run did not commit holds `error.json` instead of a
+manifest: that run's outcome ([exit codes](reference/exit-codes.md#the-outcome-of-record)); a committed
+dataset has none, a partial one included, whose coverage says what is missing. The full tree and the publication order are in
 [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
 ### The cut file
@@ -306,8 +309,8 @@ module's. JSON readers must not depend on that order.
 | `source.container` | The bucket, or the Azure container's name; absent for a filesystem | the application; `--seed-from` |
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
-| `coverage.complete` | The listing reached the end of its scope | the application |
-| `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | the application |
+| `coverage.complete` | Nothing is missing: the listing reached the end of its scope and `unreadable` is 0. Filters and exclusions are recorded beside it; they do not make it false | the application |
+| `coverage.stop_reason` | `completed` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys`, `unreported`, ...) | the application |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
 | `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
@@ -318,9 +321,8 @@ module's. JSON readers must not depend on that order.
 
 Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
 `coverage.complete` is never read as `false`, and a missing `filters` is never read as empty), and an application
-that needs one decides what its absence means. A listing with `coverage.complete` true, `stop_reason`
-`completed`, no unreadable entries and no filters covers its whole scope minus its `exclusions`, which are left out
-by design. swath publishes the complete result of the live listing it performed; it is not a point-in-time
+that needs one decides what its absence means. A listing with `coverage.complete` true and no filters covers
+its whole scope minus its `exclusions`, which are left out by design. swath publishes the complete result of the live listing it performed; it is not a point-in-time
 snapshot of a source that changes during the run.
 
 Readers ignore members they do not define and keep the raw extension (`reader.Metadata.Manifest`), so an

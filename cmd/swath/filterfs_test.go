@@ -63,14 +63,14 @@ func TestExcludedUnstattableIsNotUnreadable(t *testing.T) {
 			err := run(context.Background(), append([]string{root, "--format=tsv", "--no-stats", "--report", report}, c.filters...), &out, false)
 			var rep listing.Report
 			readJSON(t, report, &rep)
-			want := exitCompleted
+			want := exitOK
 			if c.unreadable > 0 {
 				want = exitIncomplete
 			}
 			stats, _ := json.Marshal(rep.Source.Stats)
-			if exitOf(err) != want || rep.Outcome.Unreadable != c.unreadable || strings.Count(out.String(), "\n") != 1 ||
+			if exitOf(err) != want || rep.Outcome.Unreadables() != c.unreadable || strings.Count(out.String(), "\n") != 1 ||
 				!strings.Contains(string(stats), fmt.Sprintf(`"filtered_stat_errors":%d`, c.filtered)) {
-				t.Errorf("engine %q %v: exit %d (%v), unreadable %d, rows %q", engine, c.filters, exitOf(err), err, rep.Outcome.Unreadable, out.String())
+				t.Errorf("engine %q %v: exit %d (%v), unreadable %d, rows %q", engine, c.filters, exitOf(err), err, rep.Outcome.Unreadables(), out.String())
 			}
 		}
 	}

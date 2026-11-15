@@ -30,7 +30,7 @@ import (
 // Exit codes: the outcome a supervising process acts on without reading
 // stderr (error.json carries the same, with the cause).
 const (
-	exitCompleted   = 0   // the dataset is committed (or a dry run finished)
+	exitOK          = 0   // the command did what it was asked: the dataset is committed, the rows or totals written, or a reader closed stdout
 	exitFatal       = 1   // a cause that a resume will not fix
 	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
 	exitIncomplete  = 3   // finished, but the output is incomplete: unreadable entries, or a key limit
@@ -122,7 +122,7 @@ func (e *signalError) Error() string {
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {
-	Class     string `json:"class"` // listing.Class*: completed, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
+	Class     string `json:"class"` // listing.Class*: ok, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
 	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message,omitempty"`
 	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
@@ -134,13 +134,27 @@ type outcome struct {
 	// Attempt is the invocation this outcome belongs to; the report
 	// (--report) carries the same one.
 	Attempt *listing.Attempt `json:"attempt,omitempty"`
+	// Status, Complete, StopReason and Unreadable are the report's
+	// (listing.Outcome): what became of the output and its coverage, so
+	// that the outcome event tells a complete output from a partial one.
+	Status     string `json:"status,omitempty"`
+	Complete   bool   `json:"complete"`
+	StopReason string `json:"stop_reason,omitempty"`
+	Unreadable *int64 `json:"unreadable,omitempty"`
+}
+
+// withCoverage is o with the accounted report outcome r's status and
+// coverage.
+func (o outcome) withCoverage(r listing.Outcome) outcome {
+	o.Status, o.Complete, o.StopReason, o.Unreadable = r.Status, r.Complete, r.StopReason, r.Unreadable
+	return o
 }
 
 // classify maps a command's error (and the cause its context was
 // cancelled with) to an outcome. dir is the output directory, if any.
 func classify(err, cause error, dir string) outcome {
 	if err == nil {
-		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
+		return outcome{Class: listing.ClassOK, ExitCode: exitOK}
 	}
 	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
 	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
@@ -216,8 +230,8 @@ func classify(err, cause error, dir string) outcome {
 		// idempotent, exit 0, as Java's, when the dataset covers its
 		// scope; one committed with partial coverage stays incomplete.
 		o.Resumable = false
-		if m, ok := committedManifest(dir); ok && m.Coverage.Complete && m.Coverage.Unreadable == 0 {
-			o.Class, o.ExitCode = listing.ClassCompleted, exitCompleted
+		if m, ok := committedManifest(dir); ok && m.Coverage.Complete {
+			o.Class, o.ExitCode = listing.ClassOK, exitOK
 		} else {
 			o.Class, o.ExitCode = listing.ClassIncomplete, exitIncomplete
 		}
@@ -293,19 +307,19 @@ func committedManifest(dir string) (*dataset.Manifest, bool) {
 }
 
 // account applies the frozen classification o to a report's outcome (its
-// message is the report's error, unless the run completed). The
-// completion fields follow it: a run that did not commit is not complete
-// and its stop reason is its class (fatal, stuck, deadline, ...), whatever
-// the source reported (a source's coverage says complete once its listing
-// loop ends, also after a failure); a committed run keeps the source's,
-// which the manifest's coverage holds too (an incomplete one included).
+// message is the report's error, unless the run completed). The coverage
+// fields follow it: a run that wrote no output (not ok, not incomplete) is
+// not complete and has no stop reason, whatever the source reported (a
+// source's coverage says complete once its listing loop ends, also after
+// a failure): its class says why it ended. A run that wrote its output
+// keeps the source's coverage, which the manifest holds too.
 func account(r *listing.Outcome, o outcome) {
 	r.Class, r.ExitCode, r.Resumable, r.Cause, r.StopSource = o.Class, o.ExitCode, o.Resumable, o.Cause, o.StopSource
-	if o.ExitCode != exitCompleted && o.Message != "" {
+	if o.ExitCode != exitOK && o.Message != "" {
 		r.Error = o.Message
 	}
-	if o.ExitCode != exitCompleted && o.Class != listing.ClassIncomplete {
-		r.Complete, r.StopReason = false, o.Class
+	if o.ExitCode != exitOK && o.Class != listing.ClassIncomplete {
+		r.Complete, r.StopReason = false, ""
 	}
 }
 
@@ -316,7 +330,8 @@ func account(r *listing.Outcome, o outcome) {
 func committedAccount(dir string, r *listing.Report) {
 	r.Outcome.Status = listing.StatusCommitted
 	if m, ok := committedManifest(dir); ok {
-		r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Unreadable = m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable
+		n := m.Coverage.Unreadable
+		r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Unreadable = m.Coverage.Complete, m.Coverage.StopReason, &n
 		r.Output.Committed(m)
 	}
 }
@@ -330,12 +345,12 @@ func finalizedSample(dir string, err error) error {
 	m, ok := committedManifest(dir)
 	switch {
 	case !ok:
-	case !m.Coverage.Complete:
-		return &restated{err, fmt.Sprintf("%s holds a finalized partial sample (coverage complete=false stop=%s): it cannot be resumed", dir, m.Coverage.StopReason)}
 	case m.Coverage.Unreadable > 0:
 		n := m.Coverage.Unreadable
-		return &restated{err, fmt.Sprintf("%s left out %s it could not read (coverage unreadable=%d): it cannot be resumed; list the tree again once %s can be read",
-			dir, plural(n, "an entry", count(n)+" entries"), n, plural(n, "it", "they"))}
+		return &restated{err, fmt.Sprintf("%s is %s: it cannot be resumed; list the tree again once %s can be read",
+			dir, coverageVerdict(false, m.Coverage.StopReason, n), plural(n, "it", "they"))}
+	case !m.Coverage.Complete:
+		return &restated{err, fmt.Sprintf("%s is a finalized sample, %s: it cannot be resumed", dir, coverageVerdict(false, m.Coverage.StopReason, 0))}
 	}
 	return err
 }
@@ -389,16 +404,17 @@ func hasJournal(dir string) bool {
 // not complete.
 const errorName = dataset.ErrorName
 
-// writeOutcome records a failed run's outcome (an incomplete committed
-// dataset included) in DIR/error.json (durable replace), so a supervisor
-// never parses stderr; a completed run removes a stale one. The caller
-// owns the output (listing.Config.Settle, settleOutside).
+// writeOutcome records a failed run's outcome in DIR/error.json (durable
+// replace), so a supervisor never parses stderr; a run that committed its
+// dataset (ok, or incomplete: the manifest's coverage says what is
+// missing) removes a stale one. The caller owns the output
+// (listing.Config.Settle, settleOutside).
 func writeOutcome(dir string, o outcome) error {
 	if dir == "" {
 		return nil
 	}
 	path := filepath.Join(dir, errorName)
-	if o.ExitCode == exitCompleted {
+	if o.ExitCode == exitOK || o.Class == listing.ClassIncomplete {
 		err := os.Remove(path)
 		switch {
 		case os.IsNotExist(err):
@@ -750,7 +766,7 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		defer close(done)
 		err := forcedErr(why)
 		o := s.out
-		if s.run && o.ExitCode != exitCompleted {
+		if s.run && o.ExitCode != exitOK {
 			o.Message = err.Error() + ": " + o.Message
 		}
 		r, ok := s.report()

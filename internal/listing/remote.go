@@ -362,7 +362,7 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	rs.commit = dataset.RemoteCommit{Outcome: "resumed", Identity: rec.ManifestIdentity, SHA256: rec.ManifestSHA256}
 	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: time.Now().UTC()},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
-		Outcome:    Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}}
+		Outcome:    Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: "completed"}}
 	// The dataset is the manifest's: its rows, bytes and coverage, which
 	// this invocation neither listed nor wrote.
 	var m dataset.Manifest
@@ -377,13 +377,13 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 }
 
 // committedOutcome is the outcome of finding a dataset committed with the
-// coverage c, as the command classifies the same manifest: completed with
-// exit 0 when it covers its scope, else incomplete with exit 3, never
-// completed with 0.
+// coverage c, as the command classifies the same manifest: ok with exit 0
+// when it is complete, else incomplete with exit 3, never ok with 0.
 func committedOutcome(o *Outcome, c dataset.Coverage) {
-	o.Complete, o.StopReason, o.Unreadable = c.Complete, c.StopReason, c.Unreadable
-	o.Class, o.ExitCode = ClassCompleted, 0
-	if !c.Complete || c.Unreadable > 0 {
+	n := c.Unreadable
+	o.Complete, o.StopReason, o.Unreadable = c.Complete, c.StopReason, &n
+	o.Class, o.ExitCode = ClassOK, 0
+	if !c.Complete {
 		o.Class, o.ExitCode = ClassIncomplete, 3
 	}
 }

@@ -85,7 +85,7 @@ func TestShowDataset(t *testing.T) {
 	}
 	lines := strings.Split(shown.String(), "\n")
 	want := "dataset " + out + ": SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1"
-	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") || !strings.HasPrefix(lines[4], "1 part, 1 row, ") {
+	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage: complete") || !strings.HasPrefix(lines[4], "1 part, 1 row, ") {
 		t.Fatalf("show:\n%s\nwant first line %q", shown.String(), want)
 	}
 }
@@ -130,12 +130,12 @@ func TestPrintedCommandsQuoted(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "my inventory")
 	r := &listing.Report{Outcome: listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
 	r.Invocation.Out = dir
-	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume "+quoted(dir) {
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "stopped: --max-duration reached — resume: swath resume "+quoted(dir) {
 		t.Fatalf("disposition %q", l[0])
 	}
 	// A directory named like a flag is an operand only as ./-inv.
 	r.Invocation.Out = "-inv"
-	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "INCOMPLETE (deadline) — resume: swath resume ./-inv" {
+	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "stopped: --max-duration reached — resume: swath resume ./-inv" {
 		t.Fatalf("disposition %q", l[0])
 	}
 	if got := shellOperand("-my inv"); got != quoted("./-my inv") {

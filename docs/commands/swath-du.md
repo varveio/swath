@@ -100,8 +100,8 @@ its last `/`. The read seeks to the prefix rather than scanning the dataset. A P
 is refused, since the dataset cannot total it.
 
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
-and how far the listing reached (`complete`, `INCOMPLETE` with the reason, the entries it could not read, the
-listing's filters and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with
+and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, `--max-keys
+reached`), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
 the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](../output.md#du-rows)). A dataset whose listing did not complete, such as a
 `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links

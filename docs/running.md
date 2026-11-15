@@ -153,7 +153,9 @@ and erases it before its table. At the end, runs over
 1.5 s, runs that wrote output and runs that did not complete print the statistics on stderr (objects,
 time, keys/s, API calls, mean and peak in flight, throttles and retries when any, the estimate, the parts or
 file written, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
-An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
+A run that did not complete starts the block with its verdict, the cause in it (`partial: 1 unreadable entry`,
+`stopped: --max-duration reached`, `interrupted`), and the `swath resume DIR` command when it is resumable;
+warnings come before the block.
 stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
@@ -347,8 +349,8 @@ it. The report's `invocation.prior` names what was used.
 ## Reading the output
 
 A reader starts only once `manifest.json` exists and reads the parts it lists (never a glob of `data/`). An
-application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
-`completed`, `coverage.unreadable` 0, `coverage.filters` empty, `scope.kind` `whole`, the `source` it
+application that needs the whole source checks the coverage: `coverage.complete` true (nothing missing: the end
+of the scope reached and no entry unreadable), `coverage.filters` empty, `scope.kind` `whole`, the `source` it
 expects, any `coverage.exclusions` accepted explicitly, and a missing field read as unknown
 ([The swath dataset](dataset.md#the-swath-extension)). Listed ETags are not portable content hashes; check the
 provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.

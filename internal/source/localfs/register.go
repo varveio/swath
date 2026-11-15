@@ -338,7 +338,8 @@ func storedName(dir, name string) string {
 // an entry that vanished is no longer part of the tree.
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
-	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Unreadable: st.Errors() - st.ReadlinkErrors - st.Vanished}
+	unreadable := st.Errors() - st.ReadlinkErrors - st.Vanished
+	cov := source.Coverage{Target: o.p.root, Complete: unreadable == 0, StopReason: "completed", Unreadable: unreadable}
 	cov.Exclusions = slices.Sorted(maps.Keys(o.p.opt.Skip))
 	if o.p.opt.OneFilesystem {
 		// The tree is listed only as far as its filesystem reaches; the

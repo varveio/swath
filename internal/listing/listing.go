@@ -1544,7 +1544,7 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		if pr := cfg.Progress; pr != nil && !jr.journaled() {
 			pr.parts.Add(int64(sum.Output.PartsWritten))
 		}
-		sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
+		sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassOK
 		sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsEmitted
 		sum.Output.RowsDurable = sum.Output.RowsCommitted
 		sum.Output.CommittedObjectBytes = meta.CommittedObjectBytes

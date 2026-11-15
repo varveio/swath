@@ -62,7 +62,7 @@ order stage's goroutines; at most `--workers` plus one, the drainer, listing a r
 | `split` | a range split at its cursor | `id`, `worker`, `cursor`, `pivot`, `hi` or `open` (the range's), `lower` and `upper` (the children's ids: `(cursor, pivot]` and `(pivot, hi]`), `mechanism` (`reflect`, `midpoint`, `density` or `structure`: [range-engine.md](range-engine.md)), `reason` (`demand`: idle workers; `slow`: a latency outlier, `--slow-split`), `hunger` (idle workers, the demand), `rows` (the range listed), `depth` (the children's), `gen` (the range's gallop generation); `remainder` (the estimate of `(cursor, hi]`), `est_lower`, `est_upper` (the children's estimates; each estimate is left out when it is unknown, unbounded or more than an int64 holds, as a gauge over long shared bytes can be), `held` (they share a prior's count), `persistent: true` (admitted after refused admissions) |
 | `completed` | a range listed through its bound | `id`, `worker`, `rows` |
 | `failed` | a range stopped by an error, cancellation included | `id`, `worker`, `rows`, `error` |
-| `run_end` | the trace closes, after the run | `status` (the report's `outcome.status`), `class` (`outcome.class`: `completed`, `interrupted`, `stuck`, …), `events` (handed to the writer before it), `dropped` |
+| `run_end` | the trace closes, after the run | `status` (the report's `outcome.status`), `class` (`outcome.class`: `ok`, `interrupted`, `stuck`, …), `events` (handed to the writer before it), `dropped` |
 
 A split ends its range: the range listed `(lo, cursor]`, and its children list the rest. So in a complete trace
 of a run that ended well (`run_end` with `dropped` 0), every range made (`seeded` and not `reused`, or a split's

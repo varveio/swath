@@ -561,7 +561,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	check := func(how string, rep listing.Report) {
 		t.Helper()
 		o := rep.Outcome
-		if o.Class != "completed" || o.ExitCode != exitCompleted || o.Status != "committed" || !o.Complete || o.StopReason != "completed" || o.Resumable || o.Error != "" {
+		if o.Class != "ok" || o.ExitCode != exitOK || o.Status != "committed" || !o.Complete || o.StopReason != "completed" || o.Resumable || o.Error != "" {
 			t.Fatalf("%s: report outcome %+v", how, o)
 		}
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
@@ -708,8 +708,8 @@ func TestRefusalsExit2(t *testing.T) {
 
 // TestReportCompletionFollowsOutcome: the report's completion fields follow
 // the frozen classification. A GCS run that fails on a 403 or a 401 after
-// published parts reports complete false and its class as the stop reason,
-// with the provider's cause, in --report and in the JSON on stdout; a
+// published parts reports complete false and no stop reason (the class says
+// why it ended), with the provider's cause, in --report and in the JSON on stdout; a
 // committed run's report, its run.json and the manifest agree on complete
 // and stop_reason, full coverage or partial (a key limit). Before, a failed
 // run's report said complete true and stop_reason completed (the source's
@@ -740,7 +740,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		}
 		var rep listing.Report
 		readJSON(t, report, &rep)
-		if o := rep.Outcome; o.Complete || o.StopReason != "fatal" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
+		if o := rep.Outcome; o.Complete || o.StopReason != "" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
 			t.Fatalf("%d: outcome %+v", status, o)
 		}
 		if _, err := os.Stat(filepath.Join(dir, dataset.ManifestName)); err == nil {
