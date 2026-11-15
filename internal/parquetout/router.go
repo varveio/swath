@@ -693,8 +693,9 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	if r.aborted.Load() {
 		// A part that saw the abort returns without waiting for the part
-		// before it, which may still be publishing: past an abort, the
-		// turn to publish (and to add to r.cuts) is no part's.
+		// before it, which may still be publishing (a publication under
+		// way finishes): a part given its turn after the abort neither
+		// publishes nor adds to r.cuts.
 		return
 	}
 	p.rows += base

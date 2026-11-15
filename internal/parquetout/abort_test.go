@@ -27,7 +27,8 @@ func (s sealed) Sync() error { s.once.Do(func() { close(s.ch) }); return nil }
 // returns without waiting for part 1; part 3, sealed before the abort,
 // waits for part 2 and must not take the turn from part 1 (CI, 2026-11-15:
 // on a GCS listing that failed, part 3's Cuts.Part raced part 1's under
-// -race). Only the parts published before the abort are in the cuts.
+// -race). Part 1's publication, under way at the abort, finishes and adds
+// its cuts; no part after it does: the cuts are parts 0 and 1.
 func TestAbortKeepsThePublicationTurn(t *testing.T) {
 	inPublish, hold1, hold2 := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	seal3 := sealed{once: new(sync.Once), ch: make(chan struct{})}

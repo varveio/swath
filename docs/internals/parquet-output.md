@@ -224,8 +224,9 @@ cancellation removes the unpublished parts and writes no manifest.
 dropping one when the next page starts with its key), at most one key per 1,024 rows of the part being written:
 about 1/1,024 of its keys' bytes plus 24 bytes a page, a few hundred KiB for a 64 MiB part, held per open part.
 As each part is published, in ordinal order (segments' included), the router adds them to the cut set
-(`dataset.Cuts`; each part's encoder in turn, after the part before it; past an abort none does,
-`TestAbortKeepsThePublicationTurn`), which keeps the cuts at the current R and doubles R in place as soon as they exceed the file's
+(`dataset.Cuts`; each part's encoder in turn, after the part before it; once the abort is seen, a part whose
+predecessor released its turn publishes nothing and adds no cuts, while a publication already under way
+finishes, `TestAbortKeepsThePublicationTurn`), which keeps the cuts at the current R and doubles R in place as soon as they exceed the file's
 bounds (the cuts at 2R are those at R where the rows reach a multiple of 2R since the previous cut), so it holds
 at most 262,144 cuts and 16 MiB of lines. After the commit and the run report the parts a resume retained are
 read back from their key page index (`parquetout.PageEnds`: a page end at every multiple of 1,024 rows and the
