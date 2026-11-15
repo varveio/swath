@@ -103,7 +103,8 @@ type Options struct {
 	// source.Fencing), is the attempt's durable spill: a spilled range with
 	// a free slot writes a durable file and seals its certificate, and the
 	// provider's replay ranges (source.Replaying) are its reused
-	// certificates, replayed by the drainer. Run never closes it.
+	// certificates, replayed by the drainer or, once listing is done, by
+	// the segments (segments.go). Run never closes it.
 	Durable *Cache
 }
 
@@ -164,8 +165,9 @@ type Stats struct {
 	// nothing on: from the drain's start to the first row, between two
 	// hand-ons, or from the last row to the drain's end.
 	FrontierStuck time.Duration
-	// ListingDone is when the provider finished (every range expanded),
-	// zero if it never did; DrainEnd when the drainer handed on its last
+	// ListingDone is when the provider finished (every range expanded but
+	// the replay ranges, which are not listed), zero if it never did;
+	// DrainEnd when the drainer handed on its last
 	// row. The drain tail is the interval between them.
 	ListingDone, DrainEnd time.Time
 	// IdleAfter is the workers' idle time (nothing queued to list,
@@ -177,7 +179,8 @@ type Stats struct {
 	// zero when the sink is no Segmenter).
 	Segments SegmentStats
 	// ReplayedRows are the rows recovery replay handed on from reused
-	// certificates (in Received and Rows; never listed by the provider).
+	// certificates, the drainer's and the segments' (in Received and Rows;
+	// never listed by the provider).
 	ReplayedRows int64
 	// Durable reports whether durable spill engaged for this run.
 	Durable bool
@@ -223,11 +226,23 @@ type Gauges struct {
 	// the budget, workers at admission, idle workers (nothing queued to
 	// list, read-ahead waits included).
 	publishWait, admissionWait, idleWait gauge
+	windowWait                           gauge // workers held at the frontier window (window.go)
 	// pressure is spill pressure (spiller.press); spillMax and
 	// spillReserve are the spill cap and reserve in effect (0: none).
-	windowWait             gauge // workers held at the frontier window (window.go)
 	pressure               pressure
 	spillMax, spillReserve atomic.Int64
+	// scanned is the bytes of reused certificates the segments' plan has
+	// read (scanCert): the run's progress while it hands nothing on.
+	scanned atomic.Int64
+}
+
+// CertScanned is the bytes of reused certificates the segments' plan has
+// read so far (0 for nil).
+func (g *Gauges) CertScanned() int64 {
+	if g == nil {
+		return 0
+	}
+	return g.scanned.Load()
 }
 
 // clock is the time spill pressure is recorded and read at (tests set it).
@@ -442,9 +457,10 @@ type run[R, P any] struct {
 	dt             DrainerTimes // drainer only
 	drainEnd       time.Time
 
-	// open counts the ranges created and not yet done: the listing is done
-	// when it reaches zero (listedAt, under mu). idleAfter is the workers'
-	// idle time after it (mu).
+	// open counts the ranges created and not yet done, replay ranges
+	// excepted (nothing lists them): the listing is done when it reaches
+	// zero (listedAt, under mu). idleAfter is the workers' idle time after
+	// it (mu).
 	open      atomic.Int64
 	listedAt  time.Time
 	idleAfter time.Duration
@@ -749,6 +765,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if hookBeforeDrain != nil {
 		hookBeforeDrain()
 	}
+	event("drain-start") // tests: the drainer is about to start
 	st, err := o.drainTree(root, sink)
 	if err != nil && ctx.Err() != nil {
 		// A worker failed first and cancelled the run; report its error,
@@ -960,13 +977,25 @@ func fences[R, P any](p source.Provider[R, P]) bool {
 	return ok && f.Fences()
 }
 
-// replayOf is n's certificate when n is a replay range (the drainer's
-// alone).
+// replayOf is n's certificate when n is a replay range (never a
+// worker's: the drainer's, or the segments').
 func (o *run[R, P]) replayOf(n *node[R, P]) (int, bool) {
 	if o.replayFn == nil {
 		return 0, false
 	}
 	return o.replayFn(n.r)
+}
+
+// listed counts the ranges among kids that are listed: every one but the
+// replay ranges (open).
+func (o *run[R, P]) listed(kids []*node[R, P]) int64 {
+	var n int64
+	for _, k := range kids {
+		if _, ok := o.replayOf(k); !ok {
+			n++
+		}
+	}
+	return n
 }
 
 func (o *run[R, P]) worker() {
@@ -1069,6 +1098,9 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 			o.stopped.Store(true)
 		}
 		n.state = done
+		if t := n.tile; t != nil {
+			t.cert.Add(-o.certRows(i)) // its rows are held's now, or handed on
+		}
 		if n.onPath.Load() {
 			o.drain.Broadcast()
 		}
@@ -1108,9 +1140,10 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 				d.Dispose(k.r)
 			}
 		}
-		o.open.Add(-int64(len(e.kids)))
+		kids := o.listed(e.kids) // replay ranges are not counted open
+		o.open.Add(-kids)
 		if t := n.tile; t != nil {
-			t.open.Add(-int64(len(e.kids)))
+			t.open.Add(-kids)
 		}
 		e.kids = nil
 	}
@@ -1252,15 +1285,19 @@ func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
 	e.childSeen = true
 	c := &node[R, P]{r: r, tile: e.n.tile}
-	if t := c.tile; t != nil {
-		t.open.Add(1)
-	}
 	u := childUnits()
 	e.items = append(e.items, item[R, P]{child: c, units: u})
 	e.kids = append(e.kids, c)
 	e.units += u
 	e.o.g.nodes.add(1)
-	e.o.open.Add(1)
+	if i, ok := e.o.replayOf(c); !ok { // a replay range is never listed (nor its tile's)
+		e.o.open.Add(1)
+		if t := c.tile; t != nil {
+			t.open.Add(1)
+		}
+	} else if t := c.tile; t != nil {
+		t.cert.Add(e.o.certRows(i))
+	}
 	return e.maybePublish()
 }
 

@@ -134,10 +134,13 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	azh := azblobtest.Serve(t, azblobtest.Keys())
 	common := []string{"--workers", "8", "--part-size", "4KiB", "--sort-buffer", "512KiB"}
 	// The planned arm's prior: a dataset of the same keys, its page index
-	// read as the run goes.
+	// read as the run goes (its cut file removed).
 	prior := filepath.Join(t.TempDir(), "prior")
 	if out, err := exec.Command(bin, append(append([]string{"diag", "list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, common...), "-o", prior)...).CombinedOutput(); err != nil {
 		t.Fatalf("prior: %v\n%s", err, out)
+	}
+	if err := os.Remove(filepath.Join(prior, dataset.CutsName)); err != nil {
+		t.Fatal(err)
 	}
 	// unsplit: the first occurrences the seeded arms never reach (their
 	// ranges are a page each; the s3-unseeded and azblob-unseeded arms

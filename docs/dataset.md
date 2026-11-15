@@ -170,9 +170,37 @@ The manifest is the authority for which parts belong to the dataset and for its 
 own is inspectable Parquet, not evidence that a dataset exists, is complete, or was published.
 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
-lists), `run.json` (the run report: operational, written after the commit and never part of the dataset), and
-`.swath/` (the run's private workspace, which readers ignore). The full tree and the publication order are in
+lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`), `run.json`
+(the run report: operational, written after the commit and never part of the dataset), and `.swath/` (the run's
+private workspace, which readers ignore). The full tree and the publication order are in
 [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
+
+### The cut file
+
+`cuts.txt` is the dataset's key distribution for the next listing of the same source and scope. It is
+advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
+without it is whole. A committed run writes it last, after the manifest and `run.json` (in a bucket, after the
+orphan cleanup too, within a time bound of its own); one it cannot write, or not in time, is a warning, and the
+dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the
+dataset complete), and a dataset of no rows has none.
+
+It is a [cut file](running.md#seeding-a-refresh-from-the-previous-dataset): one line per cut, the key, a tab, and
+the rows after the previous cut through that key; the counts sum to the manifest's rows and the last line is the
+dataset's last key. A cut falls only where a 1,024-row key page the writer filled ends, never where the next
+page continues a key's versions. With R rows a cut, it is the first such page end where the dataset's rows reach
+each multiple of R; R is the least power of two (1: every page end) that keeps the file within the cut file's
+bounds, 262,144 lines and 16 MiB. With keys of about 60 bytes that is every page end up to about 250 million rows,
+then one cut about every 8,192 rows at 2 billion and every 131,072 at 30 billion, about 16 MB at most; longer keys
+double R sooner. A key holding a line feed cannot be a line: its rows count toward the next line (a dataset whose
+last key holds one has no cut file).
+
+`--seed-from DIR` reads it as the prior when it is the dataset's own: every line counted, the cuts ascending from
+the first part's first key, the last cut the dataset's last key, each count positive and the counts summing to
+the manifest's rows, and every cut a key the run could list (valid UTF-8, within the provider's key length).
+Otherwise (or when it is absent) the run reads the parts' key page index, warns once when the file was there
+and refused, and the run report's `invocation.prior.cuts_file` says which (`read`, `absent`, `refused` with
+`cuts_refused`). A dataset in a bucket carries it too (`PREFIX/cuts.txt`); `--seed-from` reads a local path,
+so copy that one object and pass it as a cut file.
 
 ## A dataset in a bucket
 
@@ -186,8 +214,10 @@ Blob Storage); nothing of it is written to local disk. Readers see the same prof
   resumed. The manifest's `parts[].path` names each one; a reader takes them from the manifest and never from a
   listing of `data/`, which may also hold parts no manifest names (below).
 - **The manifest is created, never replaced:** `PREFIX/manifest.json` is written only if absent (GCS
-  `ifGenerationMatch=0`, S3 and Azure `If-None-Match: *`), so of two runs writing one prefix exactly one commits. `PREFIX/run.json` is written by
-  the run that committed, after the commit, only if absent. A prefix that already holds a manifest is refused
+  `ifGenerationMatch=0`, S3 and Azure `If-None-Match: *`), so of two runs writing one prefix exactly one commits. `PREFIX/cuts.txt`
+  (the [cut file](#the-cut-file)) and `PREFIX/run.json` are written by the run that committed, after the commit, only if absent: an
+  object already at either name, which no run of this dataset wrote, is left as it is (a run replaces nothing it did not create), and
+  for the cut file the run warns that it did not write its own; do not seed from that object. A prefix that already holds a manifest is refused
   before the run starts: a dataset in a bucket is not replaced (choose a new prefix per run).
 
 Parts are uploaded as they close and are individually visible before the commit; an upload aborted before

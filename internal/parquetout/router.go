@@ -170,6 +170,9 @@ type Router[P any] struct {
 	waitNs   atomic.Int64 // time Write waited for an encoder (queue or slot)
 	closed   bool
 	done     []dataset.Part // resumed parts, already published
+	// cuts are the cut file's cuts of the parts this run publishes, added
+	// in ordinal order as each is published (after the resumed parts).
+	cuts *dataset.Cuts
 
 	// mu serializes Write, Close and Abort with the interval cut.
 	mu       sync.Mutex
@@ -298,6 +301,7 @@ type part[P any] struct {
 	limit  int64 // logical bytes per part in effect after this part
 	rows   int64 // rows in parts 0..ordinal
 	info   dataset.Part
+	ends   []dataset.PageEnd // its page ends, until published
 	err    error
 }
 
@@ -320,7 +324,7 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	// admitted, the most column goroutines at once across the parts
 	// (columns), however many parts are open; Admit raises them with the
 	// encoders. A codec per writer held a pool of states each.
-	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: newCodec(opt.Encoders)}
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: newCodec(opt.Encoders), cuts: dataset.NewCuts(0)}
 	for range opt.MaxEncoders - opt.Encoders {
 		r.slots <- struct{}{}
 	}
@@ -328,6 +332,7 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	r.encoders.Store(int32(opt.Encoders))
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
+		r.cuts = dataset.NewCuts(res.Rows)
 	}
 	r.startTick()
 	return r, nil
@@ -663,6 +668,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	t, o := time.Now(), out.Load()
 	p.info, p.err = w.close()
+	p.ends = w.ends
 	r.spent(t, &out, o)
 	if p.err != nil {
 		r.fail(p.err)
@@ -719,9 +725,12 @@ func (r *Router[P]) encode(p *part[P]) {
 		if p.segment {
 			if p.err = faults.At("segment-published"); p.err != nil { // tests: killed with later segments open
 				r.fail(p.err)
+				return
 			}
 		}
 	}
+	r.cuts.Part(p.ends) // in ordinal order: after the previous part's, before the next's
+	p.ends = nil
 }
 
 // adjacent checks part ordinal (info) against the part before it (nil for
@@ -843,6 +852,10 @@ func (r *Router[P]) Close() ([]dataset.Part, error) {
 	return out, nil
 }
 
+// Cuts are the cut file's cuts of the parts this run wrote, after the
+// resumed parts' rows; read once Close has returned.
+func (r *Router[P]) Cuts() *dataset.Cuts { return r.cuts }
+
 // Abort stops every encoder; it is safe after Close. Unpublished files are
 // removed by dataset.Cleanup.
 func (r *Router[P]) Abort() {
@@ -890,4 +903,7 @@ type Encoder interface {
 	// Routed is the rows this run routed into parts: after listing it
 	// must equal the rows the order stage handed on.
 	Routed() int64
+	// Cuts are the cut file's cuts of the parts this run wrote, after
+	// Close.
+	Cuts() *dataset.Cuts
 }

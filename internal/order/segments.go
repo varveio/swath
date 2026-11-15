@@ -31,8 +31,17 @@ import (
 // written by one worker, so parts encode in parallel instead of one after
 // another. The sink publishes them in ordinal order and checks each
 // against the previous (adjacency) before publishing it; the seams between
-// segments are checked again here. Before listing is done nothing
-// changes: the drainer walks the tree as always.
+// segments are checked again here. Without a plan, before listing is done
+// nothing changes: the drainer walks the tree as always.
+//
+// A resume's reused certificates (replay ranges) are not listed: listing
+// ends with the gaps around them, and a tile holding one is listed once
+// its other ranges are done. The ones the drainer has not reached when a
+// stretch or the tail is planned are the segments' too. Their files are read once before the cut
+// (scanCert: their frames located, their rows checked and counted, none
+// kept), and each frame holding a row above K is a unit, read again by
+// its segment; the files go back to their cache once every segment is
+// written, as this run's durable files do.
 
 // Segmenter is a sink that can take the rest of its stream as consecutive
 // segments (the Parquet router through registry).
@@ -105,12 +114,21 @@ type SegmentStats struct {
 	// drain holds it too).
 	Tree int64
 	// DurableFiles is the durable spill files (order.Cache) the segments
-	// read frames of; DurableBoundaries the segment boundaries that fall
-	// inside one of their frames (a span of it on either side).
+	// read frames of, reused certificates included; DurableBoundaries the
+	// segment boundaries that fall inside one of their frames (a span of it
+	// on either side).
 	DurableFiles, DurableBoundaries int
 	// Deferred is the rows a planned boundary moved past, in group mode,
 	// because they continued the group of the key before it (cut).
 	Deferred int64
+	// Certificates is the reused certificates (a resume's) the segments
+	// replayed, the ones the drainer had not reached when they were
+	// planned (listing ended, or a stretch held them); CertRows their rows
+	// handed on (in Rows), CertScan the plan's time reading them before
+	// the cut (scanCert; in Plan).
+	Certificates int
+	CertRows     int64
+	CertScan     time.Duration
 	// Rolling is the stretches written while listing went on (nil
 	// without a plan). The fields above count them too; Reason is the
 	// tail's.
@@ -127,11 +145,13 @@ type SegmentStats struct {
 // to close): over Write, the mean segments written at once; PeakWriters the
 // most open at once. Gap sums the drainer's time between the end of one
 // stretch and the start of the next (MaxGap the longest): the encoders the
-// stretches leave idle unless the serial drain uses them. NotEngaged counts,
-// by reason (Roll*, Segment*), the decisions that wrote no stretch.
+// stretches leave idle unless the serial drain uses them. Certificates is
+// the reused certificates (a resume's) the stretches replayed (in
+// SegmentStats.Certificates). NotEngaged counts, by reason (Roll*,
+// Segment*), the decisions that wrote no stretch.
 type RollingStats struct {
 	Stretches, Segments           int64
-	Rows                          int64
+	Rows, Certificates            int64
 	Time, OpenWait                time.Duration
 	Plan, Write, HandOff, Writers time.Duration
 	PeakWriters                   int
@@ -223,13 +243,24 @@ type segState[P any] struct {
 }
 
 // unit is a run of rows still to hand on: an in-memory item's rows, or a
-// spilled frame.
+// spilled frame, a reused certificate's included (its first skip rows lie
+// at or below K: n and logical are the rows after them).
 type unit[P any] struct {
 	rows       []schema.Row[P]
 	f          *spillFile
 	at         spillAt
 	n, logical int64
 	units      int64 // what its rows count against the row budget
+	skip       int
+}
+
+// certAt is a reused certificate the drainer has not reached when the
+// segments are planned: its replay range's node, and its place among the
+// units (before the unit at index at).
+type certAt[R, P any] struct {
+	n    *node[R, P]
+	cert int
+	at   int
 }
 
 // segment is one part's rows: from row r0 of unit u0 to row r1 of unit u1
@@ -280,9 +311,10 @@ func (o *run[R, P]) stretchDue() bool {
 func (s *segState[P]) notEngaged(why string) { s.roll.NotEngaged[why]++ }
 
 // listedAhead is the rows held by the run of listed tiles that starts with
-// the drainer's own (its node's tile, or the plan root's next child), summed
-// until they reach enough, and false when that tile is still listing (mu
-// held).
+// the drainer's own (its node's tile, or the plan root's next child), its
+// reused certificates' rows not yet replayed included (tileCredit.cert),
+// summed until they reach enough, and false when that tile is still
+// listing (mu held).
 func (o *run[R, P]) listedAhead(enough int64) (int64, bool) {
 	if len(o.path) == 0 || o.path[0].n != o.win.root {
 		return 0, false
@@ -293,7 +325,7 @@ func (o *run[R, P]) listedAhead(enough int64) (int64, bool) {
 		if t.open.Load() != 0 {
 			return 0, false
 		}
-		rows = t.held.Load()
+		rows = t.held.Load() + t.cert.Load()
 	}
 	items := o.win.root.items
 	j := o.path[0].i
@@ -302,7 +334,7 @@ func (o *run[R, P]) listedAhead(enough int64) (int64, bool) {
 		if t.open.Load() != 0 {
 			break
 		}
-		rows += t.held.Load()
+		rows += t.held.Load() + t.cert.Load()
 	}
 	if len(o.path) == 1 && j == o.path[0].i {
 		return 0, false
@@ -386,7 +418,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	}
 	t := time.Now()
 	o.seg.held, o.seg.freed = 0, 0
-	units, files, released, releasedMeta, nodes, markers, mem, end := o.flatten()
+	units, files, certs, released, releasedMeta, nodes, markers, mem, end := o.flatten()
 	tree := o.buffered
 	// What the segments may hold is the budget beside the tree: the tree
 	// holds about the budget once listing has ended (spill keeps it
@@ -398,6 +430,33 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		free -= sh.Load()
 	}
 	o.mu.Unlock()
+	var scans []*certScan[P]
+	var certRows int64
+	if len(certs) > 0 {
+		// The drainer's readers close (reopened where they were if the
+		// segments do not go ahead): their descriptors are the scans'.
+		o.sp.closeReaders()
+		ts := time.Now()
+		scans, err = o.scanCerts(certs, min(maxReaders, max(1, spareProcs())))
+		o.seg.st.CertScan += time.Since(ts)
+		if err != nil {
+			o.mu.Lock()
+			return false, err
+		}
+		n := len(units)
+		for _, s := range scans {
+			n += len(s.units)
+		}
+		all := make([]unit[P], 0, n)
+		at := 0
+		for j, c := range certs {
+			all = append(append(all, units[at:c.at]...), scans[j].units...)
+			scans[j].units = nil // one copy is kept: the merged units
+			at = c.at
+			certRows += scans[j].emitted
+		}
+		units = append(all, units[at:]...)
+	}
 	per := segmentShare(units, pl)
 	if hookShare != nil {
 		per = hookShare(per)
@@ -435,6 +494,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		if began {
 			sg.AbandonSegments() // the drainer writes on, the interval cut resumes
 		}
+		o.dropScans(scans)
 		o.mu.Lock()
 		why := SegmentSinglePart
 		switch {
@@ -483,6 +543,19 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	for _, it := range mem {
 		it.rows = nil
 	}
+	// The certificates are the segments' to replay: their rows are
+	// received here, as the drainer's replay receives them (Rows).
+	for _, c := range certs {
+		c.n.state = done
+		if t := c.n.tile; t != nil {
+			t.cert.Add(-o.certRows(c.cert))
+		}
+	}
+	o.seg.st.Certificates += len(certs)
+	o.seg.st.CertRows += certRows
+	o.received.Add(certRows)
+	o.replayed.Add(certRows)
+	o.g.ahead.add(certRows)
 	o.seg.uses = make([]atomic.Int32, len(units))
 	for _, sg := range segs {
 		for ui := sg.u0; ui < sg.u1 || (ui == sg.u1 && sg.r1 > 0); ui++ {
@@ -520,10 +593,19 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		// Every spill file the segments finished is done as the drainer's
 		// trailer read leaves it: a run-private file removed and its credit
 		// returned, a durable one handed back to its cache (drainedFile).
-		// Every worker has returned: the drainer owns the files again, and
-		// no later stretch or serial read meets them.
+		// A certificate goes back the same way, as the drainer's replay
+		// leaves it, and is retired once K covers it: until here it is
+		// undrained, so neither K nor eviction retires it while a segment
+		// may still read it. Every worker has returned: the drainer owns
+		// the files again, and no later stretch or serial read meets them.
 		for f := range files {
 			if e := o.sp.drained(f); e != nil && err == nil {
+				err = e
+			}
+		}
+		for _, s := range scans {
+			o.sp.cache.replayedCert(s.emitted, s.skipped)
+			if e := o.sp.drained(s.f); e != nil && err == nil {
 				err = e
 			}
 		}
@@ -552,6 +634,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	r.Stretches++
 	r.Segments += int64(len(segs))
 	r.Rows += rows
+	r.Certificates += int64(len(certs))
 	r.Time += end2.Sub(t)
 	r.Plan += tw0.Sub(t)
 	r.Write += tw1.Sub(tw0)
@@ -751,20 +834,22 @@ var hookSegmenter func(mu *sync.Mutex)
 
 // flatten lists the rows still to hand on in the stretch, in drain order,
 // from the drainer's walk (mu held), with the rows each spill file must
-// account for at its trailer, the budget units the items hold, the nodes
-// and markers they release, the items holding rows in memory (whose rows
-// the segments, once committed, own instead), and where the stretch ends.
-// Every node it enters is done: once listing is done, all of them; with a
-// plan before then, it enters the plan root's next tile only while that
-// tile is listed (tileCredit.open), and stops at the first that is not, or
-// at the root's end while the plan goes on.
-func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, released, meta, nodes, markers int64, mem []*item[R, P], end stretchEnd) {
+// account for at its trailer, the replay ranges not reached yet (their
+// certificates' rows are not units yet: scanCert), the budget units the
+// items hold, the nodes and markers they release, the items holding rows
+// in memory (whose rows the segments, once committed, own instead), and
+// where the stretch ends. Every node it enters is done but those replay
+// ranges: once listing is done, all of them; with a plan before then, it
+// enters the plan root's next tile only while that tile is listed
+// (tileCredit.open, which does not count replay ranges either), and stops
+// at the first that is not, or at the root's end while the plan goes on.
+func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, certs []certAt[R, P], released, meta, nodes, markers int64, mem []*item[R, P], end stretchEnd) {
 	files = map[*spillFile]int64{}
 	path := append([]drainFrame[R, P](nil), o.path...)
 	if o.win != nil && len(path) > 1 {
 		if t := path[1].n.tile; t.open.Load() != 0 { // the drainer's tile still listing: no stretch
 			end.at = path[0].i
-			return units, files, released, meta, nodes, markers, mem, end
+			return units, files, certs, released, meta, nodes, markers, mem, end
 		}
 		end.tiles = append(end.tiles, path[1].n.tile)
 	}
@@ -773,7 +858,7 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 		if w := o.win; w != nil && f.n == w.root {
 			if f.i < len(f.n.items) && f.n.items[f.i].child.tile.open.Load() != 0 || f.i >= len(f.n.items) && f.n.state != done {
 				end.at = f.i
-				return units, files, released, meta, nodes, markers, mem, end
+				return units, files, certs, released, meta, nodes, markers, mem, end
 			}
 			if f.i < len(f.n.items) {
 				end.tiles = append(end.tiles, f.n.items[f.i].child.tile)
@@ -782,6 +867,9 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 		if f.i >= len(f.n.items) {
 			if sf := f.n.spill; sf != nil {
 				files[sf] += sf.read // what the drainer replayed itself
+			}
+			if i, ok := o.replayOf(f.n); ok && f.n.state == queued {
+				certs = append(certs, certAt[R, P]{n: f.n, cert: i, at: len(units)})
 			}
 			path = path[:len(path)-1]
 			nodes++
@@ -809,12 +897,13 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 		}
 	}
 	end.final = true
-	return units, files, released, meta, nodes, markers, mem, end
+	return units, files, certs, released, meta, nodes, markers, mem, end
 }
 
 // rowsTimed is a unit's rows, with the frame's decoding time: in memory,
-// or its frame read and decoded on its file's read handle; a frame holding
-// other than the rows its marker recorded is refused.
+// or its frame read and decoded on its file's read handle (past its skip
+// rows); a frame holding other than the rows its marker (or its
+// certificate's scan) recorded is refused.
 func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error) {
 	if u.f == nil {
 		return u.rows, 0, nil
@@ -823,10 +912,10 @@ func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error
 	if err != nil {
 		return nil, 0, err
 	}
-	if int64(len(rows)) != u.n {
-		return nil, 0, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), u.n)
+	if int64(len(rows)) != int64(u.skip)+u.n {
+		return nil, 0, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), int64(u.skip)+u.n)
 	}
-	return rows, dec, nil
+	return rows[u.skip:], dec, nil
 }
 
 // segTimes is one segment's time by what it did (SegmentStats).
@@ -1074,6 +1163,11 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 				return 0, 0, "", "", false, err
 			}
 			held += u.units
+		}
+		if u.f != nil && u.f.d != nil && u.f.d.reused {
+			if err := faults.At("spill-replay-frame"); err != nil { // a recovery replay's frame, earlier ones handed on
+				return 0, 0, "", "", false, err
+			}
 		}
 		t := time.Now()
 		rs, dec, err := o.rowsTimed(u)

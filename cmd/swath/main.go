@@ -386,10 +386,12 @@ func printVersion(w io.Writer) {
 // crash points (package faults), in this order, SWATH_TEST_SERIAL_SEALS
 // (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
 // SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
-// "point:n": the n-th time the process reaches crash point point; and on
+// "point:n": the n-th time the process reaches crash point point, and
+// SWATH_TEST_SLOW_AT (slowAt); and on
 // the order stage's events (order.SetDurableEvents), serialSeals',
-// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and SWATH_TEST_STRETCH_FILE
-// (stretchFile).
+// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile),
+// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing) and
+// SWATH_TEST_STRETCH_FILE (stretchFile).
 func testHooks() {
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
@@ -398,6 +400,9 @@ func testHooks() {
 	}
 	if path := os.Getenv("SWATH_TEST_LAST_RANGE_FILE"); path != "" {
 		events = append(events, lastRangeFile(path))
+	}
+	if os.Getenv("SWATH_TEST_DRAIN_AFTER_LISTING") != "" {
+		events = append(events, drainAfterListing())
 	}
 	if path := os.Getenv("SWATH_TEST_STRETCH_FILE"); path != "" {
 		events = append(events, stretchFile(path))
@@ -414,7 +419,7 @@ func testHooks() {
 		fmt.Fprintln(os.Stderr, killMarker(os.Getenv("SWATH_TEST_KILL_ID"), killAt)) // the harness tells this kill from its own
 		kill()
 	}
-	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })} {
+	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} }), slowAt(os.Getenv("SWATH_TEST_SLOW_AT"))} {
 		if h != nil {
 			hooks = append(hooks, h)
 		}
@@ -450,6 +455,26 @@ func atNth(spec string, act func()) func(string) {
 	return func(p string) {
 		if p == point && seen.Add(1) == nth {
 			act()
+		}
+	}
+}
+
+// slowAt is SWATH_TEST_SLOW_AT, "point:duration": each time the process
+// reaches crash point point, the goroutine sleeps that long (slow work that
+// is still work: cmd/swath's TestSegmentsReplayDurableFiles slows each
+// certificate's scan past the stall timeout). Nil for another spec.
+func slowAt(spec string) func(string) {
+	point, d, ok := strings.Cut(spec, ":")
+	if !ok {
+		return nil
+	}
+	dur, err := time.ParseDuration(d)
+	if err != nil {
+		return nil
+	}
+	return func(p string) {
+		if p == point {
+			time.Sleep(dur)
 		}
 	}
 }
@@ -506,6 +531,30 @@ func lastRangeFile(path string) func(string) {
 		if alone.Load() && sealed.Load() && made.CompareAndSwap(false, true) {
 			if f, err := os.Create(path); err == nil {
 				f.Close()
+			}
+		}
+	}
+}
+
+// drainAfterListing is SWATH_TEST_DRAIN_AFTER_LISTING: the drainer starts
+// ("drain-start", on its goroutine) only once every range is listed
+// ("listing-done"), so a resume's reused certificates are left to the
+// segments, none replayed by the drainer while the gaps are listed
+// (cmd/swath's TestSegmentsReplayDurableFiles), except those it reaches
+// before the router can state its cut rule (a resume whose interrupted run
+// published no part: until its own part 0 has closed by size). A wait over
+// 30 s gives up.
+func drainAfterListing() func(string) {
+	listed := make(chan struct{})
+	var once sync.Once
+	return func(e string) {
+		switch e {
+		case "listing-done":
+			once.Do(func() { close(listed) })
+		case "drain-start":
+			select {
+			case <-listed:
+			case <-time.After(30 * time.Second):
 			}
 		}
 	}

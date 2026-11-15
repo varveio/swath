@@ -90,10 +90,17 @@ type tileCredit struct {
 	held   atomic.Int64 // rows received and not yet handed to the sink
 	grown  atomic.Bool
 	closed bool // the drainer closed the tile's node (mu)
-	// open counts the tile's ranges not yet done (o.open's, per tile):
-	// at 0 under mu the tile is listed, every range in it done, its items
-	// final and its spill files complete (segments.go: rolling).
+	// open counts the tile's ranges not yet done (o.open's, per tile;
+	// replay ranges are not counted, as there): at 0 under mu the tile is
+	// listed, every range in it done but the replay ranges, its items
+	// final and its spill files complete (segments.go: rolling; a replay
+	// range still queued is the stretch's certificate, scanCert).
 	open atomic.Int64
+	// cert is the captured rows of its reused certificates (replay
+	// ranges) not yet replayed: rows it will hand on that held does not
+	// count yet (an estimate: those at or below K are skipped), which a
+	// stretch counts (listedAhead).
+	cert atomic.Int64
 }
 
 // window is the run's frontier window (nil without a plan).
@@ -271,7 +278,6 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 	}
 	w.sumEst += e
 	t := &tileCredit{est: e, grow: growthFactor * max(e, w.sumEst/w.st.Tiles, 1)}
-	t.open.Store(1) // its node
 	w.tiles = append(w.tiles, t)
 	w.est += e
 	n := &node[R, P]{r: r, tile: t}
@@ -281,7 +287,13 @@ func (o *run[R, P]) admitTile(force bool) (int, error) {
 	o.buffered += u
 	o.max = max(o.max, o.buffered)
 	o.g.nodes.add(1)
-	o.open.Add(1)
+	if i, ok := o.replayOf(n); ok { // a replay range is never listed (open): its tile is at once
+		w.listed.Add(1)
+		t.cert.Store(o.certRows(i))
+	} else {
+		o.open.Add(1)
+		t.open.Store(1) // its node
+	}
 	o.stack = append(o.stack, n)
 	w.st.PeakTiles = max(w.st.PeakTiles, int64(len(w.tiles)))
 	w.st.PeakCreditRows = max(w.st.PeakCreditRows, w.est+w.excess.Load())
@@ -378,6 +390,7 @@ func (o *run[R, P]) notifyListed() {
 		o.opt.ListingDone()
 	}
 	o.listedNotified.Store(true)
+	event("listing-done") // tests: every range is listed
 }
 
 // awaitPlan is the drainer at the plan root with every admitted tile

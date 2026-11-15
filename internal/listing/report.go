@@ -41,10 +41,15 @@ import (
 // resources.drain.writer_before_listing_done. 9 adds fields only (#513):
 // resources.spill.durable.limit_bytes and limited_by (the spill the
 // certificate slots and the ledger history cap derive from). 10 adds
-// resources.window, the frontier window of a run planned from a counted
-// --seed-from (#535). 11 adds resources.drain.segments.rolling, the segments a
-// seeded run writes while listing goes on (#535).
-const ReportVersion = 11
+// fields only (#288): resources.drain.segments.certificates_read,
+// certified_rows and certificate_scan_ns (a resume's certificates the
+// segments replayed), and resources.spill.durable.resume.
+// replayed_certificates. 11 adds resources.window, the frontier window of
+// a run planned from a counted --seed-from (#535). 12 adds
+// invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
+// 13 adds resources.drain.segments.rolling, the segments a seeded run
+// writes while listing goes on (#535).
+const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -655,6 +660,13 @@ type Segments struct {
 	// DeferredRows is the rows a planned boundary moved past because they
 	// continued the group of the key before it (versions schemas).
 	DeferredRows int64 `json:"deferred_rows"`
+	// CertificatesRead is the reused certificates (a resume's durable
+	// spill) the segments replayed, CertifiedRows their rows (in rows), and
+	// CertificateScanNs the plan's time reading them before the cut (in
+	// plan_ns). Durable_files_read counts their files too.
+	CertificatesRead  int   `json:"certificates_read"`
+	CertifiedRows     int64 `json:"certified_rows"`
+	CertificateScanNs int64 `json:"certificate_scan_ns"`
 	// Rolling is the stretches written while listing went on (a seeded
 	// run's plan; nil without one). The fields above count them too;
 	// reason is the tail's.
@@ -668,6 +680,9 @@ type Rolling struct {
 	Stretches int64 `json:"stretches"`
 	Segments  int64 `json:"segments"`
 	Rows      int64 `json:"rows"`
+	// CertificatesRead is the reused certificates (a resume's) the
+	// stretches replayed (in the segments' certificates_read).
+	CertificatesRead int64 `json:"certificates_read"`
 	// TimeNs is the drainer's time inside the stretches (planning them,
 	// waiting for their segments, retiring their spill files): the serial
 	// drain stands meanwhile. OpenWaitNs is the segments' time opening

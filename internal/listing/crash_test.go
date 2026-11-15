@@ -57,7 +57,9 @@ func crashConfig(url, out string, resume bool) Config {
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
 // as a kill would) at every crash point, at its first and a later
 // occurrence, then resumes; the final dataset must be byte-identical to an
-// uninterrupted run. It is the step-2 gate (contracts I1, I5, I6), for each
+// uninterrupted run, its cut file too (the retained parts' cuts read from
+// their key page index, the rest collected as written; none after a kill
+// past the commit). It is the step-2 gate (contracts I1, I5, I6), for each
 // journaled provider (spill is provider-neutral: S3 runs it both ways; with
 // spill on its durable spill is sealed, ledgered and retired, and the kill
 // points include each of those steps: the resume replays what it accepts).
@@ -73,9 +75,13 @@ func TestCrashMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
 	s3url, gcsep, azep := crashBucket(t), gcsBucket(t, 8000), azblobBucket(t, 8000)
 	// The seeded arm's prior: an earlier listing's dataset, its page index
-	// read as the run goes (and its reader failing at seed-from-part).
+	// read as the run goes (its cut file removed; and its reader failing
+	// at seed-from-part).
 	prior := filepath.Join(t.TempDir(), "prior")
 	if _, err := Run(context.Background(), crashConfig(s3url, prior, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(prior, dataset.CutsName)); err != nil {
 		t.Fatal(err)
 	}
 	// The coarse arm's prior: a counted cut file of a cut every 2,000 keys,
@@ -200,6 +206,11 @@ func TestCrashMatrix(t *testing.T) {
 							}
 						} else {
 							sameDataset(t, point, ref, out)
+						}
+						if point != "manifest" {
+							// Killed after the commit, the cut file is not
+							// written (nothing resumes a committed run).
+							requireCuts(t, point, out)
 						}
 						t.Logf("resumed %d parts (%d rows), listed %d more rows, %d parts cut by time", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsEmitted, sum.Resources.PartTimeCuts)
 					})

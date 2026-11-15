@@ -12,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/runtrace"
@@ -33,15 +35,18 @@ func plannedConfig(url, out, prior string, w int) Config {
 }
 
 // TestPlannedRunIsTheUnseededRun: a run planned from a counted prior (its
-// predecessor's dataset, read as it goes, or a counted cut file whose cuts
-// are each several tiles' worth, so the engine splits inside them) writes
-// the unseeded run's parts byte for byte at 1, 4, 64 and 256 workers with the
-// part interval off, with a filter as well; under a spill cap at a fifth of
-// the unseeded run's spill peak the frontier window binds and the parts are
-// the same, and with the dataset's tiles (a key page each, far under half
-// the cap) no frame is refused. A coarse cut's tile can spill past the cap
-// by itself: the window admits tiles, it does not bound one. A dry run seeded
-// from the same priors counts every row (order.Count takes no plan).
+// predecessor's dataset, from its cut file or, without it, its page index
+// read as it goes; the dataset with a coarsened cut file of two cuts, each
+// more keys than a tile of keyrange.TilePages pages; or a counted cut file
+// whose cuts are each several tiles' worth, so the engine splits inside
+// them) writes the unseeded run's parts byte for byte at 1, 4, 64 and 256
+// workers with the part interval off, with a filter as well; under a spill
+// cap at a fifth of the unseeded run's spill peak the frontier window binds
+// and the parts are the same, and with the dataset's tiles (a key page
+// each, far under half the cap) no frame is refused. A coarse cut's tile
+// can spill past the cap by itself: the window admits tiles, it does not
+// bound one. A dry run seeded from the same priors counts every row
+// (order.Count takes no plan).
 func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	url := crashBucket(t)
 	dir := t.TempDir()
@@ -59,7 +64,34 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	if err := os.WriteFile(cuts, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, prior := range []string{ref, cuts} {
+	index := filepath.Join(dir, "index")
+	if err := os.CopyFS(index, os.DirFS(ref)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(index, dataset.CutsName)); err != nil {
+		t.Fatal(err)
+	}
+	// The dataset with the cut file its writer makes under a bound of two
+	// lines: each cut more keys than a tile of TilePages pages of 100.
+	sparse := filepath.Join(dir, "sparse")
+	if err := os.CopyFS(sparse, os.DirFS(index)); err != nil {
+		t.Fatal(err)
+	}
+	full, err := os.ReadFile(filepath.Join(ref, dataset.CutsName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := coarsened(t, full, 2)
+	for l := range strings.SplitSeq(strings.TrimSuffix(string(two), "\n"), "\n") {
+		if n, _ := strconv.Atoi(l[strings.LastIndexByte(l, '\t')+1:]); n <= keyrange.TilePages*100 {
+			t.Fatalf("a coarsened cut of %d keys: not coarser than a tile of %d pages", n, keyrange.TilePages)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sparse, dataset.CutsName), two, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	took := map[string]string{ref: "read", index: "absent", sparse: "read", cuts: ""}
+	for _, prior := range []string{ref, index, sparse, cuts} {
 		for _, w := range []int{1, 4, 64, 256} {
 			name := fmt.Sprintf("%s/w%d", filepath.Base(prior), w)
 			out := filepath.Join(dir, strings.ReplaceAll(name, "/", "-"))
@@ -68,8 +100,15 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 				t.Fatalf("%s: %v", name, err)
 			}
 			sameDataset(t, name, ref, out)
-			if sum.Resources.Window == nil || sum.Resources.Window.Tiles < 4 {
+			tiles := int64(4)
+			if prior == sparse {
+				tiles = 2
+			}
+			if sum.Resources.Window == nil || sum.Resources.Window.Tiles < tiles {
 				t.Fatalf("%s: window %+v", name, sum.Resources.Window)
+			}
+			if p := sum.Invocation.Prior; p == nil || p.CutsFile != took[prior] {
+				t.Fatalf("%s: prior %+v, want its cut file %q", name, p, took[prior])
 			}
 		}
 	}
@@ -77,7 +116,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	if peak == 0 {
 		t.Fatal("the unseeded run did not spill: the cap arm proves nothing")
 	}
-	for _, prior := range []string{ref, cuts} {
+	for _, prior := range []string{ref, index, sparse, cuts} {
 		out := filepath.Join(dir, "capped-"+filepath.Base(prior))
 		cfg := plannedConfig(url, out, prior, 8)
 		cfg.Limits.Spill.Max = peak / 5
@@ -88,7 +127,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 		sameDataset(t, out, ref, out)
 		s, w := sum.Resources.Spill, sum.Resources.Window
 		t.Logf("%s: unseeded peak %d, cap %d: peak %d, refused %d, window %+v", filepath.Base(prior), peak, cfg.Limits.Spill.Max, s.PeakBytes, s.Refused, w)
-		if (prior == ref && s.Refused != 0) || w.BoundBy != "spill_cap" || w.Waits["rows"]+w.Waits["spill"] == 0 {
+		if ((prior == ref || prior == index) && s.Refused != 0) || w.BoundBy != "spill_cap" || w.Waits["rows"]+w.Waits["spill"] == 0 {
 			t.Fatalf("capped: refused %d frames, window %+v", s.Refused, w)
 		}
 	}
@@ -108,7 +147,7 @@ func TestPlannedRunIsTheUnseededRun(t *testing.T) {
 	}
 	sameDataset(t, "filtered", fref, fout)
 	// A dry run counts with the prior tiled at once.
-	for _, prior := range []string{ref, cuts} {
+	for _, prior := range []string{ref, index, sparse, cuts} {
 		cfg := plannedConfig(url, "", prior, 8)
 		sum, err := Run(context.Background(), cfg)
 		if err != nil || sum.Output.RowsEmitted != int64(len(keys)) || sum.Resources.Window != nil {
@@ -182,6 +221,11 @@ func TestDurableResumePlannedAcrossTiles(t *testing.T) {
 	sameDataset(t, "planned resume", ref, out)
 	if d := sum.Resources.Spill.Durable; d == nil || d.Resume == nil || d.Resume.Accepted == 0 || sum.Resources.Window == nil {
 		t.Fatalf("nothing reused, or not planned: %+v, window %+v", d, sum.Resources.Window)
+	}
+	// The replay ranges are never listed: listing ends once every gap is,
+	// so the tail can take the certificates left (#288).
+	if sum.Timings.ListingDoneAt.IsZero() || sum.Resources.Drain.Segments == nil || sum.Resources.Drain.Segments.Reason == "listing_active" {
+		t.Fatalf("listing never done: listing_done_at %v, segments %+v", sum.Timings.ListingDoneAt, sum.Resources.Drain.Segments)
 	}
 	m := manifestOf(t, out)
 	k := string(m.Parts[sum.Output.PartsRetained-1].MaxKey)

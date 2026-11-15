@@ -43,6 +43,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
 | `parts` | parts published |
 | `verified_bytes` | a resume's bytes of retained parts checked so far |
+| `scanned_bytes` | a resume's bytes of reused certificates its segments have read before their cut ([ordering.md](../internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | `advance` | the sum of the above; rises in every phase |
 | `answered` | requests the service answered usably (a sign the service is up, not progress) |
 | `frontier` | the listing's pages: those that held an entry or ended a chain, and empty continuing pages within the first 1,024 of their run (the watchdog's liveness with `advance`) |
@@ -63,7 +64,7 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 10) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 11) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
 this report. A change to the schema bumps `report_version` and is listed in
 the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
@@ -73,10 +74,10 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 11 |
+| `report_version` | 13 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
+| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; for a dataset, `cuts_file`, how its cut file was taken: `read` (its cuts are the prior), `absent`, or `refused` with `cuts_refused` saying why ([dataset.md](../dataset.md#the-cut-file)); without it `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `unreadable` (the count of entries that could not be read: the rows and totals leave them out; the manifest's `coverage.unreadable`), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` ([exit-codes.md](exit-codes.md)) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential |
 
@@ -190,8 +191,8 @@ began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exh
 metadata bound), `abandoned` (by reason), `sealed_files`,
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
-`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
-`requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
+`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`,
+`replayed_certificates` (by the drainer or the segments), `gaps`, `requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
 drain: its tail once listing is done, and the drainer's times over the whole run
 ([internals/ordering.md](../internals/ordering.md), every field in
 [internals/counters.md](../internals/counters.md)): `tail_ns`,
@@ -202,9 +203,10 @@ encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
-`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`; the
+`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`, and on a
+resume the reused certificates the segments replayed: `certificates_read`, `certified_rows`, `certificate_scan_ns`; the
 counts include `rolling`, the stretches a seeded run wrote while listing went on, absent without a plan:
-`stretches`, `segments`, `rows`, `time_ns` (the drainer inside them) split into `plan_ns`, `write_ns` and
+`stretches`, `segments`, `rows`, `certificates_read`, `time_ns` (the drainer inside them) split into `plan_ns`, `write_ns` and
 `handoff_ns`, `open_wait_ns` (segments opening their parts), `writers_ns` and `peak_writers` (segments written at
 once: `writers_ns` over `write_ns` is the mean), `gap_ns` and `max_gap_ns` (between stretches) and `not_engaged`
 by reason, [internals/ordering.md](../internals/ordering.md#rolling-segments-during-listing)); and `encoders_at_start`, `encoders_after_listing`,

@@ -5,48 +5,66 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: the run report is at `report_version` 13. The report fields the entries below name are new in it.
+- Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
+  file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
+  the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
+  SeekParquet format and written last, after the run report; a run that cannot write it (in a bucket, within a
+  time bound of its own) warns and stays committed. `--seed-from DATASET` makes its
+  tiles from it instead of the parts' page index when it matches the manifest; a bucket dataset's can be copied
+  and passed as a cut file. The run report adds `invocation.prior.cuts_file` and `cuts_refused`.
 - Go port: a seeded run writes the tiles already listed ahead of its output as several Parquet parts at once
   while listing goes on, instead of one part at a time until listing ends: each such stretch is cut with the
   part router's own rule, so the parts are the same, byte for byte without the part interval, and its last part
-  stays open for the rows after it. The run report (`report_version` 11) adds
+  stays open for the rows after it. A resume's reused certificates in such a
+  stretch are replayed by its segments, as in the tail. The run report adds
   `resources.drain.segments.rolling` (#535).
 
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold
-  less), so rows listed ahead of the
-  output stay near the window instead of growing with the bucket; a dry run and uncounted cut files are unchanged.
-  The run report (`report_version` 10) adds `resources.window`; the range engine counts `seed.from.merged` and
-  `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and `--seed-from-window-rows` the window's
-  rows (#535).
-- Go port: a durable spill certificate slot is 64 KiB of the spill cap, not 1 MiB, up to the metadata ceiling
-  (262,144 certificates, 512 MiB of their metadata), which a 16 GiB cap reaches (`limited_by` `metadata`). Listings
-  of 200 to 600 million keys at 2,048 workers ran out of slots at one per MiB (16 of 28 in a kill-and-resume
-  sweep, whose resumes replayed 35 to 46 % of the keys against 93 to 97 % for the rest); every one of their ranges
-  now has a slot (#513).
-
+  less), so rows listed ahead of the output stay near the window instead of growing with the bucket, and such a
+  relist needs a fraction of a cold run's spill. The window admits tiles; it does not bound storage, so a region
+  that grew since the prior can still fill a small cap. A dry run, uncounted cut files and unseeded runs are
+  unchanged. The run report adds `resources.window`; the range engine counts `seed.from.merged` and
+  `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a tile's pages (32) and
+  `--seed-from-window-rows` the window's rows (#535).
+- Go port: a resume that reuses durable-spill certificates writes its tail with the parallel segments. Before,
+  such a resume never finished listing: its replay ranges were counted as ranges still to list, so the segments
+  never engaged (`drain.segments.reason` `listing_active`), the encoders reserved for after listing were never
+  admitted, and every replayed row went through the one drainer. A resume took 2.11 to 2.18 times a fresh run's
+  wall on 28 production key lists, and takes 0.67 to 0.82 times it now (10 of those lists). Listing now ends with the gaps around the
+  certificates, and the certificates the drainer has not reached by then are replayed by the segments, read by
+  offset after one scan of their files. The parts are the uninterrupted run's. The run report adds
+  `drain.segments.certificates_read`, `certified_rows` and `certificate_scan_ns`, and
+  `spill.durable.resume.replayed_certificates`; `progress.json` counts the bytes the scans read
+  (`scanned_bytes`, in `advance`), so a long scan is not stopped as stuck (#288).
 - Go port: the durable spill's certificate limits scale with the spill cap instead of stopping at 10,000
-  live certificates and a 40,000-record ledger: one certificate slot per MiB of the spill cap (of the free space
-  without one), at most 262,144, and at most 512 MiB of certificate metadata, keys counted
-  (`metadata_exhausted`), and a ledger history of four records per
-  slot, at least 40,000; a resume reads the ledger within the largest limits, whatever free space it finds. A
-  billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits; every finished range now
-  fits, so a resume relists the ranges unfinished at the stop. With the default spill cap a resume counts the
-  certified files it kept as free space, so on the same disk it no longer rejects those that fit the stopped
-  run's cap. The run report (`report_version` 9) says what the limits derive from:
+  live certificates and a 40,000-record ledger: one certificate slot per 64 KiB of the spill cap (of the free
+  space without one), up to a ceiling of 262,144 certificates and 512 MiB of their metadata, keys counted
+  (`metadata_exhausted`), which a 16 GiB cap reaches (`limited_by` `metadata`); a ledger history of four records
+  per slot, at least 40,000. A resume reads the ledger within the largest limits, whatever free space it finds.
+  A billion-key listing that spilled 73,081 ranges sealed 20,000 under the old limits, and in a kill-and-resume
+  sweep of 28 lists of 160 to 593 million keys at 2,048 workers, 16 ran out of slots even at one per MiB and
+  their resumes replayed as little as 35 % of the keys from certificates, against 93 to 97 % for the rest; those
+  lists' ranges now all have a slot, so a resume relists little more than the ranges unfinished at the stop. With the default
+  spill cap a resume counts the certified files it kept as free space, so on the same disk it no longer rejects
+  those that fit the stopped run's cap. The run report says what the limits derive from:
   `resources.spill.durable.limit_bytes` and `limited_by` (#513).
 - Go port: a sorted run whose spill cap is far too small, so that listing waits on the output, says so: once
-  spill has stood refused with workers waiting for 2 minutes, the error event `spill_pressure` names the wait,
-  spill and its cap, the output's rate and the remedy, and repeats every 30 minutes while it lasts
-  (`order.spill_pressure_since` in `progress.json`). `--spill-wait-timeout DURATION` (default 0: wait) stops
-  such a run instead: exit 74, `cause` `spill_budget`, `stop_source` `spill_wait`, resumable with more disk or
-  a larger `--spill-budget` (#535).
-
-- Go port: the run report (`report_version` 8) says where a sorted run's workers waited and for how long:
+  spill has stood refused with workers waiting on it (publishing or at admission) for 2 minutes, the error event
+  `spill_pressure` names the wait, spill and its cap, the output's rate and the remedy, and repeats every 30
+  minutes while it lasts (`order.spill_pressure_since` in `progress.json`). `--spill-wait-timeout DURATION`
+  (default 0: wait) stops such a run instead: exit 74, `cause` `spill_budget`, `stop_source` `spill_wait`,
+  resumable with more disk or a larger `--spill-budget` (#535).
+- Go port: the run report says where a sorted run's workers waited and for how long:
   `resources.publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns` with their peaks (live in `progress.json`
   as `order.publish_waiters`, `admission_waiters`, `idle_workers`), `resources.spill.refused_ns` and
   `refused_spells`, and `resources.drain.writer_before_listing_done`; the range engine's `awaited.*` counters
   say why the range the output waited for was or was not split (#535).
+- Go port: a sorted run under a spill cap no longer stops after listing with `spill: corrupt frame` when a range
+  had every frame refused by the cap (its spill file then holds only its trailer, which the parallel tail's
+  check misread). The failure was loud and published nothing from the bad check.
 
 - Changes from 0.3: 0.4 is a different tool. The Go implementation replaces the Java 0.3 releases with
   another command line (`swath list`, `du`, `show`, `resume`; renamed and removed options), more sources

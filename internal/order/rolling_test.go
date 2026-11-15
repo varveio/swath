@@ -19,6 +19,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/source"
 )
 
 // rollFixture is a plan of tiles whose frontier tile (hold) is held after
@@ -383,5 +384,264 @@ func TestSegmentsLeaveIdleWorkersAlone(t *testing.T) {
 	}
 	if idle.Load() > 4*workers {
 		t.Fatalf("%d idle waits after listing at %d workers: the segments woke them", idle.Load(), workers)
+	}
+}
+
+// certPlan is a plan over a certificate resume (certResume): tiled's
+// ranges as tiles in key order, as keyrange's cutReuse makes them, the
+// gaps above K cut into tiles of about gapRows rows and each replay range
+// a tile of its own. The first gap tile (the frontier), when it is not the
+// last, is held until every other gap tile but the last is listed, the
+// last until release, so the drainer finds listed tiles holding
+// certificates ahead of it while listing goes on.
+type certPlan struct {
+	*tiled
+	tiles          []tz
+	est            []int64
+	front, last    int // tile indexes
+	frontC, lastC  chan struct{}
+	frontO, lastO  sync.Once
+	gaps           int64
+	finished       atomic.Int64 // gap tiles listed through
+	mu             sync.Mutex
+	next           int
+	betweenReplays int // replay tiles between the frontier and the last
+}
+
+func newCertPlan(t *testing.T, cr *certResume, gapRows int) *certPlan {
+	t.Helper()
+	p := &certPlan{tiled: &tiled{rows: cr.rows, spans: cr.c.Spans(), k: cr.k}, front: -1, frontC: make(chan struct{}), lastC: make(chan struct{})}
+	add := func(r tz) {
+		var n int64
+		for _, row := range cr.rows {
+			if row.Key > r.lo && (r.open || row.Key <= r.hi) {
+				n++
+			}
+		}
+		p.tiles, p.est = append(p.tiles, r), append(p.est, n)
+		if r.replay < 0 {
+			p.gaps++
+			if p.front < 0 {
+				p.front = len(p.tiles) - 1
+			}
+		}
+	}
+	gap := func(lo, hi string, open bool) {
+		n := 0
+		for _, row := range cr.rows {
+			if row.Key > lo && (open || row.Key <= hi) {
+				if n++; n == gapRows {
+					add(tz{lo: lo, hi: row.Key, replay: -1})
+					lo, n = row.Key, 0
+				}
+			}
+		}
+		if open || hi > lo {
+			add(tz{lo: lo, hi: hi, open: open, replay: -1})
+		}
+	}
+	lo := cr.k
+	for i, s := range p.spans {
+		start := max(s.Lo, cr.k)
+		if start > lo {
+			gap(lo, start, false)
+		}
+		add(tz{lo: start, hi: s.Hi, open: s.HiOpen, replay: i})
+		if s.HiOpen {
+			t.Fatal("fixture: the last certificate is open, no gap tile ends the plan")
+		}
+		lo = s.Hi
+	}
+	gap(lo, "", true)
+	p.last = len(p.tiles) - 1
+	if p.front == p.last { // no gap before the certificates: nothing to hold at the frontier
+		p.front = -1
+		close(p.frontC)
+	}
+	for i := p.front + 1; i < p.last; i++ {
+		if p.tiles[i].replay >= 0 {
+			p.betweenReplays++
+		}
+	}
+	if p.betweenReplays == 0 {
+		t.Fatalf("fixture: no certificate between the frontier (tile %d) and the last tile (%d)", p.front, p.last)
+	}
+	return p
+}
+
+func (p *certPlan) Planner() source.Planner[tz] { return p }
+func (p *certPlan) Sizes() source.PlanSizes     { return source.PlanSizes{} }
+func (p *certPlan) Bound(bool)                  {}
+
+func (p *certPlan) Start(context.Context, func()) func() { return func() {} }
+
+func (p *certPlan) Next(admit func(int64) bool) (tz, bool, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.next == len(p.tiles):
+		return tz{}, false, true, nil
+	case !admit(p.est[p.next]):
+		return tz{}, false, false, nil
+	}
+	p.next++
+	return p.tiles[p.next-1], true, false, nil
+}
+
+func (p *certPlan) Expand(ctx context.Context, r tz, e source.Emitter[tz, tp]) error {
+	var hold chan struct{}
+	switch {
+	case p.front >= 0 && r.lo == p.tiles[p.front].lo:
+		hold = p.frontC
+	case r.lo == p.tiles[p.last].lo:
+		hold = p.lastC
+	}
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	err := p.tiled.Expand(ctx, r, e)
+	p.finished.Add(1)
+	return err
+}
+
+func (p *certPlan) release() { p.lastO.Do(func() { close(p.lastC) }) }
+
+// run resumes cr into s through p, with the frontier released once the
+// other gap tiles are listed and the last tile once a stretch is kept;
+// crash, if set, is the crash point stopping it (its first time). Each
+// segment part closed moves K over the parts closed in order, as the
+// journal would.
+func (p *certPlan) run(t *testing.T, cr *certResume, s *partSink, crash string) (Stats, error) {
+	t.Helper()
+	withProcs(t, 5)
+	anyShare(t)
+	hookWait = func(string) {
+		if p.front >= 0 && p.finished.Load() >= p.gaps-2 {
+			p.frontO.Do(func() { close(p.frontC) })
+		}
+	}
+	defer func() { hookWait = nil }()
+	defer p.release()
+	defer faults.Set(func(at string) error {
+		if at == "stretch-kept" {
+			p.release()
+		}
+		if at == crash {
+			return faults.ErrCrash
+		}
+		return nil
+	})()
+	s.onClose = func(string) {
+		if k, ok := s.closedPrefix(); ok {
+			cr.c.SetK(k)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	k := cr.k
+	return Run[tz, tp](ctx, p, s, &testSchema, Options{Workers: 4, Budget: 400, SpillDir: t.TempDir(), Durable: cr.c, After: &k})
+}
+
+// closedPrefix is the last key of the parts closed in order from the first
+// (what a journal would have published), false if none is.
+func (s *partSink) closedPrefix() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var k string
+	ok := false
+	for _, p := range s.parts {
+		if !p.closed || len(p.keys) == 0 {
+			break
+		}
+		k, ok = p.keys[len(p.keys)-1], true
+	}
+	return k, ok
+}
+
+// TestRollingReplaysCertificates: a seeded resume whose plan holds reused
+// certificates (replay ranges as tiles, around which it lists the gaps)
+// writes a stretch over listed tiles that hold certificates while listing
+// goes on: a tile holding a replay range is listed once its other ranges
+// are, and the stretch replays the certificates the drainer has not
+// reached, as the tail does (scanned before the cut, read again by offset
+// by their segments). The parts are the uninterrupted run's after K, every
+// certified row above K handed on once, and every certificate retires once
+// K covers it. Killed when a stretch holding certificates is planned with
+// none of its parts opened, or when it is written with its last part kept,
+// the run resumes (recovery with K the last part closed in order) to the
+// same parts.
+func TestRollingReplaysCertificates(t *testing.T) {
+	for _, crash := range []string{"", "segments-begun", "stretch-kept"} {
+		t.Run("crash="+crash, func(t *testing.T) {
+			cr := newCertResume(t)
+			spans := cr.c.Spans()
+			p := newCertPlan(t, cr, 150)
+			s := &partSink{limit: cr.limit, encoders: 4, stated: true}
+			st, err := p.run(t, cr, s, crash)
+			rl := st.Segments.Rolling
+			if crash == "" {
+				if err != nil {
+					t.Fatalf("%v (segments %+v)", err, st.Segments)
+				}
+				s.close()
+				if got := s.boundaries(); !slices.EqualFunc(got, cr.want, slices.Equal[[]string]) {
+					t.Fatalf("%d parts, the uninterrupted run's after K %d; or their rows differ", len(got), len(cr.want))
+				}
+				in, all := cr.certified(spans)
+				if rl == nil || rl.Stretches == 0 || rl.Certificates == 0 || st.Segments.Certificates < int(rl.Certificates) {
+					t.Fatalf("rolling %+v, segments %+v: want a stretch replaying certificates (%d between the frontier and the last tile)", rl, st.Segments, p.betweenReplays)
+				}
+				if st.ReplayedRows != in || st.Received != st.Rows || st.Rows != all {
+					t.Fatalf("replayed %d (want %d), received %d, handed on %d (want %d)", st.ReplayedRows, in, st.Received, st.Rows, all)
+				}
+				rs := &cr.c.st
+				if rs.ReplayedCerts.Load() != int64(len(spans)) || rs.ReplayedRows.Load() != in {
+					t.Fatalf("the cache counted %d of %d certificates, %d of %d rows replayed", rs.ReplayedCerts.Load(), len(spans), rs.ReplayedRows.Load(), in)
+				}
+				cr.c.SetK(spans[len(spans)-1].Hi)
+				if n := rs.RetiredPublished.Load(); n != int64(len(spans)) {
+					t.Fatalf("%d of %d certificates retired once K covers them", n, len(spans))
+				}
+				t.Logf("rolling %+v; %d tiles, %d certificates (%d by stretches, %d by segments in all)", *rl, len(p.tiles), len(spans), rl.Certificates, st.Segments.Certificates)
+				return
+			}
+			if !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("stopped with %v, want the crash at %s (rolling %+v)", err, crash, rl)
+			}
+			if rl == nil || rl.Certificates == 0 && crash == "stretch-kept" {
+				t.Fatalf("rolling %+v: the crash at %s was not in a stretch replaying certificates", rl, crash)
+			}
+			// The resume: K is the last part closed in order; the parts after
+			// it are the uninterrupted run's.
+			k, ok := s.closedPrefix()
+			var done [][]string
+			for _, pt := range s.parts {
+				if !pt.closed || len(pt.keys) == 0 {
+					break
+				}
+				done = append(done, pt.keys)
+			}
+			if !ok {
+				k = cr.k
+			}
+			cr.c = recoverAll(t, cr.c, cr.root, &k)
+			cr.c.Start(slots(64), 0, nil)
+			cr.k = k
+			rp := newCertPlan(t, cr, 150)
+			rs := &partSink{limit: cr.limit, encoders: 4, stated: true}
+			if _, err := rp.run(t, cr, rs, ""); err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			rs.close()
+			got := append(done, rs.boundaries()...)
+			if !slices.EqualFunc(got, cr.want, slices.Equal[[]string]) {
+				t.Fatalf("%d parts before the crash and %d after, the uninterrupted run's %d; or their rows differ", len(done), len(rs.parts), len(cr.want))
+			}
+			t.Logf("crash at %s: %d parts kept, %d resumed over %d certificates", crash, len(done), len(rs.parts), len(cr.c.Spans()))
+		})
 	}
 }
