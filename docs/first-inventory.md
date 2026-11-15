@@ -2,7 +2,8 @@
 
 This walk-through uses a local directory, so it needs no cloud account and no credentials, and nothing leaves
 your machine. Replace `media` with a directory of yours. The output below comes from a small example tree of
-seven files. [Install](install.md) swath first.
+five directories and six files, one of them a hard-linked file with two names. [Install](install.md) swath
+first.
 
 ## 1. Find where the space went
 
@@ -69,6 +70,10 @@ swath list media -o media-inventory
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
 manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
+
+A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),
+it still writes the dataset, ends with `swath: N entries could not be read and are missing from the output`
+and exits 3 ([exit codes](reference/exit-codes.md)); step 4 shows how the dataset records it.
 
 The output directory must be new or empty. Keep it outside the tree you list; if it is inside, swath skips it
 and records it as an exclusion.

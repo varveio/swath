@@ -300,7 +300,7 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 		noteKept(errOut, l.line(lvInfo, evDataset, msg, p))
 		return
 	}
-	noteKept(errOut, "swath: "+msg+"\n")
+	noteKept(errOut, "swath: "+escapeControl(msg)+"\n")
 }
 
 // savedInventory is the commands that list SOURCE (as given, redacted,
