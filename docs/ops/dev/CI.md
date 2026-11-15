@@ -17,7 +17,7 @@ runners are owned elsewhere and are only summarized here:
 | [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push/label change, every push to `main`, manual dispatch from any branch | the per-commit gate: Go jobs, script self-tests, `ci-gate` |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
-| [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
+| [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks over the built site, with its videos fetched from a release and verified by sha256; deploy to GitHub Pages from `main` |
 | [`cache-maintenance.yml`](../../../.github/workflows/cache-maintenance.yml) | main CI or CodeQL completion, hourly, dispatch | bound Go and CodeQL cache generations |
 | [`go-stress.yml`](../../../.github/workflows/go-stress.yml) | dispatch only | repeat one Go test or pattern N times on a chosen runner |
 
