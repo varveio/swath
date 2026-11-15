@@ -444,15 +444,22 @@ for the output stay near the window instead of growing with the bucket.</figcapt
 
 `swath du` keeps no rows and needs no order across ranges. Its workers count rows as they arrive: there is no
 drainer, no spill and no file. Bare `swath du` on a terminal shows the largest prefixes at any depth, and every
-figure in it is exact.
+figure in it is exact. On the NOAA bucket it took 59.2 s for 37,074,995 objects, with a peak of 145 MiB
+against the sorted inventory's 1.51 GiB
+([how it was measured](../../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)).
 
 It uses the order inside each range. The rows a range lists before it splits, or all of them if it does not,
 are one run of contiguous keys. A prefix that a run enters after its first row and leaves before its last is
 complete, so its total is final. The prefixes at a run's two ends are partial; they are summed by name across
-runs and are complete when the listing ends. A complete prefix below 1% of the bytes seen so far is dropped,
-since it is below 1% of the total too; of the rest, the view keeps the 100 largest at each depth. A dropped
-prefix's bytes are already counted in its parent's. Each parent's other children are folded into one counted
-`(N more)` line, so every level adds up ([the view](../../docs/commands/swath-du.md#the-view)).
+runs and are complete when the listing ends. Of the complete prefixes and objects, the view keeps the 100
+largest at each depth, whatever order the listing completes them in. A dropped one's bytes are already counted
+in its parent's.
+
+The view then fills the terminal from the largest down, each line under its parent with its size, object
+count, share, bar and newest date. Each parent's other children are folded into one counted `(N more)` line,
+so every level adds up. A fold of many small prefixes that together outweigh a line's share is broken down
+first, so a wide level is shown as far as the lines go. On a local tree, `!` after the size marks a line whose
+sums leave out a directory that could not be read ([the view](../../docs/commands/swath-du.md#the-view)).
 
 <figure class="swath-figure">
 <svg viewBox="0 0 480 136" role="img" aria-labelledby="fg-du-title fg-du-desc">

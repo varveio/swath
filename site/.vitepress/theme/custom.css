@@ -179,8 +179,11 @@ html:has(.swath-dev-banner) {
   }
 }
 .swath-terminal-prompt,
-.swath-terminal-bar {
+.swath-terminal-cyan {
   color: #46aaba;
+}
+.swath-terminal-dim {
+  color: #9a9a95;
 }
 
 /* A long code block (the plain-text --help under a command's options, a long example) is capped
