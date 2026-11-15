@@ -1,8 +1,9 @@
 # Running swath in production
 
-A short guide for whoever schedules and watches swath. The full reference is [Running swath](running.md);
-every option is in the [command reference](commands/swath.md). Numbers below are observations on the stated runs
-([Measurements (internals)](internals/measurements.md)), not limits or promises.
+A short guide for whoever schedules and supervises swath: the nightly command, what to do with each exit code,
+and writing the dataset to a bucket from a machine that may not last. One run's command, outcome and limits are
+in [Running swath](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
+observations on the stated runs ([Measurements (internals)](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
 
@@ -14,7 +15,7 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
-  point readers at it once its `manifest.json` exists ([Running swath](running.md#overwrite-and-refresh)).
+  point readers at it once its `manifest.json` exists ([Overwrite and refresh](resume-and-refresh.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset (warm start, below). Leave it out on the first night.
 - `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
@@ -31,148 +32,16 @@ What the supervisor does with the exit code:
 | 124 (deadline) | resume only within a separate budget of attempts or total time; past it, a person |
 | 1, 2 | a person: a resume will not fix it |
 
-## Three flags on a small runner
+The rest of a scheduled run has its own pages:
 
-On a 1-vCPU machine with 1 to 2 GB of memory the defaults are the place to start. Change these three only
-when the report says so.
-
-- **`--workers`** (default 64 for an object store; for a local path 4 per CPU, so 4 here). Listing waits on request round trips, not the CPU. On one core the sorted
-  output (ordering, spill and one Parquet encoder) is the limit, so more workers do not help there. Raise it
-  (128, 256) only on a machine with spare cores and a service that does not throttle. Lower it if the service
-  throttles at 64.
-- **`--sort-buffer`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
-  and encoding. Memory is the least of physical memory, the cgroup's limit and `GOMEMLIMIT`, and 128 MiB stands
-  in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB
-  (`diagnostics.sort_buffer`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
-  spill to disk: a listing whose waiting rows fit in the budget never spills. It is
-  not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The
-  writers are admitted against their own allowance, the same 1/16 of memory whatever `--sort-buffer` says
-  (`diagnostics.resources.drain.encoder_allowance_bytes`), so a smaller sort buffer does not mean fewer encoders. The measurements
-  that follow were taken at a 128 MiB budget, the default before 0.4.0: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
-  0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
-  267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
-  vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured
-  over those lists. If `process.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
-  heavy (`diagnostics.resources.spill.rows` near the rows listed) or `diagnostics.resources.budget_wait_ns` is large and memory is free,
-  raise it: past what a listing holds ahead of its output, more buys only tail workers.
-- **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to
-  disposable spill files on the output's filesystem. By default spill may use that filesystem's free space
-  after a reserve of at least 1 GiB: half of it when the parts are written there too, all of it for a
-  dataset in a bucket. The default follows the disk: a frame it would refuse re-reads the free space, so a
-  filesystem grown under the running process is used without a restart. Set `--spill-budget`, a fixed cap,
-  when the filesystem is shared with other work. Size the disk as described below.
-
-## Warm start for repeat listings
-
-`--seed-from PREVIOUS-DATASET` divides the bucket into ranges from the previous dataset's key distribution.
-The run then sends no delimiter requests and makes far fewer early splits. On 251 production key lists
-served through a fake at 50 ms, a seeded run took a median 0.76x the cold run's wall time and sent 1.02 requests
-per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still listed at 1.11 to 1.15x the
-64-worker ideal (`stale4`, 2026-11-07). The prior must be the same bucket and prefix, or the run is refused
-(exit 2). The output is the same with or without a prior.
-
-A prior with counts (a previous dataset, or a cut file whose every line carries a count) also changes what is
-listed ahead of the output: a sorted run lists front to back, taking the prior's tiles in key order only while the rows listed and not
-yet written stay within a window of 8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold less
-([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
-near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
-no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
-range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
-after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
-the bucket's growth, and read `diagnostics.resources.window` and `diagnostics.resources.spill.peak_bytes` in the report. With thousands
-of workers and a cap of a few hundred MB or less, the window holds fewer tiles: it admits none while the spill
-ahead of the output is past half the cap (`diagnostics.resources.window.spill_rows` is the mean rows held at its
-refusals), and it evicts the durable certificates behind the output to keep room, so a crash relists those keys.
-Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
-listing. A cut file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
-the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
-
-## A healthy run report
-
-Five fields to check in the `--report` file of a sorted listing of a million keys or more:
-
-| Field | Normal |
-|---|---|
-| `outcome.class` | `ok` (exit 0), with `outcome.complete` true; for the whole source, also no filters in the dataset's coverage ([check](results.md#coverage-and-unreadable-entries)) |
-| `diagnostics.efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
-| `diagnostics.resources.spill.refused` | 0 |
-| `diagnostics.resources.budget_wait_ns` | 0 or close to it |
-| `diagnostics.resources.max_frontier_stuck_ns` | a few request round trips: a median 0.28 s and at most 1 s on sorted runs of the 64 lists of 20M keys or more through a 50 ms fake (candidate 4, run `c4big`: its resumed and spill-capped arms) |
-
-Spill is normal. A sorted run of a large bucket spills almost every row once (a median 96 % of rows on the 64
-lists of 20M keys or more: candidate 4, run `c4big`, plain frames), because ranges finish in roughly
-key-uniform order and the output waits for the leftmost one.
-
-## Three bad patterns
-
-**Spill refused, workers waiting.** `diagnostics.resources.spill.refused` is above 0 and `diagnostics.resources.budget_wait_ns` is
-large. `diagnostics.resources.free_disk_min_bytes` is close to `diagnostics.resources.spill.reserve_bytes`, or the spill reached
-`diagnostics.resources.spill.max_bytes`. Listing then runs at the output's pace, and on a very large bucket that pace
-can be a small fraction of the listing's: three listings of 8 to 30 billion objects on a 100 GiB disk at 2,048
-workers fell from about 7,000 requests a second to about 10 once the spill cap filled, and were stopped after
-four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
-`diagnostics.resources.spill.refused_ns` is how long spill stood refused; `publish_wait_ns`, `admission_wait_ns` and
-`idle_wait_ns`, with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say
-why the range the output waited for was or was not split
-([counters](internals/counters.md#order-stage-and-encoders-run-summary-top-level)).
-The run does not fail by itself. Once spill has stood refused with workers waiting on it for 2 minutes, swath says so
-on stderr, an error, and again every 30 minutes while it lasts: how long listing has waited, spill and its
-cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
-alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
-instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk. With the default
-cap, grow the filesystem under the running process (a cloud persistent disk resized, then its filesystem grown
-online): within seconds the run rereads the free space, the cap rises and listing continues;
-`diagnostics.resources.spill.cap_raises` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
-run started with. A `--spill-budget` is fixed: stop the run and resume it with a larger one on a disk that has
-the room, `swath resume DIR --spill-budget 200GiB`; a plain `swath resume DIR` keeps the recorded cap, and with
-the default derives it from the free space it finds (the certified spill the stopped run kept counted as
-free). A repeat listing avoids most of this by seeding from the previous dataset ([warm start](#warm-start-for-repeat-listings)).
-
-**A stuck frontier.** `diagnostics.resources.max_frontier_stuck_ns` is seconds to minutes. In `progress.json`, `rows_fetched`
-rises while `rows_encoded` and `parts_written` stay flat and `part_age_ms` grows. One range at the front of the output is
-slow: a slow, retried or hung request. Check `inflight.p99_ns` against `inflight.p50_ns` and the retries in
-the report's `diagnostics.source.stats.counters.values`. After `--stall-timeout` (10 min) of no progress the run stops
-with exit 75 and writes every goroutine's stack to `DIR/.swath/stacks-stuck.txt`. Resume it, and keep that file
-if it happens again.
-
-**Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
-`limit` falls below `--workers`. Throttle answers cause no cut while they are under 15 % of the limiter's
-window, the last answers since its last cut (four per worker, at least 256 and at most 4,096); the counter
-`limiter.cuts_suppressed.tolerated` counts those answers. For a quota shared with other clients, set
-`--request-rate N` below it. If a run crawls with the limit near 1 under sustained throttling, use `--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
-
-## Resume after a kill
-
-`swath resume DIR` continues an S3, GCS or Azure Blob dataset run after a signal, a crash, an OOM kill or a full disk. A local
-directory listing keeps no journal and starts over.
-
-- **Kept:** every published part, verified by size and SHA-256 before listing continues. Verification read
-  247 to 376 MiB/s with a cold page cache and 511 MiB/s warm on a 4-vCPU VM
-  ([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
-  minutes.
-- **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
-  the output), read back from `DIR/.swath/spill/durable/` instead of listed again. A range is certified when
-  it finishes; the number of certificates scales with the spill cap (one per 64 KiB of it, at most 262,144,
-  reached at 16 GiB), so a listing with fewer ranges than that certifies every finished range unless its
-  spill turns over more than about twice (`no_slot`, `history_exhausted` and `metadata_exhausted` in
-  `diagnostics.resources.spill.durable` count the ranges that were not). Certified files stay in the work directory, so
-  resume on the same disk, or on a persistent disk moved to another machine ([below](#on-a-preemptible-or-spot-machine)).
-- **Listed again:** the keys after the last published key that no certified file holds: the ranges that were
-  still listing at the stop, and any not certified. Once they are listed, the rest is written by the parallel
-  tail as on a fresh run, the certified rows included. The report's `diagnostics.resources.spill.durable.resume` says what was reused
-  (`replayed_rows`, `gaps`, `requests_saved_est`); [Running swath](running.md#stopping-and-resuming) owns the rules.
-
-The resume replays the recorded command. Only the resource, reporting and request options may change
-([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
-
-## Where things are
-
-The output directory's layout is in [swath-list](commands/swath-list.md#files). Spill lives under
-`DIR/.swath/spill/`, on the output's filesystem: disposable spill is removed by the next run, and certified
-spill (`spill/durable/`) is kept after a stop for the resume and removed when the dataset commits
-([Running swath](running.md#stopping-and-resuming)); text on stdout spills under
-`$TMPDIR`. On tmpfs spill uses memory: the report's `diagnostics.resources.spill.fs_type` names the filesystem, and a run
-that spills there warns once, at its first spill.
+- <a id="three-flags-on-a-small-runner"></a><a id="a-healthy-run-report"></a><a id="three-bad-patterns"></a>[Watch and tune a run](watch-a-run.md):
+  [three flags on a small runner](watch-a-run.md#three-flags-on-a-small-runner),
+  [a healthy run report](watch-a-run.md#a-healthy-run-report) and
+  [three bad patterns](watch-a-run.md#three-bad-patterns).
+- <a id="warm-start-for-repeat-listings"></a><a id="resume-after-a-kill"></a><a id="where-things-are"></a>[Stop, resume and refresh](resume-and-refresh.md):
+  [resume after a kill](resume-and-refresh.md#stopping-and-resuming), where the workspace and spill are, and
+  the [warm start for repeat listings](resume-and-refresh.md#warm-start-for-repeat-listings).
+- <a id="disk-sizing"></a>[Size a run](size-a-run.md): [disk sizing](size-a-run.md#disk-sizing) and memory.
 
 ## Writing to a bucket
 
@@ -181,6 +50,10 @@ that spills there warns once, at its first spill.
 large on the runner: the parts go up as they close, and `DIR` holds only spill and the
 run's metadata.
 
+- **The destination's own options:** credentials (GCS: `--output-gcs-credentials-file`, else Application
+  Default Credentials; S3: `--output-s3-profile`, else the AWS SDK's chain, always signed; Azure:
+  `--output-azure-sas-token`, never recorded, else Entra ID), region (`--output-s3-region`) and endpoint
+  (`--output-endpoint-url`: path-style for S3; for Azure the account is its first path segment).
 - **Per store:** credentials, permissions, region and endpoint, and what each store needs for uploads that
   did not finish, are on the store's page: [Amazon S3](sources/s3.md#writing-a-dataset-to-s3) (a lifecycle rule
   that aborts incomplete multipart uploads is required), [Google Cloud Storage](sources/gcs.md#writing-a-dataset-to-gcs),
@@ -194,7 +67,7 @@ run's metadata.
   runners sharing one work directory are refused by its lock; two work directories writing one prefix race
   at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
 - **Windows:** a bucket run of an object store keeps a journal, which Windows refuses (directories cannot be
-  synced there: [Running swath](running.md#known-limits)), so it is refused there, as a journaled local dataset is;
+  synced there: [Known limits](troubleshooting.md#known-limits)), so it is refused there, as a journaled local dataset is;
   a local tree, which keeps no journal, can be written to a bucket on Windows, without resume.
 - **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
@@ -256,46 +129,3 @@ machine:
 - **Verification:** before listing continues, the resume reads every part the journal records back from the
   bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):
   everything published so far is downloaded once, at the bucket's read rate and price.
-
-## Disk sizing
-
-- **The dataset:** about 30 bytes per row at the default part size (the live 1.09-billion-object listing of
-  run `cogslive1`, `bf5e6d52`, 256 workers, wrote 488 parts, 32 GB). Measure your own from a representative
-  prefix: `output.output_bytes` over `output.rows_committed`.
-- **Spill per row:** frames are prefix-coded and compressed (zstd) by default: 25 to 53 bytes per row on production
-  keys with real ETags in the frame benchmark, and about 30 bytes per row on the live listing above (`cogslive1`:
-  32 GB for 1.08 billion spilled rows). At the peak, a median 71 % of the rows were listed ahead of the output
-  on lists of 20M keys or more (candidate 4, run `c4big`, plain frames), so live spill can come close to the
-  dataset's own size. On listings of a billion objects and more it reaches it: 96 to 99 % of the rows were
-  ahead of the output at the peak, at 18 to 22 bytes per row
-  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
-- **Peak spill** of a first listing (no prior, or a cut file without counts) ≈ 0.7 × rows × spill bytes per
-  row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget of a
-  dataset on disk is half of (free space − the reserve), so the free space needed is about the dataset plus
-  twice the peak spill plus the reserve (`diagnostics.resources.spill.reserve_bytes`: one part per encoder, at least 1
-  GiB). The default follows the disk: a filesystem that turns out small can be grown under the running process
-  instead of restarting it.
-- **A relist seeded from the previous dataset** (or a counted cut file) keeps the rows ahead of the output near
-  its frontier window of at most 8 million rows instead of the bucket ([warm start](#warm-start-for-repeat-listings)),
-  so its spill is a small fraction of a first listing's. The window is not a storage bound: a region that grew
-  since the prior, keys added past its last key and certified files awaiting retirement still spill. Size the
-  disk for the dataset and that growth, and take the spill a seeded run needs from its report's
-  `diagnostics.resources.spill.peak_bytes`.
-- **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing of
-  a bucket is the one that can outgrow its disk. Give it room to spare or a disk that can be grown online (the
-  default spill cap follows it), bound it with `--max-duration`, and size later runs from its manifest's row
-  count.
-- **A dataset in a bucket:** the work directory needs no room for the dataset. The default spill budget is its
-  free space after the 1 GiB reserve, and follows the disk: on a disk that can be grown online, start modest
-  and grow it if spill fills it (`diagnostics.resources.spill.cap_raises` counts the rises). Set `--spill-budget` when the
-  disk is shared, and size it as the budget plus the reserve plus the metadata, which grows with the parts (a claim receipt of
-  under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
-  the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk, S3 part or Azure block) per
-  encoder, admitted with its writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
-  run's `diagnostics.resources.spill.peak_bytes` before shrinking the disk.
-- **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;
-  so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
-  disk frames are refused and listing slows to the output's pace (the first bad
-  pattern above): a run a little short of disk still completes, and a run far short of it may not finish in
-  any useful time; it says so after 2 minutes (`spill_pressure`), and `--spill-wait-timeout` stops it
-  (resumable for a run with a journal; text output and a local tree run again). Set `--spill-budget` explicitly when you know the room.

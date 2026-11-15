@@ -210,7 +210,7 @@ the report: a person needs to look. A service that is slow for minutes at a time
 
 `throttles` rises in `progress.json` and the request limit falls below `--workers`. For a quota shared with
 other clients, set `--request-rate N` below it. If the limit stays near 1 under sustained throttling, use
-`--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
+`--no-adaptive-limit --request-rate N` ([Throttling](watch-a-run.md#throttling)).
 
 ## A warning repeats about failing requests
 
@@ -247,7 +247,7 @@ connections that fail later are an outage instead: swath retries them until `--s
 
 A part, the journal or the manifest could not be written. Free space, or move the output directory to a
 larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almost every row once on the
-output's filesystem, unless it is seeded from the previous dataset (`--seed-from`): size the disk as [Running swath in production](production.md#disk-sizing) says, or cap spill with
+output's filesystem, unless it is seeded from the previous dataset (`--seed-from`): size the disk as [disk sizing](size-a-run.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
 A run that is far short of spill room keeps going at the output's pace, which on a very large bucket can be a
@@ -258,7 +258,7 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 ```
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `diagnostics.resources.spill.refused` above 0
-([the first bad pattern](production.md#three-bad-patterns)). With the default cap, grow the spill filesystem
+([the first bad pattern](watch-a-run.md#three-bad-patterns)). With the default cap, grow the spill filesystem
 under the running process: the cap follows the disk, and listing continues once the next frame finds the room
 (`diagnostics.resources.spill.cap_raises`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
 the room (a plain resume keeps the recorded cap; with the default cap it derives one from the free space it
@@ -272,7 +272,7 @@ the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
 directories being read, the encoders, the tail after listing and the garbage collector come on top, and swath
 sets no total-memory limit. Read `process.peak_rss_bytes` in the report of a representative run. To use less,
 lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without
-lowering the peak ([Running swath](running.md#memory)).
+lowering the peak ([Memory](size-a-run.md#memory)).
 
 ## `swath du` shows a size of `-`
 
@@ -297,6 +297,32 @@ its row, an entry removed during the walk is no longer part of the tree, and one
 leave out by its name is not selected: none of them counts. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
 `coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
+
+## Known limits
+
+The limits of this build, and what has not been measured:
+
+- **Windows:** journaled object-store dataset runs, recovery and bucket commit cleanup through resume
+  are refused for local and bucket output: directory sync is unavailable, so a power loss could lose
+  acknowledged work. The output lock holds. Filesystem runs work without resume; an already committed,
+  finalized dataset takes the CLI's no-work path. See [platforms](install.md#platforms). The test suite
+  runs there in CI; nothing is measured there.
+- **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
+  UTF-8, so a filesystem run never meets one.
+- **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories
+  (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
+- **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
+  committed dataset is the complete result of a live listing, exactly once per key (with `--all-versions`, once
+  per version), not a point-in-time view.
+- **Versioned listing** (`--all-versions`) was checked against an independent serial listing on small public
+  buckets (seven S3, one GCS; up to 40,000 versions, pages of 1 to 1,000 entries, interrupted and resumed runs);
+  large versioned buckets are unmeasured.
+- **Memory:** `--sort-buffer` bounds rows in flight, not resident memory ([Size a run](size-a-run.md#memory)).
+- **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
+  of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of
+  objects (35 completed, 50.6 billion objects in all) are individual runs, not a benchmark
+  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
+  other gaps are in [measurements](internals/measurements.md#known-gaps).
 
 ## Reporting a problem
 

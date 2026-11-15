@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Docs: the user guide is split by the question a reader asks. `running.md` keeps one run's command, outcome and
+  limits and links to Size a run, Watch and tune a run, Stop, resume and refresh, and List every version; known
+  limits moved to Troubleshooting. Query an inventory (DuckDB, pandas, Spark, verifying) is apart from the dataset
+  format; `production.md` covers scheduled runs and bucket destinations only; `swath du`'s and `swath resume`'s
+  explanations moved from their command pages to Total a source and Stop, resume and refresh. Old anchors still
+  resolve.
 - Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
   rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular

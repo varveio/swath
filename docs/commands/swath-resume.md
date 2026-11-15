@@ -34,23 +34,6 @@ are listed again. The `next:` line quotes a DIR the shell would split or expand 
 quotes on Windows), and spells
 one that begins with `-` as `./-DIR`, so it can be pasted as printed. [`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
 
-A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
-`swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
-prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
-version: the GCS generation, the S3 version id or ETag, the Azure ETag; its size and SHA-256), and a resume of a run that reached
-its commit first reads the bucket's manifest back: the run's own means the run is complete, and the resume first
-finishes what the commit left (this run's leftover parts deleted, `run.json` beside the manifest). A commit that
-ended unresolved (exit 75) is resumed the same way: the resume creates the very manifest the run saved. The
-destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`), and an
-Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azure: account and container),
-prefix, endpoint and S3 region are fixed. A lost work directory loses the
-resume: the parts already uploaded are not reused. A new run at the same prefix is not refused (only a prefix
-holding a `manifest.json` is), but nothing removes the lost run's parts, so start it at a new prefix
-([Running swath in production](../production.md#on-a-preemptible-or-spot-machine)).
-
-Rows listed but not yet in a published part are listed again, except those a validated spill file still
-holds ([Running swath](../running.md#stopping-and-resuming)).
-
 The source, the route (endpoint, addressing, region), the filters, the schema and the part size are fixed for
 the run. Only the options below may be given again; the last value wins. A switch the run was started with is
 undone by its other spelling: `--no-anonymous` undoes `--anonymous`, `--adaptive-limit` undoes
@@ -62,22 +45,8 @@ swath: --part-size is fixed for the run and cannot change on resume (see 'swath 
 See 'swath resume --help'.
 ```
 
-Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in `AZURE_STORAGE_SAS_TOKEN`) or
-`--s3-bearer-token-command` must be given it again.
-
-A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
-exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys` sample) is a finalized
-partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
-
-```text
-swath: sample is a finalized sample, partial: --max-keys reached: it cannot be resumed
-```
-
-A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
-the count (`outcome.unreadable`).
- Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
-judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
-resumes, and a text file `rows.tsv` is refused as text output.
+What a resume keeps and lists again, secrets, a dataset in a bucket, complete and partial datasets, and the
+refused resumes are in [Stop, resume and refresh](../resume-and-refresh.md#stopping-and-resuming).
 
 ## Options
 
@@ -480,5 +449,5 @@ The provider's credential variables ([Sources](../sources/README.md)); a resume 
 
 ## See also
 
-[swath list](swath-list.md), [swath show](swath-show.md), [Running swath](../running.md#stopping-and-resuming),
+[swath list](swath-list.md), [swath show](swath-show.md), [Stop, resume and refresh](../resume-and-refresh.md#stopping-and-resuming),
 [Exit codes](../reference/exit-codes.md)

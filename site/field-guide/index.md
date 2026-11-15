@@ -121,13 +121,13 @@ and all 64 workers listed pieces of it.
   lists the rest alone, one page per round trip.
 - **The store.** swath shares one adaptive request limit across its workers. It reduces concurrency under
   sustained throttling and recovers as the answers improve
-  ([throttling](../../docs/running.md#throttling)). In the NOAA run requests in flight averaged 52.3 of 64.
+  ([throttling](../../docs/watch-a-run.md#throttling)). In the NOAA run requests in flight averaged 52.3 of 64.
 - **The output.** Rows leave through one sorted stream and the part writers, so a run that writes an
   inventory can wait on its output (next section).
 
 The request count has a floor: one request per page of keys. The NOAA run made 39,016 requests for 37,064,981
 objects, about 1.05 per 1,000. A billion objects cost at least a million requests
-([cost](../../docs/running.md#cost)). A scheduled inventory (S3 Inventory, GCS Storage Insights, Azure Blob
+([cost](../../docs/size-a-run.md#cost)). A scheduled inventory (S3 Inventory, GCS Storage Insights, Azure Blob
 inventory) can cost less, when a daily or weekly report is fresh enough
 ([when swath fits](../../docs/start-here.md#when-swath-fits)).
 
@@ -164,7 +164,7 @@ and never skips one. No worker's cursor and no split is saved, so a resume makes
 spilled ahead of the output can be sealed as certified spill files, and a resume replays those instead of
 listing them again. The tests stop a run at every crash point, including with a real SIGKILL, resume it, and
 compare the result with an uninterrupted run, byte for byte
-([stopping and resuming](../../docs/running.md#stopping-and-resuming)).
+([stopping and resuming](../../docs/resume-and-refresh.md#stopping-and-resuming)).
 
 A listing is not a point-in-time snapshot. swath publishes the complete result of the live listing it
 performed: an object written or deleted while it runs may or may not be in it.
@@ -184,7 +184,7 @@ With those counts the run lists the bucket front to back. Tiles are taken in key
 only while the tiles already taken fit a window at the output: 8 million rows, or less when the disk or the
 sort buffer holds less. Rows listed ahead of the output, and the spill they need, stay near that window
 instead of growing with the bucket. The splits stay adaptive: a region that grew since the previous run is
-split as on any run ([seeding a refresh](../../docs/running.md#seeding-a-refresh-from-the-previous-dataset)).
+split as on any run ([seeding a refresh](../../docs/resume-and-refresh.md#seeding-a-refresh-from-the-previous-dataset)).
 
 ## Exact totals without sorting: the `swath du` view
 

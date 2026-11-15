@@ -31,7 +31,7 @@ by every object store are in [Choose a source](README.md#credentials-on-every-ob
 - `--endpoint-url` replaces the JSON API's base URL, `https://storage.googleapis.com/storage/v1/` (for
   fake-gcs-server).
 - `--all-versions` lists live and noncurrent generations; their metadata differs from S3's versions
-  ([Running swath](../running.md#listing-every-version)).
+  ([List every version](../all-versions.md)).
 
 GCS's XML API also answers S3 requests: `s3://` with `--endpoint-url https://storage.googleapis.com` and
 `--s3-bearer-token-command 'gcloud auth print-access-token'` lists through it

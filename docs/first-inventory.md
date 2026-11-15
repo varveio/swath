@@ -106,7 +106,7 @@ filters or exclusions, means the dataset covers the whole tree. Read the verdict
 rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains them.
 
 To read the rows themselves, open the parts with DuckDB, Python or another Parquet
-reader ([the swath dataset](dataset.md)).
+reader ([Query an inventory](query.md)).
 
 ## 5. Total the saved inventory
 
@@ -120,10 +120,11 @@ swath du --from-dataset media-inventory -d 1
 ```
 
 It prints the totals of step 1 as they were when the tree was listed, and says on stderr when that was and
-whether the listing was complete ([swath du](commands/swath-du.md#totals-from-a-saved-dataset)).
+whether the listing was complete ([swath du](totals.md#totals-from-a-saved-dataset)).
 
 ## Next
 
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
 - [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
+- [Query an inventory](query.md): read the saved inventory with DuckDB, pandas or Spark.
 - [Run large listings](running.md): size, watch, stop and resume a long run.

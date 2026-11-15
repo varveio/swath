@@ -20,13 +20,19 @@ are published on the [releases page](https://github.com/varveio/swath/releases) 
 - [Output](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
   a dataset.
 - [Filters](filters.md): globs, regular expressions, sizes, times and storage classes.
-- [Running swath](running.md): sizing, cost, watching, throttling, stopping and resuming, refreshing an inventory,
-  versions, known limits. [Running swath in production](production.md) is the short checklist for scheduled runs.
-- [Troubleshooting](troubleshooting.md): symptom, cause, fix.
+- [Running swath](running.md): one large run, its output directory, outcome and limits.
+  - [Size a run](size-a-run.md): disk, memory and cost.
+  - [Watch and tune a run](watch-a-run.md): progress, the signals to read, throttling, the flags to change.
+  - [Stop, resume and refresh](resume-and-refresh.md): signals, `swath resume`, overwrite and seeding a refresh.
+  - [List every version](all-versions.md): versions, generations, snapshots and delete markers.
+- [Running swath in production](production.md): a scheduled run under a supervisor, a dataset written to a
+  bucket, preemptible machines.
+- [Troubleshooting](troubleshooting.md): symptom, cause, fix; the known limits.
 
 **Read the output**
 
-- [The swath dataset](dataset.md): querying an inventory, checking that it is complete, and its files, schemas,
+- [Query an inventory](query.md): DuckDB, pandas and Spark, checking that an inventory is complete, verifying it.
+- [The swath dataset format](dataset.md): its files, schemas,
   manifest and coverage. From Go, the [`reader`](../reader/README.md) module.
 
 **Reference**

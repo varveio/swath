@@ -124,7 +124,7 @@ the committed dataset (`rows_retained` + `rows_emitted`; a resume that finds the
 an earlier attempt, takes it from the manifest and retains and emits nothing itself). `parts_written` and
 `parts_retained` count parts. `replaced` is true when the committed dataset replaced a previous one in the
 output (`--overwrite`), which stayed readable until this commit installed the new one in its place
-([Overwrite and refresh](../running.md#overwrite-and-refresh)); absent otherwise.
+([Overwrite and refresh](../resume-and-refresh.md#overwrite-and-refresh)); absent otherwise.
 `object_bytes` sums the sizes of the objects this invocation listed and the filters kept (the size column; absent for a schema without one, and when an object's size is unknown, as at the names metadata tier; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files kept), each name once: a file with several hard links counts once per link, where `swath du`'s `totals.bytes` counts it once. On a fresh committed run they are exactly those of `rows_emitted`; a resume does not count the rows it replays from spill, and a run that stopped also counts rows it listed and never handed on;
 `output_bytes` is the dataset's part bytes. `committed_object_bytes` is the committed dataset's object bytes,
 the same sum over every row of it, as the manifest's `extensions.swath.committed_object_bytes` states it: retained parts
