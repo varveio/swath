@@ -2331,7 +2331,7 @@ progress logs; they are individual runs, not a benchmark.
 - **Ample disk.** 35 buckets, 50.6 billion objects in all, completed. At the peak 96 to 99 % of the rows were
   ahead of the output (usgs-lidar-public: 1.949 of 1.973 billion; 21 of its 677 parts were published before
   listing ended). Spill peaked at 18 to 22 bytes per row, about the size of the Parquet output.
-  `resources.spill.refused` and `resources.budget_wait_ns` were 0 in every run.
+  `diagnostics.resources.spill.refused` and `diagnostics.resources.budget_wait_ns` were 0 in every run.
 - **A cap too small.** Three buckets of 29.6, 10.3 and 8.4 billion objects on a 100 GiB disk (a 91 GiB spill
   cap) at 2,048 workers fell from about 7,000 requests a second to about 10 once the cap filled. After the cap,
   rows listed per second equalled rows written per second, at about 8,000 to 12,000: one range paged serially.
@@ -2391,7 +2391,7 @@ because its tiles were all queued at once: uncapped, it changed the spill peak b
 
 ### Where workers wait under a cap
 
-With the wait-site counters of [#549](https://github.com/varveio/swath/pull/549) (`resources.publish_wait_ns`,
+With the wait-site counters of [#549](https://github.com/varveio/swath/pull/549) (`diagnostics.resources.publish_wait_ns`,
 `admission_wait_ns`, `idle_wait_ns`; the range engine's `awaited.*`), capped runs of the same lists:
 
 - **64 workers.** 93 % of worker time was blocked publishing (emitters with a refused frame, still inside their

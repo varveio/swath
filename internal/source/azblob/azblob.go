@@ -98,8 +98,8 @@ type Options struct {
 	Timeout time.Duration
 	Trust   source.Trust // how the service's certificate is verified
 	Workers int
-	Warn    func(string) // one-time warnings for the user; may be nil
-	Client  API          // optional; built from the options above when nil
+	Warn    func(code, msg string) // one-time warnings for the user (registry.Request.Warn); may be nil
+	Client  API                    // optional; built from the options above when nil
 	// AllVersions lists every entry of each name (NewVersions): its
 	// versions, snapshots and soft-deleted blobs beside its current blob.
 	AllVersions bool
@@ -395,7 +395,7 @@ func (p *provider[P]) admit(ctx context.Context) error {
 	case p.opt.Flat:
 		p.namespace = "asserted"
 		if p.opt.Warn != nil {
-			p.opt.Warn(fmt.Sprintf("Azure Blob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
+			p.opt.Warn(source.WarnFlatAssumed, fmt.Sprintf("Azure Blob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
 		}
 	case !p.unsigned() && refused(err):
 		// Credentials the service rejected: what any request would meet.
@@ -480,10 +480,10 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 			return nil, false, fmt.Errorf("Azure Blob client: %w", err)
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
-			opt.Warn(n)
+			opt.Warn(source.WarnAnonymous, n)
 		}
 		if opt.Trust.NoVerify && opt.Warn != nil {
-			opt.Warn(source.NoVerifyWarning)
+			opt.Warn(source.WarnTLSUnverified, source.NoVerifyWarning)
 		}
 		p.client = c
 		p.creds, p.anonymous = c.Credentials()

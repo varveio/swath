@@ -56,9 +56,9 @@ type Options struct {
 	BearerRefresh time.Duration
 	// RequestPayer accepts the request charges of a requester-pays bucket.
 	RequestPayer bool
-	Timeout      time.Duration // per request; default 30 s
-	Trust        source.Trust  // how the service's certificate is verified (client.Config.Trust)
-	Warn         func(string)  // one-time warnings for the user; may be nil
+	Timeout      time.Duration          // per request; default 30 s
+	Trust        source.Trust           // how the service's certificate is verified (client.Config.Trust)
+	Warn         func(code, msg string) // one-time warnings for the user (registry.Request.Warn); may be nil
 	FetchOwner   bool
 	// AllVersions lists every version and delete marker
 	// (ListObjectVersions, NewVersions) instead of the current objects.
@@ -218,10 +218,10 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 			return nil, false, fmt.Errorf("S3 client: %w", err)
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
-			opt.Warn(n)
+			opt.Warn(source.WarnAnonymous, n)
 		}
 		if opt.Trust.NoVerify && opt.Warn != nil {
-			opt.Warn(source.NoVerifyWarning)
+			opt.Warn(source.WarnTLSUnverified, source.NoVerifyWarning)
 		}
 		p.client, p.region = c, c.Region()
 		p.creds, p.anonymous = c.Credentials()

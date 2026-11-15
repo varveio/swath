@@ -287,7 +287,7 @@ func TestRemoteSessionSecrecy(t *testing.T) {
 			cfg.Limits.PartSize = 1 << 20 // parts of several chunks: a session
 			var said []string
 			var mu sync.Mutex
-			cfg.Warn = func(m string) { mu.Lock(); said = append(said, m); mu.Unlock() }
+			cfg.Warn = func(_, m string) { mu.Lock(); said = append(said, m); mu.Unlock() }
 			cfg.Settle = func(r Report, err error) {
 				mu.Lock()
 				said = append(said, r.Outcome.Error, fmt.Sprint(err))

@@ -391,7 +391,7 @@ frontier, rejected per guard clause, skipped for no demand, outranked, or by an 
 gate), each accepted
 split's pivot source, the density refinement's refusals by reason; `child_empty.{lower,upper}` and by pivot
 source and kind of `hi`; small children; depth; unsplittable ranges; structure probes and
-their pivots; `max_active`, `max_queued`, `mean_active`; busy, idle-with-demand and sink-wait time.
+their pivots; `peak_active`, `peak_queued`, `mean_active`; busy, idle-with-demand and sink-wait time.
 
 **Reading a split chain from the report.** Every accepted split counts one pivot source:
 `split.pivot.reflect` (the anchor reflection), `split.pivot.midpoint` (a safe scalar between the cursor and the

@@ -11,7 +11,7 @@ A supervisor's outcome of record is the exit code plus the report at the path it
 (outside the output directory, a fresh path per attempt, or removed before the attempt starts): `outcome`
 (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`; `status`, `complete` and `stop_reason` follow the
 class: a run that did not commit is `complete` false with its class as the `stop_reason`, and a committed
-run's agree with the manifest's `coverage`) and `attempt` (`id`, random, and `started`). For a run that did
+run's agree with the manifest's `coverage`) and `attempt` (`id`, random, and `started_at`), with `run` (`id`: the journal's, the same for every resume). For a run that did
 not complete, `DIR/error.json` holds the same outcome in the dataset (`class`, `exit_code`, `message`,
 `resumable`, `cause`: the provider's failure class such as `throttle` or `access_denied`, or `no_space` for a
 full disk; and the same `attempt`); it never needs stderr.
@@ -166,7 +166,7 @@ in the resume identity, so a resume would stop at the same place. Start over (`-
 
 `--part-max-rows N`'s cut depends on the rows only, so it is part of the resume identity, a resume
 reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part closed by size
-does); `resources.part_row_cuts` counts them. `--part-interval` is checked every eighth of the interval and
+does); `diagnostics.resources.part_row_cuts` counts them. `--part-interval` is checked every eighth of the interval and
 does not close a part whose boundary a resume fixed.
 
 ## Encoder sizing

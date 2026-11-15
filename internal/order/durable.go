@@ -335,7 +335,7 @@ type durableStats struct {
 }
 
 // DurableReport is durableStats for the run report
-// (resources.spill.durable), with the caps in effect.
+// (diagnostics.resources.spill.durable), with the caps in effect.
 type DurableReport struct {
 	Slots                 int              `json:"slots"`       // the certificate cap
 	History               int              `json:"history"`     // ledger records retained and reserved at the end

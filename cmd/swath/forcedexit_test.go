@@ -222,6 +222,12 @@ func TestForcedExitAfterCommit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
 		t.Fatalf("error.json after a completed run's forced exit: %v", err)
 	}
+	// The progress file's last snapshot is the committed run's.
+	var p listing.ProgressSnapshot
+	readJSON(t, filepath.Join(dir, progressName), &p)
+	if p.State != listing.StateDone || p.Rows != 20000 {
+		t.Fatalf("progress.json after a completed run's forced exit: state %q, rows_fetched %d", p.State, p.Rows)
+	}
 }
 
 // TestForcedExitAtCommit: the run installs its manifest and then hangs (at

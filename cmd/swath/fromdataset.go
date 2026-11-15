@@ -22,6 +22,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/totals"
@@ -171,7 +172,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	l.read(o.fromDataset, read)
 	if read.Rows == 0 && o.datasetPrefix != "" {
-		l.warn(fmt.Sprintf("no key of the dataset starts with %q", o.datasetPrefix))
+		l.warn(warnPrefixNotFound, fmt.Sprintf("no key of the dataset starts with %q", o.datasetPrefix))
 	}
 	if err := t.write(stdout); brokenPipe(err) {
 		return nil // the reader closed stdout: exit 0, as a live swath du
@@ -184,7 +185,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	c := m.Coverage
 	switch {
 	case c == nil || c.Complete == nil:
-		l.warn("the dataset's manifest does not say whether its listing completed: the totals may leave entries out")
+		l.warn(warnCoverageUnknown, "the dataset's manifest does not say whether its listing completed: the totals may leave entries out")
 	case !*c.Complete:
 		why := "its listing did not complete"
 		if c.StopReason != nil {
@@ -213,8 +214,8 @@ type provenance struct {
 	Path              string          `json:"path"`
 	Source            *string         `json:"source"`
 	SchemaID          string          `json:"schema_id"`
-	ListingStartedAt  *time.Time      `json:"listing_started_at"`
-	ListingFinishedAt *time.Time      `json:"listing_finished_at"`
+	ListingStartedAt  *jsontime.Time  `json:"listing_started_at"`
+	ListingFinishedAt *jsontime.Time  `json:"listing_finished_at"`
 	Complete          *bool           `json:"complete"`
 	StopReason        *string         `json:"stop_reason"`
 	Unreadable        *int64          `json:"unreadable"`
@@ -229,7 +230,7 @@ func provenanceOf(dir string, m reader.Metadata) provenance {
 		p.Source = &uri
 	}
 	if c := m.Coverage; c != nil {
-		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.Unreadable = c.ListingStartedAt, c.ListingFinishedAt, c.Complete, c.StopReason, c.Unreadable
+		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.Unreadable = jsontime.OfPtr(c.ListingStartedAt), jsontime.OfPtr(c.ListingFinishedAt), c.Complete, c.StopReason, c.Unreadable
 		p.Filters, p.Exclusions = c.Filters, c.Exclusions
 	}
 	return p
@@ -274,7 +275,7 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 	msg := "totals of the dataset " + p.Path + ", not a live listing: " + src
 	if at := p.ListingFinishedAt; at != nil {
 		msg += " as listed " + at.UTC().Format(time.RFC3339)
-		if age := now.Sub(*at); age >= 0 {
+		if age := now.Sub(at.Time); age >= 0 {
 			msg += " (" + ago(age) + ")"
 		}
 	}

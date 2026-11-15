@@ -141,8 +141,8 @@ func (t *terminal) claim(forced func() outcome, wait time.Duration, late func(sn
 
 // outcomeOf is the outcome file's view (error.json, the stderr outcome
 // line) of an accounted report: the same class, exit code, resumability,
-// cause, message and attempt.
+// cause, message, attempt and run.
 func outcomeOf(r listing.Report) outcome {
 	return outcome{Class: r.Outcome.Class, ExitCode: r.Outcome.ExitCode, Message: r.Outcome.Error,
-		Resumable: r.Outcome.Resumable, Cause: r.Outcome.Cause, StopSource: r.Outcome.StopSource, Attempt: r.Attempt}
+		Resumable: r.Outcome.Resumable, Cause: r.Outcome.Cause, StopSource: r.Outcome.StopSource, Attempt: r.Attempt, Run: r.Run}
 }

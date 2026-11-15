@@ -165,7 +165,7 @@ type Provider struct {
 	stats    Stats
 	// warn tells the user of a directory left out (registry.Request.Warn);
 	// nil outside a run. warnMu serialises the workers' calls.
-	warn   func(string)
+	warn   func(code, msg string)
 	warnMu sync.Mutex
 	// space is the root's filesystem space, measured once (spaceOnce):
 	// nil when the measurement failed or the platform has none. rootInfo
@@ -176,13 +176,13 @@ type Provider struct {
 }
 
 // warnf passes a warning to the user, if the run takes them.
-func (p *Provider) warnf(format string, a ...any) {
+func (p *Provider) warnf(code, format string, a ...any) {
 	if p.warn == nil {
 		return
 	}
 	p.warnMu.Lock()
 	defer p.warnMu.Unlock()
-	p.warn(fmt.Sprintf(format, a...))
+	p.warn(code, fmt.Sprintf(format, a...))
 }
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)

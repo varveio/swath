@@ -40,7 +40,7 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 		if err := f.Parse(append(args, "--anonymous")); err != nil {
 			t.Fatal(err)
 		}
-		src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(string) {}})
+		src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 1, Warn: func(string, string) {}})
 		if err != nil {
 			t.Fatal(err)
 		}

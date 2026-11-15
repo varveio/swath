@@ -74,7 +74,10 @@ each attempt a fresh path outside the output directory. The report's `outcome` h
   "stop_source": "timebox",
   "attempt": {
     "id": "5c3c3d59be9ea1c21fa747cc8b647131",
-    "started": "2026-11-10T12:35:34.390093792Z"
+    "started_at": "2026-11-10T12:35:34.390093Z"
+  },
+  "run": {
+    "id": "0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a"
   }
 }
 ```

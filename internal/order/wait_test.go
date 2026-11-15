@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
@@ -426,7 +427,7 @@ func TestSpillPressure(t *testing.T) {
 	t.Cleanup(func() { clock = time.Now })
 	advance := func(d time.Duration) time.Time { return time.Unix(0, now.Add(int64(d))) }
 	ws := waits(t)
-	since := func(o *run[string, tp]) *time.Time {
+	since := func(o *run[string, tp]) *jsontime.Time {
 		o.mu.Lock() // a waiter that told hookWait holds mu until it waits
 		defer o.mu.Unlock()
 		return o.g.Snapshot().SpillPressureSince

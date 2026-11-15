@@ -25,6 +25,7 @@ import (
 	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -76,7 +77,7 @@ func (d *destination) sameAsLocal(t *testing.T, name, ref, prefix string, orphan
 		}
 	}
 	strip := func(m dataset.Manifest) string {
-		m.Parts, m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = nil, time.Time{}, time.Time{}, time.Time{}
+		m.Parts, m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = nil, time.Time{}, jsontime.Time{}, jsontime.Time{}
 		objects := "unknown"
 		if m.CommittedObjectBytes != nil {
 			objects = fmt.Sprint(*m.CommittedObjectBytes)
@@ -267,7 +268,7 @@ func TestRemoteCrashMatrix(t *testing.T) {
 						})
 						cfg := remoteConfig(url, ws, false, d.output(prefix))
 						cfg.Limits.Spill.Off = !spill
-						_, err := Run(context.Background(), cfg)
+						first, err := Run(context.Background(), cfg)
 						restore()
 						if seen.Load() < nth {
 							if err != nil {
@@ -281,15 +282,26 @@ func TestRemoteCrashMatrix(t *testing.T) {
 						if !errors.Is(err, faults.ErrCrash) {
 							t.Fatalf("crash not injected: %v", err)
 						}
-						_, err = Run(context.Background(), remoteConfig(url, ws, true, d.output(prefix)))
+						resumed, err := Run(context.Background(), remoteConfig(url, ws, true, d.output(prefix)))
+						// A run killed before its journal was opened has no id yet;
+						// once it has one, its resume is an attempt of the same run.
+						if resumed.Run == nil || first.Run != nil && resumed.Run.ID != first.Run.ID {
+							t.Fatalf("run %+v, its resume's %+v: want the same", first.Run, resumed.Run)
+						}
 						switch point {
 						case "manifest-created", "manifest", "run-report", "finalized":
 							// Committed: the resume finishes the aftermath (orphans,
-							// run report) and reports the run complete.
+							// run report) and reports the run complete; the run
+							// report in the bucket names the run.
 							if !errors.Is(err, ErrComplete) {
 								t.Fatalf("resume after the manifest's creation: %v", err)
 							}
 							d.sameAsLocal(t, point, ref, prefix, true)
+							var rep Report
+							o, _ := d.Object(prefix + "/" + dataset.ReportName)
+							if err := json.Unmarshal(o, &rep); err != nil || rep.Run == nil || rep.Run.ID != resumed.Run.ID {
+								t.Fatalf("%s: the bucket's run report names run %+v (%v), want %s", point, rep.Run, err, resumed.Run.ID)
+							}
 							return
 						}
 						if err != nil {

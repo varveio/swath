@@ -20,6 +20,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/reader"
 )
 
@@ -467,7 +468,7 @@ func TestManifestObjectBytes(t *testing.T) {
 // reads back as written, and a manifest read and written again keeps it
 // byte for byte.
 func TestManifestFilesystem(t *testing.T) {
-	at := time.Date(2026, 11, 13, 10, 0, 0, 123456000, time.UTC)
+	at := jsontime.Of(time.Date(2026, 11, 13, 10, 0, 0, 123456000, time.UTC))
 	for _, want := range []*FilesystemSpace{nil, {TotalBytes: 1 << 40, FreeBytes: 0, AvailableBytes: 0, MeasuredAt: at}, {TotalBytes: 100, FreeBytes: 500, AvailableBytes: 80, MeasuredAt: at}} {
 		meta := Meta{SchemaID: id, Source: Source{Kind: "local", URI: "/data"}, Scope: Scope{Kind: "whole"},
 			Coverage: Coverage{Complete: true, StopReason: "completed"}, Filesystem: want}

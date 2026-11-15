@@ -39,6 +39,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/jsontime"
 )
 
 // Dir and Name locate the journal inside the dataset directory.
@@ -80,10 +81,10 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 // Header is the journal's first frame.
 type Header struct {
-	Type     string    `json:"type"` // "header"
-	Version  int       `json:"version"`
-	Identity Identity  `json:"identity"`
-	Created  time.Time `json:"created"`
+	Type     string        `json:"type"` // "header"
+	Version  int           `json:"version"`
+	Identity Identity      `json:"identity"`
+	Created  jsontime.Time `json:"created"`
 	// Argv is the command that started the run; swath resume replays it.
 	Argv []string `json:"argv,omitempty"`
 	// RunUUID names the run across every resume: Create makes
@@ -118,10 +119,10 @@ type Record struct {
 // failed in a way a resume must not retry (a protocol violation by the
 // service, as Java's markRunUnresumable), so swath resume refuses it.
 type Unresumable struct {
-	Type   string    `json:"type"`  // "unresumable"
-	Cause  string    `json:"cause"` // "protocol"
-	Reason string    `json:"reason"`
-	At     time.Time `json:"at"`
+	Type   string        `json:"type"`  // "unresumable"
+	Cause  string        `json:"cause"` // "protocol"
+	Reason string        `json:"reason"`
+	At     jsontime.Time `json:"at"`
 }
 
 // UnresumableError refuses to resume a run its journal marks unresumable.
@@ -129,7 +130,7 @@ type UnresumableError struct{ Mark Unresumable }
 
 func (e *UnresumableError) Error() string {
 	return fmt.Sprintf("the run in the output directory cannot be resumed: it was marked unresumable (%s) at %s: %s",
-		e.Mark.Cause, e.Mark.At.Format(time.RFC3339), e.Mark.Reason)
+		e.Mark.Cause, jsontime.Format(e.Mark.At.Time), e.Mark.Reason)
 }
 
 // State is what a journal says about a run.
@@ -186,7 +187,7 @@ func Create(out string, id Identity, argv []string) (*Journal, error) {
 	var uuid [16]byte
 	rand.Read(uuid[:])
 	j.uuid = hex.EncodeToString(uuid[:])
-	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC(), Argv: argv, RunUUID: j.uuid}); err != nil {
+	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: jsontime.Of(time.Now()), Argv: argv, RunUUID: j.uuid}); err != nil {
 		j.Close()
 		return nil, err
 	}
@@ -429,7 +430,7 @@ func (j *Journal) append(v any) error {
 // MarkUnresumable appends the run's terminal frame (Unresumable) and
 // returns once it is synced; no record follows it.
 func (j *Journal) MarkUnresumable(cause, reason string) error {
-	if err := j.append(Unresumable{Type: "unresumable", Cause: cause, Reason: reason, At: time.Now().UTC()}); err != nil {
+	if err := j.append(Unresumable{Type: "unresumable", Cause: cause, Reason: reason, At: jsontime.Of(time.Now())}); err != nil {
 		return err
 	}
 	j.mu.Lock()
