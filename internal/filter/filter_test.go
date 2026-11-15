@@ -412,3 +412,29 @@ func TestMissingColumn(t *testing.T) {
 		t.Errorf("Reads %v %v %v", size, mtime, class)
 	}
 }
+
+// TestGlobRefusesRegexSigns: a glob that carries a sign of a regular
+// expression is refused naming the regex flag; the neighbors that are valid
+// globs, and each escape the message offers, are accepted.
+func TestGlobRefusesRegexSigns(t *testing.T) {
+	for _, p := range []string{`\.parquet$`, `*\.tmp$`, `^logs/*`, `*.parquet$`, `\d*.csv`, `a\wb`, `x\s`, `(a|b).txt`, `logs/(2025|2026)/*`} {
+		for _, flag := range []string{"include", "exclude"} {
+			s := Spec{}
+			if flag == "include" {
+				s.Include = []string{p}
+			} else {
+				s.Exclude = []string{p}
+			}
+			err := s.Validate()
+			if err == nil || !strings.Contains(err.Error(), "--"+flag+"-regex") || !strings.HasPrefix(err.Error(), "--"+flag+" ") {
+				t.Errorf("--%s %q: %v", flag, p, err)
+			}
+		}
+	}
+	for _, p := range []string{`*.parquet`, `.*`, `**/.*`, `\^a`, `a\$`, `a[$]`, `[^]a`, `a$b`, `a^b`, `photo (1).jpg`, `a(b)`, `a|b`, `a+b`, `a\\.b`,
+		`[(|)]*`, `[\\.]x`, `a\|b(c)`, `{a,b}.gz`, `(a)|(b)`, `[!(]|)`} {
+		if err := (&Spec{Include: []string{p}}).Validate(); err != nil {
+			t.Errorf("%q refused: %v", p, err)
+		}
+	}
+}

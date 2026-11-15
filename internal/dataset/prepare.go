@@ -22,8 +22,10 @@ var (
 	ErrOutIsRoot  = errors.New("output is the listed root or one of its ancestors")
 	ErrNotEmpty   = errors.New("output directory is not empty")
 	ErrNotDataset = errors.New("output directory does not hold a previous swath dataset")
-	ErrInsideRoot = errors.New("cannot replace an output inside the listed root")
-	ErrRootNotDir = errors.New("root is not a directory")
+	// ErrPriorRelease is a resume of a directory that an interrupted 0.3 run left.
+	ErrPriorRelease = errors.New("the output directory holds an interrupted run written by swath 0.3, which cannot be resumed; --overwrite replaces it")
+	ErrInsideRoot   = errors.New("cannot replace an output inside the listed root")
+	ErrRootNotDir   = errors.New("root is not a directory")
 )
 
 // Prepare validates out against root (Usable) and creates out/data. out may
@@ -275,6 +277,9 @@ func isDataset(out, schemaID string) bool {
 			}
 		}
 	}
+	if InterruptedV03(out) {
+		return true
+	}
 	_, e1 := os.Stat(filepath.Join(out, legacySuccess))
 	fi, e2 := os.Stat(filepath.Join(out, DataDir))
 	if e1 == nil && e2 == nil && fi.IsDir() {
@@ -292,6 +297,25 @@ func isDataset(out, schemaID string) bool {
 		}
 	}
 	return false
+}
+
+// InterruptedV03 reports whether out holds an interrupted run of swath 0.3
+// that has not committed: its .swath-state.json or .swath/checkpoint.sqlite
+// (names no other tool is known to write), or a _staging/ directory beside
+// data/ (a bare _staging/ is any program's). A committed directory is a
+// dataset, not this.
+func InterruptedV03(out string) bool {
+	if Committed(out) {
+		return false
+	}
+	for _, mark := range []string{".swath-state.json", filepath.Join(Workspace, "checkpoint.sqlite")} {
+		if fi, err := os.Lstat(filepath.Join(out, mark)); err == nil && fi.Mode().IsRegular() {
+			return true
+		}
+	}
+	st, e1 := os.Stat(filepath.Join(out, "_staging"))
+	data, e2 := os.Stat(filepath.Join(out, DataDir))
+	return e1 == nil && st.IsDir() && e2 == nil && data.IsDir()
 }
 
 // Resumable reports whether out holds an interrupted journaled run.

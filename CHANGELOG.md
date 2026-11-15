@@ -5,6 +5,11 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `--include` and `--exclude` refuse, with exit 2 before any listing, a glob that carries a sign of a
+  regular expression (a leading `^`, a final `$`, `\.`, `\d`, `(a|b)`), naming `--include-regex` or
+  `--exclude-regex`; a 0.3 command line no longer lists nothing and exits 0 (#526). A directory an interrupted
+  0.3 run left (`.swath-state.json`, `.swath/checkpoint.sqlite`, or `_staging/` beside `data/`) is replaced by
+  `--overwrite`, and `swath resume` refuses it as written by 0.3.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
