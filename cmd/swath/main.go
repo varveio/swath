@@ -1033,7 +1033,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			// the lock leaves the file as the run before it left it.
 			writeProgress(cfg.Output.Dir, cfg.Progress)
 		}
-		term.account(&sum, err)                     // a no-op for the accounted report Settle gets
+		term.account(&sum, err) // a no-op for the accounted report Settle gets
 		if werr := writeOutcome(cfg.Output.Dir, outcomeOf(sum)); werr != nil {
 			unrecorded = "write " + errorName + ": " + werr.Error()
 		} else {
