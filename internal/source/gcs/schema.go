@@ -41,10 +41,6 @@ var Schema = schema.Bind(reader.GCSObjectsV1, schema.Schema[Object]{
 		{Str: schema.NonEmpty(func(o *Object) string { return o.MD5 })},
 		{Str: schema.NonEmpty(func(o *Object) string { return o.CRC32C })},
 		{Str: schema.NonEmpty(func(o *Object) string { return o.ContentType })},
-		// time_created is an optional column of the schema id, placed
-		// last: parts written before the lister recorded it lack it, so a
-		// reader may read it where present but not require it
-		// (docs/dataset.md, "Schema registry").
 		{Int: func(o *Object) (int64, bool) { return o.TimeCreated, o.TimeCreated != 0 }},
 	},
 	Bytes: func(o *Object) int64 { return 40 + objectHeap(o) }, // five integers of 8 bytes

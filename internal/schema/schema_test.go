@@ -46,8 +46,8 @@ func TestBindDerivesContainers(t *testing.T) {
 		}
 		return cols
 	}
-	s := Bind(reader.LocalV1, Schema[entry]{Info: Info{Containers: Match{Column: "kind", Value: "DIR"}}, Columns: cols()})
-	if s.Container == nil || !s.Container(&entry{"DIR"}) || s.Container(&entry{"FILE"}) || s.Container(&entry{"dir"}) {
+	s := Bind(reader.LocalV1, Schema[entry]{Info: Info{Containers: Match{Column: "kind", Value: "dir"}}, Columns: cols()})
+	if s.Container == nil || !s.Container(&entry{"dir"}) || s.Container(&entry{"file"}) || s.Container(&entry{"DIR"}) {
 		t.Fatal("Container does not follow the declaration")
 	}
 	if s := Bind(reader.LocalV1, Schema[entry]{Columns: cols()}); s.Container != nil {
@@ -66,5 +66,48 @@ func TestBindDerivesContainers(t *testing.T) {
 			}()
 			Bind(reader.LocalV1, bad)
 		}()
+	}
+}
+
+// TestObjectSize: a row's object bytes are its size, 0 for a row that is
+// no object (a container, a delete marker), and unknown (false) for an
+// object whose size is null; a schema without a size column has none.
+func TestObjectSize(t *testing.T) {
+	type row struct {
+		size          int64
+		sized, marker bool
+		kind          string
+	}
+	s := &Schema[row]{
+		Info: Info{ID: "test/sizes", Groups: true, Versions: reader.VersionSpec{ID: "kind", Latest: "latest", DeleteMarker: "marker"},
+			Containers: Match{Column: "kind", Value: "dir"}},
+		Columns: []Column[row]{
+			{Spec: Spec{Name: "size", Type: Int64}, Int: func(r *row) (int64, bool) { return r.size, r.sized }},
+			{Spec: Spec{Name: "kind", Type: String}, Str: func(r *row) (string, bool) { return r.kind, true }},
+			{Spec: Spec{Name: "latest", Type: Bool, Required: true}, Bool: func(*row) (bool, bool) { return true, true }},
+			{Spec: Spec{Name: "marker", Type: Bool, Required: true}, Bool: func(r *row) (bool, bool) { return r.marker, true }},
+		},
+	}
+	s.Container = func(r *row) bool { return r.kind == "dir" }
+	size := ObjectSize(s)
+	for _, c := range []struct {
+		r    row
+		n    int64
+		sure bool
+	}{
+		{row{size: 7, sized: true, kind: "file"}, 7, true},
+		{row{size: 4096, sized: true, kind: "dir"}, 0, true},
+		{row{kind: "dir"}, 0, true},
+		{row{marker: true, kind: "v"}, 0, true},
+		{row{kind: "file"}, 0, false},
+	} {
+		if n, ok := size(&c.r); n != c.n || ok != c.sure {
+			t.Errorf("%+v: (%d, %v), want (%d, %v)", c.r, n, ok, c.n, c.sure)
+		}
+	}
+	s.Columns = s.Columns[1:]
+	s.Info.Versions = reader.VersionSpec{}
+	if ObjectSize(s) != nil {
+		t.Fatal("a schema without a size column has an object size")
 	}
 }

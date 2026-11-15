@@ -40,7 +40,7 @@ func hasColumn(t *testing.T, path, name string) bool {
 }
 
 // TestClaimedPartKeepsItsColumns: a GCS run by a build that wrote no
-// time_created column (the schema without its last column, a row's
+// created_at column (the schema without its last column, a row's
 // logical size 8 bytes less) stops with
 // part 1 claimed and unrecorded: at journal-append (the record never
 // written) and as a torn record (written, then cut short before the part
@@ -66,7 +66,7 @@ func TestClaimedPartKeepsItsColumns(t *testing.T) {
 	}
 	current := func() { sourcegcs.Schema.Columns, sourcegcs.Schema.Bytes = columns, size }
 	t.Cleanup(current)
-	if columns[len(columns)-1].Name != "time_created" {
+	if columns[len(columns)-1].Name != "created_at" {
 		t.Fatalf("last column %s", columns[len(columns)-1].Name)
 	}
 	for _, tc := range []struct {
@@ -112,8 +112,8 @@ func TestClaimedPartKeepsItsColumns(t *testing.T) {
 			if err != nil {
 				t.Fatalf("part 1 is not claimed: %v", err)
 			}
-			if hasColumn(t, claim, "time_created") {
-				t.Fatal("the claimed part holds time_created")
+			if hasColumn(t, claim, "created_at") {
+				t.Fatal("the claimed part holds created_at")
 			}
 			if _, err := Run(context.Background(), gcsConfig(ep, out, true)); err != nil {
 				t.Fatalf("resume: %v", err)
@@ -130,8 +130,8 @@ func TestClaimedPartKeepsItsColumns(t *testing.T) {
 				t.Fatalf("part 1 is %d bytes, sha256 %s; the claimed part %d bytes, sha256 %s", p.Bytes, p.SHA256, claimed.Bytes, claimed.SHA256)
 			}
 			for i, p := range m.Parts {
-				if got := hasColumn(t, filepath.Join(out, filepath.FromSlash(p.Path)), "time_created"); got != (i > 1) {
-					t.Fatalf("part %d: time_created %v", i, got)
+				if got := hasColumn(t, filepath.Join(out, filepath.FromSlash(p.Path)), "created_at"); got != (i > 1) {
+					t.Fatalf("part %d: created_at %v", i, got)
 				}
 			}
 			if _, err := os.Stat(filepath.Join(out, dataset.Workspace, dataset.SuspectDir, dataset.PartName(1))); !os.IsNotExist(err) {

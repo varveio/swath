@@ -5,6 +5,22 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: one name per concept in every dataset schema. Times: `created_at` (GCS `time_created`, Azure
+  `creation_time`, local `birth_time`), `deleted_at` (GCS `time_deleted`, Azure `deleted_time`), `accessed_at`
+  (Azure `last_access_time`, local `atime`); MD5: `md5` (Azure `content_md5`); Azure's access tier is
+  `storage_class`, with `storage_class_inferred` and `storage_class_changed_at`. `swath/gcs-generations/v1`
+  gains a required `is_latest`. A local `kind` is lower case (`file`, `dir`, `symlink`, ...). Every part has
+  every column of its schema id: no column may be absent.
+- Go port: one provider token per provider on every machine surface: `s3`, `gcs`, `azure`, `local` (manifest
+  `source.kind`, report `source.name`, the journal's provider); the Azure schema ids are
+  `swath/azure-objects/v1` and `swath/azure-versions/v1`, and the reader's types `AzureObject` and `AzureVersion`.
+- Go port: the manifest's `coverage.filters` is a list of `{"filter": NAME, "value": VALUE}` named for the
+  options (`modified_since`, `one_file_system`, ...; `null` for a switch), its times with six fraction digits;
+  `coverage.snapshot` is gone. A new `collected` records the metadata tier and the optional columns the run
+  asked for, and `committed_object_bytes` is absent when an object's size was not read (`--metadata names`)
+  instead of 0. `swath du --from-dataset`'s `dataset` member and event carry the filters in the same objects.
+- Go port: a JSONL row of a local tree always has `key` and `key_base64` (and `link_target`,
+  `link_target_base64`): the text, null when not UTF-8, and the base64 bytes, null when UTF-8.
 - Go port: a run stopped while its parts were still publishing no longer lets a later part add its page ends to
   the cut file's cuts beside an earlier part still adding its own (a data race, seen under the race detector).
 - Go port: `swath du`'s rows carry both byte figures under the dataset's names, `size` (the lengths) and
@@ -17,7 +33,7 @@ Notable changes per release. The full human summary for the current release is i
   selects the default, and the two together are refused. The run report's `output.totals` takes the same
   names (`size`, `allocated_bytes`, the missing counts, `max_last_modified`, `primary`) in place of `bytes`,
   `bytes_column` and `unsized`. `links_once` says whether the listing reads links (a local tree at stat or
-  statx, without `-l`), and the manifest records a local listing's metadata tier (`source.metadata`), so a
+  statx, without `-l`), and the manifest records a local listing's metadata tier (`collected.metadata`), so a
   dataset listed with `--metadata names` totals as the live run does, an empty one included. A name of a
   hard-linked file counted under another name adds no time to `max_last_modified`.
 - Go port: the `swath du` table shows one figure, `size`, or `on disk` with `--allocated`, the counts with

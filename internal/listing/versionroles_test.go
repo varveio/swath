@@ -31,12 +31,12 @@ type rolePayload struct {
 }
 
 // roleCases are the declarations a versionroles:// root names: a string ID
-// with a latest boolean and delete markers, an integer ID with a deleted-at
-// column, and a malformed one (both latest and deleted-at).
+// with a latest boolean and delete markers, an integer ID without delete
+// markers, and a malformed one (no latest column).
 var roleCases = map[string]reader.VersionSpec{
 	"latest":    {ID: "label", Latest: "head", DeleteMarker: "tomb"},
-	"deletedat": {ID: "serial", DeletedAt: "retired"},
-	"malformed": {ID: "label", Latest: "head", DeletedAt: "retired"},
+	"serial":    {ID: "serial", Latest: "head"},
+	"malformed": {ID: "label"},
 }
 
 func roleSchema(roles reader.VersionSpec) *schema.Schema[rolePayload] {
@@ -53,7 +53,7 @@ func roleSchema(roles reader.VersionSpec) *schema.Schema[rolePayload] {
 			{Spec: schema.Spec{Name: "version_id", Type: schema.String}, Str: func(*rolePayload) (string, bool) { return "decoy", true }},
 			{Spec: schema.Spec{Name: "is_latest", Type: schema.Bool, Required: true}, Bool: func(p *rolePayload) (bool, bool) { return !p.head && p.alive, true }},
 			{Spec: schema.Spec{Name: "is_delete_marker", Type: schema.Bool, Required: true}, Bool: func(p *rolePayload) (bool, bool) { return !p.tomb, true }},
-			{Spec: schema.Spec{Name: "time_deleted", Type: schema.TimestampMicros}, Int: func(p *rolePayload) (int64, bool) { return 1, p.alive }},
+			{Spec: schema.Spec{Name: "deleted_at", Type: schema.TimestampMicros}, Int: func(p *rolePayload) (int64, bool) { return 1, p.alive }},
 		},
 		Bytes: func(*rolePayload) int64 { return 8 },
 		Heap:  func(p *rolePayload) int64 { return int64(len(p.label)) },
@@ -62,7 +62,7 @@ func roleSchema(roles reader.VersionSpec) *schema.Schema[rolePayload] {
 
 // roleRows: a: latest and noncurrent; b: a latest delete marker over a
 // noncurrent version; c: one row. Under "latest", head and tomb decide;
-// under "deletedat", alive (a null retired) does, and tomb means nothing.
+// under "serial", head does, and tomb means nothing.
 var roleRows = []schema.Row[rolePayload]{
 	{Key: "a", Data: rolePayload{label: "a2", serial: 2, head: true, alive: true, size: 1}},
 	{Key: "a", Data: rolePayload{label: "a1", serial: 1, retired: 0, size: 2}},
@@ -116,7 +116,7 @@ func TestVersionReportFollowsDeclaration(t *testing.T) {
 		absent string
 	}{
 		{"latest", map[string]int64{"versions": 4, "delete_markers": 1, "live_objects": 2, "distinct_keys": 3, "rows_emitted": 5}, "noncurrent"},
-		{"deletedat", map[string]int64{"versions": 5, "noncurrent": 3, "live_objects": 2, "distinct_keys": 3, "rows_emitted": 5}, "delete_markers"},
+		{"serial", map[string]int64{"versions": 5, "noncurrent": 2, "live_objects": 3, "distinct_keys": 3, "rows_emitted": 5}, "delete_markers"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "rows.txt")
@@ -143,7 +143,7 @@ func TestVersionRolesRefusedBeforeOutput(t *testing.T) {
 	for _, o := range []OutputConfig{{Dir: ds}, {Text: &textout.Config{Path: text, Format: textout.TSV}}} {
 		func() {
 			defer func() {
-				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "test/version-roles: version roles: exactly one") {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "test/version-roles: version roles: no latest column") {
 					t.Fatalf("recovered %v", r)
 				}
 			}()

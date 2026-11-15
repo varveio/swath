@@ -795,7 +795,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 	id := journal.Identity{Tool: buildinfo.Tool, Format: int(seekparquet.FormatVersion), SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
-		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
+		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: filter.Texts(cfg.Filter.Descriptions())}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
 		id.Provider = sid.Provider
@@ -816,7 +816,6 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 		m.Coverage.StopReason = "unreported" // a source without a report claims nothing
 		return m
 	}
-	m.Source.Metadata = rep.Fields
 	if f := rep.Filesystem; f != nil {
 		m.Filesystem = &dataset.FilesystemSpace{TotalBytes: f.TotalBytes, FreeBytes: f.FreeBytes, AvailableBytes: f.AvailableBytes, MeasuredAt: f.MeasuredAt}
 	}
@@ -826,6 +825,7 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 	}
 	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable = c.Complete, c.StopReason, c.Unreadable
 	m.Coverage.Exclusions, m.Coverage.Filters = c.Exclusions, c.Filters
+	m.Collected = dataset.Collected{Metadata: rep.Fields, Columns: rep.Collected}
 	return m
 }
 

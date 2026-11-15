@@ -136,7 +136,7 @@ type opened[P any] struct {
 
 // Locator records the root without its SAS.
 func (o *opened[P]) Locator() source.Locator {
-	return source.Locator{Kind: "azblob", Root: o.p.target(), Container: o.p.opt.Container}
+	return source.Locator{Kind: "azure", Root: o.p.target(), Container: o.p.opt.Container}
 }
 
 // endpoint is the account's blob service URL as the client requests it
@@ -154,7 +154,7 @@ func (o *opened[P]) endpoint() string {
 // route (Routed), or the run declines resume.
 func (o *opened[P]) Identity() source.Identity {
 	ep := o.endpoint()
-	id := source.Identity{Provider: "azblob", Fields: []source.IdentityField{
+	id := source.Identity{Provider: "azure", Fields: []source.IdentityField{
 		{Name: "source", Value: o.p.target()},
 		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
 		{Name: "account", Value: o.p.opt.Account},
@@ -185,7 +185,17 @@ func (o *opened[P]) Capabilities() source.Capabilities {
 
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
-	return keyrange.Report("azblob", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
+	r := keyrange.Report("azure", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
+	if o.p.opt.FetchMetadata {
+		r.Collected = append(r.Collected, "metadata")
+	}
+	if o.p.opt.FetchTags {
+		r.Collected = append(r.Collected, "tags")
+	}
+	if o.p.opt.FetchImmutability {
+		r.Collected = append(r.Collected, "immutability_policy_until", "immutability_policy_mode", "legal_hold")
+	}
+	return r
 }
 
 // The registered source's whole method set (keyrange.Registered: the eleven

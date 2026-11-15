@@ -102,7 +102,7 @@ is refused, since the dataset cannot total it.
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
 and how far the listing reached (`complete`, `INCOMPLETE` with the reason, the entries it could not read, the
 listing's filters and exclusions). `-q` silences that line. In JSONL each row also carries a `dataset` member with
-the same facts ([Output](../output.md#du-rows)). A dataset whose listing did not complete, such as a
+the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](../output.md#du-rows)). A dataset whose listing did not complete, such as a
 `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
 counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
@@ -325,10 +325,10 @@ sizes) with exit 2.
 ### Local
 
 - <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
-  what is read per entry (statx adds birth_time; Linux) (default `stat`)
+  what is read per entry (statx adds created_at; Linux) (default `stat`)
 
 - <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
-  omit the directories' rows (kind DIR)
+  omit the directories' rows (kind dir)
 
 - <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
   do not read symbolic links' targets
@@ -575,8 +575,8 @@ Azure Blob:
 
 Local:
       --metadata names|stat|statx
-                              what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs               omit the directories' rows (kind DIR)
+                              what is read per entry (statx adds created_at; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind dir)
       --no-link-target        do not read symbolic links' targets
       --one-file-system       do not walk into a mount point below the root, as du -x
 

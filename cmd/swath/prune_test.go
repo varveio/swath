@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/localfs"
 )
@@ -62,7 +63,7 @@ func TestPruneCommandParquet(t *testing.T) {
 			}
 			manifest := readManifest(t, dir)
 			filters := []string{"exclude=a/**", "exclude=x", "exclude_regex=^never$"}
-			if !slices.Equal(manifest.Coverage.Filters, filters) || manifest.Coverage.Unreadable != 0 ||
+			if !slices.Equal(filter.Texts(manifest.Coverage.Filters), filters) || manifest.Coverage.Unreadable != 0 ||
 				!manifest.Coverage.Complete || manifest.Coverage.StopReason != "completed" {
 				t.Fatalf("coverage %+v, want original filters %q and complete coverage", manifest.Coverage, filters)
 			}
@@ -119,7 +120,7 @@ func TestPruneCommandFileRoot(t *testing.T) {
 	if err := run(context.Background(), args, &out, false); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "key\tsize\tkind\ng\t2\tFILE\n" {
+	if out.String() != "key\tsize\tkind\ng\t2\tfile\n" {
 		t.Fatalf("file-root rows %q", out.String())
 	}
 	checkCommandPruning(t, reportPath, 0, 1, 0, 1)

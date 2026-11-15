@@ -18,8 +18,8 @@ const (
 	S3VersionsV1     SchemaID = "swath/s3-versions/v1"     // S3 versions and delete markers (--all-versions)
 	GCSObjectsV1     SchemaID = "swath/gcs-objects/v1"     // Cloud Storage live objects
 	GCSGenerationsV1 SchemaID = "swath/gcs-generations/v1" // Cloud Storage generations (--all-versions)
-	AzblobObjectsV1  SchemaID = "swath/azblob-objects/v1"  // Azure Blob current blobs
-	AzblobVersionsV1 SchemaID = "swath/azblob-versions/v1" // Azure Blob versions, snapshots and soft-deleted blobs (--all-versions)
+	AzureObjectsV1   SchemaID = "swath/azure-objects/v1"   // Azure Blob current blobs
+	AzureVersionsV1  SchemaID = "swath/azure-versions/v1"  // Azure Blob versions, snapshots and soft-deleted blobs (--all-versions)
 	LocalV1          SchemaID = "swath/local-entries/v1"   // a filesystem tree
 )
 
@@ -41,11 +41,8 @@ const (
 type ColumnSpec struct {
 	Name string
 	Type ColumnType
-	// Required: the column is never null.
+	// Required: the column is never null. Every column is in every part.
 	Required bool
-	// MayBeAbsent: a part may lack the column (it was added to the schema
-	// id later), which reads as null. Every other column is in every part.
-	MayBeAbsent bool
 }
 
 // SchemaSpec is a schema id's key and columns.
@@ -69,9 +66,8 @@ type SchemaSpec struct {
 
 // VersionSpec names the columns of a versions schema (a key's versions as
 // consecutive rows) by role, so a consumer interprets the rows of any such
-// schema from its spec instead of from the column names. ID and exactly
-// one of Latest and DeletedAt are set; a versions schema has repeating keys
-// (UniqueKeys false).
+// schema from its spec instead of from the column names. ID and Latest are
+// set; a versions schema has repeating keys (UniqueKeys false).
 type VersionSpec struct {
 	// ID is the version's identifier: a string column, or a signed INT64
 	// column whose value is the identifier in decimal. Null on a row
@@ -83,10 +79,6 @@ type VersionSpec struct {
 	// that is a delete marker (no object, no bytes) rather than a version
 	// of the object. A schema without it has no delete markers.
 	DeleteMarker string
-	// DeletedAt is the alternative to Latest: a nullable timestamp
-	// column, null on the latest (live) row. A row with a value, even a
-	// zero one, is not the latest.
-	DeletedAt string
 }
 
 // Column returns the named column (the key included).
@@ -158,38 +150,37 @@ var (
 		{Name: "md5", Type: TypeString},
 		{Name: "crc32c", Type: TypeString},
 		{Name: "content_type", Type: TypeString},
-		{Name: "time_created", Type: TypeTimestampMicros, MayBeAbsent: true},
+		{Name: "created_at", Type: TypeTimestampMicros},
 	}
-	// azblobColumns: every column is nullable: content_md5 and access_tier
-	// where Azure lists none, the others where a listing omits them. The
-	// columns from access_tier_inferred on were added to the schema id
-	// later: a part written before lacks them. metadata, tags and the
-	// immutability columns are null unless the run asked for them.
-	azblobColumns = []ColumnSpec{
+	// azureColumns: every column is nullable: md5 and storage_class where
+	// Azure lists none, the others where a listing omits them. metadata,
+	// tags and the immutability columns are null unless the run asked for
+	// them.
+	azureColumns = []ColumnSpec{
 		{Name: "size", Type: TypeInt64},
 		{Name: "last_modified", Type: TypeTimestampMicros},
 		{Name: "etag", Type: TypeString},
-		{Name: "content_md5", Type: TypeString},
+		{Name: "md5", Type: TypeString},
 		{Name: "content_type", Type: TypeString},
 		{Name: "blob_type", Type: TypeString},
-		{Name: "access_tier", Type: TypeString},
-		{Name: "creation_time", Type: TypeTimestampMicros},
-		{Name: "access_tier_inferred", Type: TypeBool, MayBeAbsent: true},
-		{Name: "access_tier_change_time", Type: TypeTimestampMicros, MayBeAbsent: true},
-		{Name: "archive_status", Type: TypeString, MayBeAbsent: true},
-		{Name: "rehydrate_priority", Type: TypeString, MayBeAbsent: true},
-		{Name: "last_access_time", Type: TypeTimestampMicros, MayBeAbsent: true},
-		{Name: "content_encoding", Type: TypeString, MayBeAbsent: true},
-		{Name: "server_encrypted", Type: TypeBool, MayBeAbsent: true},
-		{Name: "encryption_scope", Type: TypeString, MayBeAbsent: true},
-		{Name: "customer_provided_key_sha256", Type: TypeString, MayBeAbsent: true},
-		{Name: "lease_state", Type: TypeString, MayBeAbsent: true},
-		{Name: "tag_count", Type: TypeInt64, MayBeAbsent: true},
-		{Name: "metadata", Type: TypeString, MayBeAbsent: true},
-		{Name: "tags", Type: TypeString, MayBeAbsent: true},
-		{Name: "immutability_policy_until", Type: TypeTimestampMicros, MayBeAbsent: true},
-		{Name: "immutability_policy_mode", Type: TypeString, MayBeAbsent: true},
-		{Name: "legal_hold", Type: TypeBool, MayBeAbsent: true},
+		{Name: "storage_class", Type: TypeString},
+		{Name: "created_at", Type: TypeTimestampMicros},
+		{Name: "storage_class_inferred", Type: TypeBool},
+		{Name: "storage_class_changed_at", Type: TypeTimestampMicros},
+		{Name: "archive_status", Type: TypeString},
+		{Name: "rehydrate_priority", Type: TypeString},
+		{Name: "accessed_at", Type: TypeTimestampMicros},
+		{Name: "content_encoding", Type: TypeString},
+		{Name: "server_encrypted", Type: TypeBool},
+		{Name: "encryption_scope", Type: TypeString},
+		{Name: "customer_provided_key_sha256", Type: TypeString},
+		{Name: "lease_state", Type: TypeString},
+		{Name: "tag_count", Type: TypeInt64},
+		{Name: "metadata", Type: TypeString},
+		{Name: "tags", Type: TypeString},
+		{Name: "immutability_policy_until", Type: TypeTimestampMicros},
+		{Name: "immutability_policy_mode", Type: TypeString},
+		{Name: "legal_hold", Type: TypeBool},
 	}
 )
 
@@ -203,27 +194,29 @@ var schemas = map[SchemaID]SchemaSpec{
 		ColumnSpec{Name: "is_delete_marker", Type: TypeBool, Required: true}),
 		Versions: VersionSpec{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}},
 	GCSObjectsV1: {ID: GCSObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxObjectKeyBytes, Columns: gcsColumns},
-	// The gcs-objects/v1 columns, then time_deleted: null for the live
-	// generation.
+	// The gcs-objects/v1 columns, then is_latest (the live generation)
+	// and deleted_at: null for the live generation.
 	GCSGenerationsV1: {ID: GCSGenerationsV1, Key: textKey, MaxKeyBytes: maxObjectKeyBytes, Columns: concat(gcsColumns,
-		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros}),
-		Versions: VersionSpec{ID: "generation", DeletedAt: "time_deleted"}},
-	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: azblobColumns},
-	// The azblob-objects/v1 columns, then the entry's identity: its
+		ColumnSpec{Name: "is_latest", Type: TypeBool, Required: true},
+		ColumnSpec{Name: "deleted_at", Type: TypeTimestampMicros}),
+		Versions: VersionSpec{ID: "generation", Latest: "is_latest"}},
+	AzureObjectsV1: {ID: AzureObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: azureColumns},
+	// The azure-objects/v1 columns, then the entry's identity: its
 	// version id (null for a snapshot, and on an account without
 	// versioning), is_latest (the name's current blob: what a current
 	// listing lists), its snapshot time (null unless a snapshot), whether
 	// it is soft-deleted, when, and the days its retention has left.
-	AzblobVersionsV1: {ID: AzblobVersionsV1, Key: textKey, MaxKeyBytes: maxBlobNameBytes, Columns: concat(present(azblobColumns),
+	AzureVersionsV1: {ID: AzureVersionsV1, Key: textKey, MaxKeyBytes: maxBlobNameBytes, Columns: concat(azureColumns,
 		ColumnSpec{Name: "version_id", Type: TypeString},
 		ColumnSpec{Name: "is_latest", Type: TypeBool, Required: true},
 		ColumnSpec{Name: "snapshot", Type: TypeString},
 		ColumnSpec{Name: "is_deleted", Type: TypeBool, Required: true},
-		ColumnSpec{Name: "deleted_time", Type: TypeTimestampMicros},
+		ColumnSpec{Name: "deleted_at", Type: TypeTimestampMicros},
 		ColumnSpec{Name: "remaining_retention_days", Type: TypeInt64}),
 		Versions: VersionSpec{ID: "version_id", Latest: "is_latest"}},
 	// Names are bytes; identifiers are unsigned; allocated_bytes is
-	// st_blocks × 512 and metadata_changed_at is ctime.
+	// st_blocks × 512, metadata_changed_at is ctime, accessed_at atime and
+	// created_at the birth time.
 	LocalV1: {ID: LocalV1, Key: binaryKey, UniqueKeys: true, Columns: []ColumnSpec{
 		{Name: "size", Type: TypeInt64},
 		{Name: "last_modified", Type: TypeTimestampMicros},
@@ -236,22 +229,12 @@ var schemas = map[SchemaID]SchemaSpec{
 		{Name: "dev", Type: TypeUint64},
 		{Name: "allocated_bytes", Type: TypeInt64},
 		{Name: "metadata_changed_at", Type: TypeTimestampMicros},
-		{Name: "atime", Type: TypeTimestampMicros},
-		{Name: "birth_time", Type: TypeTimestampMicros},
+		{Name: "accessed_at", Type: TypeTimestampMicros},
+		{Name: "created_at", Type: TypeTimestampMicros},
 		{Name: "link_target", Type: TypeBinary},
 	}},
 }
 
 func concat(cols []ColumnSpec, more ...ColumnSpec) []ColumnSpec {
 	return append(slices.Clone(cols), more...)
-}
-
-// present is cols with every column required in every part: a schema id
-// created after its columns were (none of its parts predates them).
-func present(cols []ColumnSpec) []ColumnSpec {
-	cols = slices.Clone(cols)
-	for i := range cols {
-		cols[i].MayBeAbsent = false
-	}
-	return cols
 }

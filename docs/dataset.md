@@ -12,9 +12,9 @@ of them reads the whole dataset. This query lists the five largest files of a lo
 
 ```bash
 duckdb -c "
-  SELECT decode(key) AS key, size
+  SELECT try(decode(key)) AS key, size
   FROM read_parquet('inventory/data/*.parquet')
-  WHERE kind = 'FILE'
+  WHERE kind = 'file'
   ORDER BY size DESC
   LIMIT 5;"
 ```
@@ -32,11 +32,11 @@ duckdb -c "
 └───────────────────────┴──────────┘
 ```
 
-A local tree's `key` is binary, since file names need not be UTF-8, so `decode(key)` reads it as text; an
-object store's `key` is text already, so write `key`, and leave out `kind`, which only a local tree has. Each
-source's columns are in the [schema registry](#schema-registry). A query that reads an optional column, one that
-some parts can lack, adds `union_by_name = true` so DuckDB matches columns by name across parts
-([Keys and order](#keys-and-order)).
+A local tree's `key` is binary, since file names need not be UTF-8, so `try(decode(key))` reads it as text: a
+name that is not UTF-8 reads as NULL there instead of failing the query (plain `decode` refuses it), and `key`
+itself keeps its exact bytes. An object store's `key` is text already, so write `key`, and leave out `kind`,
+which only a local tree has. Each source's columns are in the [schema registry](#schema-registry); every part
+of a dataset has every column of its schema.
 
 The glob is not enough in two cases. There, read the part list from `manifest.json`:
 
@@ -50,9 +50,9 @@ The glob is not enough in two cases. There, read the part list from `manifest.js
 duckdb -c "
   SET VARIABLE parts = (SELECT list('inventory/' || p.path)
                         FROM (SELECT unnest(parts) AS p FROM read_json('inventory/manifest.json')));
-  SELECT decode(key) AS key, size
-  FROM read_parquet(getvariable('parts'), union_by_name = true)
-  WHERE kind = 'FILE'
+  SELECT try(decode(key)) AS key, size
+  FROM read_parquet(getvariable('parts'))
+  WHERE kind = 'file'
   ORDER BY size DESC
   LIMIT 5;"
 ```
@@ -80,10 +80,6 @@ The inventory holds its whole scope when `complete` is true, `stop_reason` is `c
 and `filters` and `exclusions` are empty, or you accept its exclusions explicitly. Check too that the manifest's
 `source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
 ([the swath extension](#the-swath-extension)).
-
-> [!NOTE]
-> A dataset written by 0.4.0-rc.2 names the count `skipped_entries` instead of `unreadable`
-> ([differences in 0.4.0-rc.2](release-candidate.md)).
 
 ## The format contract
 
@@ -142,11 +138,11 @@ that policy on other readers. SeekParquet defines execution and exactness in its
 
 Concrete decoders preserve nullable values and source-specific fields. They check
 projection, physical value types and required nulls; the application owns additional
-acceptance rules such as nonnegative sizes, timestamp ranges, local kind selection
-and Azure class mapping. `CheckSchema` supplies the full registered column check.
+acceptance rules such as nonnegative sizes, timestamp ranges and local kind
+selection. `CheckSchema` supplies the full registered column check.
 
 Whether a dataset suits a purpose is the application's decision. The manifest records how the listing ran (its
-source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
+source, scope and coverage, `one_file_system` included, and what it collected) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
 after it is copied or moved, not for ordinary reads. `swath verify` is planned
@@ -274,8 +270,10 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
       "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
       "scope": {"kind": "prefix", "prefix": "logs/"},
       "coverage": {"complete": true, "stop_reason": "completed", "unreadable": 0,
-                   "exclusions": [], "filters": [], "snapshot": false,
+                   "exclusions": [],
+                   "filters": [{"filter": "modified_since", "value": "2026-11-01T00:00:00.000000Z"}],
                    "listing_started_at": "…", "listing_finished_at": "…"},
+      "collected": {"columns": ["owner_id", "owner_display_name"]},
       "committed_object_bytes": 12345678
     }
   },
@@ -286,11 +284,12 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
 }
 ```
 
-A local listing's extension also records its metadata tier (`source.metadata`) and its filesystem's space
-(`filesystem`), for example:
+A local listing's extension also records its metadata tier and its filesystem's space (`filesystem`), for
+example:
 
 ```json
-"source": {"kind": "local-fs", "uri": "/System/Volumes/Data", "metadata": "stat"},
+"source": {"kind": "local", "uri": "/System/Volumes/Data"},
+"collected": {"metadata": "stat", "columns": ["link_target"]},
 "filesystem": {"total_bytes": 994662584320, "free_bytes": 462012616704,
                "available_bytes": 430573547520, "measured_at": "2026-11-12T20:50:36.03Z"}
 ```
@@ -302,20 +301,19 @@ module's. JSON readers must not depend on that order.
 |---|---|---|
 | `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
 | `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | the application; absent is not an error |
-| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | the application; `--seed-from` |
+| `source.kind` | `s3`, `gcs`, `azure` or `local` | the application; `--seed-from` |
 | `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | the application: an Azure container's name is unique only within its account, which only `source.uri` records |
 | `source.container` | The bucket, or the Azure container's name; absent for a filesystem | the application; `--seed-from` |
-| `source.metadata` | The metadata tier a filesystem was listed at (`--metadata`): `names`, `stat` or `statx`. At `names` every stat column is null; absent for a bucket. Added under `version` 1 | the application; `reader` (`Metadata.Source.Metadata`); `swath du --from-dataset`, which counts hard-linked files under every name at `names`, as the live run does |
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | The listing reached the end of its scope | the application |
 | `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | the application |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
-| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-file-system`), `no_dirs` (`--no-dirs`) | the application |
+| `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
-| `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
-| `committed_object_bytes` | The dataset's object bytes: the `size` column summed over every row (a local tree's files only, not its directories; a null size not counted), as the parts' writers counted them, so a resumed dataset states the same total as an uninterrupted one. Absent when unknown (a schema without a size column, or a resumed run whose earlier parts were written by a build that did not count them); `0` is a real total. Added under `version` 1 | the application; `reader` (`Metadata.CommittedObjectBytes`); the run report's `output.committed_object_bytes` |
+| `collected` | What the listing read beyond the columns every row carries: `metadata`, a local listing's tier (`--metadata`: `names`, `stat` or `statx`; at `names` every stat column is null; absent for an object store), and `columns`, the optional columns the run asked for (`link_target` unless `--no-link-target` or the `names` tier; `owner_id` and `owner_display_name` with `--s3-fetch-owner`; Azure's `metadata`, `tags`, and `immutability_policy_until`, `immutability_policy_mode` and `legal_hold`, with `--azure-fetch-metadata`, `--azure-fetch-tags` and `--azure-fetch-immutability`). A null in a column it names means the source had no value; a null in an optional column it does not name means the run did not ask | the application; `reader` (`Metadata.Collected`); `swath du --from-dataset`, which counts hard-linked files under every name at `names`, as the live run does |
+| `committed_object_bytes` | The dataset's object bytes: the `size` column summed over every object (a local tree's files only, not its directories; not an S3 delete marker), as the parts' writers counted them, so a resumed dataset states the same total as an uninterrupted one. Absent when unknown: a schema without a size column, or an object whose size is null (a local tree listed with `--metadata names`, which reads no sizes); `0` is a real total | the application; `reader` (`Metadata.CommittedObjectBytes`); the run report's `output.committed_object_bytes` |
 | `filesystem` | A local source's filesystem space, as the operating system reported it when the listing ended: `total_bytes`, `free_bytes` (including space reserved for the superuser), `available_bytes` (what an unprivileged writer may use) and `measured_at`. It describes the filesystem that holds `source.uri` (for a symbolic link to a file, which lists as the link, the link's own; for a link to a directory, which is walked through, the target's); with `--one-file-system` that is the filesystem the walk stayed on, without it nested mounts are listed but not described. Measured with `statfs` on Linux (fragment units) and macOS, `GetDiskFreeSpaceEx` on Windows, where the total and available bytes are within the caller's quota and the free bytes are the volume's, so free can exceed total. Absent for a remote source, on other platforms, when the call fails, for a filesystem that reports a size of 0, and when the root no longer names what the listing started from (a link retargeted, a directory replaced). It is what the filesystem says of itself, not a disk's capacity: volumes that share a pool (an APFS container, a ZFS pool) each report the pool's free space, so it is not summed across datasets, and the dataset's size is not `total_bytes` minus `free_bytes` (scope, hard links, shared blocks, snapshots and the filesystem's overhead differ). Added under `version` 1 | the application; `reader` (`Metadata.Filesystem`) |
 
 Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
@@ -344,14 +342,17 @@ binding, accessor order and null handling.
 | `swath/s3-versions/v1` | an S3 version or delete marker (`--all-versions`) | UTF-8 | no: one row per version | 1,024 bytes |
 | `swath/gcs-objects/v1` | a Cloud Storage live object | UTF-8 | yes | 1,024 bytes |
 | `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
-| `swath/azblob-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
-| `swath/azblob-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
+| `swath/azure-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
+| `swath/azure-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
 | `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
 
 Every column after the key is nullable unless marked required. Types: `STRING` is `BYTE_ARRAY (STRING)`, UTF-8;
 `binary` is unannotated `BYTE_ARRAY`; `int64` is `INT64` (`INT(64,true)` or unannotated); `uint32` and `uint64` are
 `INT32 INT(32,false)` and `INT64 INT(64,false)`, read over their full unsigned range; `timestamp` is `INT64
-TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`.
+TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`. Every part has every column of its schema id. One concept has one
+name in every schema that has it: `last_modified`, `created_at`, `deleted_at`, `accessed_at`,
+`metadata_changed_at` and `storage_class_changed_at` for times, `storage_class` for the storage class (Azure's
+access tier) and `md5` for the base64 MD5 a store lists.
 
 **`swath/s3-objects/v1`**: `key`, `size` int64, `last_modified` timestamp, `etag` STRING (one pair of surrounding
 quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STRING (null unless the run used
@@ -364,39 +365,39 @@ quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STR
 
 **`swath/gcs-objects/v1`**: `key` (the object name), `size` int64, `last_modified` timestamp (`updated`), `etag`
 STRING (the JSON API's opaque entity tag), `generation` and `metageneration` int64, `storage_class` STRING, `md5`
-and `crc32c` STRING (base64, as listed), `content_type` STRING, and last `time_created` timestamp
-(`timeCreated`). `time_created` is the one column of this id a part may lack: parts written before the lister recorded it
-do not have it, and a reader reads it as null there. `last_modified` also moves when only the object's metadata
+and `crc32c` STRING (base64, as listed), `content_type` STRING, and last `created_at` timestamp
+(`timeCreated`). `last_modified` also moves when only the object's metadata
 changes, and `etag` is not a content hash. Compare content with `md5` or `crc32c`. GCS gives no `md5` for composite
 objects and neither hash for objects encrypted with customer-managed or customer-supplied keys.
 
-**`swath/gcs-generations/v1`**: the `swath/gcs-objects/v1` columns, then `time_deleted` timestamp: null for the
-live generation. There is no `is_latest`.
+**`swath/gcs-generations/v1`**: the `swath/gcs-objects/v1` columns, then `is_latest` bool (required: the live
+generation, exactly the row whose `deleted_at` is null) and `deleted_at` timestamp (`timeDeleted`: when the
+generation became noncurrent; null for the live generation).
 
-**`swath/azblob-objects/v1`**: `key` (the blob name), `size` int64 (`Content-Length`), `last_modified` timestamp
-(`Last-Modified`, at the wire's 1 s resolution), `etag` STRING (opaque, as listed), `content_md5` STRING (base64
-as listed; null when absent, as for blobs uploaded in blocks without one), `content_type` STRING, `blob_type`
-STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `access_tier` STRING (null when absent), `creation_time`
-timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a
-content hash: compare content with `content_md5`, and never compare ETags across stores. Then the columns added
-to the schema id later, which a part written before lacks (read them as null there): `access_tier_inferred` bool
-(true when the tier is the account's default, not set on the blob), `access_tier_change_time` timestamp,
-`archive_status` STRING (`rehydrate-pending-to-hot`, `-cool`, `-cold`), `rehydrate_priority` STRING (`High`,
-`Standard`), `last_access_time` timestamp (only with the account's last access tracking on),
-`content_encoding` STRING, `server_encrypted` bool, `encryption_scope` STRING, `customer_provided_key_sha256`
+**`swath/azure-objects/v1`**: `key` (the blob name), `size` int64 (`Content-Length`), `last_modified` timestamp
+(`Last-Modified`, at the wire's 1 s resolution), `etag` STRING (opaque, as listed), `md5` STRING (`Content-MD5`,
+base64 as listed; null when absent, as for blobs uploaded in blocks without one), `content_type` STRING,
+`blob_type` STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `storage_class` STRING (the access tier: `Hot`,
+`Cool`, `Cold`, `Archive`, ...; null when absent; `--storage-class` filters on it), `created_at` timestamp
+(`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a content hash:
+compare content with `md5`, and never compare ETags across stores. Then `storage_class_inferred` bool (true when
+the tier is the account's default, not set on the blob), `storage_class_changed_at` timestamp
+(`Access-Tier-Change-Time`), `archive_status` STRING (`rehydrate-pending-to-hot`, `-cool`, `-cold`),
+`rehydrate_priority` STRING (`High`, `Standard`), `accessed_at` timestamp (`LastAccessTime`: null unless the storage account has last access time tracking
+enabled, and Azure updates it at most once per 24 hours), `content_encoding`
+STRING, `server_encrypted` bool, `encryption_scope` STRING, `customer_provided_key_sha256`
 STRING, `lease_state` STRING (`available`, `leased`, `expired`, `breaking`, `broken`), `tag_count` int64, and
-the columns a run asks for, null unless it did: `metadata` and `tags` STRING (a JSON object of names to
-values, keys sorted; `{}` for none; `metadata` null for a blob encrypted with a customer-provided key, whose
-metadata a listing cannot read), `immutability_policy_until` timestamp, `immutability_policy_mode` STRING
+the columns a run asks for, null unless it did (`collected.columns` names them): `metadata` and `tags` STRING (a
+JSON object of names to values, keys sorted; `{}` for none; `metadata` null for a blob encrypted with a
+customer-provided key, whose metadata a listing cannot read; DuckDB reads a value with `json(metadata)` or
+`metadata->>'$.name'`), `immutability_policy_until` timestamp, `immutability_policy_mode` STRING
 (`Unlocked`, `Locked`) and `legal_hold` bool (false for none). Each is as Azure lists it, null where it lists
 nothing. A timestamp the Azure SDK decodes as `0001-01-01T00:00:00Z` (its value for a missing time) is null too.
-The Python comparison reader supplies typed nulls for these added columns when an entire
-current-object dataset lacks them, and unions parts by name when only some parts lack them.
 
-**`swath/azblob-versions/v1`**: the `swath/azblob-objects/v1` columns in the same order, then `version_id` STRING
+**`swath/azure-versions/v1`**: the `swath/azure-objects/v1` columns in the same order, then `version_id` STRING
 (as listed, a timestamp; null for a snapshot and on an account without versioning), `is_latest` bool (required:
 the name's current blob, live, the row a current listing has), `snapshot` STRING (the snapshot's time as listed;
-null unless the row is a snapshot), `is_deleted` bool (required: soft-deleted), `deleted_time` timestamp and
+null unless the row is a snapshot), `is_deleted` bool (required: soft-deleted), `deleted_at` timestamp and
 `remaining_retention_days` int64 (until the soft-deleted entry is purged; null unless deleted). A soft-deleted
 entry keeps its size and metadata: it is stored and billed until purged. There are no delete markers.
 
@@ -406,15 +407,16 @@ records `no_dirs` in `coverage.filters`):
 | Column | Type | Source |
 |---|---|---|
 | `key` | binary, required | the path relative to the root, `/`-separated, no leading `/`; a directory's ends in `/`; the name's exact bytes |
-| `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'DIR'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du`'s total |
+| `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'dir'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du`'s total |
 | `last_modified` | timestamp | `st_mtime` |
-| `kind` | STRING, required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
+| `kind` | STRING, required | `file`, `dir`, `symlink`, `fifo`, `socket`, `char_device`, `block_device`, `unknown` |
 | `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
 | `uid`, `gid`, `nlink` | uint32 | `st_uid`, `st_gid`, `st_nlink` |
 | `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`) |
 | `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`) |
-| `metadata_changed_at`, `atime` | timestamp | `st_ctime`, `st_atime` |
-| `birth_time` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); macOS `st_birthtime` (stat tier); Windows `CreationTime` |
+| `metadata_changed_at` | timestamp | `st_ctime` |
+| `accessed_at` | timestamp | `st_atime`, which `noatime` mounts leave stale and `relatime` (the Linux default) updates at most once a day or on a write |
+| `created_at` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); macOS `st_birthtime` (stat tier); Windows `CreationTime` |
 | `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
 
 Under `--metadata names` (no stat) the stat columns are null.
@@ -437,9 +439,8 @@ This section is for consumers that read the parts without `reader`: DuckDB, Pyth
 - **The dataset is the parts `manifest.json` lists**, in the listed order. In a committed local directory those
   are exactly the files under `data/`, so a glob reads them; elsewhere, read the manifest's list
   ([Query an inventory with DuckDB](#query-an-inventory-with-duckdb)): a run in progress publishes parts under
-  `data/` before its commit, and a bucket prefix can hold parts no manifest names. Optional columns can be absent
-  from some parts (`read_parquet(..., union_by_name = true)` in DuckDB). Columns a schema id does not define may
-  appear anywhere and are ignored.
+  `data/` before its commit, and a bucket prefix can hold parts no manifest names.
+  Columns a schema id does not define may appear anywhere and are ignored.
 - **Order is unsigned byte order.** Rows ascend by `key`'s bytes compared as unsigned bytes, within each part and
   across parts in manifest order. Keys are never normalized (Unicode, case, separators). Cloud keys are the
   provider's UTF-8 bytes. A local key is the name's bytes exactly as the kernel returned them, which need not be
@@ -449,20 +450,20 @@ This section is for consumers that read the parts without `reader`: DuckDB, Pyth
   puts names with characters at U+10000 and above before those at U+E000 to U+FFFF. swath's adapter reorders
   them, so an Azure dataset is in byte order like every other one, not in the service's listing order.
 - **Versions rows are consecutive per key.** In `swath/s3-versions/v1`, `swath/gcs-generations/v1` and
-  `swath/azblob-versions/v1` a key
+  `swath/azure-versions/v1` a key
   repeats once per version, on consecutive rows, and a key's group never spans two parts. On S3 the order within
   a group is the service's: newest first, with versions and delete markers interleaved. No column rebuilds it,
   since two entries can share `last_modified`. On GCS rows order by key and then by numeric `generation`, strictly
-  ascending; the lister refuses a page that breaks this. The `is_latest`, `is_delete_marker` and `time_deleted`
+  ascending; the lister refuses a page that breaks this. The `is_latest`, `is_delete_marker` and `deleted_at`
   values are the service's, per row. In an unfiltered, complete listing, the first row of an S3 group is the one
   with `is_latest` true, and a key whose first row is a delete marker is deleted. On GCS the last row is the newest
-  generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
+  generation, live (`is_latest`) only when `deleted_at` is null, and a name may have no live generation. A filter (`--min-size`,
   `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
-  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3), `time_deleted IS NULL` (GCS) or
-  `is_latest` (Azure Blob), row by row. On Azure Blob a group is in the service's order: a name's entries keyed
+  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `is_latest` (GCS and Azure Blob),
+  row by row. On Azure Blob a group is in the service's order: a name's entries keyed
   by their time within the name (snapshots and versions oldest first; the base blob or current version, the one
   with `is_latest`, last). The reader module describes version roles with `VersionSpec` on `SchemaSpec.Versions`: version ID,
-  latest or deleted-at, and optional delete marker ([version roles](../reader/README.md#version-roles)).
+  latest, and optional delete marker ([version roles](../reader/README.md#version-roles)).
   swath's text output, version counts and per-prefix totals read the rows through it. Typed reader decoders and
   schema-specific SQL still bind columns by name.
 - **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
@@ -492,7 +493,7 @@ a dataset, whether parts are missing, or what the listing covered. Those are the
 | Identifier | May change without a new value | Forces a new value | Who decides |
 |---|---|---|---|
 | SeekParquet `format_version` / `draft_revision` | editorial clarifications | any change to which bytes are accepted or what a query returns | SeekParquet maintainers, through proposal and conformance review |
-| `schema_id` | added nullable, absence-tolerant columns that leave existing rows and columns unchanged; writer layout (row groups, pages, encodings, codecs) | a renamed or removed column, a changed type, signedness, time unit or nullability, a changed key encoding or uniqueness, a changed meaning of a row; type widening is not automatically compatible | swath maintainers, with the consumers |
+| `schema_id` | writer layout (row groups, pages, encodings, codecs) | an added, renamed or removed column (every part has every column of its id), a changed type, signedness, time unit or nullability, a changed key encoding or uniqueness, a changed meaning of a row; type widening is not automatically compatible | swath maintainers, with the consumers |
 | `extensions.swath.version` | added informative members that readers may ignore | a change to an existing member's meaning. When an older application could misread the dataset, the schema id changes too, because older readers ignore members they do not know | swath maintainers |
 | Writer recipe (`parquetout.Recipe`, in the resume identity) | changes that keep its byte-reproduction promise | a change to how a part is reproduced byte for byte | swath writer maintainers |
 | Journal version (private to a run) | changes that existing recovery reads safely | a representation existing recovery cannot read | swath recovery maintainers |

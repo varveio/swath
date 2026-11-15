@@ -12,8 +12,9 @@
       "md5": "m",
       "crc32c": null,
       "content_type": "text/plain",
-      "time_created": 90,
-      "time_deleted": 200
+      "created_at": 90,
+      "is_latest": false,
+      "deleted_at": 200
     },
     {
       "key": "k",
@@ -26,8 +27,9 @@
       "md5": null,
       "crc32c": "c",
       "content_type": null,
-      "time_created": null,
-      "time_deleted": 180
+      "created_at": null,
+      "is_latest": false,
+      "deleted_at": 180
     },
     {
       "key": "k",
@@ -40,8 +42,9 @@
       "md5": null,
       "crc32c": null,
       "content_type": null,
-      "time_created": 70,
-      "time_deleted": null
+      "created_at": 70,
+      "is_latest": true,
+      "deleted_at": null
     },
     {
       "key": "z",
@@ -54,8 +57,9 @@
       "md5": null,
       "crc32c": null,
       "content_type": null,
-      "time_created": 60,
-      "time_deleted": 75
+      "created_at": 60,
+      "is_latest": false,
+      "deleted_at": 75
     }
   ]
 }

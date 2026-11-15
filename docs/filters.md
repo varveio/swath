@@ -111,10 +111,11 @@ that were never visited are not counted in either `rows_fetched` or `rows_filter
 
 ## Filtered datasets
 
-A dataset written with filters says so: its manifest's `coverage.filters` lists one description per rule
-(`include=…`, `include_regex=…`, `exclude=…`, `exclude_regex=…`, `min_size=…`, `max_size=…`,
-`modified_after=…`, `modified_before=…`, `storage_class=…`), and `swath show` counts them. An application that
+A dataset written with filters says so: its manifest's `coverage.filters` lists one object per rule, named for
+its option (`{"filter": "modified_since", "value": "2026-11-08T12:46:10.000000Z"}`: `include`, `include_regex`,
+`exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`), and
+`swath show` counts them. A relative time such as `--modified-since 7d` is recorded as the time it named. An application that
 needs the whole source reads a non-empty `coverage.filters` as a partial listing ([The swath dataset](dataset.md#the-swath-extension)).
-`--no-dirs` and `--one-file-system` mark a local dataset the same way (`no_dirs`, `one_filesystem`).
+`--no-dirs` and `--one-file-system` mark a local dataset the same way (`no_dirs`, `one_file_system`, each with a `null` value).
 
 The filters are part of the run's identity: `swath resume` keeps them and refuses others.

@@ -20,9 +20,11 @@ import (
 // KeyColumn is the key's column name, the first of every schema's.
 const KeyColumn = "key"
 
-// Base64Suffix names a JSONL member that carries a string or binary
-// column's bytes in standard base64, in place of the column's own member,
-// when they are not UTF-8 (NAME_base64). No schema column may end in it.
+// Base64Suffix names the JSONL member that carries a binary column's bytes
+// in standard base64 when they are not UTF-8 (NAME_base64). Every row of
+// a schema with a binary column has both members: NAME, null when the
+// bytes are not UTF-8, and NAME_base64, null when they are. No schema
+// column may end in it.
 const Base64Suffix = "_base64"
 
 // The columns the table reads by their dataset names, when the schema has
@@ -38,8 +40,8 @@ const (
 // dataset's column names (or Config.Columns, in their order), each value as
 // the schema stores it. TSV is one header line of the names and a line of
 // fields per row (appendTSV); JSONL one object per row, its members in
-// column order, a null JSON null, and a string or binary value that is not
-// UTF-8 as NAME_base64. The table, for people, is the time in local time
+// column order, a null JSON null, and a binary column as two members,
+// NAME and NAME_base64 (Base64Suffix). The table, for people, is the time in local time
 // to the second, its heading naming the zone, the size in binary units, the kind and version columns where the
 // schema has them, and the key last; a missing time or size is "-".
 type Sink[P any] struct {
@@ -58,7 +60,7 @@ type column[P any] struct {
 	num  func(*P) (int64, bool)
 	flag func(*P) (bool, bool)
 	// member and member64 are the JSONL member openings: `"NAME":` and
-	// `"NAME_base64":"`.
+	// `,"NAME_base64":`.
 	name, member, member64 string
 	key                    bool
 }
@@ -91,7 +93,7 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 		names = append(names, c.Name)
 	}
 	for i, n := range names {
-		all[i].name, all[i].member, all[i].member64 = n, `"`+n+`":`, `"`+n+Base64Suffix+`":"`
+		all[i].name, all[i].member, all[i].member64 = n, `"`+n+`":`, `,"`+n+Base64Suffix+`":`
 	}
 	k := &Sink[P]{o: o}
 	switch {
@@ -220,7 +222,11 @@ func (c *column[P]) appendJSON(b []byte, r *schema.Row[P]) []byte {
 	case c.str != nil:
 		var ok bool
 		if v, ok = c.str(p); !ok {
-			return append(append(b, c.member...), "null"...)
+			b = append(append(b, c.member...), "null"...)
+			if c.typ == schema.Binary {
+				b = append(append(b, c.member64...), "null"...)
+			}
+			return b
 		}
 	case c.flag != nil:
 		f, ok := c.flag(p)
@@ -239,10 +245,17 @@ func (c *column[P]) appendJSON(b []byte, r *schema.Row[P]) []byte {
 		}
 		return appendNumber(b, c.typ, n)
 	}
-	if !utf8.ValidString(v) {
-		return append(base64.StdEncoding.AppendEncode(append(b, c.member64...), []byte(v)), '"')
+	valid := utf8.ValidString(v)
+	switch {
+	case c.typ != schema.Binary && !valid: // UTF-8 by the schema; a stray byte reads as U+FFFD, as encoding/json writes it
+		return appendJSONString(append(b, c.member...), strings.ToValidUTF8(v, "\uFFFD"))
+	case c.typ != schema.Binary:
+		return appendJSONString(append(b, c.member...), v)
+	case valid:
+		return append(append(appendJSONString(append(b, c.member...), v), c.member64...), "null"...)
 	}
-	return appendJSONString(append(b, c.member...), v)
+	b = append(append(append(b, c.member...), "null"...), c.member64...)
+	return append(base64.StdEncoding.AppendEncode(append(b, '"'), []byte(v)), '"')
 }
 
 // appendNumber appends an integer or time column's value: an unsigned

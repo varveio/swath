@@ -75,7 +75,7 @@ func swathExtension() map[string]any {
 		"source":       map[string]any{"kind": "s3", "uri": "s3://b", "container": "b"},
 		"scope":        map[string]any{"kind": "whole"},
 		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0,
-			"exclusions": []string{"out/"}, "filters": []string{}, "snapshot": false},
+			"exclusions": []string{"out/"}, "filters": []string{}},
 	}
 }
 
@@ -160,10 +160,10 @@ func semanticAt(t *testing.T, err error, kind Kind, column string) *SemanticErro
 func TestOpenRecordsCoverage(t *testing.T) {
 	ext := swathExtension()
 	delete(ext, "published_at")
-	ext["source"] = map[string]any{"kind": "local-fs", "uri": "/data"}
+	ext["source"] = map[string]any{"kind": "local", "uri": "/data"}
 	ext["scope"] = map[string]any{"kind": "prefix", "prefix": "d/"}
 	ext["coverage"] = map[string]any{"complete": false, "stop_reason": "max_keys", "unreadable": 3,
-		"exclusions": []string{}, "filters": []string{"one_filesystem"}, "snapshot": false}
+		"exclusions": []string{}, "filters": []map[string]any{{"filter": "one_file_system", "value": nil}}}
 	s := spec{id: LocalV1, key: s3Spec().key, ext: ext}
 	rows := make([]localRow, len(localTree))
 	for i, e := range localTree {
@@ -188,8 +188,8 @@ func TestOpenRecordsCoverage(t *testing.T) {
 	}
 	m := d.Metadata()
 	c := m.Coverage
-	if !m.Swath || m.PublishedAt != nil || *m.Source.Kind != "local-fs" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "d/" ||
-		*c.Complete || *c.StopReason != "max_keys" || *c.Unreadable != 3 || !reflect.DeepEqual(c.Filters, []string{"one_filesystem"}) ||
+	if !m.Swath || m.PublishedAt != nil || *m.Source.Kind != "local" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "d/" ||
+		*c.Complete || *c.StopReason != "max_keys" || *c.Unreadable != 3 || !reflect.DeepEqual(c.Filters, []Filter{{Filter: "one_file_system"}}) ||
 		len(m.Manifest.Parts) != 2 {
 		t.Fatalf("metadata %+v, coverage %+v", m, c)
 	}

@@ -17,7 +17,7 @@ import (
 // Cloud Storage bucket: its rows carry generation, metageneration, the
 // checksums and the content type, which the route renders instead of the
 // synthetic values, and the creation time where the part holds the
-// optional time_created column.
+// optional created_at column.
 const NativeSchemaID = string(reader.GCSObjectsV1)
 
 // Item is one listed object as the route renders it. Size and Updated are
@@ -99,7 +99,7 @@ type nativeSource struct{ st *store.Sorted }
 
 // nativeColumns are the NativeSchemaID columns the route renders.
 var nativeColumns = []string{"size", "last_modified", "etag", "generation", "metageneration", "storage_class", "md5", "crc32c", "content_type",
-	"time_created"}
+	"created_at"}
 
 func nativeItem(row *legacy.Row) Item {
 	it := Item{Key: row.Key, Native: &Native{}}
@@ -113,7 +113,7 @@ func nativeItem(row *legacy.Row) Item {
 	n.ETag, n.StorageClass, n.ContentType = text(row, "etag"), text(row, "storage_class"), text(row, "content_type")
 	n.MD5, n.CRC32C = text(row, "md5"), text(row, "crc32c")
 	n.Generation, n.Metageneration = integer(row, "generation"), integer(row, "metageneration")
-	n.TimeCreated = integer(row, "time_created")
+	n.TimeCreated = integer(row, "created_at")
 	return it
 }
 

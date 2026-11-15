@@ -518,7 +518,7 @@ size. Without it, a part first closed by the interval would take more rows in a 
 another `--part-interval`, and an unchanged source would be refused. The footer also says how the part was
 written: its columns and its `created_by`. The resume writes the reproduced part with those (the schema's
 columns that the footer names, in order) and the parts after it with its own, so a resume by a build that
-writes an optional column the claimed part lacks (`time_created` for GCS), or that names itself differently in
+writes a column the claimed part lacks (the test drops GCS's `created_at`), or that names itself differently in
 `created_by`, still reproduces an unchanged source's part (`TestClaimedPartKeepsItsColumns`,
 `parquetout` `TestCutReproducesClaimedFooter`). An unreadable footer gives no boundary, and the byte comparison
 decides as before. A suspect already set aside
