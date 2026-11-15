@@ -94,7 +94,7 @@ target or, on a slow frontier, once it has been open for the part interval (defa
 was published, or since the start). What a crash loses is not bounded by that age: rows listed past the
 frontier (in memory or spill) and parts encoded after a gap in the ordinals are listed again too.
 
-**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. A run that reaches it publishes and records every
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-max-rows` reaches it. A run that reaches it publishes and records every
 part up to 99,999 and stops (exit 1, `cause` `part_limit`, not resumable: the part size and row cap are in
 the identity, so a resume would stop at the same part); its journal and parts are kept, and the run starts
 over with a larger `--part-size` ([parquet-output.md](parquet-output.md)). Its readers accept a manifest of every dataset within the limit:

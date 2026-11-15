@@ -342,7 +342,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	px := &campaignProxy{}
@@ -974,7 +974,7 @@ func TestCampaignRunnerFaults(t *testing.T) {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))))

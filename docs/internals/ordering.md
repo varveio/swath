@@ -665,7 +665,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
 - **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
   (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
   listed. The cut follows the router's rule exactly: a part closes after the row whose logical bytes bring it
-  to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
+  to the frozen limit, or else at `--part-max-rows` rows. A frame that may hold a boundary is decoded
   to find the row; the others pass whole. The first segment continues the open part. So the parts are the
   ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
   2, 3 and 8 encoders admitted against the serial drain, with and without a row cap). In group mode a

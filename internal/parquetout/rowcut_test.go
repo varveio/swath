@@ -35,7 +35,7 @@ func routeMaxRows(t *testing.T, rows []row, encoders int, partSize, maxRows int6
 	return parts, r.RowCuts()
 }
 
-// TestMaxRowsRotation: --part-rotation-max-rows closes a part at N rows
+// TestMaxRowsRotation: --part-max-rows closes a part at N rows
 // besides the size target; the boundaries depend on the rows only (the same
 // parts at any encoder count), the cuts are counted, and a size-cut part
 // still sets the ratio: with a row bound that never binds, the parts are

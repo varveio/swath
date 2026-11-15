@@ -240,7 +240,7 @@ resumes, and a text file `rows.tsv` is refused as text output.
 - <a id="option-progress"></a>[`--progress`](#option-progress)\
   show progress on stderr (default: a terminal that rows do not share)
 
-  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal.
+  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased.
 
 - <a id="option-no-progress"></a>[`--no-progress`](#option-no-progress)\
   no live progress on stderr
@@ -414,7 +414,8 @@ Reporting:
                                 With -qq the exit code and the reports stand alone.
       --progress              show progress on stderr (default: a terminal that rows do not share)
                                 Not by default with -q or -v (which appends progress records), nor
-                                while rows go to the same terminal.
+                                while rows go to the same terminal, where swath list refuses it;
+                                swath du's table comes after the line is erased.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress

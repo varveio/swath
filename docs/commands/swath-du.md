@@ -130,7 +130,7 @@ sizes) with exit 2.
 - <a id="option-depth"></a>[`-d, --depth N`](#option-depth)\
   also total each prefix down to N levels below SOURCE (0: the total)
 
-  A prefix ends at a '/'; each includes what is below it, as du.
+  A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same.
 
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
   local: show and --sort size by the files' allocated bytes (on disk)
@@ -190,12 +190,12 @@ sizes) with exit 2.
   Matched as --include is. dir/ drops a directory's own row, dir/\*\* the rows below it. Local trees skip traversal below directories covered by a terminal /\*\*; other excludes only filter rows.
 
 - <a id="option-include-regex"></a>[`--include-regex REGEX`](#option-include-regex)\
-  keep keys this RE2 regex matches anywhere in the full key (repeatable)
+  keep keys this RE2 regex matches anywhere in the key (repeatable)
 
-  The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does.
+  Matched against the key below SOURCE, as a glob is, on every source: ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does.
 
 - <a id="option-exclude-regex"></a>[`--exclude-regex REGEX`](#option-exclude-regex)\
-  drop keys this RE2 regex matches anywhere in the full key (repeatable)
+  drop keys this RE2 regex matches anywhere in the key (repeatable)
 
 - <a id="option-min-size"></a>[`--min-size SIZE`](#option-min-size)\
   keep objects (local: entries) of at least this size (1K, 1.5GiB)
@@ -208,7 +208,7 @@ sizes) with exit 2.
 - <a id="option-modified-since"></a>[`--modified-since TIME`](#option-modified-since)\
   keep objects or entries modified at or after TIME (2026-01-01, 7d)
 
-  An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names.
+  2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time (TZ), as the tables print it; with Z or an offset, that zone. A duration (7d, 12h) is that long before the run started. Either is recorded as the UTC time it names.
 
 - <a id="option-modified-until"></a>[`--modified-until TIME`](#option-modified-until)\
   keep objects or entries modified at or before this time
@@ -333,7 +333,7 @@ sizes) with exit 2.
 - <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
   do not read symbolic links' targets
 
-- <a id="option-one-file-system"></a>[`--one-file-system`](#option-one-file-system)\
+- <a id="option-one-file-system"></a>[`-x, --one-file-system`](#option-one-file-system)\
   do not walk into a mount point below the root, as du -x
 
 ### Performance
@@ -395,7 +395,7 @@ sizes) with exit 2.
 - <a id="option-progress"></a>[`--progress`](#option-progress)\
   show progress on stderr (default: a terminal that rows do not share)
 
-  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal.
+  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased.
 
 - <a id="option-no-progress"></a>[`--no-progress`](#option-no-progress)\
   no live progress on stderr
@@ -430,6 +430,7 @@ sizes) with exit 2.
 Totals:
   -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
                                 A prefix ends at a '/'; each includes what is below it, as du.
+                                --max-depth N, GNU du's spelling, is the same.
       --allocated             local: show and --sort size by the files' allocated bytes (on disk)
                                 The files' st_blocks x 512: the table's one figure, the line under
                                 it giving the lengths; TSV and JSONL rows carry both either way. A
@@ -479,18 +480,20 @@ Filters:
                                 Matched as --include is. dir/ drops a directory's own row, dir/**
                                 the rows below it. Local trees skip traversal below directories
                                 covered by a terminal /**; other excludes only filter rows.
-      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
-                                The full key, SOURCE's object-store prefix included (a glob matches
-                                the key below SOURCE). Any include, glob or regex, keeps a key. ^
-                                with a literal prefix narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the full key (repeatable)
+      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the key (repeatable)
+                                Matched against the key below SOURCE, as a glob is, on every source:
+                                ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with
+                                a literal prefix narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the key (repeatable)
       --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
                                 Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
                                 KB, MB, GB, TB (decimal), any case.
       --max-size SIZE         keep objects or entries of at most this size
       --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                                An offset or Z; UTC without one. A duration (7d, 12h) is that long
-                                before the run started, recorded as the time it names.
+                                2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time
+                                (TZ), as the tables print it; with Z or an offset, that zone. A
+                                duration (7d, 12h) is that long before the run started. Either is
+                                recorded as the UTC time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
       --storage-class NAME[,NAME...]
                               keep objects in these storage classes (STANDARD,GLACIER; repeatable)
@@ -578,7 +581,7 @@ Local:
                               what is read per entry (statx adds created_at; Linux) (default stat)
       --no-dirs               omit the directories' rows (kind dir)
       --no-link-target        do not read symbolic links' targets
-      --one-file-system       do not walk into a mount point below the root, as du -x
+  -x, --one-file-system       do not walk into a mount point below the root, as du -x
 
 Performance:
   -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
@@ -630,7 +633,8 @@ Reporting:
                                 With -qq the exit code and the reports stand alone.
       --progress              show progress on stderr (default: a terminal that rows do not share)
                                 Not by default with -q or -v (which appends progress records), nor
-                                while rows go to the same terminal.
+                                while rows go to the same terminal, where swath list refuses it;
+                                swath du's table comes after the line is erased.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress

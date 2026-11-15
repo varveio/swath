@@ -40,9 +40,9 @@ A warning's `code` says what it warns of, whatever its words: `request_failures`
 none answered, for 10 seconds), `unreadable` (entries that could not be read), `no_progress` (half the stall
 timeout without progress), `stuck` (the stall timeout: the run stops), `stacks` (a goroutine dump),
 `forced_exit` (still stopping after the shutdown grace), `outcome_unrecorded` (the outcome is not in
-`error.json`), `trace_unwritten` (`--trace`), `profile_unwritten` (a development profile), `prefix_not_found` and
-`coverage_unknown` (`swath du --from-dataset`: no key under the prefix; a manifest that does not say whether its
-listing completed), `anonymous_credentials_ignored` (`--anonymous` with credentials in the environment),
+`error.json`), `trace_unwritten` (`--trace`), `profile_unwritten` (a development profile), `prefix_not_found` (no key
+under the source's prefix, or `swath du --from-dataset`'s), `coverage_unknown` (`swath du --from-dataset`: a
+manifest that does not say whether its listing completed), `anonymous_credentials_ignored` (`--anonymous` with credentials in the environment),
 `tls_unverified` (`--no-verify-ssl`), `namespace_unread` (Azure Blob: listed as flat), `directory_too_large` (a
 local directory left out), `lock_unenforced`, `durable_spill_off`, `unresumable_not_marked`,
 `seed_from_cuts_refused`, `seed_from_unavailable` (a resume without its `--seed-from` prior), `encoders_limited`,

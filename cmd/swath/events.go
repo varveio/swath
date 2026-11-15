@@ -128,7 +128,7 @@ const (
 	warnOutcomeUnrecorded = "outcome_unrecorded" // the outcome is not recorded in error.json
 	warnTrace             = "trace_unwritten"    // --trace: the trace file is not written whole
 	warnProfile           = "profile_unwritten"  // SWATH_CPUPROFILE, SWATH_MEMPROFILE: a profile is not written
-	warnPrefixNotFound    = "prefix_not_found"   // du --from-dataset: no key starts with the prefix
+	warnPrefixNotFound    = "prefix_not_found"   // no key starts with the prefix (a listing that found nothing, du --from-dataset)
 	warnCoverageUnknown   = "coverage_unknown"   // du --from-dataset: the manifest does not say whether its listing completed
 )
 
