@@ -335,7 +335,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `slow_start.end_limit` | max | permits | slow_start | --adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping) |
 | `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
-| `credentials.refreshes` | count | refreshes |  | signing credentials fetched and installed after the first: ahead of their expiry (by the smaller of 5 minutes and a quarter of their lifetime), or renewed; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client |
+| `credentials.refreshes` | count | refreshes |  | signing credentials fetched after the first: ahead of their expiry (by the smaller of 5 minutes and a quarter of their lifetime), or renewed; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client |
 | `credentials.expired_refreshes` | count | refreshes |  | renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused |
 <!-- s3:end -->
 
