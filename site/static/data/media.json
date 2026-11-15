@@ -1,0 +1,12 @@
+{
+  "release": "site-media-2026-11",
+  "files": [
+    {
+      "path": "media/noaa-gestofs-pds-replay.mp4",
+      "asset": "swath-noaa-gestofs-pds-2026-11-15.mp4",
+      "bytes": 1166726,
+      "sha256": "649bac341dedf4572ce7fcdf3062bd8755b5cce6c608ff0e3425d3fc19081ad0",
+      "description": "Replay of the home page's run: a sorted inventory of s3://noaa-gestofs-pds on 2026-11-15, rendered from its trace by tools/explainer (strip style)."
+    }
+  ]
+}

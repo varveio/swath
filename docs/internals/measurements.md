@@ -645,42 +645,48 @@ listed anonymously on 2026-11-15 from a 4-vCPU cloud VM with 7.7 GiB of RAM and 
 with other work, and its region was not recorded. The build was main at `d8fbe439` (`CGO_ENABLED=0 go build ./cmd/swath`), at its
 defaults: 64 workers, seeded. Each run ran once, one after the other.
 
-The home page's run wrote a sorted Parquet inventory, with the trace the video is rendered from:
+The home page's run wrote a sorted Parquet inventory, with the trace the video is rendered from, and DuckDB
+queried it:
 
 ```bash
 swath diag list s3://noaa-gestofs-pds/ -o noaa --anonymous --s3-region us-east-1 \
   --trace noaa-gestofs-pds.trace.jsonl --report list.report.json --stats --no-progress --color never \
   --max-duration 30m
-duckdb -c "SELECT regexp_extract(key, '\.(\w+)$', 1) AS ext,
-    count(*) AS objects, format_bytes(sum(size)::BIGINT) AS bytes
-    FROM 'noaa/data/*.parquet'
-    GROUP BY ext ORDER BY sum(size) DESC LIMIT 5"
+duckdb -column -c "SELECT
+    regexp_extract(key, '\.(\w+)$', 1) AS ext,
+    count(*) AS objects,
+    format_bytes(sum(size)::BIGINT) AS bytes
+  FROM 'noaa/data/*.parquet'
+  GROUP BY ext ORDER BY sum(size) DESC
+  LIMIT 5"
 ```
 
 | Run (started, UTC) | Objects | Bytes | Requests | Wall | Peak RSS | Output |
 |---|---:|---:|---:|---:|---:|---|
-| `diag list -o` (12:12:05) | 37,064,981 | 1,548,830,863,147,448 (1.38 PiB) | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B (825 MiB) |
+| **`diag list -o`, the home page's (12:22:05)** | 37,064,981 | 1,548,830,863,147,448 (1.38 PiB) | 39,016 | 60.9 s | 1.51 GiB | 11 parts, 865,491,977 B (825 MiB) |
+| `diag list -o`, earlier (12:12:05) | 37,064,981 | 1,548,830,863,147,448 | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B |
 | `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 | 39,026 | 53.7 s | 111 MiB | none |
 | `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB | 2,169 top-level prefixes |
 
-- **The dataset run.**
+- **The home page's run.**
   - No retries, throttles or timeouts.
-  - In flight averaged 53.3 of 64.
-  - Spill wrote 796 MB (delta+zstd) of 4.4 GB logical, peaking at 666 MB. The frontier wait was 38.8 s.
-  - Listing ended at 55 s and publication took 7 s more.
+  - In flight averaged 52.3 of 64.
+  - Spill wrote 795 MB (delta+zstd) of 4.4 GB logical, peaking at 618 MB. The frontier wait was 41.3 s.
+  - Listing ended at 54 s and publication took 7.6 s more.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
 - **The trace.**
-  - 48,770 events, none dropped.
+  - 48,216 events, none dropped.
   - The seed tiled the bucket into 257 ranges with 3 requests.
-  - The run made 2,325 splits, all on demand (idle workers).
-  - The heaviest seed range held 64.5% of the objects (`tools/explainer`'s lineage weight) and 1,977 of the splits.
-- **The DuckDB query.** DuckDB 1.5.5 ran over the 12 parts on the same VM. It counted objects and bytes by key
+  - The run made 2,203 splits, all on demand (idle workers).
+  - The heaviest seed range held 64.5% of the objects (`tools/explainer`'s lineage weight) and 1,834 of the splits.
+- **The DuckDB query.** DuckDB 1.5.5 ran over the 11 parts on the same VM. It counted objects and bytes by key
   suffix: `nc` 382,202 objects and 1.3 PiB, `grib2` 13,178,305 and 39.8 TiB, `png` 22,913,029 and 1.3 TiB.
-  DuckDB's `.timer` gave 2.97, 3.30 and 3.90 s real, about 11.3 s user each, over three runs.
-- **The video.** The home page's video is `tools/explainer`'s `strip` style, rendered from the dataset run's trace
-  (`--video`). `capture-video.js` captured it at 30 frames/s, and it was encoded with libx264 (CRF 23):
-  36.5 s, 1080x1350, 1.2 MB.
+  The same query with `.timer on` gave 2.95, 2.94 and 2.95 s real, about 11.3 s user each, over three runs.
+- **The video.** The video is `tools/explainer`'s `strip` style, rendered from the home page's run's trace (`--video`).
+  `capture-video.js` captured it at 30 frames/s, and it was encoded with libx264 (CRF 23): 36.5 s, 1080x1350,
+  1,166,726 bytes. It is the release asset `site-media-2026-11` / `swath-noaa-gestofs-pds-2026-11-15.mp4`.
+  The poster is frame 750 of the capture.
 
 Each figure comes from one run, on one VM, on one day, against a bucket that is still being written to. It is an observation, not a rate.
 

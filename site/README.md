@@ -15,7 +15,7 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `moved/` | Short pages for addresses that were published once or that readers type (`/docs/sources`, `/docs/commands/`, `/docs/reference/`, `/field-guide/`, `/runs/noaa-gestofs-pds/`): each says where the content is now, and forwards where one page replaces it. `MOVED` in `.vitepress/config.mts` maps them; they are not in search or the sitemap. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm), the development-docs notice and the home page's terminal example (`index.ts`); no custom components. |
-| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, and `media/`: the home page's replay video and its poster, rendered by [`tools/explainer`](../tools/explainer/README.md) from the run in [the measurements](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15). |
+| `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, `data/media.json` (the videos the deploy fetches, below) and `media/` (the replay's poster) |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
 | `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
@@ -39,10 +39,11 @@ A new user page in `docs/` needs a sidebar entry in `.vitepress/config.mts`; it 
 
 ```bash
 ./scripts/ci/build-site.sh build/site            # exactly what gets deployed; needs Node.js and npm
+./scripts/ci/fetch-site-media.sh build/site       # the videos, from a release, verified by sha256
 python3 scripts/ci/check-site.py --site build/site
 ```
 
-The same two commands run in CI and gate the deploy. The build fails on a dead link between pages. The
+The same three commands run in CI and gate the deploy. The build fails on a dead link between pages. The
 checks then verify, over the built tree, that site-local links, assets and fragments resolve; that links into
 this repository name files and headings that exist on `main`; that no contributor page is published; that
 the public spelling and naming rules in [`docs/style.md`](../docs/style.md) hold across the site and the
@@ -64,6 +65,36 @@ varve.io.
 ```bash
 site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP server for the fonts
 ```
+
+## Replacing a video
+
+Videos are not in git: a re-render replaces over a megabyte of binary content, and git keeps every version
+forever. They are assets on a GitHub release, and `.github/workflows/site.yml` fetches them into the built site
+with `scripts/ci/fetch-site-media.sh` and verifies each sha256 against `static/data/media.json`, on pull requests
+too, before the checks; a digest mismatch or a missing asset fails the job. `check-site.py` counts a declared
+path as present, so a local build without the videos still checks, and its `media` check holds the manifest to
+account (a release, a digest per file, a page that references it, and the bytes when they are there). The home
+page's replay is rendered by [`tools/explainer`](../tools/explainer/README.md) from the run in
+[the measurements](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15);
+its poster is a frame of the same capture, kept in `static/media/`.
+
+**Treat a release asset as immutable once a deploy has referenced it.** Publish a new asset name, or a new dated
+media release, rather than replacing bytes under a name a reviewed digest describes.
+
+```bash
+sha256sum swath-noaa-gestofs-pds-2027-01-10.mp4
+# Into the current media release under a new asset name:
+gh release upload site-media-2026-11 swath-noaa-gestofs-pds-2027-01-10.mp4
+# Or a new dated release. The tag must not start with `v` (that triggers release.yml), and
+# --latest=false keeps it from displacing the newest swath release as "Latest".
+gh release create site-media-2027-01 --title "Site media 2027-01" --latest=false \
+  --notes "Video assets served by swath.varve.io; fetched by the site deploy workflow, pinned by sha256." \
+  swath-noaa-gestofs-pds-2027-01-10.mp4
+```
+
+Then update `static/data/media.json` (the `release`, and the entry's `asset`, `bytes` and `sha256`; `path` is where
+the file lands in the site and what the page references) and run
+`scripts/ci/fetch-site-media.sh build/site` after building to check the pin.
 
 ## Releasing a new version
 

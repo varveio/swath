@@ -20,40 +20,19 @@ hero:
       link: https://github.com/varveio/swath
 
 features:
-  - title: Find where the space went
-    details: <code>swath du</code> totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
-    link: /docs/first-inventory
-    linkText: Your first inventory
-  - title: List and export rows
-    details: <code>swath list</code> prints every key with its size, time and storage metadata, in byte order, as a table, TSV or JSONL.
-    link: /docs/output
-    linkText: Output
   - title: Save an inventory you can query
     details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
     link: /docs/dataset
     linkText: The swath dataset
+  - title: List and export rows
+    details: <code>swath list</code> prints every key with its size, time and storage metadata, in byte order, as a table, TSV or JSONL.
+    link: /docs/output
+    linkText: Output
+  - title: Find where the space went
+    details: <code>swath du</code> totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
+    link: /docs/first-inventory
+    linkText: Your first inventory
 ---
-
-## One listing, replayed
-
-<!-- The media are in site/static/media/, copied into the site after the build; bound, so the build does not
-     try to bundle them. -->
-<figure class="swath-replay">
-  <video controls muted playsinline preload="none" :poster="'/media/noaa-gestofs-pds-replay-poster.jpg'"
-    :src="'/media/noaa-gestofs-pds-replay.mp4'" aria-label="A 36-second replay of a swath listing of s3://noaa-gestofs-pds, rendered from its run trace">
-    The replay is an MP4 video your browser does not play.
-  </video>
-  <figcaption>
-    The run above, replayed from its trace: one of the 257 key ranges swath started from held 64.5% of the
-    bucket's objects, so swath split it 1,977 times while listing it, each time a worker was idle, until all
-    64 workers were sharing it.
-  </figcaption>
-</figure>
-
-The run was on 2026-11-15 from a 4-vCPU cloud VM. The bucket is still being written to (its newest object was
-written about an hour before the run), so a run today shows other numbers.
-[How this was measured](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)
-and [how the replay is made](../tools/explainer/README.md).
 
 ## What swath is
 
@@ -98,7 +77,7 @@ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region 
 ```
 
 The whole bucket, listed at the top of this page, is about 37 million objects: that run took about a minute
-from a 4-vCPU cloud VM, made 39,098 requests against the public bucket and wrote an 825 MiB inventory. Start
+from a 4-vCPU cloud VM, made 39,016 requests against the public bucket and wrote an 825 MiB inventory. Start
 with a prefix.
 
 `-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
