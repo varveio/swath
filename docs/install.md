@@ -135,7 +135,9 @@ docker run --rm --user "$(id -u):$(id -g)" \
 ```
 
 Credentials in the environment work too (`-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e
-AWS_SESSION_TOKEN`). A release candidate publishes only its own tag, never `latest`. Pin the
+AWS_SESSION_TOKEN`). Without a shell the image cannot run `--s3-bearer-token-command` or a profile's
+`credential_process` (both run under `sh -c`): use the release binary for those, or an image of your own that
+adds a shell and the command. A release candidate publishes only its own tag, never `latest`. Pin the
 image digest for runs that must use the same image; the image signature and provenance checks are in
 [Releasing swath](../RELEASING.md#verifying-a-release).
 

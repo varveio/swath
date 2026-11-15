@@ -5,6 +5,13 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: S3 credentials that expire (an assumed role, web identity, SSO, `credential_process`, container
+  credentials, an instance role) are refreshed 5 minutes before they expire, for the source and for a bucket
+  destination. Before, they were used until the instant they expired, so a request signed just before could be
+  refused with `ExpiredToken`, and a listing longer than its credentials' session stopped with cause `auth`. An
+  expired-token answer to such credentials now refreshes them, once however many requests it answers, and the
+  request is retried once; keys that do not refresh still stop the run with cause `auth`, saying so. The run
+  report counts `credentials.refreshes` and `credentials.expired_refreshes` (#523).
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the

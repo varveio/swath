@@ -92,7 +92,7 @@ func TestCredentialOutageRecovers(t *testing.T) {
 			w.WriteHeader(503)
 			fmt.Fprint(w, `<ErrorResponse><Error><Type>Receiver</Type><Code>ServiceUnavailable</Code><Message>down</Message></Error></ErrorResponse>`)
 		default:
-			exp := time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339)
+			exp := time.Now().Add(expiryWindow + 2*time.Second).UTC().Format(time.RFC3339) // refreshed in 2 s
 			fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
 <AccessKeyId>AK%d</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
 </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, i, exp)
@@ -105,7 +105,7 @@ func TestCredentialOutageRecovers(t *testing.T) {
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2500 * time.Millisecond) // the first credentials expire; the refresh meets the outage
+	time.Sleep(2500 * time.Millisecond) // the first credentials are due a refresh, which meets the outage
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 		t.Fatalf("after the outage: %v (class %s, %d STS calls)", err, objhttp.Classify(err), n.Load())
 	}

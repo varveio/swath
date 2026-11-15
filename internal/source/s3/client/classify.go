@@ -14,10 +14,10 @@ func (e *Error) Failure() objhttp.Failure {
 	}
 	f.Throttle = f.Throttle || e.Status == 429 || e.Status == 503
 	f.Timeout = !f.Throttle && e.Code == "RequestTimeout"
-	f.Transient = f.Throttle || e.Status >= 500 || e.Code == "RequestTimeout" || e.Code == "InternalError" || e.Code == "ServiceUnavailable"
+	f.Transient = f.Throttle || e.Status >= 500 || e.Code == "RequestTimeout" || e.Code == "InternalError" || e.Code == "ServiceUnavailable" || e.Renewed
 	if !f.Transient {
 		switch e.Code {
-		case "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "TokenRefreshRequired":
+		case "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "ExpiredTokenException", "InvalidToken", "TokenRefreshRequired":
 			f.Class = objhttp.ClassAuth
 		case "NoSuchBucket":
 			// The bucket only: NoSuchKey and a 404 without a code are not.

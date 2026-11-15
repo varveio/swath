@@ -254,6 +254,11 @@ func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 // Stats returns the counters so far.
 func (p *provider[P]) Stats() Stats {
 	p.Activity.Store(p.Set(), p.ID(0))
+	if c, ok := p.client.(refreshed); ok {
+		n, forced := c.CredentialRefreshes()
+		p.Set().Set(p.ID(cCredentialRefreshes), n)
+		p.Set().Set(p.ID(cCredentialExpired), forced)
+	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
 		MeanActive: e.MeanActive, Counters: e.Counters}

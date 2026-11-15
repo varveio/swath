@@ -272,7 +272,12 @@ func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*D
 	// (AWS_CA_BUNDLE, a profile's ca_bundle), which a plain *http.Client
 	// refuses.
 	hc := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.ResponseHeaderTimeout = timeout })
-	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(hc), config.WithLogger(logging.Nop{})}
+	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(hc), config.WithLogger(logging.Nop{}),
+		// Expiring credentials (an assumed role, web identity, SSO, a
+		// credential process) are refreshed 5 minutes before they expire,
+		// as the S3 source's are: never used until the instant they do, so
+		// a request signed just before is not refused on arrival.
+		config.WithCredentialsCacheOptions(func(co *aws.CredentialsCacheOptions) { co.ExpiryWindow = 5 * time.Minute })}
 	if o.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(o.Profile))
 	}
