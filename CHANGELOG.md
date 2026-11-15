@@ -13,6 +13,13 @@ Notable changes per release. The full human summary for the current release is i
   renews them, once for all the requests refused for the same credentials, and the source's request is retried
   once; keys that do not refresh still stop the run with cause `auth`, saying so. The run report counts
   `credentials.refreshes` and `credentials.expired_refreshes` (#523).
+- Go port: the default spill cap follows the disk. Without `--spill-budget` spill may use the spill filesystem's
+  free space after the reserve: all of it for a dataset in a bucket, whose parts are uploaded from memory, and
+  half of it otherwise (the parts, the text file, or for a stream other programs' temporary files share the
+  filesystem); a frame the cap would refuse rereads the free space, and so does the run every 2 s while the
+  cap holds it back, so a disk grown under a live run (a cloud disk resized and its filesystem grown online) is used without a
+  restart. `--spill-budget` is a fixed cap. The run report adds `resources.spill.max_by`, `start_max_bytes`,
+  `max_raised`, `max_rechecks` and `max_recheck_raised`; `max_bytes` is the cap in effect at the end.
 - Go port: `objfile/remote` opens a location with explicit settings: `remote.OpenWith(ctx, location,
   remote.Options{...})` takes a GCS credentials file, an endpoint (an emulator's for GCS), an S3 region and
   profile, an Azure SAS and a request timeout; `remote.Open` is `OpenWith` with the zero `Options`. An Azure

@@ -23,6 +23,7 @@ import (
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/objfile/gcs"
 )
 
@@ -233,7 +234,8 @@ func TestConfigRejectsInvalid(t *testing.T) {
 // TestResourceAdmission: encoders are admitted against an encoder
 // allowance and the descriptor limit, never below one; the
 // default spill reserve is derived from the encoders' parts, and the
-// default spill cap is half the free space after it; a negative one is none.
+// default spill cap is the free space after it, half of it when the output
+// shares the spill filesystem, following the disk; a negative one is none.
 func TestResourceAdmission(t *testing.T) {
 	s3Encoder := encoderPrice("s3://bkt")
 	if s3Encoder != parquetout.EncoderBytes(&s3.Schema) || encoderPrice("scripted://x") != parquetout.DefaultEncoderBytes {
@@ -291,21 +293,58 @@ func TestResourceAdmission(t *testing.T) {
 			t.Errorf("reserve %d resolved to %d (%v), want %d", in, c.Limits.Spill.Reserve, err, want)
 		}
 	}
+	// The cap: a given one is fixed, a negative one none; the default is
+	// the free space after the reserve, half of it when the filesystem is
+	// shared, and follows the disk (share). Retained certified spill
+	// counts as free.
+	const free, reserve, retained = 100 << 30, 1 << 30, 40 << 30
+	old := freeBytes
+	t.Cleanup(func() { freeBytes = old })
+	freeBytes = func(string) int64 { return free }
 	dir := t.TempDir()
-	if got := spillMax(SpillLimits{Max: 5}, dir, 0); got != 5 {
-		t.Errorf("explicit cap: %d", got)
+	for _, tc := range []struct {
+		l          SpillLimits
+		retained   int64
+		shared     bool
+		max, share int64
+		by         string
+	}{
+		{SpillLimits{Max: 5}, 0, true, 5, 0, CapBudget},
+		{SpillLimits{Max: -1}, 0, true, 0, 0, CapNone},
+		{SpillLimits{Reserve: reserve}, 0, false, free - reserve, 1, CapDisk},
+		{SpillLimits{Reserve: reserve}, 0, true, (free - reserve) / 2, 2, CapDiskHalf},
+		{SpillLimits{Reserve: reserve}, retained, false, free + retained - reserve, 1, CapDisk},
+		{SpillLimits{Reserve: reserve}, retained, true, (free + retained - reserve) / 2, 2, CapDiskHalf},
+	} {
+		m, share := spillMax(tc.l, filepath.Join(dir, "not", "yet"), tc.retained, tc.shared)
+		if by := capBy(order.Options{SpillMax: m, SpillShare: share}); m != tc.max || share != tc.share || by != tc.by {
+			t.Errorf("%+v (retained %d, shared %v): cap %d share %d by %s, want %d %d %s", tc.l, tc.retained, tc.shared, m, share, by, tc.max, tc.share, tc.by)
+		}
 	}
-	if got := spillMax(SpillLimits{Max: -1}, dir, 0); got != 0 {
-		t.Errorf("no cap: %d", got)
+	freeBytes = func(string) int64 { return order.Unlimited }
+	if m, share := spillMax(SpillLimits{}, dir, 0, false); m != 0 || share != 0 {
+		t.Errorf("free space not measured: cap %d share %d", m, share)
 	}
-	free := order.FreeBytes(dir)
-	if got := spillMax(SpillLimits{Reserve: 1 << 20}, filepath.Join(dir, "not", "yet"), 0); free != order.Unlimited && got != (free-(1<<20))/2 && got > free/2 {
-		t.Errorf("derived cap %d, free %d", got, free)
-	}
-	// Retained certified spill counts as free: half of it more.
-	const retained = 40 << 30
-	if got := spillMax(SpillLimits{Reserve: 1 << 20}, dir, retained); free != order.Unlimited && (got < (free+retained-(1<<20))/2-(64<<20) || got > (free+retained)/2) {
-		t.Errorf("derived cap %d with %d retained, free %d", got, retained, free)
+	freeBytes = func(string) int64 { return free }
+	// The spill filesystem shared: with a dataset on disk, a text file, a
+	// stream's $TMPDIR; not with a dataset in a bucket.
+	t.Setenv("TMPDIR", t.TempDir())
+	for _, tc := range []struct {
+		out   OutputConfig
+		share int64
+	}{
+		{OutputConfig{Dir: t.TempDir()}, 2},
+		{OutputConfig{Text: &textout.Config{Path: filepath.Join(t.TempDir(), "keys.txt")}}, 2},
+		{OutputConfig{Dir: t.TempDir(), Remote: &RemoteOutput{}}, 1},
+		{OutputConfig{Text: &textout.Config{}}, 2},
+	} {
+		oopt, scratch, err := orderOptions(Config{Output: tc.out}, nil, 1<<20, nil)
+		if scratch != "" {
+			defer os.RemoveAll(scratch)
+		}
+		if err != nil || oopt.SpillShare != tc.share {
+			t.Errorf("output %+v: share %d (%v), want %d", tc.out, oopt.SpillShare, err, tc.share)
+		}
 	}
 }
 

@@ -29,7 +29,7 @@ _swath_list() {
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
-        '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
+        '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
@@ -170,7 +170,7 @@ _swath_diag_list() {
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
-        '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
+        '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
@@ -261,7 +261,7 @@ _swath_diag_count() {
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
-        '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
+        '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
@@ -330,7 +330,7 @@ _swath_resume() {
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
-        '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
+        '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \

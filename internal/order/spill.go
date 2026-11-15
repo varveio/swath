@@ -54,8 +54,11 @@ import (
 // live spill bytes stay within Max and the spill filesystem keeps Reserve
 // bytes free afterwards (room for the parts still to be published, which
 // share the filesystem when the spill directory is under the output). A
-// refused frame is not an error: the emitter waits on the reorder budget,
-// as without spill (graceful backpressure). An ENOSPC on a frame of rows is
+// cap that follows the disk (Options.SpillShare) is re-derived from the
+// free space when it would refuse a frame, and rises when the filesystem
+// has grown (follow). A refused frame is not an error: the emitter waits
+// on the reorder budget, as without spill (graceful backpressure), and
+// retries when woken. An ENOSPC on a frame of rows is
 // treated the same way, after truncating the torn frame; an ENOSPC that
 // cannot be undone (opening the file, a failed truncation) or on a
 // trailer stops the run with that error. The reserve is checked, not held:
@@ -101,20 +104,33 @@ type spiller[P any] struct {
 	dir      string
 	delta    bool // delta frames (else plain: --spill-plain)
 	compress bool
-	max      int64 // live spill bytes (0: no cap)
-	reserve  int64 // free bytes to leave on the filesystem (0: none)
-	live     atomic.Int64
-	peak     atomic.Int64
-	refused  atomic.Int64 // frames refused by the disk budget
-	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
-	wake     func()       // rouses the run's waiters (credit returned); nil in tests
-	verify   func() error // Options.SpillVerify; nil in tests
-	spilling func()       // Options.Spilling; nil in tests
-	g        *Gauges      // live bytes and open readers (nil in tests)
-	seq      atomic.Uint64
-	enc      sync.Pool // *zstd.Encoder
-	bufs     sync.Pool // *[]byte: writers' frame and body buffers
-	dec      *zstd.Decoder
+	max      atomic.Int64 // live spill bytes (0: no cap)
+	reserve  int64        // free bytes to leave on the filesystem (0: none)
+	// share, when above 0, makes max follow the disk (Options.SpillShare);
+	// raised counts the times it rose, rechecks the follower's reads of
+	// the free space (recheck) and recheckRaised those that raised it.
+	// raisedCh tells the follower a frame raised it (wake the waiters).
+	// room counts the times room came back (credit returned, the cap
+	// raised, the free space grown under a refusal), each before its
+	// waiters are woken: an emitter that tried a frame without the order
+	// stage's lock retries instead of waiting when it moved meanwhile, as
+	// the wake may have come while it held no lock (emitter.publish).
+	room                            atomic.Uint64
+	share                           int64
+	raised, rechecks, recheckRaised atomic.Int64
+	raisedCh                        chan struct{}
+	live                            atomic.Int64
+	peak                            atomic.Int64
+	refused                         atomic.Int64 // frames refused by the disk budget
+	full                            atomic.Bool  // the last frame was refused; cleared when a file is deleted
+	wake                            func()       // rouses the run's waiters (credit returned); nil in tests
+	verify                          func() error // Options.SpillVerify; nil in tests
+	spilling                        func()       // Options.Spilling; nil in tests
+	g                               *Gauges      // live bytes and open readers (nil in tests)
+	seq                             atomic.Uint64
+	enc                             sync.Pool // *zstd.Encoder
+	bufs                            sync.Pool // *[]byte: writers' frame and body buffers
+	dec                             *zstd.Decoder
 	// rbuf and zbuf are the drainer's read and decode buffers, reused from
 	// frame to frame for delta frames (their rows own their storage); a
 	// plain frame's rows view its buffers, so each gets fresh ones.
@@ -169,7 +185,8 @@ func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress boo
 	if err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	s := &spiller[P]{schema: sch, codec: sch.Codec, dir: dir, delta: !plain, compress: compress, max: max, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s := &spiller[P]{schema: sch, codec: sch.Codec, dir: dir, delta: !plain, compress: compress, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s.max.Store(max)
 	s.dc, _ = sch.Codec.(schema.DeltaCodec[P])
 	s.h = newHandles(s.readers)
 	if compress {
@@ -700,7 +717,7 @@ var errSpillFull = errors.New("spill: disk budget used")
 func (s *spiller[P]) admit(n int64, final bool) bool {
 	live := s.live.Add(n)
 	if !final {
-		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
+		if m := s.max.Load(); (m > 0 && live > m && !s.follow(live, n)) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
 			s.live.Add(-n)
 			s.refuse()
 			// Drained certificates hold credit until K covers them: the
@@ -715,6 +732,133 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	s.track()
 	return true
 }
+
+// follow re-derives a cap that follows the disk (share) for live spill
+// bytes, n of them a frame not yet written, from the free space now: the
+// cap rises to DiskCap of that free space and the spill already on the
+// filesystem when that admits the frame, and it reports whether it did.
+// The cap never falls (the parts written since the start use free space
+// too); a fixed cap, or free space that cannot be measured, never rises. A
+// rise ends a refusal (unrefuse) as returned credit does: room came back.
+func (s *spiller[P]) follow(live, n int64) bool {
+	if s.share <= 0 {
+		return false
+	}
+	free := freeBytes(s.dir)
+	if free == Unlimited {
+		return false
+	}
+	c := DiskCap(free+live-n, s.reserve, s.share)
+	if c < live {
+		return false
+	}
+	woke := s.raiseTo(c)
+	if woke {
+		s.room.Add(1)
+	}
+	if s.full.Load() {
+		s.unrefuse()
+		woke = true
+	}
+	if woke {
+		select { // the follower wakes the waiters, outside any lock held here
+		case s.raisedCh <- struct{}{}:
+		default:
+		}
+	}
+	return true
+}
+
+// raiseTo raises the cap to c when c is above it (it never falls), and
+// reports whether it rose.
+func (s *spiller[P]) raiseTo(c int64) bool {
+	for m := s.max.Load(); c > m; m = s.max.Load() {
+		if s.max.CompareAndSwap(m, c) {
+			s.raised.Add(1)
+			if g := s.g; g != nil {
+				for m := g.spillMax.Load(); c > m && !g.spillMax.CompareAndSwap(m, c); m = g.spillMax.Load() {
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// followEvery is the follower's cadence (tests shorten it).
+var followEvery = 2 * time.Second
+
+// follower is a run's companion for a cap that follows the disk, until
+// quit: it wakes every waiter when a frame raised the cap (follow), and
+// every followEvery rechecks the free space (recheck) while the cap holds
+// the run back, as a grown filesystem otherwise goes unseen while no frame
+// is tried: every emitter and worker asleep on a refusal with no credit
+// returning, or workers held at the frontier window, which stops admission
+// at half the cap before any frame reaches it. It runs without the order
+// stage's lock, so wake takes it safely.
+func (s *spiller[P]) follower(quit <-chan struct{}, wake func()) {
+	t := time.NewTicker(followEvery)
+	defer t.Stop()
+	last := int64(-1)
+	for {
+		select {
+		case <-quit:
+			return
+		case <-s.raisedCh:
+			wake()
+		case <-t.C:
+			if !s.recheck(&last) {
+				continue
+			}
+			wake()
+		}
+		if hookFollowerWake != nil {
+			hookFollowerWake()
+		}
+	}
+}
+
+// hookFollowerWake runs after each of the follower's wakes (tests).
+var hookFollowerWake func()
+
+// recheck re-reads the free space while the cap holds the run back (a
+// frame refused, or workers waiting at the frontier window, in publish or
+// at admission; otherwise it reads nothing): the cap rises when the
+// filesystem has more room, and it reports whether the waiters should try
+// again: the cap rose, or the free space grew under a refusal (the reserve
+// may have refused, not the cap). Either moves room before the follower
+// wakes the waiters. last is the free space the previous recheck read (-1: none since the
+// cap last held nothing back).
+func (s *spiller[P]) recheck(last *int64) bool {
+	full := s.full.Load()
+	if g := s.g; !full && (g == nil || g.windowWait.n.Load()+g.publishWait.n.Load()+g.admissionWait.n.Load() == 0) {
+		*last = -1
+		return false
+	}
+	free := freeBytes(s.dir)
+	if free == Unlimited {
+		return false
+	}
+	s.rechecks.Add(1)
+	grew := full && *last >= 0 && free > *last
+	*last = free
+	if s.raiseTo(DiskCap(free+s.live.Load(), s.reserve, s.share)) {
+		s.recheckRaised.Add(1)
+		grew = true
+	}
+	if grew {
+		s.room.Add(1)
+		if s.full.Load() {
+			s.unrefuse()
+		}
+	}
+	return grew
+}
+
+// DiskCap is a spill cap that follows the disk: 1/share of the free bytes
+// free on the spill filesystem (spill already there counted as free),
+// after the reserve; at least one byte.
+func DiskCap(free, reserve, share int64) int64 { return max(1, (free-reserve)/share) }
 
 // release returns a deleted file's bytes to the budget and wakes every
 // waiter: a worker held at admission, or an emitter whose frame was
@@ -763,6 +907,7 @@ func (s *spiller[P]) refuse() {
 
 // unrefuse clears full (credit returned), ending a refused interval.
 func (s *spiller[P]) unrefuse() {
+	s.room.Add(1)
 	r := &s.refusal
 	r.mu.Lock()
 	s.full.Store(false)
@@ -1175,6 +1320,9 @@ func decodeDelta[P any](src []byte, c schema.Codec[P], dc schema.DeltaCodec[P], 
 
 // Unlimited is what FreeBytes reports when it cannot measure.
 const Unlimited = 1<<63 - 1
+
+// freeBytes is statFree (tests replace it).
+var freeBytes = statFree
 
 // FreeBytes is the space available to an unprivileged writer on dir's
 // filesystem, or Unlimited when it cannot be measured.
