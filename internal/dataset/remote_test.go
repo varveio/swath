@@ -391,7 +391,7 @@ func TestDeleteOwned(t *testing.T) {
 // when read.
 func TestCommitMarkerStrict(t *testing.T) {
 	ws := workspace(t)
-	if err := ws.WriteFile(RemoteCommitName, []byte(`{"report_version":6,"outcome":{"status":"failed"}}`), 0o644); err != nil {
+	if err := ws.WriteFile(RemoteCommitName, []byte(`{"report_version":1,"outcome":{"status":"failed"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if Committed(ws.Name()) || Unfinalized(ws.Name()) {

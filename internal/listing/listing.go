@@ -252,13 +252,18 @@ type Spill struct {
 	// set the cap (CapBudget, CapDisk, CapDiskHalf, CapNone); a cap set by
 	// the disk follows it: a frame it would refuse re-reads the free
 	// space, and MaxRaised counts the times the cap rose (the filesystem
-	// grew, or other files on it were removed).
-	MaxBytes      int64  `json:"max_bytes"`
-	StartMaxBytes int64  `json:"start_max_bytes"`
-	MaxBy         string `json:"max_by"`
-	MaxRaised     int64  `json:"max_raised"`
-	ReserveBytes  int64  `json:"reserve_bytes"`
-	PeakReaders   int64  `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
+	// grew, or other files on it were removed). While such a cap holds
+	// the run back (a frame refused, workers at the frontier window) the
+	// free space is also reread every 2 s: MaxRechecks counts those reads,
+	// MaxRecheckRaised those that raised the cap.
+	MaxBytes         int64  `json:"max_bytes"`
+	StartMaxBytes    int64  `json:"start_max_bytes"`
+	MaxBy            string `json:"max_by"`
+	MaxRaised        int64  `json:"max_raised"`
+	MaxRechecks      int64  `json:"max_rechecks"`
+	MaxRecheckRaised int64  `json:"max_recheck_raised"`
+	ReserveBytes     int64  `json:"reserve_bytes"`
+	PeakReaders      int64  `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
 	// ReadHandles is the spill read handles' account: every read of a
 	// spill file (a frame at an offset, a trailer, the drainer's reader)
 	// leases its file's one descriptor, kept open between reads.
@@ -1358,7 +1363,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			RefusedNs: int64(ost.SpillRefusedTime), RefusedSpells: ost.SpillRefusedSpells,
-			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), MaxRaised: ost.SpillMaxRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), MaxRaised: ost.SpillMaxRaised, MaxRechecks: ost.SpillMaxRechecks, MaxRecheckRaised: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {

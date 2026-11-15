@@ -31,7 +31,7 @@ import (
 // ledger, a file of its own beside the spill files: the part journal keeps
 // its single committer, and no cache failure touches it.
 //
-// A durable file is a sequence of version-2 frames (the journal's
+// A durable file is a sequence of frames (the journal's
 // envelope: length, CRC-32C over the length and the payload, the payload
 // whose first byte is its type): H the header, the rows frames (the
 // disposable spill's types, decoded whatever this run's flags), C the
@@ -41,9 +41,9 @@ import (
 // the magic) that locates it in one read.
 
 const (
-	durableMagic   = "SWATHDS2" // a durable file's header and tail
+	durableMagic   = "SWATHDS1" // a durable file's header and tail
 	ledgerMagic    = "SWATHDL1" // the ledger's first frame
-	durableVersion = 2
+	durableVersion = 1
 	ledgerVersion  = 1
 	frameHeader    = 'H'
 	frameCapture   = 'C'
@@ -111,10 +111,7 @@ const (
 	// zstd frame bodies as spill.go writes them. A durable file whose
 	// header names another codec ID or version is not replayable by this
 	// build: recovery rejects it (rejected.codec) and lists its interval.
-	// Version 2 invalidates older payloads, including Azure objects before
-	// their optional property columns were added. The revision is global:
-	// older caches of every provider relist; journaled parts stay reusable.
-	rowCodecVersion = 2
+	rowCodecVersion = 1
 )
 
 // DurableDir is the durable spill directory, relative to the output.
@@ -972,7 +969,7 @@ func randomID() [16]byte {
 	return id
 }
 
-// frame2 is a version-2 frame: length, CRC-32C over the length and the
+// frame2 is a frame: length, CRC-32C over the length and the
 // payload (type, body).
 func frame2(dst []byte, typ byte, body []byte) []byte {
 	var hdr [8]byte
@@ -985,13 +982,13 @@ func frame2(dst []byte, typ byte, body []byte) []byte {
 	return append(dst, body...)
 }
 
-// seal2 sets the length and version-2 CRC of a frame built in place.
+// seal2 sets the length and CRC of a frame built in place.
 func seal2(frame []byte) {
 	binary.LittleEndian.PutUint32(frame[:4], uint32(len(frame)-8))
 	binary.LittleEndian.PutUint32(frame[4:8], crc32.Update(crc32.Checksum(frame[:4], spillCRC), spillCRC, frame[8:]))
 }
 
-// check2 verifies a version-2 frame's CRC.
+// check2 verifies a frame's CRC.
 func check2(hdr [8]byte, payload []byte) bool {
 	return crc32.Update(crc32.Checksum(hdr[:4], spillCRC), spillCRC, payload) == binary.LittleEndian.Uint32(hdr[4:])
 }

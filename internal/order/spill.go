@@ -107,21 +107,24 @@ type spiller[P any] struct {
 	max      atomic.Int64 // live spill bytes (0: no cap)
 	reserve  int64        // free bytes to leave on the filesystem (0: none)
 	// share, when above 0, makes max follow the disk (Options.SpillShare);
-	// raised counts the times it rose.
-	share    int64
-	raised   atomic.Int64
-	live     atomic.Int64
-	peak     atomic.Int64
-	refused  atomic.Int64 // frames refused by the disk budget
-	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
-	wake     func()       // rouses the run's waiters (credit returned); nil in tests
-	verify   func() error // Options.SpillVerify; nil in tests
-	spilling func()       // Options.Spilling; nil in tests
-	g        *Gauges      // live bytes and open readers (nil in tests)
-	seq      atomic.Uint64
-	enc      sync.Pool // *zstd.Encoder
-	bufs     sync.Pool // *[]byte: writers' frame and body buffers
-	dec      *zstd.Decoder
+	// raised counts the times it rose, rechecks the follower's reads of
+	// the free space (recheck) and recheckRaised those that raised it.
+	// raisedCh tells the follower a frame raised it (wake the waiters).
+	share                           int64
+	raised, rechecks, recheckRaised atomic.Int64
+	raisedCh                        chan struct{}
+	live                            atomic.Int64
+	peak                            atomic.Int64
+	refused                         atomic.Int64 // frames refused by the disk budget
+	full                            atomic.Bool  // the last frame was refused; cleared when a file is deleted
+	wake                            func()       // rouses the run's waiters (credit returned); nil in tests
+	verify                          func() error // Options.SpillVerify; nil in tests
+	spilling                        func()       // Options.Spilling; nil in tests
+	g                               *Gauges      // live bytes and open readers (nil in tests)
+	seq                             atomic.Uint64
+	enc                             sync.Pool // *zstd.Encoder
+	bufs                            sync.Pool // *[]byte: writers' frame and body buffers
+	dec                             *zstd.Decoder
 	// rbuf and zbuf are the drainer's read and decode buffers, reused from
 	// frame to frame for delta frames (their rows own their storage); a
 	// plain frame's rows view its buffers, so each gets fresh ones.
@@ -376,7 +379,7 @@ type spillFile struct {
 	// back that claims more is malformed, refused before any allocation.
 	most, mostOwned atomic.Int64
 
-	// A durable file (d set): its version-2 frames are written through the
+	// A durable file (d set): its frames are written through the
 	// output root, crc is the CRC-32C of every byte written (owner only),
 	// capturing is set from its C frame until the seal or an abandon.
 	d                    *Cert
@@ -743,20 +746,91 @@ func (s *spiller[P]) follow(live, n int64) bool {
 	if c < live {
 		return false
 	}
-	for m := s.max.Load(); c > m; m = s.max.Load() {
-		if s.max.CompareAndSwap(m, c) {
-			s.raised.Add(1)
-			break
-		}
-	}
-	if g := s.g; g != nil {
-		for m := g.spillMax.Load(); c > m && !g.spillMax.CompareAndSwap(m, c); m = g.spillMax.Load() {
+	if s.raiseTo(c) {
+		select { // the follower wakes the waiters, outside any lock held here
+		case s.raisedCh <- struct{}{}:
+		default:
 		}
 	}
 	if s.full.Load() {
 		s.unrefuse()
 	}
 	return true
+}
+
+// raiseTo raises the cap to c when c is above it (it never falls), and
+// reports whether it rose.
+func (s *spiller[P]) raiseTo(c int64) bool {
+	for m := s.max.Load(); c > m; m = s.max.Load() {
+		if s.max.CompareAndSwap(m, c) {
+			s.raised.Add(1)
+			if g := s.g; g != nil {
+				for m := g.spillMax.Load(); c > m && !g.spillMax.CompareAndSwap(m, c); m = g.spillMax.Load() {
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// followEvery is the follower's cadence (tests shorten it).
+var followEvery = 2 * time.Second
+
+// follower is a run's companion for a cap that follows the disk, until
+// quit: it wakes every waiter when a frame raised the cap (follow), and
+// every followEvery rechecks the free space (recheck) while the cap holds
+// the run back, as a grown filesystem otherwise goes unseen while no frame
+// is tried: every emitter and worker asleep on a refusal with no credit
+// returning, or workers held at the frontier window, which stops admission
+// at half the cap before any frame reaches it. It runs without the order
+// stage's lock, so wake takes it safely.
+func (s *spiller[P]) follower(quit <-chan struct{}, wake func()) {
+	t := time.NewTicker(followEvery)
+	defer t.Stop()
+	last := int64(-1)
+	for {
+		select {
+		case <-quit:
+			return
+		case <-s.raisedCh:
+			wake()
+		case <-t.C:
+			if s.recheck(&last) {
+				wake()
+			}
+		}
+	}
+}
+
+// recheck re-reads the free space while the cap holds the run back (a
+// frame refused, or workers held at the frontier window; otherwise it
+// reads nothing): the cap rises when the filesystem has more room, and it
+// reports whether the waiters should try again: the cap rose, or the free
+// space grew under a refusal (the reserve may have refused, not the cap).
+// last is the free space the previous recheck read (-1: none since the
+// cap last held nothing back).
+func (s *spiller[P]) recheck(last *int64) bool {
+	full := s.full.Load()
+	if !full && (s.g == nil || s.g.windowWait.n.Load() == 0) {
+		*last = -1
+		return false
+	}
+	free := freeBytes(s.dir)
+	if free == Unlimited {
+		return false
+	}
+	s.rechecks.Add(1)
+	grew := full && *last >= 0 && free > *last
+	*last = free
+	if s.raiseTo(DiskCap(free+s.live.Load(), s.reserve, s.share)) {
+		s.recheckRaised.Add(1)
+		if s.full.Load() {
+			s.unrefuse()
+		}
+		return true
+	}
+	return grew
 }
 
 // DiskCap is a spill cap that follows the disk: 1/share of the free bytes

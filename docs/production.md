@@ -121,7 +121,7 @@ cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressur
 alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
 instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk. With the default
 cap, grow the filesystem under the running process (a cloud persistent disk resized, then its filesystem grown
-online): the next frame spill tries re-reads the free space, the cap rises and listing continues;
+online): within seconds the run rereads the free space, the cap rises and listing continues;
 `resources.spill.max_raised` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
 run started with. A `--spill-budget` is fixed: stop the run and resume it with a larger one on a disk that has
 the room, `swath resume DIR --spill-budget 200GiB`; a plain `swath resume DIR` keeps the recorded cap, and with

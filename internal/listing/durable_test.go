@@ -558,9 +558,9 @@ func TestDurableCompressionFlip(t *testing.T) {
 	}
 }
 
-// TestDurableVersions: a journal of another version (7 and 8 recorded
-// MD5 digests; 10 is a later build's) is refused before recovery changes
-// anything, the durable spill included; the current version resumes.
+// TestDurableVersions: a journal of another version is refused before
+// recovery changes anything, the durable spill included; the current
+// version resumes.
 func TestDurableVersions(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
@@ -576,7 +576,7 @@ func TestDurableVersions(t *testing.T) {
 		binary.LittleEndian.PutUint32(frame[4:8], crc32.Update(crc32.Checksum(frame[:4], crc32.MakeTable(crc32.Castagnoli)), crc32.MakeTable(crc32.Castagnoli), []byte(nh)))
 		os.WriteFile(path, append(frame, jb[8+size:]...), 0o644)
 	}
-	for _, v := range []int{7, 8, journal.Version + 1} {
+	for _, v := range []int{0, journal.Version + 1} {
 		dir := filepath.Join(t.TempDir(), strconv.Itoa(v))
 		if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
 			t.Fatal(err)
@@ -904,7 +904,7 @@ func recodec(t *testing.T, out, name string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b) < 16 || string(b[len(b)-8:]) != "SWATHDS2" {
+	if len(b) < 16 || string(b[len(b)-8:]) != "SWATHDS1" {
 		t.Fatalf("%s has a ledger record and no tail (%d bytes)", name, len(b))
 	}
 	n0 := int(binary.LittleEndian.Uint32(b))

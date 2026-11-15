@@ -1,6 +1,6 @@
 module github.com/varveio/swath/reader
 
-go 1.26.0
+go 1.26.3
 
 toolchain go1.27.4
 
@@ -16,7 +16,7 @@ require (
 	github.com/parquet-go/bitpack v1.1.0 // indirect
 	github.com/parquet-go/jsonlite v1.5.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
-	github.com/twpayne/go-geom v1.6.1 // indirect
+	github.com/twpayne/go-geom v1.7.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )

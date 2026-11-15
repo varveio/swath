@@ -500,14 +500,21 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   disk spills under its directory and a text file beside itself, so the output keeps room, and a stream spills
   under `$TMPDIR`, which other programs use. A frame the cap would refuse re-reads the free space
   (`spiller.follow`): when that share of the free space plus the spill already on the filesystem admits the
-  frame, the cap rises to it and a standing refusal ends as when credit returns; so a filesystem grown under a
-  live run (a cloud disk resized and its filesystem grown online) is used without a restart, and with free
-  space unchanged the cap stays where it started. The cap never falls: the parts written meanwhile take free
+  frame, the cap rises to it and a standing refusal ends as when credit returns. A frame is tried only when
+  something wakes its emitter, and the frontier window stops admission at half the cap, before any frame
+  reaches it, so the run's follower (`spiller.follower`, a goroutine the run owns while the cap follows the
+  disk, stopped with it) also rereads the free space every 2 s while the cap holds the run back: a frame
+  refused, or workers waiting at the window; otherwise a tick reads nothing. A rise, at a frame or a
+  recheck, wakes every waiter through the follower, which holds no lock of the order stage; a recheck also
+  wakes them when the free space grew under a refusal the reserve may have made
+  (`TestRefusedSpillWakesOnGrowth`, `TestWindowFollowsGrownDisk`). So a filesystem grown under a live run (a
+  cloud disk resized and its filesystem grown online) is used without a restart, and with free space
+  unchanged the cap stays where it started. The cap never falls: the parts written meanwhile take free
   space, and the reserve check, which reads the free space at every frame, guards the disk itself. Where free
   space cannot be measured the default is no cap; a library caller's negative value means none. The report
   says what set the cap (`spill.max_by`: `spill_budget`, `disk`, `disk_half` or `none`), the cap the run
-  started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`) and how many times it rose
-  (`max_raised`, `TestSpillCapFollowsDisk`); `progress.json`'s `order.spill_max_bytes` rises with it. The
+  started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`), how many times it rose
+  (`max_raised`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`max_rechecks`, `max_recheck_raised`); `progress.json`'s `order.spill_max_bytes` rises with it. The
   reserve is checked against the filesystem afterwards (`listing.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
   under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
@@ -693,7 +700,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 
 - **Durable files.** The read-ahead and the segments read a durable spill file's rows frames as they read a
   run-private file's, by the offset its marker records (a header or capture frame may precede a rows frame:
-  the offset is the rows frame's own), checking the version-2 CRC; the drainer's reader skips to the end of a
+  the offset is the rows frame's own), checking the CRC; the drainer's reader skips to the end of a
   frame read ahead, past any capture frame before it. The segments check a durable file's trailer (its total
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
@@ -763,7 +770,7 @@ vectors as well as round trips, so shared implementation alone cannot establish 
 
 ## Durable spill
 
-A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
+A journaled run keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 
@@ -840,18 +847,14 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   children exposed (`TestDurableSealErrorStopsRun`: the output is a prefix of the oracle). A capture that
   started at its closing fence certifies nothing and is abandoned (`empty`); rows after the last fence
   (`unfenced`), or a stop or failed ledger at the seal (`stopping`) abandon too.
-- **File format.** Version-2 frames (the journal's envelope: length, CRC-32C over the length and the
-  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID
+- **File format.** Frames (the journal's envelope: length, CRC-32C over the length and the
+  payload): `H` (magic, format version 1, run UUID, file ID, the journal identity's digest, the row codec ID
   and its version, the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
   decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
   captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the
   trailer's offset and the magic). Files are named by their random ID; nothing depends on a path or inode.
-  Disposable spill files keep the version-1 frames above. The durable row codec revision is 2:
-  the Azure optional-property extension changed its payload encoding. This global revision rejects
-  older spill caches for every provider as `rejected.codec`, so their intervals are relisted. The
-  schema ID, journal identity and Parquet writer recipe are unchanged by this cache revision;
-  journaled Parquet parts and their committed prefix remain reusable.
-  `azblob.TestDurableLegacySpillUpgrade` exercises fixed revision-1 Azure files and relists the suffix.
+  Disposable spill files keep the version-1 frames above. The durable row codec revision is 1; a file whose header names another codec or revision is rejected as
+  `rejected.codec` and its intervals are relisted.
 - **The ledger** (`spill/durable/ledger`) is a file of its own, not journal frames: the part journal keeps
   its single committer and its strict corruption rule, and no cache failure touches it. Its first frame is
   the magic, its version, the run UUID and the identity digest; then `sealed {file_id, cs, ce, ce_open,

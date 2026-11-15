@@ -150,8 +150,10 @@ type Stats struct {
 	SpillRefusedTime   time.Duration
 	SpillRefusedSpells int64
 	// SpillMax is the spill cap in effect at the end (Options.SpillMax,
-	// raised as it followed the disk); SpillMaxRaised the times it rose.
-	SpillMax, SpillMaxRaised int64
+	// raised as it followed the disk); SpillMaxRaised the times it rose;
+	// SpillMaxRechecks the follower's reads of the free space while the
+	// cap held the run back, SpillMaxRecheckRaised those that raised it.
+	SpillMax, SpillMaxRaised, SpillMaxRechecks, SpillMaxRecheckRaised int64
 	// FrontierWait is the time the drainer waited for the range it needs
 	// next while a worker was still listing it (the slow-frontier cost).
 	// BudgetWait is the time emitters and workers with ranges queued waited
@@ -839,6 +841,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles, st.SpillOpens = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load(), o.sp.opens.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
 		st.SpillMax, st.SpillMaxRaised = o.sp.max.Load(), o.sp.raised.Load()
+		st.SpillMaxRechecks, st.SpillMaxRecheckRaised = o.sp.rechecks.Load(), o.sp.recheckRaised.Load()
 		st.SpillRefusedTime, st.SpillRefusedSpells, _ = o.sp.refusedTime()
 		st.SpillHandles = o.sp.h.stats()
 		st.SpillFrameBytes, st.SpillFrameRows = o.sp.frameBytes.quantiles(), o.sp.frameRows.quantiles()
@@ -894,6 +897,9 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		}
 		sp.wake, sp.verify, sp.spilling = wake, opt.SpillVerify, opt.Spilling
 		sp.share = opt.SpillShare
+		if sp.share > 0 {
+			sp.raisedCh = make(chan struct{}, 1)
+		}
 		sp.g = o.g
 		o.g.spillMax.Store(opt.SpillMax)
 		o.g.spillReserve.Store(opt.SpillReserve)
@@ -947,6 +953,22 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			event("waker-stopped")
 		}
 	}
+	stopFollower := func() {}
+	if o.sp != nil && o.sp.share > 0 {
+		// A cap that follows the disk: its follower rechecks the free
+		// space while the cap holds the run back and wakes the waiters
+		// when the cap rises (spiller.follower).
+		quit, done := make(chan struct{}), make(chan struct{})
+		sp := o.sp
+		go func() {
+			defer close(done)
+			sp.follower(quit, wake)
+		}()
+		stopFollower = func() {
+			close(quit)
+			<-done
+		}
+	}
 	if opt.Shared != nil {
 		opt.Shared.setWake(wake)
 	}
@@ -971,6 +993,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			opt.Shared.setWake(nil)
 		}
 		stopWaker()
+		stopFollower()
 		if o.sp != nil {
 			o.sp.close()
 		}

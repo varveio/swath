@@ -163,7 +163,7 @@ Performance:
       --spill-budget SIZE     fixed cap on spill (default: follows the spill disk's free space)
                                 By default spill may use the spill filesystem's free space after a
                                 reserve (half of it unless the dataset is in a bucket, as the output
-                                shares it), re-read when a frame would be refused, so a disk grown
+                                shares it), re-read while it holds listing back, so a disk grown
                                 under a live run is used. Set it when the filesystem is shared with
                                 other work. Past it, or at the reserve, listing waits instead of
                                 spilling.

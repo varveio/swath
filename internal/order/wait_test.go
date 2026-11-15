@@ -630,3 +630,53 @@ func TestDrainerExpandedLeadIsBounded(t *testing.T) {
 		t.Fatalf("%d rows", o.rows)
 	}
 }
+
+// followFast shortens the follower's cadence for t (followEvery), and
+// makes the spill filesystem's free space the returned counter's.
+func followFast(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	every, old := followEvery, freeBytes
+	t.Cleanup(func() { followEvery, freeBytes = every, old })
+	followEvery = 5 * time.Millisecond
+	free := &atomic.Int64{}
+	freeBytes = func(string) int64 { return free.Load() }
+	return free
+}
+
+// TestRefusedSpillWakesOnGrowth: under a cap that follows the disk, an
+// emitter whose frame was refused waits at publish and a worker with a
+// range queued at admission, and nothing returns credit; the filesystem
+// then grows, with no other stimulus: the follower's recheck raises the
+// cap and wakes both, the emitter spills and the worker claims. Without
+// the follower's cadence and its wake both sleep on.
+func TestRefusedSpillWakesOnGrowth(t *testing.T) {
+	ws := waits(t)
+	free := followFast(t)
+	free.Store(1)
+	p := newCtl()
+	o := testRun(t, p, Options{Budget: 1, SpillDir: t.TempDir(), SpillMax: 1, SpillShare: 1})
+	o.buffered = 1
+	n := &node[string, tp]{r: "x", state: expanding}
+	done := publishing(o, n, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "k"}}, units: 1}}, 1)
+	expectWait(t, ws, waitPublish)
+	bg(o, o.worker)
+	o.mu.Lock()
+	o.stack = []*node[string, tp]{{r: "y"}}
+	o.work.Broadcast()
+	o.mu.Unlock()
+	expectWait(t, ws, waitAdmission)
+	if o.sp.refused.Load() != 1 || o.sp.raised.Load() != 0 {
+		t.Fatalf("refused %d, raised %d", o.sp.refused.Load(), o.sp.raised.Load())
+	}
+	free.Store(1 << 30) // the disk grown under the live run
+	if err := expect(t, done, "disk growth"); err != nil {
+		t.Fatal(err)
+	}
+	if r := expect(t, p.started, "claim"); r != "y" {
+		t.Fatalf("claimed %q", r)
+	}
+	p.ch("y") <- op{end: true}
+	if len(n.items) != 1 || n.items[0].spill == nil || o.sp.max.Load() != 1<<30 || o.sp.recheckRaised.Load() != 1 || o.sp.rechecks.Load() < 1 {
+		t.Fatalf("items %d, cap %d, rechecks %d (%d raised)", len(n.items), o.sp.max.Load(), o.sp.rechecks.Load(), o.sp.recheckRaised.Load())
+	}
+}

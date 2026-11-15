@@ -1,4 +1,4 @@
-report_version 13
+report_version 1
 args_hash string
 attempt.id string
 attempt.started time
@@ -255,6 +255,8 @@ resources.spill.logical_bytes int64
 resources.spill.max_by string
 resources.spill.max_bytes int64
 resources.spill.max_raised int64
+resources.spill.max_recheck_raised int64
+resources.spill.max_rechecks int64
 resources.spill.opens int64
 resources.spill.peak_bytes int64
 resources.spill.peak_readers int64

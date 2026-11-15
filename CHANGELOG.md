@@ -5,14 +5,13 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the run report is at `report_version` 13. The report fields the entries below name are new in it.
 - Go port: the default spill cap follows the disk. Without `--spill-budget` spill may use the spill filesystem's
   free space after the reserve: all of it for a dataset in a bucket, whose parts are uploaded from memory, and
   half of it otherwise (the parts, the text file, or for a stream other programs' temporary files share the
-  filesystem); a frame the cap would refuse re-reads the free space,
-  so a disk grown under a live run (a cloud disk resized and its filesystem grown online) is used without a
-  restart. `--spill-budget` is a fixed cap. The run report adds `resources.spill.max_by`, `start_max_bytes` and
-  `max_raised`; `max_bytes` is the cap in effect at the end.
+  filesystem); a frame the cap would refuse rereads the free space, and so does the run every 2 s while the
+  cap holds it back, so a disk grown under a live run (a cloud disk resized and its filesystem grown online) is used without a
+  restart. `--spill-budget` is a fixed cap. The run report adds `resources.spill.max_by`, `start_max_bytes`,
+  `max_raised`, `max_rechecks` and `max_recheck_raised`; `max_bytes` is the cap in effect at the end.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the

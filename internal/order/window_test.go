@@ -331,6 +331,73 @@ func TestWindowSpillCapHeld(t *testing.T) {
 	}
 }
 
+// TestWindowFollowsGrownDisk: under a cap that follows the disk, a stalled
+// frontier holds the window at the cap (workers wait at the window, no
+// frame refused, so no frame rereads the free space); the filesystem
+// grows while the frontier is still held, and the follower's recheck
+// raises the cap and wakes the window, which admits further tiles with no
+// other stimulus; released, the run lists every key. The filesystem is the
+// test's: its size less the live spill is the free space.
+func TestWindowFollowsGrownDisk(t *testing.T) {
+	followFast(t)
+	const capBytes = 64 << 10
+	g := &Gauges{}
+	var size atomic.Int64
+	size.Store(capBytes)
+	freeBytes = func(string) int64 { return size.Load() - g.spill.n.Load() }
+	p := newPlanned(300, 100, 50)
+	release, steady := make(chan struct{}), make(chan struct{})
+	p.hold[0] = release
+	var once sync.Once
+	hookWait = func(site string) {
+		// Every tile admitted but the held one listed through, and a
+		// worker at the window: nothing else moves.
+		if site == waitWindow && p.finished.Load() > 2 && p.finished.Load() == int64(p.admitted()-1) {
+			once.Do(func() { close(steady) })
+		}
+	}
+	defer func() { hookWait = nil }()
+	type result struct {
+		st   Stats
+		keys []string
+		err  error
+	}
+	res := make(chan result, 1)
+	go func() {
+		st, keys, err := runPlanned(t, p, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), SpillMax: capBytes, SpillShare: 1, Gauges: g})
+		res <- result{st, keys, err}
+	}()
+	select {
+	case <-steady:
+	case <-time.After(30 * time.Second):
+		close(release)
+		<-res
+		t.Fatal("the window never held the run")
+	}
+	held := p.admitted()
+	size.Store(1 << 40) // the disk grown under the live run
+	deadline := time.Now().Add(10 * time.Second)
+	for p.admitted() == held {
+		if time.Now().After(deadline) {
+			close(release)
+			<-res
+			t.Fatalf("no tile admitted past %d after the disk grew", held)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	r := <-res
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !slices.Equal(r.keys, p.keys()) {
+		t.Fatalf("%d keys, want %d", len(r.keys), len(p.keys()))
+	}
+	if st := r.st; st.SpillRefused != 0 || st.SpillMaxRecheckRaised == 0 || st.SpillMax <= capBytes || st.Window.Waits[WindowRows]+st.Window.Waits[WindowSpill] == 0 {
+		t.Fatalf("refused %d, cap %d raised %d times (%d by %d rechecks), window %+v", st.SpillRefused, st.SpillMax, st.SpillMaxRaised, st.SpillMaxRecheckRaised, st.SpillMaxRechecks, st.Window)
+	}
+}
+
 // TestWindowTarget: with a disk and a budget that hold far more, the
 // window is its target (windowTarget: bound_by rows), or the rows the plan
 // sets (the diag knob: bound_by set), the tiles held never charging more;

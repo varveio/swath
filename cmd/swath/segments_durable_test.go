@@ -154,7 +154,7 @@ func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Requ
 // spill-replay-frame) and resumed again, and a resume whose certificate
 // scans outlast the stall timeout is not stopped as stuck. A segment that could not read a
 // durable file fails the run (the offset reader opens it through the output
-// root and checks its version-2 CRC); nothing falls back to the serial
+// root and checks its CRC); nothing falls back to the serial
 // drain silently.
 func TestSegmentsReplayDurableFiles(t *testing.T) {
 	if testing.Short() {
