@@ -23,7 +23,6 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
@@ -153,7 +152,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
 	// A tree listed at the names tier has no link counts: its files count
 	// under every name, as a live names-tier swath du counts them.
-	names := m.Source != nil && m.Source.Metadata != nil && *m.Source.Metadata == localfs.Names.String()
+	names := info.NamesTier != "" && m.Source != nil && m.Source.Metadata != nil && *m.Source.Metadata == info.NamesTier
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
 		Primary: primaryFigure(&o)}
 	o.filter.Base = origin
