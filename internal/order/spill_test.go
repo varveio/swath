@@ -281,13 +281,16 @@ func TestSpillDiskBudget(t *testing.T) {
 	// A cap that follows the disk, started at the same limit on a disk
 	// that has grown since: its first frame past the limit re-reads the
 	// free space and the cap rises instead of refusing, with the same
-	// output; the gauge and Stats carry the cap in effect.
+	// output; the gauge and Stats carry the cap in effect. Frames past the
+	// limit at once may each raise it, at most one a worker: each counts
+	// the others' reserved bytes as spill already on the disk, whose free
+	// space here does not fall (ubuntu-24.04-arm CI, 2026-11-15: 2).
 	old := freeBytes
 	defer func() { freeBytes = old }()
 	freeBytes = func(string) int64 { return 1 << 40 }
 	g := &Gauges{}
 	grown := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit, SpillShare: 1, Gauges: g}, false)
-	if grown.SpillRefused != 0 || grown.SpillMaxRaised != 1 || grown.SpillMax < 1<<40 || g.Snapshot().SpillMaxBytes != grown.SpillMax || grown.SpillPeak <= limit {
+	if grown.SpillRefused != 0 || grown.SpillMaxRaised < 1 || grown.SpillMaxRaised > workers || grown.SpillMax < 1<<40 || g.Snapshot().SpillMaxBytes != grown.SpillMax || grown.SpillPeak <= limit {
 		t.Fatalf("cap following the disk from %d: peak %d, refused %d, raised %d to %d (gauge %d)", limit, grown.SpillPeak, grown.SpillRefused,
 			grown.SpillMaxRaised, grown.SpillMax, g.Snapshot().SpillMaxBytes)
 	}
