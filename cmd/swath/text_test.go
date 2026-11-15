@@ -248,10 +248,10 @@ func TestColumns(t *testing.T) {
 // TestLocalTextEndToEnd: a local tree prints as text rows, to stdout and to a
 // .tsv or .jsonl file, under the local schema's names; with --metadata
 // names the fields it does not read are null in TSV and JSONL and "-" in
-// the table, whose times are UTC whatever TZ says; --no-header leaves out
-// TSV's header line. A run with -o prints nothing on stdout.
+// the table, whose times are local, its heading naming the zone;
+// --no-header leaves out TSV's header line. A run with -o prints nothing on
+// stdout.
 func TestLocalTextEndToEnd(t *testing.T) {
-	t.Setenv("TZ", "America/New_York")
 	root, _ := depthTree(t)
 	var out bytes.Buffer
 	if err := run(context.Background(), []string{root, "--no-stats"}, &out, false); err != nil {
@@ -277,7 +277,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tFILE\t",
 		"jsonl": `{"key":"a/b/f","size":null,"last_modified":null,"kind":"FILE",`,
-		"table": "-" + strings.Repeat(" ", 28) + "-  FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
+		"table": "-  FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
@@ -285,8 +285,11 @@ func TestLocalTextEndToEnd(t *testing.T) {
 		}
 	}
 	out.Reset()
+	zone, _ := time.Now().Zone()
+	local := time.Date(2026, 1, 2, 4, 4, 5, 0, time.UTC).Local().Format(time.DateTime)
 	if err := run(context.Background(), []string{root, "--format", "table", "--no-stats"}, &out, false); err != nil ||
-		!strings.HasPrefix(out.String(), "last_modified             size  kind          key\n") || !strings.Contains(out.String(), "\n2026-01-02T04:04:05Z       5 B  FILE          a/b/f\n") {
+		!strings.HasPrefix(out.String(), "last_modified ("+zone+")") || !strings.Contains(out.String(), "\n"+local+" ") ||
+		!strings.Contains(out.String(), "     5 B  FILE          a/b/f\n") {
 		t.Fatalf("table: %v\n%s", err, out.String())
 	}
 	out.Reset()

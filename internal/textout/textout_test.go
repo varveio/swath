@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/klauspost/compress/gzip"
@@ -81,10 +82,9 @@ func write(t *testing.T, cfg Config) []byte {
 // TestRowContract: the three formats over a schema's columns in its order
 // under its names: TSV with \N for a null and the TSV escapes, JSONL with
 // null and JSON's escapes, every time with six fraction digits in UTC; the
-// table's time in UTC to the second with its Z whatever TZ says, the size
-// in binary units, a null "-"; TSV's header line left out on request.
+// table's time in its zone, named in the heading, the size in binary
+// units, a null "-"; TSV's header line left out on request.
 func TestRowContract(t *testing.T) {
-	t.Setenv("TZ", "Asia/Kolkata")
 	tsv := "key\tsize\tlast_modified\tetag\tstorage_class\towner_id\tgeneration\n" +
 		"a/b.txt\t12\t2023-11-14T22:13:20.000000Z\te1\tSTANDARD\t\\N\t7\n" +
 		"tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\t0\t\\N\t\\N\t\\N\t\\N\t7\n" +
@@ -101,11 +101,11 @@ func TestRowContract(t *testing.T) {
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "last_modified             size  key\n" +
-		"2023-11-14T22:13:20Z      12 B  a/b.txt\n" +
-		"-                          0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
-		"2023-11-14T22:13:20Z  1.00 TiB  µ\n"
-	if got := string(write(t, Config{Format: Table})); got != table {
+	table := "last_modified (CET)      size  key\n" +
+		"2023-11-14 23:13:20      12 B  a/b.txt\n" +
+		"-                         0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
+		"2023-11-14 23:13:20  1.00 TiB  µ\n"
+	if got := string(write(t, Config{Format: Table, Loc: time.FixedZone("CET", 3600)})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
 	}
 }

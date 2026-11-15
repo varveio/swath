@@ -55,6 +55,9 @@ type Config struct {
 	Columns []string
 	// NoHeader leaves out TSV's header line.
 	NoHeader bool
+	// Loc is the table's time zone (nil: time.Local); TSV and JSONL are
+	// UTC.
+	Loc *time.Location
 	// Formatters is the goroutines formatting rows at once; below 2 the
 	// order stage formats them itself. Account, if set, is told the row
 	// bytes (schema.RowsBytes) of batches handed to them and not yet
@@ -350,16 +353,12 @@ func appendTime(dst []byte, micros int64) []byte {
 	return time.UnixMicro(micros).UTC().AppendFormat(dst, "2006-01-02T15:04:05.000000Z07:00")
 }
 
-// tableTime is a table's time layout: UTC to the second, with its Z
-// (2026-11-15T12:31:10Z), whatever the reader's zone, so a row copied out
-// of the table still says which time it is.
-const tableTime = "2006-01-02T15:04:05Z07:00"
+// tableTime is a table's time layout, to the second in the reader's zone,
+// which the heading names.
+const tableTime = "2006-01-02 15:04:05"
 
-// tableTimeWidth is a table time's width.
-const tableTimeWidth = len("2006-01-02T15:04:05Z")
-
-func appendTableTime(dst []byte, micros int64) []byte {
-	return time.UnixMicro(micros).UTC().AppendFormat(dst, tableTime)
+func appendLocal(dst []byte, micros int64, loc *time.Location) []byte {
+	return time.UnixMicro(micros).In(loc).AppendFormat(dst, tableTime)
 }
 
 // appendJSONString appends s, which is UTF-8, as a JSON string, escaped as

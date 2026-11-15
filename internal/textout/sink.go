@@ -39,8 +39,8 @@ const (
 // the schema stores it. TSV is one header line of the names and a line of
 // fields per row (appendTSV); JSONL one object per row, its members in
 // column order, a null JSON null, and a string or binary value that is not
-// UTF-8 as NAME_base64. The table, for people, is the time in UTC to the
-// second, the size in binary units, the kind and version columns where the
+// UTF-8 as NAME_base64. The table, for people, is the time in local time
+// to the second, its heading naming the zone, the size in binary units, the kind and version columns where the
 // schema has them, and the key last; a missing time or size is "-".
 type Sink[P any] struct {
 	o     *Out
@@ -98,7 +98,7 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 	case o.cfg.Format == Table && len(o.cfg.Columns) > 0:
 		return nil, errors.New("text output: the table's columns are fixed; columns are chosen for TSV and JSONL")
 	case o.cfg.Format == Table:
-		k.table = newTable(s, vers)
+		k.table = newTable(s, vers, o.cfg.Loc)
 		o.cfg.Formatters = 1 // its widths grow with the rows it formats
 		if _, err := o.bw.Write(k.table.header(nil)); err != nil {
 			return nil, err
@@ -271,6 +271,9 @@ type table[P any] struct {
 	vers        *schema.Versions[P]
 	idName      string
 	kindW, idW  int
+	loc         *time.Location
+	timeHeading string // last_modified (CET): the zone's abbreviation
+	timeW       int
 }
 
 // The table's headings beyond the schema's column names: a versions
@@ -284,8 +287,13 @@ const (
 	missingCell = "-"
 )
 
-func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P]) *table[P] {
-	t := &table[P]{vers: vers, kindW: len(kindColumn)}
+func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Location) *table[P] {
+	if loc == nil {
+		loc = time.Local
+	}
+	zone, _ := time.Now().In(loc).Zone()
+	t := &table[P]{vers: vers, kindW: len(kindColumn), loc: loc, timeHeading: mtimeColumn + " (" + zone + ")"}
+	t.timeW = max(len(t.timeHeading), len(tableTime))
 	for _, c := range s.Columns {
 		switch c.Name {
 		case mtimeColumn:
@@ -307,7 +315,7 @@ func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P]) *table[P] {
 }
 
 func (t *table[P]) header(b []byte) []byte {
-	b = appendLeft(b, mtimeColumn, tableTimeWidth)
+	b = appendLeft(b, t.timeHeading, t.timeW)
 	b = appendPadded(append(b, "  "...), []byte(sizeColumn), sizeWidth)
 	if t.kind != nil {
 		b = appendLeft(append(b, "  "...), kindColumn, t.kindW)
@@ -326,11 +334,11 @@ func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 	p := &r.Data
 	start := len(b)
 	if v, ok := get(t.mtime, p); ok {
-		b = appendTableTime(b, v)
+		b = appendLocal(b, v, t.loc)
 	} else {
 		b = append(b, missingCell...)
 	}
-	b = pad(b, start, tableTimeWidth)
+	b = pad(b, start, t.timeW)
 	var num [24]byte
 	n := append(num[:0], missingCell...)
 	if v, ok := get(t.size, p); ok {

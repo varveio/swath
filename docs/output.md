@@ -95,20 +95,21 @@ No column name ends in `_base64`.
 
 ### The table
 
-For reading on a terminal: the time in UTC to the second, with its `Z`, whatever the machine's time zone, the
-size in binary units, the local tree's `kind`, the version columns with `--all-versions`, and the key last,
-escaped as in TSV. A missing value is `-`.
+For reading on a terminal: the time to the second in local time (`TZ` sets the zone), its heading naming the
+zone by its abbreviation (`last_modified (CET)`), the size in binary units, the local tree's `kind`, the version
+columns with `--all-versions`, and the key last, escaped as in TSV. A missing value is `-`. TSV, JSONL and the
+dataset keep times in UTC.
 
 ```text
-$ swath list /data/photos
-last_modified             size  kind          key
-2026-11-02T09:30:00Z  4.00 KiB  DIR           2025/
-2026-03-01T10:00:00Z   293 KiB  FILE          2025/a.jpg
-2026-11-02T09:30:00Z  4.00 KiB  DIR           2025/raw/
-2026-03-01T10:00:00Z   117 KiB  FILE          2025/raw/b.cr2
-2026-11-02T09:30:00Z  4.00 KiB  DIR           2026/
-2026-11-02T09:30:00Z  48.8 KiB  FILE          2026/c.jpg
-2026-11-02T09:30:00Z       3 B  FILE          notes.txt
+$ TZ=UTC swath list /data/photos
+last_modified (UTC)      size  kind          key
+2026-11-02 09:30:00  4.00 KiB  DIR           2025/
+2026-03-01 10:00:00   293 KiB  FILE          2025/a.jpg
+2026-11-02 09:30:00  4.00 KiB  DIR           2025/raw/
+2026-03-01 10:00:00   117 KiB  FILE          2025/raw/b.cr2
+2026-11-02 09:30:00  4.00 KiB  DIR           2026/
+2026-11-02 09:30:00  48.8 KiB  FILE          2026/c.jpg
+2026-11-02 09:30:00       3 B  FILE          notes.txt
 ```
 
 `--columns` and `--no-header` do not apply to the table; with either on a terminal, `auto` prints TSV.

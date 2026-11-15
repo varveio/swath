@@ -21,8 +21,8 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: the `swath du` table shows one figure, `size`, or `on disk` with `--allocated`, the counts with
   grouped digits, no time, and each path indented two blanks a level; an unknown figure is `-`, a partial one
   `>= ` its lower bound. For a local tree a line on stderr under the table gives the totals of both figures
-  (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table prints times in UTC with a
-  `Z` (`2026-11-15T12:31:10Z`) whatever `TZ` says, and `-` for a missing value.
+  (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table heads its local times
+  with the zone's abbreviation (`last_modified (CET)`) in place of `(local)`, and prints `-` for a missing value.
 - Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
 - Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
   network filesystems) records it as null, not 0.

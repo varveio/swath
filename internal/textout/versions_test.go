@@ -8,6 +8,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source/gcs"
@@ -22,6 +23,9 @@ func text[P any](t *testing.T, cfg textout.Config, s *schema.Schema[P], rows []s
 	t.Helper()
 	var buf bytes.Buffer
 	cfg.Stdout = &buf
+	if cfg.Format == textout.Table && cfg.Loc == nil {
+		cfg.Loc = time.UTC
+	}
 	o, err := textout.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -81,15 +85,15 @@ func TestVersionsRows(t *testing.T) {
 // is the latest, and a delete marker where the schema has them; a delete
 // marker's size is "-".
 func TestVersionsTable(t *testing.T) {
-	s3want := "last_modified             size  version_id  latest  delete_marker  key\n" +
-		"2023-11-14T22:13:20Z       1 B  new         true    false          k\n" +
-		"2023-11-14T22:13:20Z         -  null        false   true           k\n"
+	s3want := "last_modified (UTC)      size  version_id  latest  delete_marker  key\n" +
+		"2023-11-14 22:13:20       1 B  new         true    false          k\n" +
+		"2023-11-14 22:13:20         -  null        false   true           k\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &s3.VersionsSchema, s3versions); got != s3want {
 		t.Errorf("S3:\n%q\nwant\n%q", got, s3want)
 	}
-	gcswant := "last_modified             size  generation  latest  key\n" +
-		"1970-01-01T00:00:00Z       1 B  1700000000000001  false   k\n" +
-		"-                          2 B  1700000000000002  true    k\n"
+	gcswant := "last_modified (UTC)      size  generation  latest  key\n" +
+		"1970-01-01 00:00:00       1 B  1700000000000001  false   k\n" +
+		"-                         2 B  1700000000000002  true    k\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &gcs.GenerationSchema, gcsGenerations); got != gcswant {
 		t.Errorf("GCS:\n%q\nwant\n%q", got, gcswant)
 	}

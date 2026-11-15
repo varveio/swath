@@ -43,7 +43,7 @@ rc.2 release binary and a build of the code these pages describe.
 | `--max-duration` ends a text-file run | the statistics count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |
 
 These pages also describe four changes not checked here by running rc.2: `swath du`'s rows carry both byte
-figures (`size`, `allocated_bytes`) and `max_last_modified`, and the tables print times in UTC
+figures (`size`, `allocated_bytes`) and `max_last_modified`, and the list table names its time zone
 ([Output](output.md#du-rows)); a `swath du` of a million rows or
 more on a terminal ends with a hint to save an inventory and total it with `--from-dataset`; a run stopped by
 Ctrl-C or `SIGTERM` now ends by that signal (the shell still reports 130 or 143), where rc.2 exited with the
