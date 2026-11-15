@@ -109,10 +109,16 @@ type spillWaitError struct{ msg string }
 func (e *spillWaitError) Error() string        { return e.msg }
 func (e *spillWaitError) Is(target error) bool { return target == errSpillWait }
 
-// signalError is a run stopped by a signal.
+// signalError is a run stopped by a signal: an interrupt (Ctrl-C), or
+// SIGTERM by its name, as kill and a supervisor call it.
 type signalError struct{ sig os.Signal }
 
-func (e *signalError) Error() string { return "stopped by " + e.sig.String() }
+func (e *signalError) Error() string {
+	if e.sig == syscall.SIGTERM {
+		return "stopped by SIGTERM"
+	}
+	return "stopped by " + e.sig.String()
+}
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {

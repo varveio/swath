@@ -37,7 +37,7 @@ import (
 // totals', the output's, the filters' and the terminal's that rows already
 // listed can answer. Every other flag shapes a listing (a provider's, a
 // limit, the run report) and is refused, never ignored.
-var datasetFlags = []string{"from-dataset", "depth", "sort", "max-prefixes", "allocated", "apparent-size", "count-links", "max-inodes", "format", "no-header",
+var datasetFlags = []string{"from-dataset", "depth", "max-depth", "sort", "max-prefixes", "allocated", "apparent-size", "count-links", "max-inodes", "format", "no-header",
 	"include", "exclude", "include-regex", "exclude-regex", "min-size", "max-size", "modified-since", "modified-until", "storage-class",
 	"verbose", "quiet", "color", "log-format", "no-progress", "no-stats"}
 

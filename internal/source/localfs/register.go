@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,7 +32,22 @@ import (
 // The local filesystem takes roots without a scheme.
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info}, Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals, CheckFilter: checkFilter,
-		Title: "Local", Example: "/data", Usage: "a local directory or file"})
+		Title: "Local", Example: "/data", Usage: "a local directory or file", Suggest: suggest})
+}
+
+// suggest is the local path of a file:// URL on this host
+// (registry.Factory.Suggest): file:///data/x is /data/x, and
+// file:///C:/x is C:\x on Windows.
+func suggest(root string) (string, bool) {
+	u, err := url.Parse(root)
+	if err != nil || !strings.EqualFold(u.Scheme, "file") || u.Host != "" && u.Host != "localhost" || u.Path == "" {
+		return "", false
+	}
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p), true
 }
 
 // workersPerCPU and maxWorkers bound the default --workers for a local tree:
@@ -70,7 +86,7 @@ func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 		Usage: "what is read per entry (statx adds created_at; Linux)"})
 	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
 	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
-	source.Define(f, source.Flag{Name: "one-file-system", Familiar: []string{"one-filesystem", "x"}, Value: source.Switch(&o.OneFilesystem),
+	source.Define(f, source.Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: source.Switch(&o.OneFilesystem),
 		Usage: "do not walk into a mount point below the root, as du -x"})
 	return o
 }

@@ -6,6 +6,8 @@ package gcs
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/spf13/pflag"
 
@@ -19,10 +21,39 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, GenerationSchema.Info}, Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, GenerationSchema.Info}, Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix, Suggest: suggest,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Operational: []string{"gcs-credentials-file"},
 		Title:       "GCS", Example: "gs://bucket", Usage: "gs://bucket[/prefix]"})
+}
+
+// suggest is the gs:// root of a source given as gcs:// or as a GCS https
+// URL (storage.googleapis.com/BUCKET/KEY, BUCKET.storage.googleapis.com/KEY,
+// storage.cloud.google.com/BUCKET/KEY) (registry.Factory.Suggest).
+func suggest(root string) (string, bool) {
+	u, err := url.Parse(root)
+	if err != nil {
+		return "", false
+	}
+	bucket, key := u.Host, u.Path
+	switch scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()); {
+	case scheme == "gcs":
+	case scheme != "https" && scheme != "http":
+		return "", false
+	case host == "storage.googleapis.com" || host == "storage.cloud.google.com":
+		bucket, key, _ = strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
+	case strings.HasSuffix(host, ".storage.googleapis.com"):
+		bucket = strings.TrimSuffix(host, ".storage.googleapis.com")
+	default:
+		return "", false
+	}
+	if bucket == "" {
+		return "", false
+	}
+	if key = strings.TrimPrefix(key, "/"); key != "" {
+		bucket += "/" + key
+	}
+	return "gs://" + bucket, true
 }
 
 // flagged is the GCS flag group's value: the GCS options, the store

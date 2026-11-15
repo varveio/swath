@@ -114,12 +114,12 @@ so in its manifest.
   Matched as --include is. dir/ drops a directory's own row, dir/\*\* the rows below it. Local trees skip traversal below directories covered by a terminal /\*\*; other excludes only filter rows.
 
 - <a id="option-include-regex"></a>[`--include-regex REGEX`](#option-include-regex)\
-  keep keys this RE2 regex matches anywhere in the full key (repeatable)
+  keep keys this RE2 regex matches anywhere in the key (repeatable)
 
-  The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does.
+  Matched against the key below SOURCE, as a glob is, on every source: ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does.
 
 - <a id="option-exclude-regex"></a>[`--exclude-regex REGEX`](#option-exclude-regex)\
-  drop keys this RE2 regex matches anywhere in the full key (repeatable)
+  drop keys this RE2 regex matches anywhere in the key (repeatable)
 
 - <a id="option-min-size"></a>[`--min-size SIZE`](#option-min-size)\
   keep objects (local: entries) of at least this size (1K, 1.5GiB)
@@ -132,7 +132,7 @@ so in its manifest.
 - <a id="option-modified-since"></a>[`--modified-since TIME`](#option-modified-since)\
   keep objects or entries modified at or after TIME (2026-01-01, 7d)
 
-  An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names.
+  2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time (TZ), as the tables print it; with Z or an offset, that zone. A duration (7d, 12h) is that long before the run started. Either is recorded as the UTC time it names.
 
 - <a id="option-modified-until"></a>[`--modified-until TIME`](#option-modified-until)\
   keep objects or entries modified at or before this time
@@ -257,7 +257,7 @@ so in its manifest.
 - <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
   do not read symbolic links' targets
 
-- <a id="option-one-file-system"></a>[`--one-file-system`](#option-one-file-system)\
+- <a id="option-one-file-system"></a>[`-x, --one-file-system`](#option-one-file-system)\
   do not walk into a mount point below the root, as du -x
 
 ### Performance
@@ -292,7 +292,7 @@ so in its manifest.
 
   0: by size only. Lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing.
 
-- <a id="option-part-rotation-max-rows"></a>[`--part-rotation-max-rows N`](#option-part-rotation-max-rows)\
+- <a id="option-part-max-rows"></a>[`--part-max-rows N`](#option-part-max-rows)\
   also close a part at N rows (0: by size and --part-interval only)
 
   Set it when readers want parts of a bounded row count; it is fixed for the run.
@@ -354,7 +354,7 @@ so in its manifest.
 - <a id="option-progress"></a>[`--progress`](#option-progress)\
   show progress on stderr (default: a terminal that rows do not share)
 
-  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal.
+  Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased.
 
 - <a id="option-no-progress"></a>[`--no-progress`](#option-no-progress)\
   no live progress on stderr
@@ -449,18 +449,20 @@ Filters:
                                 Matched as --include is. dir/ drops a directory's own row, dir/**
                                 the rows below it. Local trees skip traversal below directories
                                 covered by a terminal /**; other excludes only filter rows.
-      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
-                                The full key, SOURCE's object-store prefix included (a glob matches
-                                the key below SOURCE). Any include, glob or regex, keeps a key. ^
-                                with a literal prefix narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the full key (repeatable)
+      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the key (repeatable)
+                                Matched against the key below SOURCE, as a glob is, on every source:
+                                ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with
+                                a literal prefix narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the key (repeatable)
       --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
                                 Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
                                 KB, MB, GB, TB (decimal), any case.
       --max-size SIZE         keep objects or entries of at most this size
       --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                                An offset or Z; UTC without one. A duration (7d, 12h) is that long
-                                before the run started, recorded as the time it names.
+                                2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time
+                                (TZ), as the tables print it; with Z or an offset, that zone. A
+                                duration (7d, 12h) is that long before the run started. Either is
+                                recorded as the UTC time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
       --storage-class NAME[,NAME...]
                               keep objects in these storage classes (STANDARD,GLACIER; repeatable)
@@ -548,7 +550,7 @@ Local:
                               what is read per entry (statx adds created_at; Linux) (default stat)
       --no-dirs               omit the directories' rows (kind dir)
       --no-link-target        do not read symbolic links' targets
-      --one-file-system       do not walk into a mount point below the root, as du -x
+  -x, --one-file-system       do not walk into a mount point below the root, as du -x
 
 Performance:
   -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
@@ -588,8 +590,7 @@ Performance:
                                 (it bounds how long rows wait in an open part, not how much a resume
                                 repeats: a closed part still publishes in order); 0 for part
                                 boundaries independent of timing.
-      --part-rotation-max-rows N
-                              also close a part at N rows (0: by size and --part-interval only)
+      --part-max-rows N       also close a part at N rows (0: by size and --part-interval only)
                                 Set it when readers want parts of a bounded row count; it is fixed
                                 for the run.
       --seed-from PATH        object stores: start from a previous listing's key distribution
@@ -644,7 +645,8 @@ Reporting:
                                 With -qq the exit code and the reports stand alone.
       --progress              show progress on stderr (default: a terminal that rows do not share)
                                 Not by default with -q or -v (which appends progress records), nor
-                                while rows go to the same terminal.
+                                while rows go to the same terminal, where swath list refuses it;
+                                swath du's table comes after the line is erased.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress

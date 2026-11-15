@@ -19,7 +19,7 @@ swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
 | Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found; at least 128 KiB (less is refused, exit 2) | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `invocation.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by an encoder allowance of 1/16 of memory (at most 1 GiB, whatever `--sort-buffer` says), each encoder priced at the schema's calculated working set plus, writing to a bucket, its upload buffer (a GCS chunk, an S3 part or an Azure block), and by the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
 | Spill disk | `--spill-budget` | 0: the spill filesystem's free space after the reserve for a dataset in a bucket, half of it otherwise (the output, or a stream's other programs in `$TMPDIR`, share it), following the disk | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's in `$TMPDIR/swath-ATTEMPT-RANDOM/spill/`, as a stream has no directory; a listed tree holding either leaves it out; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The default cap is re-derived from the free space when it would refuse a frame, and every 2 s while it holds the run back, so a filesystem grown under the running process is used (report: `resources.spill.max_by`, `start_max_bytes`, `max_bytes`, `max_raised`); a `--spill-budget` is fixed. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
-| Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
+| Part size | `--part-size`, `--part-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
 
 ### Disk
 
@@ -147,7 +147,9 @@ uninterrupted one.
 resume recovered), live and average keys/s, parts, requests in flight, elapsed time, API calls and a cost
 estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
 (`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
-automatic progress and the warnings off, `--no-progress` turns progress off everywhere. At the end, runs over
+automatic progress and the warnings off, `--no-progress` turns progress off everywhere. While `swath list`'s
+rows go to the same terminal there is no line, and `--progress` is refused; `swath du` draws it while it lists
+and erases it before its table. At the end, runs over
 1.5 s, runs that wrote output and runs that did not complete print the statistics on stderr (objects,
 time, keys/s, API calls, mean and peak in flight, throttles and retries when any, the estimate, the parts or
 file written, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
@@ -410,7 +412,7 @@ versions, and a soft-deleted one only `is_deleted` rows. A filter can
 remove a key's latest version, so in a filtered dataset read `is_latest` per row instead of
 by position.
 
-**Parts never split a key.** A part's size target, `--part-rotation-max-rows` and `--part-interval` cut at the
+**Parts never split a key.** A part's size target, `--part-max-rows` and `--part-interval` cut at the
 next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a
 key again. The interval no longer bounds how long a part stays open while one key's rows are still arriving.
 

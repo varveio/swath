@@ -81,7 +81,7 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 		Long:  "With -qq the exit code and the reports stand alone."})
 	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
 		Usage: "show progress on stderr (default: a terminal that rows do not share)",
-		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal."})
+		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased."})
 	source.Define(f, source.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
 	source.Define(f, source.Flag{Name: "progress-interval", Value: source.Duration(&t.interval), Metavar: "DURATION", Group: g,
 		Usage: "how often progress is printed (at least 1s); implies --progress",
@@ -336,6 +336,7 @@ type display struct {
 	started  time.Time // the invocation's start: the elapsed time shown
 	noun     nouns
 	dataset  bool // the run writes a dataset: its parts are shown
+	erase    bool // rows follow on the same terminal: stop clears the line
 
 	samples chan listing.ProgressSnapshot
 	stopped chan struct{}
@@ -369,6 +370,13 @@ func progressPrefs(t termOptions, tty, rows bool, width int, termEnv string) (sh
 	}
 	redraw = show && tty && termEnv != "dumb" && width >= minUsableWidth && t.verbose == 0 && enableVT()
 	return show, redraw
+}
+
+// progressForced says the command line asks for live progress
+// (--progress, or --progress-interval without --no-progress), whatever
+// shares the terminal.
+func (t termOptions) progressForced() bool {
+	return t.progress.set && t.progress.on || !t.progress.set && t.interval > 0
 }
 
 // progressInterval is the record cadence: the flag, else 1 s redrawing and
@@ -448,8 +456,10 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 	}
 }
 
-// stop ends the display; a redrawn line is erased, so what follows on
-// stderr (the statistics, an error) starts on a clean line.
+// stop ends the display: the last redrawn line stays, ended by a newline,
+// so what follows on stderr (the statistics, an error) starts on a clean
+// line; with erase, rows follow on the same terminal (swath du's table)
+// and the line is cleared instead.
 func (d *display) stop() {
 	if d == nil {
 		return
@@ -457,7 +467,11 @@ func (d *display) stop() {
 	d.once.Do(func() {
 		close(d.stopped)
 		d.done.Wait()
-		d.out.finish()
+		if d.erase {
+			d.out.erase()
+		} else {
+			d.out.finish()
+		}
 	})
 }
 
@@ -519,6 +533,17 @@ func (c *stderrCoord) finish() {
 	defer c.mu.Unlock()
 	if c.line != "" {
 		note(c.w, "\n")
+	}
+	c.line, c.done = "", true
+}
+
+// erase ends the progress line for good and clears it, the cursor at the
+// start of the empty line.
+func (c *stderrCoord) erase() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.line != "" {
+		note(c.w, "\r"+eraseLine)
 	}
 	c.line, c.done = "", true
 }

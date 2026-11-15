@@ -159,12 +159,12 @@ after the run, may go there.
 A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits,
 `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects
 or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or
-`--part-rotation-max-rows` reaches it. A run that would open part 100,000 first publishes every earlier part,
+`--part-max-rows` reaches it. A run that would open part 100,000 first publishes every earlier part,
 then stops with exit 1, class `fatal`, `cause` `part_limit`, not resumable: the part size and row cap are frozen
 in the resume identity, so a resume would stop at the same place. Start over (`--overwrite`) with a larger
-`--part-size` or without `--part-rotation-max-rows`.
+`--part-size` or without `--part-max-rows`.
 
-`--part-rotation-max-rows N`'s cut depends on the rows only, so it is part of the resume identity, a resume
+`--part-max-rows N`'s cut depends on the rows only, so it is part of the resume identity, a resume
 reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part closed by size
 does); `resources.part_row_cuts` counts them. `--part-interval` is checked every eighth of the interval and
 does not close a part whose boundary a resume fixed.

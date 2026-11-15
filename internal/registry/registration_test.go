@@ -5,6 +5,7 @@ package registry
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestRegisterDuplicate(t *testing.T) {
 
 func TestLookupUnknownScheme(t *testing.T) {
 	const root = "unknown-registry-test://bucket/prefix"
-	if _, err := Lookup(root); err == nil || err.Error() != "unsupported source: no provider for unknown-registry-test://" {
+	if _, err := Lookup(root); err == nil || !strings.HasPrefix(err.Error(), "unsupported source unknown-registry-test://; SOURCE is ") || strings.Contains(err.Error(), root) {
 		t.Fatalf("unknown scheme: %v", err)
 	}
 }

@@ -280,7 +280,7 @@ func examples() (stores []string, local string) {
 
 // helpOf is the help text of a list command.
 func helpOf(cmd command) commandHelp {
-	src := "SOURCE is " + sourceForms() + "."
+	src := "SOURCE is " + registry.SourceForms() + "."
 	stores, local := examples()
 	a, b := stores[0], stores[min(1, len(stores)-1)]
 	switch {
@@ -304,7 +304,7 @@ func helpOf(cmd command) commandHelp {
 			examples: []string{"swath du " + a, "swath du -d 1 " + local, "swath du " + b + " --format jsonl", "swath du --from-dataset logs-inventory -d 2 --sort size"}}
 	}
 	return commandHelp{usage: []string{"list SOURCE [OPTIONS]", "ls SOURCE [OPTIONS]"},
-		about:    "Recursively list every entry below SOURCE: text rows on stdout, or an inventory with -o.",
+		about:    "Recursively list every entry below SOURCE: text rows on stdout, or a dataset with -o.",
 		detail:   "-o DIR writes a sorted Parquet dataset, -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) text rows into that file. " + src,
 		examples: []string{"swath list " + a + " -o logs-inventory", "swath list " + a + " | head", "swath list " + b + " -o rows.jsonl.zst"}}
 }
@@ -330,7 +330,6 @@ func usage(w io.Writer, f *pflag.FlagSet, cmd command, s helpStyle) {
 		fmt.Fprintf(&b, "\n"+shortTail, cmd.name())
 	case !cmd.diag:
 		b.WriteString("\nswath resume --help lists the options a resume may change.\n")
-		b.WriteString("Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.\n")
 	}
 	fmt.Fprint(w, b.String())
 }
@@ -398,7 +397,7 @@ func rootHelp(w io.Writer, s helpStyle) {
 	})
 	writeFlags(&b, keep, s, column(keep))
 	b.WriteString("\n")
-	s.para(&b, 0, "SOURCE is "+sourceForms()+". The options above may also come before COMMAND.")
+	s.para(&b, 0, "SOURCE is "+registry.SourceForms()+". The options above may also come before COMMAND.")
 	s.heading(&b, "Examples")
 	stores, local := examples()
 	for _, e := range []string{"swath list " + stores[0] + " -o logs-inventory", "swath list " + stores[0] + " | head", "swath du -d 1 " + local} {

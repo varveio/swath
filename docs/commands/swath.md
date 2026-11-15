@@ -69,15 +69,19 @@ See 'swath list --help'.
 
 An option that belongs to one provider carries its prefix (`--s3-region`, `--gcs-credentials-file`,
 `--azure-sas-token`) and is refused, with exit 2, for another provider's source. Options every object store
-shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`) are bare. An older
-spelling (`--endpoint`, `--profile`, `--region`) gets the same suggestion of the current name.
+shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`, `-x`) are bare. An older
+spelling (`--endpoint`, `--profile`, `--region`, 0.3's `--force-path-style` or `--idle-timeout`) gets the
+same suggestion of the current name, and a 0.3 option nothing replaces (`--compression`, `--output-type`)
+says what does its work. A value error names the option and the value as typed, then what is wanted:
+`swath: --min-size "1e3": want a size such as 1K, ...`. Every usage error ends with the help to read.
 
 A value that can carry a secret is never shown or recorded as typed: `--azure-sas-token`,
 `--s3-bearer-token-command`, and the user information, query or fragment of SOURCE, `--endpoint-url` or a URL
 given to `-o` are `[redacted]` in errors, logs, the report and the journal. Plain paths are shown as typed.
 
 `-h` prints a command's short help (the usage, the examples and the most used options), `--help` all of it.
-Both go to stdout and exit 0.
+Both go to stdout and exit 0; `swath` alone prints its own short help. `swath list` and `swath du` refuse `-h`
+given with anything else (exit 2): `du -h` users mean human-readable sizes, which the table already prints.
 
 ### Sizes and durations
 
@@ -236,7 +240,8 @@ What each one means and what to do: [Exit codes](../reference/exit-codes.md).
 | `TZ` | the time zone of the tables' local times |
 | `TMPDIR` | where text rows on stdout spill (see [Running swath](../running.md#sizing-a-run)) |
 | `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [Sources](../sources/README.md) |
-| `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE` | write Go CPU and allocation profiles to that file and beside it, split at the end of listing: `FILE.listing`, `FILE.tail` (CPU), `FILE.exit` (allocations); `SWATH_MEMPROFILERATE` sets the allocation sample rate ([phase profiles](../internals/diagnostics.md#phase-profiles)) |
+
+The development variables (profiles, engine switches) are in [Diagnostics](../internals/diagnostics.md#environment).
 
 ## See also
 

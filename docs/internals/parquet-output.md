@@ -158,7 +158,7 @@ It cuts them with the router's own rule once part 0 has frozen the ratio, so the
 interval closes no part from then on. Publication stays in ordinal order with the adjacency check, and the
 abort closes every segment's queue unpublished.
 
-**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. The router refuses to open part 100,000
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-max-rows` reaches it. The router refuses to open part 100,000
 (`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
 journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
 (`TestRouterRefusesPartPastLimit`); a segment refused there stops waiting for that publication when the run is canceled, and gives its encoder slot back (`TestSegmentPastLimitCancels`). `dataset.PartOrdinal` refuses a six-digit name.

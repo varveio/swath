@@ -82,7 +82,7 @@ const manifestKeyBytes = 4096
 // size and row cap are frozen in a resume's identity, so a resume would
 // reach the limit again: the run is not resumable (exit 1, class fatal,
 // cause part_limit), and starts over with a larger --part-size or without
-// --part-rotation-max-rows.
+// --part-max-rows.
 var ErrPartLimit = errors.New("the dataset reached its limit of 100,000 parts")
 
 // PartOrdinal is the ordinal of a name PartName makes (ok false for any
