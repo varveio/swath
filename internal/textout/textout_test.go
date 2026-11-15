@@ -103,10 +103,10 @@ func TestRowContract(t *testing.T) {
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "last_modified (CET)      size  key\n" +
-		"2023-11-14 23:13:20      12 B  a/b.txt\n" +
-		"-                         0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
-		"2023-11-14 23:13:20  1.00 TiB  µ\n"
+	table := "    size  last_modified (CET)  key\n" +
+		"    12 B  2023-11-14 23:13:20  a/b.txt\n" +
+		"     0 B  -                    tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
+		"1.00 TiB  2023-11-14 23:13:20  µ\n"
 	if got := string(write(t, Config{Format: Table, Loc: time.FixedZone("CET", 3600)})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
 	}

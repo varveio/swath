@@ -171,14 +171,15 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLocalTable: a local tree's table has the kind beside the time and
-// size (as wide as the widest kind name, so the key column never moves), a
-// missing value "-", and its keys escaped as in TSV.
+// TestLocalTable: a local tree's table has the size, the time and the
+// kind (as wide as the widest usual kind name, so the key column does not
+// move), its keys headed path, a missing value "-", a symlink's target
+// after its key, and keys and targets escaped as in TSV.
 func TestLocalTable(t *testing.T) {
-	want := "last_modified (UTC)      size  kind          key\n" +
-		"2023-11-14 22:13:20  4.00 KiB  dir           dir\n" +
-		"-                         0 B  symlink       dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
-		"-                           -  symlink       empty-link\n"
+	want := "    size  last_modified (UTC)  kind     path\n" +
+		"4.00 KiB  2023-11-14 22:13:20  dir      dir\n" +
+		"     0 B  -                    symlink  dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ -> ../a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
+		"       -  -                    symlink  empty-link\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &localfs.Schema, localRows); got != want {
 		t.Errorf("\n%q\nwant\n%q", got, want)
 	}
@@ -280,7 +281,7 @@ func TestEverySchemaPrints(t *testing.T) {
 		if line := text(t, textout.Config{Format: textout.JSONL}, &s, rows); json.Unmarshal([]byte(line), &m) != nil || len(m) != members {
 			t.Errorf("%s: JSONL %q", id, line)
 		}
-		if lines := strings.Split(text(t, textout.Config{Format: textout.Table}, &s, rows), "\n"); len(lines) != 3 || !strings.HasSuffix(lines[1], "  k") {
+		if lines := strings.Split(text(t, textout.Config{Format: textout.Table}, &s, rows), "\n"); len(lines) != 3 || !strings.Contains(lines[1]+" ", "  k ") {
 			t.Errorf("%s: table %q", id, lines)
 		}
 	}

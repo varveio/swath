@@ -242,3 +242,23 @@ func TestTableCounts(t *testing.T) {
 		t.Fatalf("%v %q", err, b.String())
 	}
 }
+
+// TestTableTotalAndUnreadable: the table's total row names the source
+// (TotalsLayout.Total, escaped as a prefix is) before "(total)", and a
+// directory that could not be read shows "-" for its figure and counts.
+func TestTableTotalAndUnreadable(t *testing.T) {
+	rows := []totals.Prefix{
+		{Objects: 3, Dirs: 2, Size: 10, HasSize: true},
+		{Prefix: "locked/", Depth: 1, HasSize: true, Unreadable: true},
+		{Prefix: "ok/", Depth: 1, Objects: 3, Size: 10, HasSize: true},
+	}
+	var b bytes.Buffer
+	l := TotalsLayout{Local: true, Loc: time.UTC, Total: "t/\x1bphotos"}
+	want := "size  files  dirs  last_modified (UTC)  path\n" +
+		"   -      -     -  -                    locked/\n" +
+		"10 B      3     0  -                    ok/\n" +
+		"10 B      3     2  -                    t/\\x1bphotos (total)\n"
+	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != want {
+		t.Fatalf("%v\n%q\nwant\n%q", err, b.String(), want)
+	}
+}

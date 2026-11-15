@@ -8,6 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +21,9 @@ import (
 
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/totals"
 )
 
 func snap() listing.ProgressSnapshot {
@@ -27,16 +32,20 @@ func snap() listing.ProgressSnapshot {
 		StartedAt: jsontime.Of(time.Unix(1, 0)), CostUSD: &usd, CostRatePer1kUSD: 0.005}
 }
 
-// TestProgressRecord: Java's listing record (phase, objects with the
-// recovered rows apart, live and average rates, the parts of a dataset, in
-// flight, elapsed, API calls, the labelled estimate), its trailing fields
-// dropped whole to fit a terminal, and colour only when asked. The rate
-// takes the rows' noun; a run without a dataset shows no parts.
+// TestProgressRecord: the listing record (phase, rows with the recovered
+// ones apart, bytes so far, elapsed, live and average rates, the parts of
+// a dataset, then in flight, API calls and the labelled estimate), its
+// trailing fields dropped whole to fit a terminal, and colour only when
+// asked. The rate takes the rows' noun; a run without a dataset shows no
+// parts, a source without requests no request fields; while every request
+// fails the cause retried takes the rate's place.
 func TestProgressRecord(t *testing.T) {
 	store := rowNouns(false, false)
-	parts := progressParts(snap(), 75*time.Second, 2000, store, true)
-	want := []string{"listing", "1,234,567 objects (+1,000 recovered)", "2,000 keys/s (avg 123,457)", "3 parts", "17 in flight",
-		"1m15s elapsed", "2,500 API calls", "~$0.013 (est. @ $0.005/1k LIST)"}
+	s := snap()
+	s.ObjectBytes = 5 << 30
+	parts := progressParts(s, 75*time.Second, 2000, store, true, "")
+	want := []string{"listing", "1,234,567 objects (+1,000 recovered)", "5.00 GiB", "1m15s elapsed", "2,000 keys/s (avg 123,457)", "3 parts", "17 in flight",
+		"2,500 API calls", "~$0.013 (est. @ $0.005/1k LIST)"}
 	if strings.Join(parts, "|") != strings.Join(want, "|") {
 		t.Fatalf("parts\n got %q\nwant %q", parts, want)
 	}
@@ -44,7 +53,7 @@ func TestProgressRecord(t *testing.T) {
 		t.Fatalf("plain frame %q", got)
 	}
 	narrow := frame(parts, 60, false)
-	if len([]rune(narrow)) > 60 || !strings.HasSuffix(narrow, "recovered)") {
+	if len([]rune(narrow)) > 60 || !strings.HasSuffix(narrow, "5.00 GiB") {
 		t.Fatalf("narrow frame %q", narrow)
 	}
 	if got := frame(parts, 8, false); got != "  listin" {
@@ -53,21 +62,26 @@ func TestProgressRecord(t *testing.T) {
 	if c := frame(parts, 0, true); !strings.Contains(c, "\x1b[36m1,234,567 objects") || !strings.Contains(c, "\x1b[2m") {
 		t.Fatalf("coloured frame %q", c)
 	}
+	if p := progressParts(snap(), time.Second, 0, store, true, "connection refused"); p[2] != "1.0s elapsed" || p[3] != "retrying: connection refused" {
+		t.Fatalf("failing record %q", p)
+	}
 	v := snap()
 	v.Rows, v.Requests, v.Verified = 0, 0, 5_000_000
-	if p := progressParts(v, time.Second, 0, store, true); p[0] != "verifying" || p[1] != "4.77 MiB verified" {
+	if p := progressParts(v, time.Second, 0, store, true, ""); p[0] != "verifying" || p[1] != "4.77 MiB verified" || p[2] != "1.0s elapsed" {
 		t.Fatalf("verification record %q", p)
 	}
 	v = snap()
 	v.Parts = 1
-	if p := progressParts(v, time.Second, 0, store, true); p[3] != "1 part" {
+	if p := progressParts(v, time.Second, 0, store, true, ""); p[4] != "1 part" {
 		t.Fatalf("one part: %q", p)
 	}
-	local := progressParts(snap(), time.Second, 2000, rowNouns(true, false), false)
-	if local[1] != "1,234,567 entries (+1,000 recovered)" || local[2] != "2,000 entries/s (avg 123,457)" || local[3] != "17 in flight" {
+	l := snap()
+	l.Requests, l.Inflight, l.CostUSD = 0, 0, nil
+	local := progressParts(l, time.Second, 2000, rowNouns(true, false), false, "")
+	if strings.Join(local, "|") != "listing|1,234,567 entries (+1,000 recovered)|1.0s elapsed|2,000 entries/s (avg 123,457)" {
 		t.Fatalf("local text run: %q", local)
 	}
-	if p := progressParts(snap(), time.Second, 2000, rowNouns(false, true), false); p[1] != "1,234,567 rows (+1,000 recovered)" || p[2] != "2,000 rows/s (avg 123,457)" {
+	if p := progressParts(snap(), time.Second, 2000, rowNouns(false, true), false, ""); p[1] != "1,234,567 rows (+1,000 recovered)" || p[3] != "2,000 rows/s (avg 123,457)" {
 		t.Fatalf("versions: %q", p)
 	}
 }
@@ -195,57 +209,69 @@ func TestColorResolution(t *testing.T) {
 	}
 }
 
-// TestStatsBlock: Java's gating and lines from the report.
+// TestStatsBlock: the closing lines from the report (the verdict, the
+// count, the bytes, the time and its rate, where the output went, what to
+// run next), the statistics only with detail, and the gating.
 func TestStatsBlock(t *testing.T) {
 	rss := int64(200_000_000)
-	per := 1.5
 	usd := 0.01
+	objBytes := int64(5 << 40)
 	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
-		Output:      listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
-		Requests:    &listing.Requests{HTTPAttempts: 2000},
-		Cost:        &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
-		Process:     listing.Process{PeakRSSBytes: &rss},
-		Diagnostics: listing.Diagnostics{Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}}
+		Invocation: listing.Invocation{Out: "ds1"},
+		Outcome:    listing.Outcome{Status: listing.StatusCommitted, Complete: true, Class: listing.ClassOK},
+		Output: listing.Output{RowsFetched: 2_000_000, RowsEmitted: 2_000_000, RowsCommitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000,
+			CommittedObjectBytes: &objBytes},
+		Requests: &listing.Requests{HTTPAttempts: 2000, Retries: 3},
+		Cost:     &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
+		Process:  listing.Process{PeakRSSBytes: &rss}}
 	store := rowNouns(false, false)
-	got := statsLines(r, false, store)
-	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · in flight avg 0.00 · peak 0",
-		"~$0.010 (est. @ $0.005/1k LIST)", "2 parts · 3.34 MiB written · peak RSS 191 MiB"}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("lines\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	check := func(got []string, want ...string) {
+		t.Helper()
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("lines\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
 	}
-	if l := statsLines(r, false, rowNouns(true, false)); !strings.HasPrefix(l[0], "2,000,000 entries in 12.3s · 166,667 entries/s") { // a local tree's rows
-		t.Fatalf("local headline %q", l[0])
+	check(statsLines(r, false, store, false), "complete: 2,000,000 objects, 5.00 TiB in 14.0s · 142,857 keys/s → ds1 (2 parts, 3.34 MiB)",
+		"next: swath show ds1 · swath du --from-dataset ds1")
+	// --stats: the request account, the retries (no throttles: none), the
+	// estimate and the peak RSS.
+	check(statsLines(r, false, store, true)[2:], "2,000 API calls · in flight avg 0.00 · peak 0", "retried 3", "~$0.010 (est. @ $0.005/1k LIST)", "peak RSS 191 MiB")
+	// A short run gives no rate; a resume names the rows from earlier
+	// attempts; filtered rows follow the kept ones.
+	short := *r
+	short.Timings.SessionMs = 1500
+	short.Output.RowsRetained, short.Output.RowsFiltered = 7_003, 12
+	if l := statsLines(&short, false, store, false); l[0] != "complete: 2,000,000 objects (7,003 from earlier attempts) kept, 12 filtered out, 5.00 TiB in 1.5s → ds1 (2 parts, 3.34 MiB)" {
+		t.Fatalf("short resume %q", l[0])
 	}
-	// What swath wrote: one part, or one text file.
-	one := *r
-	one.Output.PartsWritten, one.Output.RowsEmitted, one.Requests = 1, 1, &listing.Requests{HTTPAttempts: 1}
-	if l := statsLines(&one, false, store); !strings.HasPrefix(l[0], "1 object in ") || l[1] != "1 API call · in flight avg 0.00 · peak 0" ||
-		l[3] != "1 part · 3.34 MiB written · peak RSS 191 MiB" {
-		t.Fatalf("one part %q", l)
-	}
-	one.Output.Text = &listing.TextOutput{Destination: "out.tsv", Bytes: 2048}
-	one.Outcome.Status = listing.StatusWritten
-	if l := statsLines(&one, false, store); l[len(l)-1] != "1 file · 2.00 KiB written · peak RSS 191 MiB" {
-		t.Fatalf("a text file %q", l)
-	}
-	one.Outcome.Status = listing.StatusStopped // the file is discarded
-	if l := statsLines(&one, false, store); l[len(l)-1] != "no file written · peak RSS 191 MiB" {
-		t.Fatalf("a discarded text file %q", l)
-	}
-	r.Outcome = listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}
-	r.Invocation.Out = "/data/ds"
-	if l := statsLines(r, false, store); l[0] != "stopped: --max-duration reached — resume: swath resume /data/ds" {
-		t.Fatalf("disposition %q", l[0])
-	}
-	short := &listing.Report{Timings: listing.Timings{SessionMs: 100}}
+	// A text file, a stream, a discarded file.
+	text := listing.Report{Timings: r.Timings, Outcome: listing.Outcome{Status: listing.StatusWritten, Complete: true},
+		Output: listing.Output{RowsFetched: 1, RowsEmitted: 1, Text: &listing.TextOutput{Destination: "out.tsv", Bytes: 2048}}}
+	check(statsLines(&text, false, rowNouns(true, false), false), "complete: 1 entry in 14.0s · 0 entries/s → out.tsv (2.00 KiB)")
+	text.Output.Text.Destination = "-"
+	check(statsLines(&text, false, store, false), "complete: 1 object in 14.0s · 0 keys/s")
+	text.Output.Text.Destination = "out.tsv"
+	text.Outcome = listing.Outcome{Status: listing.StatusFailed, Class: listing.ClassFatal, ExitCode: exitFatal}
+	check(statsLines(&text, false, store, false), "failed: 1 object in 14.0s · 0 keys/s, no file written")
+	// A stopped dataset run: what it saved for swath resume, what it listed.
+	r.Outcome = listing.Outcome{Status: listing.StatusFailed, Class: "deadline", ExitCode: exitDeadline, Resumable: true}
+	r.Output = listing.Output{RowsFetched: 12_003, RowsEmitted: 9_000, RowsDurable: 7_003, PartsWritten: 1, OutputBytes: 2048}
+	check(statsLines(r, false, store, false), "stopped: --max-duration reached; 7,003 saved, 12,003 listed in 14.0s · 857 keys/s → ds1 (1 part, 2.00 KiB)",
+		"next: swath resume ds1")
+	// swath du: the total row's counts and size.
+	size := int64(410 << 10)
+	du := listing.Report{Timings: listing.Timings{SessionMs: 100}, Outcome: listing.Outcome{Complete: true},
+		Output: listing.Output{RowsFetched: 16, RowsEmitted: 16, Totals: &totals.Stats{Objects: 7, Dirs: 9, Size: &size}}}
+	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories, 410 KiB in 0.1s")
+	quick := &listing.Report{Timings: listing.Timings{SessionMs: 100}}
 	switch {
-	case showStats(termOptions{}, short, false):
+	case showStats(termOptions{}, quick, false):
 		t.Fatal("a short complete run without output prints statistics")
 	case !showStats(termOptions{}, r, false):
 		t.Fatal("an incomplete run prints no statistics")
 	case showStats(termOptions{quiet: 1}, r, false), showStats(termOptions{}, r, true):
 		t.Fatal("quiet or a closed pipe prints statistics")
-	case !showStats(termOptions{stats: tri{true, true}, quiet: 1}, short, true):
+	case !showStats(termOptions{stats: tri{true, true}, quiet: 1}, quick, true):
 		t.Fatal("--stats does not force them")
 	case showStats(termOptions{stats: tri{true, false}}, r, false):
 		t.Fatal("--no-stats prints them")
@@ -320,7 +346,7 @@ func TestReportContinuity(t *testing.T) {
 		p.Rows != r.Output.RowsFetched || p.Requests != r.Requests.HTTPAttempts {
 		t.Fatalf("progress.json %+v, report %+v", p, r)
 	}
-	if out != "" || !strings.Contains(stderr.String(), "3 objects in ") || !strings.Contains(stderr.String(), "API calls") {
+	if out != "" || !strings.Contains(stderr.String(), "complete: 3 objects, 9 B in ") || !strings.Contains(stderr.String(), "API calls") {
 		t.Fatalf("stdout %q stderr %q", out, stderr.String())
 	}
 	again, _, _ := list("s3://bkt")
@@ -348,5 +374,51 @@ func TestStopSource(t *testing.T) {
 	}
 	if classify(err, nil, "").StopSource != "" {
 		t.Error("a failure names a stop source")
+	}
+}
+
+// TestRetrying: the progress line's failing cause (failureWatch.retrying)
+// is the cause every request fails with: at once while nothing was ever
+// answered, after retryingFor once something was, and none after an
+// answer; its host is left out.
+func TestRetrying(t *testing.T) {
+	w := newFailureWatch("S3", 0)
+	at := time.Now()
+	refused := source.Exchange{URL: &url.URL{Host: "127.0.0.1:1"}, Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}
+	w.exchange(refused, at)
+	if got := w.retrying(at); got != syscall.ECONNREFUSED.Error() {
+		t.Fatalf("nothing answered: %q", got)
+	}
+	w.exchange(source.Exchange{URL: refused.URL, Status: 200}, at)
+	if got := w.retrying(at); got != "" {
+		t.Fatalf("after an answer: %q", got)
+	}
+	w.exchange(refused, at)
+	if got := w.retrying(at.Add(time.Second)); got != "" {
+		t.Fatalf("a moment's failure after answers: %q", got)
+	}
+	if got := w.retrying(at.Add(retryingFor)); got != syscall.ECONNREFUSED.Error() {
+		t.Fatalf("a lasting failure after answers: %q", got)
+	}
+}
+
+// TestDuDatasetHint: swath du DIR on a dataset directory totals DIR's
+// files, and says on stderr how to total what the dataset lists.
+func TestDuDatasetHint(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{"-o", ds, src}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	stderr := captureStderr(t)
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{ds}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if want := "hint: " + ds + " is a swath dataset; to total what it lists: swath du --from-dataset " + shellOperand(ds) + "\n"; !strings.Contains(stderr.String(), want) || out.Len() == 0 {
+		t.Fatalf("stderr %q", stderr.String())
 	}
 }

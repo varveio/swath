@@ -278,10 +278,11 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	if err != nil {
 		return err
 	}
-	origin, err := keyOrigin(root)
+	scope, err := keyPrefix(root)
 	if err != nil {
 		return err
 	}
+	origin := scope[:strings.LastIndexByte(scope, '/')+1]
 	// A local tree's file with several hard links counts once, as du
 	// counts it, unless --count-links.
 	view := duView(o, format, registry.Redact(root), stdoutTTY)
@@ -294,7 +295,7 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			}
 		}
 	}
-	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view}
+	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view, scope: scope, label: registry.Redact(root)}
 	return nil
 }
 
@@ -333,19 +334,22 @@ func totalsFormat(o *options, stdoutTTY bool) (string, error) {
 	return format, nil
 }
 
-// keyOrigin is the prefix swath du's depth counts from: the key prefix the
-// root names, up to its last '/' (s3://b/logs/2026/ and s3://b/logs/2026/x
-// count from logs/2026/; s3://b/logs from the bucket's top). A local tree's
-// keys are relative to the root, so it counts from "". It is taken from the
-// root as given, before an --include narrows the listed prefix.
-func keyOrigin(root string) (string, error) {
+// keyPrefix is the key prefix the root names: its keys' common start
+// (s3://b/logs/2026/0 names logs/2026/0). A local tree's keys are relative
+// to the root, so it names "". It is taken from the root as given, before
+// an --include narrows the listed prefix.
+func keyPrefix(root string) (string, error) {
 	pf, err := registry.Lookup(root)
 	if err != nil || pf.KeyPrefix == nil {
 		return "", nil // an unknown scheme is refused when the run looks it up
 	}
-	p, err := pf.KeyPrefix(root)
-	if err != nil {
-		return "", err
-	}
-	return p[:strings.LastIndexByte(p, '/')+1], nil
+	return pf.KeyPrefix(root)
+}
+
+// keyOrigin is the prefix swath du's depth counts from: the key prefix the
+// root names, up to its last '/' (s3://b/logs/2026/ and s3://b/logs/2026/x
+// count from logs/2026/; s3://b/logs from the bucket's top).
+func keyOrigin(root string) (string, error) {
+	p, err := keyPrefix(root)
+	return p[:strings.LastIndexByte(p, '/')+1], err
 }

@@ -134,6 +134,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	fd, err := openDir(r.path, r.prefix != "")
 	if err != nil {
 		st.note(&st.OpenErrors, r.path, err)
+		p.unreadableDir(r)
 		return nil
 	}
 	st.DirsRead++

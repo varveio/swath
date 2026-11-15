@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,14 +67,17 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// TestShowDataset: swath show names a committed dataset's layers, the
-// SeekParquet format and draft, the swath schema id and the swath metadata
-// version, before its coverage, and counts its parts and rows in English
-// (1 part, 1 row).
+// TestShowDataset: swath show prints a committed dataset's verdict first,
+// then labelled lines in reading order (source, listed, contents with
+// counts grouped, coverage, storage last), and clips a long key range to
+// the width given.
 func TestShowDataset(t *testing.T) {
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
-		t.Fatal(err)
+	long := strings.Repeat("k", 200)
+	for _, name := range []string{"a", long} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte("12345"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	out := filepath.Join(t.TempDir(), "ds")
 	if err := run(context.Background(), []string{"-o", out, src}, io.Discard, false); err != nil {
@@ -83,27 +87,52 @@ func TestShowDataset(t *testing.T) {
 	if err := show([]string{out}, &shown); err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(shown.String(), "\n")
-	want := "dataset " + out + ": SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1"
-	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage: complete") || !strings.HasPrefix(lines[4], "1 part, 1 row, ") {
-		t.Fatalf("show:\n%s\nwant first line %q", shown.String(), want)
+	lines := strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n")
+	labels := []string{"source", "listed", "contents", "coverage", "storage"}
+	if len(lines) != 6 || lines[0] != out+": complete" {
+		t.Fatalf("show:\n%s", shown.String())
+	}
+	for i, l := range labels {
+		if !strings.HasPrefix(lines[i+1], "  "+l+" ") {
+			t.Fatalf("line %d %q, want the label %s", i+1, lines[i+1], l)
+		}
+	}
+	if !strings.Contains(lines[1], "(whole tree)") || !strings.Contains(lines[3], "2 entries, 10 B; keys \"a\" .. \""+long+"\"") ||
+		lines[4] != "  coverage  nothing unreadable; no filters; no exclusions" ||
+		!strings.Contains(lines[5], "1 part, ") || !strings.Contains(lines[5], "schema swath/local-entries/v1") {
+		t.Fatalf("show:\n%s", shown.String())
+	}
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(out, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatal(err)
+	}
+	shown.Reset()
+	writeSummary(&shown, "ds", &m, 80)
+	for _, l := range strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n") {
+		if strings.Contains(l, "contents") && (len(l) > 80 || !strings.Contains(l, "...\"")) {
+			t.Fatalf("clipped to 80: %q", l)
+		}
 	}
 }
 
-// TestShowNotADataset: swath show on a path that is no dataset, a
-// missing one or a file (a text listing), says what it does not hold,
-// with and without --journal, never an open error ("not a directory").
+// TestShowNotADataset: swath show on a missing path says so; on a path
+// that is no dataset (a file, a text listing) it says what it does not
+// hold, with and without --journal, never an open error ("not a
+// directory").
 func TestShowNotADataset(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "rows.tsv")
 	if err := os.WriteFile(file, []byte("key\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{file, filepath.Join(t.TempDir(), "missing")} {
-		for _, args := range [][]string{{dir}, {dir, "--journal"}} {
-			err := show(args, io.Discard)
-			if err == nil || !strings.Contains(err.Error(), dir+" holds ") || strings.Contains(err.Error(), "not a directory") {
-				t.Fatalf("show %q: %v", args, err)
-			}
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, args := range [][]string{{file}, {file, "--journal"}, {missing}, {missing, "--journal"}} {
+		want := file + " holds "
+		if args[0] == missing {
+			want = missing + ": no such file or directory"
+		}
+		if err := show(args, io.Discard); err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "not a directory") {
+			t.Fatalf("show %q: %v", args, err)
 		}
 	}
 }
@@ -130,13 +159,13 @@ func TestPrintedCommandsQuoted(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "my inventory")
 	r := &listing.Report{Outcome: listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
 	r.Invocation.Out = dir
-	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "stopped: --max-duration reached — resume: swath resume "+quoted(dir) {
-		t.Fatalf("disposition %q", l[0])
+	if l := statsLines(r, false, rowNouns(false, false), false); l[1] != "next: swath resume "+quoted(dir) {
+		t.Fatalf("next %q", l)
 	}
 	// A directory named like a flag is an operand only as ./-inv.
 	r.Invocation.Out = "-inv"
-	if l := statsLines(r, false, rowNouns(false, false)); l[0] != "stopped: --max-duration reached — resume: swath resume ./-inv" {
-		t.Fatalf("disposition %q", l[0])
+	if l := statsLines(r, false, rowNouns(false, false), false); l[1] != "next: swath resume ./-inv" {
+		t.Fatalf("next %q", l)
 	}
 	if got := shellOperand("-my inv"); got != quoted("./-my inv") {
 		t.Fatalf("shellOperand(-my inv) = %s", got)
@@ -150,7 +179,7 @@ func TestPrintedCommandsQuoted(t *testing.T) {
 	if err := show([]string{dir}, &shown); err != nil {
 		t.Fatal(err)
 	}
-	if want := "\ncommand: swath list " + quoted("--output="+dir) + " s3://b\n"; !strings.Contains(shown.String(), want) {
+	if want := "\n  command   swath list " + quoted("--output="+dir) + " s3://b\n"; !strings.Contains(shown.String(), want) {
 		t.Fatalf("show:\n%s\nwant %q", shown.String(), want)
 	}
 }

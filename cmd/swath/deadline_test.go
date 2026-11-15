@@ -186,7 +186,7 @@ func TestDeadlineWithoutJournal(t *testing.T) {
 		stderr.Reset()
 		code := conclude(run(passed, []string{src, "--max-duration", "1ns", "-o", out, "--stats", "--no-progress"}, io.Discard, false))
 		got := stderr.String()
-		if code != exitDeadline || !strings.HasSuffix(got, advice) || out == file && !strings.Contains(got, "\n  no file written") {
+		if code != exitDeadline || !strings.HasSuffix(got, advice) || out == file && !strings.Contains(got, ", no file written\n") {
 			t.Fatalf("-o %s: exit %d, stderr %q", out, code, got)
 		}
 	}

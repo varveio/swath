@@ -35,6 +35,9 @@ type Progress struct {
 	requests atomic.Pointer[func() source.Requests]
 	tariff   atomic.Uint64 // math.Float64bits
 	retained atomic.Int64  // rows kept from the interrupted run (resume)
+	// bytes is the order stage's sum of the sizes of the rows it accepted
+	// (registry.Sizes), nil before it starts.
+	bytes    atomic.Pointer[atomic.Int64]
 	ordered  atomic.Int64
 	encoded  atomic.Int64
 	parts    atomic.Int64
@@ -175,6 +178,10 @@ type ProgressSnapshot struct {
 	// Retained is the rows a resume kept from the interrupted run (not
 	// listed by this attempt, so not in Rows).
 	Retained int64 `json:"rows_retained"`
+	// ObjectBytes is the sizes of the objects listed so far summed, as the
+	// order stage accepted them (the report's object_bytes): the terminal
+	// line's, not the progress file's.
+	ObjectBytes int64 `json:"-"`
 	// Requests (http_attempts), Retries, Inflight and Limit are the source's HTTP account
 	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
 	// retries, requeues), attempts repeated, attempts in flight now, and
@@ -244,6 +251,9 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		}
 	}
 	s.Retained = p.retained.Load()
+	if b := p.bytes.Load(); b != nil {
+		s.ObjectBytes = b.Load()
+	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()
 	if g := p.gauges.Load(); g != nil {

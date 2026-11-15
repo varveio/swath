@@ -30,6 +30,18 @@ import (
 	"github.com/varveio/swath/reader"
 )
 
+// unnamedTotal is a table with its total row's name left out.
+func unnamedTotal(table string) string {
+	var b strings.Builder
+	for l := range strings.Lines(table) {
+		if strings.HasSuffix(l, " (total)\n") {
+			l = l[:strings.LastIndex(strings.TrimSuffix(l, " (total)\n"), "  ")] + "  (total)\n"
+		}
+		b.WriteString(l)
+	}
+	return b.String()
+}
+
 // duRun runs swath du with args and returns its stdout.
 func duRun(t *testing.T, args ...string) (string, error) {
 	t.Helper()
@@ -40,19 +52,21 @@ func duRun(t *testing.T, args ...string) (string, error) {
 
 // liveAndSaved runs swath du on a source (live) and on its dataset (saved)
 // and fails unless their rows are the same: TSV byte for byte, JSONL with
-// the saved rows' dataset member, last, removed.
+// the saved rows' dataset member, last, removed, the table but for what
+// its total row is named by (the SOURCE or DIR typed).
 func liveAndSaved(t *testing.T, live, saved []string) {
 	t.Helper()
 	want, err := duRun(t, live...)
 	if err != nil {
 		t.Fatalf("%q: %v", live, err)
 	}
+	want = unnamedTotal(want)
 	got, err := duRun(t, saved...)
 	if err != nil {
 		t.Fatalf("%q: %v", saved, err)
 	}
 	var stripped strings.Builder
-	for l := range strings.Lines(got) {
+	for l := range strings.Lines(unnamedTotal(got)) {
 		if i := strings.Index(l, `,"dataset":{`); i >= 0 {
 			l = l[:i] + "}\n"
 		}

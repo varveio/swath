@@ -280,7 +280,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tfile\t",
 		"jsonl": `{"key":"a/b/f","key_base64":null,"size":null,"last_modified":null,"kind":"file",`,
-		"table": "-  file          a/b/f\n", // kind: block_device wide
+		"table": "-  file     a/b/f\n", // kind: as wide as symlink, the widest usual kind
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
@@ -291,8 +291,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	zone, _ := time.Now().Zone()
 	local := time.Date(2026, 1, 2, 4, 4, 5, 0, time.UTC).Local().Format(time.DateTime)
 	if err := run(context.Background(), []string{root, "--format", "table", "--no-stats"}, &out, false); err != nil ||
-		!strings.HasPrefix(out.String(), "last_modified ("+zone+")") || !strings.Contains(out.String(), "\n"+local+" ") ||
-		!strings.Contains(out.String(), "     5 B  file          a/b/f\n") {
+		!strings.HasPrefix(out.String(), "    size  last_modified ("+zone+")") || !strings.Contains(out.String(), "     5 B  "+local+"  file     a/b/f\n") {
 		t.Fatalf("table: %v\n%s", err, out.String())
 	}
 	out.Reset()

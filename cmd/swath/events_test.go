@@ -270,7 +270,7 @@ func flakyGCS(t *testing.T) string {
 // with its cause, not the answered ones; -vvv every request.
 func TestVerbosity(t *testing.T) {
 	stderr := captureSyncStderr(t)
-	start := regexp.MustCompile(`(?m)^swath: listing gs://bkt to stdout \(attempt [0-9a-f]{32}\)$`)
+	start := regexp.MustCompile(`(?m)^swath: listing gs://bkt to stdout \(attempt [0-9a-f]{8}\)$`)
 	failed := regexp.MustCompile(`(?m)^swath: request GET 127\.0\.0\.1:\d+/storage/v1/b/bkt/o\?\S*: 503 \(`)
 	retry := regexp.MustCompile(`(?m)^swath: attempt 1 \S+/storage/v1/b/bkt/o\S* failed \(\w+\): .*; retrying in `)
 	answered := regexp.MustCompile(`(?m)^swath: request GET 127\.0\.0\.1:\d+/storage/v1/b/bkt/o\?\S*: 200 \(`)
@@ -406,7 +406,7 @@ func TestOneLineFailures(t *testing.T) {
 					t.Fatalf("%s: stderr %q, want %q", c.name, s, c.line)
 				}
 			case "-v":
-				if !strings.Contains(s, "swath: outcome: {") || (c.line != "" && !strings.HasSuffix(s, c.line)) || strings.Contains(s, "  failed\n") || strings.Contains(s, "  refused\n") {
+				if !strings.Contains(s, "swath: outcome: {") || (c.line != "" && !strings.HasSuffix(s, c.line)) || strings.Contains(s, "\n  failed") || strings.Contains(s, "\n  refused") {
 					t.Fatalf("%s -v: stderr %q", c.name, s)
 				}
 			default:

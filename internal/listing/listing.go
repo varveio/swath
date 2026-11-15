@@ -1029,9 +1029,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	}
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes
+	if cfg.Progress != nil {
+		cfg.Progress.bytes.Store(&sizes.Bytes)
+	}
 	versions := &registry.VersionCounts{}
 	env.Versions = versions
 	env.Totals = cfg.Totals
+	if cfg.Totals != nil {
+		env.Unreadable = cfg.Totals.Unreadable
+	}
 	a.retained.Store(a.sum.Output.RowsRetained)
 	a.sum.sampler = startHistory(a.sample, historyDisk(cfg, oopt))
 	defer a.sum.sampler.finish()

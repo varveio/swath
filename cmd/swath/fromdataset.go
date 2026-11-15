@@ -171,7 +171,10 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		Primary: primaryFigure(&o), View: view != nil}
 	o.filter.Base = origin
 	prov := provenanceOf(o.fromDataset, m)
-	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view}
+	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view, scope: prefix, label: label}
+	if relative {
+		t.scope = ""
+	}
 	if t.dataset, err = json.Marshal(prov); err != nil {
 		return err
 	}
@@ -348,7 +351,11 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 	}
 	msg := "totals of the dataset " + p.Path + ", not a live listing: " + src
 	if at := p.ListingFinishedAt; at != nil {
-		msg += " as listed " + at.UTC().Format(time.RFC3339)
+		when := localTime(at.Time) // as the table below it shows times; the event's are UTC
+		if l.json {
+			when = at.UTC().Format(time.RFC3339)
+		}
+		msg += " as listed " + when
 		if age := now.Sub(at.Time); age >= 0 {
 			msg += " (" + ago(age) + ")"
 		}

@@ -157,6 +157,10 @@ type Provider struct {
 	dev    int64             // the root's device (OneFilesystem)
 	prune  func(string) bool // immutable directory predicate, set before workers start
 	keyOut func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
+	// unreadable is told the key prefix of a directory that could not be
+	// opened (registry.Env.Unreadable; nil: nobody asks), set before
+	// workers start.
+	unreadable func(string)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -361,6 +365,7 @@ func sortRows(rows []Row) {
 func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	f, ok := openChecked(r, st)
 	if !ok {
+		p.unreadableDir(r)
 		return nil
 	}
 	st.DirsRead++
@@ -432,6 +437,14 @@ func (p *Provider) leftOut(key string, dir, known bool) bool {
 		return asDir
 	}
 	return asFile
+}
+
+// unreadableDir tells the run (registry.Env.Unreadable) of a directory
+// below the root that could not be opened.
+func (p *Provider) unreadableDir(r Range) {
+	if p.unreadable != nil && r.prefix != "" {
+		p.unreadable(r.prefix)
+	}
 }
 
 // openChecked opens a directory by path. Below the root it then checks that

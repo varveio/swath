@@ -40,13 +40,13 @@ _swath_list() {
         '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
         '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
-        '--stats[print the end-of-run statistics on stderr]' \
-        '--no-stats[no end-of-run statistics on stderr]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '--stats[print the closing lines on stderr, with the run'\''s statistics]' \
+        '--no-stats[no closing lines on stderr]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
@@ -108,13 +108,13 @@ _swath_du() {
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
         '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
-        '--stats[print the end-of-run statistics on stderr]' \
-        '--no-stats[no end-of-run statistics on stderr]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '--stats[print the closing lines on stderr, with the run'\''s statistics]' \
+        '--no-stats[no closing lines on stderr]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
@@ -184,13 +184,13 @@ _swath_diag_list() {
         '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
         '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
-        '--stats[print the end-of-run statistics on stderr]' \
-        '--no-stats[no end-of-run statistics on stderr]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '--stats[print the closing lines on stderr, with the run'\''s statistics]' \
+        '--no-stats[no closing lines on stderr]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
@@ -276,13 +276,13 @@ _swath_diag_count() {
         '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
         '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
-        '--stats[print the end-of-run statistics on stderr]' \
-        '--no-stats[no end-of-run statistics on stderr]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '--stats[print the closing lines on stderr, with the run'\''s statistics]' \
+        '--no-stats[no closing lines on stderr]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
@@ -343,13 +343,13 @@ _swath_resume() {
         '--spill-wait-timeout=[stop after waiting this long on a full spill cap (exit 74); 0: wait]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
         '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
-        '--stats[print the end-of-run statistics on stderr]' \
-        '--no-stats[no end-of-run statistics on stderr]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '--stats[print the closing lines on stderr, with the run'\''s statistics]' \
+        '--no-stats[no closing lines on stderr]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
@@ -381,8 +381,8 @@ _swath_resume() {
 _swath_show() {
     _arguments \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '--journal[dump the journal'\''s header and records as JSON lines]' \
@@ -407,8 +407,8 @@ _swath() {
     typeset -A opt_args
     _arguments -C \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
-        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--color=[color progress, statistics, the help and du'\''s view]:value:(auto always never)' \
+        '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or closing lines (-qq: no errors)]' \
+        '--color=[color progress, closing lines, the help and du'\''s view]:value:(auto always never)' \
         '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '(-V --version)'{-V,--version}'[print the version]' \

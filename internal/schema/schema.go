@@ -64,8 +64,9 @@ type Column[P any] struct {
 	// Delta writes a byte-array column DELTA_BYTE_ARRAY instead of
 	// dictionary-then-PLAIN (unique values such as ETags).
 	Delta bool
-	// Values are every value a column of names holds (a local entry's
-	// kind): a text table reserves the widest.
+	// Values are the values a column of names usually holds (a local
+	// entry's kind: file, dir, symlink): a text table reserves the widest,
+	// and widens the column for a rarer one when a row holds it.
 	Values []string
 }
 

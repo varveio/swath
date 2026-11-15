@@ -212,6 +212,10 @@ type Env struct {
 	// Totals, if set, sums the counted rows per key prefix (swath du); it
 	// needs Count.
 	Totals *totals.Tally
+	// Unreadable, if set, is told the key prefix of each directory the
+	// source could not read (a local tree's; safe for concurrent use):
+	// swath du marks its row (totals.Tally.Unreadable).
+	Unreadable func(prefix string)
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a

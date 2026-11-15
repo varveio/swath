@@ -44,8 +44,9 @@ const (
 	missingSuffix = "_missing"
 )
 
-// The row_type values: the total (depth 0, whose prefix is the source's,
-// empty for a whole bucket or tree) and every other prefix.
+// The row_type values: the total (depth 0, whose prefix is the key prefix
+// the source names, logs/2026/0 for s3://b/logs/2026/0, empty for a whole
+// bucket or tree) and every other prefix.
 const (
 	RowTotal  = "total"
 	RowPrefix = "prefix"
@@ -87,6 +88,9 @@ type TotalsLayout struct {
 	// dataset came from (swath du --from-dataset). TSV and the table have
 	// a fixed shape, and the command states it on stderr instead.
 	Dataset []byte
+	// Total names what the table's total row totals, SOURCE as typed,
+	// before headingTotal ("": headingTotal alone).
+	Total string
 }
 
 func (l *TotalsLayout) primary() string {
@@ -109,10 +113,11 @@ func (l *TotalsLayout) primary() string {
 // the rows' grammar (appendTSV), so any name round-trips; in JSONL a
 // prefix that is not UTF-8 is prefix_base64, its exact bytes, instead of
 // prefix. The table is for reading: one figure, the primary, in binary
-// units (TableFigure), the counts grouped, the newest time as the list
-// table's ("-" when unknown), and the prefix (a local tree's
-// path) last, indented by its depth; the command states the other
-// figure's total beside it.
+// units (TableFigure), the counts grouped (the figure and the counts "-"
+// for a directory that could not be read), the newest time as the list
+// table's ("-" when unknown), and the prefix (a local tree's path) last,
+// indented by its depth, the total's named by the source (Total); the
+// command states the other figure's total beside it.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
@@ -297,9 +302,9 @@ func (w tableWidths) header(b []byte, l *TotalsLayout) []byte {
 func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 	var num [32]byte
 	b = appendPadded(b, appendTableFigure(num[:0], r, l.primary()), w.figure)
-	b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Objects), w.objects)
+	b = appendPadded(append(b, "  "...), appendCount(num[:0], r, r.Objects), w.objects)
 	if l.Local {
-		b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Dirs), w.dirs)
+		b = appendPadded(append(b, "  "...), appendCount(num[:0], r, r.Dirs), w.dirs)
 	}
 	b = append(b, "  "...)
 	start := len(b)
@@ -310,6 +315,9 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 	}
 	b = append(pad(b, start, w.time), "  "...)
 	if r.Depth == 0 {
+		if l.Total != "" {
+			b = append(appendTSV(b, l.Total), ' ')
+		}
 		return append(b, headingTotal...)
 	}
 	for range 2 * (r.Depth - 1) { // a level's rows under its parent's
@@ -335,6 +343,15 @@ func appendGrouped(b []byte, n int64) []byte {
 	return b
 }
 
+// appendCount appends a count of r's for the table: grouped, or "-" for
+// a directory that could not be read, whose count is unknown.
+func appendCount(b []byte, r *totals.Prefix, n int64) []byte {
+	if r.Unreadable {
+		return append(b, missingCell...)
+	}
+	return appendGrouped(b, n)
+}
+
 // appendPadded appends s right-aligned in width columns.
 func appendPadded(b, s []byte, width int) []byte {
 	for range width - len(s) {
@@ -352,6 +369,7 @@ func TableFigure(r *totals.Prefix, figure string) string {
 
 func appendTableFigure(b []byte, r *totals.Prefix, figure string) []byte {
 	n, ok := r.Figure(figure)
+	ok = ok && !r.Unreadable
 	missing := r.SizeMissing
 	if figure == totals.AllocatedBytes {
 		missing = r.AllocatedMissing

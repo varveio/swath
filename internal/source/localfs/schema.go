@@ -94,7 +94,7 @@ var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
 	Columns: []schema.Column[Entry]{
 		intCol(HasSize, func(e *Entry) int64 { return e.Size }),
 		intCol(HasMtime, func(e *Entry) int64 { return e.Mtime }),
-		{Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }, Values: kindNames[:]},
+		{Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }, Values: kindNames[KindFile : KindSymlink+1]},
 		uint32Col(HasMode, func(e *Entry) uint32 { return e.Mode }),
 		uint32Col(HasUID, func(e *Entry) uint32 { return e.UID }),
 		uint32Col(HasGID, func(e *Entry) uint32 { return e.GID }),

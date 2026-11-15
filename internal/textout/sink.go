@@ -33,6 +33,7 @@ const (
 	sizeColumn  = "size"
 	mtimeColumn = "last_modified"
 	kindColumn  = "kind"
+	linkColumn  = "link_target"
 )
 
 // Sink writes the order stage's ascending segments as text rows of the
@@ -41,9 +42,9 @@ const (
 // the schema stores it. TSV is one header line of the names and a line of
 // fields per row (appendTSV); JSONL one object per row, its members in
 // column order, a null JSON null, and a binary column as two members,
-// NAME and NAME_base64 (Base64Suffix). The table, for people, is the time in local time
-// to the second, its heading naming the zone, the size in binary units, the kind and version columns where the
-// schema has them, and the key last; a missing time or size is "-".
+// NAME and NAME_base64 (Base64Suffix). The table, for people, is the size in binary units, the
+// time in local time to the second, its heading naming the zone, the kind and version columns
+// where the schema has them, and the key last; a missing time or size is "-".
 type Sink[P any] struct {
 	o     *Out
 	cols  []column[P] // TSV and JSONL
@@ -272,15 +273,18 @@ func appendNumber(b []byte, t schema.Type, v int64) []byte {
 	return strconv.AppendInt(b, v, 10)
 }
 
-// table is the table's layout: the time and size, the kind and version
-// columns when the schema has them, the key last, two blanks apart. The
-// time and size have fixed widths, the kind column its widest name
-// (schema.Column.Values), so the key never moves; the version ID column is
-// as wide as its heading or the widest ID written so far (IDs have no
-// fixed width across providers).
+// table is the table's layout, as swath du's: the size first, then the
+// time, the kind and version columns when the schema has them, and the key
+// last (headed path for a tree, whose keys are paths), two blanks apart,
+// and after a symlink's key " -> " and its target. The time and size have
+// fixed widths and the kind column the widest of the names its rows
+// usually hold (schema.Column.Values), so the key does not move; a rarer
+// kind (char_device), as the version ID column, widens its column from
+// its row on (IDs have no fixed width across providers).
 type table[P any] struct {
 	mtime, size func(*P) (int64, bool)
-	kind        func(*P) (string, bool)
+	kind, link  func(*P) (string, bool)
+	name        string // the key's heading: key, or path for a tree
 	vers        *schema.Versions[P]
 	idName      string
 	kindW, idW  int
@@ -315,7 +319,13 @@ func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Lo
 			for _, v := range c.Values {
 				t.kindW = max(t.kindW, len(v))
 			}
+		case linkColumn:
+			t.link = c.Str
 		}
+	}
+	t.name = KeyColumn
+	if s.Info.Containers.Column != "" {
+		t.name = headingPath // a tree's rows name directories: their keys are paths
 	}
 	if vers != nil {
 		t.idName = s.Versions.ID
@@ -325,8 +335,8 @@ func newTable[P any](s *schema.Schema[P], vers *schema.Versions[P], loc *time.Lo
 }
 
 func (t *table[P]) header(b []byte) []byte {
-	b = appendLeft(b, t.timeHeading, t.timeW)
-	b = appendPadded(append(b, "  "...), []byte(sizeColumn), sizeWidth)
+	b = appendPadded(b, []byte(sizeColumn), sizeWidth)
+	b = appendLeft(append(b, "  "...), t.timeHeading, t.timeW)
 	if t.kind != nil {
 		b = appendLeft(append(b, "  "...), kindColumn, t.kindW)
 	}
@@ -337,11 +347,18 @@ func (t *table[P]) header(b []byte) []byte {
 			b = appendLeft(append(b, "  "...), headingDeleteMarker, len(headingDeleteMarker))
 		}
 	}
-	return append(b, "  "+KeyColumn+"\n"...)
+	return append(b, "  "+t.name+"\n"...)
 }
 
 func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 	p := &r.Data
+	var num [24]byte
+	n := append(num[:0], missingCell...)
+	if v, ok := get(t.size, p); ok {
+		n = appendIEC(num[:0], v)
+	}
+	b = appendPadded(b, n, sizeWidth)
+	b = append(b, "  "...)
 	start := len(b)
 	if v, ok := get(t.mtime, p); ok {
 		b = appendLocal(b, v, t.loc)
@@ -349,12 +366,6 @@ func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 		b = append(b, missingCell...)
 	}
 	b = pad(b, start, t.timeW)
-	var num [24]byte
-	n := append(num[:0], missingCell...)
-	if v, ok := get(t.size, p); ok {
-		n = appendIEC(num[:0], v)
-	}
-	b = appendPadded(append(b, "  "...), n, sizeWidth)
 	if t.kind != nil {
 		v, _ := t.kind(p)
 		t.kindW = max(t.kindW, len(v))
@@ -374,7 +385,13 @@ func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 			b = pad(strconv.AppendBool(append(b, "  "...), t.vers.Marker(p)), start, len(headingDeleteMarker))
 		}
 	}
-	return appendTSV(append(b, "  "...), r.Key)
+	b = appendTSV(append(b, "  "...), r.Key)
+	if t.link != nil {
+		if v, ok := t.link(p); ok && v != "" {
+			b = appendTSV(append(b, " -> "...), v)
+		}
+	}
+	return b
 }
 
 // get is an integer accessor's value; false when the schema lacks the
