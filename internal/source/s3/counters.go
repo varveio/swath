@@ -18,8 +18,8 @@ const (
 // Counts.Store fills them), then the provider's (Stats fills them from a
 // refreshed client).
 var clientCounters = append(objhttp.CounterDefs("429/503/SlowDown"),
-	counters.Def{Key: "credentials.refreshes", Kind: counters.Count, Unit: "refreshes", Help: "signing credentials refreshed after the first lookup and taken into use: 5 minutes before they expire, or forced; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client"},
-	counters.Def{Key: "credentials.expired_refreshes", Kind: counters.Count, Unit: "refreshes", Help: "refreshes forced by an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to refreshable credentials, its request retried once; the answers to requests signed together force one"})
+	counters.Def{Key: "credentials.refreshes", Kind: counters.Count, Unit: "refreshes", Help: "signing credentials fetched and installed after the first: ahead of their expiry (by the smaller of 5 minutes and a quarter of their lifetime), or renewed; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client"},
+	counters.Def{Key: "credentials.expired_refreshes", Kind: counters.Count, Unit: "refreshes", Help: "renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused"})
 
 // refreshed is implemented by clients that sign with refreshable
 // credentials (client.Client).

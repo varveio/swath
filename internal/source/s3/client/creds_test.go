@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/objhttp"
+	objs3 "github.com/varveio/swath/objfile/s3"
 )
 
 // TestCredentialSources keeps the credential-service region independent of
@@ -92,7 +93,7 @@ func TestCredentialOutageRecovers(t *testing.T) {
 			w.WriteHeader(503)
 			fmt.Fprint(w, `<ErrorResponse><Error><Type>Receiver</Type><Code>ServiceUnavailable</Code><Message>down</Message></Error></ErrorResponse>`)
 		default:
-			exp := time.Now().Add(expiryWindow + 2*time.Second).UTC().Format(time.RFC3339) // refreshed in 2 s
+			exp := time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339)
 			fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
 <AccessKeyId>AK%d</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
 </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, i, exp)
@@ -105,7 +106,7 @@ func TestCredentialOutageRecovers(t *testing.T) {
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2500 * time.Millisecond) // the first credentials are due a refresh, which meets the outage
+	time.Sleep(2500 * time.Millisecond) // the first credentials expire; the refresh meets the outage
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 		t.Fatalf("after the outage: %v (class %s, %d STS calls)", err, objhttp.Classify(err), n.Load())
 	}
@@ -408,8 +409,8 @@ func TestCredentialDiscovered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("profile %q: %v", c.profile, err)
 		}
-		a.credentials = refusal
-		if _, _, err := a.ready(context.Background()); discovered(t, err) != c.want {
+		a.credentials = objs3.RefreshAhead(refusal)
+		if _, _, _, err := a.ready(context.Background()); discovered(t, err) != c.want {
 			t.Errorf("profile %q: a refused refresh is discovered %v, want %v", c.profile, !c.want, c.want)
 		}
 	}

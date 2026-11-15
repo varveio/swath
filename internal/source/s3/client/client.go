@@ -190,7 +190,10 @@ func (c *Client) Credentials() (source string, anonymous bool) {
 // use after the first lookup, and how many of those refreshes an
 // expired-token answer forced.
 func (c *Client) CredentialRefreshes() (refreshes, forced int64) {
-	return c.auth.refreshes.Load(), c.auth.forced.Load()
+	if c.auth.credentials == nil {
+		return 0, 0
+	}
+	return c.auth.credentials.Refreshes()
 }
 
 // Note is a one-time warning for the user, or "".
@@ -290,7 +293,7 @@ func bearerHeader(req *http.Request) error {
 func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
-	tok, creds, err := c.auth.ready(actx)
+	tok, creds, gen, err := c.auth.ready(actx)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +320,7 @@ func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byt
 		v, err = parse(capture.Body)
 	}
 	if err != nil {
-		return nil, c.auth.expired(actx, c.failure(actx, ctx, err), creds, renewed)
+		return nil, c.auth.expired(actx, c.failure(actx, ctx, err), creds, gen, renewed)
 	}
 	return v, nil
 }

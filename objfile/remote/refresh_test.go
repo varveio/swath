@@ -17,9 +17,9 @@ import (
 )
 
 // TestOpenDestinationS3RefreshesAhead: a destination's expiring
-// credentials (web identity through STS here) are refreshed 5 minutes
-// before they expire: ones expiring in 5 minutes and a second sign the
-// first write, and are replaced after that second.
+// credentials (web identity through STS here) are refreshed ahead of their
+// expiry: ones valid for 4 seconds are replaced after 3, a write then
+// signing with them while the refresh runs, and the next with the new ones.
 func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	awsEnv(t)
 	dir := t.TempDir()
@@ -35,7 +35,7 @@ func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	var calls atomic.Int32
 	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i := calls.Add(1)
-		exp := time.Now().Add(5*time.Minute + time.Second).UTC().Format(time.RFC3339Nano)
+		exp := time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339Nano)
 		fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
 <AccessKeyId>AKWEB%d</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
 </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, i, exp)
@@ -62,11 +62,19 @@ func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	if !signed("AKWEB1") || signed("AKWEB2") {
 		t.Fatal("the first write was not signed with the first credentials")
 	}
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(3200 * time.Millisecond)
 	if _, err := d.Writer().PutIfAbsent(context.Background(), "b", []byte("b")); err != nil {
 		t.Fatal(err)
 	}
+	// The writes after it sign with the new credentials once installed,
+	// still before the first expire.
+	for i := 0; !signed("AKWEB2") && i < 50; i++ {
+		if _, err := d.Writer().PutIfAbsent(context.Background(), fmt.Sprint("c", i), []byte("c")); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if !signed("AKWEB2") || calls.Load() != 2 {
-		t.Fatalf("after a second: %d STS calls, AKWEB2 signed %v", calls.Load(), signed("AKWEB2"))
+		t.Fatalf("after 3 seconds: %d STS calls, AKWEB2 signed %v", calls.Load(), signed("AKWEB2"))
 	}
 }

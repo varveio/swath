@@ -21,6 +21,7 @@ import (
 
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	objs3 "github.com/varveio/swath/objfile/s3"
 )
 
 // expiring is a credentials provider whose every lookup issues new
@@ -49,81 +50,63 @@ func signedKey(r *http.Request) string {
 
 const expiredAnswer = `<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>`
 
-// refreshingClient is a client signing with p's credentials through the
-// SDK's cache with window, as loadAuth builds it.
-func refreshingClient(t *testing.T, h http.HandlerFunc, p aws.CredentialsProvider, window time.Duration) *Client {
+// refreshingClient is a client signing with p's credentials, refreshed
+// ahead as loadAuth's.
+func refreshingClient(t *testing.T, h http.HandlerFunc, p aws.CredentialsProvider) *Client {
 	t.Helper()
 	s3test.NoCredentials(t)
 	c := newTest(t, testConfig(s3test.Serve(t, h)))
-	c.auth.credentials = aws.NewCredentialsCache(p, func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = window })
+	c.auth.credentials = objs3.RefreshAhead(p)
 	c.auth.anonymous, c.auth.source = false, "test"
 	return c
 }
 
 // TestCredentialsRefreshAcrossExpiries: workers list through several
-// expiries of short-lived credentials against an S3 that refuses a key
-// once it has expired, a request taking transit to arrive. With a window
-// over transit, the credentials are refreshed before any request could
-// arrive late, once per expiry however many workers wait on it, and no
-// answer is an expired token. Without one, requests signed just before an
-// expiry arrive after it: each such answer renews the credentials and its
-// request is retried, so the run still completes, and the answers to
-// requests signed together force one refresh.
+// expiries of 1-second credentials against an S3 that refuses a key once it
+// has expired, a request taking transit to arrive. The credentials are
+// refreshed a quarter of their lifetime ahead, before any request could
+// arrive late, once per lifetime however many workers sign meanwhile, and no
+// answer is an expired token.
 func TestCredentialsRefreshAcrossExpiries(t *testing.T) {
-	const (
-		life, transit, run, workers = 1 * time.Second, 50 * time.Millisecond, 3 * time.Second, 8
-	)
-	for _, tc := range []struct {
-		name   string
-		window time.Duration
-	}{{"window", 500 * time.Millisecond}, {"no window", 0}} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &expiring{life: life}
-			var expired atomic.Int64
-			c := refreshingClient(t, func(w http.ResponseWriter, r *http.Request) {
-				e, ok := p.expires.Load(signedKey(r))
-				if !ok || time.Now().Add(transit).After(e.(time.Time)) {
-					expired.Add(1)
-					w.WriteHeader(400)
-					io.WriteString(w, expiredAnswer)
+	const life, transit, run, workers = 1 * time.Second, 50 * time.Millisecond, 3 * time.Second, 8
+	p := &expiring{life: life}
+	var expired atomic.Int64
+	c := refreshingClient(t, func(w http.ResponseWriter, r *http.Request) {
+		e, ok := p.expires.Load(signedKey(r))
+		if !ok || time.Now().Add(transit).After(e.(time.Time)) {
+			expired.Add(1)
+			w.WriteHeader(400)
+			io.WriteString(w, expiredAnswer)
+			return
+		}
+		io.WriteString(w, okPage)
+	}, p)
+	ctx, cancel := context.WithTimeout(context.Background(), run)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for range workers {
+		wg.Go(func() {
+			for ctx.Err() == nil {
+				if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+					errs <- err
 					return
 				}
-				io.WriteString(w, okPage)
-			}, p, tc.window)
-			ctx, cancel := context.WithTimeout(context.Background(), run)
-			defer cancel()
-			var wg sync.WaitGroup
-			errs := make(chan error, workers)
-			for range workers {
-				wg.Go(func() {
-					for ctx.Err() == nil {
-						if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-							errs <- err
-							return
-						}
-					}
-				})
-			}
-			wg.Wait()
-			close(errs)
-			for err := range errs {
-				t.Fatalf("%v (class %s)", err, objhttp.Classify(err))
-			}
-			refreshes, forced := c.CredentialRefreshes()
-			lookups := p.n.Load()
-			// One lookup per lifetime the run spans (the first included), at
-			// most one more than the run's length allows: never one per worker.
-			most := int64(run/(life-tc.window)) + 2
-			if lookups < 3 || lookups > most || refreshes != lookups-1 {
-				t.Fatalf("%d lookups (want 3 to %d), %d refreshes", lookups, most, refreshes)
-			}
-			switch {
-			case tc.window > 0 && (forced != 0 || expired.Load() != 0):
-				t.Fatalf("with a window: %d forced refreshes, %d expired answers", forced, expired.Load())
-			case tc.window == 0 && (forced == 0 || forced > lookups || expired.Load() == 0):
-				t.Fatalf("without a window: %d forced refreshes for %d lookups, %d expired answers", forced, lookups, expired.Load())
 			}
 		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("%v (class %s)", err, objhttp.Classify(err))
+	}
+	refreshes, forced := c.CredentialRefreshes()
+	lookups := p.n.Load()
+	// One lookup per three quarters of a lifetime the run spans (the first
+	// included), at most one more: never one per worker or per request.
+	most := int64(run/(life*3/4)) + 2
+	if lookups < 3 || lookups > most || refreshes != lookups-1 || forced != 0 || expired.Load() != 0 {
+		t.Fatalf("%d lookups (want 3 to %d), %d refreshes, %d forced, %d expired answers", lookups, most, refreshes, forced, expired.Load())
 	}
 }
 
@@ -145,7 +128,7 @@ func TestExpiredAnswerRenewsOnce(t *testing.T) {
 			return
 		}
 		io.WriteString(w, okPage)
-	}, p, expiryWindow)
+	}, p)
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
@@ -172,7 +155,7 @@ func TestExpiredAnswerBounded(t *testing.T) {
 	}
 	t.Run("refreshable", func(t *testing.T) {
 		p := &expiring{life: time.Hour}
-		c := refreshingClient(t, refuse, p, expiryWindow)
+		c := refreshingClient(t, refuse, p)
 		_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 		_, forced := c.CredentialRefreshes()
 		if objhttp.Classify(err) != objhttp.ClassAuth || !strings.Contains(fmt.Sprint(err), "refused again after the credentials from test were refreshed") ||
@@ -196,8 +179,9 @@ func TestExpiredAnswerBounded(t *testing.T) {
 }
 
 // TestCredentialChainRefreshesAhead: credentials from the SDK's chain (web
-// identity through STS) are refreshed expiryWindow before they expire: ones
-// expiring in expiryWindow and a second are replaced after that second.
+// identity through STS) are refreshed ahead of their expiry: ones valid for
+// 4 seconds are replaced after 3, a request then signing with them while
+// the refresh runs, and the next with the new ones.
 func TestCredentialChainRefreshesAhead(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -207,7 +191,7 @@ func TestCredentialChainRefreshesAhead(t *testing.T) {
 	var n atomic.Int32
 	sts := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i := n.Add(1)
-		exp := time.Now().Add(expiryWindow + time.Second).UTC().Format(time.RFC3339Nano)
+		exp := time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339Nano)
 		fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
 <AccessKeyId>AK%d</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
 </Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, i, exp)
@@ -228,9 +212,18 @@ func TestCredentialChainRefreshesAhead(t *testing.T) {
 	if k := list(); k != "AK1" {
 		t.Fatalf("first request signed with %s", k)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(3200 * time.Millisecond)
+	if k := list(); k != "AK1" {
+		t.Fatalf("while refreshing: signed with %s", k)
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		if refreshes, _ := c.CredentialRefreshes(); refreshes == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if k := list(); k != "AK2" || n.Load() != 2 {
-		t.Fatalf("after a second: signed with %s, %d STS calls", k, n.Load())
+		t.Fatalf("after the refresh: signed with %s, %d STS calls", k, n.Load())
 	}
 	if refreshes, forced := c.CredentialRefreshes(); refreshes != 1 || forced != 0 {
 		t.Fatalf("%d refreshes, %d forced", refreshes, forced)

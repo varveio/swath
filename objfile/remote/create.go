@@ -273,11 +273,8 @@ func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*D
 	// refuses.
 	hc := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.ResponseHeaderTimeout = timeout })
 	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(hc), config.WithLogger(logging.Nop{}),
-		// Expiring credentials (an assumed role, web identity, SSO, a
-		// credential process) are refreshed 5 minutes before they expire,
-		// as the S3 source's are: never used until the instant they do, so
-		// a request signed just before is not refused on arrival.
-		config.WithCredentialsCacheOptions(func(co *aws.CredentialsCacheOptions) { co.ExpiryWindow = 5 * time.Minute })}
+		// s3.RefreshAhead keeps the window (below): the SDK's cache none.
+		config.WithCredentialsCacheOptions(func(co *aws.CredentialsCacheOptions) { co.ExpiryWindow = 0 })}
 	if o.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(o.Profile))
 	}
@@ -287,6 +284,12 @@ func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*D
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("remote: destination configuration: %w", err)
+	}
+	if cfg.Credentials != nil {
+		// Expiring credentials (an assumed role, web identity, SSO, a
+		// credential process) are refreshed ahead of their expiry, as the
+		// S3 source's are, never used until the instant they expire.
+		cfg.Credentials = s3.RefreshAhead(cfg.Credentials)
 	}
 	d.region = cfg.Region
 	if d.region == "" {
