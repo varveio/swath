@@ -5,7 +5,6 @@ package registry
 
 import (
 	"context"
-	"sync/atomic"
 
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
@@ -18,10 +17,10 @@ import (
 type sized[P any] struct {
 	p    source.Provider[any, P]
 	size func(*P) (int64, bool)
-	n    *atomic.Int64
+	n    *Sizes
 }
 
-func newSized[P any](p source.Provider[any, P], size func(*P) (int64, bool), n *atomic.Int64) source.Provider[any, P] {
+func newSized[P any](p source.Provider[any, P], size func(*P) (int64, bool), n *Sizes) source.Provider[any, P] {
 	s := sized[P]{p, size, n}
 	if d, ok := p.(source.Disposer[any]); ok {
 		return sizedDisposer[P]{s, d}
@@ -69,7 +68,7 @@ func (s sizedDisposer[P]) Dispose(r any) { s.d.Dispose(r) }
 type sizeEmitter[P any] struct {
 	source.Emitter[any, P]
 	size func(*P) (int64, bool)
-	n    *atomic.Int64
+	n    *Sizes
 }
 
 // Subtree forwards to a Subtreer emitter: the filters drop rows, not
@@ -99,20 +98,25 @@ func (e sizeEmitter[P]) Awaited() bool {
 	return ok && a.Awaited()
 }
 
-// Rows hands the rows on and adds their sizes once the order stage has
-// accepted them: a page it refuses (the run stopping) is not counted. The
-// sizes are summed first, because the slice passes to the order stage,
-// which may reuse it.
+// Rows hands the rows on and adds their sizes, and counts those unknown,
+// once the order stage has accepted them: a page it refuses (the run
+// stopping) is not counted. The sizes are summed first, because the slice
+// passes to the order stage, which may reuse it.
 func (e sizeEmitter[P]) Rows(rows []schema.Row[P]) error {
-	var sum int64
+	var sum, unknown int64
 	for i := range rows {
 		if v, ok := e.size(&rows[i].Data); ok {
 			sum += v
+		} else {
+			unknown++
 		}
 	}
 	if err := e.Emitter.Rows(rows); err != nil {
 		return err
 	}
-	e.n.Add(sum)
+	e.n.Bytes.Add(sum)
+	if unknown > 0 {
+		e.n.Unknown.Add(unknown)
+	}
 	return nil
 }

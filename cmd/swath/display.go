@@ -727,8 +727,11 @@ func closingCount(r *listing.Report, n nouns) string {
 	var s string
 	var bytes *int64
 	switch t := out.Totals; {
-	case t != nil && t.Dirs > 0:
-		s = count(t.Objects) + " " + plural(t.Objects, "file", "files") + ", " + count(t.Dirs) + " " + plural(t.Dirs, "directory", "directories")
+	case t != nil && n == rowNouns(true, false): // a local tree's, as its table counts them
+		s = count(t.Objects) + " " + plural(t.Objects, "file", "files")
+		if t.Dirs > 0 {
+			s += ", " + count(t.Dirs) + " " + plural(t.Dirs, "directory", "directories")
+		}
 	case t != nil:
 		s = n.of(t.Objects)
 	case out.RowsCommitted > 0:
@@ -736,11 +739,14 @@ func closingCount(r *listing.Report, n nouns) string {
 	default:
 		s = n.of(out.RowsEmitted + out.RowsRetained)
 	}
+	// Bytes only where every size counted is known: a sum short of an
+	// unknown size is no total.
 	switch t := out.Totals; {
-	case t != nil && t.Size != nil && t.SizeMissing == 0:
-		bytes = t.Size
 	case t != nil:
-	case out.CommittedObjectBytes != nil:
+		if t.Size != nil && t.SizeMissing == 0 {
+			bytes = t.Size
+		}
+	case r.Outcome.Status == listing.StatusCommitted:
 		bytes = out.CommittedObjectBytes
 	case out.RowsRetained == 0:
 		bytes = out.ObjectBytes
@@ -748,7 +754,12 @@ func closingCount(r *listing.Report, n nouns) string {
 	if out.RowsRetained > 0 {
 		s += " (" + count(out.RowsRetained) + " from earlier attempts)"
 	}
-	if out.RowsFiltered > 0 {
+	switch {
+	case out.RowsFiltered > 0 && out.Totals != nil:
+		// The totals count files once however many names they have: the
+		// filters' account is in rows.
+		s += " (" + n.of(out.RowsEmitted) + " kept, " + count(out.RowsFiltered) + " filtered out)"
+	case out.RowsFiltered > 0:
 		s += " kept, " + count(out.RowsFiltered) + " filtered out"
 	}
 	if bytes != nil {

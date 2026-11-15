@@ -439,8 +439,8 @@ func show(args []string, stdout io.Writer) error {
 // writeSummary prints a committed dataset's summary for people, in
 // reading order under labels: the verdict on its coverage, the source,
 // when it was listed, what it holds (its rows, the object bytes, the key
-// range, clipped to width when that is not 0), the coverage's account and
-// the storage last.
+// range, clipped to width when that is not 0 and left out where it cannot
+// fit), the coverage's account and the storage last.
 func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int) {
 	c := &m.Coverage
 	fmt.Fprintf(w, "%s: %s\n", escapeControl(name), coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
@@ -468,10 +468,13 @@ func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int) {
 	}
 	if k := len(m.Parts); k > 0 {
 		lo, hi := strconv.Quote(string(m.Parts[0].MinKey)), strconv.Quote(string(m.Parts[k-1].MaxKey))
-		if room := width - len(indent+labelWidth+contents+"; keys  .. "); width > 0 && len(lo)+len(hi) > room {
-			lo, hi = clip(lo, room/2), clip(hi, room-room/2)
+		room := width - len(indent+labelWidth+contents+"; keys  .. ")
+		switch {
+		case width == 0 || len(lo)+len(hi) <= room:
+			contents += "; keys " + lo + " .. " + hi
+		case room >= 2*len(clipped):
+			contents += "; keys " + clip(lo, room/2) + " .. " + clip(hi, room-room/2)
 		}
-		contents += "; keys " + lo + " .. " + hi
 	}
 	label(w, "contents", contents)
 	cov := []string{"nothing unreadable"}
@@ -520,8 +523,12 @@ func localSpan(from, to time.Time) string {
 	return localTime(from) + " to " + localTime(to)
 }
 
-// clip cuts a quoted key to n bytes or fewer, its start kept and an
-// ellipsis after it.
+// clipped is the shortest key clip leaves: a quote, a character, the
+// ellipsis and the closing quote. A narrower room leaves the range out.
+const clipped = "\"k...\""
+
+// clip cuts a quoted key to n bytes or fewer (n at least len(clipped)),
+// its start kept and an ellipsis after it.
 func clip(q string, n int) string {
 	const more = "...\""
 	if len(q) <= n {

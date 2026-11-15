@@ -107,11 +107,15 @@ func TestShowDataset(t *testing.T) {
 	if err != nil || json.Unmarshal(b, &m) != nil {
 		t.Fatal(err)
 	}
-	shown.Reset()
-	writeSummary(&shown, "ds", &m, 80)
-	for _, l := range strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n") {
-		if strings.Contains(l, "contents") && (len(l) > 80 || !strings.Contains(l, "...\"")) {
-			t.Fatalf("clipped to 80: %q", l)
+	// Clipped to a narrow terminal; left out where even clipped keys
+	// would pass its width.
+	for width, keys := range map[int]bool{80: true, 50: true, 45: false} {
+		shown.Reset()
+		writeSummary(&shown, "ds", &m, width)
+		for _, l := range strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n") {
+			if strings.Contains(l, "contents") && (len(l) > width || strings.Contains(l, "...\"") != keys || strings.Contains(l, "keys") != keys) {
+				t.Fatalf("width %d: %q", width, l)
+			}
 		}
 	}
 }

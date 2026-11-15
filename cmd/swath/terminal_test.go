@@ -264,6 +264,21 @@ func TestStatsBlock(t *testing.T) {
 	du := listing.Report{Timings: listing.Timings{SessionMs: 100}, Outcome: listing.Outcome{Complete: true},
 		Output: listing.Output{RowsFetched: 16, RowsEmitted: 16, Totals: &totals.Stats{Objects: 7, Dirs: 9, Size: &size}}}
 	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories, 410 KiB in 0.1s")
+	// Its filters count rows: two names of one hard-linked file kept, one
+	// file filtered out, where the total counts the file once.
+	du.Output = listing.Output{RowsFetched: 3, RowsEmitted: 2, RowsFiltered: 1, Totals: &totals.Stats{Objects: 1, Size: &size}}
+	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 1 file (2 entries kept, 1 filtered out), 410 KiB in 0.1s")
+	// A size unknown (the names metadata tier) leaves the bytes out: of the
+	// totals, of the committed dataset, never the attempt's sum instead.
+	du.Output.Totals.SizeMissing = 1
+	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 1 file (2 entries kept, 1 filtered out) in 0.1s")
+	zero := int64(0)
+	names := listing.Report{Timings: listing.Timings{SessionMs: 100}, Invocation: listing.Invocation{Out: "ds"},
+		Outcome: listing.Outcome{Status: listing.StatusCommitted, Complete: true},
+		Output:  listing.Output{RowsFetched: 3, RowsEmitted: 3, RowsCommitted: 3, PartsWritten: 1, OutputBytes: 2048, ObjectBytes: &zero}}
+	if l := statsLines(&names, false, rowNouns(true, false), false); l[0] != "complete: 3 entries in 0.1s → ds (1 part, 2.00 KiB)" {
+		t.Fatalf("committed, its object bytes unknown: %q", l[0])
+	}
 	quick := &listing.Report{Timings: listing.Timings{SessionMs: 100}}
 	switch {
 	case showStats(termOptions{}, quick, false):
@@ -424,5 +439,23 @@ func TestDuDatasetHint(t *testing.T) {
 	}
 	if want := "hint: " + ds + " is a swath dataset; to total what it lists: swath du --from-dataset " + shellOperand(ds) + "\n"; !strings.Contains(stderr.String(), want) || out.Len() == 0 {
 		t.Fatalf("stderr %q", stderr.String())
+	}
+}
+
+// TestUnknownSizesNoBytes: at the names metadata tier no size is read, so
+// the run knows no byte total: the closing line gives none, and the report
+// leaves output.object_bytes out, as the manifest leaves
+// committed_object_bytes out; it was 0.
+func TestUnknownSizesNoBytes(t *testing.T) {
+	root, _ := depthTree(t)
+	stderr := captureStderr(t)
+	report := filepath.Join(t.TempDir(), "r.json")
+	if err := run(context.Background(), []string{root, "--metadata", "names", "-o", filepath.Join(t.TempDir(), "ds"), "--stats", "--no-progress", "--report", report}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if !regexp.MustCompile(`(?m)^  complete: [0-9,]+ entries in `).MatchString(stderr.String()) || rep.Output.ObjectBytes != nil || rep.Output.CommittedObjectBytes != nil {
+		t.Fatalf("stderr %q, object_bytes %v, committed_object_bytes %v", stderr.String(), rep.Output.ObjectBytes, rep.Output.CommittedObjectBytes)
 	}
 }

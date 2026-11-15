@@ -181,7 +181,8 @@ type ProgressSnapshot struct {
 	Retained int64 `json:"rows_retained"`
 	// ObjectBytes is the sizes of the objects listed so far summed, as the
 	// order stage accepted them: the report's output.object_bytes so far
-	// (absent for a schema without a size column, and before listing).
+	// (absent for a schema without a size column, once an object's size
+	// is null, and before listing).
 	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 	// Requests (http_attempts), Retries, Inflight and Limit are the source's HTTP account
 	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
@@ -252,9 +253,10 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		}
 	}
 	s.Retained = p.retained.Load()
-	if z := p.sizes.Load(); z != nil && z.Measured.Load() {
-		b := z.Bytes.Load()
-		s.ObjectBytes = &b
+	if z := p.sizes.Load(); z != nil {
+		if b, ok := z.Known(); ok {
+			s.ObjectBytes = &b
+		}
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()

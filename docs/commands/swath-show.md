@@ -14,7 +14,8 @@ swath show DIR [OPTIONS]
 
 For a committed dataset, `swath show` prints the manifest's summary for people, in reading order: the verdict
 first, then labelled lines for the source, when it was listed (local time, the zone named), what the dataset
-holds (its rows, the bytes of the objects they list, and the key range, clipped to a terminal's width), the
+holds (its rows, the bytes of the objects they list when every size is known, and the key range, clipped to
+a terminal's width and left out where it cannot fit), the
 coverage, and last how it is stored (the Parquet parts and their bytes, the SeekParquet format and the swath
 schema):
 

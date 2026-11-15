@@ -1046,8 +1046,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	a.sum.Resources.PeakHeapLiveBytes = heap()
 	a.router = router
 	a.sum.Output.RowsFetched = src.Listed()
-	if sizes.Measured.Load() {
-		b := sizes.Bytes.Load()
+	if b, ok := sizes.Known(); ok {
 		a.sum.Output.ObjectBytes = &b
 	}
 	if cfg.Totals != nil {

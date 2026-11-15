@@ -123,9 +123,11 @@ sends the rows to stdout. Everything else goes to stderr:
 
   The first line is the verdict (`complete`, or with its cause `partial: 1 unreadable entry`,
   `stopped: --max-duration reached`, `interrupted`), then what the run counted and the bytes listed when
-  known, the time it took, the rate for a run of 2 seconds or more, and where the output went (nothing for
-  stdout). Rows the filters dropped follow the ones kept (`3 objects kept, 1 filtered out`); `swath du` counts
-  from its total row (`7 files, 9 directories`); a dataset run that stopped says what it saved for a resume
+  known (none when a size is unknown, as with `--metadata names`), the time it took, the rate for a run of
+  2 seconds or more, and where the output went (nothing for stdout). Rows the filters dropped follow the ones
+  kept (`3 objects kept, 1 filtered out`); `swath du` counts from its total row (`7 files, 9 directories`),
+  which counts a hard-linked file once, and gives the filters' account in rows after it
+  (`1 file (2 entries kept, 1 filtered out)`); a dataset run that stopped says what it saved for a resume
   beside what it listed (`7,003 saved, 12,003 listed`), and a resume gives the dataset's total with the rows
   from earlier attempts apart. A dataset run adds a `next:` line: `swath show DIR · swath du --from-dataset
   DIR` once committed, `swath resume DIR` when it can be resumed. The warnings that explain a verdict come
