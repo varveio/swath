@@ -12,6 +12,16 @@ Notable changes per release. The full human summary for the current release is i
   cap holds it back, so a disk grown under a live run (a cloud disk resized and its filesystem grown online) is used without a
   restart. `--spill-budget` is a fixed cap. The run report adds `resources.spill.max_by`, `start_max_bytes`,
   `max_raised`, `max_rechecks` and `max_recheck_raised`; `max_bytes` is the cap in effect at the end.
+- Go port: `objfile/remote` opens a location with explicit settings: `remote.OpenWith(ctx, location,
+  remote.Options{...})` takes a GCS credentials file, an endpoint (an emulator's for GCS), an S3 region and
+  profile, an Azure SAS and a request timeout; `remote.Open` is `OpenWith` with the zero `Options`. An Azure
+  container on a custom endpoint, Azurite's or the replay server's, can now be read (#384). `Options` replaces
+  `DestinationOptions`, so `OpenDestination` takes the same struct; its write fields (`GCSWrite`, `S3Write`,
+  `AzureWrite`) are the destination's only. A store `Open` builds now waits at most `DefaultRequestTimeout`
+  (2 minutes) for a response's headers, and Azure's token requests are bounded by it; `RequestTimeout` changes
+  it, and zero or negative is the default (there is no unlimited value). GCS Application Default Credentials,
+  for reads and now for destinations too, keep the auth library's own clients, so an X.509 workload identity
+  configuration gets its mTLS client; only a `CredentialsFile`'s token requests are bounded by `RequestTimeout`.
 - Go port: `--include` and `--exclude` refuse, with exit 2 before any listing, a glob that carries a sign of a
   regular expression (a leading `^`, a final `$`, `\.`, `\d`, `(a|b)`), naming `--include-regex` or
   `--exclude-regex`; a 0.3 command line no longer lists nothing and exits 0 (#526). A directory an interrupted

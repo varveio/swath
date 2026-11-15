@@ -24,11 +24,15 @@ writes against an in-process fake bucket).
 
 ## Read a remote file
 
-`remote.Open` builds a read-only store with default credentials. Locations are
-`s3://BUCKET[/PREFIX]`, `gs://BUCKET[/PREFIX]`, or
+`remote.Open` builds a read-only store with the provider's default credentials and
+the environment's endpoint (`AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` for S3,
+`STORAGE_EMULATOR_HOST` for GCS). `remote.OpenWith` takes a `remote.Options` instead:
+a credentials file (GCS), an endpoint, a region and profile (S3), a shared access
+signature (Azure) and a request timeout; fields left unset keep `Open`'s defaults.
+Locations are `s3://BUCKET[/PREFIX]`, `gs://BUCKET[/PREFIX]`, or
 `az://ACCOUNT/CONTAINER[/PREFIX]`. The prefix is a dataset root; object names below
 it are literal relative paths, without empty, `.` or `..` segments. Location URIs
-cannot carry credentials, queries, or fragments.
+cannot carry credentials, queries, or fragments, and neither can an endpoint.
 
 This example reads a Parquet footer with ranged reads, not the whole object:
 
@@ -61,6 +65,17 @@ func rowCount(ctx context.Context) (int64, error) {
 }
 ```
 
+An Azure container on an emulator such as Azurite, whose endpoint takes the account
+as its first path segment, opens with an explicit endpoint and SAS; Azure has no
+endpoint environment variable `Open` reads:
+
+```go
+store, err := remote.OpenWith(ctx, "az://devstoreaccount1/container/dataset", remote.Options{
+    Endpoint: "http://127.0.0.1:10000",
+    SAS:      sas,
+})
+```
+
 `Object` is safe for concurrent reads. Use `WithContext(ctx)` to cancel reads;
 plain `ReadAt` uses `context.Background()`. Keep the store open until its objects
 are finished. A missing object wraps `fs.ErrNotExist`; reads after an object's
@@ -75,7 +90,7 @@ cannot be distinguished. Pinning does not provide a dataset-wide snapshot.
 
 **Custom GCS clients need care:** after a response body fails partway, the SDK can
 retry a range without checking its offset and return wrong bytes without an
-error. The clients built by `remote.Open` and `remote.OpenDestination` install a
+error. The clients built by `remote.OpenWith` and `remote.OpenDestination` install a
 validating transport, which checks each response against the one byte range its
 request names; every objfile request, a batched one included, names one range.
 See the [GCS package contract](gcs/gcs.go) before supplying your own client.
@@ -259,7 +274,7 @@ import (
 )
 
 func upload(ctx context.Context, body io.Reader) (objfile.Receipt, error) {
-    dst, err := remote.OpenDestination(ctx, "s3://bucket/dataset", remote.DestinationOptions{})
+    dst, err := remote.OpenDestination(ctx, "s3://bucket/dataset", remote.Options{})
     if err != nil {
         return objfile.Receipt{}, err
     }
@@ -319,9 +334,10 @@ The source comments own the API contract and provider settings:
   [pins and snapshots](pin.go),
   [uploads, receipts, errors, and conditional deletion](write.go).
 - [Remote stores](remote/remote.go) and [destinations](remote/create.go): credentials,
-  endpoints, client ownership, timeouts, and `DestinationOptions` (including
+  endpoints, client ownership, timeouts, and `Options` (including the destination's
   `GCSWrite`, `S3Write`, and `AzureWrite`). Read and write clients have distinct
-  credential and endpoint policies.
+  credential and endpoint policies: GCS reads request the read-only scope, and an S3
+  destination applies none of the environment's endpoint settings.
 - [S3 reads](s3/s3.go) / [writes](s3/write.go),
   [GCS reads](gcs/gcs.go) / [writes](gcs/write.go),
   [Azure reads](azblob/azblob.go) / [writes](azblob/write.go).
