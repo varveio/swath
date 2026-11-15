@@ -357,3 +357,32 @@ func TestDatasetContract(t *testing.T) {
 	}
 	checkContract(t, out)
 }
+
+// TestOverwriteKeepsOnlyItsParts: a run that replaces a committed local
+// dataset (--overwrite) leaves data/ holding exactly its own manifest's
+// parts: none of the replaced dataset's, which had more.
+func TestOverwriteKeepsOnlyItsParts(t *testing.T) {
+	src := t.TempDir()
+	mk(t, src, "a/1", "a/2", "b", "c/d/e", "f", "g")
+	out := filepath.Join(t.TempDir(), "ds")
+	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	before := checkContract(t, out)
+	var m dataset.Manifest
+	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+	if len(m.Parts) < 2 {
+		t.Fatalf("%d parts: the first dataset needs several", len(m.Parts))
+	}
+	if err := os.RemoveAll(filepath.Join(src, "c")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Replace: true}}); err != nil {
+		t.Fatal(err)
+	}
+	after := checkContract(t, out)
+	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+	if len(m.Parts) != 1 || len(after) != len(before)-3 { // c/, c/d/, c/d/e gone
+		t.Fatalf("%d parts, keys %q (before %q)", len(m.Parts), after, before)
+	}
+}

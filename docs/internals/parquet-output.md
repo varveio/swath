@@ -308,7 +308,10 @@ A producer also declares its storage-class column, `schema.Info.StorageClass` (`
 `access_tier` for Azure Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
 a declaration that names no string column. A local tree declares its containers the same way,
 `schema.Info.Containers` (the rows whose `kind` is `DIR`): `schema.Bind` derives `Schema.Container` from it,
-which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Each provider
+which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Its
+`schema.Info.NamesTier` (`names`) is the metadata tier, recorded in a manifest's `source.metadata`, whose rows
+carry no link identity: `swath du --from-dataset` counts such a dataset's hard-linked files under every name, as
+the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
 declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
 the dataset's columns (`registry.DatasetTotals`).

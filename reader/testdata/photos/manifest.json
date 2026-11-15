@@ -19,7 +19,8 @@
       "published_at": "2026-11-12T09:00:02Z",
       "source": {
         "kind": "local-fs",
-        "uri": "/data/photos"
+        "uri": "/data/photos",
+        "metadata": "stat"
       },
       "scope": {
         "kind": "whole"
