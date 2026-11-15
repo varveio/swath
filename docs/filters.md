@@ -13,8 +13,8 @@ Filters keep or drop rows. They apply to `swath list` and `swath du` alike, befo
 |---|---|
 | `--include GLOB` | the glob matches its key (repeatable: any of them) |
 | `--exclude GLOB` | drops a row the glob matches (repeatable) |
-| `--include-regex REGEX` | the regular expression matches anywhere in its full key (repeatable) |
-| `--exclude-regex REGEX` | drops a row the expression matches anywhere in its full key (repeatable) |
+| `--include-regex REGEX` | the regular expression matches anywhere in its key below SOURCE (repeatable) |
+| `--exclude-regex REGEX` | drops a row the expression matches anywhere in its key below SOURCE (repeatable) |
 | `--min-size SIZE`, `--max-size SIZE` | its size is within the bounds (inclusive) |
 | `--modified-since TIME`, `--modified-until TIME` | its modification time is within the bounds (inclusive) |
 | `--storage-class NAME[,NAME...]` | its storage class is one of those named (repeatable) |
@@ -24,8 +24,8 @@ an exclude always wins, whatever the order of the options. The other filters mus
 
 ## Globs
 
-A glob matches the key below SOURCE: for `s3://bucket/logs/` the part after `logs/`; for a local tree the path
-below its root. The rows still show the full key.
+A glob, as a regular expression, matches the key below SOURCE: for `s3://bucket/logs/` the part after `logs/`;
+for a local tree the path below its root. The rows still show the full key.
 
 | Pattern | Matches |
 |---|---|
@@ -58,23 +58,25 @@ glob, `.*` (names that start with a dot) and a `$` or `^` inside a key among the
 
 ## Regular expressions
 
-`--include-regex` and `--exclude-regex` match anywhere in the full key, SOURCE's prefix included (a glob matches
-the key below SOURCE): anchor with `^` to match from the start. The syntax is Go's RE2: backreferences
+`--include-regex` and `--exclude-regex` match anywhere in the key below SOURCE, as a glob does, on every
+source: `^b/` on `s3://bucket/a/` keeps `a/b/x`, as it does on the local tree `a/`. Anchor with `^` to match
+from SOURCE's root. The syntax is Go's RE2: backreferences
 (`\1`), lookahead and lookbehind, possessive quantifiers and atomic groups are refused with exit 2, `\z` ends
 the text (`\Z` is refused). RE2 runs in time linear in the key, so no pattern can stall a listing.
 
 ```text
 $ swath du s3://bucket --include-regex '(a|b)\1'
-swath: invalid --include-regex "(a|b)\\1" (Go RE2 syntax): error parsing regexp: invalid escape sequence: `\1`
+swath: --include-regex "(a|b)\\1": want a regular expression in Go's RE2 syntax: invalid escape sequence: `\1`
 ```
 
 ## Sizes, times and storage classes
 
 - `--min-size` and `--max-size` take a [SIZE](commands/swath.md#sizes-and-durations): `1M` and `1MiB` are
   binary, `1MB` decimal. They never match an S3 delete marker.
-- `--modified-since` and `--modified-until` take a date (`2026-01-01`), a time (`2026-01-01T12:00:00`, with
-  `Z` or an offset; UTC without one), or a duration before the run started (`7d`, `12h`), which the run
-  records as the time it names, so a resume keeps the same bound. A row without a time is kept.
+- `--modified-since` and `--modified-until` take a date (`2026-01-01`), a time (`2026-01-01T12:00:00`, or
+  `2026-01-01 12:00` as the tables print one; with `Z` or an offset, or without one: UTC, the zone every
+  table prints), or a duration before the run started (`7d`, `12h`), which the run records as the time it
+  names, so a resume keeps the same bound. A row without a time is kept.
 - `--storage-class` matches in any case. On S3 and GCS it is the storage class; on Azure Blob the access tier
   (`Hot`, `Cool`, `Cold`, `Archive`). A row without a class is in none and is dropped.
 

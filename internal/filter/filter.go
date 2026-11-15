@@ -3,10 +3,10 @@
 
 // Package filter is the row filters: --include and --exclude (globs,
 // glob.go), --include-regex and --exclude-regex (a regular expression
-// found anywhere in the key), --min-size and --max-size (inclusive),
-// --modified-since and --modified-until (inclusive, UTC without an offset,
-// or a duration before the run's start) and --storage-class (any of a
-// list). A row is kept when there is no include rule or one of them
+// found anywhere in the key; both kinds match the key below SOURCE, Base),
+// --min-size and --max-size (inclusive), --modified-since and
+// --modified-until (inclusive, UTC without an offset, or a duration before
+// the run's start) and --storage-class (any of a list). A row is kept when there is no include rule or one of them
 // (glob or regex) matches, no exclude matches, and the other filters pass;
 // the order rules are given in does not matter. Filters reduce the rows
 // emitted. Includes sharing a literal prefix narrow the listed prefix
@@ -41,16 +41,18 @@ type Spec struct {
 	Include, Exclude           []string // globs
 	IncludeRegex, ExcludeRegex []string
 	MinSize, MaxSize           string // size text (ParseSize): 1K, 256MB, 1.5GiB
-	// Since and Until are 2026-01-01, 2026-01-01T12:00:00 or
-	// 2026-01-01T12:00:00Z, or a duration before the run's start (7d),
-	// which Resolve replaces by the time it names.
+	// Since and Until are 2026-01-01, 2026-01-01T12:00:00 (or with a space
+	// for the T, as the tables print a time) or 2026-01-01T12:00:00Z, or a
+	// duration before the run's start (7d), which Resolve replaces by the
+	// time it names.
 	Since, Until   string
 	StorageClasses []string
-	// Base is the globs' root: the key prefix the source names, up to its
-	// last '/' ("" for a local tree, whose keys are relative to its root).
+	// Base is the patterns' root: the key prefix the source names, up to
+	// its last '/' ("" for a local tree, whose keys are relative to its
+	// root).
 	Base string
-	// incGlob and excGlob match the key relative to Base, incRe and excRe
-	// the key: each the alternation of its rules, nil for none.
+	// incGlob, excGlob, incRe and excRe match the key relative to Base:
+	// each the alternation of its rules, nil for none.
 	incGlob, excGlob, incRe, excRe *regexp.Regexp
 	minSize, maxSize               int64
 	since, until                   int64 // epoch microseconds
@@ -85,12 +87,12 @@ func (s *Spec) Validate() error {
 	s.minSize, s.maxSize = 0, 1<<63-1
 	if s.MinSize != "" {
 		if s.minSize, err = ParseSize(s.MinSize); err != nil {
-			return fmt.Errorf("--min-size: %w", err)
+			return fmt.Errorf("--min-size %q: %w", s.MinSize, err)
 		}
 	}
 	if s.MaxSize != "" {
 		if s.maxSize, err = ParseSize(s.MaxSize); err != nil {
-			return fmt.Errorf("--max-size: %w", err)
+			return fmt.Errorf("--max-size %q: %w", s.MaxSize, err)
 		}
 	}
 	if s.minSize > s.maxSize {
@@ -100,12 +102,12 @@ func (s *Spec) Validate() error {
 	s.since, s.until = -1<<63, 1<<63-1
 	if s.Since != "" {
 		if s.since, err = ParseTime(s.Since); err != nil {
-			return fmt.Errorf("--modified-since: %w", err)
+			return fmt.Errorf("--modified-since %q: %w", s.Since, err)
 		}
 	}
 	if s.Until != "" {
 		if s.until, err = ParseTime(s.Until); err != nil {
-			return fmt.Errorf("--modified-until: %w", err)
+			return fmt.Errorf("--modified-until %q: %w", s.Until, err)
 		}
 	}
 	if s.since > s.until {
@@ -146,7 +148,7 @@ func anyOf(flag string, pats []string, globs bool) (*regexp.Regexp, error) {
 	alt := make([]string, len(pats))
 	for i, p := range pats {
 		if p == "" {
-			return nil, fmt.Errorf("--%s: empty pattern", flag)
+			return nil, fmt.Errorf("--%s \"\": want a pattern", flag)
 		}
 		alt[i] = p
 		if globs {
@@ -160,7 +162,7 @@ func anyOf(flag string, pats []string, globs bool) (*regexp.Regexp, error) {
 			}
 			alt[i] = re
 		} else if _, err := regexp.Compile(p); err != nil {
-			return nil, fmt.Errorf("invalid --%s %q (Go RE2 syntax): %w", flag, p, err)
+			return nil, fmt.Errorf("--%s %q: want a regular expression in Go's RE2 syntax: %s", flag, p, strings.TrimPrefix(err.Error(), "error parsing regexp: "))
 		}
 	}
 	return regexp.Compile("(?:" + strings.Join(alt, ")|(?:") + ")")
@@ -219,10 +221,10 @@ func (s *Spec) KeyExcluded() (func(string) bool, error) {
 	}
 	return func(key string) bool {
 		rel, _ := strings.CutPrefix(key, base)
-		if (incGlob != nil || incRe != nil) && !(incGlob != nil && incGlob.MatchString(rel) || incRe != nil && incRe.MatchString(key)) {
+		if (incGlob != nil || incRe != nil) && !(incGlob != nil && incGlob.MatchString(rel) || incRe != nil && incRe.MatchString(rel)) {
 			return true
 		}
-		return excGlob != nil && excGlob.MatchString(rel) || excRe != nil && excRe.MatchString(key)
+		return excGlob != nil && excGlob.MatchString(rel) || excRe != nil && excRe.MatchString(rel)
 	}, nil
 }
 
@@ -330,7 +332,7 @@ func (s *Spec) NarrowPrefix(scope string) (string, string) {
 		if lit == "" {
 			return scope, NarrowUnanchored
 		}
-		lits = append(lits, lit)
+		lits = append(lits, s.Base+lit)
 	}
 	common := lits[0]
 	for _, l := range lits[1:] {
@@ -376,25 +378,25 @@ func ParseSize(text string) (int64, error) {
 		i++
 	}
 	num, unit := s[:i], strings.TrimSpace(s[i:])
-	if num == "" {
-		return 0, fmt.Errorf("invalid size: %s", text)
-	}
 	mult := map[string]int64{"": 1, "b": 1, "k": 1 << 10, "kib": 1 << 10, "kb": 1e3, "m": 1 << 20, "mib": 1 << 20, "mb": 1e6,
 		"g": 1 << 30, "gib": 1 << 30, "gb": 1e9, "t": 1 << 40, "tib": 1 << 40, "tb": 1e12}
 	m, ok := mult[unit]
-	if !ok {
-		return 0, fmt.Errorf("unknown size unit '%s' in: %s", unit, text)
-	}
-	r, ok := new(big.Rat).SetString(num)
-	if !ok {
-		return 0, fmt.Errorf("invalid size number: %s", text)
+	r, parsed := new(big.Rat).SetString(num)
+	if num == "" || !ok || !parsed {
+		return 0, errSize
 	}
 	r.Mul(r, new(big.Rat).SetInt64(m))
-	if !r.IsInt() || !r.Num().IsInt64() {
-		return 0, fmt.Errorf("size is out of range or not an exact byte count: %s", text)
+	switch {
+	case !r.IsInt():
+		return 0, errors.New("want a whole number of bytes: give a unit for a fraction (1.5K)")
+	case !r.Num().IsInt64():
+		return 0, errors.New("want a size below 8EiB")
 	}
 	return r.Num().Int64(), nil
 }
+
+// errSize refuses a size ParseSize cannot read, naming its units.
+var errSize = errors.New("want a size such as 1K, 1.5GiB or 256MB: bytes, or K, M, G, T, KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal)")
 
 // Resolve replaces a --modified-since or --modified-until given as a
 // duration (7d) by the time that long before now, the run's start, so that
@@ -414,16 +416,20 @@ func (s *Spec) Resolve(now time.Time) {
 	}
 }
 
-// ParseTime is Java's TimeParser: an instant with Z or an offset, a local
-// date-time taken as UTC, or a date (its start, UTC); epoch microseconds.
+// ParseTime is an instant with Z or an offset, a date-time without one
+// taken as UTC (as the tables print times; a space may stand for the T), or
+// a date (its start, UTC); epoch microseconds.
 func ParseTime(text string) (int64, error) {
 	s := strings.TrimSpace(text)
+	if len(s) > len("2006-01-02") && s[len("2006-01-02")] == ' ' {
+		s = s[:len("2006-01-02")] + "T" + strings.TrimLeft(s[len("2006-01-02"):], " ")
+	}
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04", "2006-01-02"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UnixMicro(), nil
 		}
 	}
-	return 0, fmt.Errorf("invalid date/time: %s (use 2026-01-01, 2026-01-01T12:00:00, 2026-01-01T12:00:00Z, or a duration before now such as 7d)", text)
+	return 0, errors.New("want a time such as 2026-01-01, 2026-01-01 12:00 or 2026-01-01T12:00:00Z (UTC without an offset), or a duration before now such as 7d")
 }
 
 // Equal reports whether two description lists are the same filters.

@@ -263,6 +263,8 @@ func TestNarrowPrefix(t *testing.T) {
 		{Spec{IncludeRegex: []string{`^a|^b`}}, "", "", NarrowUnanchored},
 		{Spec{IncludeRegex: []string{`^l+`}}, "", "", NarrowUnanchored},
 		{Spec{IncludeRegex: []string{`^ab+`}}, "", "a", Narrowed},
+		{Spec{IncludeRegex: []string{`^2026/`}, Base: "logs/"}, "logs/", "logs/2026/", Narrowed}, // below SOURCE, as a glob
+		{Spec{IncludeRegex: []string{`^logs/`}, Base: "logs/"}, "logs/", "logs/logs/", Narrowed},
 		{Spec{Include: []string{"logs/2026/*.gz"}}, "", "logs/2026/", Narrowed},
 		{Spec{Include: []string{"/2026/**"}, Base: "logs/"}, "logs/20", "logs/2026/", Narrowed},
 		{Spec{Include: []string{"/19/**"}, Base: "logs/"}, "logs/20", "logs/20", NarrowNoLonger},
@@ -372,6 +374,30 @@ func TestSize(t *testing.T) {
 	if err := (&Spec{MinSize: "64MB", MaxSize: "64000000"}).Validate(); err != nil {
 		t.Errorf("64MB is 64000000 bytes: %v", err)
 	}
+	// The refusal is the value's: --flag "VALUE": want ..., naming the
+	// units, or a unit for a fraction of a byte.
+	for in, want := range map[string]string{"1e3": `--min-size "1e3": want a size such as 1K, 1.5GiB or 256MB: bytes, or K, M, G, T, KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal)`,
+		"10QB": `--min-size "10QB": want a size such as`, "1.5": `--min-size "1.5": want a whole number of bytes: give a unit for a fraction (1.5K)`} {
+		if err := (&Spec{MinSize: in}).Validate(); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", in, err, want)
+		}
+	}
+}
+
+// TestRegexBelowSource: a regex, as a glob, matches the key below SOURCE
+// (Base), on every source: ^b/ is SOURCE's b/, whatever prefix SOURCE
+// names.
+func TestRegexBelowSource(t *testing.T) {
+	keys := keyRows("a/b/x", "a/c/b/y") // every key is below SOURCE's prefix
+	if got := kept(t, Spec{IncludeRegex: []string{"^b/"}, Base: "a/"}, keys); !slices.Equal(got, []string{"a/b/x"}) {
+		t.Errorf("--include-regex ^b/ below a/ kept %q", got)
+	}
+	if got := kept(t, Spec{ExcludeRegex: []string{"^b/"}, Base: "a/"}, keys); !slices.Equal(got, []string{"a/c/b/y"}) {
+		t.Errorf("--exclude-regex ^b/ below a/ kept %q", got)
+	}
+	if got := kept(t, Spec{IncludeRegex: []string{"^a/"}, Base: "a/"}, keys); len(got) != 0 {
+		t.Errorf("--include-regex ^a/ below a/ matched the source's own prefix: %q", got)
+	}
 }
 
 // TestTimes: the absolute forms, and a duration before the run's start
@@ -379,6 +405,16 @@ func TestSize(t *testing.T) {
 func TestTimes(t *testing.T) {
 	if a, b := us(t, "2026-01-01T12:00:00+02:00"), us(t, "2026-01-01T10:00"); a != b {
 		t.Errorf("offset %d, local %d", a, b)
+	}
+	// A time without an offset is UTC, as the tables print times, and
+	// their form, a space for the T, is read too.
+	for _, in := range []string{"2026-01-01 10:00", "2026-01-01 10:00:00", "2026-01-01  10:00:00.000", "2026-01-01 10:00:00Z", "2026-01-01T10:00:00Z"} {
+		if got := us(t, in); got != us(t, "2026-01-01T10:00") {
+			t.Errorf("%q: %d", in, got)
+		}
+	}
+	if err := (&Spec{Since: "yesterday"}).Validate(); err == nil || !strings.HasPrefix(err.Error(), `--modified-since "yesterday": want a time such as 2026-01-01`) {
+		t.Errorf("yesterday: %v", err)
 	}
 	now := time.Date(2026, 11, 10, 12, 30, 15, 500, time.UTC)
 	for in, want := range map[string]string{"7d": "2026-11-03T12:30:15Z", "1w": "2026-11-03T12:30:15Z", "1d12h": "2026-11-09T00:30:15Z", "90m": "2026-11-10T11:00:15Z",
