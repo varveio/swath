@@ -18,42 +18,41 @@ import os
 import sys
 
 from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
-                            GCS_VERSIONS, AZBLOB_CURRENT, AZBLOB_VERSIONS, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS,
-                            AZBLOB_ADDED, sql_string)
+                            GCS_VERSIONS, AZURE_CURRENT, AZURE_VERSIONS, VERSION_IDS, GCS_COLUMNS, AZURE_COLUMNS,
+                            sql_string)
 
 
 # Physical type, repetition and logical annotation for every declared GCS
-# column. Nullable values still require a column in each part; only the
-# columns added to a schema id later may be absent: GCS's current-object
-# time_created and Azure's AZBLOB_ADDED (docs/dataset.md).
+# column. Nullable values still require a column in each part
+# (docs/dataset.md).
 GCS_CONTRACT = {
     name: ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
     if name in {"key", "etag", "storage_class", "md5", "crc32c", "content_type"}
-    else ("INT64", "OPTIONAL", "Timestamp" if name in {"last_modified", "time_created"} else "Int")
+    else ("INT64", "OPTIONAL", "Timestamp" if name in {"last_modified", "created_at"} else "Int")
     for name in GCS_COLUMNS
 }
 
-AZBLOB_INTS = {"size", "tag_count"}
-AZBLOB_TIMES = {"last_modified", "creation_time", "access_tier_change_time", "last_access_time", "immutability_policy_until"}
-AZBLOB_BOOLS = {"access_tier_inferred", "server_encrypted", "legal_hold"}
-AZBLOB_CONTRACT = {
-    name: ("INT64", "OPTIONAL", "Int") if name in AZBLOB_INTS
-    else ("INT64", "OPTIONAL", "Timestamp") if name in AZBLOB_TIMES
-    else ("BOOLEAN", "OPTIONAL", "Bool") if name in AZBLOB_BOOLS
+AZURE_INTS = {"size", "tag_count"}
+AZURE_TIMES = {"last_modified", "created_at", "storage_class_changed_at", "accessed_at", "immutability_policy_until"}
+AZURE_BOOLS = {"storage_class_inferred", "server_encrypted", "legal_hold"}
+AZURE_CONTRACT = {
+    name: ("INT64", "OPTIONAL", "Int") if name in AZURE_INTS
+    else ("INT64", "OPTIONAL", "Timestamp") if name in AZURE_TIMES
+    else ("BOOLEAN", "OPTIONAL", "Bool") if name in AZURE_BOOLS
     else ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
-    for name in AZBLOB_COLUMNS
+    for name in AZURE_COLUMNS
 }
 
 
 def check_object_schema(con, path, sid, check):
-    azure = sid in (AZBLOB_CURRENT, AZBLOB_VERSIONS)
-    contract = dict(AZBLOB_CONTRACT if azure else GCS_CONTRACT)
+    azure = sid in (AZURE_CURRENT, AZURE_VERSIONS)
+    contract = dict(AZURE_CONTRACT if azure else GCS_CONTRACT)
     if sid == GCS_VERSIONS:
-        contract["time_deleted"] = ("INT64", "OPTIONAL", "Timestamp")
-    if sid == AZBLOB_VERSIONS:
+        contract.update({"is_latest": ("BOOLEAN", "REQUIRED", "Bool"), "deleted_at": ("INT64", "OPTIONAL", "Timestamp")})
+    if sid == AZURE_VERSIONS:
         contract.update({"version_id": ("BYTE_ARRAY", "OPTIONAL", "String"), "is_latest": ("BOOLEAN", "REQUIRED", "Bool"),
                          "snapshot": ("BYTE_ARRAY", "OPTIONAL", "String"), "is_deleted": ("BOOLEAN", "REQUIRED", "Bool"),
-                         "deleted_time": ("INT64", "OPTIONAL", "Timestamp"),
+                         "deleted_at": ("INT64", "OPTIONAL", "Timestamp"),
                          "remaining_retention_days": ("INT64", "OPTIONAL", "Int")})
     rows = con.execute(f"SELECT name, type, repetition_type, logical_type, converted_type, num_children "
                        f"FROM parquet_schema({sql_string(path)})").fetchall()[1:]
@@ -70,8 +69,6 @@ def check_object_schema(con, path, sid, check):
     print(f"\nColumn-by-column against {sid}: {path}")
     for name, (physical, repetition, annotation) in contract.items():
         matches = [row for row in got if row[0] == name]
-        if not matches and (sid == GCS_CURRENT and name == "time_created" or sid == AZBLOB_CURRENT and name in AZBLOB_ADDED):
-            continue
         row = matches[0] if matches else (name, None, None, None, None)
         logical = str(row[3] or "")
         good = len(matches) == 1 and row[1:3] == (physical, repetition)
@@ -112,7 +109,9 @@ def main(out, reference=None):
         check(k in ext, f"extensions.swath has {k}")
     check(list(m.get("extensions", {})) == ["swath"], "extensions holds the swath namespace only")
     cov = ext.get("coverage", {})
-    check(cov.get("snapshot") is False and isinstance(cov.get("exclusions"), list) and isinstance(cov.get("filters"), list),
+    filters = cov.get("filters")
+    check("snapshot" not in cov and isinstance(cov.get("exclusions"), list) and isinstance(filters, list)
+          and all(isinstance(f, dict) and set(f) == {"filter", "value"} for f in filters),
           f"coverage complete={cov.get('complete')} unreadable={cov.get('unreadable')} scope={ext.get('scope')}")
     for gone in ("_SUCCESS", "symlink.txt"):
         check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
@@ -125,8 +124,8 @@ def main(out, reference=None):
     s3 = sid in (S3_CURRENT, S3_VERSIONS)
     check(m.get("key") == {"column": "key", "unique": not groups}, f"key declaration {m.get('key')} (unique unless the schema repeats keys)")
     source_kinds = {S3_CURRENT: "s3", S3_VERSIONS: "s3", GCS_CURRENT: "gcs",
-                    GCS_VERSIONS: "gcs", AZBLOB_CURRENT: "azblob", AZBLOB_VERSIONS: "azblob"}
-    check(ext.get("source", {}).get("kind") == source_kinds.get(sid, "local-fs"),
+                    GCS_VERSIONS: "gcs", AZURE_CURRENT: "azure", AZURE_VERSIONS: "azure"}
+    check(ext.get("source", {}).get("kind") == source_kinds.get(sid, "local"),
           "source kind agrees with schema id")
     report = "run.json"
     check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
@@ -138,7 +137,7 @@ def main(out, reference=None):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
-    if sid in (GCS_CURRENT, GCS_VERSIONS, AZBLOB_CURRENT, AZBLOB_VERSIONS):
+    if sid in (GCS_CURRENT, GCS_VERSIONS, AZURE_CURRENT, AZURE_VERSIONS):
         schemas_valid = True
         for path in paths:
             schemas_valid = check_object_schema(con, path, sid, check) and schemas_valid
@@ -211,7 +210,7 @@ def main(out, reference=None):
         """).fetchone()
         cnt, bmin, bmax, first, last, bad = r
         bmin, bmax, first, last = bytes(bmin), bytes(bmax), bytes(first), bytes(last)
-        if sid == AZBLOB_VERSIONS:
+        if sid == AZURE_VERSIONS:
             # A name's latest entry is its last (Azure lists its current
             # blob after its snapshots and versions), and at most one.
             bad_latest = con.execute(f"""SELECT count(*) FROM (
@@ -226,6 +225,9 @@ def main(out, reference=None):
                 FROM read_parquet('{p}', file_row_number=true))
                 WHERE generation IS NULL OR (key = pk AND generation <= pg)""").fetchone()[0]
             check(bad_generations == 0, "  generations strictly ascend within each name")
+            bad_latest = con.execute(f"""SELECT count(*) FROM read_parquet('{p}')
+                WHERE is_latest IS DISTINCT FROM (deleted_at IS NULL)""").fetchone()[0]
+            check(bad_latest == 0, "  is_latest exactly where deleted_at is null")
         lo, hi = base64.b64decode(f["min_key_base64"]), base64.b64decode(f["max_key_base64"])
         print(f"  {f['path']}: rows={cnt} bytes={f['bytes']} min_key={first!r} max_key={last!r}")
         check(cnt == f["rows"], f"  rows {f['rows']}")

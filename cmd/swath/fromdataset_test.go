@@ -110,8 +110,8 @@ func TestDuFromDatasetLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	var em dataset.Manifest
-	if readJSON(t, filepath.Join(emptyNames, dataset.ManifestName), &em); em.Source.Metadata != "names" {
-		t.Fatalf("manifest source %+v", em.Source)
+	if readJSON(t, filepath.Join(emptyNames, dataset.ManifestName), &em); em.Collected.Metadata != "names" {
+		t.Fatalf("manifest collected %+v", em.Collected)
 	}
 	for _, format := range []string{"tsv", "jsonl"} {
 		liveAndSaved(t, []string{empty, "--metadata", "names", "--format", format}, []string{"--from-dataset", emptyNames, "--format", format})
@@ -141,6 +141,18 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err != nil || json.Unmarshal([]byte(got), &row) != nil || row.Dataset.Path != ds || *row.Dataset.Source != src || !*row.Dataset.Complete ||
 		row.Dataset.SchemaID != "swath/local-entries/v1" || row.Dataset.ListingFinishedAt == nil {
 		t.Fatalf("JSONL: %v %s", err, got)
+	}
+	// A filtered dataset's rows carry its filters as its manifest records
+	// them, one object each; stderr names them.
+	filtered := filepath.Join(t.TempDir(), "filtered")
+	if err := run(context.Background(), []string{root, "-o", filtered, "--exclude", "x", "--no-dirs", "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	got, err = duRun(t, "--from-dataset", filtered, "--format", "jsonl")
+	if want := `"filters":[{"filter":"no_dirs","value":null},{"filter":"exclude","value":"x"}]`; err != nil || !strings.Contains(got, want) ||
+		!strings.Contains(stderr.String(), "; filtered: no_dirs, exclude=x") {
+		t.Fatalf("filtered JSONL: %v %s\nstderr: %s", err, got, stderr.String())
 	}
 	// -q leaves stderr empty.
 	stderr.Reset()
@@ -403,7 +415,7 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 	s := parquet.SchemaOf(new(noKindRow))
 	rows := &parquetRows{rows: []parquet.Row{s.Deconstruct(nil, &noKindRow{Key: []byte("dir/"), Size: &size, LastModified: &at})}}
 	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
-		"source": map[string]any{"kind": "local-fs", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
+		"source": map[string]any{"kind": "local", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
 		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
 	if err != nil {
 		t.Fatal(err)

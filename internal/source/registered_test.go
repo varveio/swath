@@ -283,7 +283,7 @@ func TestRegisteredLocators(t *testing.T) {
 	}{
 		{"s3://bkt/" + prefix, "s3", "bkt", s3test.Bucket(t, nil), &s3.Options{Anonymous: true}},
 		{"gs://bkt/" + prefix, "gcs", "bkt", gcstest.Bucket(t, nil, 0), &gcs.Options{Anonymous: true}},
-		{"az://" + az.Account + "/" + az.Container + "/" + prefix, "azblob", az.Container, strings.TrimSuffix(az.Endpoint, "/"+az.Account), &azblob.Options{Client: azblobtest.NewStore(nil)}},
+		{"az://" + az.Account + "/" + az.Container + "/" + prefix, "azure", az.Container, strings.TrimSuffix(az.Endpoint, "/"+az.Account), &azblob.Options{Client: azblobtest.NewStore(nil)}},
 	} {
 		t.Run(c.kind, func(t *testing.T) {
 			f, err := registry.Lookup(c.root)
@@ -338,7 +338,7 @@ func TestRegisteredLocators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := src.Locator(), (source.Locator{Kind: "azblob", Root: "az://acct/c/" + sasPrefix, Container: "c"}); got != want {
+	if got, want := src.Locator(), (source.Locator{Kind: "azure", Root: "az://acct/c/" + sasPrefix, Container: "c"}); got != want {
 		t.Errorf("SAS locator=%+v want=%+v", got, want)
 	}
 	if got, want := registry.Redact(root), "az://acct/c/"+sasPrefix+"?"+azblob.RedactedSAS; got != want {

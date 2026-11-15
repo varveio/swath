@@ -81,7 +81,7 @@ type Projection struct {
 	// reads share the window cache with reads without it.
 	Content bool
 	// Created reads LastModified as the object's creation time where the
-	// schema stores one: a GCS recording's time_created, which Cloud
+	// schema stores one: a GCS recording's created_at, which Cloud
 	// Storage's S3-compatible XML API lists as LastModified. A row whose
 	// creation time is null (a part written before the column was listed)
 	// keeps its modification time. A schema without the column ignores it,

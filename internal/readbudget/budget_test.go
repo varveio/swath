@@ -190,7 +190,7 @@ func write(dir string, g *geometry) error {
 	}
 	meta := dataset.Meta{SchemaID: srcs3.Schema.ID, Groups: srcs3.Schema.Groups,
 		Source: dataset.Source{Kind: "s3", URI: "s3://budget", Container: "budget"}, Scope: dataset.Scope{Kind: "whole"},
-		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}}
+		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}}
 	return dataset.Publish(dir, meta, parts, nil)
 }
 

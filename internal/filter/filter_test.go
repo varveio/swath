@@ -4,6 +4,8 @@
 package filter
 
 import (
+	"encoding/json"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"regexp"
@@ -208,7 +210,7 @@ func TestAlgebra(t *testing.T) {
 		}
 		r := tc.spec
 		r.Include, r.Exclude, r.IncludeRegex, r.ExcludeRegex = reversed(r.Include), reversed(r.Exclude), reversed(r.IncludeRegex), reversed(r.ExcludeRegex)
-		if got := kept(t, r, keyRows(keys...)); !slices.Equal(got, want) || !slices.Equal(r.Descriptions(), tc.spec.Descriptions()) {
+		if got := kept(t, r, keyRows(keys...)); !slices.Equal(got, want) || fmt.Sprint(r.Descriptions()) != fmt.Sprint(tc.spec.Descriptions()) {
 			t.Errorf("%v reversed: %q, %v", tc.spec.Descriptions(), got, r.Descriptions())
 		}
 	}
@@ -226,11 +228,16 @@ func reversed(s []string) []string {
 func TestDescriptions(t *testing.T) {
 	s := Spec{Include: []string{"b", "a"}, IncludeRegex: []string{"r"}, Exclude: []string{"x"}, ExcludeRegex: []string{"y"}, MinSize: "1K", MaxSize: "2K",
 		Since: "2026-01-01", Until: "2026-02-01", StorageClasses: []string{"STANDARD", "GLACIER"}}
-	want := "include=a include=b include_regex=r exclude=x exclude_regex=y min_size=1K max_size=2K modified_after=2026-01-01 modified_before=2026-02-01 storage_class=STANDARD,GLACIER"
-	if got := strings.Join(s.Descriptions(), " "); got != want {
+	want := "[include=a include=b include_regex=r exclude=x exclude_regex=y min_size=1K max_size=2K modified_since=2026-01-01T00:00:00.000000Z " +
+		"modified_until=2026-02-01T00:00:00.000000Z storage_class=GLACIER storage_class=STANDARD]"
+	if got := fmt.Sprint(s.Descriptions()); got != want {
 		t.Errorf("descriptions %q", got)
 	}
-	id := func(s Spec) journal.Identity { return journal.Identity{Filters: s.Descriptions()} }
+	b, err := json.Marshal((&Spec{Since: "2026-11-08T12:46:10Z", MaxSize: "1K"}).Descriptions())
+	if err != nil || string(b) != `[{"filter":"max_size","value":"1K"},{"filter":"modified_since","value":"2026-11-08T12:46:10.000000Z"}]` {
+		t.Errorf("coverage.filters %s, %v", b, err)
+	}
+	id := func(s Spec) journal.Identity { return journal.Identity{Filters: Texts(s.Descriptions())} }
 	same := Spec{Include: []string{"a", "b", "a"}, IncludeRegex: []string{"r"}, Exclude: []string{"x"}}
 	other := Spec{Include: []string{"b", "a"}, IncludeRegex: []string{"r"}, Exclude: []string{"x"}}
 	if err := journal.Check(id(other), id(same)); err != nil {

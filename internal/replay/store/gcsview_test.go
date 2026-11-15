@@ -249,14 +249,14 @@ func TestGCSRecordingAzureView(t *testing.T) {
 }
 
 // gcsTimedRow is a swath/gcs-objects/v1 row with both time columns, as
-// the lister writes since it records time_created; gcsUntimedRow is one
+// the lister writes since it records created_at; gcsUntimedRow is one
 // written before, without the column.
 type gcsTimedRow struct {
 	Key          string  `parquet:"key"`
 	Size         int64   `parquet:"size"`
 	LastModified *int64  `parquet:"last_modified,optional,timestamp(microsecond)"`
 	ETag         *string `parquet:"etag,optional"`
-	TimeCreated  *int64  `parquet:"time_created,optional,timestamp(microsecond)"`
+	TimeCreated  *int64  `parquet:"created_at,optional,timestamp(microsecond)"`
 }
 
 type gcsUntimedRow struct {
@@ -269,7 +269,7 @@ type gcsUntimedRow struct {
 // writeGCSParts writes a swath/gcs-objects/v1 SeekParquet dataset of one
 // part per rows slice, in order: parts of gcsUntimedRow where untimed is
 // true, else of gcsTimedRow (the column set of a run resumed by a build
-// that records time_created).
+// that records created_at).
 func writeGCSParts(t *testing.T, parts [][]gcsTimedRow, untimed []bool) string {
 	t.Helper()
 	var written []seekPart
@@ -288,10 +288,10 @@ func writeGCSParts(t *testing.T, parts [][]gcsTimedRow, untimed []bool) string {
 }
 
 // TestGCSRecordingLastModifiedFromTimeCreated reads a swath/gcs-objects/v1
-// dataset of three parts, the first written without time_created and the
+// dataset of three parts, the first written without created_at and the
 // others with it (some rows null), through the window cache (packed),
 // the bare reader, the arena overflow path and a rollup. With Created
-// (the S3 route) every row's LastModified is its time_created, else its
+// (the S3 route) every row's LastModified is its created_at, else its
 // last_modified; without it (the Azure route, the GCS route's
 // non-native reads) always its last_modified; the answers of every path
 // are equal. A schema without the column drops Created, so its reads

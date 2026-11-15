@@ -287,7 +287,7 @@ Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with 
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
 producer defines its schema beside its code. All producers bind their accessors to the specification
 `reader` registers for the schema id (`schema.Bind`, `reader.Schema`), which owns column order, names,
-types, nullability and key settings. This includes Azure's `reader.AzblobObjectsV1` binding in
+types, nullability and key settings. This includes Azure's `reader.AzureObjectsV1` binding in
 `internal/source/azblob/schema.go`; Azure keeps its accessors, `Delta` preferences, logical and heap accounting,
 and codec beside the provider. `azblob` `TestSchemaBinding` checks its reader contract and field behavior.
 `listing` `TestProducerSchemasGolden` pins the five S3, GCS and local schemas. The Parquet node is built from the bound
@@ -297,20 +297,19 @@ that interpretation applies.
 
 ### Version roles
 
-`reader.SchemaSpec.Versions` (`reader.VersionSpec`) declares the version ID, exactly one of latest or
-deleted-at, and an optional delete-marker column. `schema.Bind` copies the declaration into
+`reader.SchemaSpec.Versions` (`reader.VersionSpec`) declares the version ID, the latest column and an
+optional delete-marker column. `schema.Bind` copies the declaration into
 `schema.Info.Versions` and checks it against the producer accessors when the package loads.
 `schema.BindVersions` derives `ID`, `Latest` and optional `DeleteMarker` accessors: IDs are strings or signed
-64-bit integers formatted in decimal; latest is a required boolean or the absence of a nullable deleted-at
-timestamp. A present zero timestamp means deleted. Latest and delete-marker flags must be required booleans
+64-bit integers formatted in decimal. Latest and delete-marker flags must be required booleans
 with accessors; missing, repeated or mistyped role columns are refused. A schema with roles must group keys.
 
-A producer also declares its storage-class column, `schema.Info.StorageClass` (`storage_class` for S3 and GCS,
-`access_tier` for Azure Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
+A producer also declares its storage-class column, `schema.Info.StorageClass` (`storage_class` for S3, GCS and Azure
+Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
 a declaration that names no string column. A local tree declares its containers the same way,
-`schema.Info.Containers` (the rows whose `kind` is `DIR`): `schema.Bind` derives `Schema.Container` from it,
+`schema.Info.Containers` (the rows whose `kind` is `dir`): `schema.Bind` derives `Schema.Container` from it,
 which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Its
-`schema.Info.NamesTier` (`names`) is the metadata tier, recorded in a manifest's `source.metadata`, whose rows
+`schema.Info.NamesTier` (`names`) is the metadata tier, recorded in a manifest's `collected.metadata`, whose rows
 carry no link identity: `swath du --from-dataset` counts such a dataset's hard-linked files under every name, as
 the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
@@ -321,7 +320,7 @@ the dataset's columns (`registry.DatasetTotals`).
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer
 declaration before the listing creates a journal, dataset or text file. Generic lister consumers—text
 output, version counts and per-prefix totals—share this interpretation. They do not infer roles from names
-such as `is_latest`, `generation` or `time_deleted`. The reader module's typed decoders still bind named
+such as `is_latest`, `generation` or `deleted_at`. The reader module's typed decoders still bind named
 columns for their specific row contracts. `registry` `TestVersionRolesFollowDeclaration` and `listing`
 `TestVersionReportFollowsDeclaration` place contradictory conventional columns beside declared roles;
 `TestVersionRolesRefusedBeforeOutput` in `listing` checks refusal before output creation.

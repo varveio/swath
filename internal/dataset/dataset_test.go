@@ -317,7 +317,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source", "version"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"collected", "coverage", "published_at", "scope", "source", "version"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
 		}
 		if !bytes.HasPrefix(raw["extensions"], []byte(`{"swath":{"version":1,`)) {
@@ -376,7 +376,7 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	manifest := func(parts ...ManifestPart) []byte {
 		t.Helper()
 		b, err := json.Marshal(Manifest{Format: seekparquet.Format, DraftRevision: int(seekparquet.DraftRevision), SchemaID: "x/v1",
-			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Coverage: Coverage{Exclusions: []string{}, Filters: []string{}}, Parts: parts})
+			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Coverage: Coverage{Exclusions: []string{}, Filters: []reader.Filter{}}, Parts: parts})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -425,7 +425,7 @@ func TestManifestObjectBytes(t *testing.T) {
 	for _, want := range []*int64{nil, n(0), n(12345)} {
 		m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: id,
 			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Source: Source{Kind: "s3", URI: "s3://b/"}, Scope: Scope{Kind: "whole"},
-			Coverage: Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}, CommittedObjectBytes: want,
+			Coverage: Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}, CommittedObjectBytes: want,
 			Parts: []ManifestPart{{Path: "data/part-00000.parquet", PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b", SHA256: strings.Repeat("0123456789abcdef", 4)}}}}
 		b, err := json.Marshal(m)
 		if err != nil {
@@ -469,7 +469,7 @@ func TestManifestObjectBytes(t *testing.T) {
 func TestManifestFilesystem(t *testing.T) {
 	at := time.Date(2026, 11, 13, 10, 0, 0, 123456000, time.UTC)
 	for _, want := range []*FilesystemSpace{nil, {TotalBytes: 1 << 40, FreeBytes: 0, AvailableBytes: 0, MeasuredAt: at}, {TotalBytes: 100, FreeBytes: 500, AvailableBytes: 80, MeasuredAt: at}} {
-		meta := Meta{SchemaID: id, Source: Source{Kind: "local-fs", URI: "/data"}, Scope: Scope{Kind: "whole"},
+		meta := Meta{SchemaID: id, Source: Source{Kind: "local", URI: "/data"}, Scope: Scope{Kind: "whole"},
 			Coverage: Coverage{Complete: true, StopReason: "completed"}, Filesystem: want}
 		m := newManifest(meta, nil, func(int, Part) string { return "" })
 		b, err := json.Marshal(m)

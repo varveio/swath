@@ -14,7 +14,7 @@ import (
 const statLinks = false
 
 // fillSys: CreationTime is a birth time (Windows has no POSIX ctime through
-// FileInfo) and LastAccessTime is atime. uid, gid, inode, dev, nlink and
+// FileInfo) and LastAccessTime is the access time. uid, gid, inode, dev, nlink and
 // blocks stay null.
 func fillSys(r *Entry, fi fs.FileInfo) {
 	d, ok := fi.Sys().(*syscall.Win32FileAttributeData)

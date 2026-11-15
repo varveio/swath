@@ -280,7 +280,7 @@ func TestVersionCodec(t *testing.T) {
 }
 
 // TestAllVersionsOpen: --all-versions opens the versions listing, its rows
-// bound to swath/azblob-versions/v1, resumable as the current listing.
+// bound to swath/azure-versions/v1, resumable as the current listing.
 func TestAllVersionsOpen(t *testing.T) {
 	src, err := open(context.Background(), registry.Request{Root: "az://acct/c",
 		Options: &Options{Client: &routed{pages: &pages{}}, AllVersions: true}, Workers: 1})
@@ -290,7 +290,7 @@ func TestAllVersionsOpen(t *testing.T) {
 	if _, ok := src.(*opened[Version]); !ok {
 		t.Fatalf("%T", src)
 	}
-	if src.(registry.Source).Schema().ID != "swath/azblob-versions/v1" || !src.(source.Capable).Capabilities().Resume {
+	if src.(registry.Source).Schema().ID != "swath/azure-versions/v1" || !src.(source.Capable).Capabilities().Resume {
 		t.Fatalf("schema %s, capabilities %+v", src.(registry.Source).Schema().ID, src.(source.Capable).Capabilities())
 	}
 }

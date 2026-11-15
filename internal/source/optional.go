@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/runtrace"
+	"github.com/varveio/swath/reader"
 )
 
 // Locator says what a source lists, for the dataset's metadata.
 type Locator struct {
-	Kind      string // the dataset's source kind ("s3", "local-fs")
+	Kind      string // the dataset's source kind ("s3", "gcs", "azure", "local")
 	Root      string // the root as recorded (an absolute path, or the URL)
 	Container string // the bucket or account container; "" if none
 	// Path is the root's local filesystem path, "" for a remote source:
@@ -200,6 +201,10 @@ type Report struct {
 	Stats  any    // marshalled as JSON
 	Brief  string // one line of text for the plain-text summary
 	Fields string // the metadata tier collected, if the provider has tiers
+	// Collected names the optional columns the run asked for and the
+	// provider filled (null otherwise), in schema order: they go into the
+	// manifest.
+	Collected []string
 	// Coverage is what the dataset covers; it goes into the manifest,
 	// where applications read it.
 	Coverage Coverage
@@ -222,11 +227,11 @@ type FilesystemSpace struct {
 
 // Coverage is what a dataset claims to cover.
 type Coverage struct {
-	Target     string   // the canonical listed target (s3://bucket[/prefix], or the root path)
-	Prefix     string   // the scope: "" for the whole source, else the listed prefix
-	Filters    []string // the row filters applied (listing.Config.Filter), as descriptions
-	Exclusions []string // left out by design (an output directory inside a listed tree)
-	Unreadable int64    // entries missing from the listing because they could not be read
-	Complete   bool     // false if the listing stopped early (a key limit)
-	StopReason string   // "completed", or why it stopped
+	Target     string          // the canonical listed target (s3://bucket[/prefix], or the root path)
+	Prefix     string          // the scope: "" for the whole source, else the listed prefix
+	Filters    []reader.Filter // the row filters applied beyond listing.Config.Filter (a local tree kept to one filesystem)
+	Exclusions []string        // left out by design (an output directory inside a listed tree)
+	Unreadable int64           // entries missing from the listing because they could not be read
+	Complete   bool            // false if the listing stopped early (a key limit)
+	StopReason string          // "completed", or why it stopped
 }

@@ -37,12 +37,14 @@ type Metadata struct {
 	Source      *SourceInfo
 	Scope       *Scope
 	Coverage    *Coverage
+	// Collected is extensions.swath.collected.
+	Collected *Collected
 	// CommittedObjectBytes is extensions.swath.committed_object_bytes: the
 	// dataset's object sizes summed (every row's size column, a local
 	// tree's files only), as its writers counted them. Nil when the
-	// manifest does not state it (a schema without a size column, a dataset
-	// written before the member existed or resumed from parts that predate
-	// it): never read as 0, which is a real total.
+	// manifest does not state it (a schema without a size column, a
+	// listing that did not read every object's size: --metadata names):
+	// never read as 0, which is a real total.
 	CommittedObjectBytes *int64
 	// Filesystem is extensions.swath.filesystem: the space of the
 	// filesystem that holds a local source's root, as its operating system
@@ -75,10 +77,9 @@ type FilesystemSpace struct {
 
 // SourceInfo is what was listed.
 type SourceInfo struct {
-	Kind      *string `json:"kind"`      // "s3", "gcs", "azblob", "local-fs"
+	Kind      *string `json:"kind"`      // "s3", "gcs", "azure", "local"
 	URI       *string `json:"uri"`       // s3://bucket/prefix, gs://…, az://account/container/…, or the absolute root path
 	Container *string `json:"container"` // the bucket or container name; absent for a filesystem
-	Metadata  *string `json:"metadata"`  // the metadata tier a filesystem was listed at: "names", "stat" or "statx"; absent for a bucket
 }
 
 // Scope is the part of the source the listing was asked for.
@@ -90,19 +91,46 @@ type Scope struct {
 // Coverage records how much of the scope the listing reached: whether it
 // completed, why it stopped, how many entries it could not read, and the filters
 // that limited it (a filesystem listing kept to one filesystem records
-// "one_filesystem"). Exclusions name what the listing left out by design
+// one_file_system). Exclusions name what the listing left out by design
 // (an output directory inside a listed tree). A listing is not a
-// point-in-time snapshot: Snapshot is false, and entries that changed
-// while it ran may or may not be in it.
+// point-in-time snapshot: entries that changed while it ran may or may
+// not be in it.
 type Coverage struct {
 	Complete          *bool      `json:"complete"`
 	StopReason        *string    `json:"stop_reason"`
 	Unreadable        *int64     `json:"unreadable"`
 	Exclusions        []string   `json:"exclusions"`
-	Filters           []string   `json:"filters"`
-	Snapshot          *bool      `json:"snapshot"`
+	Filters           []Filter   `json:"filters"`
 	ListingStartedAt  *time.Time `json:"listing_started_at"`
 	ListingFinishedAt *time.Time `json:"listing_finished_at"`
+}
+
+// Filter is one filter that limited a listing: the option's name in snake
+// case (modified_since for --modified-since) and its value, nil for an
+// option that takes none (one_file_system, no_dirs). A time is RFC 3339
+// in UTC with six fraction digits; a pattern is one filter each.
+type Filter struct {
+	Filter string  `json:"filter"`
+	Value  *string `json:"value"`
+}
+
+// String is the filter as name=value, or its name without a value.
+func (f Filter) String() string {
+	if f.Value == nil {
+		return f.Filter
+	}
+	return f.Filter + "=" + *f.Value
+}
+
+// Collected is what a listing read beyond the columns every row of its
+// schema carries: its metadata tier (names, stat or statx; nil for a
+// source without tiers) and the optional columns it asked for (an S3
+// listing's owner_id, a local tree's link_target). A nullable column not
+// named here and outside the tier is null because the source did not
+// report it, not because the listing did not ask.
+type Collected struct {
+	Metadata *string  `json:"metadata"`
+	Columns  []string `json:"columns"`
 }
 
 // ParseMetadata reads m's extensions.swath. Its version must be the
@@ -134,6 +162,7 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 		Source               *SourceInfo      `json:"source"`
 		Scope                *Scope           `json:"scope"`
 		Coverage             *Coverage        `json:"coverage"`
+		Collected            *Collected       `json:"collected"`
 		CommittedObjectBytes *int64           `json:"committed_object_bytes"`
 		Filesystem           *FilesystemSpace `json:"filesystem"`
 	}
@@ -141,6 +170,6 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 		return Metadata{}, &SemanticError{Kind: KindMetadata, Err: err}
 	}
 	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage, out.CommittedObjectBytes = true, x.PublishedAt, x.Source, x.Scope, x.Coverage, x.CommittedObjectBytes
-	out.Filesystem = x.Filesystem
+	out.Collected, out.Filesystem = x.Collected, x.Filesystem
 	return out, nil
 }

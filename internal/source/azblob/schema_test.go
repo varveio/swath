@@ -15,7 +15,7 @@ import (
 // TestSchemaBinding pins the producer's specification and accessors, so
 // reader binding cannot silently change the columns written to a dataset.
 func TestSchemaBinding(t *testing.T) {
-	wantInfo := schema.Info{Name: "swath_listing", ID: "swath/azblob-objects/v1", Key: schema.String, MaxKeyBytes: 3072, StorageClass: "access_tier"}
+	wantInfo := schema.Info{Name: "swath_listing", ID: "swath/azure-objects/v1", Key: schema.String, MaxKeyBytes: 3072, StorageClass: "storage_class"}
 	if !reflect.DeepEqual(Schema.Info, wantInfo) || Schema.MaxKeyBytes != MaxKeyBytes {
 		t.Fatalf("info: %+v, want %+v", Schema.Info, wantInfo)
 	}
@@ -24,16 +24,16 @@ func TestSchemaBinding(t *testing.T) {
 		{Name: "size", Type: schema.Int64},
 		{Name: "last_modified", Type: schema.TimestampMicros},
 		{Name: "etag", Type: schema.String},
-		{Name: "content_md5", Type: schema.String},
+		{Name: "md5", Type: schema.String},
 		{Name: "content_type", Type: schema.String},
 		{Name: "blob_type", Type: schema.String},
-		{Name: "access_tier", Type: schema.String},
-		{Name: "creation_time", Type: schema.TimestampMicros},
-		{Name: "access_tier_inferred", Type: schema.Bool},
-		{Name: "access_tier_change_time", Type: schema.TimestampMicros},
+		{Name: "storage_class", Type: schema.String},
+		{Name: "created_at", Type: schema.TimestampMicros},
+		{Name: "storage_class_inferred", Type: schema.Bool},
+		{Name: "storage_class_changed_at", Type: schema.TimestampMicros},
 		{Name: "archive_status", Type: schema.String},
 		{Name: "rehydrate_priority", Type: schema.String},
-		{Name: "last_access_time", Type: schema.TimestampMicros},
+		{Name: "accessed_at", Type: schema.TimestampMicros},
 		{Name: "content_encoding", Type: schema.String},
 		{Name: "server_encrypted", Type: schema.Bool},
 		{Name: "encryption_scope", Type: schema.String},
@@ -53,12 +53,12 @@ func TestSchemaBinding(t *testing.T) {
 		Props: client.Props{AccessTierInferred: client.True, AccessTierChangeTime: 17, ArchiveStatus: "arch", RehydratePriority: "prio",
 			LastAccessTime: 19, ContentEncoding: "enc", ServerEncrypted: client.False, EncryptionScope: "scope", CustomerProvidedKeySHA256: "cpk",
 			LeaseState: "lease", TagCount: 23, Metadata: "{}", Tags: "{}", ImmutabilityUntil: 29, ImmutabilityMode: "mode", LegalHold: client.True}}
-	wantInts := map[string]int64{"size": 7, "last_modified": 11, "creation_time": 13, "access_tier_change_time": 17, "last_access_time": 19,
+	wantInts := map[string]int64{"size": 7, "last_modified": 11, "created_at": 13, "storage_class_changed_at": 17, "accessed_at": 19,
 		"tag_count": 23, "immutability_policy_until": 29}
-	wantStrings := map[string]string{"etag": "etag", "content_md5": "md5", "content_type": "type", "blob_type": "blob", "access_tier": "tier",
+	wantStrings := map[string]string{"etag": "etag", "md5": "md5", "content_type": "type", "blob_type": "blob", "storage_class": "tier",
 		"archive_status": "arch", "rehydrate_priority": "prio", "content_encoding": "enc", "encryption_scope": "scope",
 		"customer_provided_key_sha256": "cpk", "lease_state": "lease", "metadata": "{}", "tags": "{}", "immutability_policy_mode": "mode"}
-	wantBools := map[string]bool{"access_tier_inferred": true, "server_encrypted": false, "legal_hold": true}
+	wantBools := map[string]bool{"storage_class_inferred": true, "server_encrypted": false, "legal_hold": true}
 	for _, c := range Schema.Columns {
 		if c.Delta != (c.Name == "etag" || c.Name == "metadata" || c.Name == "tags") {
 			t.Fatalf("%s: encoding changed", c.Name)

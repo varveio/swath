@@ -56,7 +56,7 @@ var (
 
 // TestVersionsRows: a versions schema's rows keep its columns and order
 // under its own names: S3's delete marker with a null size, GCS's
-// generation as its integer and time_deleted null on the live one, with
+// generation as its integer and deleted_at null on the live one, with
 // no column named after another provider's.
 func TestVersionsRows(t *testing.T) {
 	for _, c := range []struct {
@@ -70,9 +70,9 @@ func TestVersionsRows(t *testing.T) {
 			`{"key":"k","size":1,"last_modified":"2023-11-14T22:13:20.000000Z","etag":"e","storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null,"version_id":"new","is_latest":true,"is_delete_marker":false}` + "\n" +
 				`{"key":"k","size":null,"last_modified":"2023-11-14T22:13:20.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null,"version_id":"null","is_latest":false,"is_delete_marker":true}` + "\n"},
 		{"GCS TSV", text(t, textout.Config{Format: textout.TSV}, &gcs.GenerationSchema, gcsGenerations),
-			"key\tsize\tlast_modified\tetag\tgeneration\tmetageneration\tstorage_class\tmd5\tcrc32c\tcontent_type\ttime_created\ttime_deleted\n" +
-				"k\t1\t1970-01-01T00:00:00.000005Z\t\\N\t1700000000000001\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\t1970-01-01T00:00:00.000010Z\n" +
-				"k\t2\t\\N\t\\N\t1700000000000002\t\\N\t\\N\t\\N\t\\N\ttext/plain\t\\N\t\\N\n"},
+			"key\tsize\tlast_modified\tetag\tgeneration\tmetageneration\tstorage_class\tmd5\tcrc32c\tcontent_type\tcreated_at\tis_latest\tdeleted_at\n" +
+				"k\t1\t1970-01-01T00:00:00.000005Z\t\\N\t1700000000000001\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\tfalse\t1970-01-01T00:00:00.000010Z\n" +
+				"k\t2\t\\N\t\\N\t1700000000000002\t\\N\t\\N\t\\N\t\\N\ttext/plain\t\\N\ttrue\t\\N\n"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s:\n%q\nwant\n%q", c.name, c.got, c.want)

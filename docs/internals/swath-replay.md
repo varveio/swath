@@ -332,7 +332,7 @@ no provider API, so every route maps or fills it.
 | Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath/local-entries/v1` |
 |---|---|---|---|
 | S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
-| S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `time_created` (GCS `timeCreated`, which the XML API lists), milliseconds; from `last_modified` (GCS `updated`) where `time_created` is null or the part lacks the column | mapped from the modification time, milliseconds |
+| S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `created_at` (GCS `timeCreated`, which the XML API lists), milliseconds; from `last_modified` (GCS `updated`) where `created_at` is null or the part lacks the column | mapped from the modification time, milliseconds |
 | S3: `ETag` | exact, absent when null | mapped: the MD5 in lower-case hex; without an MD5, `-` and the etag; neither: placeholder `swath-s3-synthetic-v1` | placeholder `swath-s3-synthetic-v1` (S3 lists every object with an ETag) |
 | S3: `Size` | exact (`0` when null) | mapped from `size` (the same value) | mapped from the file size |
 | S3: `StorageClass` | exact, absent when null | absent (the XML API sends none, whatever the class) | placeholder `STANDARD` (S3 lists every object with a class) |
@@ -340,7 +340,7 @@ no provider API, so every route maps or fills it.
 | S3: `Owner` (`fetch-owner=true`) | exact, absent when both columns are null | absent (not stored; the XML API sent none) | absent, no real equivalent: an S3 owner `ID` names an account, nothing in a local tree does (its uid names a user of one host), and a placeholder would invent one. Live S3 drops an owner field it does not return rather than filling it (2026-11-07: `Owner` with `ID` alone, no `DisplayName`); the route answers `fetch-owner=true` without `Owner` for every recording that holds none |
 | GCS: `name`, `size` | mapped from the key and size (`0` when null) | exact | mapped from the path and file size |
 | GCS: `updated` | mapped from `last_modified` (six digits; the epoch when null) | exact | mapped from the modification time |
-| GCS: `timeCreated` | absent (not stored) | exact (six digits), just before `updated`; absent when `time_created` is null or the part lacks the column | absent |
+| GCS: `timeCreated` | absent (not stored) | exact (six digits), just before `updated`; absent when `created_at` is null or the part lacks the column | absent |
 | GCS: `etag` | placeholder `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) | exact (`swath-gcs-synthetic-v1` when null) | placeholder `swath-gcs-synthetic-v1` |
 | GCS: `generation`, `metageneration` | placeholder `1` | exact (`1` when null) | placeholder `1` |
 | GCS: `storageClass` | placeholder `STANDARD` | exact (`STANDARD` when null) | placeholder `STANDARD` |
@@ -361,15 +361,13 @@ no MD5, has `-` and its JSON API `etag`, quoted (the etag already carries the me
 `Owner`, `ChecksumAlgorithm` or `ChecksumType` element appears for a STANDARD, NEARLINE or MULTI_REGIONAL object
 (no public COLDLINE or ARCHIVE object was found to probe); `LastModified` is the object's `timeCreated`, not its
 `updated` (they differ once its metadata changed, metageneration above 1), so the route maps it from
-`time_created`. A recording's parts written before the lister listed `timeCreated` hold no `time_created` column;
-their rows keep `updated`. An `md5` value that is not the standard base64 of 16 bytes is not taken for an MD5. The
+`created_at`. A part without that column (a recording made another way) keeps `updated`. An `md5` value that is not the standard base64 of 16 bytes is not taken for an MD5. The
 placeholder `swath-s3-synthetic-v1` is neither 32 hexadecimal digits with an optional `-N` part count (an S3 ETag)
 nor `-` and base64 (the XML API's composite form), so a client cannot take it for a real ETag; Cloud Storage lists
 every object with an etag, so only a recording made some other way lacks both. The route writes no `Generation` or
 `MetaGeneration` element, which the XML API adds and S3 does not have, and writes the ETag's quotation marks as
 `&quot;`, as live S3 does (`server` `TestLiveGCSXMLAPIContents` pins the probed elements,
-`TestGCSRecordingOnTheS3Route` the edge rows, `TestResumedGCSRecordingMixesParts` a recording with parts of both
-kinds).
+`TestGCSRecordingOnTheS3Route` the edge rows).
 
 The S3-shaped schemas' answers on every route are the replay wire contract's
 (`server` `TestEmptyAndNullStringsEndToEnd`).
@@ -1051,7 +1049,7 @@ fixture's declared schema id:
 | `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
 | `contentType` | exact, absent when null (as live GCS lists an object stored without one) | synthetic: `application/octet-stream` |
 | `md5Hash`, `crc32c` | exact, absent when null | absent |
-| `timeCreated` | exact (six fractional digits, as `updated`), written just before `updated`; absent when null or in a part without the optional `time_created` column (one written before the lister listed it) | absent |
+| `timeCreated` | exact (six fractional digits, as `updated`), written just before `updated`; absent when null or in a part without the `created_at` column | absent |
 | `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
 | `id`, `selfLink`, `mediaLink`, `owner`, `metadata` and the rest | absent (not stored) | absent |
 

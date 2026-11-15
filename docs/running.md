@@ -397,7 +397,7 @@ swath list --all-versions az://ACCOUNT/CONTAINER[/PREFIX] -o DIR  # versions, sn
 **Rows.** One row per S3 version or delete marker, per GCS generation, or per Azure Blob entry (a version,
 a snapshot, a soft-deleted blob, or the current blob), under the [version schemas](dataset.md#schema-registry). A delete marker's absent metadata is null, never 0.
 `version_id` is verbatim: `"null"` is a real ID (an object written while versioning was off). The current
-objects are `is_latest AND NOT is_delete_marker` (S3), `time_deleted IS NULL` (GCS) or `is_latest` (Azure Blob);
+objects are `is_latest AND NOT is_delete_marker` (S3) or `is_latest` (GCS and Azure Blob);
 a listing of the current objects alone is the default mode, which is cheaper.
 
 **Order.** Keys ascend; a key's rows are consecutive, in the service's order within the key: S3 newest first,
@@ -406,10 +406,10 @@ entries, keyed by their time within the name: snapshots and versions oldest firs
 same `last_modified` (to the second), so that time does not rebuild S3's order: the file order does.
 In an unfiltered, complete listing, the first row of an S3 key's group is the one with `is_latest`, and a
 delete marker there means the object is deleted. On GCS, the last row of a name's group is the newest
-generation; it is live only if `time_deleted` is null, and a GCS name may have no live generation. On Azure Blob
+generation; it is live (`is_latest`) only if `deleted_at` is null, and a GCS name may have no live generation. On Azure Blob
 a name's `is_latest` row, when it has one, is its last; a versioned blob that was deleted has only previous
 versions, and a soft-deleted one only `is_deleted` rows. A filter can
-remove a key's latest version, so in a filtered dataset read `is_latest` and `time_deleted` per row instead of
+remove a key's latest version, so in a filtered dataset read `is_latest` per row instead of
 by position.
 
 **Parts never split a key.** A part's size target, `--part-max-rows` and `--part-interval` cut at the
@@ -428,8 +428,8 @@ multiply the pages; Microsoft recommends fewer than 1,000 versions per blob for 
 never falls back to a current-object listing); GCS needs the same `storage.objects.list`; Azure Blob the same
 permission to list (a SAS with `l`, anonymous access to a public container). Text rows carry the
 versions schema's columns: S3's `version_id`, `is_latest` and `is_delete_marker` (a delete marker's `size` and
-`etag` null), GCS's `generation` and `time_deleted` (null on the live generation), Azure Blob's `version_id`,
-`is_latest`, `snapshot`, `is_deleted`, `deleted_time` and `remaining_retention_days`; the table shows the version
+`etag` null), GCS's `generation`, `is_latest` and `deleted_at` (null on the live generation), Azure Blob's `version_id`,
+`is_latest`, `snapshot`, `is_deleted`, `deleted_at` and `remaining_retention_days`; the table shows the version
 ID (empty for an Azure snapshot), `latest` and, on S3, `delete_marker`. `--min-size` and `--max-size` never match a delete marker. A resume
 continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
 no versions and stay refused.

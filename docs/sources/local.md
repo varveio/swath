@@ -29,7 +29,7 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 
 | Option | Effect |
 |---|---|
-| `--metadata names\|stat\|statx` | what is read per entry: names only (no size or time), `stat` (the default), or `statx`, which adds `birth_time` (Linux) |
+| `--metadata names\|stat\|statx` | what is read per entry: names only (no size or time), `stat` (the default), or `statx`, which adds `created_at` (Linux) |
 | `--no-dirs` | omit the directories' rows (they are still walked) |
 | `--no-link-target` | do not read symbolic links' targets |
 | `--one-file-system` | do not walk into a directory on another device (a mount point), as `du -x` and `find -xdev`; its row is kept |
@@ -39,7 +39,7 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 hard-linked files it remembers ([Understand your results](../results.md)).
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole directory (`coverage.filters` holds
-`no_dirs` or `one_filesystem`). `--one-file-system` and `--allocated` need each entry's stat: they are refused
+`no_dirs` or `one_file_system`). `--one-file-system` and `--allocated` need each entry's stat: they are refused
 with `--metadata names`.
 
 A SOURCE that is a file is read as the same entry in a listing of its parent: at the `--metadata` tier, and a
@@ -64,8 +64,8 @@ repeat.
 
 - A local listing keeps no journal: an interrupted one is run again, and `swath resume` does not apply. On
   Windows, local listings work, text output and datasets alike, including a dataset written to a bucket.
-- Names that are not valid UTF-8 are listed with their exact bytes: escaped in TSV and the table, as
-  `key_base64` in JSONL ([Output](../output.md#text-rows)). A dataset's `key` column is binary for the same
+- Names that are not valid UTF-8 are listed with their exact bytes: escaped in TSV and the table, in
+  `key_base64` (with `key` null) in JSONL ([Output](../output.md#text-rows)). A dataset's `key` column is binary for the same
   reason.
 - A directory's row carries its own size (`st_size` on Unix); `swath du` counts directories separately and
   leaves their sizes out of its byte totals.

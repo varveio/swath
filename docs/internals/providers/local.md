@@ -14,7 +14,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
   that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
-  directory (every stat column and `birth_time`; `os.DirEntry.Info` is an `lstat` of the full path, which
+  directory (every stat column and `created_at`; `os.DirEntry.Info` is an `lstat` of the full path, which
   resolves the path again per entry), on Windows the directory enumeration's own size, times and attributes
   (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`), elsewhere `Lstat`.
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
@@ -64,16 +64,17 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   cold, 2× warm, on 1M files in one directory on a 4-CPU runner. A listing still reads a directory whole: it
   sorts it.
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
-  symlinks), `statx` (full mask, adds `birth_time`).
+  symlinks), `statx` (full mask, adds `created_at`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
-  portable engine on Windows), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
-  (counter `other_device_dirs`); `Report` adds `one_filesystem` to the coverage's filters, so a dataset says it
-  stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no DIR row, and
-  `Report` adds `no_dirs` to the filters likewise.
+  portable engine on Windows), and `emit` keeps a `dir` row whose `dev` differs but hands on no child range for it
+  (counter `other_device_dirs`); `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
+  stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
+  `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them
+  (`--no-link-target` off), `link_target` as collected (the manifest's `collected`).
 - **Recursive exclusion pruning.** Before workers start, `opened.Run` derives an immutable directory
   predicate from `registry.Env.Filter`. The filter package's glob compiler recognizes terminal `/**`
   segments without a second glob language. The shared `emit` path retains the directory row for the

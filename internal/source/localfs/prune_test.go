@@ -40,13 +40,13 @@ func pruneReference(t *testing.T, root string, opt Options, spec filter.Spec) []
 	return rows
 }
 
-// Compare every output column except atime: opening directories and reading
+// Compare every output column except accessed_at: opening directories and reading
 // symlink targets can change that value between the two walks.
 func pruneText(t *testing.T, dst *bytes.Buffer) *textout.Out {
 	t.Helper()
 	var columns []string
 	for _, c := range Schema.Specs() {
-		if c.Name != "atime" {
+		if c.Name != "accessed_at" {
 			columns = append(columns, c.Name)
 		}
 	}

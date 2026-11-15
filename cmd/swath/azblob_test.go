@@ -321,7 +321,7 @@ func TestAzureSDKLogProcess(t *testing.T) {
 }
 
 // TestAzblobAllVersions: --all-versions on Azure Blob writes
-// swath/azblob-versions/v1 with repeating keys declared, every entry once in
+// swath/azure-versions/v1 with repeating keys declared, every entry once in
 // byte order, and reports the versions counts. The replay refuses include=
 // (its conformance profile); a proxy in front of it answers every listing
 // request, each of which must ask for versions, snapshots and soft-deleted
@@ -358,7 +358,7 @@ func TestAzblobAllVersions(t *testing.T) {
 	if got := datasetKeys(t, out); !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d in byte order", len(got), len(keys))
 	}
-	if m := readManifest(t, out); m.SchemaID != "swath/azblob-versions/v1" || m.Key.Unique {
+	if m := readManifest(t, out); m.SchemaID != "swath/azure-versions/v1" || m.Key.Unique {
 		t.Fatalf("schema %s, key %+v", m.SchemaID, m.Key)
 	}
 	var rj struct {

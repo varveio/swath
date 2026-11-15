@@ -19,8 +19,7 @@ type Versions[P any] struct {
 	// ID is the version's identifier (an integer column's value in
 	// decimal); false when the row has none.
 	ID func(p *P) (string, bool)
-	// Latest: the row is its key's latest (from the latest column, or a
-	// null deleted-at column).
+	// Latest: the row is its key's latest.
 	Latest func(p *P) bool
 	// DeleteMarker, nil for a schema without delete markers: the row is
 	// a delete marker, not a version of the object.
@@ -37,9 +36,7 @@ func (v *Versions[P]) Marker(p *P) bool { return v.DeleteMarker != nil && v.Dele
 // declares none. It refuses a declaration that does not define every
 // row's roles: a role column that is missing, repeated or of the wrong
 // type, a nullable latest or delete-marker column (null would mean
-// neither), a required deleted-at column (no row could be latest), not
-// exactly one of Latest and DeletedAt, or a schema whose keys do not
-// group.
+// neither), or a schema whose keys do not group.
 func BindVersions[P any](s *Schema[P]) (*Versions[P], error) {
 	d := s.Info.Versions
 	if d == (reader.VersionSpec{}) {
@@ -50,9 +47,6 @@ func BindVersions[P any](s *Schema[P]) (*Versions[P], error) {
 	}
 	if !s.Groups {
 		return nil, fail("its keys are unique, and versions repeat a key")
-	}
-	if (d.Latest == "") == (d.DeletedAt == "") {
-		return nil, fail("exactly one of a latest and a deleted-at column is needed, not %q and %q", d.Latest, d.DeletedAt)
 	}
 	var seen []string
 	column := func(role, name string) (*Column[P], error) {
@@ -100,21 +94,8 @@ func BindVersions[P any](s *Schema[P]) (*Versions[P], error) {
 	default:
 		return nil, fail("the version ID column %s is not a string or a signed 64-bit integer", d.ID)
 	}
-	if d.Latest != "" {
-		if v.Latest, err = flag("latest", d.Latest); err != nil {
-			return nil, err
-		}
-	} else {
-		c, err := column("deleted-at", d.DeletedAt)
-		if err != nil {
-			return nil, err
-		}
-		if c.Type != TimestampMicros || c.Int == nil || c.Required {
-			return nil, fail("the deleted-at column %s is not a nullable timestamp", d.DeletedAt)
-		}
-		// presence, not magnitude: a zero time is a deletion time
-		get := c.Int
-		v.Latest = func(p *P) bool { _, deleted := get(p); return !deleted }
+	if v.Latest, err = flag("latest", d.Latest); err != nil {
+		return nil, err
 	}
 	if d.DeleteMarker != "" {
 		if v.DeleteMarker, err = flag("delete marker", d.DeleteMarker); err != nil {

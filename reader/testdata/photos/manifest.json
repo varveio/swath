@@ -7,10 +7,10 @@
     {
       "path": "data/part-00000.parquet",
       "rows": 7,
-      "bytes": 3722,
+      "bytes": 3885,
       "min_key_base64": "MjAyNS8=",
       "max_key_base64": "bm90ZXMudHh0",
-      "sha256": "9b79e99390b1d5521dfeac0d614ea311cc3385cfb4581c742a6b44e97b8d4519"
+      "sha256": "9fbb3a92feafcacfad6b3a364f9338f59f14aa0d8e91d7f2c72b33be03dc367e"
     }
   ],
   "extensions": {
@@ -18,9 +18,8 @@
       "version": 1,
       "published_at": "2026-11-12T09:00:02Z",
       "source": {
-        "kind": "local-fs",
-        "uri": "/data/photos",
-        "metadata": "stat"
+        "kind": "local",
+        "uri": "/data/photos"
       },
       "scope": {
         "kind": "whole"
@@ -31,10 +30,16 @@
         "unreadable": 0,
         "exclusions": [],
         "filters": [],
-        "snapshot": false,
         "listing_started_at": "2026-11-12T09:00:00Z",
         "listing_finished_at": "2026-11-12T09:00:01Z"
-      }
+      },
+      "collected": {
+        "metadata": "stat",
+        "columns": [
+          "link_target"
+        ]
+      },
+      "committed_object_bytes": 2506
     }
   },
   "key": {

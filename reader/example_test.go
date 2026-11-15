@@ -66,13 +66,13 @@ func Example() {
 	}
 	// Output:
 	// swath/local-entries/v1 whole source: true
-	// DIR   4096 2025/
-	// DIR   4096 2025/summer/
-	// FILE  1200 2025/summer/beach.jpg
-	// FILE   800 2025/summer/hike.jpg
-	// DIR   4096 2026/
-	// FILE   500 2026/snow.jpg
-	// FILE     6 notes.txt
+	// dir   4096 2025/
+	// dir   4096 2025/summer/
+	// file  1200 2025/summer/beach.jpg
+	// file   800 2025/summer/hike.jpg
+	// dir   4096 2026/
+	// file   500 2026/snow.jpg
+	// file     6 notes.txt
 }
 
 // List the top level of a dataset by delimiter, two entries a page: a
