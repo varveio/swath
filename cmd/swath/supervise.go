@@ -31,7 +31,7 @@ import (
 // stderr (error.json carries the same, with the cause).
 const (
 	exitOK          = 0   // the command did what it was asked: the dataset is committed, the rows or totals written, or a reader closed stdout
-	exitFatal       = 1   // a cause that a resume will not fix
+	exitFatal       = 1   // a failure a person fixes; a journaled run is resumable after (outcome.resumable)
 	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
 	exitIncomplete  = 3   // finished, but the output is incomplete: unreadable entries, or a key limit
 	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR), or --spill-wait-timeout; resumable when the journal is intact
@@ -235,17 +235,31 @@ func classify(err, cause error, dir string) outcome {
 		} else {
 			o.Class, o.ExitCode = listing.ClassIncomplete, exitIncomplete
 		}
-	case errors.Is(err, syscall.ENOSPC):
-		// A full disk stops the run (a part, a journal append, spill or
-		// the manifest cannot be written) but loses nothing durable:
-		// resumable once there is space, when the journal is intact. Its
-		// own code lets a runner retry with a larger workspace.
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		// A full disk or quota stops the run (a part, a journal append,
+		// spill or the manifest cannot be written) but loses nothing
+		// durable: resumable once there is space, when the journal is
+		// intact. Its own code lets a runner retry with a larger workspace.
 		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, "no_space"
-	default:
+	case errors.Is(err, journal.ErrLocked):
+		// Another process owns the output: this attempt changed nothing,
+		// and the run there is that process's to finish.
 		o.Class, o.ExitCode, o.Resumable = listing.ClassFatal, exitFatal, false
+	default:
+		// A person fixes the cause (credentials, permissions, a disk that
+		// fails or turned read-only); a journaled run whose journal is
+		// intact then resumes, as resumable says: swath resume refuses
+		// only a run the journal marks unresumable (a protocol violation,
+		// above). A missing bucket and another region are fixed by
+		// another command (the bucket and the region are the run's
+		// identity), not by a resume.
+		o.Class, o.ExitCode = listing.ClassFatal, exitFatal
 		var ce interface{ Class() string }
 		if errors.As(err, &ce) {
 			o.Cause = ce.Class()
+		}
+		if o.Cause == source.CauseNotFound || o.Cause == source.CauseRegionRedirect {
+			o.Resumable = false
 		}
 	}
 	return o

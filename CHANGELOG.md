@@ -5,6 +5,11 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a full quota (EDQUOT) exits 74 (`disk_full`, cause `no_space`) as a full disk does, and spill
+  waits on it as on a full disk; it was exit 1 and ended the run (#518). An exit-1 run's `resumable` says
+  what `swath resume` does: true for a journaled run stopped by `auth`, `access_denied` or a disk error, once
+  the cause is fixed (it said false while resume continued it); false for `not_found`, `region_redirect` and
+  another process's output (#517).
 - Go port: `complete` means nothing is missing: the listing reached the end of its scope and read every entry.
   The manifest's `coverage.complete`, the report's `outcome.complete`, the `outcome` log event, `swath show` and
   `swath du --from-dataset` say false for a dataset with unreadable entries (before: true, beside

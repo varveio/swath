@@ -154,9 +154,9 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | 0: success, empty result, already-complete resume, closed stdout | 0 `ok`, an already-complete resume included | kept | – |
-| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable); a full disk is 74 | kept | partial coverage (a key limit, unreadable entries) is 3 `incomplete`, 2026-11-13: finished, the output usable but partial; Java exited 1 for a key limit and 0 with unreadable entries |
+| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal`, resumable as `outcome.resumable` says ([exit codes](../reference/exit-codes.md)); a full disk or quota is 74 | kept | partial coverage (a key limit, unreadable entries) is 3 `incomplete`, 2026-11-13: finished, the output usable but partial; Java exited 1 for a key limit and 0 with unreadable entries |
 | 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `309e562`) |
-| 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
+| 74: output filesystem full | 74 `disk_full`, cause `no_space` (ENOSPC, EDQUOT), resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
 | 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows`, `stuck_empty_chain` | kept (causes renamed) | `stuck_empty_chain` added 2026-11-06 (review R3): Java rejects a continuing empty page at once; Go follows them, bounded |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |

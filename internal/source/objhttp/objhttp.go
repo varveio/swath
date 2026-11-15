@@ -43,10 +43,10 @@ const (
 	// ClassNotFound: the bucket or container the request names does not
 	// exist (S3 NoSuchBucket, GCS's 404 to a listing, Azure
 	// ContainerNotFound). A missing object or prefix is never labelled so.
-	ClassNotFound Class = "not_found"
+	ClassNotFound Class = source.CauseNotFound
 	// ClassRegionRedirect: S3 answered that the bucket is in another region
 	// and named it (X-Amz-Bucket-Region); the message carries the region.
-	ClassRegionRedirect Class = "region_redirect"
+	ClassRegionRedirect Class = source.CauseRegionRedirect
 	ClassOther          Class = "other" // no provider label in the run report
 )
 

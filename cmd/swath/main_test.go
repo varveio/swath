@@ -401,8 +401,9 @@ func TestRefusedRunLeavesOwnerMetadata(t *testing.T) {
 	}
 }
 
-// TestDiskFullIsResumable: a full disk loses nothing durable, so with an
-// intact journal the outcome is resumable, with the cause named.
+// TestDiskFullIsResumable: a full disk or a full quota (EDQUOT, exit 1
+// before: #518) loses nothing durable, so with an intact journal the
+// outcome is exit 74, resumable, with the cause named.
 func TestDiskFullIsResumable(t *testing.T) {
 	dir := t.TempDir()
 	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, nil)
@@ -410,12 +411,50 @@ func TestDiskFullIsResumable(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Close()
-	o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, dir)
-	if o.ExitCode != exitDiskFull || o.Class != "disk_full" || !o.Resumable || o.Cause != "no_space" {
-		t.Fatalf("journal ENOSPC: %+v", o)
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EDQUOT} {
+		o := classify(fmt.Errorf("journal: %w", errno), nil, dir)
+		if o.ExitCode != exitDiskFull || o.Class != "disk_full" || !o.Resumable || o.Cause != "no_space" {
+			t.Fatalf("journal %v: %+v", errno, o)
+		}
+		if o := classify(fmt.Errorf("journal: %w", errno), nil, t.TempDir()); o.Resumable {
+			t.Fatalf("%v without a journal is resumable: %+v", errno, o)
+		}
 	}
-	if o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, t.TempDir()); o.Resumable {
-		t.Fatalf("ENOSPC without a journal is resumable: %+v", o)
+}
+
+// TestFatalResumableAsTheJournalSays: a run that stopped on a failure a
+// person fixes (credentials, permissions, a failing or read-only disk)
+// exits 1, and its outcome is resumable when its journal is intact, as
+// swath resume continues it; it said not resumable while resume continued
+// it (#517). A failure whose fix changes the recorded command (a missing
+// bucket, another region) or that is another process's run is not.
+func TestFatalResumableAsTheJournalSays(t *testing.T) {
+	dir := t.TempDir()
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	for _, c := range []struct {
+		err       error
+		cause     string
+		resumable bool
+	}{
+		{&classified{errors.New("list: 401"), "auth"}, "auth", true},
+		{&classified{errors.New("list: 403"), "access_denied"}, "access_denied", true},
+		{fmt.Errorf("publish: %w", syscall.EIO), "", true},
+		{fmt.Errorf("journal: %w", syscall.EROFS), "", true},
+		{&classified{errors.New("list: 404"), "not_found"}, "not_found", false},
+		{&classified{errors.New("list: 301"), "region_redirect"}, "region_redirect", false},
+		{fmt.Errorf("%w (%s)", journal.ErrLocked, dir), "", false},
+	} {
+		o := classify(c.err, nil, dir)
+		if o.Class != "fatal" || o.ExitCode != exitFatal || o.Resumable != c.resumable || o.Cause != c.cause {
+			t.Errorf("%v: %+v, want fatal, resumable %v, cause %q", c.err, o, c.resumable, c.cause)
+		}
+		if o := classify(c.err, nil, t.TempDir()); o.Resumable {
+			t.Errorf("%v without a journal is resumable", c.err)
+		}
 	}
 }
 
