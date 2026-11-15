@@ -317,8 +317,9 @@ A producer also declares its storage-class column, `schema.Info.StorageClass` (`
 Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
 a declaration that names no string column. A local tree declares its containers the same way,
 `schema.Info.Containers` (the rows whose `kind` is `dir`): `schema.Bind` derives `Schema.Container` from it,
-which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly. Its
-`schema.Info.NamesTier` (`names`) is the metadata tier, recorded in a manifest's `collected.metadata`, whose rows
+which `swath du` counts in `dirs` rather than as objects, and refuses a `Container` set directly;
+`schema.Info.Links` (the rows whose `kind` is `symlink`) are the rows `swath du --from-dataset` refuses as SOURCE,
+since a live listing follows a link to a directory. Its `schema.Info.NamesTier` (`names`) is the metadata tier, recorded in a manifest's `collected.metadata`, whose rows
 carry no link identity: `swath du --from-dataset` counts such a dataset's hard-linked files under every name, as
 the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's

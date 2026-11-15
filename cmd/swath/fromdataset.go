@@ -25,6 +25,7 @@ import (
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
@@ -102,7 +103,7 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 // it: sourcePrefix), as swath du of it would print them: an object store's
 // whole keys, with depth counted from its key prefix (or the dataset's
 // scope) up to its last '/'; a local tree's keys below SOURCE, with depth
-// counted from SOURCE. Stderr
+// counted from SOURCE, or the row of the file SOURCE names. Stderr
 // says what the dataset is (eventLog.dataset); a dataset whose listing did
 // not complete, or left out entries it could not read, prints its totals
 // and exits 3 (incomplete), as the run that wrote it did. A file with
@@ -151,8 +152,12 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 			return err
 		}
 		// A local tree's keys are relative to its root: a directory below
-		// it totals as its own listing, keyed from it.
-		relative = prefix != "" && !hasScheme(*m.Source.URI)
+		// it totals as its own listing, keyed from it, a file as its row.
+		if relative = prefix != "" && !hasScheme(*m.Source.URI); relative {
+			if prefix, err = fileKey(ctx, d, info, prefix, o.datasetSource); err != nil {
+				return err
+			}
+		}
 	}
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
 	if relative {
@@ -254,6 +259,29 @@ func sourcePrefix(dir, arg string, m reader.Metadata) (string, error) {
 		}
 	}
 	return "", usageError{fmt.Errorf("%q: %s was listed from %s; give %s, or no argument", registry.Redact(arg), dir, registry.Redact(src), below)}
+}
+
+// fileKey is prefix, the directory sourcePrefix made of arg, a local path, as
+// the key of the file it names when the dataset holds that key, which
+// DatasetTotals then reads alone. A symbolic link (info.Links) is refused:
+// a live swath du follows one to a directory, whose rows are not under
+// its name.
+func fileKey(ctx context.Context, d *reader.Dataset, info schema.Info, prefix, arg string) (string, error) {
+	key := strings.TrimSuffix(prefix, "/")
+	var cols []string
+	if info.Links.Column != "" {
+		cols = append(cols, info.Links.Column)
+	}
+	rows, err := d.SeekParquet().Get(ctx, []byte(key), nil, cols...)
+	switch {
+	case err != nil || len(rows) == 0:
+		return prefix, err
+	case len(cols) > 0:
+		if v, _ := rows[0].Value(info.Links.Column); string(v.Bytes()) == info.Links.Value {
+			return "", usageError{fmt.Errorf("%q: a symbolic link in the dataset; give the path it points to", registry.Redact(arg))}
+		}
+	}
+	return key, nil
 }
 
 // urlPrefix is the key prefix of arg, a URL below src (or src): the same

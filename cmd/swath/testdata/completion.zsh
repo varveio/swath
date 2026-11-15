@@ -197,7 +197,6 @@ _swath_diag_list() {
         '--no-journal[publish parts only at the end, without the journal resume needs]' \
         '--no-spill[wait on the sort buffer instead of spilling rows to disk]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
-        '--segment-workers=[workers writing the tail (0: one per two CPUs, at least 8)]:N: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -354,7 +353,6 @@ _swath_resume() {
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
-        '--segment-workers=[workers writing the tail (0: one per two CPUs, at least 8)]:N: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
