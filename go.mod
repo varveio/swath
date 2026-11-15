@@ -19,7 +19,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/spf13/pflag v1.1.0
-	github.com/varveio/seekparquet/go v0.1.1-0.20261114182916-41e43191bc40
+	github.com/varveio/seekparquet/go v0.2.0
 	github.com/varveio/swath/objfile v0.0.0-00010101000000-000000000000
 	github.com/varveio/swath/reader v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.38.0

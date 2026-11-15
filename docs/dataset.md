@@ -154,8 +154,8 @@ after it is copied or moved, not for ordinary reads. `swath verify` is planned
 [SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
 section of its `go/README.md`). From the root of a SeekParquet checkout that includes `cmd/seekparquet`
 and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
-`github.com/varveio/seekparquet/go v0.1.1-0.20261112184929-7264a9f88420` in `go.mod`; use that
-revision or one with a matching format, rather than assuming a published tag includes the command.
+`github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the release that fixed draft revision 1; use that
+release (tag `go/v0.2.0`) or a later one with a matching format.
 
 ```bash
 go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
