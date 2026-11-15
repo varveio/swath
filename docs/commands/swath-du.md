@@ -96,11 +96,13 @@ Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows
 
 An optional SOURCE after the directory takes the form a live `swath du` takes: the dataset's source as it was
 listed (the `source` stderr names), which totals the whole dataset as no SOURCE does, or a path or URL below it,
-which restricts the totals to the keys below it. A local path is made absolute, as a live `swath du` resolves
-it, and taken as a directory below the listed tree (`/data/photos/2025` totals the keys under `2025/`); a URL
-names the same bucket or container and a prefix that starts with the listed one (`s3://bucket/logs/2026/` of a
-dataset listed from `s3://bucket/logs/`). Depth counts from its prefix up to the last `/`, and the read seeks
-to the prefix rather than scanning the dataset. A SOURCE below the listed one that holds no key prints zeros
+which restricts the totals to the keys below it and prints what a live `swath du` of it prints. A local path
+is made absolute, as a live `swath du` resolves it, and taken as a directory below the listed tree:
+`/data/photos/2025` totals the keys under `2025/`, labelled and filtered relative to it, with depth counted
+from it. A URL names the same bucket or container and a prefix that starts with the listed one
+(`s3://bucket/logs/2026/` of a dataset listed from `s3://bucket/logs/`); its rows keep whole keys, as a live
+run's do, and depth counts from its prefix up to the last `/`. The read seeks to the prefix rather than
+scanning the dataset. A SOURCE below the listed one that holds no key prints zeros
 and warns, exit 0, as a live listing of an empty prefix. Any other SOURCE is refused (exit 2), naming the
 dataset's: `"photos": photos-inventory was listed from /data/photos; give a path below it, or no argument`.
 

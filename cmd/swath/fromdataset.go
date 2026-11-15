@@ -98,8 +98,10 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 
 // duFromDataset is swath du --from-dataset DIR [SOURCE]: the totals of the
 // dataset's rows under SOURCE (the dataset's source, or a path or URL below
-// it: sourcePrefix), as swath du of it would print them, with depth counted
-// from its key prefix (or the dataset's scope) up to its last '/'. Stderr
+// it: sourcePrefix), as swath du of it would print them: an object store's
+// whole keys, with depth counted from its key prefix (or the dataset's
+// scope) up to its last '/'; a local tree's keys below SOURCE, with depth
+// counted from SOURCE. Stderr
 // says what the dataset is (eventLog.dataset); a dataset whose listing did
 // not complete, or left out entries it could not read, prints its totals
 // and exits 3 (incomplete), as the run that wrote it did. A file with
@@ -142,13 +144,19 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	if m.Scope != nil && m.Scope.Prefix != nil {
 		scope = *m.Scope.Prefix
 	}
-	prefix := scope
+	prefix, relative := scope, false
 	if o.datasetSource != "" {
 		if prefix, err = sourcePrefix(o.fromDataset, o.datasetSource, m); err != nil {
 			return err
 		}
+		// A local tree's keys are relative to its root: a directory below
+		// it totals as its own listing, keyed from it.
+		relative = prefix != "" && !hasScheme(*m.Source.URI)
 	}
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
+	if relative {
+		origin = ""
+	}
 	// A tree listed at the names tier has no link counts: its files count
 	// under every name, as a live names-tier swath du counts them.
 	names := info.NamesTier != "" && m.Collected != nil && m.Collected.Metadata != nil && *m.Collected.Metadata == info.NamesTier
@@ -163,7 +171,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	l := elog()
 	l.dataset(prov, time.Now())
-	read, err := registry.DatasetTotals(ctx, d, prefix, &o.filter, t.tally, runtime.GOMAXPROCS(0))
+	read, err := registry.DatasetTotals(ctx, d, prefix, relative, &o.filter, t.tally, runtime.GOMAXPROCS(0))
 	if err != nil {
 		return fail(err)
 	}

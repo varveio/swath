@@ -121,19 +121,23 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	}
 	liveAndSaved(t, []string{root, "-d", "1", "--no-header"}, []string{"--from-dataset", ds, "-d", "1", "--no-header"})
 	liveAndSaved(t, []string{root, "--max-depth", "1"}, []string{"--from-dataset", ds, "--max-depth", "1"}) // GNU du's spelling
-	// SOURCE, a path below the tree, restricts the totals to its keys, the
-	// depth counted from it; the rows keep the dataset's keys. The tree
-	// itself, in any spelling of its path, is the whole dataset.
-	below := []string{filepath.Join(root, "a"), filepath.Join(root, "a") + string(filepath.Separator)}
-	whole := []string{root, filepath.Join(root, "a", "..")}
+	// SOURCE, a path below the tree, totals as swath du of that directory:
+	// its keys below it, the depth counted from it, its filters anchored
+	// there. The tree itself, in any spelling of its path, is the whole
+	// dataset.
+	sub := filepath.Join(root, "a")
+	below := []string{sub, sub + string(filepath.Separator)}
+	whole := []string{root, filepath.Join(sub, "..")}
 	if runtime.GOOS == "windows" { // the same paths, as Windows takes them
-		below = append(below, filepath.ToSlash(below[0]), strings.ToUpper(below[0]))
+		below = append(below, filepath.ToSlash(sub), strings.ToUpper(sub))
 		whole = append(whole, filepath.ToSlash(root), strings.ToUpper(root))
 	}
 	for _, a := range below {
-		got, err := duRun(t, "--from-dataset", ds, a, "-d", "1", "--format", "tsv")
-		if err != nil || !strings.Contains(got, "\t2\t1\t7\t0\t") || !strings.HasSuffix(got, "\ta/b/\n") || strings.Count(got, "\n") != 3 {
-			t.Fatalf("SOURCE %s: %v\n%s", a, err, got)
+		for _, format := range []string{"table", "tsv", "jsonl"} {
+			for _, extra := range [][]string{{"-d", "0"}, {"-d", "2"}, {"-d", "1", "--sort", "size"}, {"-d", "2", "--exclude", "b/**"}} {
+				flags := append([]string{"--format", format}, extra...)
+				liveAndSaved(t, append([]string{sub}, flags...), append([]string{"--from-dataset", ds, a}, flags...))
+			}
 		}
 	}
 	for _, a := range whole {

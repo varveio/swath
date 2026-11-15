@@ -194,8 +194,9 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: `swath du --from-dataset DIR [SOURCE]` totals a committed local dataset (`swath list -o DIR`)
   instead of listing the source again: the same rows, depths, orders, formats and filters as `swath du` of the
   source, read in one parallel pass over the key and the columns the totals need. SOURCE, in the form a live
-  `swath du` takes it, is the dataset's source or a path or URL below it, whose keys the read seeks to; any
-  other SOURCE, such as a key prefix, is refused (exit 2) naming the dataset's source. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
+  `swath du` takes it, is the dataset's source or a path or URL below it, whose keys the read seeks to and
+  whose rows are those `swath du SOURCE` prints (a local directory's relative to it); any other SOURCE, such
+  as a key prefix, is refused (exit 2) naming the dataset's source. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
   `dataset` member; a dataset whose listing did not complete, or left out entries it could not read, prints its totals and exits 3
   (`incomplete`).
   Options that shape a listing, a dataset in a bucket and an interrupted run are refused. Plain `swath du DIR`
