@@ -18,8 +18,10 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: `--include-regex` and `--exclude-regex` match the key below SOURCE on every source, as the globs
   do. Before, on an object store they matched the whole key, SOURCE's prefix included, while a local tree's
   key is below its root.
-- Go port: `--modified-since` and `--modified-until` also read a time with a space for the `T`,
-  `2026-11-15 07:45[:00]`, the form the tables print.
+- Go port: `--modified-since` and `--modified-until` read a time without an offset as local time (`TZ`), as the
+  tables print it and `find -newermt` reads it (it was UTC), and also take the tables' form
+  `2026-11-15 07:45[:00]`; the run records the UTC time it names, as for a duration. `Z` or an offset is
+  honoured as given.
 - Go port: `swath du` takes `--max-depth N` (GNU du's spelling of `--depth N`) and `-x` (also on `swath list`)
   for `--one-file-system`; GNU du's other hints (`-s`, `--apparent-size`) appear on `swath du` only. The 0.3
   spellings (`--force-path-style`, `--idle-timeout`, `--force`, `--parquet-part-size`, `--compression`, ...)

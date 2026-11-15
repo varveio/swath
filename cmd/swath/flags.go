@@ -146,7 +146,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "keep objects or entries of at most this size"})
 	def(source.Flag{Name: "modified-since", Value: source.Text(&o.filter.Since), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or after TIME (2026-01-01, 7d)",
-		Long:  "2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00; an offset or Z, UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names."})
+		Long:  "2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time (TZ), as the tables print it; with Z or an offset, that zone. A duration (7d, 12h) is that long before the run started. Either is recorded as the UTC time it names."})
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME[,NAME...]", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",

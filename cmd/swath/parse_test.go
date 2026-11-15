@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -822,5 +823,28 @@ func TestOutputNameRules(t *testing.T) {
 	}
 	if _, _, err := parseList([]string{"s3://bkt", "-o", in("ds"), "--part-size", "1M", "--part-max-rows", "5"}, io.Discard, command{}); err != nil {
 		t.Errorf("part flags with a dataset: %v", err)
+	}
+}
+
+// TestBareTimeIsLocal: a --modified-since or --modified-until time without
+// an offset is local time (TZ), the tables' form included; the recorded
+// command carries the UTC time it names, and one with Z or an offset is
+// kept as given. The zone is 5 hours west of UTC, as TZ=America/New_York
+// in winter (time.Local, which TZ sets at start).
+func TestBareTimeIsLocal(t *testing.T) {
+	was := time.Local
+	time.Local = time.FixedZone("EST", -5*3600)
+	t.Cleanup(func() { time.Local = was })
+	for in, want := range map[string]string{
+		"2026-11-15 07:45":          "2026-11-15T12:45:00Z",
+		"2026-11-15T07:45:00":       "2026-11-15T12:45:00Z",
+		"2026-11-15":                "2026-11-15T05:00:00Z",
+		"2026-11-15T07:45:00Z":      "2026-11-15T07:45:00Z",
+		"2026-11-15T07:45:00+01:00": "2026-11-15T07:45:00+01:00",
+	} {
+		o, _, err := parseList([]string{t.TempDir(), "--modified-since", in, "--modified-until", in}, io.Discard, command{count: true, du: true})
+		if err != nil || !slices.Contains(o.argv, "--modified-since="+want) || !slices.Contains(o.argv, "--modified-until="+want) {
+			t.Errorf("%q: %v, recorded %q, want %q", in, err, o.argv, want)
+		}
 	}
 }

@@ -5,8 +5,8 @@
 // glob.go), --include-regex and --exclude-regex (a regular expression
 // found anywhere in the key; both kinds match the key below SOURCE, Base),
 // --min-size and --max-size (inclusive), --modified-since and
-// --modified-until (inclusive, UTC without an offset, or a duration before
-// the run's start) and --storage-class (any of a list). A row is kept when there is no include rule or one of them
+// --modified-until (inclusive; local time without an offset, or a duration
+// before the run's start, each resolved to the absolute time it names) and --storage-class (any of a list). A row is kept when there is no include rule or one of them
 // (glob or regex) matches, no exclude matches, and the other filters pass;
 // the order rules are given in does not matter. Filters reduce the rows
 // emitted. Includes sharing a literal prefix narrow the listed prefix
@@ -42,9 +42,9 @@ type Spec struct {
 	IncludeRegex, ExcludeRegex []string
 	MinSize, MaxSize           string // size text (ParseSize): 1K, 256MB, 1.5GiB
 	// Since and Until are 2026-01-01, 2026-01-01T12:00:00 (or with a space
-	// for the T) or 2026-01-01T12:00:00Z, or a
-	// duration before the run's start (7d), which Resolve replaces by the
-	// time it names.
+	// for the T), local time, or 2026-01-01T12:00:00Z (an offset), or a
+	// duration before the run's start (7d); Resolve replaces a local time
+	// and a duration by the UTC time they name.
 	Since, Until   string
 	StorageClasses []string
 	// Base is the patterns' root: the key prefix the source names, up to
@@ -399,15 +399,21 @@ func ParseSize(text string) (int64, error) {
 var errSize = errors.New("want a size such as 1K, 1.5GiB or 256MB: bytes, or K, M, G, T, KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal)")
 
 // Resolve replaces a --modified-since or --modified-until given as a
-// duration (7d) by the time that long before now, the run's start, so that
+// duration (7d) by the time that long before now, the run's start, and one
+// given without an offset by the instant it names in now's zone (the local
+// time, as the tables print and find -newermt reads), each in UTC, so that
 // the journal, coverage.filters and the report record the time and a
-// resume keeps the same bound.
+// resume, in whatever zone, keeps the same bound. A time with Z or an
+// offset is kept as given.
 func (s *Spec) Resolve(now time.Time) {
 	for _, t := range []*string{&s.Since, &s.Until} {
 		if *t == "" {
 			continue
 		}
-		if _, err := ParseTime(*t); err == nil {
+		if at, zoned, err := parseTime(*t, now.Location()); err == nil {
+			if !zoned {
+				*t = at.UTC().Format(time.RFC3339Nano)
+			}
 			continue
 		}
 		if d, err := source.ParseDuration(strings.TrimSpace(*t)); err == nil && d >= 0 {
@@ -416,20 +422,30 @@ func (s *Spec) Resolve(now time.Time) {
 	}
 }
 
-// ParseTime is an instant with Z or an offset, a date-time without one
-// taken as UTC (a space may stand for the T), or
-// a date (its start, UTC); epoch microseconds.
+// ParseTime is an instant with Z or an offset, or a date-time or a date
+// (its start) without one, local time (a space may stand for the T); epoch
+// microseconds.
 func ParseTime(text string) (int64, error) {
+	t, _, err := parseTime(text, time.Local)
+	return t.UnixMicro(), err
+}
+
+// parseTime is ParseTime's instant, a time without an offset read in loc,
+// and whether the text gave its zone (Z or an offset).
+func parseTime(text string, loc *time.Location) (time.Time, bool, error) {
 	s := strings.TrimSpace(text)
 	if len(s) > len("2006-01-02") && s[len("2006-01-02")] == ' ' {
 		s = s[:len("2006-01-02")] + "T" + strings.TrimLeft(s[len("2006-01-02"):], " ")
 	}
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04", "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UnixMicro(), nil
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, true, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04", "2006-01-02"} {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
+			return t, false, nil
 		}
 	}
-	return 0, errors.New("want a time such as 2026-01-01, 2026-01-01 12:00 or 2026-01-01T12:00:00Z, or a duration before now such as 7d")
+	return time.Time{}, false, errors.New("want a time such as 2026-01-01, 2026-01-01 12:00 (local time) or 2026-01-01T12:00:00Z, or a duration before now such as 7d")
 }
 
 // Equal reports whether two description lists are the same filters.
