@@ -190,11 +190,11 @@ func TestStatsBlock(t *testing.T) {
 	per := 1.5
 	usd := 0.01
 	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
-		Output:   listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
-		Requests: &listing.Requests{HTTPAttempts: 2000},
-		Cost:     &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
-		Diagnostics: listing.Diagnostics{Resources: listing.Resources{PeakRSSBytes: &rss},
-			Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}}
+		Output:      listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
+		Requests:    &listing.Requests{HTTPAttempts: 2000},
+		Cost:        &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
+		Process:     listing.Process{PeakRSSBytes: &rss},
+		Diagnostics: listing.Diagnostics{Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}}
 	store := rowNouns(false, false)
 	got := statsLines(r, false, store)
 	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · in flight avg 0.00 · peak 0",

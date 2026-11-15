@@ -1025,7 +1025,7 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 		_ = jr.j.Close()
 		jr.j = nil
 	}
-	cfg.Progress.end(err)
+	cfg.Progress.End(err)
 	// The outcome goes into the output only while its pathname is still
 	// the directory this process locked.
 	if cfg.Settle != nil && jr.verify() == nil {
@@ -1040,7 +1040,7 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 func runInfo(cfg Config, jr *runJournal) *RunInfo {
 	switch {
 	case jr != nil && jr.remote != nil:
-		return &RunInfo{ID: jr.remote.run}
+		return jr.remote.runInfo()
 	case jr != nil && jr.j != nil:
 		return &RunInfo{ID: jr.j.RunUUID()}
 	case cfg.Attempt != nil:

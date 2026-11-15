@@ -1243,7 +1243,7 @@ func countLine(stdout io.Writer, sum listing.Report) {
 	}
 	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
 		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
-		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
+		measured(sum.Process.PeakRSSBytes, 1<<20, "%.1fMiB"))
 	fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
 }
 

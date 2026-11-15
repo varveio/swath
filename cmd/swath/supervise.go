@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 )
@@ -635,7 +636,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
 	buf := stacks.Bytes()
 	sj, _ := json.Marshal(s)
-	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
+	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, jsontime.Format(time.Now()), sj)
 	l := elog()
 	done := make(chan string, 1)
 	go func() {
@@ -763,7 +764,18 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		o.Attempt = f.att
 		account(&r.Outcome, o)
 		if f.dir != "" {
-			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
+			f.pr.Owned(func() {
+				_ = writeOutcome(f.dir, outcomeOf(r))
+				if f.pr.Started() {
+					// The run's final snapshot: done once committed.
+					var failed error
+					if r.Outcome.Status != listing.StatusCommitted {
+						failed = err
+					}
+					f.pr.End(failed)
+					progressWrite(f.dir, f.pr)
+				}
+			})
 		}
 		_ = writeReport(f.report, r, nil)
 	}()
@@ -785,7 +797,12 @@ const progressEvery = 2 * time.Second
 // never overwrites its owner's progress), and never a snapshot older than
 // one written before (the final one, done or failed, stays).
 func writeProgress(dir string, pr *listing.Progress) {
-	pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), pr.Snapshot(), dataset.Atomic) })
+	pr.Owned(func() { progressWrite(dir, pr) })
+}
+
+// progressWrite is writeProgress's write, inside pr.Owned.
+func progressWrite(dir string, pr *listing.Progress) {
+	_ = dataset.ReplaceJSON(filepath.Join(dir, progressName), pr.Snapshot(), dataset.Atomic)
 }
 
 // supervise runs list with the run's liveness owner: it rewrites the

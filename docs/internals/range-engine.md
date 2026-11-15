@@ -212,7 +212,7 @@ cannot read the bound (+∞) ranks it above every finite estimate; where the gau
 refusals in a row) and hunger cover the rest. An emptied segment costs one request for its tile; a new folder
 between cuts lies inside one tile and is split there. The report shows it: `seed.from.error.within_2x`, `.grown`,
 `.shrunk` and `.max_grown` compare every prior tile's listed keys (its descendants included, exact once the run
-ends) with the prior's count; `split.pivot.*`, `split.peak_depth` and `child_empty.*` show the splits it took, as on
+ends) with the prior's count; `split.pivot.*`, `split.max_depth` and `child_empty.*` show the splits it took, as on
 any run; `seed.from.expected_keys` against `objects` is the scope's growth. The run report's `invocation.prior`
 names the path, the source (`dataset` or `cuts`), the cuts offered and whether they were counted. On a resume the
 prior is read again; one that is gone or no longer matches is a warning, and the resume lists without it.
@@ -293,7 +293,7 @@ left is at least twice the running ranges' mean. Keys left are the gauge's remai
 seed tile's bound is the next folder, and a page cannot see where its own folder ends), the keys the range has
 listed; a slow split's child that is still an outlier halves again without that test. Bounded: one slow split's
 children wait at a time (they are queued, not run, until a worker frees up), and the admission gates apply.
-Counters `split.slow.peak_range_latency_ns`, `split.slow.run_latency_ns`. Measured: on a scaled slow folder
+Counters `split.slow.max_range_latency_ns`, `split.slow.run_latency_ns`. Measured: on a scaled slow folder
 (`TestSlowRangeSplits`) 9 % off the wall; on the suite ([measurements](measurements.md#red-team-fixes-2026-11-07))
 too little to adopt: the slow folder still peels a few pages per split, as the pivot policy hands out what an
 idle worker can take, not half a folder whose end no page shows.
@@ -336,7 +336,7 @@ midpoint `between(c, ceiling)` finds neither a safe scalar nor a sliver, so it i
 a synthesis step that could not run on its inputs (`TestInvalidScopeCeiling`).
 
 **Pivots.** A split waits for a page, so a chain of `d` dependent splits costs at least `d` page latencies:
-the pivot policy is judged by the depth of the split tree it builds (`split.peak_depth`), which a balanced tree
+the pivot policy is judged by the depth of the split tree it builds (`split.max_depth`), which a balanced tree
 keeps near `log2(pages)`. A pivot that peels a few pages off the cursor and leaves the remainder in the upper
 child makes the depth linear in the range's size. So the pivot is the further of two steps (`propose`):
 1. **The anchor reflection.** Each chain of upper children carries an anchor: on the open frontier a seed or
@@ -397,13 +397,13 @@ their pivots; `peak_active`, `peak_queued`, `mean_active`; busy, idle-with-deman
 `split.pivot.reflect` (the anchor reflection), `split.pivot.midpoint` (a safe scalar between the cursor and the
 ceiling, after a reflection reached it), `split.pivot.density.bounded` and `.frontier` (the galloped density
 step lay further), and `split.pivot.structure`. `split.frontier.anchored` counts frontier splits whose chain had
-an anchor, `split.gallop.peak_generation` the longest run of upper children that split, and
+an anchor, `split.gallop.max_generation` the longest run of upper children that split, and
 `split.reflect.ceiling`, `split.density.shrink_prevented`, `split.gallop.halvings` and `split.sliver_refused` the
 decisions where those rules engaged. When the density step is refused, `split.density.refused.*` says why
 (`alphabet` is a page with a non-ASCII or control byte: such keys turn density off, and only the reflection and the
 midpoint remain). A child carries its parent's pivot source, so an empty child is attributed
 (`child_empty.by.<source>.<lower|upper>`) and classed by its `hi` (`child_empty.hi.pivot`: a pivot; `.bound`: a
-seed cut, the scope's end or ⊤). The chain's length is `split.peak_depth`, its mean over the leaves
+seed cut, the scope's end or ⊤). The chain's length is `split.max_depth`, its mean over the leaves
 `split.leaf_depth_sum` / `split.leaves`; at one page latency per step, depth times `inflight.p50_ns` is a floor
 under the wall time. Children ending under one page (`child_small.*`) and the keys a frontier split handed to
 its lower side (`split.frontier_handout_keys` / `split.accepted_frontier`) show the balance of the splits;
@@ -463,7 +463,7 @@ sequential chain) the engine emits a row only once its key's rows are proven com
   key earn watchdog credit only within the first 1,024 pages of a no-advance run. Raw keys are
   validated before bound and resume suppression; suppressed rows cannot reset that window.
 - *Units.* `st.keys` counts rows (work); density, the gauge and the pivot take distinct keys.
-- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.peak_rows`, `groups.overfetch_rows`,
+- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.max_rows`, `groups.overfetch_rows`,
   `split.skipped.group_open`.
 
 Group page fragments are detached on both sides before emission or retention: their row arrays and
@@ -471,6 +471,6 @@ string arenas cannot retain excluded rows outside the order budget. Native chain
 before inclusive or resume suppression. Only a strictly greater observed key resets the token window;
 same-key pages earn watchdog credit for at most the first 1,024 pages of a run. GCS also validates
 strictly ascending generation ordinals across page seams, including empty and suppressed pages,
-with state owned by each chain. `groups.peak_rows` scans every group, including interior groups,
+with state owned by each chain. `groups.max_rows` scans every group, including interior groups,
 sequential listings and seed EOF. `groups.overfetch_rows` counts only rows above a range's upper bound
 read to close its last group; resume suppression and split relisting have separate accounting.

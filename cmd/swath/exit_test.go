@@ -185,7 +185,7 @@ func TestExitCodes(t *testing.T) {
 	}
 	// The progress file's last snapshot says the run failed.
 	var p listing.ProgressSnapshot
-	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"peak_mutex_hold_ns"`)) || p.State != listing.StateFailed {
+	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"max_mutex_hold_ns"`)) || p.State != listing.StateFailed {
 		t.Fatalf("progress file: %s", b)
 	}
 }

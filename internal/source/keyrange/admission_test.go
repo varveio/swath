@@ -96,7 +96,7 @@ func TestAdmissionEngages(t *testing.T) {
 			g(cSplitPivotReflect), g(cSplitPivotMidpoint), g(cSplitPivotDensityBounded), g(cSplitPivotDensityFrontier), g(cReflectCeiling),
 			g(cDensityShrinkPrevented), g(cGallopMaxGen), g(cGallopHalvings), g(cSplitSliverRefused), g(cChildEmptyLower), g(cChildEmptyUpper))
 		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
-			t.Errorf("%s: split.peak_depth %d over %d", name, d, depthBound(len(keys), shapePage, 4))
+			t.Errorf("%s: split.max_depth %d over %d", name, d, depthBound(len(keys), shapePage, 4))
 		}
 		pivots := []counters.ID{cSplitAcceptedFrontier, cFrontierAnchored, cSplitPivotReflect, cSplitPivotDensityBounded, cGallopMaxGen}
 		if name == "date" || name == "nbm" {
@@ -145,7 +145,7 @@ func TestAdmissionFlat(t *testing.T) {
 		t.Errorf("%d ranges, want fewer than 360", g(cLeaves))
 	}
 	if d := g(cSplitMaxDepth); d > depthBound(len(keys), page, 4) {
-		t.Errorf("split.peak_depth %d over %d", d, depthBound(len(keys), page, 4))
+		t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), page, 4))
 	}
 	if g(cMaxActive) < 32 {
 		t.Errorf("peak_active %d: the gates starved the workers", g(cMaxActive))

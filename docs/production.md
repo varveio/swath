@@ -52,7 +52,7 @@ when the report says so.
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
   vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured
-  over those lists. If `diagnostics.resources.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
+  over those lists. If `process.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
   heavy (`diagnostics.resources.spill.rows` near the rows listed) or `diagnostics.resources.budget_wait_ns` is large and memory is free,
   raise it: past what a listing holds ahead of its output, more buys only tail workers.
 - **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to
@@ -97,7 +97,7 @@ Five fields to check in the `--report` file of a sorted listing of a million key
 | `diagnostics.efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
 | `diagnostics.resources.spill.refused` | 0 |
 | `diagnostics.resources.budget_wait_ns` | 0 or close to it |
-| `diagnostics.resources.peak_frontier_stuck_ns` | a few request round trips: a median 0.28 s and at most 1 s on sorted runs of the 64 lists of 20M keys or more through a 50 ms fake (candidate 4, run `c4big`: its resumed and spill-capped arms) |
+| `diagnostics.resources.max_frontier_stuck_ns` | a few request round trips: a median 0.28 s and at most 1 s on sorted runs of the 64 lists of 20M keys or more through a 50 ms fake (candidate 4, run `c4big`: its resumed and spill-capped arms) |
 
 Spill is normal. A sorted run of a large bucket spills almost every row once (a median 96 % of rows on the 64
 lists of 20M keys or more: candidate 4, run `c4big`, plain frames), because ranges finish in roughly
@@ -122,13 +122,13 @@ alone, the run finishes at the output's pace. On an unattended run, `--spill-wai
 instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk. With the default
 cap, grow the filesystem under the running process (a cloud persistent disk resized, then its filesystem grown
 online): within seconds the run rereads the free space, the cap rises and listing continues;
-`diagnostics.resources.spill.max_raised` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
+`diagnostics.resources.spill.cap_raises` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
 run started with. A `--spill-budget` is fixed: stop the run and resume it with a larger one on a disk that has
 the room, `swath resume DIR --spill-budget 200GiB`; a plain `swath resume DIR` keeps the recorded cap, and with
 the default derives it from the free space it finds (the certified spill the stopped run kept counted as
 free). A repeat listing avoids most of this by seeding from the previous dataset ([warm start](#warm-start-for-repeat-listings)).
 
-**A stuck frontier.** `diagnostics.resources.peak_frontier_stuck_ns` is seconds to minutes. In `progress.json`, `rows_fetched`
+**A stuck frontier.** `diagnostics.resources.max_frontier_stuck_ns` is seconds to minutes. In `progress.json`, `rows_fetched`
 rises while `rows_encoded` and `parts_written` stay flat and `part_age_ms` grows. One range at the front of the output is
 slow: a slow, retried or hung request. Check `inflight.p99_ns` against `inflight.p50_ns` and the retries in
 the report's `diagnostics.source.stats.counters.values`. After `--stall-timeout` (10 min) of no progress the run stops
@@ -287,7 +287,7 @@ machine:
   count.
 - **A dataset in a bucket:** the work directory needs no room for the dataset. The default spill budget is its
   free space after the 1 GiB reserve, and follows the disk: on a disk that can be grown online, start modest
-  and grow it if spill fills it (`diagnostics.resources.spill.max_raised` counts the rises). Set `--spill-budget` when the
+  and grow it if spill fills it (`diagnostics.resources.spill.cap_raises` counts the rises). Set `--spill-budget` when the
   disk is shared, and size it as the budget plus the reserve plus the metadata, which grows with the parts (a claim receipt of
   under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
   the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk, S3 part or Azure block) per

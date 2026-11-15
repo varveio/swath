@@ -608,7 +608,7 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	if written > 0 {
 		out = append(out, textout.Size(written)+" written")
 	}
-	if rss := r.Resources.PeakRSSBytes; rss != nil && *rss > 0 {
+	if rss := r.Process.PeakRSSBytes; rss != nil && *rss > 0 {
 		out = append(out, "peak RSS "+textout.Size(*rss))
 	}
 	if len(out) > 0 {

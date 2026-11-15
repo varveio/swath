@@ -252,17 +252,17 @@ type Spill struct {
 	// free space spill left on its filesystem (0: none). MaxBy is what
 	// set the cap (CapBudget, CapDisk, CapDiskHalf, CapNone); a cap set by
 	// the disk follows it: a frame it would refuse re-reads the free
-	// space, and MaxRaised counts the times the cap rose (the filesystem
+	// space, and CapRaises counts the times the cap rose (the filesystem
 	// grew, or other files on it were removed). While such a cap holds
 	// the run back (a frame refused, workers waiting on it) the
-	// free space is also reread every 2 s: MaxRechecks counts those reads,
-	// MaxRecheckRaised those that raised the cap.
+	// free space is also reread every 2 s: CapRechecks counts those reads,
+	// CapRecheckRaises those that raised the cap.
 	MaxBytes         int64  `json:"max_bytes"`
 	StartMaxBytes    int64  `json:"start_max_bytes"`
 	MaxBy            string `json:"max_by"`
-	MaxRaised        int64  `json:"max_raised"`
-	MaxRechecks      int64  `json:"max_rechecks"`
-	MaxRecheckRaised int64  `json:"max_recheck_raised"`
+	CapRaises        int64  `json:"cap_raises"`
+	CapRechecks      int64  `json:"cap_rechecks"`
+	CapRecheckRaises int64  `json:"cap_recheck_raises"`
 	ReserveBytes     int64  `json:"reserve_bytes"`
 	PeakReaders      int64  `json:"peak_readers"` // spill read descriptors open at once (at most order.MaxSpillReaders, unless more segment workers read at once)
 	// ReadHandles is the spill read handles' account: every read of a
@@ -634,7 +634,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	cfg.Argv = registry.RedactArgv(cfg.Argv)
 	rep, err := run(ctx, cfg)
 	cfg.finalize(&rep, err)
-	cfg.Progress.end(err)
+	cfg.Progress.End(err)
 	return rep, err
 }
 
@@ -754,6 +754,9 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 				sum.Output.Remote.Commit = "lost_race"
 			}
 		}
+		// A resume that finished a committed run's aftermath (a dataset in a
+		// bucket) is an attempt of that run.
+		sum.Run = cfg.remote.runInfo()
 		rep, err := sum.failed(err)
 		cfg.finalize(&rep, err)
 		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
@@ -1372,14 +1375,14 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			RefusedNs: int64(ost.SpillRefusedTime), RefusedSpells: ost.SpillRefusedSpells,
-			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), MaxRaised: ost.SpillMaxRaised, MaxRechecks: ost.SpillMaxRechecks, MaxRecheckRaised: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			MaxBytes: max(ost.SpillMax, oopt.SpillMax), StartMaxBytes: oopt.SpillMax, MaxBy: capBy(oopt), CapRaises: ost.SpillMaxRaised, CapRechecks: ost.SpillMaxRechecks, CapRecheckRaises: ost.SpillMaxRecheckRaised, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			ReadHandles: ost.SpillHandles, FrameBytes: ost.SpillFrameBytes, FrameRows: ost.SpillFrameRows,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {
 			res.Spill.Durable = c.Report()
 		}
 	}
-	res.PeakAheadRows, res.PeakFrontierStuckNs = ost.PeakAhead, int64(ost.FrontierStuck)
+	res.PeakAheadRows, res.MaxFrontierStuckNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	res.PublishWaitNs, res.AdmissionWaitNs, res.IdleWaitNs = int64(ost.PublishWait), int64(ost.AdmissionWait), int64(ost.IdleWait)
@@ -1422,8 +1425,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 	}
 	if a.router != nil {
 		s := ost.Segments
-		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, PeakRows: s.MaxRows, Seams: s.Seams,
-			TimeNs: int64(s.Time), PeakNs: int64(s.MaxTime), PlanNs: int64(s.Plan), ReadNs: int64(s.Read), DecodeNs: int64(s.Decode), WriteNs: int64(s.Write),
+		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, MaxRows: s.MaxRows, Seams: s.Seams,
+			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan), ReadNs: int64(s.Read), DecodeNs: int64(s.Decode), WriteNs: int64(s.Write),
 			MaxWorkers: oopt.SegmentWorkers, BudgetWaits: s.BudgetWaits, BudgetWaitNs: int64(s.BudgetWait), PeakHeldBytes: s.MaxHeld,
 			WorkersBy: s.WorkersBy, PerWorkerBytes: s.PerWorker, FreeBytes: s.Free, TreeBytes: s.Tree,
 			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries, DeferredRows: s.Deferred,

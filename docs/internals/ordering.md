@@ -368,7 +368,7 @@ creates no file (`TestCountOnlyHoldsNothing`). A stop reaches the providers thro
 handed over then is disposed, never expanded, so a range emitting only children (a wide local directory
 with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`, with and without empty `Rows` batches
 between the children). The report says so: `features.order` false, `spill` absent,
-`peak_buffered_bytes`, `peak_ahead_rows` and `peak_frontier_stuck_ns` 0.
+`peak_buffered_bytes`, `peak_ahead_rows` and `max_frontier_stuck_ns` 0.
 
 `order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
 must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
@@ -543,7 +543,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   space cannot be measured the default is no cap; a library caller's negative value means none. The report
   says what set the cap (`spill.max_by`: `spill_budget`, `disk`, `disk_half` or `none`), the cap the run
   started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`), how many times it rose
-  (`max_raised`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`max_rechecks`, `max_recheck_raised`); `progress.json`'s `order.spill_max_bytes` rises with it. The
+  (`cap_raises`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`cap_rechecks`, `cap_recheck_raises`); `progress.json`'s `order.spill_max_bytes` rises with it. The
   reserve is checked against the filesystem afterwards (`listing.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
   under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
@@ -563,7 +563,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers`, `peak_ahead_rows` (rows received and
-  not yet handed on, in memory or spilled), `peak_frontier_stuck_ns` (the longest interval in which the
+  not yet handed on, in memory or spilled), `max_frontier_stuck_ns` (the longest interval in which the
   drainer handed nothing on, closed on every drain exit, so a canceled or failed run reports its last
   stall: `TestInterruptedRunReportsStall`; the interval is closed after the final flush, so a last sink write that
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,

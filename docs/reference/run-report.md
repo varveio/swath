@@ -21,7 +21,7 @@ The fields most runs need:
 | `output.object_bytes` | the bytes of the objects this attempt listed, each name once (a hard-linked file once per link) |
 | `output.totals` | `swath du`'s totals (the rows themselves are only on stdout) |
 | `requests.http_attempts`, `cost.cost_usd` | requests made, and their cost at the provider's reference list rate |
-| `diagnostics.resources.peak_rss_bytes` | the process's peak memory (a [diagnostic](#diagnostics)) |
+| `process.peak_rss_bytes` | the process's peak memory |
 | `timings.wall_ms` | the run's duration |
 
 `--report FILE` may not name a directory, a file in a directory that does not exist, the text output file,
@@ -59,7 +59,7 @@ file; `DIR/run.json` follows the commit. Its counts carry the run report's names
 | `empty_chain_pages` | empty continuing pages past the first 1,024 of their run: answered, followed, not progress |
 | `throttles`, `timeouts` | throttle failures; timeout failures, including credential waits before HTTP accounting starts |
 | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
-| `mutex_wait_ns`, `peak_mutex_hold_ns` | the range engine's decision mutex: summed wait, longest hold |
+| `mutex_wait_ns`, `max_mutex_hold_ns` | the range engine's decision mutex: summed wait, longest hold |
 | `rows_retained` | rows a resume kept from the interrupted run (not in `rows_fetched`) |
 | `http_attempts`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](../internals/clients.md#retry-policy-and-accounting)) |
 | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
@@ -80,7 +80,10 @@ and emitted, requests it made) separately from the dataset (rows retained from a
 committed). Durations are integers with the unit in the name; a measurement that was not taken is absent,
 never zero. Its members are its stable core, which changes only with a new `report_version`, but for
 [`diagnostics`](#diagnostics): how the pipeline ran, under names that follow the algorithm and may change in any
-release.
+release. A name says what kind of extreme it holds: `peak_` is a high-water mark over time (the most held at
+once); `max_` on a configured value is a limit (`max_prefixes`, `spill.max_bytes`); and `max_` on a column or
+an item is its largest value over the rows or items, as SQL's `max()` (`totals.max_last_modified`, the longest
+segment's `max_time_ns`).
 
 | Field | Meaning |
 |---|---|
@@ -102,6 +105,10 @@ written and closed the last part, then `publication_ms` until the manifest is in
 range listed and none in flight (absent if it never did): the drain's tail lies between it and
 `listing_finished_at`. `user_cpu_ms` and `sys_cpu_ms` are the process's CPU times (absent where the platform does
 not measure them).
+
+**Process** (`process`). `peak_rss_bytes` is the process's peak resident set (Linux VmHWM, macOS `getrusage`,
+Windows the peak working set); absent, with the CPU times, where the platform does not measure them
+(`diagnostics.resources.rusage_available` false).
 
 **Rows and bytes** (`output`). `rows_fetched` is what this invocation listed from the source, `rows_filtered`
 what the filters dropped of it, `rows_emitted` what was handed on in order (swath du, swath diag count: counted). On a fresh run
@@ -197,10 +204,11 @@ seed, from its first delimiter request to its tiles (absent where none ran). `te
 `timings.listing_ms`; `http_attempts_per_1k_rows` is `requests.http_attempts` per 1,000 `output.rows_fetched`
 (`null` without a row).
 
-**Resources** (`resources`). `peak_rss_bytes` (with `rusage_available`), `peak_heap_live_bytes` (sampled every
+**Resources** (`resources`). `rusage_available` (whether this platform measured the CPU times and
+`process.peak_rss_bytes`), `peak_heap_live_bytes` (sampled every
 100 ms), `peak_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`
 (the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
-output's; absent for swath du and swath diag count), `peak_ahead_rows`, `peak_frontier_stuck_ns`, `frontier_wait_ns`,
+output's; absent for swath du and swath diag count), `peak_ahead_rows`, `max_frontier_stuck_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), the order stage's waits by site, each
 summed over goroutines with the most goroutines waiting there at once: `publish_wait_ns` and `peak_publish_waiters`
 (emitters waiting in publish on a full budget), `admission_wait_ns` and `peak_admission_waiters` (workers waiting to
@@ -209,10 +217,10 @@ nothing queued to list, read-ahead waits included, over the whole run), `peak_no
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `frames` (row frames written), `opens` (spill file open attempts: every write, and a read only when its file's handle was not open; a resume's certificate validation not counted), `peak_bytes`, `refused`,
 `refused_ns` (the time spill stood refused: from a refused frame until a spill file's credit next returned, an interval
-open at the end included), `refused_spells` (those intervals that ended), `max_by` (what set the cap: `spill_budget`, fixed; by default `disk`, the spill filesystem's free space after the reserve, for a dataset in a bucket, or `disk_half`, half of it otherwise (the filesystem shared with the output, or for a stream with other programs' temporary files), both following the disk; `none`), `start_max_bytes` (the cap the run started with), `max_bytes` (the cap in effect at the end), `max_raised` (the times the cap rose: a disk grown under the run), `max_rechecks` and `max_recheck_raised` (rereads of the free space every 2 s while such a cap held the run back, and those that raised it), `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
+open at the end included), `refused_spells` (those intervals that ended), `max_by` (what set the cap: `spill_budget`, fixed; by default `disk`, the spill filesystem's free space after the reserve, for a dataset in a bucket, or `disk_half`, half of it otherwise (the filesystem shared with the output, or for a stream with other programs' temporary files), both following the disk; `none`), `start_max_bytes` (the cap the run started with), `max_bytes` (the cap in effect at the end), `cap_raises` (the times the cap rose: a disk grown under the run), `cap_rechecks` and `cap_recheck_raises` (rereads of the free space every 2 s while such a cap held the run back, and those that raised it), `reserve_bytes`, `peak_readers` (spill read descriptors open at once), `read_handles` (the spill read
 handles: `hits`, `misses`, `raced`, `evictions` by reason, `capacity`, `retired`, `truncated`, `low_fd`, `closed`, and
 `peak_open`), `frame_bytes` and `frame_rows` (row frames written by size: `p50`, `p90` and `p99`, each the bound of
-the power-of-two bucket holding it, and `peak`, exact), `dir`, `fs_type`, and with durable spill
+the power-of-two bucket holding it, and `max`, exact), `dir`, `fs_type`, and with durable spill
 ([internals/ordering.md](../internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
 `history` and `history_cap` (ledger records against H), `limit_bytes` (the spill both derive from, one slot per
 64 KiB) and `limited_by` (what bound the slots: `spill_cap`, `free_space` without a cap, `metadata` at the
@@ -231,7 +239,7 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 when listing never finished): `parts` and `rows` published, and the encoders' time on the batches written, `encode_ns`
 encoding and `output_ns` in the parts' files or uploads; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
-`segments`, `workers`, `rows`, `peak_rows`, `seam_checks`, `time_ns`, `peak_time_ns`, `plan_ns`, `read_ns`,
+`segments`, `workers`, `rows`, `max_rows` (the largest segment's), `seam_checks`, `time_ns`, `max_time_ns` (the longest), `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers` (the cap), `budget_waits`, `budget_wait_ns`, `peak_held_bytes`, `workers_by`,
 `per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`, and on a
 resume the reused certificates the segments replayed: `certificates_read`, `certified_rows`, `certificate_scan_ns`); and `encoders_at_start`, `encoders_after_listing`,

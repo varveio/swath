@@ -306,7 +306,7 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 								}
 							}
 							if page <= 7 && st.Get(cGroupsMaxRows) < int64(50*page) && !strings.HasPrefix(c.name, "resume") && c.name != "prefix" && c.name != "sequential" {
-								t.Errorf("groups.peak_rows %d: the hot key's group was not seen whole", st.Get(cGroupsMaxRows))
+								t.Errorf("groups.max_rows %d: the hot key's group was not seen whole", st.Get(cGroupsMaxRows))
 							}
 						})
 					}
@@ -555,7 +555,7 @@ func TestGroupsMaximumIncludesMiddleGroup(t *testing.T) {
 	p.take(&g, rows, true, "")
 	st := p.Stats()
 	if got := st.Get(cGroupsMaxRows); got != 100 {
-		t.Fatalf("groups.peak_rows=%d, want 100", got)
+		t.Fatalf("groups.max_rows=%d, want 100", got)
 	}
 }
 

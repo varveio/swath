@@ -36,6 +36,7 @@ type Report struct {
 	Invocation Invocation `json:"invocation"`
 	Outcome    Outcome    `json:"outcome"`
 	Timings    Timings    `json:"timings"`
+	Process    Process    `json:"process"`
 	Output     Output     `json:"output"`
 	// ArgsHash is the digest of the run's frozen identity
 	// (journal.Identity.Hash): the same for a run and its resumes; empty
@@ -442,11 +443,16 @@ const (
 	JobsGzip      = "gzip"              // gzip: one stream
 )
 
+// Process is the process's account of itself.
+type Process struct {
+	// PeakRSSBytes is the process's peak resident set (Windows: peak
+	// working set): absent (nil) where it is not measured
+	// (Resources.RusageAvailable).
+	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
+}
+
 // Resources the run used. Wait times sum over goroutines.
 type Resources struct {
-	// PeakRSSBytes is the process's peak resident set (Windows: peak
-	// working set): absent (nil) where it is not measured.
-	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
 	// RusageAvailable says whether this platform measured the CPU times and
 	// peak RSS; false leaves them out rather than reporting zeros.
 	RusageAvailable   bool  `json:"rusage_available"`
@@ -461,12 +467,12 @@ type Resources struct {
 	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
 	// PeakAheadRows is the most rows listed and not yet handed on at once
 	// (ahead of the publish frontier, in memory or spilled);
-	// PeakFrontierStuckNs the longest interval in which the order stage
+	// MaxFrontierStuckNs the longest interval in which the order stage
 	// handed nothing on. Both 0 for a dry run, which does not order.
-	PeakAheadRows       int64 `json:"peak_ahead_rows"`
-	PeakFrontierStuckNs int64 `json:"peak_frontier_stuck_ns"`
-	FrontierWaitNs      int64 `json:"frontier_wait_ns"`
-	BudgetWaitNs        int64 `json:"budget_wait_ns"`
+	PeakAheadRows      int64 `json:"peak_ahead_rows"`
+	MaxFrontierStuckNs int64 `json:"max_frontier_stuck_ns"`
+	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
+	BudgetWaitNs       int64 `json:"budget_wait_ns"`
 	// The order stage's waits by site, summed over goroutines, each with
 	// the most goroutines waiting there at once: emitters in publish on a
 	// full budget and workers at admission (together budget_wait_ns), and
@@ -629,11 +635,11 @@ type Segments struct {
 	Segments int    `json:"segments"`
 	Workers  int    `json:"workers"`
 	Rows     int64  `json:"rows"`
-	PeakRows int64  `json:"peak_rows"` // the largest segment's
+	MaxRows  int64  `json:"max_rows"` // the largest segment's
 	Seams    int64  `json:"seam_checks"`
-	TimeNs   int64  `json:"time_ns"`      // summed over segments, open to close
-	PeakNs   int64  `json:"peak_time_ns"` // the longest segment
-	PlanNs   int64  `json:"plan_ns"`      // cutting the rest into segments (boundary frames decoded)
+	TimeNs   int64  `json:"time_ns"`     // summed over segments, open to close
+	MaxNs    int64  `json:"max_time_ns"` // the longest segment
+	PlanNs   int64  `json:"plan_ns"`     // cutting the rest into segments (boundary frames decoded)
 	// The segments' time by what it did: reading spill frames (DecodeNs
 	// of it decoding), handing batches to their parts (WriteNs: the
 	// encoders' queue waits included); the rest of time_ns is the order
@@ -716,11 +722,11 @@ func (r *Report) finish() {
 func (r *Report) setRusage(user, sys time.Duration, peak int64, ok bool) {
 	r.Resources.RusageAvailable = ok
 	if !ok {
-		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = nil, nil, nil
+		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Process.PeakRSSBytes = nil, nil, nil
 		return
 	}
 	u, s := user.Milliseconds(), sys.Milliseconds()
-	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = &u, &s, &peak
+	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Process.PeakRSSBytes = &u, &s, &peak
 }
 
 // requests fills Requests, Cost and Efficiency from the source's request

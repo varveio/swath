@@ -68,7 +68,7 @@ def main():
              med([get(x, "timings.wall_ms") / 1000 for x in ok]),
              med([get(x, "timings.user_cpu_ms") / 1000 for x in ok]),
              med([get(x, "timings.sys_cpu_ms") / 1000 for x in ok]),
-             med([get(x, "diagnostics.resources.peak_rss_bytes") / (1 << 20) for x in ok]),
+             med([get(x, "process.peak_rss_bytes") / (1 << 20) for x in ok]),
              srows, frames, sp("ranges"),
              srows / frames if srows and frames else None,
              opens, opens / frames if opens and frames else None,

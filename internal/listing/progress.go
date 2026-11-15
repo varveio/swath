@@ -116,8 +116,8 @@ func (p *Progress) setState(s string) {
 	}
 }
 
-// end records how the run ended: StateDone without err, else StateFailed.
-func (p *Progress) end(err error) {
+// End records how the run ended: StateDone without err, else StateFailed.
+func (p *Progress) End(err error) {
 	if err == nil {
 		p.setState(StateDone)
 	} else {
@@ -187,14 +187,14 @@ type ProgressSnapshot struct {
 	CostUSD  *float64 `json:"cost_usd,omitempty"`
 	// CostRatePer1kUSD is the reference rate CostUSD is derived from.
 	CostRatePer1kUSD float64 `json:"rate_per_1k_usd,omitempty"`
-	// MutexWaitNs and PeakMutexHoldNs are the range engine's decision
+	// MutexWaitNs and MaxMutexHoldNs are the range engine's decision
 	// mutex: the goroutines' total wait for it and its longest hold
 	// (source.Contended; 0 otherwise).
-	MutexWaitNs     int64         `json:"mutex_wait_ns"`
-	PeakMutexHoldNs int64         `json:"peak_mutex_hold_ns"`
-	StartedAt       jsontime.Time `json:"started_at"`  // zero before the run starts
-	AsOf            jsontime.Time `json:"as_of"`       //
-	DurationMs      int64         `json:"duration_ms"` // since StartedAt
+	MutexWaitNs    int64         `json:"mutex_wait_ns"`
+	MaxMutexHoldNs int64         `json:"max_mutex_hold_ns"`
+	StartedAt      jsontime.Time `json:"started_at"`  // zero before the run starts
+	AsOf           jsontime.Time `json:"as_of"`       //
+	DurationMs     int64         `json:"duration_ms"` // since StartedAt
 	// Order is the order stage's live resources with their peaks:
 	// outstanding nodes, spill markers, open spill readers, live spill
 	// bytes (nil before the stage starts).
@@ -233,7 +233,7 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	if f := p.contention.Load(); f != nil {
 		w, h := (*f)()
-		s.MutexWaitNs, s.PeakMutexHoldNs = int64(w), int64(h)
+		s.MutexWaitNs, s.MaxMutexHoldNs = int64(w), int64(h)
 	}
 	if f := p.requests.Load(); f != nil {
 		r := (*f)()

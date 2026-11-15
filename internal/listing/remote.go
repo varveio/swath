@@ -361,7 +361,12 @@ func (rs *remoteState) finalizeCommitted(ctx context.Context, cfg Config, r *os.
 	}
 	rs.outcome = "resumed"
 	rs.commit = dataset.RemoteCommit{Outcome: "resumed", Identity: rec.ManifestIdentity, SHA256: rec.ManifestSHA256}
-	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: jsontime.Of(time.Now())},
+	// The run is the journal's, which the commit kept: this invocation
+	// finishes its aftermath, so its report names it.
+	if st, err := journal.ReadIn(r); err == nil {
+		rs.run = st.Header.RunUUID
+	}
+	rep := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Run: rs.runInfo(), Timings: Timings{StartedAt: jsontime.Of(time.Now())},
 		Invocation: Invocation{Argv: cfg.Argv, Out: cfg.Output.Dir, Resume: true},
 		Outcome:    Outcome{Status: StatusCommitted, Class: ClassCompleted, Complete: true, StopReason: "completed"}}
 	// The dataset is the manifest's: its rows, bytes and coverage, which
@@ -448,6 +453,14 @@ func (jr *runJournal) attachRemote(cfg Config, rs *remoteState) error {
 		rs.attempt = randomID()
 	}
 	return nil
+}
+
+// runInfo is the run rs belongs to, once known (nil before).
+func (rs *remoteState) runInfo() *RunInfo {
+	if rs == nil || rs.run == "" {
+		return nil
+	}
+	return &RunInfo{ID: rs.run}
 }
 
 func randomID() string {

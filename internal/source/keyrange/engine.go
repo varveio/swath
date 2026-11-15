@@ -300,7 +300,7 @@ func (p *Engine[P]) lock() {
 	p.c.Add(cMutexWait, int64(p.held.Sub(t)))
 }
 
-// unlock releases the decision mutex, raising mutex.peak_hold_ns.
+// unlock releases the decision mutex, raising mutex.max_hold_ns.
 func (p *Engine[P]) unlock() {
 	p.c.Max(cMutexMaxHold, int64(time.Since(p.held)))
 	p.mu.Unlock()

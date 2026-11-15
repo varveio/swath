@@ -75,7 +75,7 @@ def check(r, a):
     rows = out["rows_committed"] or out.get("rows_emitted", out.get("rows_listed"))  # report v2, v1
     wall = rep["timings"]["wall_ms"] / 1000
     hwm = max([s.get("vmhwm_bytes", 0) for s in ss] + [0])
-    peak_rss = res.get("peak_rss_bytes") or hwm
+    peak_rss = rep.get("process", res).get("peak_rss_bytes") or hwm
     rss = [s["vmrss_bytes"] for s in ss if "vmrss_bytes" in s]
     mid, late = thirds(rss)
     g = {}

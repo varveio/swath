@@ -94,7 +94,7 @@ func TestShapes(t *testing.T) {
 			t.Logf("%s: %d keys, wall %d ms, requests/1k %.2f, depth %d (bound %d), mean active %.1f of %d, splits %d",
 				s.Name, len(keys), r.WallMs, r.RequestsPer1k, r.Depth, depthBound, r.MeanActive, workers, r.Splits)
 			if r.Depth > depthBound {
-				t.Errorf("split.peak_depth %d over %d", r.Depth, depthBound)
+				t.Errorf("split.max_depth %d over %d", r.Depth, depthBound)
 			}
 			if Tiny(s.Name) {
 				if req := r.RequestsPer1k * float64(len(keys)) / 1000; req > 50*pages+50 {

@@ -255,7 +255,7 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `diagnostics.resources.spill.refused` above 0
 ([the first bad pattern](production.md#three-bad-patterns)). With the default cap, grow the spill filesystem
 under the running process: the cap follows the disk, and listing continues once the next frame finds the room
-(`diagnostics.resources.spill.max_raised`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
+(`diagnostics.resources.spill.cap_raises`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
 the room (a plain resume keeps the recorded cap; with the default cap it derives one from the free space it
 finds), or let it finish. With `--spill-wait-timeout DURATION` the run stops by itself once
 the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
@@ -265,7 +265,7 @@ the wait has lasted that long: exit 74, `cause` `spill_budget`, the error ending
 
 `--sort-buffer` bounds the rows held between listing and encoding, not the process's memory: pages in flight,
 directories being read, the encoders, the tail after listing and the garbage collector come on top, and swath
-sets no total-memory limit. Read `diagnostics.resources.peak_rss_bytes` in the report of a representative run. To use less,
+sets no total-memory limit. Read `process.peak_rss_bytes` in the report of a representative run. To use less,
 lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without
 lowering the peak ([Running swath](running.md#memory)).
 
