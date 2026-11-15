@@ -34,6 +34,7 @@ import (
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader"
 )
 
 // Spec is a run's filters as given (their text is what the manifest and
@@ -167,38 +168,53 @@ func anyOf(flag string, pats []string, globs bool) (*regexp.Regexp, error) {
 	return regexp.Compile("(?:" + strings.Join(alt, ")|(?:") + ")")
 }
 
-// Descriptions are the filters' descriptions: the manifest's
-// coverage.filters and part of the run's identity. Each pattern is one,
-// sorted and once each within its flag, so the same rules in another order
-// are the same filters.
-func (s *Spec) Descriptions() []string {
+// Descriptions are the filters as the manifest's coverage.filters records
+// them, and part of the run's identity: each named for its option in snake
+// case, with its value as given, a time as RFC 3339 in UTC with six
+// fraction digits. Each pattern and storage class is one, sorted and once
+// each within its option, so the same rules in another order are the same
+// filters.
+func (s *Spec) Descriptions() []reader.Filter {
 	if s.Empty() {
 		return nil
 	}
-	var d []string
+	var d []reader.Filter
 	add := func(k, v string) {
 		if v != "" {
-			d = append(d, k+"="+v)
+			d = append(d, reader.Filter{Filter: k, Value: &v})
 		}
 	}
 	for _, r := range []struct {
 		k    string
-		pats []string
+		vals []string
 	}{{"include", s.Include}, {"include_regex", s.IncludeRegex}, {"exclude", s.Exclude}, {"exclude_regex", s.ExcludeRegex}} {
-		pats := slices.Clone(r.pats)
-		slices.Sort(pats)
-		for _, p := range slices.Compact(pats) {
-			add(r.k, p)
+		vals := slices.Clone(r.vals)
+		slices.Sort(vals)
+		for _, v := range slices.Compact(vals) {
+			add(r.k, v)
 		}
 	}
 	add("min_size", s.MinSize)
 	add("max_size", s.MaxSize)
-	add("modified_after", s.Since)
-	add("modified_before", s.Until)
-	if len(s.StorageClasses) > 0 {
-		add("storage_class", strings.Join(s.StorageClasses, ","))
+	add("modified_since", timeText(s.Since))
+	add("modified_until", timeText(s.Until))
+	classes := slices.Clone(s.StorageClasses)
+	slices.Sort(classes)
+	for _, c := range slices.Compact(classes) {
+		add("storage_class", c)
 	}
 	return d
+}
+
+// timeText is a --modified-since or --modified-until value (resolved) as
+// jsontime.Format (the rows' form, as every JSON time); text that is
+// not a time stays as given.
+func timeText(text string) string {
+	us, err := ParseTime(text)
+	if text == "" || err != nil {
+		return text
+	}
+	return jsontime.Format(time.UnixMicro(us))
 }
 
 // KeyExcluded returns a predicate on keys: true when the include and exclude
@@ -427,5 +443,12 @@ func ParseTime(text string) (int64, error) {
 	return 0, fmt.Errorf("invalid date/time: %s (use 2026-01-01, 2026-01-01T12:00:00, 2026-01-01T12:00:00Z, or a duration before now such as 7d)", text)
 }
 
-// Equal reports whether two description lists are the same filters.
-func Equal(a, b []string) bool { return slices.Equal(a, b) }
+// Texts are filters as the run's identity records them, name=value each
+// (reader.Filter.String).
+func Texts(filters []reader.Filter) []string {
+	out := make([]string, len(filters))
+	for i, f := range filters {
+		out[i] = f.String()
+	}
+	return out
+}
