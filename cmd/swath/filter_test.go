@@ -57,7 +57,7 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 	}
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-	if !slices.Equal(m.Coverage.Filters, []string{"exclude_regex=sub1", "min_size=1"}) {
+	if got := filter.Texts(m.Coverage.Filters); !slices.Equal(got, []string{"exclude_regex=sub1", "min_size=1"}) {
 		t.Fatalf("coverage.filters %q", m.Coverage.Filters)
 	}
 	type rep struct {
@@ -127,7 +127,9 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 	for _, p := range m2.Parts {
 		rows += p.Rows
 	}
-	if rows != r0 || !slices.Equal(m2.Coverage.Filters, append(slices.Clone(m.Coverage.Filters), "modified_after="+since)) {
+	sinceAt, _ := time.Parse(time.RFC3339, since)
+	wantFilters := append(filter.Texts(m.Coverage.Filters), "modified_since="+sinceAt.UTC().Format("2006-01-02T15:04:05.000000Z"))
+	if rows != r0 || !slices.Equal(filter.Texts(m2.Coverage.Filters), wantFilters) {
 		t.Fatalf("resumed: %d rows (want %d), filters %q", rows, r0, m2.Coverage.Filters)
 	}
 }

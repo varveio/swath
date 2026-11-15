@@ -12,4 +12,4 @@ column storage_class BYTE_ARRAY STRING optional max_bytes 0 accessor str
 column md5 BYTE_ARRAY STRING optional max_bytes 0 accessor str
 column crc32c BYTE_ARRAY STRING optional max_bytes 0 accessor str
 column content_type BYTE_ARRAY STRING optional max_bytes 0 accessor str
-column time_created INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
+column created_at INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int

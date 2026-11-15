@@ -71,8 +71,7 @@ type Part struct {
 	CreatedBy string
 	// ObjectBytes sums the object sizes of the part's rows
 	// (schema.ObjectSize), as the writer counted them; nil for a schema
-	// without a size column, or a retained part whose journal record
-	// predates the count. Neither the manifest nor the footer holds it:
+	// without a size column, or a part with an object whose size is null. Neither the manifest nor the footer holds it:
 	// the journal record does, and the manifest the dataset's total
 	// (Manifest.CommittedObjectBytes).
 	ObjectBytes *int64
@@ -164,11 +163,13 @@ type Manifest struct {
 	Source          Source
 	Scope           Scope
 	Coverage        Coverage
+	// Collected is extensions.swath.collected: the metadata tier and the
+	// optional columns the listing asked for.
+	Collected Collected
 	// CommittedObjectBytes is extensions.swath.committed_object_bytes: the
 	// object sizes of every row of the dataset summed (schema.ObjectSize),
-	// nil when unknown (a schema without a size column, a part whose count
-	// predates it, a manifest written before the member existed) and never
-	// 0 for unknown.
+	// nil when unknown (a schema without a size column, an object whose
+	// size is null) and never 0 for unknown.
 	CommittedObjectBytes *int64
 	// Filesystem is extensions.swath.filesystem: the space of the
 	// filesystem that holds a local source's root; nil when not measured.
@@ -218,6 +219,7 @@ type swathExtension struct {
 	Source               Source           `json:"source"`
 	Scope                Scope            `json:"scope"`
 	Coverage             Coverage         `json:"coverage"`
+	Collected            Collected        `json:"collected"`
 	CommittedObjectBytes *int64           `json:"committed_object_bytes,omitempty"`
 	Filesystem           *FilesystemSpace `json:"filesystem,omitempty"`
 }
@@ -225,7 +227,10 @@ type swathExtension struct {
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
 	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: jsontime.Of(m.PublishedAt), Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
-		CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
+		Collected: m.Collected, CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
+	if x.Collected.Columns == nil {
+		x.Collected.Columns = []string{}
+	}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
@@ -259,8 +264,9 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		}
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
-		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt.Time, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, CommittedObjectBytes: x.CommittedObjectBytes,
-		Filesystem: x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
+		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt.Time, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Collected: x.Collected,
+		CommittedObjectBytes: x.CommittedObjectBytes,
+		Filesystem:           x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}
@@ -274,10 +280,9 @@ func (m *Manifest) Current() bool {
 
 // Source is what was listed.
 type Source struct {
-	Kind      string `json:"kind"`                // "s3", "local-fs"
+	Kind      string `json:"kind"`                // "s3", "gcs", "azure", "local"
 	URI       string `json:"uri"`                 // s3://bucket/prefix, or the absolute root path
 	Container string `json:"container,omitempty"` // the bucket
-	Metadata  string `json:"metadata,omitempty"`  // the metadata tier a local tree was listed at: "names", "stat" or "statx"
 }
 
 // Scope is the part of the source the listing was asked for.
@@ -292,14 +297,22 @@ type Scope struct {
 // directory inside a listed tree). A listing is not a point-in-time
 // snapshot: entries that changed while it ran may or may not be in it.
 type Coverage struct {
-	Complete          bool          `json:"complete"`    // the listing reached the end of the scope
-	StopReason        string        `json:"stop_reason"` // "completed", or why it stopped early
-	Unreadable        int64         `json:"unreadable"`  // entries missing because they could not be read
-	Exclusions        []string      `json:"exclusions"`
-	Filters           []string      `json:"filters"`
-	Snapshot          bool          `json:"snapshot"` // always false
-	ListingStartedAt  jsontime.Time `json:"listing_started_at"`
-	ListingFinishedAt jsontime.Time `json:"listing_finished_at"`
+	Complete          bool            `json:"complete"`    // the listing reached the end of the scope
+	StopReason        string          `json:"stop_reason"` // "completed", or why it stopped early
+	Unreadable        int64           `json:"unreadable"`  // entries missing because they could not be read
+	Exclusions        []string        `json:"exclusions"`
+	Filters           []reader.Filter `json:"filters"`
+	ListingStartedAt  jsontime.Time   `json:"listing_started_at"`
+	ListingFinishedAt jsontime.Time   `json:"listing_finished_at"`
+}
+
+// Collected is what a listing read beyond its schema's columns that every
+// row carries: its metadata tier ("names", "stat" or "statx"; "" for a
+// source without tiers, and the member is left out) and the optional
+// columns it asked for, in schema order.
+type Collected struct {
+	Metadata string   `json:"metadata,omitempty"`
+	Columns  []string `json:"columns"`
 }
 
 // FilesystemSpace is the space of the filesystem that holds a local
@@ -325,10 +338,11 @@ type Meta struct {
 	SchemaID string
 	// Groups: the schema's keys repeat (schema.Info.Groups); the manifest
 	// declares them not unique, as the footers do.
-	Groups   bool
-	Source   Source
-	Scope    Scope
-	Coverage Coverage
+	Groups    bool
+	Source    Source
+	Scope     Scope
+	Coverage  Coverage
+	Collected Collected
 	// CommittedObjectBytes is the dataset's object bytes (ObjectBytes;
 	// nil: unknown, and the manifest leaves the member out).
 	CommittedObjectBytes *int64

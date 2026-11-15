@@ -575,7 +575,7 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 		}
 	}
 	last := Schema.Columns[len(Schema.Columns)-1]
-	if last.Name != "time_created" || last.Type != schema.TimestampMicros || last.Int == nil {
+	if last.Name != "created_at" || last.Type != schema.TimestampMicros || last.Int == nil {
 		t.Fatalf("last column %+v", last.Spec)
 	}
 	if _, ok := last.Int(&Object{}); ok {

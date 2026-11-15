@@ -376,11 +376,11 @@ var s3Objects = objectProjection{
 // 2026-11-07, server TestLiveGCSXMLAPIContents): the ETag from the MD5 or
 // the etag (gcsETag), no StorageClass, Owner or checksum element,
 // which that API's listing never carries, whatever the object's class,
-// and with Projection.Created the LastModified from time_created, the
+// and with Projection.Created the LastModified from created_at, the
 // object's timeCreated, which that API lists (server
 // TestLiveGCSXMLAPIContents, TestGCSRecordingLastModifiedFromTimeCreated).
 var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5", contentType: "content_type",
-	timeCreated: "time_created"}
+	timeCreated: "created_at"}
 
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.

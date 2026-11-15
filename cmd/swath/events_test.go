@@ -36,6 +36,7 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/reader"
 )
 
 // syncBuffer is stderr for a test whose run writes it from several
@@ -92,7 +93,7 @@ func TestDocsLogEvents(t *testing.T) {
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
 	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "completed", int64(0), jsontime.Of(at.Add(-50*time.Hour))
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
-		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []string{}, Exclusions: []string{}}, at)
+		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []reader.Filter{}, Exclusions: []string{}}, at)
 	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
 	t.Chdir(t.TempDir())
 	j, err := journal.Create("inventory", journal.Identity{Tool: "swath"}, nil)

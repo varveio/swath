@@ -20,8 +20,8 @@
 //
 // Schema and SchemaIDs expose the producer registry. Project a schema spec's
 // ColumnNames to decode owning SeekParquet rows with DecodeS3Object,
-// DecodeS3Version, DecodeGCSObject, DecodeGCSGeneration, DecodeAzblobObject,
-// DecodeAzblobVersion or DecodeLocalEntry. Nullable fields remain nil; required
+// DecodeS3Version, DecodeGCSObject, DecodeGCSGeneration, DecodeAzureObject,
+// DecodeAzureVersion or DecodeLocalEntry. Nullable fields remain nil; required
 // nulls and malformed column values return SemanticError. Application rules such
 // as size/time acceptance, filesystem kind filtering and class mapping stay with
 // the caller. Position preserves the key and equal-key offset for continuation.

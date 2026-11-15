@@ -35,7 +35,7 @@ trust helps scope what counts as a vulnerability.
   hostile name cannot forge a line or drive the terminal; JSON log lines carry the
   exact string with those characters as `\u` escapes, and bytes that are not
   valid UTF-8 read back as U+FFFD there. Rows keep the exact bytes (the `table` and
-  TSV formats escape them, JSONL has `key_base64`).
+  TSV formats escape them, JSONL carries them in `key_base64`).
 - **A hostile or compromised endpoint is a considered actor.** A response from a
   malicious `--endpoint-url` that makes swath hang, loop without bound, or exhaust
   memory is in scope.

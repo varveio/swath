@@ -191,7 +191,7 @@ func destinationIdentity(d *dataset.Remote) *journal.Destination {
 
 // sourceSchemes are the destination schemes of the source kinds a
 // destination can overlap.
-var sourceSchemes = map[string]string{"gcs": "gs", "s3": "s3", "azblob": "az"}
+var sourceSchemes = map[string]string{"gcs": "gs", "s3": "s3", "azure": "az"}
 
 // checkOverlap refuses a destination the listing would list, or one that
 // holds the listed namespace: the same provider, account and bucket (or

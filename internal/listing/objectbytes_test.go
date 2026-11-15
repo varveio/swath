@@ -6,11 +6,9 @@ package listing
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -240,88 +238,6 @@ func TestCommittedObjectBytesRetried(t *testing.T) {
 		t.Fatalf("nothing retried: %+v", sum.Requests)
 	}
 	committedObjectBytes(t, "retried", sum, out, &want)
-}
-
-// TestCommittedObjectBytesLegacy: a resume of a run whose journal records
-// carry no object bytes (an earlier build's) commits a dataset whose
-// object bytes are unknown: absent from the report, the manifest and
-// run.json, never 0; this invocation's own object_bytes stays.
-func TestCommittedObjectBytesLegacy(t *testing.T) {
-	datasettest.RequireJournal(t)
-	url := crashBucket(t)
-	out := filepath.Join(t.TempDir(), "ds")
-	var seen atomic.Int64
-	restore := faults.Set(func(p string) error {
-		if p == "journal-append" && seen.Add(1) == 3 {
-			return faults.ErrCrash
-		}
-		return nil
-	})
-	_, err := Run(context.Background(), crashConfig(url, out, false))
-	restore()
-	if !errors.Is(err, faults.ErrCrash) {
-		t.Fatalf("crash not injected: %v", err)
-	}
-	if n := stripObjectBytes(t, out); n == 0 {
-		t.Fatal("no record carried object bytes")
-	}
-	sum, err := Run(context.Background(), crashConfig(url, out, true))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sum.Output.RowsRetained == 0 || sum.Output.ObjectBytes == nil || *sum.Output.ObjectBytes == 0 {
-		t.Fatalf("retained %d; object_bytes %v", sum.Output.RowsRetained, sum.Output.ObjectBytes)
-	}
-	committedObjectBytes(t, "legacy", sum, out, nil)
-}
-
-// stripObjectBytes rewrites out's journal as an earlier build of the same
-// journal version wrote it: its records without object_bytes. It returns
-// how many records had them.
-func stripObjectBytes(t *testing.T, out string) int {
-	t.Helper()
-	path := journal.Path(out)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	table := crc32.MakeTable(crc32.Castagnoli)
-	var w bytes.Buffer
-	n := 0
-	for len(b) >= 8 {
-		size := binary.LittleEndian.Uint32(b[:4])
-		payload := b[8 : 8+size]
-		b = b[8+size:]
-		var rec map[string]any
-		if err := json.Unmarshal(payload, &rec); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := rec["object_bytes"]; ok {
-			delete(rec, "object_bytes")
-			n++
-			if payload, err = json.Marshal(rec); err != nil {
-				t.Fatal(err)
-			}
-		}
-		var hdr [8]byte
-		binary.LittleEndian.PutUint32(hdr[:4], uint32(len(payload)))
-		binary.LittleEndian.PutUint32(hdr[4:], crc32.Update(crc32.Checksum(hdr[:4], table), table, payload))
-		w.Write(hdr[:])
-		w.Write(payload)
-	}
-	if err := os.WriteFile(path, w.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	st, err := journal.Read(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, rec := range st.Records {
-		if rec.ObjectBytes != nil {
-			t.Fatalf("record %d kept its object bytes", i)
-		}
-	}
-	return n
 }
 
 // TestCommittedObjectBytesEmpty: a dataset of no part holds 0 object

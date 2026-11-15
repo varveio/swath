@@ -17,7 +17,7 @@ credentials separately. `--anonymous` with
 `--azure-sas-token` or a SAS in the root is refused (exit 2), as every provider refuses it beside an explicit
 credential; Azure credentials in the environment (`AZURE_STORAGE_SAS_TOKEN`, `AZURE_STORAGE_KEY`, the Entra ID
 variables) are ignored with the shared one-line warning naming them. `--storage-class` filters on the access
-tier (`access_tier`, the schema's declared storage-class column).
+tier (`storage_class`, the schema's declared storage-class column).
 
 Root parse errors keep clean roots, redact SAS queries and hide credential-bearing authorities.
 
@@ -183,7 +183,7 @@ to `Prefixes`, with the adapter's `Truncated` and token.
 With a counted `--seed-from` prior the pages are 5,000 entries, as the prior's tiles hold whole pages
 ([warm start](../range-engine.md)); `--page-size` still sets another size.
 
-**Every entry** (`--all-versions`: `NewVersions`, rows `Version`, schema `swath/azblob-versions/v1`). Every
+**Every entry** (`--all-versions`: `NewVersions`, rows `Version`, schema `swath/azure-versions/v1`). Every
 listing request sends `include=versions,snapshots,deleted` (`client.Include`), so a name is listed once per entry:
 its snapshots, its previous versions, its soft-deleted blobs and its current blob. Not `deletedwithversions`:
 it adds, to a listing without `versions`, one placeholder (`HasVersionsOnly`) per deleted name that still has
@@ -221,17 +221,16 @@ up to five entries at page sizes that put seams inside names, with splits, and r
 profile); `cmd/swath`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
 it as Azure answers it over a container of current blobs only: the plain listing (identical bytes, live).
 
-**Schema** `swath/azblob-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
+**Schema** `swath/azure-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
 from the reader. [dataset.md](../../dataset.md#schema-registry) owns column semantics; the provider uses
 `MaxKeyBytes` 3,072, dictionary encoding for `blob_type` and the other short strings, and `DELTA_BYTE_ARRAY`
-for `etag`, `metadata` and `tags`. The sixteen columns after `creation_time` were added to the id later
-(`MayBeAbsent`), as dataset.md's evolution policy allows. A row's logical size counts an added integer or
-boolean only when it has a value, so a listing whose blobs carry none of them cuts its parts as before. Its
+for `etag`, `metadata` and `tags`. A row's logical size counts a property's integer or boolean only when it
+has a value. Its
 spill codec uses [the shared payload delta encoding](../ordering.md#payload-delta-codec) in three groups
 (eight strings at most each: the first columns, the properties, the tags) and one byte packing the three
 optional booleans (`TestDeltaHistoricalBytes` pins the first group's bytes, `TestCodecProperties` the rest).
 
-**Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
+**Identity** for resume: provider `azure`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
 are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`), and `fetch_metadata`, `fetch_tags`, `fetch_immutability` only when
 given (a default run's identity is as before they existed). Credentials may change, a SAS among them. A run with

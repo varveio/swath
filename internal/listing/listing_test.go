@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -73,8 +74,9 @@ func TestEndToEnd(t *testing.T) {
 	}
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
-		!m.Coverage.Complete || m.Coverage.Unreadable != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
+	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.Source.Kind != "local" || m.Scope.Kind != "whole" ||
+		!m.Coverage.Complete || m.Coverage.Unreadable != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" ||
+		m.Collected.Metadata != "stat" || !slices.Equal(m.Collected.Columns, []string{"link_target"}) {
 		t.Fatalf("manifest %+v", m)
 	}
 	// The source's filesystem space, measured when the listing ended, on

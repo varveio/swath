@@ -56,7 +56,8 @@ func TestS3Dataset(t *testing.T) {
 			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
 		}
 		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
-			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsEmitted ||
+			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || rows != sum.Output.RowsEmitted ||
+			m.Collected.Metadata != "" || m.Collected.Columns == nil || len(m.Collected.Columns) != 0 ||
 			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt.Time) {
 			t.Fatalf("manifest %+v", m)
 		}

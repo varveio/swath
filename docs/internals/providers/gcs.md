@@ -93,11 +93,10 @@ group (`keyrange.Flags`, registered once by the command); the GCS flags are pref
 
 **Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed),
-`content_type` and, last, `time_created` (`timeCreated`, µs, the logical type of `last_modified`). `time_created`
-is an optional column of the schema id: a part written before the lister listed it has no such column, and a
-run resumed across that change holds parts of both kinds ([../dataset.md](../../dataset.md#schema-registry)). Two columns share
+`content_type` and, last, `created_at` (`timeCreated`, µs, the logical type of `last_modified`)
+([../dataset.md](../../dataset.md#schema-registry)). Two columns share
 S3's names but not its meaning. `last_modified` is `updated`, which GCS also moves when only the object's metadata
-changes; S3's `LastModified` moves only when the object is written. `time_created` is the generation's write
+changes; S3's `LastModified` moves only when the object is written. `created_at` is the generation's write
 time and never changes. `etag` is the JSON API's opaque entity tag, which also changes with metadata and is not a
 content hash, so compare content with `md5` or `crc32c`, never an ETag across stores. GCS omits `md5Hash` for
 composite objects, whose `crc32c` remains, and omits both hashes from listings of objects encrypted with
@@ -119,10 +118,10 @@ Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `
 generation; it is not `softDeleteTime`); items stay in wire order, name ascending and generation ascending within
 a name, and pages are native, continued by the API's `pageToken`. The payload `gcs.Generation` is an `Object` and
 `TimeDeleted`; its schema `swath/gcs-generations/v1` is the `gcs-objects/v1` columns in the same order (the same
-accessors; `generation` an exact INT64) and then `time_deleted`, null for the live generation (there is no
-`is_latest`: a name may have no live generation, and the highest generation is not taken to be live), with
-`Info.Groups` set. Its [version roles](../parquet-output.md#version-roles) declare `generation` as ID and
-`time_deleted` as deleted-at. Its spill codec uses the [shared payload delta encoding](../ordering.md#payload-delta-codec).
+accessors; `generation` an exact INT64) and then `is_latest`, true exactly where `timeDeleted` is absent, and
+`deleted_at`, null for the live generation (a name may have no live generation, and the highest generation is
+not taken to be live), with `Info.Groups` set. Its [version roles](../parquet-output.md#version-roles) declare
+`generation` as ID and `is_latest` as latest. Its spill codec uses the [shared payload delta encoding](../ordering.md#payload-delta-codec).
 `gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
 none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
 sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop

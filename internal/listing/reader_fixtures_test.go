@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/reader"
 )
 
 // TestVerifierFixtures writes real Go Parquet parts for the independent
@@ -32,8 +33,8 @@ func TestVerifierFixtures(t *testing.T) {
 	writeVerifierFixtures(t, filepath.Join(base, "current"), "gcs", gcs.Schema, gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5})
 	writeVerifierFixtures(t, filepath.Join(base, "generations"), "gcs", gcs.GenerationSchema,
 		gcs.Generation{Object: gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5}, TimeDeleted: 20})
-	writeVerifierFixtures(t, filepath.Join(base, "azblob"), "azblob", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
-	writeVerifierFixtures(t, filepath.Join(base, "azblobversions"), "azblob", azblob.VersionSchema,
+	writeVerifierFixtures(t, filepath.Join(base, "azure"), "azure", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
+	writeVerifierFixtures(t, filepath.Join(base, "azureversions"), "azure", azblob.VersionSchema,
 		azblob.Version{Object: azblob.Object{Size: 7, Mtime: 10, CreationTime: 5}, VersionID: "2026-01-01T00:00:00.0000000Z", IsLatest: true})
 }
 
@@ -110,7 +111,7 @@ func writeVerifierFixtures[P any](t *testing.T, base, kind string, original sche
 			t.Fatal(err)
 		}
 		meta := dataset.Meta{SchemaID: original.ID, Groups: original.Groups, Source: dataset.Source{Kind: kind, URI: "fixture://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
-			Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}}
+			Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []reader.Filter{}}}
 		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte("{}\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +172,7 @@ func TestSeekParquetFixtures(t *testing.T) {
 		long = append(long, localfs.Row{Key: fmt.Sprintf("%s/%02d/%05d", lead, i%7, i), Data: entry})
 	}
 	slices.SortFunc(long, func(a, b localfs.Row) int { return strings.Compare(a.Key, b.Key) })
-	writeSeekFixture(t, filepath.Join(base, "local-long-keys"), "local-fs", &localfs.Schema, long, 1000)
+	writeSeekFixture(t, filepath.Join(base, "local-long-keys"), "local", &localfs.Schema, long, 1000)
 }
 
 func writeSeekFixture[P any](t *testing.T, dir, kind string, s *schema.Schema[P], rows []schema.Row[P], maxRows int64) {

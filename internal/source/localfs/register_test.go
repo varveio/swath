@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/registry"
+	"github.com/varveio/swath/reader"
 )
 
 // TestReportFilters: --no-dirs leaves the directories' rows out, so the
@@ -17,10 +18,10 @@ import (
 func TestReportFilters(t *testing.T) {
 	for _, tc := range []struct {
 		opt  Options
-		want []string
+		want []reader.Filter
 	}{
 		{Options{}, nil},
-		{Options{NoDirs: true}, []string{noDirsFilter}},
+		{Options{NoDirs: true}, []reader.Filter{noDirsFilter}},
 	} {
 		p, err := New(t.TempDir(), tc.opt)
 		if err != nil {

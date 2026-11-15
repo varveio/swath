@@ -659,10 +659,10 @@ func TestIdentity(t *testing.T) {
 	a, loc := ident(root+"?sv=1&sig=SECRET1", base(r), "")
 	b, _ := ident(root, "HTTP://"+strings.TrimPrefix(base(r), "http://")+"/", "sv=1&sig=SECRET2")
 	want := []string{"source=az://replay/corpus/p", "endpoint=" + base(r) + "/replay", "account=replay", "container=corpus", "flat_asserted=false"}
-	if !slices.Equal(canon(a), want) || !slices.Equal(canon(a), canon(b)) || a.Provider != "azblob" {
+	if !slices.Equal(canon(a), want) || !slices.Equal(canon(a), canon(b)) || a.Provider != "azure" {
 		t.Fatalf("identities %q %q, want %q", canon(a), canon(b), want)
 	}
-	if loc.Root != "az://replay/corpus/p" || loc.Kind != "azblob" || strings.Contains(fmt.Sprint(a, loc), "SECRET") {
+	if loc.Root != "az://replay/corpus/p" || loc.Kind != "azure" || strings.Contains(fmt.Sprint(a, loc), "SECRET") {
 		t.Fatalf("a SAS reaches the identity or the locator: %+v %+v", a, loc)
 	}
 	other := azblobtest.Serve(t, []string{"a"})

@@ -30,7 +30,7 @@ import (
 // the same account and container whose prefix holds it or is held by it;
 // another account or container never does.
 func TestRemoteAzureOverlap(t *testing.T) {
-	src := source.Locator{Kind: "azblob", Root: "az://acct/ctr/a", Container: "ctr"}
+	src := source.Locator{Kind: "azure", Root: "az://acct/ctr/a", Container: "ctr"}
 	for dst, overlaps := range map[string]bool{
 		"az://acct/ctr": true, "az://acct/ctr/a": true, "az://acct/ctr/ab/c": true, "az://acct/ctr/out": false,
 		"az://other/ctr/a": false, "az://acct/ctr2/a": false, "gs://ctr/a": false,

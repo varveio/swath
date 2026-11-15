@@ -35,17 +35,15 @@ type Row = schema.Row[Object]
 const MaxKeyBytes = 3 * maxNameUnits
 
 // Schema is the Azure Blob listing schema.
-var Schema = schema.Bind(reader.AzblobObjectsV1, schema.Schema[Object]{
-	Info:    schema.Info{Name: "swath_listing", StorageClass: "access_tier"}, // the access tier is its storage class
+var Schema = schema.Bind(reader.AzureObjectsV1, schema.Schema[Object]{
+	Info:    schema.Info{Name: "swath_listing", StorageClass: "storage_class"}, // the access tier
 	Columns: objectColumns,
 	Bytes:   objectBytes,
 	Heap:    objectHeap,
 	Codec:   objectCodec{},
 })
 
-// objectColumns are swath/azblob-objects/v1's, in order. The columns from
-// access_tier_inferred on were added to the schema id later
-// (reader.ColumnSpec.MayBeAbsent).
+// objectColumns are swath/azure-objects/v1's, in order.
 var objectColumns = []schema.Column[Object]{
 	{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 	{Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},
@@ -76,8 +74,7 @@ var objectColumns = []schema.Column[Object]{
 
 // objectBytes is the logical size: 8 bytes per integer column with a
 // value (the first three always count), 1 per boolean with one, and the
-// strings. A listing whose blobs carry none of the later properties sizes
-// its rows as before they were added, so its parts are cut alike.
+// strings.
 func objectBytes(o *Object) int64 {
 	n := 24 + objectHeap(o)
 	for _, v := range objectProps(o).ints() {

@@ -11,7 +11,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from dataset_schema import AZBLOB_CURRENT, AZBLOB_VERSIONS, AZBLOB_ADDED, COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
+from dataset_schema import AZURE_CURRENT, AZURE_VERSIONS, COLUMNS, VERSION_IDS, compare_rows, schema_id, sql_string
 from bench.diffds import compare
 
 FIXTURES = Path(__file__).parent / "testdata" / "readers"
@@ -60,10 +60,10 @@ class DuckDBComparison(unittest.TestCase):
         # Exact schema types keep null-only string fields from being inferred as integers.
         strings = {"key", "etag", "storage_class", "owner_id", "owner_display_name",
                    "checksum_algorithm", "checksum_type", "version_id", "md5", "crc32c", "content_type",
-                   "content_md5", "blob_type", "access_tier", "archive_status", "rehydrate_priority", "content_encoding",
+                   "blob_type", "archive_status", "rehydrate_priority", "content_encoding",
                    "encryption_scope", "customer_provided_key_sha256", "lease_state", "metadata", "tags",
                    "immutability_policy_mode", "snapshot"}
-        booleans = {"access_tier_inferred", "server_encrypted", "legal_hold"}
+        booleans = {"storage_class_inferred", "server_encrypted", "legal_hold"}
         cols = COLUMNS[sid]
         types = ["VARCHAR" if c in strings else "BOOLEAN" if c.startswith("is_") or c in booleans else "BIGINT" for c in cols]
         con = duckdb.connect()
@@ -133,60 +133,29 @@ def write_dataset(directory, schema, part_queries):
 
 
 @unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")
-class AzureCompatibility(unittest.TestCase):
-    def rows(self, keys, extended=False, **overrides):
+class AzureColumns(unittest.TestCase):
+    def rows(self, keys, **overrides):
         cols = {"key": "k", "size": "100::BIGINT",
                 "last_modified": "TIMESTAMPTZ '2026-01-01 00:00:00+00'", "etag": "'e'",
-                "content_md5": "NULL::VARCHAR", "content_type": "'text/plain'", "blob_type": "'BlockBlob'",
-                "access_tier": "'Hot'", "creation_time": "NULL::TIMESTAMPTZ"}
-        if extended:
-            cols.update({c: "NULL::VARCHAR" for c in AZBLOB_ADDED})
-            cols.update({c: "NULL::BOOLEAN" for c in ("access_tier_inferred", "server_encrypted", "legal_hold")})
-            cols.update({c: "NULL::TIMESTAMPTZ" for c in ("access_tier_change_time", "last_access_time",
-                                                       "immutability_policy_until")})
-            cols["tag_count"] = "NULL::BIGINT"
+                "md5": "NULL::VARCHAR", "content_type": "'text/plain'", "blob_type": "'BlockBlob'",
+                "storage_class": "'Hot'", "created_at": "NULL::TIMESTAMPTZ"}
+        cols.update({c: "NULL::VARCHAR" for c in COLUMNS[AZURE_CURRENT] if c not in cols})
+        cols.update({c: "NULL::BOOLEAN" for c in ("storage_class_inferred", "server_encrypted", "legal_hold")})
+        cols.update({c: "NULL::TIMESTAMPTZ" for c in ("storage_class_changed_at", "accessed_at", "immutability_policy_until")})
+        cols["tag_count"] = "NULL::BIGINT"
         cols.update(overrides)
         listed = "[" + ",".join(sql_string(k) for k in keys) + "]::VARCHAR[]"
         return (f"SELECT {', '.join(f'{v} AS {c}' for c, v in cols.items() if v is not None)} "
                 f"FROM (SELECT unnest({listed}) AS k, generate_subscripts({listed}, 1) AS i) ORDER BY i")
 
-    def test_historical_and_mixed_parts(self):
-        old = self.rows(["a", "b"])
-        new = self.rows(["a", "b"], extended=True)
-        cases = {
-            "old/old": ([old], [old], True),
-            "old/new-null": ([old], [new], True),
-            "new-null/old": ([new], [old], True),
-            "mixed parts": ([self.rows(["a"]), self.rows(["b"], extended=True)], [new], True),
-            "added bool differs": ([old], [self.rows(["a", "b"], extended=True, legal_hold="false")], "legal_hold"),
-            "added int differs": ([old], [self.rows(["a", "b"], extended=True, tag_count="7::BIGINT")], "tag_count"),
-            "added time differs": ([old], [self.rows(["a", "b"], extended=True,
-                                  last_access_time="TIMESTAMPTZ '2026-01-01 00:00:00+00'")], "last_access_time"),
-            "added string differs": ([old], [self.rows(["a", "b"], extended=True, metadata="'{}'")], "metadata"),
-        }
-        for name, (pa, pb, expected) in cases.items():
-            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
-                a, b = Path(td) / "a", Path(td) / "b"
-                write_dataset(a, AZBLOB_CURRENT, pa)
-                write_dataset(b, AZBLOB_CURRENT, pb)
-                results = []
-                for method in ("sql", "stream"):
-                    result = compare(str(a), str(b), method=method)
-                    self.assertEqual(result["identical"], expected is True, result)
-                    if expected is not True:
-                        self.assertEqual(result["differing_columns_at_same_position"], {expected: 2})
-                    result.pop("method")
-                    results.append(result)
-                self.assertEqual(*results)
-
     def test_versions_columns_stay_required(self):
         extra = {"version_id": "'v'", "is_latest": "true", "snapshot": "NULL::VARCHAR", "is_deleted": "false",
-                 "deleted_time": "NULL::TIMESTAMPTZ", "remaining_retention_days": "NULL::BIGINT"}
-        for column in COLUMNS[AZBLOB_VERSIONS]:
+                 "deleted_at": "NULL::TIMESTAMPTZ", "remaining_retention_days": "NULL::BIGINT"}
+        for column in COLUMNS[AZURE_VERSIONS]:
             with self.subTest(column=column), tempfile.TemporaryDirectory() as td:
                 a = Path(td) / "a"
-                query = self.rows(["a"], extended=True, **dict(extra, **{column: None}))
-                write_dataset(a, AZBLOB_VERSIONS, [query])
+                query = self.rows(["a"], **dict(extra, **{column: None}))
+                write_dataset(a, AZURE_VERSIONS, [query])
                 for method in ("sql", "stream"):
                     with self.assertRaisesRegex(ValueError, f"missing column {column}$"):
                         compare(str(a), str(a), method=method)
@@ -330,24 +299,23 @@ class VerifierSchema(unittest.TestCase):
         self.assertIn("whole-row ordered sequence and multiset match reference", proc.stdout)
 
     def test_complete_object_contract_in_every_part(self):
-        for schema in ("current", "generations", "azblob", "azblobversions"):
+        for schema in ("current", "generations", "azure", "azureversions"):
             for dataset in sorted((self.base / schema).iterdir()):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)
-                    allowed = (dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
-                               or (schema == "azblob" and dataset.name.removeprefix("missing_") in AZBLOB_ADDED))
+                    allowed = dataset.name == "valid"
                     self.assertEqual(status == 0, allowed, output)
                     if not allowed:
                         column = dataset.name.split("_", 1)[1].removeprefix("type_")
                         self.assertIn("FAIL   " + column + ":", output)
 
     def test_azure_source_kind_must_match(self):
-        dataset = self.base / "azblob/valid"
+        dataset = self.base / "azure/valid"
         manifest = dataset / "manifest.json"
         original = manifest.read_text()
         try:
             changed = json.loads(original)
-            changed["extensions"]["swath"]["source"]["kind"] = "local-fs"
+            changed["extensions"]["swath"]["source"]["kind"] = "local"
             manifest.write_text(json.dumps(changed))
             status, output = self.verify(dataset)
             self.assertEqual(status, 1, output)
@@ -358,8 +326,8 @@ class VerifierSchema(unittest.TestCase):
     def test_azure_size_accepts_signed_int64(self):
         import duckdb
         from verify import check_object_schema
-        from dataset_schema import AZBLOB_CURRENT
-        source = self.base / "azblob/valid/data/part-00000.parquet"
+        from dataset_schema import AZURE_CURRENT
+        source = self.base / "azure/valid/data/part-00000.parquet"
         with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
             for typ in ("BIGINT", "UBIGINT", "INTEGER", "VARCHAR"):
                 with self.subTest(type=typ):
@@ -369,17 +337,17 @@ class VerifierSchema(unittest.TestCase):
                                 f"SELECT * REPLACE (CAST(NULL AS {typ}) AS size) "
                                 f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
                     verdicts = {}
-                    check_object_schema(con, part, AZBLOB_CURRENT,
+                    check_object_schema(con, part, AZURE_CURRENT,
                                         lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
                     self.assertEqual(verdicts["size"], typ == "BIGINT")
 
     def test_azure_timestamps_require_utc_microseconds(self):
         import duckdb
         from verify import check_object_schema
-        from dataset_schema import AZBLOB_CURRENT
-        source = self.base / "azblob/valid/data/part-00000.parquet"
+        from dataset_schema import AZURE_CURRENT
+        source = self.base / "azure/valid/data/part-00000.parquet"
         with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
-            for column in ("last_modified", "creation_time"):
+            for column in ("last_modified", "created_at"):
                 for typ in ("TIMESTAMP", "TIMESTAMP_MS", "TIMESTAMP_NS", "TIMESTAMPTZ"):
                     with self.subTest(column=column, type=typ):
                         part = Path(td) / (typ + ".parquet")
@@ -388,11 +356,11 @@ class VerifierSchema(unittest.TestCase):
                                     f"SELECT * REPLACE (CAST(NULL AS {typ}) AS {column}) "
                                     f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
                         verdicts = {}
-                        check_object_schema(con, part, AZBLOB_CURRENT,
+                        check_object_schema(con, part, AZURE_CURRENT,
                                             lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
                         self.assertEqual(verdicts[column], typ == "TIMESTAMPTZ")
 
-    def test_time_deleted_requires_utc_microseconds(self):
+    def test_deleted_at_requires_utc_microseconds(self):
         import duckdb
         from verify import check_object_schema
         from dataset_schema import GCS_VERSIONS
@@ -401,13 +369,13 @@ class VerifierSchema(unittest.TestCase):
             for typ in ("TIMESTAMP", "TIMESTAMP_MS", "TIMESTAMP_NS", "TIMESTAMPTZ"):
                 with self.subTest(type=typ):
                     part = Path(td) / (typ + ".parquet")
-                    con.execute(f"COPY (SELECT * REPLACE (CAST(time_deleted AS {typ}) AS time_deleted) "
+                    con.execute(f"COPY (SELECT * REPLACE (CAST(deleted_at AS {typ}) AS deleted_at) "
                                 f"FROM read_parquet({sql_string(source)}) UNION ALL "
-                                f"SELECT * REPLACE (CAST(NULL AS {typ}) AS time_deleted) "
+                                f"SELECT * REPLACE (CAST(NULL AS {typ}) AS deleted_at) "
                                 f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
                     verdicts = {}
                     check_object_schema(con, part, GCS_VERSIONS, lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
-                    self.assertEqual(verdicts["time_deleted"], typ == "TIMESTAMPTZ")
+                    self.assertEqual(verdicts["deleted_at"], typ == "TIMESTAMPTZ")
 
 
 if __name__ == "__main__":

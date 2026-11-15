@@ -21,6 +21,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
@@ -153,7 +154,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	origin := prefix[:strings.LastIndexByte(prefix, '/')+1]
 	// A tree listed at the names tier has no link counts: its files count
 	// under every name, as a live names-tier swath du counts them.
-	names := info.NamesTier != "" && m.Source != nil && m.Source.Metadata != nil && *m.Source.Metadata == info.NamesTier
+	names := info.NamesTier != "" && m.Collected != nil && m.Collected.Metadata != nil && *m.Collected.Metadata == info.NamesTier
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
 		Primary: primaryFigure(&o)}
 	o.filter.Base = origin
@@ -210,16 +211,16 @@ func datasetIncomplete(msg string) error {
 // manifest does not say), the JSONL rows' dataset member and the dataset
 // event's fields.
 type provenance struct {
-	Path              string         `json:"path"`
-	Source            *string        `json:"source"`
-	SchemaID          string         `json:"schema_id"`
-	ListingStartedAt  *jsontime.Time `json:"listing_started_at"`
-	ListingFinishedAt *jsontime.Time `json:"listing_finished_at"`
-	Complete          *bool          `json:"complete"`
-	StopReason        *string        `json:"stop_reason"`
-	Unreadable        *int64         `json:"unreadable"`
-	Filters           []string       `json:"filters"`
-	Exclusions        []string       `json:"exclusions"`
+	Path              string          `json:"path"`
+	Source            *string         `json:"source"`
+	SchemaID          string          `json:"schema_id"`
+	ListingStartedAt  *jsontime.Time  `json:"listing_started_at"`
+	ListingFinishedAt *jsontime.Time  `json:"listing_finished_at"`
+	Complete          *bool           `json:"complete"`
+	StopReason        *string         `json:"stop_reason"`
+	Unreadable        *int64          `json:"unreadable"`
+	Filters           []reader.Filter `json:"filters"`
+	Exclusions        []string        `json:"exclusions"`
 }
 
 func provenanceOf(dir string, m reader.Metadata) provenance {
@@ -293,7 +294,7 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 		msg += ", " + count(*p.Unreadable) + " unreadable"
 	}
 	if len(p.Filters) > 0 {
-		msg += "; filtered: " + strings.Join(p.Filters, ", ")
+		msg += "; filtered: " + strings.Join(filter.Texts(p.Filters), ", ")
 	}
 	if len(p.Exclusions) > 0 {
 		msg += "; excluded: " + strings.Join(p.Exclusions, ", ")

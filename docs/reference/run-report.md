@@ -159,8 +159,8 @@ rows after filtering at the order stage's handoff (swath du, swath diag count: v
 `versions` excludes S3 delete markers; S3 also reports `delete_markers`, with
 `rows_emitted` = `versions` + `delete_markers`. GCS reports `noncurrent` among its
 `versions`, with `versions` = `noncurrent` + `live_objects`. A live S3 object has
-`is_latest` true and `is_delete_marker` false; a live GCS generation has null
-`time_deleted`. Zero counts are present. Retained resume rows, held tails, relisting,
+`is_latest` true and `is_delete_marker` false; a live GCS generation has `is_latest`
+true and null `deleted_at`. Zero counts are present. Retained resume rows, held tails, relisting,
 and raw overfetch are excluded. `distinct_keys` excludes pending batches that never reached the sink, including on a failed run.
 
 Object-store failure diagnostics retain `auth` (unusable credentials), `access_denied` (a listing

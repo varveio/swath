@@ -89,9 +89,11 @@ One JSON object per line, its members in column order, a null `null`, strings es
 {"key":"weird/new\nline.txt","size":6,"last_modified":"2026-01-01T00:00:00.000000Z","etag":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","storage_class":"STANDARD","owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
 ```
 
-A string that is not valid UTF-8 (a local file name's raw bytes) cannot be a JSON string: its member is then
-`NAME_base64`, the exact bytes in standard base64, in place of `NAME` (`key_base64`, `link_target_base64`).
-No column name ends in `_base64`.
+A local tree's `key` and `link_target` are bytes, which need not be UTF-8 and then cannot be a JSON string.
+Every row of a local tree has two members for each: `NAME`, the text, `null` when the bytes are not UTF-8, and
+`NAME_base64`, the exact bytes in standard base64, `null` when they are UTF-8 (`key` and `key_base64`,
+`link_target` and `link_target_base64`; both `null` where the value is). The member set never changes from row
+to row. No column name ends in `_base64`.
 
 ### The table
 
@@ -103,13 +105,13 @@ dataset keep times in UTC.
 ```text
 $ TZ=UTC swath list /data/photos
 last_modified (UTC)      size  kind          key
-2026-11-02 09:30:00  4.00 KiB  DIR           2025/
-2026-03-01 10:00:00   293 KiB  FILE          2025/a.jpg
-2026-11-02 09:30:00  4.00 KiB  DIR           2025/raw/
-2026-03-01 10:00:00   117 KiB  FILE          2025/raw/b.cr2
-2026-11-02 09:30:00  4.00 KiB  DIR           2026/
-2026-11-02 09:30:00  48.8 KiB  FILE          2026/c.jpg
-2026-11-02 09:30:00       3 B  FILE          notes.txt
+2026-11-02 09:30:00  4.00 KiB  dir           2025/
+2026-03-01 10:00:00   293 KiB  file          2025/a.jpg
+2026-11-02 09:30:00  4.00 KiB  dir           2025/raw/
+2026-03-01 10:00:00   117 KiB  file          2025/raw/b.cr2
+2026-11-02 09:30:00  4.00 KiB  dir           2026/
+2026-11-02 09:30:00  48.8 KiB  file          2026/c.jpg
+2026-11-02 09:30:00       3 B  file          notes.txt
 ```
 
 `--columns` and `--no-header` do not apply to the table; with either on a terminal, `auto` prints TSV.

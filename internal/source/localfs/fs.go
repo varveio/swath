@@ -31,7 +31,7 @@ type Fields uint8
 const (
 	Stat  Fields = iota // one fstatat per entry: every stat column
 	Names               // no stat: key and kind from the directory entry type
-	Statx               // one statx per entry (Linux, full mask): stat columns plus birth_time
+	Statx               // one statx per entry (Linux, full mask): stat columns plus created_at
 )
 
 // ParseFields maps names, stat and statx to Fields.
@@ -52,7 +52,7 @@ func (f Fields) String() string { return [...]string{"stat", "names", "statx"}[f
 // Options configure a Provider.
 type Options struct {
 	Fields     Fields
-	NoDirs     bool            // omit kind=DIR rows (directories are still walked)
+	NoDirs     bool            // omit kind=dir rows (directories are still walked)
 	LinkTarget bool            // read symlink targets (stat tiers)
 	Skip       map[string]bool // the run's own output: keys neither emitted nor, for a directory ("a/b/"), walked
 	Portable   bool            // use the portable engine even where a native one exists

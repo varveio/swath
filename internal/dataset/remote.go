@@ -26,6 +26,7 @@ import (
 
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/reader"
 )
 
 // A remote dataset is written straight to an object store: its parts are
@@ -268,13 +269,13 @@ type ClaimReceipt struct {
 // path(i, part), published now.
 func newManifest(meta Meta, parts []Part, path func(i int, p Part) string) Manifest {
 	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
-		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, CommittedObjectBytes: meta.CommittedObjectBytes,
+		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Collected: meta.Collected, CommittedObjectBytes: meta.CommittedObjectBytes,
 		Filesystem: meta.Filesystem, Parts: []ManifestPart{}}
 	if m.Coverage.Exclusions == nil {
 		m.Coverage.Exclusions = []string{}
 	}
 	if m.Coverage.Filters == nil {
-		m.Coverage.Filters = []string{}
+		m.Coverage.Filters = []reader.Filter{}
 	}
 	for i, p := range parts {
 		m.Parts = append(m.Parts, ManifestPart{Path: path(i, p), PartInfo: p.PartInfo})

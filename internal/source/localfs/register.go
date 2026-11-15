@@ -25,6 +25,7 @@ import (
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/reader"
 )
 
 // The local filesystem takes roots without a scheme.
@@ -66,8 +67,8 @@ func (f *Fields) Type() string { return "string" }
 func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 	o := &Options{LinkTarget: true}
 	source.Define(f, source.Flag{Name: "metadata", Value: &o.Fields, Metavar: "names|stat|statx", Default: o.Fields.String(),
-		Usage: "what is read per entry (statx adds birth_time; Linux)"})
-	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind DIR)"})
+		Usage: "what is read per entry (statx adds created_at; Linux)"})
+	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
 	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
 	source.Define(f, source.Flag{Name: "one-file-system", Familiar: []string{"one-filesystem", "x"}, Value: source.Switch(&o.OneFilesystem),
 		Usage: "do not walk into a mount point below the root, as du -x"})
@@ -135,10 +136,10 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 }
 
 // oneFilesystemFilter and noDirsFilter are --one-file-system and --no-dirs
-// in the manifest's coverage.filters.
-const (
-	oneFilesystemFilter = "one_filesystem"
-	noDirsFilter        = "no_dirs"
+// in the manifest's coverage.filters: options that take no value.
+var (
+	oneFilesystemFilter = reader.Filter{Filter: "one_file_system"}
+	noDirsFilter        = reader.Filter{Filter: "no_dirs"}
 )
 
 type opened struct {
@@ -198,7 +199,7 @@ func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parque
 }
 
 func (o *opened) Locator() source.Locator {
-	return source.Locator{Kind: "local-fs", Root: o.p.root, Path: o.p.root}
+	return source.Locator{Kind: "local", Root: o.p.root, Path: o.p.root}
 }
 
 func (o *opened) Listed() int64 {
@@ -333,7 +334,11 @@ func (o *opened) Report() source.Report {
 		// an application can tell.
 		cov.Filters = append(cov.Filters, noDirsFilter)
 	}
-	return source.Report{Name: "local", Stats: &st, Fields: o.p.opt.Fields.String(), Coverage: cov, Filesystem: o.p.filesystemSpace(),
+	var collected []string
+	if o.p.opt.LinkTarget && o.p.opt.Fields != Names {
+		collected = []string{"link_target"}
+	}
+	return source.Report{Name: "local", Stats: &st, Fields: o.p.opt.Fields.String(), Collected: collected, Coverage: cov, Filesystem: o.p.filesystemSpace(),
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}
 }
 

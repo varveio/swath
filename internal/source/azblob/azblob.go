@@ -198,13 +198,13 @@ type Stats struct {
 }
 
 // Provider is the range engine bound to List Blobs: the current blobs,
-// rows of swath/azblob-objects/v1.
+// rows of swath/azure-objects/v1.
 type Provider = provider[Object]
 
 // VersionsProvider is the --all-versions listing (Options.AllVersions):
 // every entry of each name, its versions, snapshots and soft-deleted blobs
 // beside its current blob (include=versions,snapshots,deleted), rows of
-// swath/azblob-versions/v1.
+// swath/azure-versions/v1.
 type VersionsProvider = provider[Version]
 
 // provider is an Azure Blob listing with payload P.
