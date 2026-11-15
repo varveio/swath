@@ -646,7 +646,8 @@ with other work, and its region was not recorded. The build was main at `d8fbe43
 defaults: 64 workers, seeded. Each run ran once, one after the other.
 
 The home page's run wrote a sorted Parquet inventory, with the trace the video is rendered from, and DuckDB
-queried it:
+queried it. The page shows the command as `swath list` with the same source, `-o` and credentials options,
+without `--trace`, `--report`, `--stats`, `--no-progress`, `--color` and `--max-duration`:
 
 ```bash
 swath diag list s3://noaa-gestofs-pds/ -o noaa --anonymous --s3-region us-east-1 \
@@ -664,6 +665,7 @@ duckdb -column -c "SELECT
 | Run (started, UTC) | Objects | Bytes | Requests | Wall | Peak RSS | Output |
 |---|---:|---:|---:|---:|---:|---|
 | **`diag list -o`, the home page's (12:22:05)** | 37,064,981 | 1,548,830,863,147,448 (1.38 PiB) | 39,016 | 60.9 s | 1.51 GiB | 11 parts, 865,491,977 B (825 MiB) |
+| `diag list -o`, later, on a loaded host (12:32:47) | 37,064,981 | 1,548,830,863,147,448 | 39,170 | 128.3 s | 1.70 GiB | 13 parts, 865,410,202 B |
 | `diag list -o`, earlier (12:12:05) | 37,064,981 | 1,548,830,863,147,448 | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B |
 | `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 | 39,026 | 53.7 s | 111 MiB | none |
 | `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB | 2,169 top-level prefixes |
@@ -675,6 +677,8 @@ duckdb -column -c "SELECT
   - Listing ended at 54 s and publication took 7.6 s more.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
+- **The run at 12:32** shared the VM with other work: the load average was 12.7 when it ended. It took twice
+  as long with the same requests and is not the one the home page shows.
 - **The trace.**
   - 48,216 events, none dropped.
   - The seed tiled the bucket into 257 ranges with 3 requests.

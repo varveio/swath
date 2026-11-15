@@ -10,12 +10,22 @@ import '@fontsource-variable/inter/opsz.css'
 import '@fontsource-variable/geist-mono/wght.css'
 import './custom.css'
 
+const REPO = 'https://github.com/varveio/swath/blob/main/'
+
 // Real output of a live run on 2026-11-15 with main at d8fbe439: a sorted inventory of a public bucket, then a
 // DuckDB query over it (docs/internals/measurements.md, "A public bucket for the home page"). The run was
 // `swath diag list` with --trace and --report added, for the replay below the hero; swath's cost estimate line
 // is left out where the output reads "…", and DuckDB's trailing spaces are trimmed. Nothing else is changed.
-const HERO_CAPTION =
-  'A live run on a public NOAA bucket, 2026-11-15: list it once into a sorted Parquet inventory, then query it without listing again (DuckDB took 2.9 s). … marks a line left out.'
+const MEASURED = REPO + 'docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15'
+const HERO_CAPTION = [
+  "On 2026-11-15 a build of main wrote this public bucket's sorted Parquet inventory in 61 seconds, and the " +
+    'query over it took 3 seconds. The run was ',
+  { code: 'swath diag list' },
+  ', this command with a trace and a report added. Commands and output are abbreviated (… marks a line left ' +
+    'out): ',
+  { text: 'full details', href: MEASURED },
+  '.',
+]
 const HERO_SESSION = [
   [`swath list s3://noaa-gestofs-pds/ -o noaa \\
     --anonymous --s3-region us-east-1`,
@@ -41,25 +51,19 @@ png    22913029  1.3 TiB`],
 
 // The replay of that run, under the hero. The video is a release asset that the deploy fetches and verifies
 // (site/static/data/media.json, scripts/ci/fetch-site-media.sh); the poster is in site/static/media/.
-const REPO = 'https://github.com/varveio/swath/blob/main/'
 const REPLAY = {
   video: '/media/noaa-gestofs-pds-replay.mp4',
   poster: '/media/noaa-gestofs-pds-replay-poster.jpg',
   label: 'A 36-second replay of the swath listing of s3://noaa-gestofs-pds shown above, rendered from its run trace',
   heading: 'The same run, replayed',
   text: [
-    "The listing above, replayed from its own trace. swath started from 257 guessed key ranges, and one of them " +
-      "held 64.5% of the bucket's objects. Rather than leave one worker on it, swath split that range 1,834 times " +
-      'while it was being listed, each time a worker went idle, until all 64 workers were sharing it. Every range ' +
-      'finished, with no gap and no overlap.',
-    'Listed on 2026-11-15 from a 4-vCPU cloud VM: 37,064,981 objects in 61 seconds, 39,016 requests. The bucket ' +
-      'is still being written to (its newest object was written about an hour before the run), so a run today ' +
-      'shows other numbers.',
+    'The replay shows swath handing the busiest part of the bucket to workers as they become free, so the ' +
+      'listing keeps moving without being told how the keys are laid out. Here one of its 257 starting ranges ' +
+      'held 64.5% of the objects and was split 1,834 times.',
+    'Measured once on main at d8fbe439 from a shared 4-vCPU cloud VM; the client\'s region was not recorded. ' +
+      'The bucket changes over time, so a later listing differs.',
   ],
-  links: [
-    ['How this was measured', REPO + 'docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15'],
-    ['How the replay is made', REPO + 'tools/explainer/README.md'],
-  ],
+  links: [['How this was measured', MEASURED]],
 }
 
 interface DevDocsNotice {
@@ -84,7 +88,9 @@ const DevDocsBanner = defineComponent({
 
 const HeroTerminal = () =>
   h('figure', { class: 'swath-terminal' }, [
-    h('figcaption', { class: 'swath-terminal-caption' }, HERO_CAPTION),
+    h('figcaption', { class: 'swath-terminal-caption' }, HERO_CAPTION.map((c) =>
+      typeof c === 'string' ? c : 'code' in c ? h('code', c.code) : h('a', { href: c.href }, c.text),
+    )),
     h('pre', { tabindex: 0 }, [
       h('code', HERO_SESSION.flatMap(([command, output], i) => [
         i ? '\n' : '',

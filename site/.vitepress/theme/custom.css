@@ -286,3 +286,12 @@ html:has(.swath-dev-banner) {
     align-items: center;
   }
 }
+.swath-terminal-caption a {
+  color: var(--vp-c-brand-1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.swath-terminal-caption code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.92em;
+}
