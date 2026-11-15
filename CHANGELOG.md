@@ -16,7 +16,7 @@ Notable changes per release. The full human summary for the current release is i
   events' `run_id`.
 - Go port: every time in a JSON file or event (report, `run.json`, `error.json`, `progress.json`, the manifest,
   the journal, the log's `ts`, a resolved `--modified-since` in `coverage.filters`, `swath du`'s
-  `totals.max_last_modified` and `--from-dataset` provenance) is RFC 3339 in UTC with
+  `totals.max_last_modified` and `--from-dataset` provenance, the trace's `run_start.time`) is RFC 3339 in UTC with
   exactly six fraction digits: `2026-11-15T12:00:00.137198Z`, never `…28.1371984Z` or `…28Z`.
 - Go port: report and log names, one vocabulary: `attempt.started` is `attempt.started_at`;
   `timings.listing_done_at` is `timings.provider_finished_at`; `invocation.fields` is `invocation.metadata`;
@@ -32,6 +32,8 @@ Notable changes per release. The full human summary for the current release is i
   counts as the report does: `rows_fetched`, `rows_emitted`, `rows_encoded`, `parts_written`, `http_attempts`,
   `rate_per_1k_usd`, `order.spill_bytes`; `mutex_wait_ms` and `mutex_max_hold_ms` (floats) are integer
   `mutex_wait_ns` and `max_mutex_hold_ns`.
+- Go port: `swath show --journal` is a diagnostic: it prints the journal's private format, which may change in
+  any release.
 - Go port: `--log-format json`: the envelope's `attempt` is `attempt_id`, with `run_id` beside it; every
   `warning` has a `code`; `cause` is always a label (a retry's failure class, a request's `http_STATUS`,
   `timeout`, `connection` or `unreachable`) and the free text is `error`; `retry.class` is gone (it is
