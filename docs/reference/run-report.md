@@ -133,7 +133,7 @@ bytes) with `size_missing` and `allocated_bytes_missing` (the objects counted wi
 delete markers), `links_once` (a local tree's hard-linked files counted once: without `--count-links`, on rows
 that identify their links, which `--metadata names` and Windows do not read), `linked_rows` (rows with more
 than one hard link), `inodes` (the distinct inodes among them, each counted once) and `max_inodes` (their
-cap).
+cap). The byte totals are JSON numbers that can exceed 2^53: read them as 64-bit integers.
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
 rows after filtering at the order stage's handoff (swath du, swath diag count: validated, counted rows).

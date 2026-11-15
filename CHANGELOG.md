@@ -14,8 +14,10 @@ Notable changes per release. The full human summary for the current release is i
   `--allocated` only puts the allocated bytes first and makes `--sort size` order by them; `--apparent-size`
   selects the default, and the two together are refused. The run report's `output.totals` takes the same
   names (`size`, `allocated_bytes`, the missing counts, `max_last_modified`, `primary`) in place of `bytes`,
-  `bytes_column` and `unsized`. `links_once` is false where no link could be identified, so a dataset listed
-  with `--metadata names` totals as the live run does.
+  `bytes_column` and `unsized`. `links_once` says whether the listing reads links (a local tree at stat or
+  statx, without `-l`), and the manifest records a local listing's metadata tier (`source.metadata`), so a
+  dataset listed with `--metadata names` totals as the live run does, an empty one included. A name of a
+  hard-linked file counted under another name adds no time to `max_last_modified`.
 - Go port: the `swath du` table shows one figure, `size`, or `on disk` with `--allocated`, the counts with
   grouped digits, no time, and each path indented two blanks a level; an unknown figure is `-`, a partial one
   `>= ` its lower bound. For a local tree a line on stderr under the table gives the totals of both figures

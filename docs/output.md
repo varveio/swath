@@ -161,15 +161,17 @@ prefix	1	1	0	50000	0	53248	0	2026-11-02T09:30:00.000000Z	size	name	true	2026/
 | `size_missing` | the objects counted that had no length (a local walk with `--metadata names`) |
 | `allocated_bytes` | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
 | `allocated_bytes_missing` | the objects counted that had no allocated bytes |
-| `max_last_modified` | the newest `last_modified` among the objects counted under the prefix; directories and S3 delete markers do not count; null when no object had one |
+| `max_last_modified` | the newest `last_modified` among the objects counted under the prefix; directories, S3 delete markers and the names of a hard-linked file that is counted under another do not count; null when no object had one |
 | `primary` | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
 | `sort` | the order of the rows, `name` or `size` (`--sort`) |
-| `links_once` | `true` when a file with several hard links was counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket |
+| `links_once` | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
 | `prefix` | the prefix, up to and including its `/`; the total's is SOURCE's prefix up to its last `/`, empty for a whole bucket or tree |
 
 Every row has both figures, whichever `--allocated` puts first. A figure that no object under the prefix had is
 null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones there
-were, and its `*_missing` count says how many it leaves out. An empty prefix has 0 of each.
+were, and its `*_missing` count says how many it leaves out. An empty prefix has 0 of each figure its source
+has: an empty bucket's `size` is 0 and its `allocated_bytes` null. The byte figures are JSON numbers and can
+exceed 2^53; parse them as 64-bit integers, not as floating point (JavaScript's `JSON.parse` rounds them).
 
 TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; `--no-header` leaves
 out its header line. JSONL has the same fields, the prefix after `depth` (`prefix_base64` for a prefix that is
@@ -179,7 +181,9 @@ not valid UTF-8). Totals read from a saved dataset (`swath du --from-dataset`) a
 `filters`, `exclusions`; null where the manifest does not say), so a stored row still says it was not a live
 listing and how complete it was. Both sort the rows by prefix in byte order, the total first and each parent
 before its children; the table puts the total last. Select the total by `row_type`, not by its place:
-`jq 'select(.row_type == "total") | .size'`. An object-store source has no `dirs` field.
+`jq 'select(.row_type == "total") | .size'`. Three members depend on the source or the data, and every other
+is in every row: `dirs` (a local tree's rows only), `dataset` (JSONL read from a saved dataset) and
+`prefix_base64` (in place of `prefix`, for a prefix that is not valid UTF-8).
 
 Read the totals with care:
 

@@ -106,7 +106,8 @@ the same facts ([Output](../output.md#du-rows)). A dataset whose listing did not
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
 counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
 `-l` counts every name. A dataset listed with `--metadata names` holds no lengths, blocks or links, so its rows
-are those of a live `--metadata names` run: both figures null and `links_once` false.
+are those of a live `--metadata names` run: both figures null and `links_once` false, also when nothing is
+counted, since the manifest records the tier.
 
 `--from-dataset` reads a committed local dataset directory. A dataset in a bucket is refused as not supported
 yet. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
