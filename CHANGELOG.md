@@ -5,6 +5,9 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
+  (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
+  longer subject to in-place changes of the format. No code change from the commit pinned before.
 - Go port: S3 credentials that expire (an assumed role, web identity, SSO, `credential_process`, container
   credentials, an instance role) are refreshed ahead of their expiry, by the smaller of 5 minutes and a quarter
   of their lifetime, for the source and for a bucket destination. Before, they were used until the instant
@@ -132,7 +135,7 @@ Notable changes per release. The full human summary for the current release is i
 
 - Go port: `reader` keeps swath metadata, `CheckSchema`, the schema registry and concrete typed
   decoders. Scanning, aggregation and browse pages now use SeekParquet's `Plan.ScanParallel`,
-  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()` (pinned at `41e43191bc40`).
+  `Dataset.Aggregate` and `Dataset.Page` through `Dataset.SeekParquet()`.
   The unreleased reader wrappers `Stream`, `StreamLocal`, `Scan`, `ScanBatches`, `Totals`, `Aggregates`,
   `List` and `Page`, their request/result types (including `ScanRequest`, `PathTotals` and `StreamStats`),
   and SeekParquet type/error aliases (including `Options`, `Limits` and `ReadStats`) are deleted.
