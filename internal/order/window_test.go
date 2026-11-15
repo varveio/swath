@@ -37,6 +37,9 @@ type planned struct {
 	wake     func()
 	listing  atomic.Int64 // tiles in Expand
 	finished atomic.Int64 // tiles listed through
+	// held is the tiles waiting on their hold now, heldByDrainer of them
+	// expanded by the drainer itself (not a worker).
+	held, heldByDrainer atomic.Int64
 }
 
 func newPlanned(tiles, rows, page int) *planned {
@@ -109,9 +112,19 @@ func (p *planned) Expand(ctx context.Context, i int, e source.Emitter[int, tp]) 
 			return err
 		}
 		if h := p.hold[i]; h != nil && j == 0 {
+			d := int64(0)
+			if em, ok := e.(*emitter[int, tp]); ok && em.drainer {
+				d = 1
+			}
+			p.heldByDrainer.Add(d)
+			p.held.Add(1)
 			select {
 			case <-h:
 			case <-ctx.Done():
+			}
+			p.held.Add(-1)
+			p.heldByDrainer.Add(-d)
+			if err := ctx.Err(); err != nil {
 				return context.Cause(ctx)
 			}
 		}
@@ -349,10 +362,23 @@ func TestWindowFollowsGrownDisk(t *testing.T) {
 	release, steady := make(chan struct{}), make(chan struct{})
 	p.hold[0] = release
 	var once sync.Once
+	const workers = 4
 	hookWait = func(site string) {
-		// Every tile admitted but the held one listed through, and a
-		// worker at the window: nothing else moves.
-		if site == waitWindow && p.finished.Load() > 2 && p.finished.Load() == int64(p.admitted()-1) {
+		// Every tile admitted but the held one listed through, and every
+		// worker waiting, at the window or idle, but the held tile's when
+		// a worker (not the drainer) expands it; one at least at the
+		// window (this one is told before it is counted): nothing else
+		// moves.
+		if site != waitWindow && site != waitIdle && site != waitAhead {
+			return
+		}
+		atWindow := g.windowWait.n.Load()
+		if site == waitWindow {
+			atWindow++
+		}
+		busy := 1 - p.heldByDrainer.Load() // the held tile's worker
+		if p.held.Load() == 1 && p.finished.Load() > 2 && p.finished.Load() == int64(p.admitted()-1) && atWindow > 0 &&
+			g.windowWait.n.Load()+g.idleWait.n.Load()+1 == workers-busy {
 			once.Do(func() { close(steady) })
 		}
 	}
@@ -364,12 +390,13 @@ func TestWindowFollowsGrownDisk(t *testing.T) {
 	}
 	res := make(chan result, 1)
 	go func() {
-		st, keys, err := runPlanned(t, p, Options{Workers: 4, Budget: 300, SpillDir: t.TempDir(), SpillMax: capBytes, SpillShare: 1, Gauges: g})
+		st, keys, err := runPlanned(t, p, Options{Workers: workers, Budget: 300, SpillDir: t.TempDir(), SpillMax: capBytes, SpillShare: 1, Gauges: g})
 		res <- result{st, keys, err}
 	}()
 	select {
 	case <-steady:
 	case <-time.After(30 * time.Second):
+		t.Logf("finished %d admitted %d gauges %+v window waits %d", p.finished.Load(), p.admitted(), g.Snapshot(), g.windowWait.n.Load())
 		close(release)
 		<-res
 		t.Fatal("the window never held the run")

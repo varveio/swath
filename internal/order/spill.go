@@ -110,6 +110,12 @@ type spiller[P any] struct {
 	// raised counts the times it rose, rechecks the follower's reads of
 	// the free space (recheck) and recheckRaised those that raised it.
 	// raisedCh tells the follower a frame raised it (wake the waiters).
+	// room counts the times room came back (credit returned, the cap
+	// raised, the free space grown under a refusal), each before its
+	// waiters are woken: an emitter that tried a frame without the order
+	// stage's lock retries instead of waiting when it moved meanwhile, as
+	// the wake may have come while it held no lock (emitter.publish).
+	room                            atomic.Uint64
 	share                           int64
 	raised, rechecks, recheckRaised atomic.Int64
 	raisedCh                        chan struct{}
@@ -746,14 +752,19 @@ func (s *spiller[P]) follow(live, n int64) bool {
 	if c < live {
 		return false
 	}
-	if s.raiseTo(c) {
+	woke := s.raiseTo(c)
+	if woke {
+		s.room.Add(1)
+	}
+	if s.full.Load() {
+		s.unrefuse()
+		woke = true
+	}
+	if woke {
 		select { // the follower wakes the waiters, outside any lock held here
 		case s.raisedCh <- struct{}{}:
 		default:
 		}
-	}
-	if s.full.Load() {
-		s.unrefuse()
 	}
 	return true
 }
@@ -796,23 +807,31 @@ func (s *spiller[P]) follower(quit <-chan struct{}, wake func()) {
 		case <-s.raisedCh:
 			wake()
 		case <-t.C:
-			if s.recheck(&last) {
-				wake()
+			if !s.recheck(&last) {
+				continue
 			}
+			wake()
+		}
+		if hookFollowerWake != nil {
+			hookFollowerWake()
 		}
 	}
 }
 
+// hookFollowerWake runs after each of the follower's wakes (tests).
+var hookFollowerWake func()
+
 // recheck re-reads the free space while the cap holds the run back (a
-// frame refused, or workers held at the frontier window; otherwise it
-// reads nothing): the cap rises when the filesystem has more room, and it
-// reports whether the waiters should try again: the cap rose, or the free
-// space grew under a refusal (the reserve may have refused, not the cap).
-// last is the free space the previous recheck read (-1: none since the
+// frame refused, or workers waiting at the frontier window, in publish or
+// at admission; otherwise it reads nothing): the cap rises when the
+// filesystem has more room, and it reports whether the waiters should try
+// again: the cap rose, or the free space grew under a refusal (the reserve
+// may have refused, not the cap). Either moves room before the follower
+// wakes the waiters. last is the free space the previous recheck read (-1: none since the
 // cap last held nothing back).
 func (s *spiller[P]) recheck(last *int64) bool {
 	full := s.full.Load()
-	if !full && (s.g == nil || s.g.windowWait.n.Load() == 0) {
+	if g := s.g; !full && (g == nil || g.windowWait.n.Load()+g.publishWait.n.Load()+g.admissionWait.n.Load() == 0) {
 		*last = -1
 		return false
 	}
@@ -825,10 +844,13 @@ func (s *spiller[P]) recheck(last *int64) bool {
 	*last = free
 	if s.raiseTo(DiskCap(free+s.live.Load(), s.reserve, s.share)) {
 		s.recheckRaised.Add(1)
+		grew = true
+	}
+	if grew {
+		s.room.Add(1)
 		if s.full.Load() {
 			s.unrefuse()
 		}
-		return true
 	}
 	return grew
 }
@@ -885,6 +907,7 @@ func (s *spiller[P]) refuse() {
 
 // unrefuse clears full (credit returned), ending a refused interval.
 func (s *spiller[P]) unrefuse() {
+	s.room.Add(1)
 	r := &s.refusal
 	r.mu.Lock()
 	s.full.Store(false)

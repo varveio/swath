@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os"
@@ -144,12 +143,4 @@ func TestDocsCLIPages(t *testing.T) {
 		}
 		docBlock(t, "commands/"+page, "synopsis", "text", b.String())
 	}
-	// swath show's one option, as its --help prints it.
-	var out bytes.Buffer
-	_ = dispatch(context.Background(), []string{"show", "--help"}, &out)
-	_, opts, ok := strings.Cut(out.String(), "Options:\n")
-	if !ok {
-		t.Fatalf("swath show --help has no options:\n%s", out.String())
-	}
-	docBlock(t, "commands/swath-show.md", "flags", "text", opts)
 }

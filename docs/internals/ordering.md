@@ -504,10 +504,14 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   something wakes its emitter, and the frontier window stops admission at half the cap, before any frame
   reaches it, so the run's follower (`spiller.follower`, a goroutine the run owns while the cap follows the
   disk, stopped with it) also rereads the free space every 2 s while the cap holds the run back: a frame
-  refused, or workers waiting at the window; otherwise a tick reads nothing. A rise, at a frame or a
-  recheck, wakes every waiter through the follower, which holds no lock of the order stage; a recheck also
-  wakes them when the free space grew under a refusal the reserve may have made
-  (`TestRefusedSpillWakesOnGrowth`, `TestWindowFollowsGrownDisk`). So a filesystem grown under a live run (a
+  refused, or workers waiting at the window, in publish or at admission; otherwise a tick reads nothing. A
+  rise, at a frame or a recheck, wakes every waiter through the follower, which holds no lock of the order
+  stage (`TestFrameRaiseWakesWaiters`); a recheck also wakes them when the free space grew under a refusal
+  the reserve may have made (`TestRefusedSpillWakesOnGrowth`, `TestWindowFollowsGrownDisk`). An emitter
+  tries its frame without the order stage's lock, so room that comes back (credit, a rise) can be woken for
+  before it waits: each such return moves a count (`spiller.room`) before its wake, and an emitter whose
+  frame was refused tries again instead of waiting when the count moved meanwhile
+  (`TestRefusedSpillRetriesOnRoomBack`). So a filesystem grown under a live run (a
   cloud disk resized and its filesystem grown online) is used without a restart, and with free space
   unchanged the cap stays where it started. The cap never falls: the parts written meanwhile take free
   space, and the reserve check, which reads the free space at every frame, guards the disk itself. Where free

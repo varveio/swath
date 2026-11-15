@@ -680,3 +680,65 @@ func TestRefusedSpillWakesOnGrowth(t *testing.T) {
 		t.Fatalf("items %d, cap %d, rechecks %d (%d raised)", len(n.items), o.sp.max.Load(), o.sp.rechecks.Load(), o.sp.recheckRaised.Load())
 	}
 }
+
+// TestRefusedSpillRetriesOnRoomBack: room can come back, and its wake be
+// over, while an emitter whose frame was just refused holds no lock (it
+// spills without the order stage's lock): here the disk grows and the
+// follower raises the cap and wakes the waiters before the emitter takes
+// the lock again. The emitter must try again (spiller.room moved) rather
+// than wait for a wake already past; nothing else moves.
+func TestRefusedSpillRetriesOnRoomBack(t *testing.T) {
+	free := followFast(t)
+	free.Store(1)
+	woke := make(chan struct{}, 16)
+	var once sync.Once
+	hookFollowerWake = func() {
+		select {
+		case woke <- struct{}{}:
+		default:
+		}
+	}
+	hookSpillRefused = func() {
+		once.Do(func() {
+			free.Store(1 << 30) // the disk grows ...
+			<-woke              // ... and the follower has raised the cap and woken the waiters
+		})
+	}
+	t.Cleanup(func() { hookFollowerWake, hookSpillRefused = nil, nil })
+	o := testRun(t, newCtl(), Options{Budget: 1, SpillDir: t.TempDir(), SpillMax: 1, SpillShare: 1})
+	o.buffered = 1
+	n := &node[string, tp]{r: "x", state: expanding}
+	done := publishing(o, n, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "k"}}, units: 1}}, 1)
+	if err := expect(t, done, "room back while unlocked"); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.items) != 1 || n.items[0].spill == nil || o.sp.refused.Load() != 1 || o.sp.recheckRaised.Load() != 1 {
+		t.Fatalf("items %d, refused %d, raised by recheck %d", len(n.items), o.sp.refused.Load(), o.sp.recheckRaised.Load())
+	}
+}
+
+// TestFrameRaiseWakesWaiters: a frame that raises the cap (follow) wakes
+// the emitters already waiting on the refusal, through the follower, with
+// no recheck (the cadence an hour).
+func TestFrameRaiseWakesWaiters(t *testing.T) {
+	ws := waits(t)
+	free := followFast(t)
+	followEvery = time.Hour
+	free.Store(1)
+	o := testRun(t, newCtl(), Options{Budget: 1, SpillDir: t.TempDir(), SpillMax: 1, SpillShare: 1})
+	o.buffered = 1
+	a := &node[string, tp]{r: "a", state: expanding}
+	doneA := publishing(o, a, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "a"}}, units: 1}}, 1)
+	expectWait(t, ws, waitPublish)
+	free.Store(1 << 30) // the disk grown; the next frame finds it
+	b := &node[string, tp]{r: "b", state: expanding}
+	if err := expect(t, publishing(o, b, []item[string, tp]{{rows: []schema.Row[tp]{{Key: "b"}}, units: 1}}, 1), "the raising frame"); err != nil {
+		t.Fatal(err)
+	}
+	if err := expect(t, doneA, "the waiter woken by the raise"); err != nil {
+		t.Fatal(err)
+	}
+	if o.sp.raised.Load() != 1 || o.sp.rechecks.Load() != 0 || a.items[0].spill == nil {
+		t.Fatalf("raised %d, rechecks %d", o.sp.raised.Load(), o.sp.rechecks.Load())
+	}
+}

@@ -572,6 +572,10 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) time.Duration {
 // Test hooks that widen race windows; nil in production.
 var hookBeforeDrain, hookAfterExpand func()
 
+// hookSpillRefused runs (tests) after an emitter's frame was refused,
+// before it takes the order stage's lock again.
+var hookSpillRefused func()
+
 // hookStopCallback runs (tests) in the context's stop callback before it
 // sets stopped: delaying it opens the window in which only a latch taken
 // with the failure keeps the drainer from passing a failed node.
@@ -1367,8 +1371,12 @@ func (e *emitter[R, P]) publish() error {
 			// Spill instead of waiting: write the rows (without the lock),
 			// then publish markers. Frames precede their markers, so the
 			// drainer never reads ahead of the writer.
+			room := o.sp.room.Load()
 			o.mu.Unlock()
 			err := e.spill()
+			if err == errSpillFull && hookSpillRefused != nil {
+				hookSpillRefused()
+			}
 			o.mu.Lock()
 			if err == nil {
 				continue // the markers left pass admission too (below)
@@ -1376,10 +1384,12 @@ func (e *emitter[R, P]) publish() error {
 			if err != errSpillFull {
 				return err
 			}
-			// The disk budget is used: wait, as without spill. The lock
+			// The disk budget is used: wait, as without spill, unless room
+			// came back while the lock was released (its wake may have
+			// come before this emitter waits): then try again. The lock
 			// was released, so recheck the condition first (the drainer
 			// may have marked this node awaited meanwhile).
-			refused = true
+			refused = o.sp.room.Load() == room
 			continue
 		} else if !full {
 			// A capturing node refused with room in memory: it would

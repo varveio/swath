@@ -253,7 +253,7 @@ type Spill struct {
 	// the disk follows it: a frame it would refuse re-reads the free
 	// space, and MaxRaised counts the times the cap rose (the filesystem
 	// grew, or other files on it were removed). While such a cap holds
-	// the run back (a frame refused, workers at the frontier window) the
+	// the run back (a frame refused, workers waiting on it) the
 	// free space is also reread every 2 s: MaxRechecks counts those reads,
 	// MaxRecheckRaised those that raised the cap.
 	MaxBytes         int64  `json:"max_bytes"`

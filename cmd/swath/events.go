@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/pflag"
 
@@ -123,7 +124,7 @@ func (l *eventLog) print(level, event, msg string, fields any) {
 	if level == lvWarn {
 		p += "warning: "
 	}
-	send(errOut, p+msg+"\n")
+	send(errOut, p+escapeControl(msg)+"\n")
 }
 
 // line is an event as one JSON object: ts, level, event, attempt, msg,
@@ -145,7 +146,12 @@ func (l *eventLog) line(level, event, msg string, fields any) string {
 	return string(append(b, '}')) + "\n"
 }
 
-// marshal is v as JSON, with & < > as they are (a query, a path).
+// marshal is v as JSON, with & < > as they are (a query, a path). A
+// control character the encoder leaves as it is (DEL, C1, the bidirectional
+// controls) is written as a \u escape, so a log line tailed on a terminal
+// draws nothing; the decoded string is the same. A string that is not
+// valid UTF-8 decodes with U+FFFD for its bad bytes (the rows' JSON has
+// the exact bytes, in a _base64 member).
 func marshal(v any) []byte {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -153,7 +159,19 @@ func marshal(v any) []byte {
 	if enc.Encode(v) != nil {
 		return nil
 	}
-	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	j := bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	if !bytes.ContainsFunc(j, func(r rune) bool { return r == 0x7f || (r >= 0x80 && unsafeRune(r)) }) {
+		return j
+	}
+	var out []byte
+	for _, r := range string(j) {
+		if r == 0x7f || (r >= 0x80 && unsafeRune(r)) {
+			out = fmt.Appendf(out, `\u%04x`, r)
+		} else {
+			out = utf8.AppendRune(out, r)
+		}
+	}
+	return out
 }
 
 // The start event's modes: what a run writes.
@@ -195,7 +213,7 @@ func (l *eventLog) start(f startFields) {
 		l.print(lvInfo, evStart, msg, f)
 		return
 	}
-	note(errOut, "swath: "+msg+" (attempt "+l.attempt+")\n")
+	note(errOut, "swath: "+escapeControl(msg)+" (attempt "+l.attempt+")\n")
 }
 
 // startOf is a run's start event: src, and what it writes where.
@@ -272,7 +290,7 @@ func conclude(err error) int {
 		b, _ := json.Marshal(o)
 		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
 	}
-	noteFinal(errOut, "swath: "+err.Error()+"\n")
+	noteFinal(errOut, "swath: "+escapeControl(err.Error())+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
 		noteFinal(errOut, sh.see()+"\n")
@@ -644,7 +662,7 @@ func reportUnreadable(r *listing.Report) {
 	}
 	l.warn(msg + ":")
 	for _, s := range samples {
-		noteKept(errOut, indent+s+"\n")
+		noteKept(errOut, indent+escapeControl(s)+"\n")
 	}
 	if rest := n - int64(len(samples)); rest > 0 && len(samples) > 0 {
 		noteKept(errOut, indent+"and "+count(rest)+" more (the report's source counters say why)\n")
