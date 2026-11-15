@@ -640,7 +640,7 @@ recording.
 
 ## A public bucket for the home page (noaa-gestofs-pds, 2026-11-15)
 
-These runs are behind the home page's terminal example and replay video. `s3://noaa-gestofs-pds` (AWS us-east-1, public) was
+These runs are behind the home page's terminal examples and replay video. `s3://noaa-gestofs-pds` (AWS us-east-1, public) was
 listed anonymously on 2026-11-15 from a 4-vCPU cloud VM with 7.7 GiB of RAM and an ext4 disk. The VM was shared
 with other work, and its region was not recorded. The build was main at `d8fbe439` (`CGO_ENABLED=0 go build ./cmd/swath`), at its
 defaults: 64 workers, seeded. Each run ran once, one after the other.
@@ -669,6 +669,7 @@ duckdb -column -c "SELECT
 | `diag list -o`, earlier (12:12:05) | 37,064,981 | 1,548,830,863,147,448 | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B |
 | `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 | 39,026 | 53.7 s | 111 MiB | none |
 | `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB | 2,169 top-level prefixes |
+| **`du`, the home page's lead view (20:02:28)** | 37,071,317 | 1.38 PiB | 39,257 | 52.2 s | 118 MiB | 7 rows on a 100x30 terminal, 2,173 more folded |
 
 - **The home page's run.**
   - No retries, throttles or timeouts.
@@ -677,6 +678,11 @@ duckdb -column -c "SELECT
   - Listing ended at 54 s and publication took 7.6 s more.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
+- **The home page's lead view** is a later `du` of the whole bucket with main at `e161e303`, on the same VM, with no
+  other listing running (load average 0.75 after it). It ran once, as
+  `script -qfec 'stty cols 100 rows 30; TZ=UTC ./swath du s3://noaa-gestofs-pds --anonymous --s3-region us-east-1' /dev/null`,
+  so swath drew its terminal view at that size, with times in UTC. The page strips the escape codes and leaves out
+  the closing lines after the request count. The bucket had grown by 6,336 objects since the morning's runs.
 - **The run at 12:32** shared the VM with other work: the load average was 12.7 when it ended. It took twice
   as long with the same requests and is not the one the home page shows.
 - **The trace.**
