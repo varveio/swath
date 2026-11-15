@@ -11,6 +11,12 @@ Notable changes per release. The full human summary for the current release is i
   format; `production.md` covers scheduled runs and bucket destinations only; `swath du`'s and `swath resume`'s
   explanations moved from their command pages to Total a source and Stop, resume and refresh. Old anchors still
   resolve.
+- Site: the field guide has its pictures back, drawn for the Go engine: an animated miniature model of a
+  listing (seed, owner-side splits, the sorted stream, commit before emit; still frames with reduced motion), a
+  diagram per section, and two figures from the home page's run (its 257 starting ranges, and requests in flight
+  over time on the range that held 64.5% of the bucket). Its claims are corrected against the code.
+- Go port: with the default spill cap, the `spill_pressure` event's remedy is to grow the spill disk, or free space
+  on it, as listing then continues; with a `--spill-budget` it still says to stop and resume with more.
 - Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
   rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular
@@ -47,7 +53,6 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: a GCS error answer without an error body names its HTTP status text and path; `-v`'s start line
   shows the attempt id's first 8 characters; `swath du --from-dataset`'s label gives the listing time in local
   time.
-
 - Releases tag the nested Go modules with swath's version: `reader/vX.Y.Z` and `objfile/vX.Y.Z` beside `vX.Y.Z`,
   all at one commit, so `go get github.com/varveio/swath/reader@v0.4.0` works. Both modules are at version 0, with
   no API promise. `just release` creates the three tags; the release workflow refuses a release whose module tags

@@ -192,7 +192,16 @@ html:has(.swath-dev-banner) {
 }
 
 /* A diagram in a page (the field guide's): inline SVG in the theme's colors, so it follows light
-   and dark, scaled to the column's width with its caption under it. */
+   and dark, scaled to the column's width with its caption under it. Brand marks what swath does,
+   signal the heavy range of the home page's run, alert a mistake or a crash. */
+:root {
+  --swath-fig-signal: #a8550b;
+  --swath-fig-alert: #b42318;
+}
+.dark {
+  --swath-fig-signal: #e9a04f;
+  --swath-fig-alert: #f97066;
+}
 .swath-figure {
   margin: 24px 0;
 }
@@ -203,16 +212,31 @@ html:has(.swath-dev-banner) {
   height: auto;
   color: var(--vp-c-text-1);
 }
+.swath-figure.wide svg {
+  max-width: none;
+}
 .swath-figure text {
   fill: currentColor;
   font-family: var(--vp-font-family-base);
   font-size: 15px;
+}
+.swath-figure text.sm {
+  font-size: 13px;
 }
 .swath-figure text.mono {
   font-family: var(--vp-font-family-mono);
 }
 .swath-figure text.label {
   fill: var(--vp-c-text-2);
+}
+.swath-figure text.t-acc {
+  fill: var(--vp-c-brand-1);
+}
+.swath-figure text.t-sig {
+  fill: var(--swath-fig-signal);
+}
+.swath-figure text.t-alert {
+  fill: var(--swath-fig-alert);
 }
 .swath-figure .done {
   fill: var(--vp-c-text-3);
@@ -226,8 +250,38 @@ html:has(.swath-dev-banner) {
   fill: var(--vp-c-brand-1);
   opacity: 0.55;
 }
-.swath-figure .tick {
+.swath-figure .acc {
+  fill: var(--vp-c-brand-1);
+}
+.swath-figure .sig {
+  fill: var(--swath-fig-signal);
+}
+.swath-figure .alert {
+  fill: var(--swath-fig-alert);
+}
+.swath-figure .outline {
+  fill: none;
+  stroke: var(--vp-c-text-3);
+}
+.swath-figure .tick,
+.swath-figure .s-ink {
   stroke: currentColor;
+  fill: none;
+}
+.swath-figure .s-acc {
+  stroke: var(--vp-c-brand-1);
+  fill: none;
+}
+.swath-figure .s-sig {
+  stroke: var(--swath-fig-signal);
+  fill: none;
+}
+.swath-figure .s-alert {
+  stroke: var(--swath-fig-alert);
+  fill: none;
+}
+.swath-figure .dashed {
+  stroke-dasharray: 4 3;
 }
 .swath-figure figcaption {
   margin-top: 8px;
