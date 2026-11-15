@@ -473,7 +473,10 @@ type Resources struct {
 // them (rows, spill, growth) with their time and peak, the drainer's wait
 // for the plan to read ahead, and the peaks of the tiles held, the rows
 // charged to them and the bytes the order stage held (memory and live
-// spill) at an admission.
+// spill) at an admission; under the spill gate, the mean rows charged at
+// its refusals, the most live spill behind the output and the drained
+// certificates it evicted; and the wakes of the workers held at it on the
+// paths that engage only with durable spill, by path.
 type Window struct {
 	Tiles             int64            `json:"tiles"`
 	Forced            int64            `json:"forced"`
@@ -487,6 +490,10 @@ type Window struct {
 	PeakTiles         int64            `json:"peak_tiles"`
 	PeakCreditRows    int64            `json:"peak_credit_rows"`
 	PeakRetainedBytes int64            `json:"peak_retained_bytes"`
+	SpillRows         int64            `json:"spill_rows"`
+	PeakBehindBytes   int64            `json:"peak_behind_bytes"`
+	Evicted           int64            `json:"evicted"`
+	Wakes             map[string]int64 `json:"wakes"`
 }
 
 // Drain is the order stage's drain after listing and the time it took.

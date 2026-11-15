@@ -5,6 +5,16 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a seeded run with many workers and a small spill cap no longer crawls on spill the output has passed.
+  The frontier window held admission while live spill was past half the cap, and with durable spill most of that
+  spill could be certificates already drained, waiting for the part holding their rows to publish, which no
+  drain lowers: the drainer then admitted one tile at a time (145 million keys at 2,048 workers, 57 MB cap: 219 s
+  against 78 s uncapped). The window now leaves those certificates out of its spill gate and evicts them, oldest
+  first, while live spill is past half the cap, as a refused frame does (a crash relists their keys); it holds
+  fewer tiles while the spill ahead of the output is past half the cap. Without durable spill (no journal, or a
+  cap under 16 MiB) the window is unchanged. The run report adds `resources.window.spill_rows` (the mean rows held
+  at the spill gate's refusals, forced admissions' included), `peak_behind_bytes`, `evicted` and `wakes` (the
+  window's wake paths that engage only with durable spill) (#535).
 - Go port: a name from the source that reaches stderr (a local path in an unreadable-entry warning, a key or
   provider error in a message, a dataset's recorded source) can no longer forge a `swath:` line or send
   terminal control sequences: text lines write control characters, line separators and invalid UTF-8 bytes as
