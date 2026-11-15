@@ -306,8 +306,7 @@ func TestSegmentsFailureClosesNoPart(t *testing.T) {
 	anyShare(t)
 	withProcs(t, 5)
 	f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	heldUntilOthersDone(t, f)
 	s := &partSink{limit: 20_000, encoders: 4, failAt: 3}
 	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
 	if err == nil || err.Error() != "part writer failed" {
