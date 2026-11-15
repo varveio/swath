@@ -16,8 +16,7 @@ import (
 
 // bruteWith is the oracle: every prefix of every key, summed one row at a
 // time, under opt's depth and origin, where an object counts (as an
-// object, with its figures) only if counts says so; its time counts in any
-// case. A directory counts in its parents' Dirs, a key outside the origin
+// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, a key outside the origin
 // in the total alone. alloc: the source has allocated bytes.
 func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
@@ -65,9 +64,9 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 				} else {
 					p.AllocatedMissing++
 				}
-			}
-			if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
-				p.Newest, p.HasNewest = r.Mtime, true
+				if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
+					p.Newest, p.HasNewest = r.Mtime, true
+				}
 			}
 		}
 	}
@@ -366,7 +365,7 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 			}
 		}
 		// The oracle: each inode counts under its smallest key; its other
-		// links add their time only.
+		// links add nothing, not even their time.
 		owner := map[[2]int64]string{}
 		for _, r := range rows {
 			id := [2]int64{r.Dev, r.Inode}
@@ -417,6 +416,29 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 					t.Fatalf("seed %d: stats %+v, %d links over %d inodes", seed, st, links, len(owner))
 				}
 			}
+		}
+	}
+}
+
+// TestLinkAliasTime: a name of a hard-linked file that is not counted
+// adds no time to its prefix; with every name counted, every name's time
+// counts.
+func TestLinkAliasTime(t *testing.T) {
+	for _, once := range []bool{true, false} {
+		tl := New(Options{Depth: 1, LinksOnce: once})
+		b := tl.Batch()
+		for _, k := range []string{"a/f", "b/alias"} {
+			b.Add(&Row{Key: k, Object: true, Size: 5, HasSize: true, Mtime: 100, HasMtime: true, Link: true, Dev: 1, Inode: 7})
+		}
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r := tl.Result()
+		if len(r) != 3 || r[2].Prefix != "b/" || r[1].Objects != 1 || !r[1].HasNewest {
+			t.Fatalf("once %v: %+v", once, r)
+		}
+		if alias := r[2]; once && (alias.Objects != 0 || alias.HasNewest) || !once && (alias.Objects != 1 || !alias.HasNewest || alias.Newest != 100) {
+			t.Fatalf("once %v: b/ %+v", once, alias)
 		}
 	}
 }

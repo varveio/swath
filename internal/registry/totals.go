@@ -107,9 +107,9 @@ func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error 
 				dev, ok2 := k.dev(p)
 				ino, ok3 := k.inode(p)
 				// A row without a link count, device or inode (a dataset
-				// listed at the names tier, or on Windows) counts under
-				// its name: nothing tells its links apart. nlink is
-				// unsigned, its bits carried in the int64.
+				// listed on Windows) counts under its name: nothing tells
+				// its links apart. nlink is unsigned, its bits carried in
+				// the int64.
 				if ok1 && ok2 && ok3 {
 					r.Link, r.Dev, r.Inode = uint32(n) > 1, dev, ino
 				} else {

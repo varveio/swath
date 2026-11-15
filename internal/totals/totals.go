@@ -120,7 +120,7 @@ type Row struct {
 	Link       bool
 	Dev, Inode int64
 	// Unidentified marks an object whose links LinksOnce cannot tell
-	// apart (no link count, device or inode: the names tier, Windows): it
+	// apart (no link count, device or inode: a tree listed on Windows): it
 	// counts under its name, and the tally no longer claims LinksOnce.
 	Unidentified bool
 }
@@ -319,10 +319,10 @@ func (t *Tally) Allocated() bool {
 }
 
 // LinksOnce reports whether objects with several hard links were counted
-// once: Options.LinksOnce, unless an object's links could not be told apart
-// (Row.Unidentified), so the totals are the same whether a tree is listed
-// live or read from a dataset listed at the names tier. Call it after the
-// last Flush.
+// once: Options.LinksOnce, which a live run and a dataset's totals both set
+// from whether the listing reads links (a local tree, not at the names
+// tier, without --count-links), unless an object's links could not be
+// told apart (Row.Unidentified). Call it after the last Flush.
 func (t *Tally) LinksOnce() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -388,17 +388,17 @@ func (b *Batch) Add(r *Row) {
 		} else {
 			c.allocMissing = 1
 		}
+		c.newest, c.hasNewest = r.Mtime, r.HasMtime
 		if r.Unidentified {
 			b.unidentified++
 		}
 		if r.Link && b.t.opt.LinksOnce {
-			// The object and its figures are added once, at finish, under
-			// the smallest of its keys; the time is every link's (an
-			// inode has one), so it applies here.
+			// The object, its figures and its time are added once, at
+			// finish, under the smallest of its keys: a name not counted
+			// adds no time either.
 			b.links = append(b.links, linkRow{id: inode{r.Dev, r.Inode}, key: r.Key, c: c})
 			c = cell{}
 		}
-		c.newest, c.hasNewest = r.Mtime, r.HasMtime
 	case r.Dir:
 		b.notObjects++
 		c.dirs = 1
@@ -478,8 +478,8 @@ func (b *Batch) Flush() error {
 }
 
 // finish adds each hard-linked inode once, to the prefixes of its
-// smallest key: those cells exist, as that row's time was added under
-// them. It runs once, after the last Flush (t.mu held).
+// smallest key: those cells exist, as that row's prefixes were added. It
+// runs once, after the last Flush (t.mu held).
 func (t *Tally) finish() {
 	if t.done {
 		return

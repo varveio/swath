@@ -276,6 +276,7 @@ type Source struct {
 	Kind      string `json:"kind"`                // "s3", "local-fs"
 	URI       string `json:"uri"`                 // s3://bucket/prefix, or the absolute root path
 	Container string `json:"container,omitempty"` // the bucket
+	Metadata  string `json:"metadata,omitempty"`  // the metadata tier a local tree was listed at: "names", "stat" or "statx"
 }
 
 // Scope is the part of the source the listing was asked for.

@@ -102,6 +102,22 @@ func TestDuFromDatasetLocal(t *testing.T) {
 			liveAndSaved(t, append([]string{root, "--metadata", "names"}, flags...), append([]string{"--from-dataset", names}, flags...))
 		}
 	}
+	// With nothing counted (an empty tree, every object filtered out) the
+	// names tier's links_once is still the live run's: the manifest
+	// records the tier.
+	empty, emptyNames := t.TempDir(), filepath.Join(t.TempDir(), "empty")
+	if err := run(context.Background(), []string{empty, "-o", emptyNames, "--metadata", "names", "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var em dataset.Manifest
+	if readJSON(t, filepath.Join(emptyNames, dataset.ManifestName), &em); em.Source.Metadata != "names" {
+		t.Fatalf("manifest source %+v", em.Source)
+	}
+	for _, format := range []string{"tsv", "jsonl"} {
+		liveAndSaved(t, []string{empty, "--metadata", "names", "--format", format}, []string{"--from-dataset", emptyNames, "--format", format})
+		liveAndSaved(t, []string{root, "--metadata", "names", "--include", "none", "--format", format},
+			[]string{"--from-dataset", names, "--include", "none", "--format", format})
+	}
 	liveAndSaved(t, []string{root, "-d", "1", "--no-header"}, []string{"--from-dataset", ds, "-d", "1", "--no-header"})
 	// PREFIX restricts the totals to its keys, the depth counted from it;
 	// the rows keep the dataset's keys.

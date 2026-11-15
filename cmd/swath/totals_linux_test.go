@@ -91,7 +91,7 @@ type duSums struct {
 // duOracle walks root with lstat and sums every prefix down to depth by
 // brute force: each non-directory is an object (its size and its blocks ×
 // 512) under every prefix of its key; with once, a file of several links
-// counts under its smallest key only, its time under all; a directory adds
+// counts under its smallest key only, its time too; a directory adds
 // its own prefix and counts in its parents' dirs.
 func duOracle(t *testing.T, root string, depth int, once bool) map[string]duSums {
 	t.Helper()
@@ -147,9 +147,9 @@ func duOracle(t *testing.T, root string, depth int, once bool) map[string]duSums
 				s.objects++
 				s.size += o.size
 				s.alloc += o.alloc
-			}
-			if !o.dir && (!s.hasNewest || o.mtime > s.newest) {
-				s.newest, s.hasNewest = o.mtime, true
+				if !s.hasNewest || o.mtime > s.newest {
+					s.newest, s.hasNewest = o.mtime, true
+				}
 			}
 			sums[p] = s
 		}
