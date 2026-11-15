@@ -19,8 +19,8 @@ _swath_list() {
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
@@ -32,7 +32,7 @@ _swath_list() {
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
-        '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
+        '--part-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
@@ -58,7 +58,7 @@ _swath_list() {
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '--one-file-system[do not walk into a mount point below the root, as du -x]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -92,8 +92,8 @@ _swath_du() {
         '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
@@ -124,7 +124,7 @@ _swath_du() {
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '--one-file-system[do not walk into a mount point below the root, as du -x]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -160,8 +160,8 @@ _swath_diag_list() {
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
@@ -173,7 +173,7 @@ _swath_diag_list() {
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
-        '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
+        '--part-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
@@ -215,7 +215,7 @@ _swath_diag_list() {
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '--one-file-system[do not walk into a mount point below the root, as du -x]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -251,8 +251,8 @@ _swath_diag_count() {
         '--output-endpoint-url=[the endpoint of a bucket -o (default: the provider'\''s)]:URL: ' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
@@ -264,7 +264,7 @@ _swath_diag_count() {
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
-        '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
+        '--part-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
@@ -300,7 +300,7 @@ _swath_diag_count() {
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '--one-file-system[do not walk into a mount point below the root, as du -x]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[do not walk into a mount point below the root, as du -x]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \

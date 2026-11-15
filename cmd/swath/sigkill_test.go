@@ -39,7 +39,7 @@ func TestSIGKILLResume(t *testing.T) {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	t.Parallel()
@@ -118,7 +118,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	t.Parallel()
@@ -266,7 +266,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	t.Parallel()
@@ -404,7 +404,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	t.Parallel()

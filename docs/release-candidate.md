@@ -17,7 +17,8 @@ rc.2 release binary and a build of the code these pages describe.
 | `swath du` on a tree with hard links | counts a file under each of its names; `--count-links-once` counts it once | counts it once, as `du` does; `-l` (`--count-links`) counts every name |
 | `swath diag list --trace FILE` | not available: `unknown flag --trace` | writes a trace of an object-store listing |
 | `-o NAME.parquet` | writes a dataset directory with that name | refused: use a name without `.parquet`, or end it with `/` |
-| `swath du --max-depth`, `-s`, `--apparent-size`, `-x` | `unknown flag` | names the swath option that stands for it, for example `--depth N` |
+| `swath du --max-depth N`, `-x` | `unknown flag` | the same as `--depth N` and `--one-file-system` |
+| `swath du -s`, `--apparent-size` | `unknown flag` | names the swath option that stands for it, for example `--depth 0` |
 
 ## Entries that could not be read
 

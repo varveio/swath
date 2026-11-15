@@ -76,12 +76,15 @@ See 'swath list --help'.
 ```
 
 Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gcs-credentials-file`,
-`--azure-sas-token`), and a long option takes two dashes. A GNU `du` option says what `swath du` takes for
-it: `-x` is `--one-file-system`, `-s` and `--apparent-size` are the defaults, and
+`--azure-sas-token`), and a long option takes two dashes. `swath du` takes GNU `du`'s `-x` and `--max-depth N`
+(the same as `--depth N`), and a GNU `du` option it takes another way says so:
 
 ```text
-swath: unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)
+swath: unknown flag --summarize (the total alone is the default: --depth 0)
 ```
+
+A 0.3 option names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
+`--stall-timeout`, `--compression` is the `-o` name).
 
 An option given for another provider's source is refused rather than ignored:
 

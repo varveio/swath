@@ -370,10 +370,12 @@ func TestTextOutputInsideTree(t *testing.T) {
 }
 
 // TestNoProgressAmongRows: with stdout a terminal that carries rows, the
-// automatic progress line and -v's appended records stay off; --progress
-// still draws them. Where a record is expected the fake holds its answers
-// until one is on stderr, so a slow runner cannot end the run first; where
-// none is, it holds them past the first progress samples (2 s apart).
+// automatic progress line and -v's appended records stay off, and
+// --progress is refused (a line drawn there would break the rows); swath
+// du, whose table comes after its listing, draws the line meanwhile. Where
+// a record is expected the fake holds its answers until one is on stderr,
+// so a slow runner cannot end the run first; where none is, it holds them
+// past the first progress samples (2 s apart).
 func TestNoProgressAmongRows(t *testing.T) {
 	h := s3test.Handler(s3test.Backend(t, []string{"a", "b"}))
 	stdout, stderr := stdoutTerminal, stderrTerminal
@@ -381,12 +383,13 @@ func TestNoProgressAmongRows(t *testing.T) {
 	t.Cleanup(func() { stdoutTerminal, stderrTerminal = stdout, stderr })
 	const record = "listing · "
 	for _, tc := range []struct {
-		extra  []string
-		forced bool
-	}{{nil, false}, {[]string{"--progress"}, true}, {[]string{"-v"}, false}, {[]string{"-v", "--progress"}, true}} {
+		extra []string
+		du    bool
+		drawn bool
+	}{{nil, false, false}, {[]string{"-v"}, false, false}, {nil, true, true}} {
 		errs := captureSyncStderr(t)
 		hold := func() {
-			if !tc.forced {
+			if !tc.drawn {
 				time.Sleep(3 * time.Second)
 				return
 			}
@@ -397,12 +400,25 @@ func TestNoProgressAmongRows(t *testing.T) {
 		endpoint := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hold(); h.ServeHTTP(w, r) }))
 		args := append([]string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--endpoint-url", endpoint}, tc.extra...)
 		var out bytes.Buffer
-		if err := run(context.Background(), args, &out, false); err != nil {
+		cmd, want := run, "  a\n"
+		if tc.du {
+			cmd, want = func(ctx context.Context, args []string, w io.Writer, _ bool) error { return runDu(ctx, args, w) }, "2"
+		}
+		if err := cmd(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}
-		if drawn := strings.Contains(errs.String(), record); drawn != tc.forced || !strings.Contains(out.String(), "  a\n") {
-			t.Errorf("%v: stderr %q, stdout %q", tc.extra, errs.String(), out.String())
+		if drawn := strings.Contains(errs.String(), record); drawn != tc.drawn || !strings.Contains(out.String(), want) {
+			t.Errorf("%v (du %v): stderr %q, stdout %q", tc.extra, tc.du, errs.String(), out.String())
 		}
+	}
+	for _, extra := range [][]string{{"--progress"}, {"-v", "--progress"}, {"--progress-interval", "2s"}} {
+		err := run(context.Background(), append([]string{"s3://bkt", "--anonymous"}, extra...), io.Discard, false)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--progress: the rows go to this terminal") {
+			t.Errorf("%v with rows on the terminal: %v", extra, err)
+		}
+	}
+	if _, _, err := parseList([]string{"s3://bkt", "--progress", "-o", filepath.Join(t.TempDir(), "rows.tsv")}, io.Discard, command{}); err != nil {
+		t.Errorf("--progress with rows to a file: %v", err)
 	}
 }
 
@@ -441,6 +457,31 @@ func TestResolveOutput(t *testing.T) {
 			t.Errorf("%d: text %+v, want the dataset", i, c)
 		case tc.format != "" && (c == nil || c.Format != tc.format || c.Path != tc.path || c.Compression != tc.comp):
 			t.Errorf("%d: %+v", i, c)
+		}
+	}
+}
+
+// TestEmptyPrefixWarns: a live listing of an object-store prefix that
+// holds no key exits 0 and says so, as swath du --from-dataset does; a
+// prefix with keys does not.
+func TestEmptyPrefixWarns(t *testing.T) {
+	endpoint := s3test.Serve(t, s3test.Handler(s3test.Backend(t, []string{"a", "b/c"})))
+	for _, c := range []struct {
+		root string
+		warn bool
+	}{{"s3://bkt/zzz/", true}, {"s3://bkt/b/", false}} {
+		for _, du := range []bool{false, true} {
+			errs := captureSyncStderr(t)
+			args := []string{c.root, "--anonymous", "--no-stats", "--endpoint-url", endpoint}
+			var err error
+			if du {
+				err = runDu(context.Background(), args, io.Discard)
+			} else {
+				err = run(context.Background(), args, io.Discard, false)
+			}
+			if warned := strings.Contains(errs.String(), `swath: warning: no key starts with "zzz/"`); err != nil || warned != c.warn {
+				t.Errorf("%s (du %v): %v, stderr %q", c.root, du, err, errs.String())
+			}
 		}
 	}
 }

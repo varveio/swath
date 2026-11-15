@@ -28,7 +28,9 @@ A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `mani
 A bare local destination or bucket prefix whose final path element ends in `.parquet` (case-insensitive) is
 refused. Use a name without that suffix, or add a trailing separator to explicitly select a directory,
 such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-style directory).
-The same name rule applies to `swath resume DIR`.
+The same name rule applies to `swath resume DIR`. An existing file, or a device such as `/dev/null`, is
+refused as a dataset directory (exit 2): rows to stdout need no `-o`, and `swath diag count` lists without
+writing.
 Querying one is shown in [Running swath](running.md#reading-the-output).
 
 A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,
@@ -38,7 +40,10 @@ compatible path list. Names, sizes and times alone do not validate a backup.
 ## Text rows
 
 The `-o` name chooses the format and the compression: `NAME.tsv` or `NAME.jsonl`, optionally followed by
-`.gz` or `.zst`. Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
+`.gz` or `.zst`, in any case. A name with anything else after its `.tsv` or `.jsonl` (`rows.jsonl.zstd`,
+`rows.tsv.lz4`) is refused, never taken for a dataset directory; end it with `/` for a directory of that name.
+The part options (`--part-size`, `--part-interval`, `--part-max-rows`) shape a dataset and are refused with
+text rows. Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
 is the table on a terminal and TSV otherwise, or `table`, `tsv`, `jsonl`. Compress stdout with a pipe
 (`| zstd`). The file's directory must exist; the file is written beside its name and renamed into place when
 complete, replacing a previous file. A file written inside the local tree it lists is left out of the listing,

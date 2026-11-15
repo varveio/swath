@@ -33,6 +33,9 @@ const (
 // and spill flags are theirs.
 var writing = []string{cmdList, cmdDiagList}
 
+// partFlags shape a dataset's Parquet parts: text output refuses them.
+var partFlags = []string{"part-size", "part-interval", "part-max-rows"}
+
 // appendTo is a repeatable flag's value: each value given is added to *p.
 func appendTo(p *[]string) pflag.Value {
 	return source.Func(func(v string) error { *p = append(*p, v); return nil })
@@ -67,7 +70,11 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	o.depth, o.maxPrefixes, o.maxInodes = 0, totals.DefaultMaxPrefixes, totals.DefaultMaxInodes
 	def(source.Flag{Name: "depth", Short: "d", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "also total each prefix down to N levels below SOURCE (0: the total)",
-		Long:  "A prefix ends at a '/'; each includes what is below it, as du."})
+		Long:  "A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same."})
+	// GNU du's --max-depth limits the rows printed, as --depth does: a
+	// second spelling, kept out of the help.
+	source.Define(f, source.Flag{Name: "max-depth", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
+		Usage: "the same as --depth"}).Hidden = true
 	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: total the files' allocated bytes instead of their apparent size",
 		Long:  "The files' st_blocks x 512. A directory's own blocks are not counted, so a tree's total is below du's by them."})
@@ -99,7 +106,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "TSV and JSONL: these columns, in order (repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
 		Value: source.Func(names(&o.columns))})
-	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
+	def(source.Flag{Name: "overwrite", Familiar: []string{"force", "restart"}, Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
 	def(source.Flag{Name: "work-dir", Value: source.Text(&o.workDir), Metavar: "DIR", Group: source.GroupOutput, Commands: writing,
 		Usage: "with a bucket -o: the local work directory (lock, journal, spill)",
@@ -128,10 +135,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "drop keys this glob matches (repeatable; beats any include)",
 		Long:  "Matched as --include is. dir/ drops a directory's own row, dir/** the rows below it. Local trees skip traversal below directories covered by a terminal /**; other excludes only filter rows."})
 	def(source.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "keep keys this RE2 regex matches anywhere in the full key (repeatable)",
-		Long:  "The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
+		Usage: "keep keys this RE2 regex matches anywhere in the key (repeatable)",
+		Long:  "Matched against the key below SOURCE, as a glob is, on every source: ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
 	def(source.Flag{Name: "exclude-regex", Value: appendTo(&o.filter.ExcludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "drop keys this RE2 regex matches anywhere in the full key (repeatable)"})
+		Usage: "drop keys this RE2 regex matches anywhere in the key (repeatable)"})
 	def(source.Flag{Name: "min-size", Value: source.Text(&o.filter.MinSize), Metavar: "SIZE", Group: source.GroupFilters,
 		Usage: "keep objects (local: entries) of at least this size (1K, 1.5GiB)",
 		Long:  "Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal), any case."})
@@ -139,7 +146,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "keep objects or entries of at most this size"})
 	def(source.Flag{Name: "modified-since", Value: source.Text(&o.filter.Since), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or after TIME (2026-01-01, 7d)",
-		Long:  "An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names."})
+		Long:  "2026-01-01, 2026-01-01T12:00, 2026-01-01 12:00:00 (the tables' form), with an offset or Z, or without one: UTC, as the tables print times. A duration (7d, 12h) is that long before the run started, recorded as the time it names."})
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME[,NAME...]", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
@@ -159,13 +166,13 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
 		Usage: "fixed cap on spill (default: follows the spill disk's free space)",
 		Long:  "By default spill may use the spill filesystem's free space after a reserve (half of it unless the dataset is in a bucket, as the output shares it), re-read while it holds listing back, so a disk grown under a live run is used. Set it when the filesystem is shared with other work. Past it, or at the reserve, listing waits instead of spilling."})
-	def(source.Flag{Name: "part-size", Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: source.GroupPerformance, Commands: writing,
+	def(source.Flag{Name: "part-size", Familiar: []string{"parquet-part-size"}, Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: source.GroupPerformance, Commands: writing,
 		Usage: "target size of a Parquet part",
 		Long:  "Smaller parts for readers that load whole parts, larger for fewer files on a very large listing."})
-	def(source.Flag{Name: "part-interval", Value: source.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(listing.DefaultPartInterval),
+	def(source.Flag{Name: "part-interval", Familiar: []string{"part-rotation-interval"}, Value: source.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(listing.DefaultPartInterval),
 		Group: source.GroupPerformance, Commands: writing, Usage: "close a part with rows after this long, full or not",
 		Long: "0: by size only. Lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing."})
-	def(source.Flag{Name: "part-rotation-max-rows", Value: source.Count64(&o.partMaxRows, 0), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
+	def(source.Flag{Name: "part-max-rows", Familiar: []string{"part-rotation-max-rows"}, Value: source.Count64(&o.partMaxRows, 0), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
 		Usage: "also close a part at N rows (0: by size and --part-interval only)",
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
 	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
@@ -175,7 +182,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "max-duration", Value: source.Duration(&o.maxDuration), Metavar: "DURATION", Group: source.GroupLimits,
 		Usage: "stop the run after this long (exit 124); 0: no limit",
 		Long:  "Give every unattended run one. Only a dataset run of an object store (one with a journal) resumes where it stopped; text output and swath du run again."})
-	def(source.Flag{Name: "stall-timeout", Value: source.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: source.GroupLimits,
+	def(source.Flag{Name: "stall-timeout", Familiar: []string{"idle-timeout", "no-progress-timeout"}, Value: source.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: source.GroupLimits,
 		Usage: "stop as stuck after this long without progress (exit 75)",
 		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 	def(source.Flag{Name: "spill-wait-timeout", Value: source.Duration(&o.spillWait), Metavar: "DURATION", Group: source.GroupLimits, Commands: writing,
@@ -453,7 +460,7 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		if ne.GetSpecifiedShortnames() != "" {
 			typed = "-" + ne.GetSpecifiedName()
 		}
-		return p, usage(errors.New("unknown flag " + typed + suggestFlag(f, ne.GetSpecifiedName())))
+		return p, usage(errors.New("unknown flag " + typed + suggestFlag(f, cmd, ne.GetSpecifiedName())))
 	case errors.As(err, &ve):
 		return p, usage(fmt.Errorf("--%s needs a value (%s)", ve.GetFlag().Name, source.Described(ve.GetFlag()).Metavar))
 	case errors.As(err, &ie):
@@ -560,21 +567,33 @@ func shownValue(fl *pflag.Flag, value string) string {
 }
 
 // duSpellings are GNU du's spellings that swath du takes another way: what
-// an unknown-flag error says in their place. A plain synonym is the
-// flag's source.Flag.Familiar instead.
+// an unknown-flag error on swath du says in their place. A plain synonym
+// is the flag's source.Flag.Familiar instead.
 var duSpellings = map[string]string{
-	"max-depth":     "--depth N: it limits the breakdown, not the traversal",
 	"s":             "the total alone is the default: --depth 0",
 	"summarize":     "the total alone is the default: --depth 0",
 	"apparent-size": "apparent sizes are the default; --allocated totals blocks",
 }
 
-// suggestFlag is the " (did you mean --x?)" of an unknown flag name: what
-// swath du takes for a GNU du spelling (duSpellings), a flag that names it
-// as another tool's spelling (source.Flag.Familiar), else the visible flag
-// nearest it within two edits; "" for none.
-func suggestFlag(f *pflag.FlagSet, name string) string {
-	if s, ok := duSpellings[name]; ok {
+// oldSpellings are swath 0.3's flags that no flag stands for: what an
+// unknown-flag error says in their place.
+var oldSpellings = map[string]string{
+	"output-type": "the -o name decides: NAME.tsv or NAME.jsonl is a file, another name a dataset directory",
+	"compression": "the -o name decides: NAME.tsv.gz or NAME.jsonl.zst; on stdout, a pipe (| zstd)",
+	"checkpoint":  "a dataset of an object store keeps a journal; swath diag list --no-journal turns it off",
+	"tune":        "the settings are flags: swath list --help, swath diag list --help",
+}
+
+// suggestFlag is the " (did you mean --x?)" of an unknown flag name on
+// command cmd: what swath du takes for a GNU du spelling (duSpellings, on
+// swath du only), what a 0.3 flag became (oldSpellings), a flag that names
+// it as another tool's spelling (source.Flag.Familiar), else the visible
+// flag nearest it within two edits; "" for none.
+func suggestFlag(f *pflag.FlagSet, cmd, name string) string {
+	if s, ok := duSpellings[name]; ok && cmd == cmdDu {
+		return " (" + s + ")"
+	}
+	if s, ok := oldSpellings[name]; ok {
 		return " (" + s + ")"
 	}
 	best, dist := "", 3

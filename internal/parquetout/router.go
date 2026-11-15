@@ -76,7 +76,7 @@ type Options struct {
 	// upload) and whose Abort closes it (aborting one not completed).
 	Create func(ordinal int) (dataset.Artifact, error)
 	// MaxRows, if positive, also closes a part once it holds that many rows
-	// (Java's --part-rotation-max-rows). Such a cut depends only on the
+	// (Java's --part-max-rows). Such a cut depends only on the
 	// rows, so boundaries stay deterministic (it is part of the resume
 	// identity); a part it closes does not calibrate the size ratio, as a
 	// time cut does not: only a part closed by size does.

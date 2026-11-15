@@ -155,6 +155,11 @@ Diagnostics:
 | `SWATH_LOCALFS_ENGINE=portable` | select the portable filesystem engine in place of `getdents` on Linux ([providers/local.md](providers/local.md)) |
 | `SWATH_SPLIT_TRACE` | trace range-engine splits on stderr, one line per split: range id, bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation and the anchor its upper child carries |
 
+The crash, hang and pacing hooks the process tests drive (`SWATH_TEST_KILL_AT`, `SWATH_TEST_HANG_AT`,
+`SWATH_TEST_SLOW_AT`, `SWATH_TEST_SERIAL_SEALS`, `SWATH_TEST_LAST_RANGE_FILE`,
+`SWATH_TEST_DRAIN_AFTER_LISTING`) exist only in a build with the `swathtest` tag
+(`go build -tags swathtest ./cmd/swath`), which those tests build; a release binary reads none of them.
+
 ## Phase profiles
 
 A sorted run has two phases with different work: listing, until the provider has finished (the report's

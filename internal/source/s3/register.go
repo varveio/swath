@@ -26,11 +26,46 @@ import (
 func init() {
 	registry.Register(registry.Factory{
 		EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionsSchema.Info}, Classify: objhttp.Label,
-		Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+		Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix, Suggest: suggest,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "s3-bearer-token-command"}},
 		Operational: []string{"s3-profile", "s3-bearer-token-refresh-interval"},
 		Title:       "S3", Example: "s3://bucket/logs/", Usage: "s3://bucket[/prefix]"})
+}
+
+// suggest is the s3:// root of a source given as another tool's S3 scheme
+// (s3a://, s3n://) or as an S3 https URL, virtual-hosted
+// (BUCKET.s3[.REGION].amazonaws.com/KEY) or path-style
+// (s3[.REGION].amazonaws.com/BUCKET/KEY) (registry.Factory.Suggest).
+func suggest(root string) (string, bool) {
+	u, err := url.Parse(root)
+	if err != nil {
+		return "", false
+	}
+	bucket, key := u.Host, u.Path
+	switch scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()); {
+	case scheme == "s3a" || scheme == "s3n":
+	case scheme != "https" && scheme != "http" || !strings.HasSuffix(host, ".amazonaws.com"):
+		return "", false
+	case strings.HasPrefix(host, "s3.") || strings.HasPrefix(host, "s3-"):
+		bucket, key, _ = strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
+	default:
+		i := strings.Index(host, ".s3.")
+		if i < 0 {
+			i = strings.Index(host, ".s3-")
+		}
+		if i <= 0 {
+			return "", false
+		}
+		bucket = host[:i]
+	}
+	if bucket == "" {
+		return "", false
+	}
+	if key = strings.TrimPrefix(key, "/"); key != "" {
+		bucket += "/" + key
+	}
+	return "s3://" + bucket, true
 }
 
 // flagged is the S3 flag group's value: the S3 options, the store group's
@@ -70,12 +105,12 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "s3-profile", Familiar: []string{"profile"}, Value: source.Text(&o.Profile), Metavar: "NAME", Usage: "the shared config profile to take credentials and region from",
 		Long: "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS)."})
 	source.Define(f, source.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: source.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
-	source.Define(f, source.Flag{Name: "s3-path-style", Familiar: []string{"path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
-	source.Define(f, source.Flag{Name: "no-s3-path-style", Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
+	source.Define(f, source.Flag{Name: "s3-path-style", Familiar: []string{"path-style", "force-path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
+	source.Define(f, source.Flag{Name: "no-s3-path-style", Familiar: []string{"no-force-path-style"}, Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
 	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Shown: source.ShownNever, Familiar: []string{"bearer-token-command"}, Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
 		Usage: "a shell command printing a bearer token, sent instead of SigV4",
 		Long:  "For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again."})
-	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
+	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Familiar: []string{"bearer-token-refresh-interval"}, Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
 		Usage: "run --s3-bearer-token-command again after this long",
 		Value: source.Func(func(v string) error {
 			d, err := source.ParseDuration(v)

@@ -84,7 +84,7 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 		}
 	}
 	// The flags that stayed on swath list are not diagnostic.
-	for _, n := range []string{"workers", "sort-buffer", "spill-budget", "encoders", "part-size", "seed-from", "no-adaptive-limit", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-rotation-max-rows"} {
+	for _, n := range []string{"workers", "sort-buffer", "spill-budget", "encoders", "part-size", "seed-from", "no-adaptive-limit", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-max-rows"} {
 		if diagOnly()[n] {
 			t.Errorf("--%s is diagnostic", n)
 		}

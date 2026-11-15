@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -107,12 +108,43 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--one-filesystem"}, "unknown flag --one-filesystem (did you mean --one-file-system?)"},
 		{[]string{"s3://b", "--limiter=false"}, "unknown flag --limiter (did you mean --no-adaptive-limit?)"},
 		{[]string{"s3://b", "--concurrency", "8"}, "unknown flag --concurrency (did you mean --workers?)"},
-		{[]string{"/d", "--max-depth", "2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
-		{[]string{"/d", "--max-depth=2"}, "unknown flag --max-depth (--depth N: it limits the breakdown, not the traversal)"},
 		{[]string{"/d", "-s"}, "unknown flag -s (the total alone is the default: --depth 0)"},
 		{[]string{"/d", "--summarize"}, "unknown flag --summarize (the total alone is the default: --depth 0)"},
 		{[]string{"/d", "--apparent-size"}, "unknown flag --apparent-size (apparent sizes are the default; --allocated totals blocks)"},
-		{[]string{"/d", "-x"}, "unknown flag -x (did you mean --one-file-system?)"},
+		{[]string{"s3://b", "--force-path-style"}, "unknown flag --force-path-style (did you mean --s3-path-style?)"},
+		{[]string{"s3://b", "--no-force-path-style"}, "unknown flag --no-force-path-style (did you mean --no-s3-path-style?)"},
+		{[]string{"s3://b", "--bearer-token-refresh-interval", "1h"}, "unknown flag --bearer-token-refresh-interval (did you mean --s3-bearer-token-refresh-interval?)"},
+		{[]string{"s3://b", "--idle-timeout", "1m"}, "unknown flag --idle-timeout (did you mean --stall-timeout?)"},
+		{[]string{"s3://b", "--no-progress-timeout", "1m"}, "unknown flag --no-progress-timeout (did you mean --stall-timeout?)"},
+		{[]string{"s3://b", "--restart"}, "unknown flag --restart (did you mean --overwrite?)"},
+		{[]string{"s3://b", "--force"}, "unknown flag --force (did you mean --overwrite?)"},
+		{[]string{"s3://b", "--parquet-part-size", "1M"}, "unknown flag --parquet-part-size (did you mean --part-size?)"},
+		{[]string{"s3://b", "--part-rotation-interval", "1m"}, "unknown flag --part-rotation-interval (did you mean --part-interval?)"},
+		{[]string{"s3://b", "--part-rotation-max-rows", "5"}, "unknown flag --part-rotation-max-rows (did you mean --part-max-rows?)"},
+		{[]string{"s3://b", "--checkpoint", "none"}, "unknown flag --checkpoint (a dataset of an object store keeps a journal; swath diag list --no-journal turns it off)"},
+		{[]string{"s3://b", "--compression", "zstd"}, "unknown flag --compression (the -o name decides"},
+		{[]string{"s3://b", "--output-type", "file"}, "unknown flag --output-type (the -o name decides"},
+		{[]string{"s3://b", "--tune", "x=y"}, "unknown flag --tune (the settings are flags"},
+		{[]string{"s3://b", "--min-size", "1e3"}, `--min-size "1e3": want a size such as 1K, 1.5GiB or 256MB: bytes, or K, M, G, T, KiB`},
+		{[]string{"s3://b", "--modified-since", "yesterday"}, `--modified-since "yesterday": want a time such as`},
+		{[]string{"s3://b", "--include-regex", "["}, `--include-regex "[": want a regular expression in Go's RE2 syntax: missing closing ]`},
+		{[]string{"s3://b", "--sort", "bytes"}, `--sort "bytes": want name or size`},
+		{[]string{"s3://b", "--format", "json"}, `--format "json": want auto, table, tsv or jsonl (did you mean jsonl?)`},
+		{[]string{"s3://b", "--format", "TSV"}, `--format "TSV": want auto, table, tsv or jsonl (did you mean tsv?)`},
+		{[]string{"s3://b", "--format", "parquet"}, `--format "parquet": want auto, table, tsv or jsonl (a Parquet dataset is swath list -o DIR)`},
+		{[]string{"s3a://b/p"}, "unsupported source s3a:// (did you mean s3://b/p?); SOURCE is "},
+		{[]string{"https://bkt.s3.amazonaws.com/logs/x"}, "unsupported source https:// (did you mean s3://bkt/logs/x?)"},
+		{[]string{"https://bkt.s3.eu-west-1.amazonaws.com/"}, "unsupported source https:// (did you mean s3://bkt?)"},
+		{[]string{"https://s3.us-east-2.amazonaws.com/bkt/p"}, "unsupported source https:// (did you mean s3://bkt/p?)"},
+		{[]string{"https://storage.googleapis.com/bkt/p?x=y"}, "unsupported source https:// (did you mean gs://bkt/p?)"},
+		{[]string{"https://bkt.storage.googleapis.com/p"}, "unsupported source https:// (did you mean gs://bkt/p?)"},
+		{[]string{"gcs://bkt"}, "unsupported source gcs:// (did you mean gs://bkt?)"},
+		{[]string{"file:///data/x"}, `unsupported source file:// (did you mean /data/x?)`},
+		{[]string{"https://example.com/x"}, "unsupported source https://; SOURCE is a local directory or file, "},
+		{[]string{"abfs://c@acct.dfs.core.windows.net/"}, "unsupported source abfs://; SOURCE is"},
+		{[]string{"s3:/bkt/x"}, "s3:/bkt/x is a local path (did you mean s3://bkt/x?)"},
+		{[]string{"GS:/bkt"}, "GS:/bkt is a local path (did you mean gs://bkt?)"},
+		{[]string{"/d", "-h"}, "-h is help; sizes are already human-readable in the table"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},
 		{[]string{"s3://b", "--workers", "0"}, `--workers "0": want a whole number of at least 1`},
@@ -147,7 +179,7 @@ func TestMalformedSourceIsUsage(t *testing.T) {
 		{[]string{"s3:///x"}, `no bucket in "s3:///x"`},
 		{[]string{"gs://"}, `not a gs://bucket[/prefix] URL: "gs://"`},
 		{[]string{"az://acct"}, `no account or container in "az://acct": want az://ACCOUNT/CONTAINER[/PREFIX]`},
-		{[]string{"s3://b", "--sort-buffer", "64K", "-o", "x"}, "--sort-buffer 64KiB: at least 128KiB"},
+		{[]string{"s3://b", "--sort-buffer", "64K", "-o", "x"}, `--sort-buffer "64KiB": want at least 128KiB`},
 	} {
 		for _, cmd := range []command{{}, {count: true, du: true}} {
 			if cmd.du && len(c.args) > 1 {
@@ -506,7 +538,7 @@ func TestNegation(t *testing.T) {
 // refused naming it and the help to read.
 func TestResumeFrozenFlag(t *testing.T) {
 	err := resume(context.Background(), []string{t.TempDir(), "--part-size", "1MiB"}, io.Discard)
-	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--part-size is fixed for the run and cannot change on resume (see 'swath resume --help')") {
+	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--part-size is fixed for the run and cannot change on resume") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -671,5 +703,124 @@ func TestRefusalsSayWhy(t *testing.T) {
 	}
 	if err := show([]string{ds, "--journal"}, io.Discard); err == nil || !strings.Contains(err.Error(), "is a committed dataset, which keeps no journal") {
 		t.Errorf("show --journal on a dataset: %v", err)
+	}
+}
+
+// TestShortHelpRefusedWithArguments: -h alone prints the short help; -h
+// with anything else on swath list or du is refused (du users type it for
+// human-readable sizes), and --help is help wherever it stands.
+func TestShortHelpRefusedWithArguments(t *testing.T) {
+	ctx := context.Background()
+	for _, args := range [][]string{{"du", "-h", "t"}, {"du", "t", "-h"}, {"du", "-h", "-d", "1", "t"}, {"list", "t", "-h"}, {"ls", "-h", "t"}} {
+		var out bytes.Buffer
+		err := dispatch(ctx, args, &out)
+		var sh seeHelp
+		if exitOf(err) != exitUsage || err.Error() != "-h is help; sizes are already human-readable in the table" || !errors.As(err, &sh) || out.Len() != 0 {
+			t.Errorf("%q: %v, stdout %d bytes", args, err, out.Len())
+		}
+	}
+	for _, args := range [][]string{{"du", "-h"}, {"list", "-h"}, {"du", "--help", "t"}, {"du", "t", "--help"}, {"diag", "list", "t", "-h"}} {
+		var out bytes.Buffer
+		if err := dispatch(ctx, args, &out); !errors.Is(err, pflag.ErrHelp) || !strings.HasPrefix(out.String(), "Usage: ") {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+	var out bytes.Buffer
+	if err := dispatch(ctx, nil, &out); !errors.Is(err, pflag.ErrHelp) || !strings.Contains(out.String(), "Commands:") {
+		t.Errorf("bare swath: %v, %q", err, out.String())
+	}
+}
+
+// TestCommandSpellings: GNU du's hints are swath du's alone; --max-depth is
+// a second spelling of --depth on swath du; -x is --one-file-system.
+func TestCommandSpellings(t *testing.T) {
+	list, du := command{}, command{count: true, du: true}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"/d", "--summarize"}, "unknown flag --summarize"},
+		{[]string{"/d", "-s"}, "unknown flag -s"},
+		{[]string{"/d", "--max-depth", "1"}, "--max-depth has no meaning for swath list: it shapes swath du's totals"},
+	} {
+		_, _, err := parseList(c.args, io.Discard, list)
+		if exitOf(err) != exitUsage || err.Error() != c.want {
+			t.Errorf("list %q: %v, want %q", c.args, err, c.want)
+		}
+	}
+	for _, args := range [][]string{{"/d", "--max-depth", "2"}, {"/d", "--max-depth=2"}, {"/d", "-d2"}} {
+		if o, _, err := parseList(args, io.Discard, du); err != nil || o.depth != 2 {
+			t.Errorf("du %q: %v, depth %d", args, err, o.depth)
+		}
+	}
+	for _, cmd := range []command{list, du} {
+		o, _, err := parseList([]string{t.TempDir(), "-x"}, io.Discard, cmd)
+		if err != nil || !slices.Contains(o.argv, "--one-file-system") {
+			t.Errorf("%s -x: %v, %q", cmd.name(), err, o.argv)
+		}
+	}
+}
+
+// TestOutputNameRules: a name with a .tsv or .jsonl component ends there
+// or in .gz or .zst (any case), else it is refused, never made a dataset
+// directory; a trailing / is a directory; a path typed with one slash after
+// a scheme is refused; a file or device -o is refused with what to do; the
+// part flags are refused with text rows.
+func TestOutputNameRules(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "afile")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out.tsv"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := func(n string) string { return filepath.Join(dir, n) }
+	for _, c := range []struct {
+		out    string
+		text   string
+		refuse string
+	}{
+		{in("y.jsonl.zstd"), "", "(did you mean " + in("y.jsonl.zst") + "?)"},
+		{in("z.tsv.lz4"), "", "a .tsv file's name ends in .tsv, .tsv.gz or .tsv.zst, and a directory's in /"},
+		{in("z.TSV.LZ4"), "", "a .tsv file's name ends in"},
+		{in("z.tsv.d"), "", "a .tsv file's name ends in"},
+		{in("z.tsv.d") + "/", "", ""},
+		{in("y.TSV"), "tsv", ""},
+		{in("z.tsv.GZ"), "tsv", ""},
+		{in("z.JSONL.Zst"), "jsonl", ""},
+		{in("z.out"), "", ""},
+		{"s3:/bkt/x", "", "-o s3:/bkt/x is a local path (did you mean s3://bkt/x?)"},
+		{file, "", "-o " + file + ": " + file + " is a file, and a dataset is a directory; rows go to a file named .tsv or .jsonl"},
+		{in("out.tsv") + "/", "", "is a file, and a dataset is a directory"},
+		{os.DevNull, "", "swath diag count lists without writing"},
+	} {
+		if c.out == os.DevNull && runtime.GOOS == "windows" {
+			continue
+		}
+		o, _, err := parseList([]string{"s3://bkt", "-o", c.out}, io.Discard, command{})
+		switch {
+		case c.refuse != "":
+			if exitOf(err) != exitUsage || !strings.Contains(err.Error(), c.refuse) {
+				t.Errorf("-o %s: %v, want %q", c.out, err, c.refuse)
+			}
+		case err != nil:
+			t.Errorf("-o %s: %v", c.out, err)
+		case c.text == "" && o.text != nil, c.text != "" && (o.text == nil || o.text.Format != c.text):
+			t.Errorf("-o %s: text %+v, want %q", c.out, o.text, c.text)
+		}
+	}
+	for _, args := range [][]string{
+		{"-o", in("rows.tsv"), "--part-size", "1M"},
+		{"--part-interval", "5s"},
+		{"-o", in("rows.jsonl.zst"), "--part-max-rows", "5"},
+	} {
+		_, _, err := parseList(append([]string{"s3://bkt"}, args...), io.Discard, command{})
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "shapes a dataset's Parquet parts; text rows have none") {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+	if _, _, err := parseList([]string{"s3://bkt", "-o", in("ds"), "--part-size", "1M", "--part-max-rows", "5"}, io.Discard, command{}); err != nil {
+		t.Errorf("part flags with a dataset: %v", err)
 	}
 }

@@ -62,6 +62,10 @@ type Factory struct {
 	// another form (a service URL a console shows), and whether root is
 	// one; Canonical tries it.
 	FromURL func(root string) (string, bool)
+	// Suggest, if set, returns the provider's root for a source it does not
+	// take but recognizes (another tool's scheme, a service URL a console
+	// shows), for the refusal's "did you mean"; false for any other.
+	Suggest func(root string) (string, bool)
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must
@@ -550,24 +554,49 @@ func Canonical(root string) string {
 	return root
 }
 
-// Lookup returns the factory for root's scheme, in any case.
+// Lookup returns the factory for root's scheme, in any case. A scheme no
+// provider takes is refused naming the forms SOURCE takes, and the root a
+// provider suggests for it (Factory.Suggest).
 func Lookup(root string) (Factory, error) {
-	if rootCredentials(root) {
-		return Factory{}, fmt.Errorf("root %q: user information, a query or a fragment in the authority is refused; use the provider's credential settings", source.RedactRoot(root))
-	}
 	scheme := ""
 	if i := strings.Index(root, "://"); i > 0 {
 		scheme = strings.ToLower(root[:i])
 	}
 	regMu.Lock()
-	defer regMu.Unlock()
 	f, ok := factories[scheme]
-	if !ok {
-		// The root is not quoted: no provider can redact it (Redact).
-		if scheme == "" {
-			return f, errors.New("no provider for local paths is registered")
+	regMu.Unlock()
+	switch {
+	case !ok && scheme == "":
+		return f, errors.New("no provider for local paths is registered")
+	case !ok:
+		// The root is quoted only as a provider suggests it: none can
+		// redact the root itself (Redact).
+		for _, s := range Factories() {
+			if s.Suggest == nil {
+				continue
+			}
+			if r, ok := s.Suggest(root); ok {
+				return f, fmt.Errorf("unsupported source %s:// (did you mean %s?); SOURCE is %s", scheme, Redact(r), SourceForms())
+			}
 		}
-		return f, fmt.Errorf("unsupported source: no provider for %s://", scheme)
+		return f, fmt.Errorf("unsupported source %s://; SOURCE is %s", scheme, SourceForms())
+	case rootCredentials(root):
+		return Factory{}, fmt.Errorf("root %q: user information, a query or a fragment in the authority is refused; use the provider's credential settings", source.RedactRoot(root))
 	}
 	return f, nil
+}
+
+// SourceForms names the forms SOURCE takes: the registered providers' root
+// forms (Factory.Usage), by scheme, the local directory first.
+func SourceForms() string {
+	var forms []string
+	for _, f := range Factories() {
+		if f.Usage != "" {
+			forms = append(forms, f.Usage)
+		}
+	}
+	if n := len(forms); n > 1 {
+		return strings.Join(forms[:n-1], ", ") + " or " + forms[n-1]
+	}
+	return strings.Join(forms, "")
 }

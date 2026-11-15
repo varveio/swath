@@ -6,7 +6,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/varveio/swath/internal/listing"
@@ -33,6 +35,58 @@ func textDest(path string) (format, compression string) {
 	return textExts[strings.ToLower(filepath.Ext(p))], compression
 }
 
+// checkTextName refuses a file name with a .tsv or .jsonl component that
+// does not end there or in .gz or .zst after it (rows.jsonl.zstd,
+// rows.tsv.lz4): the name of a text file is an allowlist, never taken for
+// a dataset directory. Any case is the lower case's.
+func checkTextName(name string) error {
+	parts := strings.Split(strings.ToLower(filepath.Base(name)), ".")
+	for i := 1; i < len(parts); i++ {
+		ext := "." + parts[i]
+		if _, ok := textExts[ext]; !ok {
+			continue
+		}
+		tail := parts[i+1:]
+		if len(tail) == 0 || len(tail) == 1 && (tail[0] == "gz" || tail[0] == "zst") {
+			return nil
+		}
+		hint := "; " + outputForms
+		if len(tail) == 1 && tail[0] == "zstd" {
+			hint = fmt.Sprintf(" (did you mean %s?)", registry.Redact(name[:len(name)-len("zstd")]+"zst"))
+		}
+		return fmt.Errorf("-o %s: a %s file's name ends in %s, %s.gz or %s.zst, and a directory's in /%s", registry.Redact(name), ext, ext, ext, ext, hint)
+	}
+	return nil
+}
+
+// usableDir refuses a dataset directory name that is an existing file or
+// device (-o /dev/null), naming what to do instead.
+func usableDir(name string) error {
+	fi, err := os.Stat(strings.TrimRight(name, `/\`))
+	switch {
+	case err != nil || fi.IsDir():
+		return nil
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("-o %s is not a directory, and a dataset is one; rows to stdout need no -o, and swath diag count lists without writing", name)
+	}
+	return fmt.Errorf("-o %s: %s is a file, and a dataset is a directory; rows go to a file named .tsv or .jsonl", name, strings.TrimRight(name, `/\`))
+}
+
+// formatError refuses a --format value, with what was likely meant: the
+// lower case, jsonl for json, a dataset for parquet.
+func formatError(v string) error {
+	err := fmt.Errorf("--format %q: want auto, table, tsv or jsonl", v)
+	switch l := strings.ToLower(v); {
+	case l == "json" || l == "ndjson":
+		return fmt.Errorf("%w (did you mean jsonl?)", err)
+	case l == "parquet":
+		return fmt.Errorf("%w (a Parquet dataset is swath list -o DIR)", err)
+	case l != v && slices.Contains([]string{"auto", textout.Table, textout.TSV, textout.JSONL}, l):
+		return fmt.Errorf("%w (did you mean %s?)", err, l)
+	}
+	return err
+}
+
 // unwritten are the data-file extensions swath does not write: an -o name
 // ending in one is refused rather than taken for a dataset directory.
 var unwritten = []string{".csv", ".json", ".ndjson", ".txt", ".bz2", ".xz", ".gz", ".zst"}
@@ -45,6 +99,23 @@ const outputForms = "-o takes a dataset directory (any other name, or one ending
 func checkDatasetName(name string) error {
 	if strings.HasSuffix(strings.ToLower(name), ".parquet") {
 		return fmt.Errorf("%s: a dataset is a directory of parts; use a name without .parquet, or add / to select a directory", registry.Redact(name))
+	}
+	return nil
+}
+
+// schemeTypo refuses a path whose first segment is a provider's scheme and
+// a colon (s3:/bkt/x): a URL typed with one slash, which would otherwise be
+// a local path. It names the URL meant.
+func schemeTypo(path string) error {
+	first, rest, _ := strings.Cut(filepath.ToSlash(path), "/")
+	scheme, ok := strings.CutSuffix(first, ":")
+	if !ok || hasScheme(path) {
+		return nil
+	}
+	for _, f := range registry.Factories() {
+		if f.Scheme != "" && strings.EqualFold(scheme, f.Scheme) {
+			return fmt.Errorf("%s is a local path (did you mean %s?)", registry.Redact(path), registry.Redact(f.Scheme+"://"+strings.TrimLeft(rest, "/")))
+		}
 	}
 	return nil
 }
@@ -67,7 +138,9 @@ func hasScheme(path string) bool {
 //     not write to is refused;
 //   - -o NAME/, or another name: the Parquet dataset directory; a name
 //     ending in .parquet or a data-file extension swath does not write
-//     (unwritten) is refused unless it ends in a directory separator.
+//     (unwritten), or with anything but .gz or .zst after a .tsv or .jsonl
+//     (checkTextName), is refused unless it ends in a directory separator;
+//     an existing file or device is refused (usableDir).
 //
 // With -o FILE a --format that agrees with the file's name is accepted,
 // one that does not is refused, as is --format with a dataset directory.
@@ -100,6 +173,9 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	case remote:
 		return nil, resolveRemote(o)
 	case !toStdout:
+		if err := schemeTypo(o.out); err != nil {
+			return nil, fmt.Errorf("-o %w", err)
+		}
 		if err := checkDatasetName(o.out); err != nil {
 			return nil, fmt.Errorf("-o %w", err)
 		}
@@ -114,13 +190,18 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 				return nil, fmt.Errorf("-o %s: swath does not write %s files; %s", registry.Redact(o.out), ext, outputForms)
 			}
 		}
+		if !dir {
+			if err := checkTextName(o.out); err != nil {
+				return nil, err
+			}
+		}
 		switch {
 		case format == "" && o.format != "":
 			return nil, fmt.Errorf("--format %s: -o %s is a dataset directory, not text rows", o.format, registry.Redact(o.out))
 		case format != "" && o.format != "" && o.format != "auto" && o.format != format:
 			return nil, fmt.Errorf("--format %s: -o %s names %s; %s", o.format, registry.Redact(o.out), format, outputForms)
 		case format == "":
-			return nil, nil
+			return nil, usableDir(o.out)
 		}
 		if parent := filepath.Dir(o.out); !isDir(parent) {
 			return nil, fmt.Errorf("-o %s: its directory %s does not exist", o.out, parent)
@@ -136,7 +217,7 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	case textout.TSV, textout.JSONL, textout.Table:
 		return &textout.Config{Format: o.format}, nil
 	}
-	return nil, fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+	return nil, formatError(o.format)
 }
 
 // resolveRemote resolves an -o that is a URL: a bucket prefix the listing
@@ -217,7 +298,7 @@ func totalsFormat(o *options, stdoutTTY bool) (string, error) {
 		}
 	case textout.TSV, textout.Table, textout.JSONL:
 	default:
-		return "", fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+		return "", formatError(o.format)
 	}
 	if o.sortBy != sortName && o.sortBy != sortSize {
 		return "", fmt.Errorf("--sort %q: want name or size", o.sortBy)

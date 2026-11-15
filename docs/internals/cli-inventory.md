@@ -30,7 +30,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include-regex` (Go RE2, found anywhere, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added; a glob with a regex sign (leading `^`, final `$`, `\.`, `(a|b)`) is refused naming `--include-regex` | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
+| `--include REGEX` | `--include-regex` (Go RE2, found anywhere in the key below SOURCE, as a glob, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added; a glob with a regex sign (leading `^`, final `$`, `\.`, `(a|b)`) is refused naming `--include-regex` | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
 | `--exclude REGEX` | `--exclude-regex` (Go RE2, repeatable); `--exclude GLOB` is a glob | renamed; globs added | 2026-11-10 (owner: as `--include`) |
 | `--min-size SIZE` | `--min-size` (`KB`, `MB` decimal, unlike Java; `K`, `KiB` binary) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
@@ -82,7 +82,7 @@ decision to add it later).
 | `--tune sort.*` (three keys of Java's seven-key `--tune` registry; the other "sort" settings were JVM properties) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
 | `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off; in the Performance help group: the resume granularity) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`); kept on `swath list` 2026-11-07 (owner: an operator's resume-granularity knob) |
-| `--part-rotation-max-rows N` (2,000,000) | `--part-rotation-max-rows N` (default 0: off; part of the resume identity; `resources.part_row_cuts`) | kept (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries |
+| `--part-rotation-max-rows N` (2,000,000) | `--part-max-rows N` (default 0: off; part of the resume identity; `resources.part_row_cuts`) | renamed (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries; renamed 2026-11-15 beside `--part-size` and `--part-interval` (the old spelling is a suggestion) |
 | Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 
 ## Resume and durability

@@ -33,7 +33,6 @@ import (
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
-	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source"
@@ -306,7 +305,8 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		printVersion(stdout)
 		return nil
 	case len(p.operands) == 0:
-		return seeHelp{usageError{errors.New("no command")}, ""}
+		rootHelp(stdout, styleFor(stdout, t.color, false)) // bare swath: what to type
+		return pflag.ErrHelp
 	}
 	word, rest := p.operands[0], p.operands[1:]
 	with := func(args []string) []string { return append(slices.Clone(p.given), args...) }
@@ -383,179 +383,10 @@ func printVersion(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
-// testHooks installs the test hooks the environment asks for: on the
-// crash points (package faults), in this order, SWATH_TEST_SERIAL_SEALS
-// (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
-// SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
-// "point:n": the n-th time the process reaches crash point point, and
-// SWATH_TEST_SLOW_AT (slowAt); and on
-// the order stage's events (order.SetDurableEvents), serialSeals',
-// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and
-// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing).
-func testHooks() {
-	var hooks, events []func(string)
-	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
-		h, e := serialSeals()
-		hooks, events = append(hooks, h), append(events, e)
-	}
-	if path := os.Getenv("SWATH_TEST_LAST_RANGE_FILE"); path != "" {
-		events = append(events, lastRangeFile(path))
-	}
-	if os.Getenv("SWATH_TEST_DRAIN_AFTER_LISTING") != "" {
-		events = append(events, drainAfterListing())
-	}
-	if len(events) > 0 {
-		order.SetDurableEvents(func(e string) {
-			for _, f := range events {
-				f(e)
-			}
-		})
-	}
-	killAt := os.Getenv("SWATH_TEST_KILL_AT")
-	killed := func() {
-		fmt.Fprintln(os.Stderr, killMarker(os.Getenv("SWATH_TEST_KILL_ID"), killAt)) // the harness tells this kill from its own
-		kill()
-	}
-	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} }), slowAt(os.Getenv("SWATH_TEST_SLOW_AT"))} {
-		if h != nil {
-			hooks = append(hooks, h)
-		}
-	}
-	if len(hooks) == 0 {
-		return
-	}
-	faults.Set(func(p string) error {
-		for _, h := range hooks {
-			h(p)
-		}
-		return nil
-	})
-}
-
 // killMarker is the line SWATH_TEST_KILL_AT=spec writes to stderr, a line
 // of its own, just before the process kills itself: id is the harness's
 // attempt (SWATH_TEST_KILL_ID), so the line names this attempt and point.
 func killMarker(id, spec string) string { return "swath-test-kill " + id + " " + spec }
-
-// atNth is a hook running act the n-th time the process reaches point,
-// for spec "point:n" (nil for another spec).
-func atNth(spec string, act func()) func(string) {
-	point, n, ok := strings.Cut(spec, ":")
-	if !ok {
-		return nil
-	}
-	nth, err := strconv.ParseInt(n, 10, 64)
-	if err != nil {
-		return nil
-	}
-	var seen atomic.Int64
-	return func(p string) {
-		if p == point && seen.Add(1) == nth {
-			act()
-		}
-	}
-}
-
-// slowAt is SWATH_TEST_SLOW_AT, "point:duration": each time the process
-// reaches crash point point, the goroutine sleeps that long (slow work that
-// is still work: cmd/swath's TestSegmentsReplayDurableFiles slows each
-// certificate's scan past the stall timeout). Nil for another spec.
-func slowAt(spec string) func(string) {
-	point, d, ok := strings.Cut(spec, ":")
-	if !ok {
-		return nil
-	}
-	dur, err := time.ParseDuration(d)
-	if err != nil {
-		return nil
-	}
-	return func(p string) {
-		if p == point {
-			time.Sleep(dur)
-		}
-	}
-}
-
-// serialSeals is SWATH_TEST_SERIAL_SEALS, the real-process ledger barrier
-// (cmd/swath's SIGKILL matrix): each durable seal waits at its crash point
-// until the flusher has taken every earlier seal's record in a cycle of
-// its own (order's "cycle-records" events), so seal n's record is the
-// n-th ledger append and the matrix's fourth-cycle arms are reached by
-// construction, not by how the seals fell in the flusher's 100 ms
-// windows. A wait over 10 s gives up, and the arm it served then fails as
-// unreached (the same gate as listing's in-process sealGate). It returns
-// the crash-point hook and the order-event hook it counts cycles with.
-func serialSeals() (hook, events func(string)) {
-	var cycles atomic.Int64
-	events = func(e string) {
-		if e == "cycle-records" {
-			cycles.Add(1)
-		}
-	}
-	var mu sync.Mutex
-	var seals int64 // seals past their crash point (mu)
-	hook = func(p string) {
-		if p != "spill-seal" {
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		for deadline := time.Now().Add(10 * time.Second); cycles.Load() < seals && time.Now().Before(deadline); {
-			time.Sleep(time.Millisecond)
-		}
-		seals++
-	}
-	return hook, events
-}
-
-// lastRangeFile is SWATH_TEST_LAST_RANGE_FILE: the file is created once a
-// range is done with one left (order's "one-range-open") and a durable
-// file has been sealed ("sealed"), in whichever order they come. A test
-// that holds one range's listing from outside the process waits for the
-// file, a signal from the run's own state, instead of for the fake's
-// requests to go quiet (cmd/swath's TestSegmentsReplayDurableFiles).
-func lastRangeFile(path string) func(string) {
-	var alone, sealed, made atomic.Bool
-	return func(e string) {
-		switch e {
-		case "one-range-open":
-			alone.Store(true)
-		case "sealed":
-			sealed.Store(true)
-		default:
-			return
-		}
-		if alone.Load() && sealed.Load() && made.CompareAndSwap(false, true) {
-			if f, err := os.Create(path); err == nil {
-				f.Close()
-			}
-		}
-	}
-}
-
-// drainAfterListing is SWATH_TEST_DRAIN_AFTER_LISTING: the drainer starts
-// ("drain-start", on its goroutine) only once every range is listed
-// ("listing-done"), so a resume's reused certificates are left to the
-// segments, none replayed by the drainer while the gaps are listed
-// (cmd/swath's TestSegmentsReplayDurableFiles), except those it reaches
-// before the router can state its cut rule (a resume whose interrupted run
-// published no part: until its own part 0 has closed by size). A wait over
-// 30 s gives up.
-func drainAfterListing() func(string) {
-	listed := make(chan struct{})
-	var once sync.Once
-	return func(e string) {
-		switch e {
-		case "listing-done":
-			once.Do(func() { close(listed) })
-		case "drain-start":
-			select {
-			case <-listed:
-			case <-time.After(30 * time.Second):
-			}
-		}
-	}
-}
 
 type options struct {
 	diag                   bool // swath diag list or count: the diagnostic flags too
@@ -690,22 +521,6 @@ func providerSecrets() ([]string, map[string]string) {
 	return flags, env
 }
 
-// sourceForms is the SOURCE line of the help: the registered providers'
-// root forms (registry.Factory.Usage), by scheme, the local directory
-// first.
-func sourceForms() string {
-	var forms []string
-	for _, f := range registry.Factories() {
-		if f.Usage != "" {
-			forms = append(forms, f.Usage)
-		}
-	}
-	if n := len(forms); n > 1 {
-		return strings.Join(forms[:n-1], ", ") + " or " + forms[n-1]
-	}
-	return strings.Join(forms, "")
-}
-
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
@@ -805,14 +620,29 @@ func (c command) name() string {
 	return n
 }
 
+// errShortHelp refuses -h given with anything else to swath list or du:
+// du, gsutil du and dust users type it for human-readable sizes, and help
+// with exit 0 would go down their pipe.
+var errShortHelp = errors.New("-h is help; sizes are already human-readable in the table")
+
 // parseList resolves a list command line: its options and SOURCE, with
-// the usage refusals (a help request prints the usage to stdout).
+// the usage refusals (a help request prints the usage to stdout), each
+// followed by the command's See line.
 func parseList(args []string, stdout io.Writer, cmd command) (o options, root string, err error) {
+	defer func() {
+		var u usageError
+		if sh := (seeHelp{}); errors.As(err, &u) && !errors.As(err, &sh) {
+			err = seeHelp{err, cmd.name()}
+		}
+	}()
 	f := newFlags(&o, cmd.diag)
 	o.countOnly, o.du = cmd.count, cmd.du
 	p, err := parseFlags(f, cmd.name(), args, nil)
 	setLog(o.term, "")
 	if errors.Is(err, pflag.ErrHelp) {
+		if !p.longHelp && !cmd.diag && len(args) > 1 {
+			return o, "", usageError{errShortHelp}
+		}
 		usage(stdout, f, cmd, styleFor(stdout, o.term.color, p.longHelp))
 		return o, "", err
 	}
@@ -831,6 +661,12 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	root = registry.Canonical(p.operands[0])
 	o.argv = commandLine(cmd.name(), p, root)
 	if err := placement(f, cmd); err != nil {
+		return o, "", usageError{err}
+	}
+	if err := schemeTypo(root); err != nil {
+		return o, "", usageError{err}
+	}
+	if _, err := registry.Lookup(root); err != nil {
 		return o, "", usageError{err}
 	}
 	if err := foreignFlags(f, o.owners, root); err != nil {
@@ -862,13 +698,25 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err} // a malformed URL: s3://, az://ACCOUNT
 	}
 	if f.Changed("sort-buffer") && o.rowBudget < listing.MinRowBudget {
-		return o, "", usageError{fmt.Errorf("--sort-buffer %s: at least %s", sizeText(int64(o.rowBudget)), sizeText(listing.MinRowBudget))}
+		return o, "", usageError{fmt.Errorf("--sort-buffer %q: want at least %s", sizeText(int64(o.rowBudget)), sizeText(listing.MinRowBudget))}
 	}
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
 		return o, "", usageError{err}
 	}
 	o.text = text
+	if text != nil {
+		for _, n := range partFlags {
+			if f.Changed(n) {
+				return o, "", usageError{fmt.Errorf("--%s shapes a dataset's Parquet parts; text rows have none (a dataset is -o DIR)", n)}
+			}
+		}
+		if rows := text.Path == "" && stdoutTerminal(); rows && o.term.progressForced() {
+			if tty, _ := stderrTerminal(); tty && o.term.logFormat != logJSON {
+				return o, "", usageError{errors.New("--progress: the rows go to this terminal, where a progress line would break them; redirect stdout or write -o FILE")}
+			}
+		}
+	}
 	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
 	}
@@ -943,10 +791,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Warn:    func(m string) { elog().warn(m) },
 	}
 	if t := o.totals; t != nil {
-		// swath du's rows are its output: written once the count is
-		// complete, before the run's end and outcome are settled.
 		cfg.Totals = t.tally
-		cfg.Deliver = func(context.Context) error { return t.write(stdout) }
 	}
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
@@ -1034,12 +879,20 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		}
 	}
 	// The empty scheme is a local path. stdout carries rows to a reader on
-	// the same screen: swath list's text there, and swath du's table.
+	// the same screen while swath list's text goes there; swath du's table
+	// comes after its listing, when the live line is gone.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
 	defer tt.close()
-	if o.totals != nil {
+	if t := o.totals; t != nil {
 		tt.saveHint = savedInventory(given, o)
+		// swath du's rows are its output: written once the count is
+		// complete, before the run's end and outcome are settled, after the
+		// live line is erased.
+		cfg.Deliver = func(context.Context) error {
+			tt.disp.stop()
+			return t.write(stdout)
+		}
 	}
 	defer watchRequests(fw)() // removed before stderr is restored
 	_, disarm := source.ArmUnreachable(o.stall)
@@ -1058,6 +911,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		sum.Profiles = prof.account() // the files' final status, for --report
 	}
 	err, out := term.classify(sum, err)
+	if err == nil && sum.Outcome.Complete && sum.Output.RowsFetched+sum.Output.RowsRetained == 0 && pf.KeyPrefix != nil {
+		// A mistyped prefix lists nothing, which is no failure: it says so,
+		// as swath du --from-dataset does.
+		if p, perr := pf.KeyPrefix(root); perr == nil && p != "" {
+			elog().warn(fmt.Sprintf("no key starts with %q", p))
+		}
+	}
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	err = finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
 	if cfg.Trace != nil {
@@ -1226,7 +1086,7 @@ func explain(err error) error {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
 	case errors.Is(err, dataset.ErrPartLimit):
-		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-rotation-max-rows)", err)
+		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-max-rows)", err)
 	case errors.Is(err, listing.ErrUnsafeLayout):
 		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
 	case errors.Is(err, dataset.ErrInsideRoot) && errors.Is(err, listing.ErrInterrupted):
@@ -1426,7 +1286,7 @@ func (s *size) Set(v string) error {
 		return err
 	}
 	if n <= 0 {
-		return fmt.Errorf("invalid size %q: must be positive", v)
+		return errors.New("want a size above 0, such as 64MiB")
 	}
 	*s = size(n)
 	return nil

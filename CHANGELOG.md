@@ -5,6 +5,36 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `swath du -h DIR` and `swath list SOURCE -h` are refused (exit 2) instead of printing help with exit 0:
+  `-h is help; sizes are already human-readable in the table`. `-h` alone, and `--help` anywhere, still print
+  help; `swath` alone prints its short help.
+- Go port: an `-o` name with a `.tsv` or `.jsonl` component must end there or in `.gz` or `.zst`, in any case;
+  `rows.jsonl.zstd` (did you mean `.zst`), `rows.tsv.lz4` and the like are refused instead of becoming dataset
+  directories. An existing file or a device (`-o /dev/null`) as a dataset directory is refused with exit 2
+  and what to use instead, not exit 1. `--part-size`, `--part-interval` and `--part-max-rows` are refused with
+  text rows.
+- Go port: `--part-rotation-max-rows` is `--part-max-rows`, beside `--part-size` and `--part-interval`; the old
+  spelling is suggested.
+- Go port: `--include-regex` and `--exclude-regex` match the key below SOURCE on every source, as the globs
+  do. Before, on an object store they matched the whole key, SOURCE's prefix included, while a local tree's
+  key is below its root.
+- Go port: `--modified-since` and `--modified-until` also read the tables' form, `2026-11-15 07:45[:00]`; a time
+  without an offset is UTC, as the tables print times.
+- Go port: `swath du` takes `--max-depth N` (GNU du's spelling of `--depth N`) and `-x` (also on `swath list`)
+  for `--one-file-system`; GNU du's other hints (`-s`, `--apparent-size`) appear on `swath du` only. The 0.3
+  spellings (`--force-path-style`, `--idle-timeout`, `--force`, `--parquet-part-size`, `--compression`, ...)
+  name what replaced them, and `--format json` suggests `jsonl`, `--format parquet` a dataset (`-o DIR`).
+- Go port: `s3:/bkt` (one slash) is refused naming `s3://bkt` rather than taken as a local path; an unsupported
+  scheme names the forms SOURCE takes, and an S3 or GCS https URL (`https://bkt.s3.amazonaws.com/p`,
+  `https://storage.googleapis.com/bkt/p`), `s3a://`, `gcs://` or `file://` the source meant.
+- Go port: a live listing of an object-store prefix with no key warns `no key starts with "PREFIX"` (exit 0).
+- Go port: every value error reads `--flag "VALUE": want ...` (sizes name their units), and every usage error
+  of `swath list` and `swath du` ends with the help to read.
+- Go port: `swath du` on a terminal shows the live progress line while it lists and erases it before the table;
+  `swath list --progress` with rows on the same terminal is refused.
+- Go port: the `SWATH_TEST_*` hooks exist only in a `-tags swathtest` build; a stop by SIGTERM says
+  `stopped by SIGTERM`.
+
 - Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
   (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
   longer subject to in-place changes of the format. No code change from the commit pinned before.

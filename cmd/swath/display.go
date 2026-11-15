@@ -81,7 +81,7 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 		Long:  "With -qq the exit code and the reports stand alone."})
 	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
 		Usage: "show progress on stderr (default: a terminal that rows do not share)",
-		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal."})
+		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased."})
 	source.Define(f, source.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
 	source.Define(f, source.Flag{Name: "progress-interval", Value: source.Duration(&t.interval), Metavar: "DURATION", Group: g,
 		Usage: "how often progress is printed (at least 1s); implies --progress",
@@ -369,6 +369,13 @@ func progressPrefs(t termOptions, tty, rows bool, width int, termEnv string) (sh
 	}
 	redraw = show && tty && termEnv != "dumb" && width >= minUsableWidth && t.verbose == 0 && enableVT()
 	return show, redraw
+}
+
+// progressForced says the command line asks for live progress
+// (--progress, or --progress-interval without --no-progress), whatever
+// shares the terminal.
+func (t termOptions) progressForced() bool {
+	return t.progress.set && t.progress.on || !t.progress.set && t.interval > 0
 }
 
 // progressInterval is the record cadence: the flag, else 1 s redrawing and

@@ -37,7 +37,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	f := newFlags(&o, true)
 	p, err := parseFlags(f, "resume", args, func(fl *pflag.Flag) error {
 		if !mayChange(fl.Name) {
-			return usageError{fmt.Errorf("--%s is fixed for the run and cannot change on resume (see 'swath resume --help')", fl.Name)}
+			return usageError{fmt.Errorf("--%s is fixed for the run and cannot change on resume", fl.Name)}
 		}
 		return nil
 	})
