@@ -1021,7 +1021,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	status := func() { tt.status(cfg.Progress.Snapshot()) }
 	statusNow.Store(&status)
 	defer statusNow.Store(nil)
-	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait}
+	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait, fixed: cfg.Limits.Spill.Max > 0}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles

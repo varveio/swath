@@ -570,10 +570,13 @@ const spillPressureFor, spillPressureEvery = 2 * time.Minute, 30 * time.Minute
 // waits on it) for a run writing to dir: an error event once the wait has
 // lasted spillPressureFor, again every spillPressureEvery while it lasts,
 // and with wait (--spill-wait-timeout) the run's stop once it has lasted
-// that long; each only while the wait holds at that moment.
+// that long; each only while the wait holds at that moment. With fixed
+// (--spill-budget) the event's remedy is a restart with more; the default
+// cap follows the disk, so growing it is enough.
 type spillWatch struct {
 	dir   string
 	wait  time.Duration
+	fixed bool
 	since time.Time // the wait watched (zero: none)
 	told  time.Time // its last event (zero: none yet)
 	// The output rate's window: its start, and the rows ordered then.
@@ -625,7 +628,11 @@ func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
 	if stop {
 		return &spillWaitError{fmt.Sprintf("%s; stopped by --spill-wait-timeout %s: %s", cause, w.wait, again)}
 	}
-	elog().event(lvError, evSpillPressure, cause+"; stop the run and "+again+", or let it run: it finishes, slowly", f)
+	remedy := "stop the run and " + again
+	if !w.fixed {
+		remedy = "the cap follows the spill disk: grow the disk, or free space on it, and listing continues"
+	}
+	elog().event(lvError, evSpillPressure, cause+"; "+remedy+", or let it run: it finishes, slowly", f)
 	return nil
 }
 
