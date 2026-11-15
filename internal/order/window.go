@@ -49,6 +49,15 @@ const (
 	WindowGrowth   = "growth"    // a refusal: a held tile grown past growthFactor
 )
 
+// Why a worker held at the window was woken, on the paths that engage only
+// with durable spill (WindowStats.Wakes): without a cache no certificate
+// lies behind the output, and the window wakes as it always did.
+const (
+	WakeSpill          = WindowSpill        // spill refused a tile and no longer refuses (roomCheck)
+	WakeReadAhead      = "read_ahead"       // frames planned for the read-ahead, one per read it can start
+	WakeReadAheadShare = "read_ahead_share" // the read-ahead back under half its memory share, one per read
+)
+
 // WindowStats is the frontier window's account (Stats.Window; nil without
 // a plan).
 type WindowStats struct {
@@ -74,12 +83,17 @@ type WindowStats struct {
 	// held at an admission, in memory (Options.Budget's units) and on
 	// disk (live spill).
 	PeakTiles, PeakCreditRows, PeakRetainedBytes int64
-	// SpillRows is the mean rows charged to the tiles held when spill
-	// refused a tile: the window the spill cap allowed (0: spill never
-	// refused one). PeakBehindBytes is the most live spill seen behind
-	// the output (drained durable files not yet unlinked); Evicted the
-	// drained certificates the window evicted (spillRefuses).
+	// SpillRows is the mean, over the admission probes the spill gate
+	// refused (a forced admission's included), of the rows charged to the
+	// tiles held then (0: spill never refused one). PeakBehindBytes is
+	// the most live spill seen behind the output (drained durable files
+	// not yet unlinked); Evicted the drained certificates the window
+	// evicted (spillRefuses).
 	SpillRows, PeakBehindBytes, Evicted int64
+	// Wakes are the signals to the workers held at the window on the
+	// paths that engage only with durable spill, by path (WakeSpill,
+	// WakeReadAhead, WakeReadAheadShare).
+	Wakes map[string]int64
 }
 
 // The waiters at the window wait on their own condition (run.winCond),
@@ -119,7 +133,8 @@ type window[R, P any] struct {
 	// need is the expected rows of the tile the window last refused for
 	// its rows (0: none since an admission): settle wakes the workers at
 	// the window once that many fit (mu). spillHeld: the window refused a
-	// tile for spill since; settle wakes one once spill no longer refuses.
+	// tile for spill since; with durable spill, settle wakes one once
+	// spill no longer refuses.
 	need      int64
 	spillHeld bool
 	// spillRows and spillRefused sum the rows charged at the spill gate's
@@ -230,26 +245,36 @@ func (o *run[R, P]) storageRows() (float64, string) {
 // holding their rows publish. While live spill is past half the cap they
 // are evicted, oldest first, as a refused frame evicts them, so that the
 // spill ahead of the output holds the window, not the spill behind it;
-// until their unlinks return the credit, the window waits for it.
+// until their unlinks return the credit, the window waits for it. The
+// drained files already retired and not yet unlinked (behind less waiting)
+// are credit on its way: only the excess past them is evicted, so repeated
+// checks before the flusher's next cycle do not evict again. Without a
+// durable cache nothing is behind and this is live spill past half the cap.
 func (o *run[R, P]) spillRefuses() bool {
 	sp, w := o.sp, o.win
 	if sp == nil {
 		return false
 	}
+	behind, waiting := sp.cache.Behind()
+	w.st.PeakBehindBytes = max(w.st.PeakBehindBytes, behind)
 	if sp.full.Load() {
 		return true
 	}
 	if sp.max <= 0 {
 		return false
 	}
-	behind, waiting := sp.cache.Behind()
-	w.st.PeakBehindBytes = max(w.st.PeakBehindBytes, behind)
 	live := sp.live.Load()
-	if over := live - sp.max/2; over > 0 && waiting > 0 {
+	if over := live - sp.max/2 - (behind - waiting); over > 0 && waiting > 0 {
 		w.st.Evicted += sp.cache.trim(over)
 		_, waiting = sp.cache.Behind()
 	}
 	return live-waiting > sp.max/2
+}
+
+// durable reports whether the run has a durable cache: only then can
+// certificates lie behind the output (mu not needed: set before the run).
+func (o *run[R, P]) durable() bool {
+	return o.sp != nil && o.sp.cache != nil
 }
 
 // refuses is why the window refuses a tile of e expected rows, "" when it
@@ -359,13 +384,15 @@ func (o *run[R, P]) settle() {
 
 // roomCheck wakes the workers the window refused for its rows once the
 // refused tile fits: rows handed on, or the window grown with what the run
-// measured (a row's bytes in memory or spilled); and one refused for spill
-// once spill no longer refuses. Once per refusal, not at every step: the
-// drainer's steps (settle) and every publish ask (mu held), which also
-// evict as the spill gate does.
+// measured (a row's bytes in memory or spilled); and, with durable spill,
+// one refused for spill once spill no longer refuses. Once per refusal,
+// not at every step: the drainer's steps (settle) and every publish ask
+// (mu held), which with durable spill also evict as the spill gate does.
+// Without a durable cache it is the rows check alone.
 func (o *run[R, P]) roomCheck() {
 	w := o.win
-	spill := o.spillRefuses()
+	durable := o.durable()
+	spill := durable && o.spillRefuses()
 	if o.g.windowWait.n.Load() == 0 {
 		return
 	}
@@ -375,17 +402,19 @@ func (o *run[R, P]) roomCheck() {
 			o.winCond.Signal()
 		}
 	}
-	if w.spillHeld && !spill {
+	if durable && w.spillHeld && !spill {
 		w.spillHeld = false
+		w.st.Wakes[WakeSpill]++
 		o.winCond.Signal()
 	}
 }
 
-// wakeWindow wakes a worker held at the frontier window, if any (mu held):
-// refused again, it reads spilled frames ahead of the drainer before it
-// waits (worker).
-func (o *run[R, P]) wakeWindow() {
-	if o.win != nil && o.g.windowWait.n.Load() > 0 {
+// wakeWindow wakes a worker held at the frontier window, if any, with
+// durable spill, counted under why (mu held): refused again, it reads
+// spilled frames ahead of the drainer before it waits (worker).
+func (o *run[R, P]) wakeWindow(why string) {
+	if o.win != nil && o.durable() && o.g.windowWait.n.Load() > 0 {
+		o.win.st.Wakes[why]++
 		o.winCond.Signal()
 	}
 }

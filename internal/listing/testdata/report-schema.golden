@@ -286,6 +286,7 @@ resources.window.spill_rows int64
 resources.window.tiles int64
 resources.window.wait_ns int64
 resources.window.waits map
+resources.window.wakes map
 source.name string
 source.stats any
 timings.drain_ms int64

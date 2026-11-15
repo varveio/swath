@@ -48,8 +48,9 @@ import (
 // a run planned from a counted --seed-from (#535). 12 adds
 // invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
 // 13 adds fields only (#535): resources.window.spill_rows,
-// peak_behind_bytes and evicted (the spill gate's window and the
-// certificates behind the output it evicted).
+// peak_behind_bytes, evicted and wakes (the spill gate's refusals, the
+// certificates behind the output it evicted, and the window's wake paths
+// that engage only with durable spill).
 const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -511,7 +512,8 @@ type Resources struct {
 // charged to them and the bytes the order stage held (memory and live
 // spill) at an admission; under the spill gate, the mean rows charged at
 // its refusals, the most live spill behind the output and the drained
-// certificates it evicted.
+// certificates it evicted; and the wakes of the workers held at it on the
+// paths that engage only with durable spill, by path.
 type Window struct {
 	Tiles             int64            `json:"tiles"`
 	Forced            int64            `json:"forced"`
@@ -528,6 +530,7 @@ type Window struct {
 	SpillRows         int64            `json:"spill_rows"`
 	PeakBehindBytes   int64            `json:"peak_behind_bytes"`
 	Evicted           int64            `json:"evicted"`
+	Wakes             map[string]int64 `json:"wakes"`
 }
 
 // Drain is the order stage's drain after listing and the time it took.

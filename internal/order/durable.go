@@ -927,11 +927,13 @@ func (c *Cache) unlink(d *Cert) error {
 	if n := d.charged; n > 0 {
 		d.charged = 0
 		c.retained.Add(-n)
-		if d.drained {
-			c.behind.Add(-n)
-		}
 		if f := c.credit.Load(); f != nil {
 			(*f)(n)
+		}
+		// After the credit: between the two, the window's gate counts
+		// these bytes as still on their way and evicts less, never more.
+		if d.drained {
+			c.behind.Add(-n)
 		}
 	}
 	return nil

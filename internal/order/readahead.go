@@ -203,12 +203,12 @@ func (o *run[R, P]) planAhead(reset bool) {
 	// Wake as many workers as can start a read, not every idle one:
 	// hundreds of wake-ups per refill would cost more than the reads. A
 	// signal that reaches a worker held at admission is not lost work:
-	// the drainer reads any frame still queued when it gets there. The
-	// workers held at the frontier window are idle too, on a condition of
-	// their own: one is woken beside each.
+	// the drainer reads any frame still queued when it gets there. With
+	// durable spill, the workers held at the frontier window are idle too,
+	// on a condition of their own: one is woken beside each.
 	for range min(planned, ra.maxReads-ra.reads) {
 		o.work.Signal()
-		o.wakeWindow()
+		o.wakeWindow(WakeReadAhead)
 	}
 }
 
@@ -275,7 +275,7 @@ func (o *run[R, P]) replayMarker(it *item[R, P]) error {
 			ra.starved = false
 			o.work.Broadcast()
 			for range ra.maxReads {
-				o.wakeWindow()
+				o.wakeWindow(WakeReadAheadShare)
 			}
 		}
 	}

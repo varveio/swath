@@ -79,8 +79,8 @@ range far ahead inside an admitted tile (its neighbour stalled), a region that g
 after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
 the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. With thousands
 of workers and a cap of a few hundred MB or less, the window holds fewer tiles: it admits none while the spill
-ahead of the output is past half the cap (`resources.window.spill_rows` is the window the cap allowed), and it
-evicts the durable certificates behind the output to keep room, so a crash relists those keys.
+ahead of the output is past half the cap (`resources.window.spill_rows` is the mean rows held at its
+refusals), and it evicts the durable certificates behind the output to keep room, so a crash relists those keys.
 Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
 listing. A cut file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
 the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).

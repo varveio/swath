@@ -604,12 +604,12 @@ func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 // TestPlanStaleManyWorkersSmallCap: a stale prior whose region (5 % of the
 // keys) has grown tenfold, far more workers than tiles, and a spill cap far
 // below durable spill's minimum (no certificates: nothing behind the
-// output to leave out or evict). The grown tiles hold admission (growth)
-// while their region spills; the workers held at the window still read
-// spilled frames ahead of the drainer, so the run completes within a small
-// factor of the fresh prior's, every key once, in order, and the frames
-// refused stay bounded (a frame refused is retried on credit: a crawl
-// refuses about one per row).
+// output to leave out or evict, and none of the window's wake paths that
+// engage with durable spill only). The grown tiles hold admission (growth)
+// while their region spills; the run completes within a small factor of
+// the fresh prior's, every key once, in order, and the frames refused stay
+// bounded (a frame refused is retried on credit: a crawl refuses about one
+// per row).
 func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
 	var base, keys []string
 	lo, hi := fmt.Sprintf("k%06d", 40000), fmt.Sprintf("k%06d", 45000)
@@ -629,6 +629,11 @@ func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
 		fresh.wall, fst.SpillRefused, stale.wall, sst.SpillRefused, sst.Window.Grown, sst.Window.Waits, sst.ReadAhead.Frames, sst.ReadAhead.DrainerFrames)
 	if sst.Window.Grown == 0 || sst.Window.Waits[order.WindowGrowth] == 0 {
 		t.Fatalf("the fixture did not grow tiles: %+v", sst.Window)
+	}
+	for why, n := range sst.Window.Wakes {
+		if n != 0 || sst.Window.Evicted != 0 || sst.Window.PeakBehindBytes != 0 {
+			t.Fatalf("without durable spill: %d wakes %s, %d evicted, %d bytes behind", n, why, sst.Window.Evicted, sst.Window.PeakBehindBytes)
+		}
 	}
 	if stale.wall > 3*fresh.wall || sst.SpillRefused > int64(len(keys)/20) {
 		t.Fatalf("stale prior: %v (fresh %v), %d frames refused for %d keys", stale.wall, fresh.wall, sst.SpillRefused, len(keys))

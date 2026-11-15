@@ -12,8 +12,10 @@ Notable changes per release. The full human summary for the current release is i
   drain lowers: the drainer then admitted one tile at a time (145 million keys at 2,048 workers, 57 MB cap: 219 s
   against 78 s uncapped). The window now leaves those certificates out of its spill gate and evicts them, oldest
   first, while live spill is past half the cap, as a refused frame does (a crash relists their keys); it holds
-  fewer tiles while the spill ahead of the output is past half the cap. The run report adds
-  `resources.window.spill_rows` (the window the cap allowed), `peak_behind_bytes` and `evicted` (#535).
+  fewer tiles while the spill ahead of the output is past half the cap. Without durable spill (no journal, or a
+  cap under 16 MiB) the window is unchanged. The run report adds `resources.window.spill_rows` (the mean rows held
+  at the spill gate's refusals, forced admissions' included), `peak_behind_bytes`, `evicted` and `wakes` (the
+  window's wake paths that engage only with durable spill) (#535).
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the

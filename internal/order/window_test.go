@@ -492,3 +492,34 @@ func TestWindowShrinksToTheSpillCap(t *testing.T) {
 		t.Fatalf("spill did not bind the window below its rows: %+v", w)
 	}
 }
+
+// TestWindowEvictsOnlyTheExcess: the spill gate checked again before the
+// flusher's next cycle (a cap of 64 MiB, 48 MiB live, 32 MiB of it drained
+// certificates waiting for K, in four of 8 MiB) evicts the 16 MiB past half
+// the cap once: the certificates it retired are credit on its way until
+// their unlinks land, not an excess to evict again. Counting only what
+// waits, the second check retired the other two.
+func TestWindowEvictsOnlyTheExcess(t *testing.T) {
+	const mib = 1 << 20
+	c, _, _ := newDurable(t) // not started: no unlink lands
+	defer c.Close()
+	for range 4 {
+		c.drainedFile(&Cert{certified: true, charged: 8 * mib})
+	}
+	o := &run[int, tp]{sp: &spiller[tp]{max: 64 * mib, cache: c}, win: &window[int, tp]{}}
+	o.sp.live.Store(48 * mib)
+	for range 3 {
+		o.spillRefuses()
+	}
+	behind, waiting := c.Behind()
+	if w := o.win.st; w.Evicted != 2 || behind != 32*mib || waiting != 16*mib || w.PeakBehindBytes != 32*mib {
+		t.Fatalf("evicted %d certificates, behind %d, waiting %d, peak behind %d; want 2, 32 MiB, 16 MiB, 32 MiB",
+			w.Evicted, behind, waiting, w.PeakBehindBytes)
+	}
+	// Full, the gate still samples the spill behind the output.
+	o.sp.full.Store(true)
+	c.drainedFile(&Cert{certified: true, charged: 8 * mib})
+	if !o.spillRefuses() || o.win.st.PeakBehindBytes != 40*mib {
+		t.Fatalf("full: peak behind %d, want 40 MiB", o.win.st.PeakBehindBytes)
+	}
+}
