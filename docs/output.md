@@ -201,7 +201,8 @@ Read the totals with care:
   column `swath list` prints for each row.
 - **Filters apply first**, to every row, directories included ([Filters](filters.md)).
 
-The table rounds the figures to three significant digits in binary units. A local tree's table puts the
+The table rounds the figures to three significant digits in binary units and groups the counts' digits
+(`60,004`). A local tree's table puts the
 apparent size first, `size (apparent)`, then the allocated bytes, `on disk` (`--allocated` swaps them), calls its
 objects `files` and its prefixes `path`, and indents each path two blanks a level below the first. It shows no
 time. An unknown figure is `-`, and a partial one is a lower bound, `>= 12.0 KiB`:
@@ -220,9 +221,9 @@ A source without allocated bytes has one figure, `size`:
 ```text
 $ swath du -d 1 s3://bucket
    size  objects  prefix
-357 MiB    60000  logs/
+357 MiB   60,000  logs/
    18 B        3  weird/
-357 MiB    60004  (total)
+357 MiB   60,004  (total)
 ```
 
 The table fits 80 columns at `-d 2` while a path stays within about 38 characters; a longer path is printed

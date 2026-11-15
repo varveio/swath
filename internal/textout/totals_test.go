@@ -214,3 +214,22 @@ func TestTotalsTable(t *testing.T) {
 		}
 	}
 }
+
+// TestTableCounts: the table groups a count's digits by three; TSV and
+// JSONL keep them plain.
+func TestTableCounts(t *testing.T) {
+	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1,000", 60010: "60,010", 1234567: "1,234,567", -1000: "-1,000"} {
+		if got := string(appendGrouped(nil, n)); got != want {
+			t.Errorf("%d: %q", n, got)
+		}
+	}
+	rows := []totals.Prefix{{Objects: 60010, Size: 1, HasSize: true}}
+	var b bytes.Buffer
+	if err := WriteTotals(&b, Table, TotalsLayout{}, rows); err != nil || b.String() != "size  objects  prefix\n 1 B   60,010  (total)\n" {
+		t.Fatalf("%v %q", err, b.String())
+	}
+	b.Reset()
+	if err := WriteTotals(&b, TSV, TotalsLayout{NoHeader: true}, rows); err != nil || !strings.HasPrefix(b.String(), "total\t0\t60010\t") {
+		t.Fatalf("%v %q", err, b.String())
+	}
+}

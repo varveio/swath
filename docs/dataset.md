@@ -454,7 +454,7 @@ This section is for consumers that read the parts without `reader`: DuckDB, Pyth
   of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k` and `StartExclusive`), which skips the group's
   remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
 - **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
-  so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.
+  so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `size_missing`.
   SeekParquet reductions also skip nulls and absent values; request their counters to enforce an
   application's completeness policy, and check each result's status before using its value.
 

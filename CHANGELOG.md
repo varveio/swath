@@ -5,6 +5,25 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `swath du`'s rows carry both byte figures under the dataset's names, `size` (the lengths) and
+  `allocated_bytes` (a local file's blocks), whatever `--allocated` says; `allocated_size` is gone. `unsized`
+  is replaced by `size_missing` and `allocated_bytes_missing`: a figure no counted object had is null, one
+  that some had is the sum of theirs beside the count of the others, and an empty prefix's is 0. A bucket's
+  `allocated_bytes` is null. The newest time under a prefix is `max_last_modified`; `list` rows and the dataset
+  keep `last_modified`. Every row adds `row_type` (`total` or `prefix`), `primary`, `sort` and `links_once`.
+  `--allocated` only puts the allocated bytes first and makes `--sort size` order by them; `--apparent-size`
+  selects the default, and the two together are refused. The run report's `output.totals` takes the same
+  names (`size`, `allocated_bytes`, the missing counts, `max_last_modified`, `primary`) in place of `bytes`,
+  `bytes_column` and `unsized`. `links_once` is false where no link could be identified, so a dataset listed
+  with `--metadata names` totals as the live run does.
+- Go port: the `swath du` table shows `size (apparent)` and `on disk` (the second left out for a source without
+  allocated bytes), the counts with grouped digits, no time, and each path indented two blanks a level; an
+  unknown figure is `-`, a partial one `>= ` its lower bound. The `swath list` table prints times in UTC with a
+  `Z` (`2026-11-15T12:31:10Z`) whatever `TZ` says, and `-` for a missing value.
+- Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
+- Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
+  network filesystems) records it as null, not 0.
+
 - Go port: S3 credentials that expire (an assumed role, web identity, SSO, `credential_process`, container
   credentials, an instance role) are refreshed ahead of their expiry, by the smaller of 5 minutes and a quarter
   of their lifetime, for the source and for a bucket destination. Before, they were used until the instant

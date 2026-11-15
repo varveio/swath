@@ -292,8 +292,8 @@ func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
 		for j, f := range figs {
 			w.figures[j] = max(w.figures[j], len(appendTableFigure(num[:0], r, f)))
 		}
-		w.objects = max(w.objects, len(strconv.AppendInt(num[:0], r.Objects, 10)))
-		w.dirs = max(w.dirs, len(strconv.AppendInt(num[:0], r.Dirs, 10)))
+		w.objects = max(w.objects, len(appendGrouped(num[:0], r.Objects)))
+		w.dirs = max(w.dirs, len(appendGrouped(num[:0], r.Dirs)))
 	}
 	return w
 }
@@ -324,9 +324,9 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 		}
 		b = appendPadded(b, appendTableFigure(num[:0], r, f), w.figures[i])
 	}
-	b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Objects, 10), w.objects)
+	b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Objects), w.objects)
 	if l.Local {
-		b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Dirs, 10), w.dirs)
+		b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Dirs), w.dirs)
 	}
 	b = append(b, "  "...)
 	if r.Depth == 0 {
@@ -336,6 +336,23 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 		b = append(b, ' ')
 	}
 	return appendTSV(b, r.Prefix)
+}
+
+// appendGrouped appends a count for the table, its digits in groups of
+// three (60,010), as the command's statistics write counts.
+func appendGrouped(b []byte, n int64) []byte {
+	var num [24]byte
+	d := strconv.AppendInt(num[:0], n, 10)
+	if n < 0 {
+		b, d = append(b, '-'), d[1:]
+	}
+	for i, c := range d {
+		if i > 0 && (len(d)-i)%3 == 0 {
+			b = append(b, ',')
+		}
+		b = append(b, c)
+	}
+	return b
 }
 
 // appendPadded appends s right-aligned in width columns.

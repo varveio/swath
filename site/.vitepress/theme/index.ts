@@ -10,13 +10,13 @@ import '@fontsource-variable/inter/opsz.css'
 import '@fontsource-variable/geist-mono/wght.css'
 import './custom.css'
 
-// Real output of `swath du -d 1 ~/Downloads` on a sample tree, verified with 0.4.0-rc.2 and main.
-const HERO_COMMAND = 'swath du -d 1 ~/Downloads'
-const HERO_OUTPUT = `    size  files  dirs  last_modified (local)  path
-3.00 GiB      2     0  2026-11-10 18:42:00    datasets/
-1.72 GiB      2     0  2026-11-10 18:42:00    installers/
- 960 MiB    240     1  2026-11-10 18:42:00    photos/
-5.66 GiB    245     4  2026-11-10 18:42:00    (total)`
+// Real output of `swath du -d 1 media` on the example tree of docs/first-inventory.md, verified with main.
+const HERO_COMMAND = 'swath du -d 1 media'
+const HERO_OUTPUT = `size (apparent)   on disk  files  dirs  path
+       64.8 MiB   784 KiB      2     0  archive/
+       6.10 MiB  6.11 MiB      3     2  photos/
+       29.6 MiB  29.6 MiB      1     0  videos/
+        100 MiB  36.4 MiB      6     5  (total)`
 
 interface DevDocsNotice {
   text: string
