@@ -12,11 +12,12 @@ swath du -d 1 media
 ```
 
 ```text
-size (apparent)   on disk  files  dirs  path
-       64.8 MiB   784 KiB      2     0  archive/
-       6.10 MiB  6.11 MiB      3     2  photos/
-       29.6 MiB  29.6 MiB      1     0  videos/
-        100 MiB  36.4 MiB      6     5  (total)
+    size  files  dirs  path
+64.8 MiB      2     0  archive/
+6.10 MiB      3     2  photos/
+29.6 MiB      1     0  videos/
+ 100 MiB      6     5  (total)
+  100 MiB in 6 files · 36.4 MiB on disk
 ```
 
 Each row totals everything below it, as `du` does: its files, its directories and their bytes. `-d 1` limits
@@ -24,10 +25,11 @@ the breakdown to one level. It does not limit the walk: swath still reads the wh
 the total include everything below them. Without `-d` you get the total alone. `--sort size` puts the largest
 first.
 
-The first figure is the apparent size, the length of each file as `ls -l` shows it; `on disk` is the space
-the filesystem reports for the files, close to what `du` prints. Here `archive/` holds a sparse 64 MiB disk
-image that takes almost no disk space, and two names for one hard-linked file, counted once, as `du` counts it.
-`--allocated` puts the on-disk figure first and sorts by it, and `-l` (`--count-links`) counts every name.
+The sizes are apparent bytes, the length of each file as `ls -l` shows it; the last line adds the space the
+filesystem reports for the whole tree, on disk, close to what `du` prints. Here `archive/` holds a sparse
+64 MiB disk image that takes almost no disk space, and two names for one hard-linked file, counted once, as
+`du` counts it. `--allocated` shows the on-disk figure instead and sorts by it, and `-l` (`--count-links`)
+counts every name.
 [Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
 newest modification time ([Output](output.md#du-rows)).
 

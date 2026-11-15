@@ -69,11 +69,11 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "also total each prefix down to N levels below SOURCE (0: the total)",
 		Long:  "A prefix ends at a '/'; each includes what is below it, as du."})
 	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
-		Usage: "local: the files' allocated bytes first, and --sort size by them",
-		Long: "The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, " +
-			"so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
+		Usage: "local: show and --sort size by the files' allocated bytes (on disk)",
+		Long: "The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. " +
+			"A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
 	def(source.Flag{Name: "apparent-size", Value: source.Switch(&o.apparentSize), Group: source.GroupTotals, Commands: []string{cmdDu},
-		Usage: "the files' lengths first, and --sort size by them (the default)",
+		Usage: "show and --sort size by the lengths (the default)",
 		Long:  "Not with --allocated."})
 	def(source.Flag{Name: "count-links", Short: "l", Value: source.Switch(&o.countLinks), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",

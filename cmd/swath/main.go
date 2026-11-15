@@ -629,16 +629,50 @@ type totalsOut struct {
 	dataset []byte
 }
 
-// write writes the tally's rows to w.
+// write writes the tally's rows to w. The table shows one figure; for a
+// source with allocated bytes a line on stderr under it (unless -q, or
+// under --log-format json, whose rows are the machine's) gives the total
+// of both (figuresLine).
 func (t *totalsOut) write(w io.Writer) error {
 	opt := t.tally.Options()
-	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), Allocated: t.tally.Allocated(),
-		NoHeader: t.noHeader, Dataset: t.dataset}
+	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset}
 	rows := t.tally.Result()
 	if t.sortBy == sortSize {
 		totals.SortBySize(rows, opt.Primary)
 	}
-	return textout.WriteTotals(w, t.format, l, rows)
+	if err := textout.WriteTotals(w, t.format, l, rows); err != nil || t.format != textout.Table || !t.tally.Allocated() {
+		return err
+	}
+	if lg := elog(); lg.quiet == 0 && !lg.json {
+		for i := range rows {
+			if rows[i].Depth == 0 {
+				noteKept(errOut, "  "+figuresLine(&rows[i], opt.Primary)+"\n")
+			}
+		}
+	}
+	return nil
+}
+
+// figuresLine is the total of both figures, the primary first, as the line
+// under a table that shows one: "100 MiB in 6 files · 36.4 MiB on disk",
+// or with --allocated "36.4 MiB on disk in 6 files · 100 MiB of data"; an
+// unknown figure says so, a partial one is marked (textout.TableFigure).
+func figuresLine(total *totals.Prefix, primary string) string {
+	size, alloc := "size unknown", textout.HeadingOnDisk+" unknown"
+	if total.HasSize {
+		size = textout.TableFigure(total, totals.Size)
+	}
+	if total.HasAllocated {
+		alloc = textout.TableFigure(total, totals.AllocatedBytes) + " " + textout.HeadingOnDisk
+	}
+	files := " in " + count(total.Objects) + " " + plural(total.Objects, "file", "files")
+	if primary == totals.AllocatedBytes {
+		if total.HasSize {
+			size += " of data"
+		}
+		return alloc + files + sep + size
+	}
+	return size + files + sep + alloc
 }
 
 // runtimeFlags may change on swath resume: they do not change the output

@@ -201,22 +201,25 @@ Read the totals with care:
   column `swath list` prints for each row.
 - **Filters apply first**, to every row, directories included ([Filters](filters.md)).
 
-The table rounds the figures to three significant digits in binary units and groups the counts' digits
-(`60,004`). A local tree's table puts the
-apparent size first, `size (apparent)`, then the allocated bytes, `on disk` (`--allocated` swaps them), calls its
-objects `files` and its prefixes `path`, and indents each path two blanks a level below the first. It shows no
-time. An unknown figure is `-`, and a partial one is a lower bound, `>= 12.0 KiB`:
+The table shows one figure: `size`, or with `--allocated` the allocated bytes, headed `on disk`. It rounds it
+to three significant digits in binary units and groups the counts' digits (`60,004`). A local tree's table
+calls its objects `files` and its prefixes `path`, and indents each path two blanks a level below the first.
+It shows no time. An unknown figure is `-`, and a partial one is a lower bound, `>= 12.0 KiB`. For a source
+with allocated bytes, a line on stderr under the table gives the total of both figures, the shown one first,
+so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
 
 ```text
 $ swath du -d 2 /data/photos
-size (apparent)   on disk  files  dirs  path
-        410 KiB   416 KiB      2     1  2025/
-        117 KiB   120 KiB      1     0    2025/raw/
-       48.8 KiB  52.0 KiB      1     0  2026/
-        459 KiB   472 KiB      4     3  (total)
+    size  files  dirs  path
+ 410 KiB      2     1  2025/
+ 117 KiB      1     0    2025/raw/
+48.8 KiB      1     0  2026/
+ 459 KiB      4     3  (total)
+  459 KiB in 4 files · 472 KiB on disk
 ```
 
-A source without allocated bytes has one figure, `size`:
+With `--allocated` the line reads `472 KiB on disk in 4 files · 459 KiB of data`; when no file's allocated bytes
+were read, `on disk unknown`. A bucket's table has no such line:
 
 ```text
 $ swath du -d 1 s3://bucket
@@ -226,7 +229,7 @@ $ swath du -d 1 s3://bucket
 357 MiB   60,004  (total)
 ```
 
-The table fits 80 columns at `-d 2` while a path stays within about 38 characters; a longer path is printed
+The table fits 80 columns at `-d 2` while a path stays within about 55 characters; a longer path is printed
 whole and wraps.
 
 The totals are printed when the count completes. A run that fails or stops before prints none; one that

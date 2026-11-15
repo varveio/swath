@@ -273,7 +273,8 @@ lowering the peak ([Running swath](running.md#memory)).
 
 With `--metadata names` a local walk reads no sizes or blocks: `size` and `allocated_bytes` are null, the
 table shows `-`, and `size_missing` and `allocated_bytes_missing` count the files without them. Windows reads
-no blocks, and a bucket has none: `allocated_bytes` is null there. A figure shown as `>= 12.0 KiB` leaves out
+no blocks, and a bucket has none: `allocated_bytes` is null there, and the line under a local table says
+`on disk unknown`. A figure shown as `>= 12.0 KiB` leaves out
 the files that had no value for it ([Output](output.md#du-rows)).
 
 ## Entries could not be read

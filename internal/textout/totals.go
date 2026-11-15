@@ -51,14 +51,13 @@ const (
 )
 
 // The table's headings are the fields' names, but for what people read
-// differently: the apparent size beside the allocated bytes, a local
-// tree's objects as files under paths.
+// differently: the allocated bytes on disk, a local tree's objects as
+// files under paths.
 const (
-	headingApparent = "size (apparent)" // size, beside the on-disk figure
-	headingOnDisk   = "on disk"         // allocated_bytes
-	headingFiles    = "files"
-	headingPath     = "path"
-	headingTotal    = "(total)" // the total row's prefix in the table
+	HeadingOnDisk = "on disk" // allocated_bytes
+	headingFiles  = "files"
+	headingPath   = "path"
+	headingTotal  = "(total)" // the total row's prefix in the table
 	// partialMark marks a figure in the table that leaves out objects
 	// without a value: a lower bound.
 	partialMark = ">= "
@@ -77,9 +76,6 @@ type TotalsLayout struct {
 	// Local: the source is a local tree, whose rows carry their Dirs and
 	// whose table calls the objects files.
 	Local bool
-	// Allocated: the source has allocated bytes (totals.Tally.Allocated),
-	// so the table has their column; TSV and JSONL always do.
-	Allocated bool
 	// NoHeader leaves out TSV's header line.
 	NoHeader bool
 	// Dataset, if set, is a JSON object that every JSONL row carries as
@@ -108,10 +104,10 @@ func (l *TotalsLayout) primary() string {
 // primary figure, the order and whether hard links counted once. TSV takes
 // the rows' grammar (appendTSV), so any name round-trips; in JSONL a
 // prefix that is not UTF-8 is prefix_base64, its exact bytes, instead of
-// prefix. The table is for reading: the figures in binary units, the
-// primary first ("-" when unknown, ">= " before a partial sum), the
-// allocated bytes only for a source that has them, no time, and the
-// prefix (a local tree's path) last, indented by its depth.
+// prefix. The table is for reading: one figure, the primary, in binary
+// units (TableFigure), the counts grouped, no time, and the prefix (a
+// local tree's path) last, indented by its depth; the command states the
+// other figure's total beside it.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
@@ -245,53 +241,28 @@ func totalsOrder(format string, rows []totals.Prefix) iter.Seq[*totals.Prefix] {
 	}
 }
 
-// figures are the table's byte figures in order, by name: the primary
-// first, the allocated bytes only where the source has them.
-func (l *TotalsLayout) figures() []string {
-	switch {
-	case !l.Allocated:
-		return []string{totals.Size}
-	case l.primary() == totals.AllocatedBytes:
-		return []string{totals.AllocatedBytes, totals.Size}
-	}
-	return []string{totals.Size, totals.AllocatedBytes}
-}
-
-// heading is a figure's table heading: the size is plainly size where it
-// is the only one.
-func (l *TotalsLayout) heading(figure string) string {
-	switch {
-	case figure == totals.AllocatedBytes:
-		return headingOnDisk
-	case l.Allocated:
-		return headingApparent
+// heading is the table's figure heading: size, or on disk for the
+// allocated bytes.
+func (l *TotalsLayout) heading() string {
+	if l.primary() == totals.AllocatedBytes {
+		return HeadingOnDisk
 	}
 	return FieldSize
 }
 
 // tableWidths are the table's right-aligned columns' widths: each its
 // heading's or its widest value's.
-type tableWidths struct {
-	figures       [2]int // by l.figures' order
-	objects, dirs int
-}
+type tableWidths struct{ figure, objects, dirs int }
 
 func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
-	var w tableWidths
-	figs := l.figures()
-	for i, f := range figs {
-		w.figures[i] = len(l.heading(f))
-	}
-	w.objects, w.dirs = len(headingFiles), len(FieldDirs)
+	w := tableWidths{figure: len(l.heading()), objects: len(headingFiles), dirs: len(FieldDirs)}
 	if !l.Local {
 		w.objects = len(FieldObjects)
 	}
 	var num [32]byte
 	for i := range rows {
 		r := &rows[i]
-		for j, f := range figs {
-			w.figures[j] = max(w.figures[j], len(appendTableFigure(num[:0], r, f)))
-		}
+		w.figure = max(w.figure, len(appendTableFigure(num[:0], r, l.primary())))
 		w.objects = max(w.objects, len(appendGrouped(num[:0], r.Objects)))
 		w.dirs = max(w.dirs, len(appendGrouped(num[:0], r.Dirs)))
 	}
@@ -303,12 +274,7 @@ func (w tableWidths) header(b []byte, l *TotalsLayout) []byte {
 	if l.Local {
 		objects, prefix = headingFiles, headingPath
 	}
-	for i, f := range l.figures() {
-		if i > 0 {
-			b = append(b, "  "...)
-		}
-		b = appendPadded(b, []byte(l.heading(f)), w.figures[i])
-	}
+	b = appendPadded(b, []byte(l.heading()), w.figure)
 	b = appendPadded(append(b, "  "...), []byte(objects), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), []byte(FieldDirs), w.dirs)
@@ -318,12 +284,7 @@ func (w tableWidths) header(b []byte, l *TotalsLayout) []byte {
 
 func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 	var num [32]byte
-	for i, f := range l.figures() {
-		if i > 0 {
-			b = append(b, "  "...)
-		}
-		b = appendPadded(b, appendTableFigure(num[:0], r, f), w.figures[i])
-	}
+	b = appendPadded(b, appendTableFigure(num[:0], r, l.primary()), w.figure)
 	b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Objects), w.objects)
 	if l.Local {
 		b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Dirs), w.dirs)
@@ -363,9 +324,13 @@ func appendPadded(b, s []byte, width int) []byte {
 	return append(b, s...)
 }
 
-// appendTableFigure appends a prefix's figure for the table: appendIEC, "-"
-// when it is unknown, and after partialMark when objects without a value
-// leave it a lower bound.
+// TableFigure is a prefix's figure (totals.Size or AllocatedBytes) as the
+// table shows it: appendIEC, "-" when it is unknown, and after ">= " when
+// objects without a value leave it a lower bound.
+func TableFigure(r *totals.Prefix, figure string) string {
+	return string(appendTableFigure(nil, r, figure))
+}
+
 func appendTableFigure(b []byte, r *totals.Prefix, figure string) []byte {
 	n, ok := r.Figure(figure)
 	missing := r.SizeMissing

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // depthTree is a small local tree with known sizes and times: a/b/f (5
@@ -158,35 +160,43 @@ func TestDu(t *testing.T) {
 		strconv.FormatBool(tt.LinksOnce) != linksOnce || r.Output.RowsEmitted != 8 || r.Invocation.Argv[0] != "du" {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
-	// The table: the apparent size, then on disk (the allocated bytes), in
-	// binary units, the files and directories, no time, the path last, and
-	// the total named and last, as du's; -d is --depth. A deeper path is
-	// indented under its parent.
+	// The table: one figure, the size, in binary units, the files and
+	// directories, no time, the path last, and the total named and last,
+	// as du's; -d is --depth. A deeper path is indented under its parent.
+	// The line under it on stderr gives both figures' totals.
+	stderr := captureStderr(t)
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	want = "" +
-		"size (apparent)|on disk|files|dirs|path\n" +
-		"7 B|2|1|a/\n" +
-		"5 B|1|0|a/b/\n" +
-		"1 B|1|0|c/\n" +
-		"0 B|0|0|e/\n" +
-		"9 B|4|4|(total)\n"
-	var got strings.Builder
-	for i, l := range lines {
-		c := tableCells(l)
-		if i > 0 { // the allocated bytes, filesystem's own
-			if len(c) != 5 || c[1] == "-" != (runtime.GOOS == "windows" && c[0] != "0 B") || c[0] == "0 B" && c[1] != "0 B" {
-				t.Fatalf("row %q", l)
-			}
-			c = slices.Delete(c, 1, 2)
-		}
-		got.WriteString(strings.Join(c, "|") + "\n")
+	wantTable := "" +
+		"size  files  dirs  path\n" +
+		" 7 B      2     1  a/\n" +
+		" 5 B      1     0    a/b/\n" +
+		" 1 B      1     0  c/\n" +
+		" 0 B      0     0  e/\n" +
+		" 9 B      4     4  (total)\n"
+	onDisk := regexp.MustCompile(`^  9 B in 4 files · [0-9.]+ [KMG]?i?B on disk\n$`)
+	if runtime.GOOS == "windows" { // no blocks read
+		onDisk = regexp.MustCompile(`^  9 B in 4 files · on disk unknown\n$`)
 	}
-	if got.String() != want || !strings.HasSuffix(lines[2], "1     0    a/b/") || strings.Contains(out.String(), "2026") {
-		t.Fatalf("table\n%s\nwant\n%s", out.String(), want)
+	if out.String() != wantTable || !onDisk.MatchString(stderr.String()) {
+		t.Fatalf("table\n%s\nwant\n%s\nstderr %q", out.String(), wantTable, stderr.String())
+	}
+	// --allocated: the one figure is on disk, the line gives the size.
+	stderr.Reset()
+	out.Reset()
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--format=table", "--no-stats", "--allocated"}, &out); runtime.GOOS != "windows" &&
+		(err != nil || !strings.HasPrefix(tableCells(out.String())[0], "on disk") ||
+			!regexp.MustCompile(`^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`).MatchString(stderr.String())) {
+		t.Fatalf("--allocated: %v\n%s\nstderr %q", err, out.String(), stderr.String())
+	}
+	// -q, and TSV, print no such line.
+	for _, args := range [][]string{{"--format=table", "-q"}, {"--format=tsv"}} {
+		stderr.Reset()
+		if err := runDu(context.Background(), append([]string{root, "--no-stats"}, args...), io.Discard); err != nil || stderr.Len() != 0 {
+			t.Fatalf("%q: %v, stderr %q", args, err, stderr.String())
+		}
 	}
 	// Without -d, the total alone, here without the header line; swath
 	// diag count keeps its one line.
@@ -296,11 +306,11 @@ func TestDuNamesOnly(t *testing.T) {
 			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":1` + tail +
 			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0` + tail,
 		"table": "" +
-			"size (apparent)  on disk  files  dirs  path\n" +
-			"              -        -      2     1  a/\n" +
-			"              -        -      1     0  c/\n" +
-			"            0 B      0 B      0     0  e/\n" +
-			"              -        -      4     4  (total)\n",
+			"size  files  dirs  path\n" +
+			"   -      2     1  a/\n" +
+			"   -      1     0  c/\n" +
+			" 0 B      0     0  e/\n" +
+			"   -      4     4  (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -315,7 +325,7 @@ func TestDuNamesOnly(t *testing.T) {
 // TestDuJSONL: an object store's rows carry no Dirs, and a null allocated
 // bytes figure beside every object without it; its table has one figure,
 // plainly size, and calls its objects objects; depth counts from the
-// prefix the source names.
+// prefix the source names. No line under its table speaks of on disk.
 func TestDuJSONL(t *testing.T) {
 	src, keys := textBucket(t, 50)
 	var out bytes.Buffer
@@ -334,7 +344,8 @@ func TestDuJSONL(t *testing.T) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil ||
+	stderr := captureStderr(t)
+	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil || strings.Contains(stderr.String(), "on disk") ||
 		!regexp.MustCompile(`^ *size  objects  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
 		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \(total\)\n$`).MatchString(out.String()) {
 		t.Fatalf("%v %q", err, out.String())
@@ -518,5 +529,29 @@ func TestDuStopDuringOutput(t *testing.T) {
 	readJSON(t, report, &r)
 	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "row_type\t") {
 		t.Fatalf("outcome %+v, wall %d ms, rows %q", r.Outcome, r.Timings.WallMs, w.String())
+	}
+}
+
+// TestFiguresLine: the line under a du table gives both totals, the
+// primary first; an unknown figure says so and a partial one is a lower
+// bound.
+func TestFiguresLine(t *testing.T) {
+	const mib = 1 << 20
+	whole := totals.Prefix{Objects: 331, Size: 127 * mib, HasSize: true, Allocated: 64*mib + mib/5, HasAllocated: true}
+	for _, c := range []struct {
+		total   totals.Prefix
+		primary string
+		want    string
+	}{
+		{whole, totals.Size, "127 MiB in 331 files · 64.2 MiB on disk"},
+		{whole, totals.AllocatedBytes, "64.2 MiB on disk in 331 files · 127 MiB of data"},
+		{totals.Prefix{Objects: 1, Size: 3, HasSize: true, AllocatedMissing: 1}, totals.Size, "3 B in 1 file · on disk unknown"},
+		{totals.Prefix{Objects: 4, SizeMissing: 4, AllocatedMissing: 4}, totals.Size, "size unknown in 4 files · on disk unknown"},
+		{totals.Prefix{Objects: 3, Size: 12 * 1024, HasSize: true, Allocated: 8192, AllocatedMissing: 1, HasAllocated: true}, totals.Size, "12.0 KiB in 3 files · >= 8.00 KiB on disk"},
+		{totals.Prefix{Objects: 1000, Size: 1, HasSize: true, Allocated: 1, HasAllocated: true}, totals.AllocatedBytes, "1 B on disk in 1,000 files · 1 B of data"},
+	} {
+		if got := figuresLine(&c.total, c.primary); got != c.want {
+			t.Errorf("%+v %s: %q, want %q", c.total, c.primary, got, c.want)
+		}
 	}
 }

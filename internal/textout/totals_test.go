@@ -72,7 +72,7 @@ func TestTotalsJSONL(t *testing.T) {
 		{Prefix: "bad\xff/", Depth: 1, Objects: 1, SizeMissing: 1, AllocatedMissing: 1},
 	}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true, Allocated: true, Primary: totals.AllocatedBytes, Sort: "size", LinksOnce: true}, rows); err != nil {
+	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true, Primary: totals.AllocatedBytes, Sort: "size", LinksOnce: true}, rows); err != nil {
 		t.Fatal(err)
 	}
 	var got []map[string]any
@@ -107,21 +107,26 @@ func TestTotalsMissing(t *testing.T) {
 		{Objects: 2, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 2},
 		{Prefix: "e/", Depth: 1, HasSize: true, HasAllocated: true},
 	}
-	l := TotalsLayout{Local: true, Allocated: true, Sort: "name"}
+	l := TotalsLayout{Local: true, Sort: "name"}
 	for format, want := range map[string]string{
 		TSV: "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
 			"total\t0\t2\t0\t7\t1\t\\N\t2\t\\N\tsize\tname\tfalse\t\n" +
 			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
 		JSONL: `{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
 			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n",
-		Table: "size (apparent)  on disk  files  dirs  path\n" +
-			"            0 B      0 B      0     0  e/\n" +
-			"         >= 7 B        -      2     0  (total)\n",
+		Table: "  size  files  dirs  path\n" +
+			"   0 B      0     0  e/\n" +
+			">= 7 B      2     0  (total)\n",
 	} {
 		var b bytes.Buffer
 		if err := WriteTotals(&b, format, l, rows); err != nil || b.String() != want {
 			t.Errorf("%s: %v\n%q\nwant %q", format, err, b.String(), want)
 		}
+	}
+	l.Primary = totals.AllocatedBytes
+	var b bytes.Buffer
+	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != "on disk  files  dirs  path\n    0 B      0     0  e/\n      -      2     0  (total)\n" {
+		t.Errorf("on disk: %v %q", err, b.String())
 	}
 }
 
@@ -176,11 +181,10 @@ func TestTotalsOrder(t *testing.T) {
 	}
 }
 
-// TestTotalsTable: a local tree's table puts the apparent size first and
-// the allocated bytes beside it, or the allocated bytes first when they are
-// the primary figure; a source without them has one plainly named size
-// column. The paths keep their whole text, indented two blanks a level
-// below the first; there is no time.
+// TestTotalsTable: the table has one figure: the size, or the allocated
+// bytes, on disk, when they are the primary figure. The paths keep their
+// whole text, indented two blanks a level below the first; there is no
+// time.
 func TestTotalsTable(t *testing.T) {
 	const mib = 1 << 20
 	rows := []totals.Prefix{
@@ -192,16 +196,16 @@ func TestTotalsTable(t *testing.T) {
 		l    TotalsLayout
 		want string
 	}{
-		"local": {TotalsLayout{Local: true, Allocated: true}, "" +
-			"size (apparent)   on disk  files  dirs  path\n" +
-			"       64.0 MiB  4.00 KiB      2     1  archive/\n" +
-			"       64.0 MiB       0 B      1     0    archive/vm/\n" +
-			"       64.0 MiB  12.0 KiB      3     5  (total)\n"},
-		"allocated first": {TotalsLayout{Local: true, Allocated: true, Primary: totals.AllocatedBytes}, "" +
-			" on disk  size (apparent)  files  dirs  path\n" +
-			"4.00 KiB         64.0 MiB      2     1  archive/\n" +
-			"     0 B         64.0 MiB      1     0    archive/vm/\n" +
-			"12.0 KiB         64.0 MiB      3     5  (total)\n"},
+		"local": {TotalsLayout{Local: true}, "" +
+			"    size  files  dirs  path\n" +
+			"64.0 MiB      2     1  archive/\n" +
+			"64.0 MiB      1     0    archive/vm/\n" +
+			"64.0 MiB      3     5  (total)\n"},
+		"allocated": {TotalsLayout{Local: true, Primary: totals.AllocatedBytes}, "" +
+			" on disk  files  dirs  path\n" +
+			"4.00 KiB      2     1  archive/\n" +
+			"     0 B      1     0    archive/vm/\n" +
+			"12.0 KiB      3     5  (total)\n"},
 		"bucket": {TotalsLayout{}, "" +
 			"    size  objects  prefix\n" +
 			"64.0 MiB        2  archive/\n" +

@@ -18,21 +18,34 @@ both the scope and the filters, so you can tell later what it was meant to hold 
 ## Apparent and allocated bytes
 
 `size` is a file's apparent size: its length, as `ls -l` shows it. It is not the disk space the file takes.
-`allocated_bytes`, the table's `on disk`, is the space the filesystem reports for it. `swath du` shows both: in
-the example the tree holds 100 MiB of file lengths in 36.4 MiB on disk, close to what `du -sh` prints for it.
-`--allocated` puts the allocated bytes first and makes `--sort size` order by them:
+`allocated_bytes`, `on disk` in the table, is the space the filesystem reports for it. `swath du`'s table
+shows the size, and the line under it the totals of both: the example tree holds 100 MiB of file lengths in
+36.4 MiB on disk, close to what `du -sh` prints for it:
+
+```text
+$ swath du -d 1 media
+    size  files  dirs  path
+64.8 MiB      2     0  archive/
+6.10 MiB      3     2  photos/
+29.6 MiB      1     0  videos/
+ 100 MiB      6     5  (total)
+  100 MiB in 6 files · 36.4 MiB on disk
+```
+
+Most of the difference is a sparse 64 MiB disk image that occupies no blocks. `--allocated` shows the
+allocated bytes instead, and `--sort size` then orders by them:
 
 ```text
 $ swath du -d 1 media --allocated
- on disk  size (apparent)  files  dirs  path
- 784 KiB         64.8 MiB      2     0  archive/
-6.11 MiB         6.10 MiB      3     2  photos/
-29.6 MiB         29.6 MiB      1     0  videos/
-36.4 MiB          100 MiB      6     5  (total)
+ on disk  files  dirs  path
+ 784 KiB      2     0  archive/
+6.11 MiB      3     2  photos/
+29.6 MiB      1     0  videos/
+36.4 MiB      6     5  (total)
+  36.4 MiB on disk in 6 files · 100 MiB of data
 ```
 
-Most of the difference is a sparse 64 MiB disk image that occupies no blocks. Each row of `swath list`
-carries both figures too, under the same names.
+TSV and JSONL rows carry both figures either way, as each row of `swath list` does, under the same names.
 
 `size` totals the lengths of the listed entries that are not directories; a symbolic link's is the link's
 own. `allocated_bytes` totals their filesystem-reported allocation, `st_blocks` × 512 bytes. It is what the

@@ -19,10 +19,11 @@ on disk.
 
 ```text
 $ swath du -d 1 /data/photos --format table
-size (apparent)   on disk  files  dirs  path
-        410 KiB   416 KiB      2     1  2025/
-       48.8 KiB  52.0 KiB      1     0  2026/
-        459 KiB   472 KiB      4     3  (total)
+    size  files  dirs  path
+ 410 KiB      2     1  2025/
+48.8 KiB      1     0  2026/
+ 459 KiB      4     3  (total)
+  459 KiB in 4 files · 472 KiB on disk
 ```
 
 A prefix ends at a `/`. Depth counts from SOURCE's prefix up to its last `/`: `s3://b/logs/2026/` counts from
@@ -33,17 +34,18 @@ On a terminal the rows are a table with the total last; in a pipe they are TSV (
 header line), and `--format jsonl` gives JSONL; both put the total first, its `row_type` `total`. The fields,
 and the care their totals need, are in [Output](../output.md#du-rows).
 
-Every row has two byte figures: `size`, the objects' lengths as listed, and `allocated_bytes`, a local file's
-allocated blocks (`st_blocks` × 512; a sparse file counts its blocks, not its length), the table's `on disk`.
+TSV and JSONL rows have two byte figures: `size`, the objects' lengths as listed, and `allocated_bytes`, a local
+file's allocated blocks (`st_blocks` × 512; a sparse file counts its blocks, not its length), `on disk`. The
+table shows one of them, and on a local tree a line on stderr under it gives the totals of both.
 Neither is the storage consumed, replicas or a bill ([Apparent and allocated
 bytes](../results.md#apparent-and-allocated-bytes)). A bucket has no allocated bytes: its rows carry them as
-null and its table leaves the column out. A local tree's directories are counted in `dirs`, never as objects,
+null and its table has no on-disk line. A local tree's directories are counted in `dirs`, never as objects,
 and their own size and blocks are in no total, so a tree's allocated bytes are below `du -sB1`'s by them. With
 `--all-versions` every version is an object; an S3 delete marker adds its prefixes but no object, bytes or
 time. `max_last_modified` is the newest time among the objects counted.
 
-The size comes first by default (`--apparent-size`). On a local tree, `--allocated` puts the allocated bytes
-first and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
+The table shows the size by default (`--apparent-size`). On a local tree, `--allocated` shows the allocated
+bytes instead and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
 `--metadata names` refuses it, and a file whose filesystem reports no blocks fails the count.
 
 A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
@@ -78,10 +80,11 @@ for its SOURCE):
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
 swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12T10:00:03Z (3 hours ago); complete
-size (apparent)   on disk  files  dirs  path
-        410 KiB   416 KiB      2     1  2025/
-       48.8 KiB  52.0 KiB      1     0  2026/
-        459 KiB   472 KiB      4     3  (total)
+    size  files  dirs  path
+ 410 KiB      2     1  2025/
+48.8 KiB      1     0  2026/
+ 459 KiB      4     3  (total)
+  459 KiB in 4 files · 472 KiB on disk
 ```
 
 The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
@@ -127,12 +130,12 @@ sizes) with exit 2.
   A prefix ends at a '/'; each includes what is below it, as du.
 
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
-  local: the files' allocated bytes first, and --sort size by them
+  local: show and --sort size by the files' allocated bytes (on disk)
 
-  The files' st_blocks x 512, the table's on disk; every row carries both figures whichever comes first. A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count.
+  The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count.
 
 - <a id="option-apparent-size"></a>[`--apparent-size`](#option-apparent-size)\
-  the files' lengths first, and --sort size by them (the default)
+  show and --sort size by the lengths (the default)
 
   Not with --allocated.
 
@@ -424,12 +427,13 @@ sizes) with exit 2.
 Totals:
   -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
                                 A prefix ends at a '/'; each includes what is below it, as du.
-      --allocated             local: the files' allocated bytes first, and --sort size by them
-                                The files' st_blocks x 512, the table's on disk; every row carries
-                                both figures whichever comes first. A directory's own blocks are not
-                                counted, so a tree's total is below du's by them. A file without
-                                them (the names metadata tier reads none) fails the count.
-      --apparent-size         the files' lengths first, and --sort size by them (the default)
+      --allocated             local: show and --sort size by the files' allocated bytes (on disk)
+                                The files' st_blocks x 512: the table's one figure, the line under
+                                it giving the lengths; TSV and JSONL rows carry both either way. A
+                                directory's own blocks are not counted, so a tree's total is below
+                                du's by them. A file without them (the names metadata tier reads
+                                none) fails the count.
+      --apparent-size         show and --sort size by the lengths (the default)
                                 Not with --allocated.
   -l, --count-links           local: count a file with several hard links under each of its names
                                 By default such a file counts once, as du counts it, under the first
