@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/totals"
 )
@@ -107,16 +108,16 @@ func TestTotalsMissing(t *testing.T) {
 		{Objects: 2, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 2},
 		{Prefix: "e/", Depth: 1, HasSize: true, HasAllocated: true},
 	}
-	l := TotalsLayout{Local: true, Sort: "name"}
+	l := TotalsLayout{Local: true, Sort: "name", Loc: time.UTC}
 	for format, want := range map[string]string{
 		TSV: "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
 			"total\t0\t2\t0\t7\t1\t\\N\t2\t\\N\tsize\tname\tfalse\t\n" +
 			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
 		JSONL: `{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
 			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n",
-		Table: "  size  files  dirs  path\n" +
-			"   0 B      0     0  e/\n" +
-			">= 7 B      2     0  (total)\n",
+		Table: "  size  files  dirs  last_modified (UTC)  path\n" +
+			"   0 B      0     0  -                    e/\n" +
+			">= 7 B      2     0  -                    (total)\n",
 	} {
 		var b bytes.Buffer
 		if err := WriteTotals(&b, format, l, rows); err != nil || b.String() != want {
@@ -125,7 +126,7 @@ func TestTotalsMissing(t *testing.T) {
 	}
 	l.Primary = totals.AllocatedBytes
 	var b bytes.Buffer
-	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != "on disk  files  dirs  path\n    0 B      0     0  e/\n      -      2     0  (total)\n" {
+	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != "on disk  files  dirs  last_modified (UTC)  path\n    0 B      0     0  -                    e/\n      -      2     0  -                    (total)\n" {
 		t.Errorf("on disk: %v %q", err, b.String())
 	}
 }
@@ -182,35 +183,39 @@ func TestTotalsOrder(t *testing.T) {
 }
 
 // TestTotalsTable: the table has one figure: the size, or the allocated
-// bytes, on disk, when they are the primary figure. The paths keep their
-// whole text, indented two blanks a level below the first; there is no
-// time.
+// bytes, on disk, when they are the primary figure, then the counts, the
+// newest time in the table's zone, named in its heading ("-" when no
+// object had one), and the paths, which keep their whole text, indented
+// two blanks a level below the first.
 func TestTotalsTable(t *testing.T) {
 	const mib = 1 << 20
+	newest := time.Date(2026, 11, 15, 9, 30, 5, 999999000, time.UTC).UnixMicro() // to the second, not rounded
+	older := time.Date(2026, 7, 1, 23, 0, 0, 0, time.UTC).UnixMicro()
+	cet := time.FixedZone("CET", 3600)
 	rows := []totals.Prefix{
-		{Objects: 3, Dirs: 5, Size: 64*mib + 5000, HasSize: true, Allocated: 12288, HasAllocated: true, Newest: 1, HasNewest: true},
-		{Prefix: "archive/", Depth: 1, Objects: 2, Dirs: 1, Size: 64 * mib, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Objects: 3, Dirs: 5, Size: 64*mib + 5000, HasSize: true, Allocated: 12288, HasAllocated: true, Newest: newest, HasNewest: true},
+		{Prefix: "archive/", Depth: 1, Objects: 2, Dirs: 1, Size: 64 * mib, HasSize: true, Allocated: 4096, HasAllocated: true, Newest: older, HasNewest: true},
 		{Prefix: "archive/vm/", Depth: 2, Objects: 1, Size: 64 * mib, HasSize: true, HasAllocated: true},
 	}
 	for name, c := range map[string]struct {
 		l    TotalsLayout
 		want string
 	}{
-		"local": {TotalsLayout{Local: true}, "" +
-			"    size  files  dirs  path\n" +
-			"64.0 MiB      2     1  archive/\n" +
-			"64.0 MiB      1     0    archive/vm/\n" +
-			"64.0 MiB      3     5  (total)\n"},
-		"allocated": {TotalsLayout{Local: true, Primary: totals.AllocatedBytes}, "" +
-			" on disk  files  dirs  path\n" +
-			"4.00 KiB      2     1  archive/\n" +
-			"     0 B      1     0    archive/vm/\n" +
-			"12.0 KiB      3     5  (total)\n"},
-		"bucket": {TotalsLayout{}, "" +
-			"    size  objects  prefix\n" +
-			"64.0 MiB        2  archive/\n" +
-			"64.0 MiB        1    archive/vm/\n" +
-			"64.0 MiB        3  (total)\n"},
+		"local": {TotalsLayout{Local: true, Loc: cet}, "" +
+			"    size  files  dirs  last_modified (CET)  path\n" +
+			"64.0 MiB      2     1  2026-07-02 00:00:00  archive/\n" +
+			"64.0 MiB      1     0  -                      archive/vm/\n" +
+			"64.0 MiB      3     5  2026-11-15 10:30:05  (total)\n"},
+		"allocated": {TotalsLayout{Local: true, Primary: totals.AllocatedBytes, Loc: cet}, "" +
+			" on disk  files  dirs  last_modified (CET)  path\n" +
+			"4.00 KiB      2     1  2026-07-02 00:00:00  archive/\n" +
+			"     0 B      1     0  -                      archive/vm/\n" +
+			"12.0 KiB      3     5  2026-11-15 10:30:05  (total)\n"},
+		"bucket": {TotalsLayout{Loc: time.UTC}, "" +
+			"    size  objects  last_modified (UTC)  prefix\n" +
+			"64.0 MiB        2  2026-07-01 23:00:00  archive/\n" +
+			"64.0 MiB        1  -                      archive/vm/\n" +
+			"64.0 MiB        3  2026-11-15 09:30:05  (total)\n"},
 	} {
 		var b bytes.Buffer
 		if err := WriteTotals(&b, Table, c.l, rows); err != nil || b.String() != c.want {
@@ -229,7 +234,7 @@ func TestTableCounts(t *testing.T) {
 	}
 	rows := []totals.Prefix{{Objects: 60010, Size: 1, HasSize: true}}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, Table, TotalsLayout{}, rows); err != nil || b.String() != "size  objects  prefix\n 1 B   60,010  (total)\n" {
+	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.UTC}, rows); err != nil || b.String() != "size  objects  last_modified (UTC)  prefix\n 1 B   60,010  -                    (total)\n" {
 		t.Fatalf("%v %q", err, b.String())
 	}
 	b.Reset()

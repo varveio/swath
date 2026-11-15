@@ -12,11 +12,11 @@ swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  path
-64.8 MiB      2     0  archive/
-6.10 MiB      3     2  photos/
-29.6 MiB      1     0  videos/
- 100 MiB      6     5  (total)
+    size  files  dirs  last_modified (CET)  path
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+ 100 MiB      6     5  2026-11-02 10:30:00  (total)
   100 MiB in 6 files · 36.4 MiB on disk
 ```
 

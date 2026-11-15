@@ -35,7 +35,8 @@ Notable changes per release. The full human summary for the current release is i
   dataset listed with `--metadata names` totals as the live run does, an empty one included. A name of a
   hard-linked file counted under another name adds no time to `max_last_modified`.
 - Go port: the `swath du` table shows one figure, `size`, or `on disk` with `--allocated`, the counts with
-  grouped digits, no time, and each path indented two blanks a level; an unknown figure is `-`, a partial one
+  grouped digits, each prefix's newest time (`max_last_modified`) in local time to the second under a heading
+  naming the zone (`last_modified (CET)`), and each path indented two blanks a level; an unknown figure is `-`, a partial one
   `>= ` its lower bound. For a local tree a line on stderr under the table gives the totals of both figures
   (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table heads its local times
   with the zone's abbreviation (`last_modified (CET)`) in place of `(local)`, and prints `-` for a missing value.

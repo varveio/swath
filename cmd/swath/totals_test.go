@@ -101,6 +101,13 @@ func tableCells(line string) []string {
 	return regexp.MustCompile(`  +`).Split(strings.TrimSpace(line), -1)
 }
 
+// duTimeHeading is the du table's time heading, the local zone's, padded
+// to a time's width.
+func duTimeHeading() string {
+	zone, _ := time.Now().Zone()
+	return fmt.Sprintf("%-*s", len(time.DateTime), "last_modified ("+zone+")")
+}
+
 // linksOnce is the links_once a local tree's rows carry by default: every
 // platform but Windows reads the links.
 var linksOnce = strconv.FormatBool(runtime.GOOS != "windows")
@@ -112,7 +119,7 @@ var linksOnce = strconv.FormatBool(runtime.GOOS != "windows")
 // primary figure, order and hard-link policy; the run report says the
 // path engaged, under the rows' names.
 func TestDu(t *testing.T) {
-	root, _ := depthTree(t)
+	root, at := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", report}, &out); err != nil {
@@ -161,21 +168,25 @@ func TestDu(t *testing.T) {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
 	// The table: one figure, the size, in binary units, the files and
-	// directories, no time, the path last, and the total named and last,
-	// as du's; -d is --depth. A deeper path is indented under its parent.
+	// directories, the newest time in local time to the second under a
+	// heading naming the zone ("-" for the empty directory), the path
+	// last, and the total named and last, as du's; -d is --depth. A deeper path is indented under its parent.
 	// The line under it on stderr gives both figures' totals.
 	stderr := captureStderr(t)
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	heading := duTimeHeading()
+	local := func(t time.Time) string { return fmt.Sprintf("%-*s", len(heading), t.Local().Format(time.DateTime)) }
+	newestLocal, olderLocal, none := local(at.Add(time.Hour)), local(at), fmt.Sprintf("%-*s", len(heading), "-")
 	wantTable := "" +
-		"size  files  dirs  path\n" +
-		" 7 B      2     1  a/\n" +
-		" 5 B      1     0    a/b/\n" +
-		" 1 B      1     0  c/\n" +
-		" 0 B      0     0  e/\n" +
-		" 9 B      4     4  (total)\n"
+		"size  files  dirs  " + heading + "  path\n" +
+		" 7 B      2     1  " + newestLocal + "  a/\n" +
+		" 5 B      1     0  " + newestLocal + "    a/b/\n" +
+		" 1 B      1     0  " + olderLocal + "  c/\n" +
+		" 0 B      0     0  " + none + "  e/\n" +
+		" 9 B      4     4  " + newestLocal + "  (total)\n"
 	onDisk := regexp.MustCompile(`^  9 B in 4 files · [0-9.]+ [KMG]?i?B on disk\n$`)
 	if runtime.GOOS == "windows" { // no blocks read
 		onDisk = regexp.MustCompile(`^  9 B in 4 files · on disk unknown\n$`)
@@ -289,11 +300,12 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 
 // TestDuNamesOnly: without sizes or blocks (the names metadata tier) both
 // figures of a prefix with files are null, beside the files without them,
-// as rclone size's sizeless; the table shows them as "-", unknown; an
-// empty directory has 0 bytes. Nothing tells hard links apart, so every
+// as rclone size's sizeless; the table shows them, and the time the tier
+// does not read, as "-", unknown; an empty directory has 0 bytes. Nothing tells hard links apart, so every
 // name counts and the rows say so.
 func TestDuNamesOnly(t *testing.T) {
 	root, _ := depthTree(t)
+	none := fmt.Sprintf("%-*s", len(duTimeHeading()), "-")
 	const tail = `,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n"
 	for format, want := range map[string]string{
 		"tsv": "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
@@ -306,11 +318,11 @@ func TestDuNamesOnly(t *testing.T) {
 			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":1` + tail +
 			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0` + tail,
 		"table": "" +
-			"size  files  dirs  path\n" +
-			"   -      2     1  a/\n" +
-			"   -      1     0  c/\n" +
-			" 0 B      0     0  e/\n" +
-			"   -      4     4  (total)\n",
+			"size  files  dirs  " + duTimeHeading() + "  path\n" +
+			"   -      2     1  " + none + "  a/\n" +
+			"   -      1     0  " + none + "  c/\n" +
+			" 0 B      0     0  " + none + "  e/\n" +
+			"   -      4     4  " + none + "  (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -324,7 +336,8 @@ func TestDuNamesOnly(t *testing.T) {
 
 // TestDuJSONL: an object store's rows carry no Dirs, and a null allocated
 // bytes figure beside every object without it; its table has one figure,
-// plainly size, and calls its objects objects; depth counts from the
+// plainly size, calls its objects objects and gives their newest time;
+// depth counts from the
 // prefix the source names. No line under its table speaks of on disk.
 func TestDuJSONL(t *testing.T) {
 	src, keys := textBucket(t, 50)
@@ -346,8 +359,8 @@ func TestDuJSONL(t *testing.T) {
 	out.Reset()
 	stderr := captureStderr(t)
 	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil || strings.Contains(stderr.String(), "on disk") ||
-		!regexp.MustCompile(`^ *size  objects  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
-		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \(total\)\n$`).MatchString(out.String()) {
+		!regexp.MustCompile(`^ *size  objects  last_modified \([^)]+\)  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
+		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \d{4}-\d\d-\d\d \d\d:\d\d:\d\d  \(total\)\n$`).MatchString(out.String()) {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }

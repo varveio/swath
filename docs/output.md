@@ -211,17 +211,18 @@ Read the totals with care:
 The table shows one figure: `size`, or with `--allocated` the allocated bytes, headed `on disk`. It rounds it
 to three significant digits in binary units and groups the counts' digits (`60,004`). A local tree's table
 calls its objects `files` and its prefixes `path`, and indents each path two blanks a level below the first.
-It shows no time. An unknown figure is `-`, and a partial one is a lower bound, `>= 12.0 KiB`. For a source
-with allocated bytes, a line on stderr under the table gives the total of both figures, the shown one first,
-so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
+It shows `max_last_modified` as the [list table](#the-table) shows times: local, to the second, under a heading
+that names the zone, `-` when no object had one. An unknown figure is `-`, and a partial one is a lower bound,
+`>= 12.0 KiB`. For a source with allocated bytes, a line on stderr under the table gives the total of both
+figures, the shown one first, so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
 
 ```text
 $ swath du -d 2 /data/photos
-    size  files  dirs  path
- 410 KiB      2     1  2025/
- 117 KiB      1     0    2025/raw/
-48.8 KiB      1     0  2026/
- 459 KiB      4     3  (total)
+    size  files  dirs  last_modified (CET)  path
+ 410 KiB      2     1  2026-03-01 11:00:00  2025/
+ 117 KiB      1     0  2026-03-01 11:00:00    2025/raw/
+48.8 KiB      1     0  2026-11-02 10:30:00  2026/
+ 459 KiB      4     3  2026-11-02 10:30:00  (total)
   459 KiB in 4 files · 472 KiB on disk
 ```
 
@@ -230,13 +231,13 @@ were read, `on disk unknown`. A bucket's table has no such line:
 
 ```text
 $ swath du -d 1 s3://bucket
-   size  objects  prefix
-357 MiB   60,000  logs/
-   18 B        3  weird/
-357 MiB   60,004  (total)
+   size  objects  last_modified (CET)  prefix
+357 MiB   60,000  2026-11-15 06:59:58  logs/
+   18 B        3  2026-01-01 01:00:00  weird/
+357 MiB   60,004  2026-11-15 06:59:58  (total)
 ```
 
-The table fits 80 columns at `-d 2` while a path stays within about 55 characters; a longer path is printed
+The table fits 80 columns at `-d 2` while a path stays within about 34 characters; a longer path is printed
 whole and wraps.
 
 The totals are printed when the count completes. A run that fails or stops before prints none; one that
