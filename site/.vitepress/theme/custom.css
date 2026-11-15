@@ -191,6 +191,51 @@ html:has(.swath-dev-banner) {
   overflow: visible;
 }
 
+/* A diagram in a page (the field guide's): inline SVG in the theme's colors, so it follows light
+   and dark, scaled to the column's width with its caption under it. */
+.swath-figure {
+  margin: 24px 0;
+}
+.swath-figure svg {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  color: var(--vp-c-text-1);
+}
+.swath-figure text {
+  fill: currentColor;
+  font-family: var(--vp-font-family-base);
+  font-size: 15px;
+}
+.swath-figure text.mono {
+  font-family: var(--vp-font-family-mono);
+}
+.swath-figure text.label {
+  fill: var(--vp-c-text-2);
+}
+.swath-figure .done {
+  fill: var(--vp-c-text-3);
+  opacity: 0.35;
+}
+.swath-figure .lower {
+  fill: var(--vp-c-brand-soft);
+  stroke: var(--vp-c-brand-1);
+}
+.swath-figure .upper {
+  fill: var(--vp-c-brand-1);
+  opacity: 0.55;
+}
+.swath-figure .tick {
+  stroke: currentColor;
+}
+.swath-figure figcaption {
+  margin-top: 8px;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 /* Wide tables scroll sideways. On a narrow screen each row becomes a stack of cells, each
    labelled with its column's header (data-label, set at build time). */
 .vp-doc table {

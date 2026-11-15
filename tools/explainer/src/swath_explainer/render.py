@@ -7,6 +7,8 @@ _TEMPLATES = Path(__file__).parent / "templates"
 _PLACEHOLDER = "/*__MODEL__*/null"
 _FACTS_PLACEHOLDER = "/*__FACTS__*/null"
 _STATIC_SUMMARY_PLACEHOLDER = "<!--__STATIC_SUMMARY__-->"
+_TITLE_PLACEHOLDER = "<!--__TITLE__-->"
+_DESCRIPTION_PLACEHOLDER = "<!--__DESCRIPTION__-->"
 
 UNKNOWN = "unknown in retained evidence"
 
@@ -60,7 +62,20 @@ def _script_safe(payload):
 
 
 def _html_escape(text):
-    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace('"', "&quot;"))
+
+
+def _description(model):
+    """One sentence for the page's meta description: what the run listed and how it divided."""
+    meta, F = model["meta"], model["findings"]
+    text = "%s objects listed by %d workers in %.1f s, with %s splits" % (
+        "{:,}".format(meta["totalKeys"]), meta["workers"], meta["durationMs"] / 1000.0,
+        "{:,}".format(F["totalSplits"]))
+    if F["seedCount"] > 1:
+        text += "; the largest of %s starting ranges held %.1f%% of the objects" % (
+            "{:,}".format(F["seedCount"]), F["topShare"])
+    return text + "."
 
 
 def _dig(facts, path):
@@ -114,6 +129,8 @@ def render_report(model, facts=None):
     the record omits is shown as "unknown in retained evidence", never guessed.
     """
     page = _load("report.html")
+    page = page.replace(_TITLE_PLACEHOLDER, _html_escape(model["meta"]["title"] + " · swath run trace"))
+    page = page.replace(_DESCRIPTION_PLACEHOLDER, _html_escape(_description(model)))
     page = page.replace(_STATIC_SUMMARY_PLACEHOLDER, _static_summary(model, facts))
     page = page.replace(_FACTS_PLACEHOLDER,
                          _script_safe(json.dumps(facts)) if facts is not None else "null")
