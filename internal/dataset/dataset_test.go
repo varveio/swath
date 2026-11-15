@@ -538,10 +538,10 @@ func TestObjectBytes(t *testing.T) {
 // TestInterruptedV03Run: a directory an interrupted 0.3 run left is
 // recognised by its own marks; --overwrite replaces it (state file,
 // checkpoint, _staging, data), while a directory with only a generic
-// _staging/ or data/ is not swath's and is refused untouched.
+// _staging/ and data/ (no mark of 0.3's) is not swath's and is refused untouched.
 func TestInterruptedV03Run(t *testing.T) {
 	const schemaID = "swath/s3-objects/v1"
-	for _, marks := range [][]string{{".swath-state.json"}, {".swath/checkpoint.sqlite"}, {"_staging/run-0", "data/part-w0-0.parquet"}} {
+	for _, marks := range [][]string{{".swath-state.json"}, {".swath/checkpoint.sqlite"}, {".swath-state.json", "_staging/seg-0"}} {
 		out := t.TempDir()
 		for _, m := range append([]string{"data/part-w0-1.parquet"}, marks...) {
 			touch(t, filepath.Join(out, m))
@@ -561,18 +561,18 @@ func TestInterruptedV03Run(t *testing.T) {
 			}
 		}
 	}
-	for _, marks := range [][]string{{"_staging/x"}, {"_staging/x", "notes.txt"}} {
+	for _, marks := range [][]string{{"_staging/x"}, {"_staging/x", "notes.txt"}, {"_staging/other.txt", "data/mine.csv"}} {
 		out := t.TempDir()
 		for _, m := range marks {
 			touch(t, filepath.Join(out, m))
 		}
 		if InterruptedV03(out) {
-			t.Fatalf("%v: a bare _staging/ is recognised", marks)
+			t.Fatalf("%v: a _staging/ without a mark of 0.3 is recognised", marks)
 		}
 		if err := Prepare(out, "", schemaID, true); !errors.Is(err, ErrNotDataset) {
 			t.Fatalf("%v: %v, want ErrNotDataset", marks, err)
 		}
-		if _, err := os.Stat(filepath.Join(out, "_staging/x")); err != nil {
+		if _, err := os.Stat(filepath.Join(out, marks[0])); err != nil {
 			t.Fatalf("%v: refused directory changed: %v", marks, err)
 		}
 	}

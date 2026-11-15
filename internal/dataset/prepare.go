@@ -300,10 +300,10 @@ func isDataset(out, schemaID string) bool {
 }
 
 // InterruptedV03 reports whether out holds an interrupted run of swath 0.3
-// that has not committed: its .swath-state.json or .swath/checkpoint.sqlite
-// (names no other tool is known to write), or a _staging/ directory beside
-// data/ (a bare _staging/ is any program's). A committed directory is a
-// dataset, not this.
+// that has not committed: its .swath-state.json or .swath/checkpoint.sqlite.
+// 0.3 wrote the state file atomically before its first part or _staging/
+// segment, so a _staging/ or data/ without one of these is not its (and is
+// no evidence of anything). A committed directory is a dataset, not this.
 func InterruptedV03(out string) bool {
 	if Committed(out) {
 		return false
@@ -313,9 +313,7 @@ func InterruptedV03(out string) bool {
 			return true
 		}
 	}
-	st, e1 := os.Stat(filepath.Join(out, "_staging"))
-	data, e2 := os.Stat(filepath.Join(out, DataDir))
-	return e1 == nil && st.IsDir() && e2 == nil && data.IsDir()
+	return false
 }
 
 // Resumable reports whether out holds an interrupted journaled run.
