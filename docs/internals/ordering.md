@@ -704,7 +704,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 
 - **Durable files.** The read-ahead and the segments read a durable spill file's rows frames as they read a
   run-private file's, by the offset its marker records (a header or capture frame may precede a rows frame:
-  the offset is the rows frame's own), checking the version-2 CRC; the drainer's reader skips to the end of a
+  the offset is the rows frame's own), checking the CRC; the drainer's reader skips to the end of a
   frame read ahead, past any capture frame before it. The segments check a durable file's trailer (its total
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
@@ -774,7 +774,7 @@ vectors as well as round trips, so shared implementation alone cannot establish 
 
 ## Durable spill
 
-A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
+A journaled run keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 
@@ -850,18 +850,14 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   children exposed (`TestDurableSealErrorStopsRun`: the output is a prefix of the oracle). A capture that
   started at its closing fence certifies nothing and is abandoned (`empty`); rows after the last fence
   (`unfenced`), or a stop or failed ledger at the seal (`stopping`) abandon too.
-- **File format.** Version-2 frames (the journal's envelope: length, CRC-32C over the length and the
-  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID
+- **File format.** Frames (the journal's envelope: length, CRC-32C over the length and the
+  payload): `H` (magic, format version 1, run UUID, file ID, the journal identity's digest, the row codec ID
   and its version, the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
   decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
   captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the
   trailer's offset and the magic). Files are named by their random ID; nothing depends on a path or inode.
-  Disposable spill files keep the version-1 frames above. The durable row codec revision is 2:
-  the Azure optional-property extension changed its payload encoding. This global revision rejects
-  older spill caches for every provider as `rejected.codec`, so their intervals are relisted. The
-  schema ID, journal identity and Parquet writer recipe are unchanged by this cache revision;
-  journaled Parquet parts and their committed prefix remain reusable.
-  `azblob.TestDurableLegacySpillUpgrade` exercises fixed revision-1 Azure files and relists the suffix.
+  Disposable spill files keep the version-1 frames above. The durable row codec revision is 1; a file whose header names another codec or revision is rejected as
+  `rejected.codec` and its intervals are relisted.
 - **The ledger** (`spill/durable/ledger`) is a file of its own, not journal frames: the part journal keeps
   its single committer and its strict corruption rule, and no cache failure touches it. Its first frame is
   the magic, its version, the run UUID and the identity digest; then `sealed {file_id, cs, ce, ce_open,

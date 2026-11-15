@@ -13,45 +13,8 @@ import (
 	"github.com/varveio/swath/internal/totals"
 )
 
-// ReportVersion is the run report's version. 2: the clearer names
-// (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
-// count requests.http_attempts in place of cost.api_calls, one row budget),
-// phase times, free_disk_min_bytes and the bounded progress history
-// (docs/upgrade.md lists every rename). 3 adds fields only:
-// resources.spill.durable and durable_off (the durable spill's account),
-// the reuse.* counters, timings.listing_done_at and resources.drain (the
-// drain tail: read-ahead, segments, encoder admission after listing), and
-// for versions schemas the attempt-scoped version classification and
-// distinct keys, and swath du's per-prefix totals (output.totals). 4:
-// invocation.narrowing (the includes' prefix narrowing), outcome.unreadable
-// and requests.failure_warnings. 5: invocation.row_budget_bytes is
-// invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
-// (how it was chosen: by default a share of memory), resources.spill.frames
-// and opens, profiles (the development profiles, SWATH_CPUPROFILE and
-// SWATH_MEMPROFILE), resources.spill.read_handles (the spill read handles'
-// hits, misses and evictions) and frame_bytes and frame_rows (the row
-// frames by size), and output.remote (a dataset written to a bucket: its
-// destination, uploads, retries, commit and orphan cleanup). 6:
-// output.committed_object_bytes (the committed dataset's object bytes). 7:
-// outcome.unreadable is the count of entries that could not be read (it
-// was a flag), and outcome.entry_errors is gone. 8 adds fields only (#535):
-// the order stage's waits by site (resources.publish_wait_ns,
-// admission_wait_ns, idle_wait_ns and their peak_* twins),
-// resources.spill.refused_ns and refused_spells, and
-// resources.drain.writer_before_listing_done. 9 adds fields only (#513):
-// resources.spill.durable.limit_bytes and limited_by (the spill the
-// certificate slots and the ledger history cap derive from). 10 adds
-// fields only (#288): resources.drain.segments.certificates_read,
-// certified_rows and certificate_scan_ns (a resume's certificates the
-// segments replayed), and resources.spill.durable.resume.
-// replayed_certificates. 11 adds resources.window, the frontier window of
-// a run planned from a counted --seed-from (#535). 12 adds
-// invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
-// 13 adds fields only (#535): resources.window.spill_rows,
-// peak_behind_bytes, evicted and wakes (the spill gate's refusals, the
-// certificates behind the output it evicted, and the window's wake paths
-// that engage only with durable spill).
-const ReportVersion = 13
+// ReportVersion is the run report's schema version, the report_version field.
+const ReportVersion = 1
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

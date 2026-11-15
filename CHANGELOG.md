@@ -5,7 +5,6 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the run report is at `report_version` 13. The report fields the entries below name are new in it.
 - Go port: a seeded run with many workers and a small spill cap no longer crawls on spill the output has passed.
   The frontier window held admission while live spill was past half the cap, and with durable spill most of that
   spill could be certificates already drained, waiting for the part holding their rows to publish, which no

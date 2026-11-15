@@ -64,17 +64,16 @@ rename; the progress line on the terminal samples the same snapshot. A superviso
 ## Run report
 
 <!-- report:begin -->
-One schema (`report_version` 13) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`report_version` 1) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: a dataset is read by its manifest, never by
-this report. A change to the schema bumps `report_version` and is listed in
-the [changelog](../../CHANGELOG.md). It accounts for this invocation (rows it fetched
+this report. It accounts for this invocation (rows it fetched
 and emitted, requests it made) separately from the dataset (rows retained from an interrupted run, durable,
 committed). Durations are integers with the unit in the name; a measurement that was not taken is absent,
 never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 13 |
+| `report_version` | 1 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not: [filters.md](../filters.md#what-narrows-the-listing)), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `sort_buffer_bytes` (`--sort-buffer`, the bytes buffered for sorted output), `sort_buffer` (how it was chosen: `reason` `explicit`, `capacity_fraction` (1/16 of memory), `cap` (1 GiB), `minimum` or `unknown_fallback` (128 MiB, no memory limit found); `memory_bytes` and `bound_by` (`physical`, `cgroup` or `go_memory_limit`), the least of the limits found: `physical_bytes`, `cgroup_bytes`, `go_memory_limit_bytes`), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`; for a dataset, `cuts_file`, how its cut file was taken: `read` (its cuts are the prior), `absent`, or `refused` with `cuts_refused` saying why ([dataset.md](../dataset.md#the-cut-file)); without it `cuts` is 0 for a dataset whose page index a sorted run reads as it goes) |
