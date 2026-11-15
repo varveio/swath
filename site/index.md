@@ -29,7 +29,7 @@ features:
     link: /docs/output
     linkText: Output
   - title: Save an inventory you can query
-    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it again without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
+    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
     link: /docs/dataset
     linkText: The swath dataset
 ---
@@ -39,8 +39,9 @@ features:
 swath is an open-source command-line tool that lists object stores and filesystems in parallel. It reads
 listing metadata only and never changes what it lists.
 
-A billion-object S3 bucket lists in about three minutes on one 32-vCPU VM, and becomes a sorted Parquet
-inventory in about 14. [How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
+In one live run, swath counted 1.09 billion S3 objects in 177 seconds on one 32-vCPU VM. A separate run of the
+same bucket wrote a sorted Parquet inventory in 846 seconds (about 14 minutes).
+[How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
 
 ## Download
 

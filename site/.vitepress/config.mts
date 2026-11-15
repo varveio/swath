@@ -24,8 +24,20 @@ const GITHUB = 'https://github.com/varveio/swath'
 const ORIGIN = 'https://swath.varve.io'
 
 // Pages under docs/ that are not user documentation: published on GitHub only.
-// A trailing slash names a directory.
-const UNPUBLISHED_DOCS = ['docs/internals/', 'docs/ops/', 'docs/style.md']
+// A trailing slash names a directory. docs/sources.md is the old single Sources page, kept so
+// GitHub links to it still lead somewhere; on the site its address forwards (MOVED).
+const UNPUBLISHED_DOCS = ['docs/internals/', 'docs/ops/', 'docs/style.md', 'docs/sources.md']
+
+// Addresses that were published once, or that a reader may type, served by a short page in
+// site/moved/ that says where the content is now (and forwards, where one page replaces it).
+// They are left out of search (their front matter) and of the sitemap.
+const MOVED: Record<string, string> = {
+  'site/moved/sources.md': 'docs/sources.md',
+  'site/moved/commands.md': 'docs/commands/index.md',
+  'site/moved/reference.md': 'docs/reference/index.md',
+  'site/moved/field-guide.md': 'field-guide/index.md',
+  'site/moved/noaa-gestofs-pds.md': 'runs/noaa-gestofs-pds/index.md',
+}
 
 // Only docs/ and the site's own pages are published: every other top-level entry is
 // excluded by name, so a new directory of Markdown is never published by accident.
@@ -198,6 +210,7 @@ export default defineConfig({
     'site/index.md': 'index.md',
     'docs/README.md': 'docs/index.md',
     'docs/sources/README.md': 'docs/sources/index.md',
+    ...MOVED,
   },
   cleanUrls: true,
   outDir: '.vitepress/dist',
@@ -217,7 +230,15 @@ export default defineConfig({
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:image', content: `${ORIGIN}/card.png` }],
   ],
-  sitemap: { hostname: ORIGIN },
+  sitemap: {
+    hostname: ORIGIN,
+    transformItems: (items) => {
+      const moved = new Set(Object.values(MOVED).map(cleanPath))
+      const urlPath = (url: string) =>
+        '/' + url.replace(/^https?:\/\/[^/]+/, '').replace(/^\//, '').replace(/\.html$/, '')
+      return items.filter((item) => !moved.has(urlPath(item.url)))
+    },
+  },
 
   transformPageData(pageData) {
     const title = TITLES[pageData.filePath]
@@ -232,7 +253,11 @@ export default defineConfig({
     if (pageData.isNotFound) return []
     const url = ORIGIN + cleanPath(pageData.relativePath)
     const home = pageData.relativePath === 'index.md'
-    const title = home ? siteData.title : `${pageData.title} · ${siteData.title}`
+    // The home page's social title says what swath is, as its <title> does (its titleTemplate).
+    const tagline = pageData.frontmatter.titleTemplate
+    const title = home
+      ? (typeof tagline === 'string' ? `${siteData.title}: ${tagline}` : siteData.title)
+      : `${pageData.title} · ${siteData.title}`
     const description = pageData.description || siteData.description
     return [
       ['link', { rel: 'canonical', href: url }],

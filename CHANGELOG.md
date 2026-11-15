@@ -10,6 +10,10 @@ Notable changes per release. The full human summary for the current release is i
   `--exclude-regex`; a 0.3 command line no longer lists nothing and exits 0 (#526). A directory an interrupted
   0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
   `--overwrite`, and `swath resume` refuses it as written by 0.3.
+- Go port: a name from the source that reaches stderr (a local path in an unreadable-entry warning, a key or
+  provider error in a message, a dataset's recorded source) can no longer forge a `swath:` line or send
+  terminal control sequences: text lines write control characters, line separators and invalid UTF-8 bytes as
+  visible escapes, and JSON log lines write them as `\u` escapes (#521).
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
