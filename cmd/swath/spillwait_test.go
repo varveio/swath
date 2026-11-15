@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -29,7 +30,8 @@ import (
 func pressured(since time.Time, ordered int64) listing.ProgressSnapshot {
 	g := &order.GaugeSnapshot{SpillLiveBytes: 91 << 30, SpillMaxBytes: 91 << 30, SpillReserveBytes: 1 << 30}
 	if !since.IsZero() {
-		g.SpillPressureSince = &since
+		at := jsontime.Of(since)
+		g.SpillPressureSince = &at
 	}
 	return listing.ProgressSnapshot{Ordered: ordered, Order: g}
 }

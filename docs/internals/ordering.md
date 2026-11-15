@@ -174,7 +174,7 @@ and a reserve of 32 (`listing.admitEncoders`). An explicit `--encoders N` bypass
 and descriptor admission and is honored with a warning on a resource shortfall.
 
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
-the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
+the report's `timings.provider_finished_at`), the default count is raised to `listing.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
 1,000-key S3 response and its arena) is added to the encoder allowance, still at most `GOMAXPROCS` and the
 descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chunk, S3 part or Azure block), before `GOMAXPROCS` caps it:
@@ -189,7 +189,7 @@ descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chun
 An 8-vCPU host with 8 GiB therefore starts eight writers, local or in a bucket, whatever `--sort-buffer` is. The router holds the extra slots from the
 start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
 goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
-An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
+An explicit `--encoders` is never raised. The report's `diagnostics.resources.drain` carries `encoders_at_start`,
 `encoders_after_listing` and `encoder_admission`: `listing_done`, `explicit`, `at_cap` (the start already
 admitted the most the host carries) or `not_reached` (listing never finished); beside them the allowance
 (`encoder_allowance_bytes`), an encoder's prices (`encoder_writer_bytes`, `encoder_upload_bytes`) and what bound
@@ -291,7 +291,7 @@ part writer, so a capped planned run can be bound by it. The read-ahead plans fr
 plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
 run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
 
-The report's `resources.window` ([counters.md](counters.md#order-stage-and-encoders-run-summary-top-level))
+The report's `diagnostics.resources.window` ([counters.md](counters.md#order-stage-and-encoders-run-summary-top-level))
 counts the tiles admitted and forced, the tiles grown, the window's rows and what set them, the waits at the
 window by the refusal that held them, the drainer's wait for the plan, and the peaks of the tiles held, the
 rows charged to them and the bytes held at an admission, and under the spill gate the window it allowed, the most
@@ -368,7 +368,7 @@ creates no file (`TestCountOnlyHoldsNothing`). A stop reaches the providers thro
 handed over then is disposed, never expanded, so a range emitting only children (a wide local directory
 with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`, with and without empty `Rows` batches
 between the children). The report says so: `features.order` false, `spill` absent,
-`max_buffered_bytes`, `peak_ahead_rows` and `frontier_stuck_max_ns` 0.
+`peak_buffered_bytes`, `peak_ahead_rows` and `max_frontier_stuck_ns` 0.
 
 `order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
 must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
@@ -382,7 +382,7 @@ sorted by byte once, at the end, and written through `listing.Config.Deliver` af
 before the run's end is stamped, so a failed write or a stop during it fails the run.
 
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
-provider), the progress file's `ordered` counter, and a per-range order check: each range's keys strictly
+provider), the progress file's `rows_emitted` counter, and a per-range order check: each range's keys strictly
 ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). A provider that
 skips its sort for a count sets `Options.Unordered`, which drops that check and counts every row as a distinct
 key; it takes no `After` and no groups (`TestCountUnordered`). The local source does, since names in a
@@ -543,7 +543,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   space cannot be measured the default is no cap; a library caller's negative value means none. The report
   says what set the cap (`spill.max_by`: `spill_budget`, `disk`, `disk_half` or `none`), the cap the run
   started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`), how many times it rose
-  (`max_raised`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`max_rechecks`, `max_recheck_raised`); `progress.json`'s `order.spill_max_bytes` rises with it. The
+  (`cap_raises`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`cap_rechecks`, `cap_recheck_raises`); `progress.json`'s `order.spill_max_bytes` rises with it. The
   reserve is checked against the filesystem afterwards (`listing.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
   under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
@@ -563,13 +563,13 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers`, `peak_ahead_rows` (rows received and
-  not yet handed on, in memory or spilled), `frontier_stuck_max_ns` (the longest interval in which the
+  not yet handed on, in memory or spilled), `max_frontier_stuck_ns` (the longest interval in which the
   drainer handed nothing on, closed on every drain exit, so a canceled or failed run reports its last
   stall: `TestInterruptedRunReportsStall`; the interval is closed after the final flush, so a last sink write that
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at its first rows frame spilled, `order.Options.Spilling`; a run that never spills does not: `TestTmpfsSpillWarning`); `progress.json` carries the same as live values with their peaks
-  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin),
+  under `order` (`nodes`, `markers`, `spill_readers`, `spill_bytes`, `ahead_rows`, each with a `peak_` twin),
   with `spill_max_bytes`, `spill_reserve_bytes` and `spill_pressure_since`: since when spill has stood refused
   (the spiller's `full`) while workers wait on it, in publish or at admission, recorded where either changes
   under the spiller's refusal mutex. It is present only while that holds and listing is not done; since `full`
@@ -616,7 +616,7 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   `WaitGroup` waits for reads in flight
   (`TestReadAheadCancelMidReplay`).
 
-The report's `resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
+The report's `diagnostics.resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
 `order_check_ns`, `sink_write_ns`; fields in [counters.md](counters.md)) say what the drainer spent its time
 on. The drainer's times accumulate over the whole run, not the tail alone, so they split `tail_ns` only to the
 extent that the tail is most of the run: then a drainer whose `sink_write_ns` dominates is bound by the sink,
@@ -722,7 +722,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. Beside its writer and that share a worker
   holds one batch of row headers, and the read-ahead stops when segments begin.
 
-The report's `resources.drain.segments` (fields in [counters.md](counters.md)) gives the engagement `reason`,
+The report's `diagnostics.resources.drain.segments` (fields in [counters.md](counters.md)) gives the engagement `reason`,
 what sized the workers (`workers_by`, with both sides of the plan), and the time's split. A tail whose
 `write_ns` is most of `time_ns` is bound by the parts' encoding; one whose `read_ns` is, by the spill disk;
 `budget_waits` well above zero means the plan's share was short and the safety gate held the bound.
@@ -736,7 +736,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   covers it). The report counts what the segments read: `durable_files_read` and `durable_boundaries`.
 - **Reused certificates.** On a resume a reused certificate is a replay range, which no worker lists, so it
   does not count toward the end of listing: listing ends when the gaps around the certificates are listed
-  (`timings.listing_done_at`, and the encoders admitted after listing with it). Before that the drainer
+  (`timings.provider_finished_at`, and the encoders admitted after listing with it). Before that the drainer
   replays a certificate it reaches as always, and so it does after listing until the segments are planned,
   which needs the router's cut rule: a resume whose interrupted run published no part has no frozen part
   limit and states its rule only once its own part 0 has closed by size. The certificates it has not reached
@@ -949,7 +949,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   consumes every rows frame, pre-capture included. Replayed rows reach the order stage without the
   provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
   `objects`, `pages`, `requests` or the filters' counts.
-- **Report.** `resources.spill.durable`: `slots`, `history`, `history_cap`, `limit_bytes`, `limited_by`, `captured_ranges`, `capture_at.{range_start,fence}`,
+- **Report.** `diagnostics.resources.spill.durable`: `slots`, `history`, `history_cap`, `limit_bytes`, `limited_by`, `captured_ranges`, `capture_at.{range_start,fence}`,
   `capture_pending_dropped`, `no_slot`, `history_exhausted`, `metadata_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a

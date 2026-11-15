@@ -57,6 +57,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/replay/legacy/javaera"
 	"github.com/varveio/swath/internal/schema"
@@ -300,7 +301,7 @@ func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Sc
 		SchemaID: sch.ID,
 		Source:   dataset.Source{Kind: "capture", URI: filepath.ToSlash(capture)},
 		Scope:    dataset.Scope{Kind: "whole"},
-		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: time.Now().UTC()},
+		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: jsontime.Of(start), ListingFinishedAt: jsontime.Of(time.Now())},
 	}
 	// The manifest is the commit: it is installed only while the output is
 	// still the directory locked.

@@ -51,7 +51,7 @@ import (
 var maxHandles = MaxSpillReaders
 
 // HandleStats count the spill read handles' use (the report's
-// resources.spill.read_handles).
+// diagnostics.resources.spill.read_handles).
 type HandleStats struct {
 	// Hits are leases served by an open handle, Misses leases that opened
 	// the file; Raced counts misses whose open lost to another's for the

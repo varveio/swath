@@ -67,7 +67,7 @@ def verdict(ok):
 
 def check(r, a):
     rep, ss = r["report"], r["samples"]
-    inv, res, out = rep["invocation"], rep["resources"], rep["output"]
+    inv, res, out = rep["invocation"], rep.get("diagnostics", rep)["resources"], rep["output"]
     # The RSS gate allows twice the row budget: rows plus as much again for
     # encoders, parsing and the collector.
     workers, mem = inv["workers"], 2 * inv.get("sort_buffer_bytes", inv.get("row_budget_bytes"))  # report v5, v4
@@ -75,7 +75,7 @@ def check(r, a):
     rows = out["rows_committed"] or out.get("rows_emitted", out.get("rows_listed"))  # report v2, v1
     wall = rep["timings"]["wall_ms"] / 1000
     hwm = max([s.get("vmhwm_bytes", 0) for s in ss] + [0])
-    peak_rss = res.get("peak_rss_bytes") or hwm
+    peak_rss = rep.get("process", res).get("peak_rss_bytes") or hwm
     rss = [s["vmrss_bytes"] for s in ss if "vmrss_bytes" in s]
     mid, late = thirds(rss)
     g = {}
@@ -122,12 +122,12 @@ def series(r):
             dt = (f.get("as_of_unix_ms", 0) - prev[1].get("as_of_unix_ms", 0)) / 1000 or 1
             rq = (f.get("requests", 0) - prev[1].get("requests", 0)) / dt
             inf = (f.get("busy_ns", 0) - prev[1].get("busy_ns", 0)) / 1e9 / dt
-            ls = (p.get("objects", 0) - prev[0].get("objects", 0)) / dt
-            es = (p.get("encoded", 0) - prev[0].get("encoded", 0)) / dt
+            ls = (p.get("rows_fetched", p.get("objects", 0)) - prev[0].get("rows_fetched", prev[0].get("objects", 0))) / dt
+            es = (p.get("rows_encoded", p.get("encoded", 0)) - prev[0].get("rows_encoded", prev[0].get("encoded", 0))) / dt
         else:
             rq = inf = ls = es = 0
         print(f"| {s['t']:.0f} | {s.get('vmrss_bytes', 0) / MIB:.0f} | {o.get('nodes', 0)} | {o.get('markers', 0)} | "
-              f"{o.get('spill_readers', 0)} | {o.get('spill_live_bytes', 0) / MIB:.0f} | {p.get('part_age_ms', 0) / 1000:.0f} | "
+              f"{o.get('spill_readers', 0)} | {o.get('spill_bytes', o.get('spill_live_bytes', 0)) / MIB:.0f} | {p.get('part_age_ms', 0) / 1000:.0f} | "
               f"{rq:.0f} | {inf:.1f} | {f.get('window_peak_inflight', 0)} | {ls:.0f} | {es:.0f} |")
         prev = (p, f)
 

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,7 +28,9 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
+	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
@@ -74,10 +77,11 @@ func TestDocsLogEvents(t *testing.T) {
 	logClock = func() time.Time { return at }
 	t.Cleanup(func() { logClock = time.Now })
 	setLog(termOptions{verbose: 3, logFormat: logJSON}, "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f")
+	logRun(func() string { return "0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a" })
 	l := elog()
-	l.start(startFields{"s3://bucket/logs/", modeRows, "stdout"})
-	l.progress(listing.ProgressSnapshot{Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
-		StartedAt: at.Add(-time.Minute), AsOf: at, DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
+	l.start(startFields{"s3://bucket/logs/", modeRows, "-"})
+	l.progress(listing.ProgressSnapshot{ProgressVersion: listing.ProgressVersion, AttemptID: "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f", State: listing.StateListing, Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
+		StartedAt: jsontime.Of(at.Add(-time.Minute)), AsOf: jsontime.Of(at), DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
 	w := newFailureWatch("S3", 10*time.Minute)
 	refused := source.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
 	for i := range 14 {
@@ -87,7 +91,7 @@ func TestDocsLogEvents(t *testing.T) {
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
-	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "completed", int64(0), at.Add(-50*time.Hour)
+	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "completed", int64(0), jsontime.Of(at.Add(-50*time.Hour))
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
 		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []reader.Filter{}, Exclusions: []string{}}, at)
 	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
@@ -116,6 +120,9 @@ func TestDocsLogEvents(t *testing.T) {
 			t.Fatalf("not one JSON object: %q", line)
 		}
 		events[fmt.Sprint(e["event"])] = true
+		if e["event"] == evWarning && e["code"] == nil {
+			t.Fatalf("a warning without a code: %s", line)
+		}
 	}
 	for _, e := range []string{evStart, evProgress, evWarning, evRequest, evRetry, evDataset, evRead, evSpillPressure, evOutcome} {
 		if !events[e] {
@@ -123,6 +130,20 @@ func TestDocsLogEvents(t *testing.T) {
 		}
 	}
 	docBlock(t, "reference/log-events.md", "events", "json", got)
+}
+
+// TestDocsWarningCodes: docs/reference/log-events.md names every warning
+// code, the command's and the pipeline's.
+func TestDocsWarningCodes(t *testing.T) {
+	b, err := os.ReadFile(docs.Path(t, "reference/log-events.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range append(slices.Clone(warningCodes), source.WarningCodes...) {
+		if !bytes.Contains(b, []byte("`"+c+"`")) {
+			t.Errorf("warning code %s is not in docs/reference/log-events.md", c)
+		}
+	}
 }
 
 // TestFailureWatch: one cause failing every request warns once it has
@@ -440,7 +461,7 @@ func TestJSONProgress(t *testing.T) {
 			t.Fatalf("not an event: %q", line)
 		}
 	}
-	if !strings.Contains(s, `"event":"outcome","attempt":"`) || !strings.Contains(s, `"class":"completed","exit_code":0`) {
+	if !strings.Contains(s, `"event":"outcome","attempt_id":"`) || !strings.Contains(s, `"class":"completed","exit_code":0`) {
 		t.Fatalf("stderr %q", s)
 	}
 }
@@ -587,7 +608,7 @@ func TestStatusRecordsStayDisposable(t *testing.T) {
 	tt := &termUI{began: time.Now()}
 	for range 1200 {
 		tt.status(listing.ProgressSnapshot{Rows: 1})
-		elog().warn("a warning")
+		elog().warn("test", "a warning")
 	}
 	diagMu.Lock()
 	defer diagMu.Unlock()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/docs"
+	"github.com/varveio/swath/internal/jsontime"
 )
 
 // reportPaths is every JSON path of the run report's own schema, from its
@@ -27,7 +28,7 @@ func reportPaths() []string {
 			t = t.Elem()
 		}
 		switch {
-		case t == reflect.TypeOf(time.Time{}):
+		case t == reflect.TypeOf(time.Time{}), t == reflect.TypeOf(jsontime.Time{}):
 			out = append(out, prefix+" time")
 			return
 		case t.Kind() == reflect.Slice:

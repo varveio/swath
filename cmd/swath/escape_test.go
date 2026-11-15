@@ -70,8 +70,8 @@ func TestUntrustedNamesAreEscapedOnStderr(t *testing.T) {
 		name string
 		emit func(l *eventLog)
 	}{
-		{"warning", func(l *eventLog) { l.warn("cannot read " + hostile) }},
-		{"start", func(l *eventLog) { l.start(startFields{hostile, modeRows, "stdout"}) }},
+		{"warning", func(l *eventLog) { l.warn("test", "cannot read "+hostile) }},
+		{"start", func(l *eventLog) { l.start(startFields{hostile, modeRows, "-"}) }},
 		{"dataset", func(l *eventLog) {
 			s := hostile
 			l.dataset(provenance{Path: hostile, Source: &s, Complete: &complete}, time.Now())

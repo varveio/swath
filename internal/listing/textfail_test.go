@@ -95,7 +95,7 @@ func TestTextCompressorFailureStopsListing(t *testing.T) {
 	if !errors.Is(err, syscall.EIO) {
 		t.Fatalf("err %v after %v, want the disk's EIO", err, time.Since(start))
 	}
-	if c := sum.Output.Text.Compressor; c == nil || c.Jobs < 2 {
+	if c := sum.Text.Compressor; c == nil || c.Jobs < 2 {
 		t.Fatalf("compressor %+v: the test needs parallel jobs", c)
 	}
 	if d := time.Since(start); d > 10*time.Second {

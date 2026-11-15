@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source"
 )
@@ -40,6 +41,8 @@ type Progress struct {
 	lastPart atomic.Int64 // unix nanoseconds of the last part published
 	verified atomic.Int64 // bytes of retained parts read by a resume's verification
 	gauges   atomic.Pointer[order.Gauges]
+	state    atomic.Pointer[string]    // a State*; nil: StateListing
+	ids      atomic.Pointer[[2]string] // the attempt's and the run's ids
 
 	mu    sync.Mutex    // held across an owned write and across a change of ownership
 	owner *journal.Lock // the output's lock while the run holds it, else nil
@@ -75,12 +78,78 @@ func (p *Progress) own(l *journal.Lock) {
 	p.mu.Unlock()
 }
 
-// ProgressSnapshot is Progress at one moment.
+// identify names the attempt and the run p is the progress of.
+func (p *Progress) identify(att *Attempt, run *RunInfo) {
+	if p == nil {
+		return
+	}
+	var ids [2]string
+	if att != nil {
+		ids[0] = att.ID
+	}
+	if run != nil {
+		ids[1] = run.ID
+	}
+	p.ids.Store(&ids)
+}
+
+// Started reports whether the run has started listing (a refusal under
+// the output's lock never does).
+func (p *Progress) Started() bool { return p != nil && p.started.Load() != 0 }
+
+// RunID is the id of the run p is the progress of ("" before its output
+// is opened).
+func (p *Progress) RunID() string {
+	if p == nil {
+		return ""
+	}
+	if ids := p.ids.Load(); ids != nil {
+		return ids[1]
+	}
+	return ""
+}
+
+// setState records the run's state (a State*).
+func (p *Progress) setState(s string) {
+	if p != nil {
+		p.state.Store(&s)
+	}
+}
+
+// End records how the run ended: StateDone without err, else StateFailed.
+func (p *Progress) End(err error) {
+	if err == nil {
+		p.setState(StateDone)
+	} else {
+		p.setState(StateFailed)
+	}
+}
+
+// ProgressVersion is the progress file's schema version, its
+// progress_version member.
+const ProgressVersion = 1
+
+// A run's states, in order (ProgressSnapshot.State). A run that ends is
+// done or failed, its last snapshot with its final counts.
+const (
+	StateListing    = "listing"    // the provider lists (and a resume verifies its retained parts first)
+	StateDraining   = "draining"   // the provider finished: the order stage hands on the rows it holds
+	StatePublishing = "publishing" // the last part is written: the manifest is being committed
+	StateDone       = "done"       // the run finished: its dataset committed, its text written
+	StateFailed     = "failed"     // the run ended without its output
+)
+
+// ProgressSnapshot is Progress at one moment. Its counts are named as the
+// run report's (rows_fetched, rows_emitted, parts_written, http_attempts).
 type ProgressSnapshot struct {
-	Rows    int64 `json:"rows"`    // rows listed so far (directories and versions included)
-	Ordered int64 `json:"ordered"` // rows handed to the encoders
-	Encoded int64 `json:"encoded"` // rows written into parts
-	Parts   int64 `json:"parts"`   // parts published
+	ProgressVersion int    `json:"progress_version"`
+	AttemptID       string `json:"attempt_id,omitempty"` // the report's attempt.id
+	RunID           string `json:"run_id,omitempty"`     // the report's run.id (absent until the output is opened)
+	State           string `json:"state"`                // a State*
+	Rows            int64  `json:"rows_fetched"`         // rows listed so far (directories and versions included)
+	Ordered         int64  `json:"rows_emitted"`         // rows handed to the encoders
+	Encoded         int64  `json:"rows_encoded"`         // rows written into parts
+	Parts           int64  `json:"parts_written"`        // parts published
 	// Verified is the bytes of retained parts a resume has read to check
 	// them against the journal (size and MD5), before it lists.
 	Verified int64 `json:"verified_bytes"`
@@ -106,26 +175,26 @@ type ProgressSnapshot struct {
 	// Retained is the rows a resume kept from the interrupted run (not
 	// listed by this attempt, so not in Rows).
 	Retained int64 `json:"rows_retained"`
-	// Requests, Retries, Inflight and Limit are the source's HTTP account
+	// Requests (http_attempts), Retries, Inflight and Limit are the source's HTTP account
 	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
 	// retries, requeues), attempts repeated, attempts in flight now, and
 	// the adaptive limiter's current limit (0 without one). CostUSD is
 	// Requests at the source's reference tariff (absent without one).
-	Requests int64    `json:"requests"`
+	Requests int64    `json:"http_attempts"`
 	Retries  int64    `json:"retries"`
 	Inflight int64    `json:"inflight"`
 	Limit    int64    `json:"limit"`
 	CostUSD  *float64 `json:"cost_usd,omitempty"`
 	// CostRatePer1kUSD is the reference rate CostUSD is derived from.
-	CostRatePer1kUSD float64 `json:"cost_rate_per_1k_usd,omitempty"`
-	// MutexWaitMs and MutexMaxHoldMs are the range engine's decision
+	CostRatePer1kUSD float64 `json:"rate_per_1k_usd,omitempty"`
+	// MutexWaitNs and MaxMutexHoldNs are the range engine's decision
 	// mutex: the goroutines' total wait for it and its longest hold
 	// (source.Contended; 0 otherwise).
-	MutexWaitMs    float64   `json:"mutex_wait_ms"`
-	MutexMaxHoldMs float64   `json:"mutex_max_hold_ms"`
-	StartedAt      time.Time `json:"started_at"`  // zero before the run starts
-	AsOf           time.Time `json:"as_of"`       //
-	DurationMs     int64     `json:"duration_ms"` // since StartedAt
+	MutexWaitNs    int64         `json:"mutex_wait_ns"`
+	MaxMutexHoldNs int64         `json:"max_mutex_hold_ns"`
+	StartedAt      jsontime.Time `json:"started_at"`  // zero before the run starts
+	AsOf           jsontime.Time `json:"as_of"`       //
+	DurationMs     int64         `json:"duration_ms"` // since StartedAt
 	// Order is the order stage's live resources with their peaks:
 	// outstanding nodes, spill markers, open spill readers, live spill
 	// bytes (nil before the stage starts).
@@ -139,9 +208,15 @@ type ProgressSnapshot struct {
 // Snapshot reads p; a nil Progress reads as zero.
 func (p *Progress) Snapshot() ProgressSnapshot {
 	now := time.Now()
-	s := ProgressSnapshot{AsOf: now.UTC()}
+	s := ProgressSnapshot{ProgressVersion: ProgressVersion, State: StateListing, AsOf: jsontime.Of(now)}
 	if p == nil {
 		return s
+	}
+	if ids := p.ids.Load(); ids != nil {
+		s.AttemptID, s.RunID = ids[0], ids[1]
+	}
+	if st := p.state.Load(); st != nil {
+		s.State = *st
 	}
 	if f := p.listed.Load(); f != nil {
 		s.Rows = (*f)()
@@ -158,7 +233,7 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	if f := p.contention.Load(); f != nil {
 		w, h := (*f)()
-		s.MutexWaitMs, s.MutexMaxHoldMs = float64(w)/1e6, float64(h)/1e6
+		s.MutexWaitNs, s.MaxMutexHoldNs = int64(w), int64(h)
 	}
 	if f := p.requests.Load(); f != nil {
 		r := (*f)()
@@ -177,8 +252,8 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	s.Advance = s.Rows + s.Ordered + s.Encoded + s.Parts + s.Verified + s.Scanned
 	if st := p.started.Load(); st != 0 {
-		s.StartedAt = time.Unix(0, st).UTC()
-		s.DurationMs = now.Sub(s.StartedAt).Milliseconds()
+		s.StartedAt = jsontime.Of(time.Unix(0, st))
+		s.DurationMs = now.Sub(s.StartedAt.Time).Milliseconds()
 		s.PartAgeMs = s.DurationMs
 	}
 	if lp := p.lastPart.Load(); lp != 0 {

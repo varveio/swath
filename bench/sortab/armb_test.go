@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
@@ -483,7 +484,7 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 	st.EncoderWaitNs = int64(router.EncoderWait())
 	now := time.Now()
 	meta := dataset.Meta{SchemaID: s3.Schema.ID, Source: dataset.Source{Kind: "sortab", URI: "sortab://" + p.l.Name}, Scope: dataset.Scope{Kind: "whole"},
-		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: now.UTC()}}
+		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: jsontime.Of(start), ListingFinishedAt: jsontime.Of(now)}}
 	if err := dataset.Publish(out, meta, ps, nil); err != nil {
 		return st, err
 	}

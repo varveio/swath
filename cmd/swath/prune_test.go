@@ -18,11 +18,13 @@ import (
 )
 
 type commandPruneReport struct {
-	Output  listing.Output
-	Outcome listing.Outcome
-	Source  struct {
-		Name  string
-		Stats localfs.Stats
+	Output      listing.Output
+	Outcome     listing.Outcome
+	Diagnostics struct {
+		Source struct {
+			Name  string
+			Stats localfs.Stats
+		}
 	}
 }
 
@@ -30,13 +32,13 @@ func checkCommandPruning(t *testing.T, path string, pruned, fetched, filtered, e
 	t.Helper()
 	var report commandPruneReport
 	readJSON(t, path, &report)
-	out, stats := report.Output, report.Source.Stats
+	out, stats := report.Output, report.Diagnostics.Source.Stats
 	if out.RowsFetched != fetched || out.RowsFiltered != filtered || out.RowsEmitted != emitted || out.RowsFetched != out.RowsFiltered+out.RowsEmitted {
 		t.Fatalf("row account: fetched=%d filtered=%d emitted=%d, want %d/%d/%d", out.RowsFetched, out.RowsFiltered, out.RowsEmitted, fetched, filtered, emitted)
 	}
-	if report.Source.Name != "local" || stats.PrunedDirs != pruned || stats.Pruning == nil ||
+	if report.Diagnostics.Source.Name != "local" || stats.PrunedDirs != pruned || stats.Pruning == nil ||
 		stats.Pruning.RecursiveGlobs != 1 || stats.Pruning.RowOnlyGlobs != 1 || stats.Pruning.RegexRules != 1 {
-		t.Fatalf("source %q stats %+v pruning %+v", report.Source.Name, stats, stats.Pruning)
+		t.Fatalf("source %q stats %+v pruning %+v", report.Diagnostics.Source.Name, stats, stats.Pruning)
 	}
 	if stats.Errors() != 0 || report.Outcome.Unreadable != 0 {
 		t.Fatalf("intentional pruning counted as unreadable: %+v", report)
@@ -68,8 +70,8 @@ func TestPruneCommandParquet(t *testing.T) {
 				t.Fatalf("coverage %+v, want original filters %q and complete coverage", manifest.Coverage, filters)
 			}
 			report := checkCommandPruning(t, filepath.Join(dir, dataset.ReportName), 1, 5, 1, 4)
-			if report.Output.RowsCommitted != 4 || report.Source.Stats.DirsRead != 3 {
-				t.Fatalf("committed=%d directories read=%d, want 4 and 3", report.Output.RowsCommitted, report.Source.Stats.DirsRead)
+			if report.Output.RowsCommitted != 4 || report.Diagnostics.Source.Stats.DirsRead != 3 {
+				t.Fatalf("committed=%d directories read=%d, want 4 and 3", report.Output.RowsCommitted, report.Diagnostics.Source.Stats.DirsRead)
 			}
 		})
 	}

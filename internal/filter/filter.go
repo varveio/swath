@@ -31,6 +31,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/reader"
@@ -208,14 +209,14 @@ func (s *Spec) Descriptions() []reader.Filter {
 }
 
 // timeText is a --modified-since or --modified-until value (resolved) as
-// RFC 3339 in UTC with six fraction digits, the rows' form; text that is
+// jsontime.Format (the rows' form, as every JSON time); text that is
 // not a time stays as given.
 func timeText(text string) string {
 	us, err := ParseTime(text)
 	if text == "" || err != nil {
 		return text
 	}
-	return time.UnixMicro(us).UTC().Format("2006-01-02T15:04:05.000000Z07:00")
+	return jsontime.Format(time.UnixMicro(us))
 }
 
 // KeyExcluded returns a predicate on keys: true when the include and exclude
