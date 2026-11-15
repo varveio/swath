@@ -45,8 +45,12 @@ func (p *issuer) Retrieve(context.Context) (aws.Credentials, error) {
 	if p.same {
 		n = 1
 	}
+	// Each fetch's expiry is later than the one before, as a renewed
+	// session's is, whatever the clock's resolution: two fetches within one
+	// tick of a coarse clock would otherwise return identical credentials,
+	// which no generation can tell apart.
 	return aws.Credentials{AccessKeyID: fmt.Sprintf("AK%d", n), SecretAccessKey: "s", SessionToken: "t", CanExpire: true,
-		Expires: time.Now().Add(p.life)}, nil
+		Expires: time.Now().Add(p.life + time.Duration(p.calls.Load())*time.Millisecond)}, nil
 }
 
 // TestRefreshAheadOncePerLifetime: through the SDK's cache, whose clock a
