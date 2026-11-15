@@ -295,7 +295,7 @@ func helpOf(cmd command) commandHelp {
 			detail:   "They exist to run an experiment or a comparison, not to operate the tool. " + src,
 			examples: []string{"swath diag list " + a + " -o ds --no-seed", "swath diag list " + a + " -o ds --page-size 100"}}
 	case cmd.du:
-		return commandHelp{usage: []string{"du SOURCE [OPTIONS]", "du --from-dataset DIR [PREFIX] [OPTIONS]"},
+		return commandHelp{usage: []string{"du SOURCE [OPTIONS]", "du --from-dataset DIR [SOURCE] [OPTIONS]"},
 			about: "Total SOURCE's objects (a local tree's files), bytes and newest time, per prefix with -d N. " +
 				"Each run lists SOURCE again; --from-dataset DIR totals a dataset saved by swath list -o DIR instead.",
 			detail: "-d N totals each prefix down to N levels below SOURCE, a parent including its children, as du. A table on a terminal puts the total last; " +

@@ -30,7 +30,8 @@ type DatasetRead struct {
 
 // DatasetTotals sums the rows of the committed dataset d whose keys start
 // with prefix into t, through the filters f (nil: none), as a listing's
-// rows are summed: the same binding to the schema (bindTotals,
+// rows are summed; relative sums them as a listing of the directory prefix
+// names would have keyed them, prefix trimmed and its own row left out: the same binding to the schema (bindTotals,
 // filter.Compile, the version roles and the containers the producer
 // declares, SchemaInfo) over a payload that reads the dataset's columns.
 // It seeks to prefix and reads the key and only the columns the totals and
@@ -38,7 +39,7 @@ type DatasetRead struct {
 // totals or filter option the schema cannot answer, and a dataset whose
 // parts break its schema (reader.Dataset.CheckSchema: every part's footer
 // and columns), are refused before any row is read.
-func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, f *filter.Spec, t *totals.Tally, workers int) (DatasetRead, error) {
+func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relative bool, f *filter.Spec, t *totals.Tally, workers int) (DatasetRead, error) {
 	var read DatasetRead
 	id := d.Metadata().SchemaID
 	spec, ok := reader.Schema(id)
@@ -95,6 +96,11 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, f *fil
 			// The key views the batch, which outlives the sink's Write: the
 			// tally copies a prefix it keeps.
 			k := b.Key(i)
+			if relative {
+				if k = k[len(prefix):]; len(k) == 0 {
+					continue // the directory itself, which its listing does not hold
+				}
+			}
 			r := schema.Row[stored]{Key: unsafe.String(unsafe.SliceData(k), len(k)), Data: stored{views, i}}
 			if keep != nil && !keep(&r) {
 				dropped++

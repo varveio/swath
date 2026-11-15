@@ -472,9 +472,10 @@ type options struct {
 	allocated, apparentSize, countLinks bool
 	sortBy                              string // --sort: sortName or sortSize
 	totals                              *totalsOut
-	// swath du --from-dataset DIR [PREFIX]: the dataset directory, and the
-	// key prefix the totals are restricted to ("": the dataset's scope).
-	fromDataset, datasetPrefix string
+	// swath du --from-dataset DIR [SOURCE]: the dataset directory, and the
+	// SOURCE the totals are restricted to, as given ("": the dataset's
+	// scope).
+	fromDataset, datasetSource string
 	// A bucket -o (gs://, s3:// or az://): its work directory, its
 	// credentials, region and endpoint (--work-dir,
 	// --output-gcs-credentials-file, --output-s3-profile,
