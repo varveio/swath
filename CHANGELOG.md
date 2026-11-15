@@ -41,6 +41,8 @@ Notable changes per release. The full human summary for the current release is i
   `http_attempts`; `start.destination` is `-` for stdout and `start.source` is spelled as the manifest's
   `source.uri` (a local path absolute).
 
+- Go port: a run stopped while its parts were still publishing no longer lets a later part add its page ends to
+  the cut file's cuts beside an earlier part still adding its own (a data race, seen under the race detector).
 - Go port: `swath du`'s rows carry both byte figures under the dataset's names, `size` (the lengths) and
   `allocated_bytes` (a local file's blocks), whatever `--allocated` says; `allocated_size` is gone. `unsized`
   is replaced by `size_missing` and `allocated_bytes_missing`: a figure no counted object had is null, one

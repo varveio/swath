@@ -177,9 +177,14 @@ func TestDeadlineWithoutJournal(t *testing.T) {
 	src := localSource(t)
 	const advice = "swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)\n"
 	file := filepath.Join(t.TempDir(), "rows.tsv")
+	// The deadline has passed when the run starts. A 1ns timer alone may
+	// not fire before two files are listed where the monotonic clock is
+	// coarse (Windows CI, 2026-11-15: exit 0).
+	passed, cancel := context.WithCancelCause(context.Background())
+	cancel(errDeadline)
 	for _, out := range []string{file, filepath.Join(t.TempDir(), "ds")} {
 		stderr.Reset()
-		code := conclude(run(context.Background(), []string{src, "--max-duration", "1ns", "-o", out, "--stats", "--no-progress"}, io.Discard, false))
+		code := conclude(run(passed, []string{src, "--max-duration", "1ns", "-o", out, "--stats", "--no-progress"}, io.Discard, false))
 		got := stderr.String()
 		if code != exitDeadline || !strings.HasSuffix(got, advice) || out == file && !strings.Contains(got, "\n  no file written") {
 			t.Fatalf("-o %s: exit %d, stderr %q", out, code, got)
