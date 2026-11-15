@@ -51,7 +51,7 @@ refuses every connection stops the run after about 30 seconds (exit 75, cause `u
 
 `--ca-bundle FILE` trusts the certificates in a PEM file besides the system's (a private certificate
 authority). `--no-verify-ssl` checks no certificate, for a test endpoint only: it warns on every run that
-has it, a resume included, and the report's `source.stats.no_verify_ssl` is true. Both apply to the
+has it, a resume included, and the report's `diagnostics.source.stats.no_verify_ssl` is true. Both apply to the
 credential lookups swath makes over HTTPS (S3's STS and SSO, GCS's token exchange) as to the listing. A resume
 may give either again; `--verify-ssl` undoes a recorded `--no-verify-ssl`.
 

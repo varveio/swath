@@ -86,12 +86,14 @@ func TestTrustFlags(t *testing.T) {
 					"--report", "-", "-o", filepath.Join(t.TempDir(), "ds")}, args...), unjournaled...)
 				err = run(context.Background(), args, &out, diagList)
 				var rep struct {
-					Source struct{ Stats map[string]any }
+					Diagnostics struct {
+						Source struct{ Stats map[string]any }
+					}
 				}
 				if jerr := json.Unmarshal(out.Bytes(), &rep); jerr != nil && err == nil {
 					t.Fatalf("report: %v", jerr)
 				}
-				return rep.Source.Stats, errBuf.String(), err
+				return rep.Diagnostics.Source.Stats, errBuf.String(), err
 			}
 			if _, _, err := list(); err == nil || !strings.Contains(err.Error(), "certificate") {
 				t.Fatalf("an untrusted certificate: %v", err)

@@ -32,30 +32,32 @@ type segReport struct {
 		RowsFiltered int64 `json:"rows_filtered"`
 		RowsEmitted  int64 `json:"rows_emitted"`
 	} `json:"output"`
-	Resources struct {
-		Spill *struct {
-			Durable *struct {
-				SealedFiles int64 `json:"sealed_files"`
-				Resume      *struct {
-					Accepted             int64 `json:"accepted"`
-					ReplayedRows         int64 `json:"replayed_rows"`
-					ReplayedCertificates int64 `json:"replayed_certificates"`
-				} `json:"resume"`
-			} `json:"durable"`
-		} `json:"spill"`
-		Drain struct {
-			Segments *struct {
-				Reason            string `json:"reason"`
-				Workers           int    `json:"workers"`
-				Rows              int64  `json:"rows"`
-				DurableFilesRead  int    `json:"durable_files_read"`
-				DurableBoundaries int    `json:"durable_boundaries"`
-				CertificatesRead  int64  `json:"certificates_read"`
-				CertifiedRows     int64  `json:"certified_rows"`
-				CertificateScanNs int64  `json:"certificate_scan_ns"`
-			} `json:"segments"`
-		} `json:"drain"`
-	} `json:"resources"`
+	Diagnostics struct {
+		Resources struct {
+			Spill *struct {
+				Durable *struct {
+					SealedFiles int64 `json:"sealed_files"`
+					Resume      *struct {
+						Accepted             int64 `json:"accepted"`
+						ReplayedRows         int64 `json:"replayed_rows"`
+						ReplayedCertificates int64 `json:"replayed_certificates"`
+					} `json:"resume"`
+				} `json:"durable"`
+			} `json:"spill"`
+			Drain struct {
+				Segments *struct {
+					Reason            string `json:"reason"`
+					Workers           int    `json:"workers"`
+					Rows              int64  `json:"rows"`
+					DurableFilesRead  int    `json:"durable_files_read"`
+					DurableBoundaries int    `json:"durable_boundaries"`
+					CertificatesRead  int64  `json:"certificates_read"`
+					CertifiedRows     int64  `json:"certified_rows"`
+					CertificateScanNs int64  `json:"certificate_scan_ns"`
+				} `json:"segments"`
+			} `json:"drain"`
+		} `json:"resources"`
+	} `json:"diagnostics"`
 }
 
 func readSegReport(t *testing.T, at, path string) segReport {
@@ -64,7 +66,7 @@ func readSegReport(t *testing.T, at, path string) segReport {
 	if b, err := os.ReadFile(path); err != nil || json.Unmarshal(b, &r) != nil {
 		t.Fatalf("%s: report: %v", at, err)
 	}
-	if r.Resources.Drain.Segments == nil || r.Resources.Spill == nil || r.Resources.Spill.Durable == nil {
+	if r.Diagnostics.Resources.Drain.Segments == nil || r.Diagnostics.Resources.Spill == nil || r.Diagnostics.Resources.Spill.Durable == nil {
 		t.Fatalf("%s: no segments or durable spill in the report", at)
 	}
 	return r
@@ -212,9 +214,9 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	// replayed = emitted.
 	reconciled := func(at string, r segReport) {
 		t.Helper()
-		sg, o := r.Resources.Drain.Segments, r.Output
+		sg, o := r.Diagnostics.Resources.Drain.Segments, r.Output
 		var replayed, certs int64
-		if res := r.Resources.Spill.Durable.Resume; res != nil {
+		if res := r.Diagnostics.Resources.Spill.Durable.Resume; res != nil {
 			replayed, certs = res.ReplayedRows, res.ReplayedCertificates
 		}
 		t.Logf("%s: segments %s, %d workers, %d rows, %d durable files read, %d boundaries in them, %d of %d certificates replayed (%d rows); %d fetched, %d replayed, %d emitted",
@@ -230,11 +232,11 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	engaged := func(at string, r segReport) {
 		t.Helper()
 		reconciled(at, r)
-		sg, o := r.Resources.Drain.Segments, r.Output
+		sg, o := r.Diagnostics.Resources.Drain.Segments, r.Output
 		if sg.Reason != "engaged" || sg.Workers < 2 || sg.Rows == 0 || sg.DurableFilesRead < 1 {
 			t.Fatalf("%s: the segments did not replay durable files: %+v", at, *sg)
 		}
-		res := r.Resources.Spill.Durable.Resume
+		res := r.Diagnostics.Resources.Spill.Durable.Resume
 		if res == nil {
 			return
 		}
@@ -261,11 +263,11 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	run("clean run", exec.Command(bin, args(ref, "--report", report)...), "")
 	r := readSegReport(t, "clean run", report)
 	engaged("clean run", r)
-	if sg := r.Resources.Drain.Segments; sg.Reason != "engaged" || sg.DurableFilesRead < 1 {
+	if sg := r.Diagnostics.Resources.Drain.Segments; sg.Reason != "engaged" || sg.DurableFilesRead < 1 {
 		t.Fatalf("clean run: segments %+v: want engaged over durable files", *sg)
 	}
-	if r.Resources.Drain.Segments.DurableBoundaries < 1 || r.Resources.Spill.Durable.SealedFiles < 1 {
-		t.Fatalf("clean run: %d segment boundaries inside durable frames, %d sealed files: want both", r.Resources.Drain.Segments.DurableBoundaries, r.Resources.Spill.Durable.SealedFiles)
+	if r.Diagnostics.Resources.Drain.Segments.DurableBoundaries < 1 || r.Diagnostics.Resources.Spill.Durable.SealedFiles < 1 {
+		t.Fatalf("clean run: %d segment boundaries inside durable frames, %d sealed files: want both", r.Diagnostics.Resources.Drain.Segments.DurableBoundaries, r.Diagnostics.Resources.Spill.Durable.SealedFiles)
 	}
 
 	resume := func(at, out, kill string, extra ...string) segReport {
@@ -310,7 +312,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	resume(at, out, "spill-replay-frame:2")
 	r = resume(at+" again", out, "")
 	engaged(at, r)
-	if res := r.Resources.Spill.Durable.Resume; res == nil || res.ReplayedRows == 0 {
+	if res := r.Diagnostics.Resources.Spill.Durable.Resume; res == nil || res.ReplayedRows == 0 {
 		t.Fatalf("%s: the second resume replayed no certificate", at)
 	}
 	same(at, ref, out)
@@ -341,7 +343,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		"SWATH_TEST_DRAIN_AFTER_LISTING=1", "SWATH_TEST_SLOW_AT=spill-replay:400ms")
 	r = readSegReport(t, at, rep)
 	engaged(at, r)
-	if d := time.Duration(r.Resources.Drain.Segments.CertificateScanNs); d < 1200*time.Millisecond {
+	if d := time.Duration(r.Diagnostics.Resources.Drain.Segments.CertificateScanNs); d < 1200*time.Millisecond {
 		t.Fatalf("%s: the scans took %s, not past the stall timeout", at, d)
 	}
 	same(at, ref, out)

@@ -452,9 +452,14 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 		t.Fatalf("first attempt: exit %d (%v)", c, err)
 	}
 	old, rep := readOutcome(), readReport(r1)
-	if rep.Attempt.ID != old.Attempt.ID || !rep.Attempt.Started.Equal(old.Attempt.Started) || rep.Outcome.ExitCode != exitStuck || old.ExitCode != exitStuck {
+	if rep.Attempt.ID != old.Attempt.ID || !rep.Attempt.StartedAt.Equal(old.Attempt.StartedAt.Time) || rep.Outcome.ExitCode != exitStuck || old.ExitCode != exitStuck {
 		t.Fatalf("first attempt: error.json %+v and report %+v %+v disagree", old, rep.Attempt, rep.Outcome)
 	}
+	// The run is the journal's: not the attempt, the same in error.json.
+	if rep.Run == nil || old.Run == nil || rep.Run.ID != old.Run.ID || rep.Run.ID == rep.Attempt.ID || len(rep.Run.ID) != 32 {
+		t.Fatalf("first attempt: run %+v in the report, %+v in error.json", rep.Run, old.Run)
+	}
+	run1 := rep.Run.ID
 	stale, _ := os.ReadFile(errorFile)
 
 	restoreIO := failOutcomeWrites()
@@ -470,8 +475,11 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 	if rep.Attempt.ID == old.Attempt.ID || rep.Outcome.ExitCode != exitStuck || !strings.Contains(rep.Outcome.Unrecorded, "write "+errorName) {
 		t.Fatalf("second attempt: report %+v %+v against the stale %+v", rep.Attempt, rep.Outcome, old.Attempt)
 	}
-	if rep.Attempt.Started.Before(old.Attempt.Started) {
-		t.Fatalf("second attempt started %v, before the first %v", rep.Attempt.Started, old.Attempt.Started)
+	if rep.Attempt.StartedAt.Before(old.Attempt.StartedAt.Time) {
+		t.Fatalf("second attempt started %v, before the first %v", rep.Attempt.StartedAt, old.Attempt.StartedAt)
+	}
+	if rep.Run == nil || rep.Run.ID != run1 {
+		t.Fatalf("the resume's run %+v, the run's %s", rep.Run, run1)
 	}
 
 	// A refusal before the run (a damaged journal), its write failing too.

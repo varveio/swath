@@ -32,6 +32,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/runtrace"
@@ -110,11 +111,11 @@ func main() {
 				if ok {
 					chosen.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
-				elog().warn(fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
+				elog().warn(warnForcedExit, fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
 				if ok {
 					forcedAccount(f, s, why)
 				} else {
-					elog().warn("the run's result could not be read in time; no outcome is written")
+					elog().warn(warnOutcomeUnrecorded, "the run's result could not be read in time; no outcome is written")
 				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
 				exit(int(chosen.Load()))
@@ -175,7 +176,7 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 func newAttempt() *listing.Attempt {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
-	return &listing.Attempt{ID: hex.EncodeToString(b[:]), Started: time.Now().UTC()}
+	return &listing.Attempt{ID: hex.EncodeToString(b[:]), StartedAt: jsontime.Of(time.Now())}
 }
 
 // cfgOut is the output directory a run with o would own ("" for swath
@@ -828,7 +829,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
-		Warn:    func(m string) { elog().warn(m) },
+		Warn:    func(c, m string) { elog().warn(c, m) },
 	}
 	if t := o.totals; t != nil {
 		cfg.Totals = t.tally
@@ -843,7 +844,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
 			Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	}
-	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(m) })
+	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(warnProfile, m) })
 	if err != nil {
 		return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
 	}
@@ -880,6 +881,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
+	logRun(cfg.Progress.RunID)
 	fw := newFailureWatch(pf.Title, o.stall)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
@@ -911,6 +913,11 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
+		if cfg.Progress.Started() {
+			// The run's final snapshot, done or failed; a refusal under
+			// the lock leaves the file as the run before it left it.
+			writeProgress(cfg.Output.Dir, cfg.Progress)
+		}
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
 		if werr := writeOutcome(cfg.Output.Dir, outcomeOf(sum)); werr != nil {
 			unrecorded = "write " + errorName + ": " + werr.Error()
@@ -922,7 +929,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// the same screen while swath list's text goes there; swath du's table
 	// comes after its listing, when the live line is gone.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), pf.Scheme == "", o, cfg.Output.Dir), cfg.Output.Dir != "", n, toStdout && stdoutTerminal())
 	defer tt.close()
 	if t := o.totals; t != nil {
 		if tt.disp != nil && stdoutTerminal() {
@@ -958,7 +965,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		// A mistyped prefix lists nothing, which is no failure: it says so,
 		// as swath du --from-dataset does.
 		if p, perr := pf.KeyPrefix(root); perr == nil && p != "" {
-			elog().warn(fmt.Sprintf("no key starts with %q", p))
+			elog().warn(warnPrefixNotFound, fmt.Sprintf("no key starts with %q", p))
 		}
 	}
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
@@ -987,7 +994,7 @@ func closeTrace(w *runtrace.Writer, f *os.File, path, status, class string) {
 		err = cerr
 	}
 	if err != nil {
-		elog().warn("--trace " + path + ": " + err.Error())
+		elog().warn(warnTrace, "--trace "+path+": "+err.Error())
 	}
 }
 
@@ -1100,7 +1107,7 @@ func countLine(stdout io.Writer, sum listing.Report) {
 	}
 	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
 		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
-		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
+		measured(sum.Process.PeakRSSBytes, 1<<20, "%.1fMiB"))
 	fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
 }
 

@@ -16,7 +16,7 @@ const heapEvery = 100 * time.Millisecond
 const heapLive = "/gc/heap/live:bytes"
 
 // sampleHeap samples the live heap until the returned function is called,
-// which returns its peak (resources.peak_heap_live_bytes). Against
+// which returns its peak (diagnostics.resources.peak_heap_live_bytes). Against
 // --sort-buffer it shows the memory the budget does not see: pages a
 // retained string keeps alive, the garbage collector's working set aside.
 func sampleHeap() func() int64 {

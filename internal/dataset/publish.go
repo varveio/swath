@@ -15,6 +15,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/reader"
 )
 
@@ -214,7 +215,7 @@ func ObjectBytes(parts []Part, sized bool) *int64 {
 // swathExtension is extensions.swath.
 type swathExtension struct {
 	Version              int              `json:"version"`
-	PublishedAt          time.Time        `json:"published_at"`
+	PublishedAt          jsontime.Time    `json:"published_at"`
 	Source               Source           `json:"source"`
 	Scope                Scope            `json:"scope"`
 	Coverage             Coverage         `json:"coverage"`
@@ -225,7 +226,7 @@ type swathExtension struct {
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
+	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: jsontime.Of(m.PublishedAt), Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
 		Collected: m.Collected, CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
 	if x.Collected.Columns == nil {
 		x.Collected.Columns = []string{}
@@ -263,7 +264,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		}
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
-		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Collected: x.Collected,
+		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt.Time, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Collected: x.Collected,
 		CommittedObjectBytes: x.CommittedObjectBytes,
 		Filesystem:           x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
@@ -301,8 +302,8 @@ type Coverage struct {
 	Unreadable        int64           `json:"unreadable"`  // entries missing because they could not be read
 	Exclusions        []string        `json:"exclusions"`
 	Filters           []reader.Filter `json:"filters"`
-	ListingStartedAt  time.Time       `json:"listing_started_at"`
-	ListingFinishedAt time.Time       `json:"listing_finished_at"`
+	ListingStartedAt  jsontime.Time   `json:"listing_started_at"`
+	ListingFinishedAt jsontime.Time   `json:"listing_finished_at"`
 }
 
 // Collected is what a listing read beyond its schema's columns that every
@@ -319,10 +320,10 @@ type Collected struct {
 // ended. Free may exceed total on Windows, where a quota bounds the total
 // and the available bytes but not the free bytes.
 type FilesystemSpace struct {
-	TotalBytes     int64     `json:"total_bytes"`
-	FreeBytes      int64     `json:"free_bytes"`
-	AvailableBytes int64     `json:"available_bytes"`
-	MeasuredAt     time.Time `json:"measured_at"`
+	TotalBytes     int64         `json:"total_bytes"`
+	FreeBytes      int64         `json:"free_bytes"`
+	AvailableBytes int64         `json:"available_bytes"`
+	MeasuredAt     jsontime.Time `json:"measured_at"`
 }
 
 // ManifestPart is one part in the manifest: its path, relative to the

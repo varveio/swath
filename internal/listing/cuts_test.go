@@ -196,7 +196,7 @@ type warnings struct {
 	got []string
 }
 
-func (w *warnings) warn(s string) {
+func (w *warnings) warn(_, s string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.got = append(w.got, s)

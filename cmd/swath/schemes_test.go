@@ -38,13 +38,15 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		Output     struct {
 			RowsEmitted int64 `json:"rows_emitted"`
 		}
-		Source struct {
-			Name  string
-			Stats struct {
-				Anonymous bool
-				Counters  struct {
-					Features map[string]bool
-					Values   map[string]any
+		Diagnostics struct {
+			Source struct {
+				Name  string
+				Stats struct {
+					Anonymous bool
+					Counters  struct {
+						Features map[string]bool
+						Values   map[string]any
+					}
 				}
 			}
 		}
@@ -67,21 +69,21 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		"seed": true, "seed_from": false, "split": true, "structure": true, "trace": false}
 	for name, src := range schemes {
 		r := runJSON(false, src...)
-		if r.Outcome.Status != "committed" || r.Output.RowsEmitted != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {
+		if r.Outcome.Status != "committed" || r.Output.RowsEmitted != int64(len(keys)) || r.Diagnostics.Source.Name != name || !r.Diagnostics.Source.Stats.Anonymous {
 			t.Fatalf("%s: %+v", name, r)
 		}
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s: default workers %d, want 64", name, r.Invocation.Workers)
 		}
-		if f := r.Source.Stats.Counters.Features; !maps.Equal(f, defaults) {
+		if f := r.Diagnostics.Source.Stats.Counters.Features; !maps.Equal(f, defaults) {
 			t.Fatalf("%s defaults: features %v, want %v", name, f, defaults)
 		}
 		seeded := func(r report) bool {
-			_, ok := r.Source.Stats.Counters.Values["seed.prefixes"]
-			return r.Source.Stats.Counters.Features["seed"] && ok
+			_, ok := r.Diagnostics.Source.Stats.Counters.Values["seed.prefixes"]
+			return r.Diagnostics.Source.Stats.Counters.Features["seed"] && ok
 		}
 		if !seeded(r) {
-			t.Fatalf("%s: not seeded by default: %v", name, r.Source.Stats.Counters.Values)
+			t.Fatalf("%s: not seeded by default: %v", name, r.Diagnostics.Source.Stats.Counters.Values)
 		}
 		// --seed is diagnostic: swath list refuses it, naming swath diag.
 		if err := run(context.Background(), append([]string{"--no-seed"}, src...), io.Discard, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath diag list") {
@@ -92,8 +94,8 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
 		}
 		if seeded(r) || r.Output.RowsEmitted != int64(len(keys)) {
-			t.Fatalf("%s diag --no-seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsEmitted)
+			t.Fatalf("%s diag --no-seed: features %v, rows %d", name, r.Diagnostics.Source.Stats.Counters.Features, r.Output.RowsEmitted)
 		}
-		t.Logf("%s: %s", name, fmt.Sprint(r.Source.Stats.Counters.Features))
+		t.Logf("%s: %s", name, fmt.Sprint(r.Diagnostics.Source.Stats.Counters.Features))
 	}
 }

@@ -57,17 +57,19 @@ func TestTraceFlag(t *testing.T) {
 		t.Fatalf("run_end %v", end)
 	}
 	var rep struct {
-		Source struct {
-			Stats struct {
-				Counters struct {
-					Features map[string]bool `json:"features"`
-					Values   map[string]any  `json:"values"`
-				} `json:"counters"`
-			} `json:"stats"`
-		} `json:"source"`
+		Diagnostics struct {
+			Source struct {
+				Stats struct {
+					Counters struct {
+						Features map[string]bool `json:"features"`
+						Values   map[string]any  `json:"values"`
+					} `json:"counters"`
+				} `json:"stats"`
+			} `json:"source"`
+		} `json:"diagnostics"`
 	}
 	readJSON(t, report, &rep)
-	c := rep.Source.Stats.Counters
+	c := rep.Diagnostics.Source.Stats.Counters
 	if !c.Features["trace"] || c.Values["trace.events"] != float64(len(evs)-1) || c.Values["trace.dropped"] != 0.0 {
 		t.Fatalf("report trace counters: features %v, events %v dropped %v; %d events written", c.Features["trace"], c.Values["trace.events"], c.Values["trace.dropped"], len(evs)-1)
 	}

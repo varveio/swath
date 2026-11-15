@@ -33,7 +33,7 @@ func openFlags(t *testing.T, root string, warned *[]string, args ...string) (reg
 	if err := fs.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	return open(context.Background(), registry.Request{Root: root, Options: o, Workers: 1, Warn: func(s string) { *warned = append(*warned, s) }})
+	return open(context.Background(), registry.Request{Root: root, Options: o, Workers: 1, Warn: func(_, s string) { *warned = append(*warned, s) }})
 }
 
 // TestAdmissionKeepsCredentialFailure: credentials that cannot be had

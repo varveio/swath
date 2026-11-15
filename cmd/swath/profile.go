@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
 )
 
@@ -63,7 +64,7 @@ func memProfileRate(v string) (int, error) {
 
 // profiler writes the development profiles SWATH_CPUPROFILE and
 // SWATH_MEMPROFILE name, split at the end of listing (listingDone, the
-// event timings.listing_done_at records). The CPU profile runs from the
+// event timings.provider_finished_at records). The CPU profile runs from the
 // start into FILE and FILE.listing (the same bytes: FILE is the listing
 // phase, no longer the whole run, since Go runs one CPU profile at a time
 // and keeps no whole-run profile beside the phases') until the phase switch
@@ -386,7 +387,7 @@ func (p *profiler) account() *listing.Profiles {
 	defer p.mu.Unlock()
 	a := &listing.Profiles{Files: []listing.ProfileFile{}}
 	if !p.boundary.IsZero() {
-		a.PhaseBoundaryAt = p.boundary.UTC()
+		a.PhaseBoundaryAt = jsontime.Of(p.boundary)
 	}
 	if p.cut {
 		cut := int64(p.cutDelay)

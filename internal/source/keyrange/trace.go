@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/buildinfo"
+	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/runtrace"
 )
 
@@ -29,7 +30,7 @@ func (p *Engine[P]) TraceTo(w *runtrace.Writer) {
 	p.tr = w
 	b := buildinfo.Read()
 	e := w.Event("run_start").Int("trace_version", runtrace.Version).Str("tool", b.Tool).Str("version", b.Version).
-		Str("time", w.Start().UTC().Format(time.RFC3339Nano)).Key("prefix", p.opt.Prefix).Int("workers", int64(p.opt.Workers)).
+		Str("time", jsontime.Format(w.Start())).Key("prefix", p.opt.Prefix).Int("workers", int64(p.opt.Workers)).
 		Int("page_size", int64(p.opt.PageSize)).Bool("sequential", p.opt.Sequential).Bool("seed", p.opt.Seed && p.opt.Prior == nil).
 		Bool("prior", p.opt.Prior != nil).Str("structure", p.opt.Structure.String()).Bool("slow_split", p.opt.SlowSplit).Bool("versions", p.d.Groups)
 	if b.Revision != "" {

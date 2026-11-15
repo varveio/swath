@@ -36,17 +36,19 @@ func TestRequestRateFlag(t *testing.T) {
 		}
 		el := time.Since(start)
 		var rep struct {
-			Source struct {
-				Stats struct {
-					Counters struct {
-						Features map[string]bool `json:"features"`
-						Values   map[string]any  `json:"values"` // numbers, and flags (the seed's) as booleans
-					} `json:"counters"`
-				} `json:"stats"`
-			} `json:"source"`
+			Diagnostics struct {
+				Source struct {
+					Stats struct {
+						Counters struct {
+							Features map[string]bool `json:"features"`
+							Values   map[string]any  `json:"values"` // numbers, and flags (the seed's) as booleans
+						} `json:"counters"`
+					} `json:"stats"`
+				} `json:"source"`
+			} `json:"diagnostics"`
 		}
 		readJSON(t, report, &rep)
-		c := rep.Source.Stats.Counters
+		c := rep.Diagnostics.Source.Stats.Counters
 		attempts, _ := c.Values["attempts"].(float64)
 		n := int64(attempts)
 		if n < 10 || el < time.Duration(float64(n-1)*float64(time.Second)/rate) || !c.Features["request_rate"] {
