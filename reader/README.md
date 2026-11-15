@@ -34,8 +34,8 @@ Use SeekParquet's types and errors directly; this module does not re-export them
 `Dataset.CheckSchema(ctx)` checks the manifest's key column and uniqueness against
 its schema spec, verifies every part through SeekParquet, then checks each part's
 columns from the verified footer. Registered columns must be top-level and
-non-repeated, with the declared physical/logical type and requiredness; only columns
-marked `MayBeAbsent` may be missing. Unknown extra columns are ignored. This checks
+non-repeated, with the declared physical/logical type and requiredness, and every part
+has every registered column. Unknown extra columns are ignored. This checks
 neither every row's values nor part digests.
 
 `Schema(id)` returns a copy of a schema spec; `SchemaIDs()` lists the registered ids.
@@ -48,16 +48,16 @@ for its concrete decoder:
 | `swath/s3-versions/v1` | `DecodeS3Version` | `S3Version` |
 | `swath/gcs-objects/v1` | `DecodeGCSObject` | `GCSObject` |
 | `swath/gcs-generations/v1` | `DecodeGCSGeneration` | `GCSGeneration` |
-| `swath/azblob-objects/v1` | `DecodeAzblobObject` | `AzblobObject` |
-| `swath/azblob-versions/v1` | `DecodeAzblobVersion` | `AzblobVersion` |
+| `swath/azure-objects/v1` | `DecodeAzureObject` | `AzureObject` |
+| `swath/azure-versions/v1` | `DecodeAzureVersion` | `AzureVersion` |
 | `swath/local-entries/v1` | `DecodeLocalEntry` | `LocalEntry` |
 
 Each decoder takes a `seekparquet.Row` projecting its schema's columns. Nullable
-fields become pointers; null or permitted absence becomes nil. Required fields
+fields become pointers; null becomes nil. Required fields
 remain values; times are UTC. Byte fields share the owning row's memory. Every
 result embeds `Position` (key and equal-key offset); `Position.Cursor()` returns an
 owning `*seekparquet.Cursor` for continuation. Concrete decoders preserve source
-fields, including local kind/link target and Azure access tier.
+fields, including local kind/link target and Azure storage class (its access tier).
 
 An unprojected column, forbidden absence or wrong value type returns `ErrSchema`;
 a null required value returns `ErrRow`. Decoders do not impose application rules
@@ -99,17 +99,16 @@ measure physical requests.
 `VersionSpec`, carried by `SchemaSpec.Versions`, is the public description of a versions schema's column roles.
 Generic version consumers, including the lister's text output, version counts and per-prefix totals, use these
 roles. The typed reader decoders still read their schema's named columns. The zero value means the rows are not
-versions (every current-object schema). Otherwise the schema's keys repeat (`UniqueKeys` false), `ID` is set, and exactly one of `Latest` and `DeletedAt` is:
+versions (every current-object schema). Otherwise the schema's keys repeat (`UniqueKeys` false), `ID` and `Latest` are set:
 
 | Role | Column | Meaning |
 |---|---|---|
 | `ID` | STRING, or signed INT64 read in decimal; nullable | the version's identifier |
 | `Latest` | required BOOLEAN | true on the key's latest row |
-| `DeletedAt` | nullable timestamp | the alternative to `Latest`: null on the latest (live) row; any value, zero included, is not latest |
 | `DeleteMarker` | required BOOLEAN; optional role | true on a delete marker (no object and no bytes); a schema without the role has no delete markers |
 
 `swath/s3-versions/v1` declares `{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}` and
-`swath/gcs-generations/v1` `{ID: "generation", DeletedAt: "time_deleted"}`. A row is current when it is latest and
-not a delete marker, noncurrent when neither. `swath/azblob-versions/v1` declares `{ID: "version_id", Latest:
+`swath/gcs-generations/v1` `{ID: "generation", Latest: "is_latest"}`. A row is current when it is latest and
+not a delete marker, noncurrent when neither. `swath/azure-versions/v1` declares `{ID: "version_id", Latest:
 "is_latest"}` and includes versions, snapshots and soft-deleted blobs; interpret its additional fields with the
 Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registry).

@@ -31,7 +31,7 @@ prefix and a destination that overlaps a `gs://`, `s3://` or `az://` SOURCE are 
 TSV and JSONL rows carry the source's columns under the dataset's names, by default `key` first, then `size`,
 `last_modified` and the rest of the source's schema; `--columns` chooses them and their order, and the table
 puts `key` last ([Output](../output.md#text-rows)). Every format and every source lists in ascending byte
-order of the key. A local tree lists its directories too (kind `DIR`, the key ending
+order of the key. A local tree lists its directories too (kind `dir`, the key ending
 in `/`) unless `--no-dirs`. A local SOURCE that is a file lists as its one row, read as the same entry would be
 in a listing of its parent: at the `--metadata` tier, and a symbolic link as the link, not its target.
 
@@ -244,10 +244,10 @@ so in its manifest.
 ### Local
 
 - <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
-  what is read per entry (statx adds birth_time; Linux) (default `stat`)
+  what is read per entry (statx adds created_at; Linux) (default `stat`)
 
 - <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
-  omit the directories' rows (kind DIR)
+  omit the directories' rows (kind dir)
 
 - <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
   do not read symbolic links' targets
@@ -537,8 +537,8 @@ Azure Blob:
 
 Local:
       --metadata names|stat|statx
-                              what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs               omit the directories' rows (kind DIR)
+                              what is read per entry (statx adds created_at; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind dir)
       --no-link-target        do not read symbolic links' targets
       --one-file-system       do not walk into a mount point below the root, as du -x
 

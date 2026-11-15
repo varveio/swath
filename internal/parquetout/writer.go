@@ -154,9 +154,11 @@ type writer[P any] struct {
 	page   []schema.Row[P]                     // the page being filled; the module borrows it during WritePage
 	// size reads a row's object size (schema.ObjectSize; nil for a schema
 	// without a size column), objects sums it over the rows written: the
-	// part's dataset.Part.ObjectBytes.
+	// part's dataset.Part.ObjectBytes, unless an object's size was null
+	// (unsized).
 	size    func(*P) (int64, bool)
 	objects int64
+	unsized bool
 	closed  bool
 	// ends are the part's page ends for its dataset's cut file
 	// (dataset.PageEnd), each key owned; rows the rows of the pages
@@ -243,6 +245,8 @@ func (w *writer[P]) write(rows []schema.Row[P]) error {
 		if w.size != nil {
 			if v, ok := w.size(&rows[i].Data); ok {
 				w.objects += v
+			} else {
+				w.unsized = true
 			}
 		}
 		w.page = append(w.page, rows[i])
@@ -310,7 +314,7 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	p := dataset.Part{Path: w.file.Name(), Identity: w.file.Identity(), Columns: w.cols, CreatedBy: w.by,
 		PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
 			MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}
-	if w.size != nil {
+	if w.size != nil && !w.unsized {
 		n := w.objects
 		p.ObjectBytes = &n
 	}

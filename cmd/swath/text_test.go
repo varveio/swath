@@ -257,7 +257,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if !strings.HasPrefix(lines[0], "key\tsize\tlast_modified\tkind\t") || len(lines) != 9 || !strings.HasPrefix(lines[1], "a/\t") ||
-		!strings.HasPrefix(lines[3], "a/b/f\t5\t2026-01-02T04:04:05.000000Z\tFILE\t") {
+		!strings.HasPrefix(lines[3], "a/b/f\t5\t2026-01-02T04:04:05.000000Z\tfile\t") {
 		t.Fatalf("stdout %q", lines)
 	}
 	dir := t.TempDir()
@@ -268,14 +268,14 @@ func TestLocalTextEndToEnd(t *testing.T) {
 			t.Fatalf("%s: %v, stdout %q", name, err, out.String())
 		}
 		b, _ := os.ReadFile(file)
-		if want := map[string]string{"rows.tsv": "key\tsize\t", "rows.jsonl": `{"key":"a/","size":`}[name]; !strings.HasPrefix(string(b), want) || strings.Count(string(b), "\n") < 8 {
+		if want := map[string]string{"rows.tsv": "key\tsize\t", "rows.jsonl": `{"key":"a/","key_base64":null,"size":`}[name]; !strings.HasPrefix(string(b), want) || strings.Count(string(b), "\n") < 8 {
 			t.Fatalf("%s: %.120q", name, b)
 		}
 	}
 	for format, want := range map[string]string{
-		"tsv":   "a/b/f\t\\N\t\\N\tFILE\t",
-		"jsonl": `{"key":"a/b/f","size":null,"last_modified":null,"kind":"FILE",`,
-		"table": "                                 FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
+		"tsv":   "a/b/f\t\\N\t\\N\tfile\t",
+		"jsonl": `{"key":"a/b/f","key_base64":null,"size":null,"last_modified":null,"kind":"file",`,
+		"table": "                                 file          a/b/f\n", // kind: block_device wide
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {

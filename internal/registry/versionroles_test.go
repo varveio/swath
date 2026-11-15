@@ -36,7 +36,7 @@ type roleRow struct {
 }
 
 // roleSchema declares roles over the unconventional columns; the decoys
-// (version_id, generation, is_latest, is_delete_marker, time_deleted)
+// (version_id, generation, is_latest, is_delete_marker, deleted_at)
 // contradict every role, so a consumer reading names gets each row wrong.
 func roleSchema(roles reader.VersionSpec) *schema.Schema[roleRow] {
 	return &schema.Schema[roleRow]{
@@ -53,7 +53,7 @@ func roleSchema(roles reader.VersionSpec) *schema.Schema[roleRow] {
 			{Spec: schema.Spec{Name: "generation", Type: schema.Int64}, Int: func(*roleRow) (int64, bool) { return -9, true }},
 			{Spec: schema.Spec{Name: "is_latest", Type: schema.Bool, Required: true}, Bool: func(p *roleRow) (bool, bool) { return !p.head && p.hasRetired, true }},
 			{Spec: schema.Spec{Name: "is_delete_marker", Type: schema.Bool, Required: true}, Bool: func(p *roleRow) (bool, bool) { return !p.tomb, true }},
-			{Spec: schema.Spec{Name: "time_deleted", Type: schema.TimestampMicros}, Int: func(p *roleRow) (int64, bool) { return 1, !p.hasRetired }},
+			{Spec: schema.Spec{Name: "deleted_at", Type: schema.TimestampMicros}, Int: func(p *roleRow) (int64, bool) { return 1, !p.hasRetired }},
 		},
 		Bytes: func(*roleRow) int64 { return 8 },
 		Heap:  func(p *roleRow) int64 { return int64(len(p.label)) },
@@ -90,7 +90,7 @@ func roleSource(t *testing.T, s *schema.Schema[roleRow], rows []schema.Row[roleR
 // counts of one run, and the per-prefix totals of a count, read the
 // declared role columns together, never the conventionally named decoys:
 // a string ID with a latest boolean and delete markers, and an integer ID
-// with a nullable deleted-at column (a zero time present is a deletion).
+// without delete markers.
 func TestVersionRolesFollowDeclaration(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -125,8 +125,8 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 			objects: 4, bytes: 15,
 		},
 		{
-			name:  "integer ID, deleted-at",
-			roles: reader.VersionSpec{ID: "serial", DeletedAt: "retired"},
+			name:  "integer ID, no delete markers",
+			roles: reader.VersionSpec{ID: "serial", Latest: "head"},
 			rows: []schema.Row[roleRow]{
 				{Key: "d/a", Data: roleRow{serial: 1700000000000001, hasSer: true, retired: 5, hasRetired: true, size: 1, hasSize: true}},
 				{Key: "d/a", Data: roleRow{serial: 1700000000000002, hasSer: true, size: 2, hasSize: true, tomb: true}},
@@ -135,8 +135,8 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 			},
 			text: `last_modified (local)      size  serial  latest  key
                             1 B  1700000000000001  false   d/a
-                            2 B  1700000000000002  true    d/a
-                            4 B  0                 false   d/b
+                            2 B  1700000000000002  false   d/a
+                            4 B  0                 true    d/b
                             8 B                    true    d/c
 `,
 			counts:  [4]int64{4, 0, 2, 2},
@@ -182,10 +182,10 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 // schema.Bind does), before any run can open an output.
 func TestVersionRolesMalformed(t *testing.T) {
 	for _, roles := range []reader.VersionSpec{
-		{ID: "label", Latest: "head", DeletedAt: "retired"},
+		{ID: "label"},
 		{ID: "label", Latest: "missing"},
 		{ID: "head", Latest: "tomb"},
-		{ID: "label", DeletedAt: "size"},
+		{ID: "label", Latest: "size"},
 	} {
 		t.Run(fmt.Sprintf("%+v", roles), func(t *testing.T) {
 			defer func() {

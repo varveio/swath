@@ -5,6 +5,22 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: one name per concept in every dataset schema. Times: `created_at` (GCS `time_created`, Azure
+  `creation_time`, local `birth_time`), `deleted_at` (GCS `time_deleted`, Azure `deleted_time`), `accessed_at`
+  (Azure `last_access_time`, local `atime`); MD5: `md5` (Azure `content_md5`); Azure's access tier is
+  `storage_class`, with `storage_class_inferred` and `storage_class_changed_at`. `swath/gcs-generations/v1`
+  gains a required `is_latest`. A local `kind` is lower case (`file`, `dir`, `symlink`, ...). Every part has
+  every column of its schema id: no column may be absent.
+- Go port: one provider token per provider on every machine surface: `s3`, `gcs`, `azure`, `local` (manifest
+  `source.kind`, report `source.name`, the journal's provider); the Azure schema ids are
+  `swath/azure-objects/v1` and `swath/azure-versions/v1`, and the reader's types `AzureObject` and `AzureVersion`.
+- Go port: the manifest's `coverage.filters` is a list of `{"filter": NAME, "value": VALUE}` named for the
+  options (`modified_since`, `one_file_system`, ...; `null` for a switch), its times with six fraction digits;
+  `coverage.snapshot` is gone. A new `collected` records the metadata tier and the optional columns the run
+  asked for, and `committed_object_bytes` is absent when an object's size was not read (`--metadata names`)
+  instead of 0.
+- Go port: a JSONL row of a local tree always has `key` and `key_base64` (and `link_target`,
+  `link_target_base64`): the text, null when not UTF-8, and the base64 bytes, null when UTF-8.
 - Go port: SeekParquet is pinned at its release `go/v0.2.0`, the first that writes format 1, draft revision 1
   (`format_version` 0, `draft_revision` 1). That release fixes the draft: the datasets swath writes are no
   longer subject to in-place changes of the format. No code change from the commit pinned before.

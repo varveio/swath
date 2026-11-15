@@ -24,13 +24,13 @@ const (
 	KindBlockDevice
 )
 
-var kindNames = [...]string{"UNKNOWN", "FILE", "DIR", "SYMLINK", "FIFO", "SOCKET", "CHAR_DEVICE", "BLOCK_DEVICE"}
+var kindNames = [...]string{"unknown", "file", "dir", "symlink", "fifo", "socket", "char_device", "block_device"}
 
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
 		return kindNames[k]
 	}
-	return "UNKNOWN"
+	return kindNames[KindUnknown]
 }
 
 // Presence bits mark which optional values an Entry holds (unset = null).

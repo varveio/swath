@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,8 +60,9 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 // TestResumeCompleteAccount: swath resume of a finished local dataset
 // exits 0 and its report accounts for the committed dataset from the
 // manifest (rows_committed, output_bytes, committed_object_bytes), with
-// nothing of its own. A manifest without committed_object_bytes (written before the
-// member) leaves committed_object_bytes absent, never 0.
+// nothing of its own. A dataset whose sizes were not read (--metadata
+// names) has no committed_object_bytes, in its manifest or the report,
+// never 0.
 func TestResumeCompleteAccount(t *testing.T) {
 	datasettest.RequireJournal(t)
 	captureStderr(t)
@@ -95,18 +97,22 @@ func TestResumeCompleteAccount(t *testing.T) {
 	}
 	committedReport(t, "complete", b, m, &want)
 
-	// The same dataset as an earlier build wrote its manifest.
-	m.CommittedObjectBytes = nil
-	if err := dataset.ReplaceJSON(filepath.Join(dir, dataset.ManifestName), m, dataset.Durable); err != nil {
+	names := filepath.Join(t.TempDir(), "names")
+	if err := run(ctx, []string{src, "-o", names, "--metadata", "names"}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := resume(ctx, []string{"--report", report, dir}, io.Discard); err != nil {
+	raw, err := os.ReadFile(filepath.Join(names, dataset.ManifestName))
+	if err != nil || bytes.Contains(raw, []byte(`"committed_object_bytes"`)) {
+		t.Fatalf("a dataset of unread sizes states committed_object_bytes (%v):\n%s", err, raw)
+	}
+	readJSON(t, filepath.Join(names, dataset.ManifestName), &m)
+	if err := resume(ctx, []string{"--report", report, names}, io.Discard); err != nil {
 		t.Fatalf("resume of a complete dataset: %v", err)
 	}
 	if b, err = os.ReadFile(report); err != nil {
 		t.Fatal(err)
 	}
-	committedReport(t, "legacy manifest", b, m, nil)
+	committedReport(t, "unread sizes", b, m, nil)
 }
 
 // TestRemoteResumeFindsCommit: a run writing to a bucket is killed once its

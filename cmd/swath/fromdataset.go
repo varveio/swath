@@ -21,6 +21,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/totals"
@@ -228,7 +229,7 @@ func provenanceOf(dir string, m reader.Metadata) provenance {
 	}
 	if c := m.Coverage; c != nil {
 		p.ListingStartedAt, p.ListingFinishedAt, p.Complete, p.StopReason, p.Unreadable = c.ListingStartedAt, c.ListingFinishedAt, c.Complete, c.StopReason, c.Unreadable
-		p.Filters, p.Exclusions = c.Filters, c.Exclusions
+		p.Filters, p.Exclusions = filter.Texts(c.Filters), c.Exclusions
 	}
 	return p
 }

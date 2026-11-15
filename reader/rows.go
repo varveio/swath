@@ -11,8 +11,8 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// The decoded rows. A nullable column is a pointer, nil for null (or for
-// a column a part may lack and does); a required column is a value. Times
+// The decoded rows. A nullable column is a pointer, nil for null; a
+// required column is a value. Times
 // are UTC. Byte values share the seekparquet.Row's memory. Each row keeps
 // its Position, so a query continues after it (Position.Cursor), and rows
 // of one key stay separate rows, in file order: nothing groups them.
@@ -64,35 +64,35 @@ type GCSObject struct {
 	MD5            *string // base64, as listed
 	CRC32C         *string // base64, as listed
 	ContentType    *string
-	TimeCreated    *time.Time // nil also where the part lacks the column
+	CreatedAt      *time.Time
 }
 
 // GCSGeneration is a swath/gcs-generations/v1 row: one generation, live
-// or noncurrent. Rows of a name ascend by generation; the live one has no
-// TimeDeleted, and a name may have none.
+// or noncurrent. Rows of a name ascend by generation; the live one is
+// IsLatest and has no DeletedAt, and a name may have none.
 type GCSGeneration struct {
 	GCSObject
-	TimeDeleted *time.Time
+	IsLatest  bool
+	DeletedAt *time.Time
 }
 
-// AzblobObject is a swath/azblob-objects/v1 row: one current Azure blob.
-type AzblobObject struct {
+// AzureObject is a swath/azure-objects/v1 row: one current Azure blob.
+type AzureObject struct {
 	Position
 	Size         *int64
 	LastModified *time.Time // Last-Modified, 1 s resolution; moves on metadata writes
 	ETag         *string    // opaque, not a content hash
-	ContentMD5   *string    // base64, as listed
+	MD5          *string    // base64, as listed
 	ContentType  *string
 	BlobType     *string // BlockBlob, PageBlob or AppendBlob
-	AccessTier   *string
-	CreationTime *time.Time
-	// The properties added to the schema id later: nil in a part written
-	// before, and where Azure lists none.
-	AccessTierInferred        *bool
-	AccessTierChangeTime      *time.Time
+	StorageClass *string // the access tier
+	CreatedAt    *time.Time
+	// The other properties: nil where Azure lists none.
+	StorageClassInferred      *bool
+	StorageClassChangedAt     *time.Time
 	ArchiveStatus             *string // rehydrate-pending-to-hot, -cool or -cold
 	RehydratePriority         *string
-	LastAccessTime            *time.Time // only with the account's last access tracking on
+	AccessedAt                *time.Time // only with the account's last access tracking on
 	ContentEncoding           *string
 	ServerEncrypted           *bool
 	EncryptionScope           *string
@@ -109,17 +109,17 @@ type AzblobObject struct {
 	LegalHold               *bool
 }
 
-// AzblobVersion is a swath/azblob-versions/v1 row: one entry of a blob
+// AzureVersion is a swath/azure-versions/v1 row: one entry of a blob
 // name, a version, a snapshot or a soft-deleted blob (or the current
 // blob), consecutive with the name's other entries in Azure's order:
 // snapshots and versions oldest first, the current blob last.
-type AzblobVersion struct {
-	AzblobObject
+type AzureVersion struct {
+	AzureObject
 	VersionID              *string // null for a snapshot, and on an account without versioning
 	IsLatest               bool    // the name's current blob, live: the row a current listing has
 	Snapshot               *string // the snapshot's time, as listed; null unless a snapshot
 	IsDeleted              bool    // soft-deleted
-	DeletedTime            *time.Time
+	DeletedAt              *time.Time
 	RemainingRetentionDays *int64
 }
 
@@ -129,7 +129,7 @@ type LocalEntry struct {
 	Position
 	Size              *int64
 	LastModified      *time.Time
-	Kind              string // FILE, DIR, SYMLINK, FIFO, SOCKET, CHAR_DEVICE, BLOCK_DEVICE, UNKNOWN
+	Kind              string // file, dir, symlink, fifo, socket, char_device, block_device, unknown
 	Mode              *uint32
 	UID               *uint32
 	GID               *uint32
@@ -138,31 +138,30 @@ type LocalEntry struct {
 	Dev               *uint64
 	AllocatedBytes    *int64
 	MetadataChangedAt *time.Time // ctime
-	Atime             *time.Time
-	BirthTime         *time.Time
+	AccessedAt        *time.Time // atime
+	CreatedAt         *time.Time // birth time
 	LinkTarget        *[]byte
 }
 
 // The decoders read a row of a range or listing that projected the
 // schema's columns (SchemaSpec.ColumnNames). A column the row does not
-// carry, a part lacking a column that every part has, or a value of
-// another type is a SemanticError of KindSchema; a null in a required
+// carry, a part lacking a column, or a value of another type is a SemanticError of KindSchema; a null in a required
 // column is one of KindRow.
 
-// DecodeAzblobObject decodes a swath/azblob-objects/v1 row.
-func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error) {
-	d := decoder{spec: schemas[AzblobObjectsV1], row: &row}
-	o := d.azblobObject()
+// DecodeAzureObject decodes a swath/azure-objects/v1 row.
+func DecodeAzureObject(row seekparquet.Row) (AzureObject, error) {
+	d := decoder{spec: schemas[AzureObjectsV1], row: &row}
+	o := d.azureObject()
 	return o, d.err
 }
 
-func (d *decoder) azblobObject() AzblobObject {
-	return AzblobObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		ETag: d.string("etag"), ContentMD5: d.string("content_md5"), ContentType: d.string("content_type"),
-		BlobType: d.string("blob_type"), AccessTier: d.string("access_tier"), CreationTime: d.time("creation_time"),
-		AccessTierInferred: d.bool("access_tier_inferred"), AccessTierChangeTime: d.time("access_tier_change_time"),
+func (d *decoder) azureObject() AzureObject {
+	return AzureObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
+		ETag: d.string("etag"), MD5: d.string("md5"), ContentType: d.string("content_type"),
+		BlobType: d.string("blob_type"), StorageClass: d.string("storage_class"), CreatedAt: d.time("created_at"),
+		StorageClassInferred: d.bool("storage_class_inferred"), StorageClassChangedAt: d.time("storage_class_changed_at"),
 		ArchiveStatus: d.string("archive_status"), RehydratePriority: d.string("rehydrate_priority"),
-		LastAccessTime: d.time("last_access_time"), ContentEncoding: d.string("content_encoding"),
+		AccessedAt: d.time("accessed_at"), ContentEncoding: d.string("content_encoding"),
 		ServerEncrypted: d.bool("server_encrypted"), EncryptionScope: d.string("encryption_scope"),
 		CustomerProvidedKeySHA256: d.string("customer_provided_key_sha256"), LeaseState: d.string("lease_state"),
 		TagCount: d.int64("tag_count"), Metadata: d.string("metadata"), Tags: d.string("tags"),
@@ -195,16 +194,16 @@ func DecodeGCSObject(row seekparquet.Row) (GCSObject, error) {
 // DecodeGCSGeneration decodes a swath/gcs-generations/v1 row.
 func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error) {
 	d := decoder{spec: schemas[GCSGenerationsV1], row: &row}
-	g := GCSGeneration{GCSObject: d.gcsObject(), TimeDeleted: d.time("time_deleted")}
+	g := GCSGeneration{GCSObject: d.gcsObject(), IsLatest: d.required("is_latest").Boolean(), DeletedAt: d.time("deleted_at")}
 	return g, d.err
 }
 
-// DecodeAzblobVersion decodes a swath/azblob-versions/v1 row.
-func DecodeAzblobVersion(row seekparquet.Row) (AzblobVersion, error) {
-	d := decoder{spec: schemas[AzblobVersionsV1], row: &row}
-	v := AzblobVersion{AzblobObject: d.azblobObject(), VersionID: d.string("version_id"),
+// DecodeAzureVersion decodes a swath/azure-versions/v1 row.
+func DecodeAzureVersion(row seekparquet.Row) (AzureVersion, error) {
+	d := decoder{spec: schemas[AzureVersionsV1], row: &row}
+	v := AzureVersion{AzureObject: d.azureObject(), VersionID: d.string("version_id"),
 		IsLatest: d.required("is_latest").Boolean(), Snapshot: d.string("snapshot"), IsDeleted: d.required("is_deleted").Boolean(),
-		DeletedTime: d.time("deleted_time"), RemainingRetentionDays: d.int64("remaining_retention_days")}
+		DeletedAt: d.time("deleted_at"), RemainingRetentionDays: d.int64("remaining_retention_days")}
 	return v, d.err
 }
 
@@ -214,7 +213,7 @@ func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error) {
 	e := LocalEntry{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
 		Kind: string(d.required("kind").Bytes()), Mode: d.uint32("mode"), UID: d.uint32("uid"), GID: d.uint32("gid"),
 		Nlink: d.uint32("nlink"), Inode: d.uint64("inode"), Dev: d.uint64("dev"), AllocatedBytes: d.int64("allocated_bytes"),
-		MetadataChangedAt: d.time("metadata_changed_at"), Atime: d.time("atime"), BirthTime: d.time("birth_time"),
+		MetadataChangedAt: d.time("metadata_changed_at"), AccessedAt: d.time("accessed_at"), CreatedAt: d.time("created_at"),
 		LinkTarget: d.bytes("link_target")}
 	return e, d.err
 }
@@ -240,7 +239,7 @@ func (d *decoder) gcsObject() GCSObject {
 	return GCSObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
 		ETag: d.string("etag"), Generation: d.int64("generation"), Metageneration: d.int64("metageneration"),
 		StorageClass: d.string("storage_class"), MD5: d.string("md5"), CRC32C: d.string("crc32c"),
-		ContentType: d.string("content_type"), TimeCreated: d.time("time_created")}
+		ContentType: d.string("content_type"), CreatedAt: d.time("created_at")}
 }
 
 // kinds is the physical kind of each column type's values.
@@ -252,9 +251,8 @@ var kinds = [...]seekparquet.Kind{
 
 var errNotProjected = errors.New("not projected: read the schema's columns (SchemaSpec.ColumnNames)")
 
-// value returns the named column's value, ok false for a null, or for a
-// column the row's part lacks where the schema allows it. The name is the
-// schema's: a name it lacks is this package's bug.
+// value returns the named column's value, ok false for a null. The name
+// is the schema's: a name it lacks is this package's bug.
 func (d *decoder) value(name string) (v seekparquet.Value, ok bool) {
 	if d.err != nil {
 		return v, false
@@ -267,9 +265,9 @@ func (d *decoder) value(name string) (v seekparquet.Value, ok bool) {
 	switch {
 	case !found:
 		d.err = &SemanticError{Kind: KindSchema, Column: name, Row: d.at(), Err: errNotProjected}
-	case v.Absent() && !spec.MayBeAbsent:
+	case v.Absent():
 		d.err = semantic(KindSchema, name, d.at(), "absent from the row's part")
-	case v.Absent() || v.IsNull(): // an absent value is not null, but decodes as one
+	case v.IsNull():
 		if spec.Required {
 			d.err = semantic(KindRow, name, d.at(), "null in a required column")
 		}

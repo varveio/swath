@@ -271,7 +271,11 @@ func (o *opened[P]) Capabilities() source.Capabilities {
 
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
-	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
+	r := keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
+	if o.p.opt.FetchOwner {
+		r.Collected = []string{"owner_id", "owner_display_name"}
+	}
+	return r
 }
 
 // The registered source's whole method set (keyrange.Registered: the eleven

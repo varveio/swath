@@ -61,8 +61,8 @@ column; a `swath/gcs-objects/v1` recording with the S3 route's view of it, the E
 `etag` columns (`gcsETag`: the MD5 in hex, else `-` and the etag, else `swath-s3-synthetic-v1`) and no storage
 class. The window cache's packer holds the `md5` column apart and derives the ETag column once per fill, so a
 window's rows are the bare reader's (`store` `TestGCSRecordingS3View`). `Projection.Created`, which only the S3
-pager sets, reads `LastModified` from the optional `time_created` column where a row holds one and from
-`last_modified` otherwise; the packer holds `time_created` as a third integer column and lays it over
+pager sets, reads `LastModified` from the `created_at` column where a row holds one and from
+`last_modified` otherwise; the packer holds `created_at` as a third integer column and lays it over
 `LastModified` once per fill. A schema without the column drops `Created` from the projection (as `Content`),
 so its reads share windows with reads without it (`store` `TestGCSRecordingLastModifiedFromTimeCreated`, over
 parts with and without the column, packed, bare, overflowed and rolled up).
@@ -411,10 +411,9 @@ so the S3 path is unchanged), and the protocols and profiles in the metrics payl
 - **Native metadata.** `NewPager` reads a `swath/gcs-objects/v1` fixture's columns by name through
   `store.Sorted.ReadRows` and `RollupRows` (the same cursor and reader slots); any other store goes through
   `Rows` and the synthetic profile. `TestNativeSchemaRendersTheBucketsMetadata` lists a fake bucket with the
-  Go lister, serves the dataset and checks each item against the fake's objects. A row's `time_created` is
+  Go lister, serves the dataset and checks each item against the fake's objects. A row's `created_at` is
   rendered as `timeCreated` just before `updated`, in `updated`'s form; a null, or a part without the column,
-  renders none (`TestNativeTimeCreatedIsRenderedWhenStored`; `server` `TestResumedGCSRecordingMixesParts`
-  serves a run resumed across the column on both routes).
+  renders none (`TestNativeTimeCreatedIsRenderedWhenStored`).
 
 ### The GCS driver and the evidence replay
 

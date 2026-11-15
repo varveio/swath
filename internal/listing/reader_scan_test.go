@@ -5,6 +5,7 @@ package listing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -92,27 +93,33 @@ func TestReaderScansS3Objects(t *testing.T) {
 	}
 }
 
-// TestReaderScansGCSObjects: the parts written before time_created was
-// added pass the schema check; absent values decode as nil.
+// TestReaderScansGCSObjects: the production writer's parts pass the
+// schema check and decode; a part without one of the schema's columns
+// fails the check.
 func TestReaderScansGCSObjects(t *testing.T) {
 	rows := []gcs.Row{
 		{Key: "a", Data: gcs.Object{Size: 5, Mtime: 1_700_000_000_000_001, TimeCreated: 1, ETag: "CJ/r", Generation: 3, StorageClass: "NEARLINE"}},
 		{Key: "b", Data: gcs.Object{Size: 0}},
 	}
 	want := []reader.GCSObject{gcsWant("a", 0, rows[0].Data), gcsWant("b", 0, rows[1].Data)}
+	got, _, err := scanDecoded(openDataset(t, &gcs.Schema, "gcs", rows, 0), reader.DecodeGCSObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded %+v, want %+v", got, want)
+	}
 	older := gcs.Schema
-	older.Columns = slices.DeleteFunc(slices.Clone(older.Columns), func(c schema.Column[gcs.Object]) bool { return c.Name == "time_created" })
-	for _, s := range []*schema.Schema[gcs.Object]{&gcs.Schema, &older} {
-		got, _, err := scanDecoded(openDataset(t, s, "gcs", rows, 0), reader.DecodeGCSObject)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s == &older {
-			want[0].TimeCreated = nil
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("decoded %+v, want %+v", got, want)
-		}
+	older.Columns = slices.DeleteFunc(slices.Clone(older.Columns), func(c schema.Column[gcs.Object]) bool { return c.Name == "created_at" })
+	dir := filepath.Join(t.TempDir(), "ds")
+	writeSeekFixture(t, dir, "gcs", &older, rows, 0)
+	d, err := reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.CheckSchema(context.Background()); !errors.Is(err, reader.ErrSchema) {
+		t.Fatalf("a part without created_at: %v, want a schema error", err)
 	}
 }
 
@@ -125,16 +132,16 @@ func TestReaderScansLocalEntries(t *testing.T) {
 		{Key: "d/\xff", Data: localfs.Entry{Kind: localfs.KindFile, Size: 3, Present: localfs.HasSize}},
 		{Key: "e", Data: localfs.Entry{Kind: localfs.KindUnknown}},
 	}
-	d := openDataset(t, &localfs.Schema, "local-fs", rows, 0)
+	d := openDataset(t, &localfs.Schema, "local", rows, 0)
 	got, _, err := scanDecoded(d, reader.DecodeLocalEntry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []reader.LocalEntry{
-		{Position: reader.Position{Key: []byte("d/")}, Kind: "DIR", Size: ptr(int64(4096)), LastModified: micros(7)},
-		{Position: reader.Position{Key: []byte("d/l")}, Kind: "SYMLINK", LinkTarget: ptr([]byte("../x"))},
-		{Position: reader.Position{Key: []byte("d/\xff")}, Kind: "FILE", Size: ptr(int64(3))},
-		{Position: reader.Position{Key: []byte("e")}, Kind: "UNKNOWN"},
+		{Position: reader.Position{Key: []byte("d/")}, Kind: "dir", Size: ptr(int64(4096)), LastModified: micros(7)},
+		{Position: reader.Position{Key: []byte("d/l")}, Kind: "symlink", LinkTarget: ptr([]byte("../x"))},
+		{Position: reader.Position{Key: []byte("d/\xff")}, Kind: "file", Size: ptr(int64(3))},
+		{Position: reader.Position{Key: []byte("e")}, Kind: "unknown"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("entries %+v, want %+v", got, want)

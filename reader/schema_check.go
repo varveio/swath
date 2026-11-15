@@ -81,8 +81,6 @@ func (d *Dataset) checkPart(ctx context.Context, i int, path string) error {
 // nil when the part has no column of the spec's name.
 func checkColumn(col *seekparquet.Column, c ColumnSpec) error {
 	switch {
-	case col == nil && c.MayBeAbsent:
-		return nil
 	case col == nil:
 		return errors.New("absent from the part")
 	case col.Group || col.Repetition == seekparquet.Repeated:

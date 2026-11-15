@@ -102,8 +102,8 @@ type Record struct {
 	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
 	// ObjectBytes is the object sizes of the part's rows summed
 	// (dataset.Part.ObjectBytes): absent for a schema without a size
-	// column and in records of builds before it, which leave the dataset's
-	// total unknown (never 0).
+	// column and for a part with an object whose size is null, which leave
+	// the dataset's total unknown (never 0).
 	ObjectBytes *int64 `json:"object_bytes,omitempty"`
 
 	// Object and Identity name a remote dataset's part: its object name,

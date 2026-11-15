@@ -19,14 +19,15 @@ import (
 )
 
 // TestGenerationSchema: the generations schema is gcs-objects/v1's columns
-// in the same order, specs and encodings, then a nullable time_deleted;
-// its accessors read the generation's Object; it declares key groups.
+// in the same order, specs and encodings, then a required is_latest and
+// a nullable deleted_at; its accessors read the generation's Object; it
+// declares key groups.
 func TestGenerationSchema(t *testing.T) {
 	s := &GenerationSchema
 	if s.ID != "swath/gcs-generations/v1" || !s.Groups || Schema.Groups || s.Key != Schema.Key || s.MaxKeyBytes != Schema.MaxKeyBytes || s.Name != Schema.Name {
 		t.Fatalf("info %+v", s.Info)
 	}
-	if len(s.Columns) != len(Schema.Columns)+1 {
+	if len(s.Columns) != len(Schema.Columns)+2 {
 		t.Fatalf("%d columns", len(s.Columns))
 	}
 	g := Generation{Object: Object{Size: 7, Mtime: 2, TimeCreated: 3, ETag: "e", Generation: 1656460817987973, Metageneration: 4,
@@ -54,17 +55,26 @@ func TestGenerationSchema(t *testing.T) {
 	if v, ok := s.Columns[3].Int(&g); s.Columns[3].Name != "generation" || s.Columns[3].Type != schema.Int64 || v != 1656460817987973 || !ok {
 		t.Fatalf("generation: %+v %d %v", s.Columns[3].Spec, v, ok)
 	}
-	td := s.Columns[len(s.Columns)-1]
-	if td.Spec != (schema.Spec{Name: "time_deleted", Type: schema.TimestampMicros}) {
-		t.Fatalf("time_deleted: %+v", td.Spec)
+	latest, td := s.Columns[len(s.Columns)-2], s.Columns[len(s.Columns)-1]
+	if latest.Spec != (schema.Spec{Name: "is_latest", Type: schema.Bool, Required: true}) {
+		t.Fatalf("is_latest: %+v", latest.Spec)
+	}
+	if td.Spec != (schema.Spec{Name: "deleted_at", Type: schema.TimestampMicros}) {
+		t.Fatalf("deleted_at: %+v", td.Spec)
 	}
 	if v, ok := td.Int(&g); v != 9 || !ok {
-		t.Fatalf("time_deleted %d %v", v, ok)
+		t.Fatalf("deleted_at %d %v", v, ok)
+	}
+	if v, ok := latest.Bool(&g); v || !ok {
+		t.Fatalf("a noncurrent generation's is_latest %v %v", v, ok)
 	}
 	if _, ok := td.Int(&Generation{}); ok {
-		t.Fatal("a live generation's time_deleted is not null")
+		t.Fatal("a live generation's deleted_at is not null")
 	}
-	if s.Bytes(&g) != Schema.Bytes(&g.Object)+8 || s.Heap(&g) != Schema.Heap(&g.Object) || s.Heap(&g) != 1+8+1+1+10 {
+	if v, ok := latest.Bool(&Generation{}); !v || !ok {
+		t.Fatalf("a live generation's is_latest %v %v", v, ok)
+	}
+	if s.Bytes(&g) != Schema.Bytes(&g.Object)+9 || s.Heap(&g) != Schema.Heap(&g.Object) || s.Heap(&g) != 1+8+1+1+10 {
 		t.Fatalf("bytes %d, heap %d", s.Bytes(&g), s.Heap(&g))
 	}
 }

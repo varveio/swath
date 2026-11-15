@@ -48,12 +48,12 @@ func (p *provider[P]) version(it *client.Item) Version {
 		Deleted: it.Deleted, DeletedTime: it.DeletedTime, RetentionDays: it.RetentionDays, HasRetention: it.HasRetention}
 }
 
-// VersionSchema is swath/azblob-versions/v1: the swath/azblob-objects/v1
+// VersionSchema is swath/azure-versions/v1: the swath/azure-objects/v1
 // columns in the same order, then version_id, is_latest, snapshot,
-// is_deleted, deleted_time and remaining_retention_days. A name repeats
+// is_deleted, deleted_at and remaining_retention_days. A name repeats
 // once per entry, so the schema is grouped.
-var VersionSchema = schema.Bind(reader.AzblobVersionsV1, schema.Schema[Version]{
-	Info: schema.Info{Name: "swath_listing", StorageClass: "access_tier"},
+var VersionSchema = schema.Bind(reader.AzureVersionsV1, schema.Schema[Version]{
+	Info: schema.Info{Name: "swath_listing", StorageClass: "storage_class"},
 	Columns: append(lift(objectColumns),
 		// Version ids are unique per name (timestamps): a dictionary rarely pays.
 		schema.Column[Version]{Str: schema.NonEmpty(func(v *Version) string { return v.VersionID }), Delta: true},

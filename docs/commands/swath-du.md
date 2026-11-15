@@ -304,10 +304,10 @@ sizes) with exit 2.
 ### Local
 
 - <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
-  what is read per entry (statx adds birth_time; Linux) (default `stat`)
+  what is read per entry (statx adds created_at; Linux) (default `stat`)
 
 - <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
-  omit the directories' rows (kind DIR)
+  omit the directories' rows (kind dir)
 
 - <a id="option-no-link-target"></a>[`--no-link-target`](#option-no-link-target)\
   do not read symbolic links' targets
@@ -546,8 +546,8 @@ Azure Blob:
 
 Local:
       --metadata names|stat|statx
-                              what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs               omit the directories' rows (kind DIR)
+                              what is read per entry (statx adds created_at; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind dir)
       --no-link-target        do not read symbolic links' targets
       --one-file-system       do not walk into a mount point below the root, as du -x
 

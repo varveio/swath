@@ -134,7 +134,7 @@ func TestDuFile(t *testing.T) {
 		t.Fatalf("du: %v %q", err, out.String())
 	}
 	out.Reset()
-	if err := run(context.Background(), []string{file, "--columns", "key,size,kind", "--no-stats"}, &out, false); err != nil || out.String() != "key\tsize\tkind\ng\t2\tFILE\n" {
+	if err := run(context.Background(), []string{file, "--columns", "key,size,kind", "--no-stats"}, &out, false); err != nil || out.String() != "key\tsize\tkind\ng\t2\tfile\n" {
 		t.Fatalf("list: %v %q", err, out.String())
 	}
 }

@@ -60,9 +60,10 @@ func fields(t *testing.T, out string) ([]string, [][]*string) {
 
 // TestLocalRowsRoundTrip: a local tree's rows print: keys and link targets
 // of any bytes come back exactly from TSV (through the grammar's decoder)
-// and JSONL (NAME_base64 where they are not UTF-8); a null differs from an
-// empty string and from zero; unsigned columns print their maxima
-// unsigned.
+// and JSONL (every row has NAME and NAME_base64, one of them null unless
+// both are: the value is in NAME where it is UTF-8, else in NAME_base64);
+// a null differs from an empty string and from zero; unsigned columns
+// print their maxima unsigned.
 func TestLocalRowsRoundTrip(t *testing.T) {
 	header, rows := fields(t, text(t, textout.Config{Format: textout.TSV}, &localfs.Schema, localRows))
 	want := append([]string{textout.KeyColumn}, func() []string {
@@ -102,7 +103,7 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 		{1, "link_target", "../" + awkward}, {2, "link_target", ""}, {0, "link_target", "<null>"},
 		{1, "size", "0"}, {2, "size", "<null>"}, {1, "gid", "0"}, {0, "gid", "<null>"},
 		{1, "uid", "4294967295"}, {1, "mode", "4294967295"}, {1, "inode", "18446744073709551615"}, {1, "dev", "9223372036854775808"},
-		{0, "kind", "DIR"}, {0, "last_modified", "2023-11-14T22:13:20.000000Z"}, {1, "last_modified", "<null>"},
+		{0, "kind", "dir"}, {0, "last_modified", "2023-11-14T22:13:20.000000Z"}, {1, "last_modified", "<null>"},
 	} {
 		if got := str(col(rows[c.row], c.name)); got != c.want {
 			t.Errorf("TSV row %d %s: %q, want %q", c.row, c.name, got, c.want)
@@ -115,10 +116,15 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 		t.Fatalf("%d lines", len(lines))
 	}
 	member := func(m map[string]json.RawMessage, name string) string {
-		if b64, ok := m[name+textout.Base64Suffix]; ok {
-			if _, both := m[name]; both {
-				t.Fatalf("%s and %s%s both", name, name, textout.Base64Suffix)
-			}
+		v, ok := m[name]
+		b64, ok64 := m[name+textout.Base64Suffix]
+		if binary := name == "key" || name == "link_target"; ok64 != binary || !ok {
+			t.Fatalf("member %s present %v, %s%s present %v", name, ok, name, textout.Base64Suffix, ok64)
+		}
+		if ok64 && string(v) != "null" && string(b64) != "null" {
+			t.Fatalf("%s and %s%s both hold a value", name, name, textout.Base64Suffix)
+		}
+		if ok64 && string(b64) != "null" {
 			var s string
 			if err := json.Unmarshal(b64, &s); err != nil {
 				t.Fatal(err)
@@ -128,10 +134,6 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			return string(raw)
-		}
-		v, ok := m[name]
-		if !ok {
-			t.Fatalf("no member %s", name)
 		}
 		if string(v) == "null" {
 			return "<null>"
@@ -157,13 +159,14 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 	}{
 		{1, "link_target", "../" + awkward}, {2, "link_target", ""}, {0, "link_target", "<null>"},
 		{1, "size", "0"}, {2, "size", "<null>"}, {1, "uid", "4294967295"}, {1, "inode", "18446744073709551615"},
-		{1, "dev", "9223372036854775808"}, {0, "kind", "DIR"}, {0, "last_modified", "2023-11-14T22:13:20.000000Z"},
+		{1, "dev", "9223372036854775808"}, {0, "kind", "dir"}, {0, "last_modified", "2023-11-14T22:13:20.000000Z"},
 	} {
 		if got := member(ms[c.row], c.name); got != c.want {
 			t.Errorf("JSONL row %d %s: %q, want %q", c.row, c.name, got, c.want)
 		}
 	}
-	if !strings.HasPrefix(lines[1], `{"key_base64":"`) || !strings.HasPrefix(lines[0], `{"key":"dir","size":4096,`) {
+	if !strings.HasPrefix(lines[1], `{"key":null,"key_base64":"`) || !strings.HasPrefix(lines[0], `{"key":"dir","key_base64":null,"size":4096,`) ||
+		!strings.Contains(lines[0], `"link_target":null,"link_target_base64":null}`) {
 		t.Errorf("member order: %q", out)
 	}
 }
@@ -173,9 +176,9 @@ func TestLocalRowsRoundTrip(t *testing.T) {
 // missing value blank, and its keys escaped as in TSV.
 func TestLocalTable(t *testing.T) {
 	want := "last_modified (local)      size  kind          key\n" +
-		"2023-11-14 22:13:20    4.00 KiB  DIR           dir\n" +
-		"                            0 B  SYMLINK       dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
-		"                                 SYMLINK       empty-link\n"
+		"2023-11-14 22:13:20    4.00 KiB  dir           dir\n" +
+		"                            0 B  symlink       dir/a\\xff\\xfeb\\tc\\nd\\re\\\\f\\x1b\\x7f\\\\Nµ\n" +
+		"                                 symlink       empty-link\n"
 	if got := text(t, textout.Config{Format: textout.Table}, &localfs.Schema, localRows); got != want {
 		t.Errorf("\n%q\nwant\n%q", got, want)
 	}
@@ -232,8 +235,9 @@ func TestProjection(t *testing.T) {
 
 // TestEverySchemaPrints: every schema swath writes (the reader's list,
 // which schema.Bind requires a provider's schema to be in) prints a
-// header of its column names and a row of every column in TSV, JSONL and
-// the table; none ends a column name in the reserved suffix.
+// header of its column names and a row of every column in TSV, JSONL (a
+// binary column, the key included, as two members) and the table; none
+// ends a column name in the reserved suffix.
 func TestEverySchemaPrints(t *testing.T) {
 	type payload struct{}
 	ids := reader.SchemaIDs()
@@ -266,8 +270,14 @@ func TestEverySchemaPrints(t *testing.T) {
 				t.Errorf("%s: %s null", id, header[i])
 			}
 		}
+		members := len(spec.Columns) + 1
+		for _, c := range append([]reader.ColumnSpec{spec.Key}, spec.Columns...) {
+			if c.Type == schema.Binary {
+				members++
+			}
+		}
 		var m map[string]any
-		if line := text(t, textout.Config{Format: textout.JSONL}, &s, rows); json.Unmarshal([]byte(line), &m) != nil || len(m) != len(spec.Columns)+1 {
+		if line := text(t, textout.Config{Format: textout.JSONL}, &s, rows); json.Unmarshal([]byte(line), &m) != nil || len(m) != members {
 			t.Errorf("%s: JSONL %q", id, line)
 		}
 		if lines := strings.Split(text(t, textout.Config{Format: textout.Table}, &s, rows), "\n"); len(lines) != 3 || !strings.HasSuffix(lines[1], "  k") {

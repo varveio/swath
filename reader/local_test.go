@@ -17,8 +17,8 @@ type localRow struct {
 	Dev               *uint64 `parquet:"dev,optional"`
 	AllocatedBytes    *int64  `parquet:"allocated_bytes,optional"`
 	MetadataChangedAt *int64  `parquet:"metadata_changed_at,optional,timestamp(microsecond:utc)"`
-	Atime             *int64  `parquet:"atime,optional,timestamp(microsecond:utc)"`
-	BirthTime         *int64  `parquet:"birth_time,optional,timestamp(microsecond:utc)"`
+	AccessedAt        *int64  `parquet:"accessed_at,optional,timestamp(microsecond:utc)"`
+	CreatedAt         *int64  `parquet:"created_at,optional,timestamp(microsecond:utc)"`
 	LinkTarget        []byte  `parquet:"link_target,optional"`
 }
 
@@ -32,13 +32,13 @@ type treeEntry struct {
 // empty), a name that is not UTF-8, a symlink, a FIFO and nested
 // directories, in key order.
 var localTree = []treeEntry{
-	{"a.txt", "FILE", 3, ""},
-	{"d/", "DIR", 4096, ""},
-	{"d/e/", "DIR", 4096, ""},
-	{"d/link", "SYMLINK", 8, "../a.txt"},
-	{"d/\xff", "FILE", 0, ""},
-	{"fifo", "FIFO", 0, ""},
-	{"z/", "DIR", 4096, ""},
-	{"z/y/", "DIR", 4096, ""},
-	{"z/y/f", "FILE", 7, ""},
+	{"a.txt", "file", 3, ""},
+	{"d/", "dir", 4096, ""},
+	{"d/e/", "dir", 4096, ""},
+	{"d/link", "symlink", 8, "../a.txt"},
+	{"d/\xff", "file", 0, ""},
+	{"fifo", "fifo", 0, ""},
+	{"z/", "dir", 4096, ""},
+	{"z/y/", "dir", 4096, ""},
+	{"z/y/f", "file", 7, ""},
 }

@@ -72,10 +72,10 @@ func TestBindVersionsLatest(t *testing.T) {
 	}
 }
 
-// TestBindVersionsDeletedAt: an integer ID in decimal and latest by a null
-// deleted-at column; a zero but present time is a deletion.
-func TestBindVersionsDeletedAt(t *testing.T) {
-	v, err := schema.BindVersions(recSchema(reader.VersionSpec{ID: "serial", DeletedAt: "gone"}))
+// TestBindVersionsIntegerID: an integer ID in decimal, and no delete
+// markers without the role.
+func TestBindVersionsIntegerID(t *testing.T) {
+	v, err := schema.BindVersions(recSchema(reader.VersionSpec{ID: "serial", Latest: "head"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,10 +88,9 @@ func TestBindVersionsDeletedAt(t *testing.T) {
 		hasID  bool
 		latest bool
 	}{
-		{rec{serial: -1700000000000001, hasSerial: true}, "-1700000000000001", true, true},
-		{rec{serial: 0, hasSerial: true, hasGone: true}, "0", true, false},
-		{rec{gone: 5, hasGone: true, head: true}, "", false, false},
-		{rec{head: false}, "", false, true},
+		{rec{serial: -1700000000000001, hasSerial: true, head: true}, "-1700000000000001", true, true},
+		{rec{serial: 0, hasSerial: true}, "0", true, false},
+		{rec{head: false}, "", false, false},
 	} {
 		id, ok := v.ID(&c.p)
 		if id != c.id || ok != c.hasID || v.Latest(&c.p) != c.latest || v.Marker(&c.p) {
@@ -110,22 +109,19 @@ func TestBindVersionsMalformed(t *testing.T) {
 		message string
 	}{
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head"}, unique: true, message: "keys are unique"},
-		{roles: reader.VersionSpec{ID: "tag"}, message: "exactly one"},
-		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeletedAt: "gone"}, message: "exactly one"},
+		{roles: reader.VersionSpec{ID: "tag"}, message: "no latest column"},
 		{roles: reader.VersionSpec{Latest: "head"}, message: "no version ID column"},
-		{roles: reader.VersionSpec{DeleteMarker: "tomb"}, message: "exactly one"},
+		{roles: reader.VersionSpec{DeleteMarker: "tomb"}, message: "no version ID column"},
 		{roles: reader.VersionSpec{ID: "nope", Latest: "head"}, message: "version ID column nope is not in the schema"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "nope"}, message: "latest column nope is not in the schema"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeleteMarker: "nope"}, message: "delete marker column nope is not in the schema"},
-		{roles: reader.VersionSpec{ID: "tag", DeletedAt: "nope"}, message: "deleted-at column nope is not in the schema"},
 		{roles: reader.VersionSpec{ID: "head", Latest: "is_latest"}, message: "not a string or a signed 64-bit integer"},
 		{roles: reader.VersionSpec{ID: "gone", Latest: "head"}, message: "not a string or a signed 64-bit integer"},
 		{roles: reader.VersionSpec{ID: "small", Latest: "head"}, message: "not a string or a signed 64-bit integer"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "maybe"}, message: "latest column maybe is not a required boolean"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "serial"}, message: "latest column serial is not a required boolean"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeleteMarker: "maybe"}, message: "delete marker column maybe is not a required boolean"},
-		{roles: reader.VersionSpec{ID: "tag", DeletedAt: "required_at"}, message: "deleted-at column required_at is not a nullable timestamp"},
-		{roles: reader.VersionSpec{ID: "tag", DeletedAt: "serial"}, message: "deleted-at column serial is not a nullable timestamp"},
+		{roles: reader.VersionSpec{ID: "tag", Latest: "required_at"}, message: "latest column required_at is not a required boolean"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeleteMarker: "head"}, message: "column head has two roles"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head"}, edit: func(s *schema.Schema[rec]) { s.Columns[0].Str = nil },
 			message: "version ID column tag is not a string"},
@@ -133,8 +129,6 @@ func TestBindVersionsMalformed(t *testing.T) {
 			message: "latest column head is not a required boolean"},
 		{roles: reader.VersionSpec{ID: "serial", Latest: "head"}, edit: func(s *schema.Schema[rec]) { s.Columns[1].Int = nil },
 			message: "version ID column serial is not a string or a signed 64-bit integer"},
-		{roles: reader.VersionSpec{ID: "tag", DeletedAt: "gone"}, edit: func(s *schema.Schema[rec]) { s.Columns[4].Int = nil },
-			message: "deleted-at column gone is not a nullable timestamp"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeleteMarker: "tomb"}, edit: func(s *schema.Schema[rec]) { s.Columns[3].Bool = nil },
 			message: "delete marker column tomb is not a required boolean"},
 	} {

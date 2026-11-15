@@ -105,7 +105,8 @@ func TestReaderDecodesS3Objects(t *testing.T) {
 	}
 	if meta.SchemaID != reader.S3ObjectsV1 || !meta.Swath || meta.PublishedAt == nil || *meta.Source.Kind != "s3" || meta.Source.Container != nil ||
 		*meta.Scope.Kind != "whole" || meta.Scope.Prefix != nil || !*meta.Coverage.Complete || *meta.Coverage.StopReason != "completed" ||
-		*meta.Coverage.Unreadable != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 || *meta.Coverage.Snapshot {
+		*meta.Coverage.Unreadable != 0 || meta.Coverage.Filters == nil || len(meta.Coverage.Filters) != 0 ||
+		meta.Collected == nil || meta.Collected.Metadata != nil || meta.Collected.Columns == nil || len(meta.Collected.Columns) != 0 {
 		t.Fatalf("metadata %+v", meta)
 	}
 }
@@ -182,14 +183,14 @@ func gcsWant(key string, offset int64, o gcs.Object) reader.GCSObject {
 		g.Metageneration = ptr(o.Metageneration)
 	}
 	if o.TimeCreated != 0 {
-		g.TimeCreated = micros(o.TimeCreated)
+		g.CreatedAt = micros(o.TimeCreated)
 	}
 	return g
 }
 
 // TestReaderDecodesGCS: the GCS current-object and generations schemas,
-// nulls kept; time_created, the column a part may lack, reads as nil from
-// a part without it, where any other column's absence is a schema error.
+// nulls kept; a part without one of the schema's columns is a schema
+// error.
 func TestReaderDecodesGCS(t *testing.T) {
 	full := gcs.Object{Size: 5, Mtime: 1_700_000_000_000_001, TimeCreated: 1_700_000_000_000_000, ETag: "CJ/r", Generation: 1700000000000001, Metageneration: 2,
 		StorageClass: "NEARLINE", MD5: "1B2M2Y8AsgTpgAmY7PhCfg==", CRC32C: "AAAAAA==", ContentType: "text/plain"}
@@ -203,10 +204,6 @@ func TestReaderDecodesGCS(t *testing.T) {
 	without := func(s schema.Schema[gcs.Object], name string) *schema.Schema[gcs.Object] {
 		s.Columns = slices.DeleteFunc(slices.Clone(s.Columns), func(c schema.Column[gcs.Object]) bool { return c.Name == name })
 		return &s
-	}
-	older, _ := readAll(t, without(gcs.Schema, "time_created"), "gcs", rows, 0, 10, reader.DecodeGCSObject, func(o *reader.GCSObject) reader.Position { return o.Position })
-	if want[0].TimeCreated = nil; !reflect.DeepEqual(older, want) {
-		t.Fatalf("a part without time_created:\n%+v\nwant\n%+v", older, want)
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, "gcs", without(gcs.Schema, "md5"), rows, 0)
@@ -232,9 +229,9 @@ func TestReaderDecodesGCS(t *testing.T) {
 	}
 	gotGens, _ := readAll(t, &gcs.GenerationSchema, "gcs", gens, 0, 2, reader.DecodeGCSGeneration, func(g *reader.GCSGeneration) reader.Position { return g.Position })
 	wantGens := []reader.GCSGeneration{
-		{GCSObject: gcsWant("n", 0, gens[0].Data.Object), TimeDeleted: micros(20)},
-		{GCSObject: gcsWant("n", 1, gens[1].Data.Object), TimeDeleted: micros(30)},
-		{GCSObject: gcsWant("n", 2, full)},
+		{GCSObject: gcsWant("n", 0, gens[0].Data.Object), DeletedAt: micros(20)},
+		{GCSObject: gcsWant("n", 1, gens[1].Data.Object), DeletedAt: micros(30)},
+		{GCSObject: gcsWant("n", 2, full), IsLatest: true},
 	}
 	if !reflect.DeepEqual(gotGens, wantGens) {
 		t.Fatalf("generations\n%+v\nwant\n%+v", gotGens, wantGens)
@@ -252,14 +249,14 @@ func TestReaderDecodesLocalEntries(t *testing.T) {
 			Inode: -1, Dev: -2, Blocks: 512, Mode: 0xffffffff, UID: 0xfffffffe, GID: 1 << 31, Nlink: 1, Present: localfs.HasStat | localfs.HasBtime | localfs.HasLink}},
 		{Key: "d/\xff", Data: localfs.Entry{Kind: localfs.KindUnknown}},
 	}
-	got, meta := readAll(t, &localfs.Schema, "local-fs", rows, 0, 2, reader.DecodeLocalEntry, func(e *reader.LocalEntry) reader.Position { return e.Position })
+	got, meta := readAll(t, &localfs.Schema, "local", rows, 0, 2, reader.DecodeLocalEntry, func(e *reader.LocalEntry) reader.Position { return e.Position })
 	tb := []byte(target)
 	want := []reader.LocalEntry{
-		{Position: reader.Position{Key: []byte("d")}, Kind: "DIR", Size: ptr(int64(4096)), LastModified: micros(7), Mode: ptr(uint32(0o40755))},
-		{Position: reader.Position{Key: []byte("d/\xc3\x28-not-utf8")}, Kind: "SYMLINK", Size: ptr(int64(3)), LastModified: micros(8), MetadataChangedAt: micros(9),
-			Atime: micros(10), BirthTime: micros(11), Inode: ptr(uint64(1<<64 - 1)), Dev: ptr(uint64(1<<64 - 2)), AllocatedBytes: ptr(int64(512)),
+		{Position: reader.Position{Key: []byte("d")}, Kind: "dir", Size: ptr(int64(4096)), LastModified: micros(7), Mode: ptr(uint32(0o40755))},
+		{Position: reader.Position{Key: []byte("d/\xc3\x28-not-utf8")}, Kind: "symlink", Size: ptr(int64(3)), LastModified: micros(8), MetadataChangedAt: micros(9),
+			AccessedAt: micros(10), CreatedAt: micros(11), Inode: ptr(uint64(1<<64 - 1)), Dev: ptr(uint64(1<<64 - 2)), AllocatedBytes: ptr(int64(512)),
 			Mode: ptr(uint32(0xffffffff)), UID: ptr(uint32(0xfffffffe)), GID: ptr(uint32(1 << 31)), Nlink: ptr(uint32(1)), LinkTarget: &tb},
-		{Position: reader.Position{Key: []byte("d/\xff")}, Kind: "UNKNOWN"},
+		{Position: reader.Position{Key: []byte("d/\xff")}, Kind: "unknown"},
 	}
 	if !reflect.DeepEqual(got, want) || meta.SchemaID != reader.LocalV1 || meta.Manifest.Key.Unique != true {
 		t.Fatalf("decoded\n%+v\nwant\n%+v (%s)", got, want, meta.SchemaID)
@@ -267,25 +264,25 @@ func TestReaderDecodesLocalEntries(t *testing.T) {
 }
 
 // TestReaderDecodesAzure checks both production writer schemas against the
-// registry and their concrete decoders, keeping access tier and version fields.
+// registry and their concrete decoders, keeping storage class and version fields.
 func TestReaderDecodesAzure(t *testing.T) {
 	blob := azblob.Object{Size: 7, Mtime: 11, CreationTime: 5, ETag: "opaque", AccessTier: "Cool", BlobType: "BlockBlob"}
-	want := reader.AzblobObject{Position: reader.Position{Key: []byte("blob")}, Size: ptr(int64(7)), LastModified: micros(11),
-		CreationTime: micros(5), ETag: ptr("opaque"), AccessTier: ptr("Cool"), BlobType: ptr("BlockBlob")}
-	objects, _ := readAll(t, &azblob.Schema, "azblob", []azblob.Row{{Key: "blob", Data: blob}}, 0, 1,
-		reader.DecodeAzblobObject, func(o *reader.AzblobObject) reader.Position { return o.Position })
-	if !reflect.DeepEqual(objects, []reader.AzblobObject{want}) {
+	want := reader.AzureObject{Position: reader.Position{Key: []byte("blob")}, Size: ptr(int64(7)), LastModified: micros(11),
+		CreatedAt: micros(5), ETag: ptr("opaque"), StorageClass: ptr("Cool"), BlobType: ptr("BlockBlob")}
+	objects, _ := readAll(t, &azblob.Schema, "azure", []azblob.Row{{Key: "blob", Data: blob}}, 0, 1,
+		reader.DecodeAzureObject, func(o *reader.AzureObject) reader.Position { return o.Position })
+	if !reflect.DeepEqual(objects, []reader.AzureObject{want}) {
 		t.Fatalf("objects %+v, want %+v", objects, want)
 	}
-	versions, _ := readAll(t, &azblob.VersionSchema, "azblob", []azblob.VersionRow{
+	versions, _ := readAll(t, &azblob.VersionSchema, "azure", []azblob.VersionRow{
 		{Key: "blob", Data: azblob.Version{Object: blob, VersionID: "v1"}},
 		{Key: "blob", Data: azblob.Version{Object: blob, IsLatest: true}},
-	}, 0, 1, reader.DecodeAzblobVersion, func(v *reader.AzblobVersion) reader.Position { return v.Position })
+	}, 0, 1, reader.DecodeAzureVersion, func(v *reader.AzureVersion) reader.Position { return v.Position })
 	latest := want
 	latest.Offset = 1
-	wantVersions := []reader.AzblobVersion{
-		{AzblobObject: want, VersionID: ptr("v1")},
-		{AzblobObject: latest, IsLatest: true},
+	wantVersions := []reader.AzureVersion{
+		{AzureObject: want, VersionID: ptr("v1")},
+		{AzureObject: latest, IsLatest: true},
 	}
 	if !reflect.DeepEqual(versions, wantVersions) {
 		t.Fatalf("versions %+v, want %+v", versions, wantVersions)

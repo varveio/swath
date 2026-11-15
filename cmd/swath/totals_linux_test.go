@@ -346,11 +346,13 @@ func TestDuLocalRefusals(t *testing.T) {
 	}
 	var m struct {
 		Extensions struct {
-			Swath struct{ Coverage struct{ Filters []string } }
+			Swath struct {
+				Coverage struct{ Filters []map[string]any }
+			}
 		}
 	}
 	readJSON(t, filepath.Join(ds, "manifest.json"), &m)
-	if f := m.Extensions.Swath.Coverage.Filters; len(f) != 1 || f[0] != "one_filesystem" {
+	if f := m.Extensions.Swath.Coverage.Filters; len(f) != 1 || len(f[0]) != 2 || f[0]["filter"] != "one_file_system" || f[0]["value"] != nil {
 		t.Fatalf("coverage.filters %q", f)
 	}
 }

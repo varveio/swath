@@ -53,11 +53,11 @@ are part of the run's identity:
 
 Azure refuses a whole listing that asks for tags without the right to read them; swath then stops with that
 error and names the permission. `--storage-class` filters on the access tier (`Hot`, `Cool`, `Cold`,
-`Archive`). `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net`, and the account is then its
+`Archive`), which the dataset holds as `storage_class`. `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net`, and the account is then its
 first path segment (Azurite: `--endpoint-url http://127.0.0.1:10000 --azure-assume-flat`).
 
-**Every entry** (`--all-versions`, schema `swath/azblob-versions/v1`). Each version, snapshot and soft-deleted
-blob is a row, with `version_id`, `snapshot`, `is_deleted`, `deleted_time` and `remaining_retention_days`;
+**Every entry** (`--all-versions`, schema `swath/azure-versions/v1`). Each version, snapshot and soft-deleted
+blob is a row, with `version_id`, `snapshot`, `is_deleted`, `deleted_at` and `remaining_retention_days`;
 `is_latest` marks the row a current listing has. A name's rows are consecutive, snapshots and versions oldest
 first, the current blob last. Soft-deleted blobs exist only while the account's retention keeps them, so two
 listings days apart differ.

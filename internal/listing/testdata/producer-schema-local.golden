@@ -14,6 +14,6 @@ column inode INT64 INT(64,false) optional max_bytes 0 accessor int
 column dev INT64 INT(64,false) optional max_bytes 0 accessor int
 column allocated_bytes INT64 INT(64,true) optional max_bytes 0 accessor int
 column metadata_changed_at INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
-column atime INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
-column birth_time INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
+column accessed_at INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
+column created_at INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
 column link_target BYTE_ARRAY optional max_bytes 4096 accessor str
