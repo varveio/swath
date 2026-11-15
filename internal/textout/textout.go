@@ -361,11 +361,18 @@ const tableTime = "2006-01-02 15:04:05"
 // heading, which names the zone by its abbreviation now: last_modified
 // (CET).
 func tableClock(loc *time.Location) (*time.Location, string) {
+	loc, zone := tableZone(loc)
+	return loc, mtimeColumn + " (" + zone + ")"
+}
+
+// tableZone is a table's zone, loc or (nil) time.Local, and its
+// abbreviation now (CET).
+func tableZone(loc *time.Location) (*time.Location, string) {
 	if loc == nil {
 		loc = time.Local
 	}
 	zone, _ := time.Now().In(loc).Zone()
-	return loc, mtimeColumn + " (" + zone + ")"
+	return loc, zone
 }
 
 func appendLocal(dst []byte, micros int64, loc *time.Location) []byte {

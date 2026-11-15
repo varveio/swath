@@ -6,11 +6,15 @@ package order
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -212,6 +216,160 @@ func TestCountUnordered(t *testing.T) {
 	for _, opt := range []Options{{Workers: 1, Unordered: true, After: &k}, {Workers: 1, Unordered: true, Groups: true}} {
 		if _, err := Count(context.Background(), p, nil, opt); err == nil {
 			t.Errorf("%+v: an unordered count was accepted", opt)
+		}
+	}
+}
+
+// runScript emits its range's rows one per Rows call, a child between
+// before and after: the child's own rows are child.
+type runScript struct{ before, child, after []string }
+
+func (s runScript) Root() fr { return fr{-1} }
+
+func (s runScript) Expand(_ context.Context, r fr, e source.Emitter[fr, tp]) error {
+	rows := func(keys []string) error {
+		for _, k := range keys {
+			if err := e.Rows([]schema.Row[tp]{{Key: k}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if r.i == 0 {
+		return rows(s.child)
+	}
+	if err := rows(s.before); err != nil {
+		return err
+	}
+	if err := e.Child(fr{0}); err != nil {
+		return err
+	}
+	return rows(s.after)
+}
+
+// runSink records each run's keys and checks that a run takes no row once
+// ended and ends once.
+type runSink struct {
+	mu   sync.Mutex
+	runs [][]string
+	bad  []string
+}
+
+func (s *runSink) Write(context.Context, [][]schema.Row[tp]) error {
+	s.mu.Lock()
+	s.bad = append(s.bad, "Write without a run")
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *runSink) Run() RangeRun[tp] { return &recordedRun{s: s} }
+
+type recordedRun struct {
+	s     *runSink
+	keys  []string
+	ended bool
+}
+
+func (r *recordedRun) Write(_ context.Context, rows []schema.Row[tp]) error {
+	if r.ended {
+		r.s.mu.Lock()
+		r.s.bad = append(r.s.bad, "a row after End")
+		r.s.mu.Unlock()
+	}
+	for _, row := range rows {
+		r.keys = append(r.keys, row.Key)
+	}
+	return nil
+}
+
+func (r *recordedRun) End() {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if r.ended {
+		r.s.bad = append(r.s.bad, "ended twice")
+	}
+	r.ended = true
+	r.s.runs = append(r.s.runs, r.keys)
+}
+
+// TestCountRuns: a RangeSink takes each range's rows in runs, one per
+// stretch between the range's children, every row of a stretch in one run
+// and in order, each run ended once; a range with no rows opens none.
+func TestCountRuns(t *testing.T) {
+	for _, unordered := range []bool{false, true} {
+		s := &runSink{}
+		p := runScript{before: []string{"a", "b"}, child: []string{"c", "d"}, after: []string{"e"}}
+		if _, err := CountWithSink(context.Background(), p, nil, Options{Workers: 2, Unordered: unordered}, s); err != nil {
+			t.Fatal(err)
+		}
+		slices.SortFunc(s.runs, func(a, b []string) int { return strings.Compare(a[0], b[0]) })
+		if want := [][]string{{"a", "b"}, {"c", "d"}, {"e"}}; len(s.bad) > 0 || !slices.EqualFunc(s.runs, want, slices.Equal) {
+			t.Fatalf("unordered %v: runs %q (%q), want %q", unordered, s.runs, s.bad, want)
+		}
+		s = &runSink{}
+		if _, err := CountWithSink(context.Background(), runScript{child: []string{"c"}}, nil, Options{Workers: 1}, s); err != nil || len(s.runs) != 1 {
+			t.Fatalf("a range without rows: %v, runs %q", err, s.runs)
+		}
+	}
+}
+
+// treeScript is a three-level tree whose ranges own prefixes, as a local
+// directory's do: the root "" (row a, child d/), d/ (row d/x, child
+// d/e/), d/e/ (row d/e/y).
+type treeScript struct{}
+
+func (treeScript) Root() fr { return fr{0} }
+
+func (treeScript) Expand(_ context.Context, r fr, e source.Emitter[fr, tp]) error {
+	prefix, row := [...]string{"", "d/", "d/e/"}[r.i], [...]string{"a", "d/x", "d/e/y"}[r.i]
+	e.(source.Subtreer).Subtree(prefix)
+	if err := e.Rows([]schema.Row[tp]{{Key: row}}); err != nil {
+		return err
+	}
+	if r.i < 2 {
+		return e.Child(fr{r.i + 1})
+	}
+	return nil
+}
+
+// treeSink records runs ending and subtrees ending, in order.
+type treeSink struct {
+	runSink
+	events []string
+}
+
+func (s *treeSink) Run() RangeRun[tp] { return &treeRun{recordedRun{s: &s.runSink}, s} }
+
+func (s *treeSink) SubtreeEnd(prefix string) {
+	s.mu.Lock()
+	s.events = append(s.events, "subtree "+prefix)
+	s.mu.Unlock()
+}
+
+type treeRun struct {
+	recordedRun
+	t *treeSink
+}
+
+func (r *treeRun) End() {
+	r.recordedRun.End()
+	r.t.mu.Lock()
+	r.t.events = append(r.t.events, "run "+strings.Join(r.keys, ","))
+	r.t.mu.Unlock()
+}
+
+// TestCountSubtrees: a SubtreeSink is told that a range owning a prefix
+// ended once its runs and its descendants' have ended, the deepest first,
+// each once.
+func TestCountSubtrees(t *testing.T) {
+	for _, workers := range []int{1, 4} {
+		s := &treeSink{}
+		if _, err := CountWithSink(context.Background(), treeScript{}, nil, Options{Workers: workers, Unordered: true}, s); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"run a", "run d/x", "run d/e/y", "subtree d/e/", "subtree d/", "subtree "}
+		if !slices.Equal(s.events, want) || len(s.bad) > 0 {
+			t.Fatalf("workers %d: %q (%q), want %q", workers, s.events, s.bad, want)
 		}
 	}
 }

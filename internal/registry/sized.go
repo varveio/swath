@@ -72,6 +72,14 @@ type sizeEmitter[P any] struct {
 	n    *atomic.Int64
 }
 
+// Subtree forwards to a Subtreer emitter: the filters drop rows, not
+// ranges, so a range still owns its prefix.
+func (e sizeEmitter[P]) Subtree(prefix string) {
+	if t, ok := e.Emitter.(source.Subtreer); ok {
+		t.Subtree(prefix)
+	}
+}
+
 // Span and Fence forward to a Fencer emitter.
 func (e sizeEmitter[P]) Span(lo, hi string, open bool) {
 	if f, ok := e.Emitter.(source.Fencer); ok {

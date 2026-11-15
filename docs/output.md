@@ -245,6 +245,10 @@ $ swath du -d 1 s3://bucket
 The table fits 80 columns at `-d 2` while a path stays within about 34 characters; a longer path is printed
 whole and wraps.
 
+Without `-d` or `--format`, on a terminal, `swath du` draws [the view](commands/swath-du.md#the-view) instead
+of the table: the largest prefixes and objects at any depth, with their shares of the total. It is for reading
+only; the rows above are what a pipe, `-d` and `--format` print.
+
 The totals are printed when the count completes. A run that fails or stops before prints none; one that
 fails while they are written exits non-zero. `--report FILE` adds the total and the counts to the report's
 `output.totals`.

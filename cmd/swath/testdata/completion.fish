@@ -50,7 +50,7 @@ complete -c swath -n '__swath_cmd "completion"' -a 'bash zsh fish'
 
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l verbose -s v -d 'a start line, progress records; -vv, -vvv: the request log'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l quiet -s q -d 'no warnings, no automatic progress or statistics (-qq: no errors)'
-complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l color -x -a 'auto always never' -d 'color the progress line, the statistics and the help'
+complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l color -x -a 'auto always never' -d 'color progress, statistics, the help and du\'s view'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l log-format -x -a 'text json' -d 'stderr as text, or json: one JSON object per line'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l help -s h -d 'print help'
 complete -c swath -n '__swath_cmd ""' -l version -s V -d 'print the version'

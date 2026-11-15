@@ -381,6 +381,32 @@ by `--max-prefixes` (a merge past it fails the run, `totals.LimitError`, cause `
 sorted by byte once, at the end, and written through `listing.Config.Deliver` after the count completes and
 before the run's end is stamped, so a failed write or a stop during it fails the run.
 
+A sink that is an `order.RangeSink` takes the rows in runs instead: the emitter opens a run at a range's first
+rows and ends it when the range emits a child or its `Expand` returns. A provider emits a range's rows and
+children in key order, so in an ordered count a run is a contiguous stretch of the stream: the range engine
+emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owner-side, a range's children are
+claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
+subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
+(`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
+before its last is complete, so it is kept only when it holds at least 1 % of the bytes seen so far and is
+otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
+across runs and complete at the end. An unordered count (the local source) gives no order inside a run: there
+only objects complete in a run. A sink that is also an `order.SubtreeSink` is told when a range that declared
+the prefix it owns (`source.Subtreer`, which every emitter adapter forwards: a local directory's range owns
+its prefix, its chunks and subdirectories being its descendants) has ended with every range it emitted: the
+count keeps a node per queued range, with its parent and its pending descendants, and the worker that settles
+the last one reports the prefixes that ended, the deepest first. The view then completes that directory
+through the same rule. Of the complete prefixes above 1 % of the bytes seen, the view keeps the 100 largest
+of each depth (a min-heap a depth), which holds every prefix of 1 % of the total whatever the order they
+complete in; `--max-prefixes` bounds the local directories being listed and the prefixes kept for a hard
+link (an ordered run's partial prefixes are its two edges, a few a range, and count against nothing). A
+run's children are counted once: by the run when complete there, else when first summed as a partial prefix.
+`TestViewExactOrdered` and `TestViewExactUnordered` check the view against a brute-force tree over random
+contiguous runs fed concurrently, and directories completed as their subtrees end; `TestViewLocalBudget`
+checks that a local tree and the same rows in order give the same view within a small budget;
+`TestCountRuns` checks that each range's rows reach one run per stretch between its children, and
+`TestCountSubtrees` that a subtree ends after its runs and its descendants'.
+
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
 provider), the progress file's `rows_emitted` counter, and a per-range order check: each range's keys strictly
 ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). A provider that

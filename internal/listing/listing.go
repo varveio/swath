@@ -1047,6 +1047,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if cfg.Totals != nil {
 		st := cfg.Totals.Stats()
 		a.sum.Output.Totals = &st
+		a.sum.TotalsView = cfg.Totals.ViewStats()
 	}
 	if sd, ok := src.(source.SeedTimed); ok {
 		if d, ok := sd.SeedTime(); ok {

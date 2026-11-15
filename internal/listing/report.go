@@ -74,8 +74,11 @@ type Diagnostics struct {
 	// local source, a seed turned off, a warm start).
 	SeedMs *int64 `json:"seed_ms,omitempty"`
 	// Text is a text run's sink (nil for a dataset or a dry run).
-	Text      *TextSink `json:"text,omitempty"`
-	Resources Resources `json:"resources"`
+	Text *TextSink `json:"text,omitempty"`
+	// TotalsView is swath du's adaptive view's account (nil without the
+	// view).
+	TotalsView *totals.ViewStats `json:"totals_view,omitempty"`
+	Resources  Resources         `json:"resources"`
 	// Source is the provider's account of the listing, under its name.
 	Source *SourceStats `json:"source,omitempty"`
 	// Efficiency is this invocation's throughput and request economy.

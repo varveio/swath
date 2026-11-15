@@ -77,6 +77,9 @@ type Options struct {
 	Primary string
 	// LinksOnce counts an object with several hard links once (Row.Link).
 	LinksOnce bool
+	// View also builds the adaptive view (view.go) from the rows given to
+	// ViewRuns; MaxPrefixes then bounds its nodes rather than fail.
+	View bool
 }
 
 // prefixes yields key's prefixes from the origin (depth 0) down to Depth,
@@ -262,6 +265,7 @@ type Tally struct {
 	dirs  bool              // the source has directories (Dirs)
 	alloc bool              // the source has allocated bytes (Allocated)
 	err   error             // the first LimitError: every later merge returns it
+	view  *view             // Options.View
 	notObjects,
 	linkedRows,
 	unidentified int64
@@ -279,6 +283,9 @@ func New(opt Options) *Tally {
 		opt.Primary = Size
 	}
 	t := &Tally{opt: opt, cells: map[string]*cell{}, links: map[inode]*linked{}}
+	if opt.View {
+		t.view = newView(&opt)
+	}
 	t.pool.New = func() any { return &Batch{t: t} }
 	return t
 }
@@ -598,4 +605,17 @@ func (t *Tally) Stats() Stats {
 		s.MaxLastModified = &at
 	}
 	return s
+}
+
+// ViewStats is the adaptive view's account (Options.View), nil without
+// one: how the view's algorithm ran, for the report's diagnostics.
+func (t *Tally) ViewStats() *ViewStats {
+	v := t.view
+	if v == nil {
+		return nil
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	s := v.account()
+	return &s
 }

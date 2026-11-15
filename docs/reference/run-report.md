@@ -208,6 +208,13 @@ seed, from its first delimiter request to its tiles (absent where none ran). `te
 `timings.listing_ms`; `http_attempts_per_1k_rows` is `requests.http_attempts` per 1,000 `output.rows_fetched`
 (`null` without a row).
 
+`totals_view` is `swath du`'s [view](../commands/swath-du.md#the-view), when it was drawn: `runs` (the ranges'
+stretches of rows it read), `completed` (prefixes and objects complete inside one run, or local directories
+whose listing ended), split into `remembered` (at 1 % of the bytes seen, or holding a hard link) and `dropped`,
+`pruned` (remembered, dropped later for 100 larger ones of their depth), `partial` (cut by a run's edge, summed
+across runs), and `depth_kept` with `lowered` (-1 and false, or the deepest level kept once more than
+`output.totals.max_prefixes` were held).
+
 **Resources** (`resources`). `rusage_available` (whether this platform measured the CPU times and
 `process.peak_rss_bytes`), `peak_heap_live_bytes` (sampled every
 100 ms), `peak_buffered_bytes` (peak reorder storage, against `invocation.sort_buffer_bytes`), `free_disk_min_bytes`

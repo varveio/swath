@@ -94,6 +94,13 @@ func (t typed[R, P]) Fence(x string, top bool) {
 	}
 }
 
+// Subtree forwards to a Subtreer emitter.
+func (t typed[R, P]) Subtree(prefix string) {
+	if s, ok := t.e.(Subtreer); ok {
+		s.Subtree(prefix)
+	}
+}
+
 // Awaited forwards an Awaiter emitter's (false without one).
 func (t typed[R, P]) Awaited() bool {
 	a, ok := t.e.(Awaiter)

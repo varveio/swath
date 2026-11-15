@@ -304,7 +304,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 			observe = observer
 		}
 		if env.Totals != nil {
-			if observe, err = bindTotals(env.Totals, b.s, vers, observe); err != nil {
+			if observe, err = bindTotals(env.Totals, b.s, vers, observe, !env.Order.Unordered); err != nil {
 				return order.Stats{}, nil, err
 			}
 		}

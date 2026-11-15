@@ -284,7 +284,8 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	}
 	// A local tree's file with several hard links counts once, as du
 	// counts it, unless --count-links.
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, Primary: primaryFigure(o)}
+	view := duView(o, format, registry.Redact(root), stdoutTTY)
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, Primary: primaryFigure(o), View: view != nil}
 	if pf, err := registry.Lookup(root); err == nil {
 		opt.LinksOnce = pf.Scheme == "" && !o.countLinks
 		if pf.CheckTotals != nil {
@@ -293,7 +294,7 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			}
 		}
 	}
-	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt)}
+	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view}
 	return nil
 }
 

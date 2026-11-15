@@ -70,7 +70,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	o.depth, o.maxPrefixes, o.maxInodes = 0, totals.DefaultMaxPrefixes, totals.DefaultMaxInodes
 	def(source.Flag{Name: "depth", Short: "d", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "also total each prefix down to N levels below SOURCE (0: the total)",
-		Long:  "A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same."})
+		Long:  "A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same. Without it, a terminal shows the view instead: the largest prefixes and objects at any depth."})
 	// GNU du's --max-depth limits the rows printed, as --depth does: a
 	// second spelling, kept out of the help.
 	source.Define(f, source.Flag{Name: "max-depth", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
