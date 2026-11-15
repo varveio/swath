@@ -191,10 +191,11 @@ Notable changes per release. The full human summary for the current release is i
   goroutine dump to a file in the temporary directory and names it (the stacks reach stderr only with `-v`),
   and the tmpfs spill warning is printed at a run's first spill, not at every start.
 
-- Go port: `swath du --from-dataset DIR [PREFIX]` totals a committed local dataset (`swath list -o DIR`)
+- Go port: `swath du --from-dataset DIR [SOURCE]` totals a committed local dataset (`swath list -o DIR`)
   instead of listing the source again: the same rows, depths, orders, formats and filters as `swath du` of the
-  source, read in one parallel pass over the key and the columns the totals need, seeking to PREFIX when one is
-  given. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
+  source, read in one parallel pass over the key and the columns the totals need. SOURCE, in the form a live
+  `swath du` takes it, is the dataset's source or a path or URL below it, whose keys the read seeks to; any
+  other SOURCE, such as a key prefix, is refused (exit 2) naming the dataset's source. Stderr names the dataset's source, when it was listed and its coverage, and JSONL rows carry it as a
   `dataset` member; a dataset whose listing did not complete, or left out entries it could not read, prints its totals and exits 3
   (`incomplete`).
   Options that shape a listing, a dataset in a bucket and an interrupted run are refused. Plain `swath du DIR`

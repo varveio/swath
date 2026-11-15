@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -120,11 +121,34 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	}
 	liveAndSaved(t, []string{root, "-d", "1", "--no-header"}, []string{"--from-dataset", ds, "-d", "1", "--no-header"})
 	liveAndSaved(t, []string{root, "--max-depth", "1"}, []string{"--from-dataset", ds, "--max-depth", "1"}) // GNU du's spelling
-	// PREFIX restricts the totals to its keys, the depth counted from it;
-	// the rows keep the dataset's keys.
-	got, err := duRun(t, "--from-dataset", ds, "a/", "-d", "1", "--format", "tsv")
-	if err != nil || !strings.Contains(got, "\t2\t1\t7\t0\t") || !strings.HasSuffix(got, "\ta/b/\n") || strings.Count(got, "\n") != 3 {
-		t.Fatalf("PREFIX a/: %v\n%s", err, got)
+	// SOURCE, a path below the tree, restricts the totals to its keys, the
+	// depth counted from it; the rows keep the dataset's keys. The tree
+	// itself, in any spelling of its path, is the whole dataset.
+	below := []string{filepath.Join(root, "a"), filepath.Join(root, "a") + string(filepath.Separator)}
+	whole := []string{root, filepath.Join(root, "a", "..")}
+	if runtime.GOOS == "windows" { // the same paths, as Windows takes them
+		below = append(below, filepath.ToSlash(below[0]), strings.ToUpper(below[0]))
+		whole = append(whole, filepath.ToSlash(root), strings.ToUpper(root))
+	}
+	for _, a := range below {
+		got, err := duRun(t, "--from-dataset", ds, a, "-d", "1", "--format", "tsv")
+		if err != nil || !strings.Contains(got, "\t2\t1\t7\t0\t") || !strings.HasSuffix(got, "\ta/b/\n") || strings.Count(got, "\n") != 3 {
+			t.Fatalf("SOURCE %s: %v\n%s", a, err, got)
+		}
+	}
+	for _, a := range whole {
+		liveAndSaved(t, []string{root, "-d", "2"}, []string{"--from-dataset", ds, a, "-d", "2"})
+	}
+	// A relative path is taken from the working directory, as a live
+	// swath du takes it: the listed tree's own name there is the whole.
+	t.Chdir(filepath.Dir(root))
+	liveAndSaved(t, []string{root, "-d", "1"}, []string{"--from-dataset", ds, filepath.Base(root), "-d", "1"})
+	// A directory below the tree that holds no key warns and exits 0, as a
+	// live listing of an empty prefix.
+	stderr.Reset()
+	if got, err := duRun(t, "--from-dataset", ds, filepath.Join(root, "gone"), "--format", "tsv"); err != nil || !strings.Contains(got, "\ntotal\t0\t0\t0\t") ||
+		!strings.Contains(stderr.String(), `swath: warning: no key of the dataset starts with "gone/"`) {
+		t.Fatalf("empty SOURCE: %v\n%s\nstderr: %s", err, got, stderr.String())
 	}
 	// Stderr says it is the dataset, its source (as its manifest records
 	// the root) and coverage, not a live listing; JSONL rows carry it.
@@ -134,7 +158,7 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if s := stderr.String(); src == "" || !strings.Contains(s, "swath: totals of the dataset "+ds+", not a live listing: "+src+" as listed ") || !strings.Contains(s, "; complete\n") {
 		t.Fatalf("stderr: %s", s)
 	}
-	got, err = duRun(t, "--from-dataset", ds, "--format", "jsonl")
+	got, err := duRun(t, "--from-dataset", ds, "--format", "jsonl")
 	var row struct {
 		Dataset provenance `json:"dataset"`
 	}
@@ -176,11 +200,11 @@ func TestDuFromDatasetLocal(t *testing.T) {
 }
 
 // TestDuFromDatasetObjectStore: an object store's dataset totals as swath
-// du of the source and of a prefix of it (PREFIX), filters included; a
-// PREFIX outside the dataset's scope is refused, and the local totals'
+// du of the source and of a URL below it (SOURCE), filters included; any
+// other SOURCE is refused naming the dataset's, and the local totals'
 // options are refused on a schema without their columns.
 func TestDuFromDatasetObjectStore(t *testing.T) {
-	captureStderr(t)
+	stderr := captureStderr(t)
 	keys := []string{"logs/2026/01/a", "logs/2026/01/b/c", "logs/2026/02/d", "logs/2026/top", "logs/2027/x", "other/y"}
 	end := s3test.Bucket(t, keys)
 	store := []string{"--endpoint-url", end, "--anonymous"}
@@ -190,33 +214,49 @@ func TestDuFromDatasetObjectStore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	listed := map[string]string{ds: "s3://bkt", logs: "s3://bkt/logs/"}
 	for _, tc := range []struct {
-		src, dir, prefix string
-		flags            []string
+		src, dir string
+		flags    []string
 	}{
-		{"s3://bkt", ds, "", []string{"-d", "2"}},
-		{"s3://bkt", ds, "", []string{"-d", "3", "--sort", "size", "--format", "jsonl"}},
-		{"s3://bkt/logs/2026/", ds, "logs/2026/", []string{"-d", "1"}},
-		{"s3://bkt/logs/2026/0", ds, "logs/2026/0", []string{"-d", "1"}},
-		{"s3://bkt/logs", ds, "logs", []string{"-d", "1"}},
-		{"s3://bkt", ds, "", []string{"-d", "2", "--include", "logs/**", "--exclude", "*/02/*"}},
-		{"s3://bkt", ds, "", []string{"-d", "1", "--storage-class", "STANDARD"}},
-		{"s3://bkt/logs/", logs, "", []string{"-d", "2", "--sort", "size"}},
-		{"s3://bkt/logs/2027/", logs, "logs/2027/", []string{"-d", "1", "--max-size", "11"}},
+		{"s3://bkt", ds, []string{"-d", "2"}},
+		{"s3://bkt", ds, []string{"-d", "3", "--sort", "size", "--format", "jsonl"}},
+		{"s3://bkt/logs/2026/", ds, []string{"-d", "1"}},
+		{"s3://bkt/logs/2026/0", ds, []string{"-d", "1"}},
+		{"s3://bkt/logs", ds, []string{"-d", "1"}},
+		{"S3://bkt/logs/", ds, []string{"-d", "1"}},
+		{"s3://bkt", ds, []string{"-d", "2", "--include", "logs/**", "--exclude", "*/02/*"}},
+		{"s3://bkt", ds, []string{"-d", "1", "--storage-class", "STANDARD"}},
+		{"s3://bkt/logs/", logs, []string{"-d", "2", "--sort", "size"}},
+		{"s3://bkt/logs/2027/", logs, []string{"-d", "1", "--max-size", "11"}},
 	} {
-		saved := []string{"--from-dataset", tc.dir}
-		if tc.prefix != "" {
-			saved = append(saved, tc.prefix)
-		}
 		flags := append([]string{"--format", "tsv"}, tc.flags...) // the last --format wins
-		liveAndSaved(t, append(append([]string{tc.src}, store...), flags...), append(saved, flags...))
+		live := append(append([]string{tc.src}, store...), flags...)
+		liveAndSaved(t, live, append([]string{"--from-dataset", tc.dir, tc.src}, flags...))
+		if tc.src == listed[tc.dir] {
+			liveAndSaved(t, live, append([]string{"--from-dataset", tc.dir}, flags...))
+		}
+	}
+	// A URL below the source that holds no key warns and exits 0, as a
+	// live listing of an empty prefix.
+	stderr.Reset()
+	if got, err := duRun(t, "--from-dataset", logs, "s3://bkt/logs/2028/", "--format", "tsv"); err != nil || !strings.Contains(got, "\ntotal\t0\t0\t0\t") ||
+		!strings.Contains(stderr.String(), `swath: warning: no key of the dataset starts with "logs/2028/"`) {
+		t.Fatalf("empty SOURCE: %v\n%s\nstderr: %s", err, got, stderr.String())
+	}
+	refused := func(arg string) string {
+		return fmt.Sprintf("%q: %s was listed from s3://bkt/logs/; give a URL below it, or no argument", arg, logs)
 	}
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"--from-dataset", logs, "other/"}, `PREFIX "other/" is not inside the dataset's scope`},
-		{[]string{"--from-dataset", logs, "lo"}, `PREFIX "lo" is not inside the dataset's scope`},
+		{[]string{"--from-dataset", logs, "s3://bkt/other/"}, refused("s3://bkt/other/")},
+		{[]string{"--from-dataset", logs, "s3://bkt/lo"}, refused("s3://bkt/lo")},
+		{[]string{"--from-dataset", logs, "s3://bkt"}, refused("s3://bkt")},
+		{[]string{"--from-dataset", logs, "s3://bkt2/logs/"}, refused("s3://bkt2/logs/")},
+		{[]string{"--from-dataset", logs, "gs://bkt/logs/"}, refused("gs://bkt/logs/")},
+		{[]string{"--from-dataset", logs, "logs/2026/"}, refused("logs/2026/")}, // a key prefix is not SOURCE's form
 		{[]string{"--from-dataset", ds, "--allocated"}, "--allocated: the dataset's schema swath/s3-objects/v1 has no allocated_bytes column"},
 		{[]string{"--from-dataset", ds, "--count-links"}, "--count-links: the dataset's schema swath/s3-objects/v1 has no nlink column"},
 	} {
@@ -229,7 +269,7 @@ func TestDuFromDatasetObjectStore(t *testing.T) {
 
 // TestDuFromDatasetRefusals: an option that shapes a listing, or that the
 // dataset cannot answer, is a usage error naming it, as is a dataset in a
-// bucket, a URL as PREFIX, and a directory that holds no committed
+// bucket, a SOURCE that is not the dataset's tree or below it, and a directory that holds no committed
 // dataset (an interrupted run's says how to finish it); nothing is
 // printed on stdout.
 func TestDuFromDatasetRefusals(t *testing.T) {
@@ -238,6 +278,9 @@ func TestDuFromDatasetRefusals(t *testing.T) {
 	ds := filepath.Join(t.TempDir(), "ds")
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
+	}
+	outside := func(arg string) string {
+		return fmt.Sprintf("%q: %s was listed from %s; give a path below it, or no argument", arg, ds, root)
 	}
 	interrupted := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(interrupted, dataset.JournalDir), 0o755); err != nil {
@@ -265,7 +308,14 @@ func TestDuFromDatasetRefusals(t *testing.T) {
 		{[]string{"--allocated", "--apparent-size"}, "--allocated and --apparent-size each choose the figure that comes first"},
 		{[]string{"--no-header", "--format", "jsonl"}, "not with JSONL"},
 		{[]string{"a/", "b/"}, `unexpected argument "b/"`},
-		{[]string{"s3://bkt/logs/"}, `PREFIX "s3://bkt/logs/": a key prefix within the dataset`},
+		// SOURCE is the tree or a path below it: the dataset's own
+		// directory, the tree's parent, a sibling sharing its name's start,
+		// a URL and a key prefix (outside the tree) are refused, naming it.
+		{[]string{ds}, outside(ds)},
+		{[]string{filepath.Dir(root)}, outside(filepath.Dir(root))},
+		{[]string{root + "x"}, outside(root + "x")},
+		{[]string{"s3://bkt/logs/"}, outside("s3://bkt/logs/")},
+		{[]string{"a/"}, outside("a/")},
 	} {
 		out, err := duRun(t, append([]string{"--from-dataset", ds}, tc.args...)...)
 		if u := (usageError{}); !errors.As(err, &u) || !strings.Contains(err.Error(), tc.want) || out != "" {
@@ -496,7 +546,7 @@ func TestDuSaveHint(t *testing.T) {
 }
 
 // TestDuFromDatasetManyParts: a dataset of many parts, scanned by parallel
-// shards, totals as the live listing does, whole and under a PREFIX.
+// shards, totals as the live listing does, whole and below the source.
 func TestDuFromDatasetManyParts(t *testing.T) {
 	captureStderr(t)
 	end := s3test.Bucket(t, s3test.Keys(3000, 7))
@@ -512,5 +562,5 @@ func TestDuFromDatasetManyParts(t *testing.T) {
 	for _, flags := range [][]string{{"-d", "1"}, {"-d", "2", "--sort", "size", "--format", "jsonl"}, {"-d", "1", "--exclude", "p03/**"}} {
 		liveAndSaved(t, append(append([]string{"s3://bkt"}, store...), flags...), append([]string{"--from-dataset", ds}, flags...))
 	}
-	liveAndSaved(t, append([]string{"s3://bkt/p04/", "-d", "1"}, store...), []string{"--from-dataset", ds, "p04/", "-d", "1"})
+	liveAndSaved(t, append([]string{"s3://bkt/p04/", "-d", "1"}, store...), []string{"--from-dataset", ds, "s3://bkt/p04/", "-d", "1"})
 }

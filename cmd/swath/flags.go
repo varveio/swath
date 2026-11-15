@@ -97,7 +97,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long: "Unless --count-links. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
 	def(source.Flag{Name: "from-dataset", Value: source.Text(&o.fromDataset), Metavar: "DIR", Shown: source.ShownURL, Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "total the dataset saved in DIR (swath list -o DIR) instead of listing",
-		Long: "Then PREFIX, not SOURCE: an optional key prefix as the dataset's keys hold it, sought rather than scanned. DIR is a local dataset directory; " +
+		Long: "An optional SOURCE, the dataset's source as listed or a path or URL below it, restricts the totals to it, sought rather than scanned. DIR is a local dataset directory; " +
 			"without this option swath du DIR totals DIR's own files. Options that shape a listing are refused. Stderr names the dataset's source, " +
 			"when it was listed and what its listing covered."})
 

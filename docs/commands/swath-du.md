@@ -7,7 +7,7 @@ swath du totals SOURCE's objects (a local tree's files), their lengths and alloc
 <!-- synopsis:begin -->
 ```text
 swath du SOURCE [OPTIONS]
-swath du --from-dataset DIR [PREFIX] [OPTIONS]
+swath du --from-dataset DIR [SOURCE] [OPTIONS]
 ```
 <!-- synopsis:end -->
 
@@ -94,10 +94,15 @@ and filters need, in one parallel pass, once every part's columns are checked ag
 dataset that breaks it is refused, exit 1). Depth counts from the dataset's scope, as it would from the source.
 Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold.
 
-An optional PREFIX after the directory restricts the totals to the keys under it, as the dataset holds them (a
-local tree's keys are relative to its root, an object store's are whole keys), and depth counts from PREFIX up to
-its last `/`. The read seeks to the prefix rather than scanning the dataset. A PREFIX outside the dataset's scope
-is refused, since the dataset cannot total it.
+An optional SOURCE after the directory takes the form a live `swath du` takes: the dataset's source as it was
+listed (the `source` stderr names), which totals the whole dataset as no SOURCE does, or a path or URL below it,
+which restricts the totals to the keys below it. A local path is made absolute, as a live `swath du` resolves
+it, and taken as a directory below the listed tree (`/data/photos/2025` totals the keys under `2025/`); a URL
+names the same bucket or container and a prefix that starts with the listed one (`s3://bucket/logs/2026/` of a
+dataset listed from `s3://bucket/logs/`). Depth counts from its prefix up to the last `/`, and the read seeks
+to the prefix rather than scanning the dataset. A SOURCE below the listed one that holds no key prints zeros
+and warns, exit 0, as a live listing of an empty prefix. Any other SOURCE is refused (exit 2), naming the
+dataset's: `"photos": photos-inventory was listed from /data/photos; give a path below it, or no argument`.
 
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
 and how far the listing reached (`complete`, `INCOMPLETE` with the reason, the entries it could not read, the
@@ -165,7 +170,7 @@ sizes) with exit 2.
 - <a id="option-from-dataset"></a>[`--from-dataset DIR`](#option-from-dataset)\
   total the dataset saved in DIR (swath list -o DIR) instead of listing
 
-  Then PREFIX, not SOURCE: an optional key prefix as the dataset's keys hold it, sought rather than scanned. DIR is a local dataset directory; without this option swath du DIR totals DIR's own files. Options that shape a listing are refused. Stderr names the dataset's source, when it was listed and what its listing covered.
+  An optional SOURCE, the dataset's source as listed or a path or URL below it, restricts the totals to it, sought rather than scanned. DIR is a local dataset directory; without this option swath du DIR totals DIR's own files. Options that shape a listing are refused. Stderr names the dataset's source, when it was listed and what its listing covered.
 
 ### Output
 
@@ -455,11 +460,12 @@ Totals:
                                 Unless --count-links. Raise it for a tree of more hard-linked files
                                 when memory allows (about 100 bytes each).
       --from-dataset DIR      total the dataset saved in DIR (swath list -o DIR) instead of listing
-                                Then PREFIX, not SOURCE: an optional key prefix as the dataset's
-                                keys hold it, sought rather than scanned. DIR is a local dataset
-                                directory; without this option swath du DIR totals DIR's own files.
-                                Options that shape a listing are refused. Stderr names the dataset's
-                                source, when it was listed and what its listing covered.
+                                An optional SOURCE, the dataset's source as listed or a path or URL
+                                below it, restricts the totals to it, sought rather than scanned.
+                                DIR is a local dataset directory; without this option swath du DIR
+                                totals DIR's own files. Options that shape a listing are refused.
+                                Stderr names the dataset's source, when it was listed and what its
+                                listing covered.
 
 Output:
       --format auto|table|tsv|jsonl
@@ -694,7 +700,7 @@ the bucket again:
 ```bash
 swath list s3://bucket -o bucket-inventory
 swath du --from-dataset bucket-inventory -d 2 --sort size
-swath du --from-dataset bucket-inventory logs/2026/ -d 3
+swath du --from-dataset bucket-inventory s3://bucket/logs/2026/ -d 3
 ```
 
 ## Exit status
