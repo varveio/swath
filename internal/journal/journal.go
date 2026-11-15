@@ -445,32 +445,9 @@ func (j *Journal) Close() error {
 	return j.f.Close()
 }
 
-// Version is the journal format this tool writes and reads. Version 7
-// marked the claimed-part protocol: the part about to be recorded is at
-// dataset.ClaimPath, and recovery protects only that name (see
-// durability.md); the unresumable mark (Unresumable) is a later frame type
-// within it. Version 8 added the run UUID (Header.RunUUID) and keeps the
-// durable spill (DIR/.swath/spill/durable, with its own ledger) across a
-// resume.
-//
-// Version 9 records each part's SHA-256 (dataset.PartInfo.SHA256) where
-// earlier versions recorded its MD5. Recovery compares a retained part with
-// its record by that digest, so an earlier journal is refused before
-// recovery touches anything (VersionError), as an earlier build refuses
-// version 9; its run is listed again with --overwrite.
-//
-// Version 10 names a remote dataset's parts in their records
-// (Record.Object, Identity) and its destination in the identity
-// (Identity.Destination). A version 9 journal is a local dataset's, read
-// as version 10 without those fields; an earlier build refuses version 10.
-// A record's object bytes (Record.ObjectBytes) were added within version
-// 10: optional, so an earlier build of version 10 resumes a journal that
-// has them (ignoring them) and this build one that lacks them (the
-// dataset's object bytes are then unknown).
-const Version = 10
-
-// MinVersion is the oldest version this build reads.
-const MinVersion = 9
+// Version is the journal format this tool writes and reads. A journal of any
+// other version is refused (VersionError).
+const Version = 1
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.
@@ -649,7 +626,7 @@ func decode(r io.Reader) (*State, error) {
 			if err := json.Unmarshal(payload, &st.Header); err != nil || st.Header.Type != "header" {
 				return nil, fmt.Errorf("%w: first frame is not a header", ErrCorrupt)
 			}
-			if st.Header.Version < MinVersion || st.Header.Version > Version {
+			if st.Header.Version != Version {
 				return nil, &VersionError{Found: st.Header.Version, Want: Version}
 			}
 			first = false

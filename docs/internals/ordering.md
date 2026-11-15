@@ -679,7 +679,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 
 - **Durable files.** The read-ahead and the segments read a durable spill file's rows frames as they read a
   run-private file's, by the offset its marker records (a header or capture frame may precede a rows frame:
-  the offset is the rows frame's own), checking the version-2 CRC; the drainer's reader skips to the end of a
+  the offset is the rows frame's own), checking the CRC; the drainer's reader skips to the end of a
   frame read ahead, past any capture frame before it. The segments check a durable file's trailer (its total
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
@@ -749,7 +749,7 @@ vectors as well as round trips, so shared implementation alone cannot establish 
 
 ## Durable spill
 
-A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
+A journaled run keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 
@@ -825,8 +825,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   children exposed (`TestDurableSealErrorStopsRun`: the output is a prefix of the oracle). A capture that
   started at its closing fence certifies nothing and is abandoned (`empty`); rows after the last fence
   (`unfenced`), or a stop or failed ledger at the seal (`stopping`) abandon too.
-- **File format.** Version-2 frames (the journal's envelope: length, CRC-32C over the length and the
-  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID
+- **File format.** Frames (the journal's envelope: length, CRC-32C over the length and the
+  payload): `H` (magic, format version 1, run UUID, file ID, the journal identity's digest, the row codec ID
   and its version, the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
   decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
   captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the

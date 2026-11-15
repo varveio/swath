@@ -1,4 +1,4 @@
-report_version 12
+report_version 1
 args_hash string
 attempt.id string
 attempt.started time

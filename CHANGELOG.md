@@ -5,7 +5,6 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the run report is at `report_version` 12. The report fields the entries below name are new in it.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
