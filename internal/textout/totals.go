@@ -10,6 +10,7 @@ import (
 	"io"
 	"iter"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/totals"
@@ -78,6 +79,9 @@ type TotalsLayout struct {
 	Local bool
 	// NoHeader leaves out TSV's header line.
 	NoHeader bool
+	// Loc is the table's time zone (nil: time.Local), as the list
+	// table's; TSV and JSONL are UTC.
+	Loc *time.Location
 	// Dataset, if set, is a JSON object that every JSONL row carries as
 	// its last member, FieldDataset: where totals read from a saved
 	// dataset came from (swath du --from-dataset). TSV and the table have
@@ -105,9 +109,10 @@ func (l *TotalsLayout) primary() string {
 // the rows' grammar (appendTSV), so any name round-trips; in JSONL a
 // prefix that is not UTF-8 is prefix_base64, its exact bytes, instead of
 // prefix. The table is for reading: one figure, the primary, in binary
-// units (TableFigure), the counts grouped, no time, and the prefix (a
-// local tree's path) last, indented by its depth; the command states the
-// other figure's total beside it.
+// units (TableFigure), the counts grouped, the newest time as the list
+// table's ("-" when unknown), and the prefix (a local tree's
+// path) last, indented by its depth; the command states the other
+// figure's total beside it.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
 	bw := bufio.NewWriterSize(w, bufferBytes)
 	var b []byte
@@ -250,15 +255,21 @@ func (l *TotalsLayout) heading() string {
 	return FieldSize
 }
 
-// tableWidths are the table's right-aligned columns' widths: each its
-// heading's or its widest value's.
-type tableWidths struct{ figure, objects, dirs int }
+// tableWidths are the table's columns' widths, each its heading's or its
+// widest value's, and the time column's zone and heading.
+type tableWidths struct {
+	figure, objects, dirs, time int
+	loc                         *time.Location
+	timeHeading                 string
+}
 
 func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
 	w := tableWidths{figure: len(l.heading()), objects: len(headingFiles), dirs: len(FieldDirs)}
 	if !l.Local {
 		w.objects = len(FieldObjects)
 	}
+	w.loc, w.timeHeading = tableClock(l.Loc)
+	w.time = max(len(w.timeHeading), len(tableTime))
 	var num [32]byte
 	for i := range rows {
 		r := &rows[i]
@@ -279,6 +290,7 @@ func (w tableWidths) header(b []byte, l *TotalsLayout) []byte {
 	if l.Local {
 		b = appendPadded(append(b, "  "...), []byte(FieldDirs), w.dirs)
 	}
+	b = appendLeft(append(b, "  "...), w.timeHeading, w.time)
 	return append(append(b, "  "...), prefix+"\n"...)
 }
 
@@ -290,6 +302,13 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 		b = appendPadded(append(b, "  "...), appendGrouped(num[:0], r.Dirs), w.dirs)
 	}
 	b = append(b, "  "...)
+	start := len(b)
+	if r.HasNewest {
+		b = appendLocal(b, r.Newest, w.loc)
+	} else {
+		b = append(b, missingCell...)
+	}
+	b = append(pad(b, start, w.time), "  "...)
 	if r.Depth == 0 {
 		return append(b, headingTotal...)
 	}
