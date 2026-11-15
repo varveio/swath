@@ -21,7 +21,7 @@ must have integer `version: 1`; malformed members return a `SemanticError`.
 An absent extension leaves `Metadata.Swath` false. Unknown schema ids are refused.
 
 `Dataset.Metadata()` returns a copy of the parsed publication time, source, scope,
-coverage, committed object bytes and, for a local source, the filesystem's space. Missing members remain nil: unknown is distinct
+coverage (its filters as `Filter`s), what the listing collected (`Collected`), committed object bytes and, for a local source, the filesystem's space. Missing members remain nil: unknown is distinct
 from zero, false or empty. The application decides whether the source, scope, filters,
 exclusions, completeness and freshness suit its purpose.
 
