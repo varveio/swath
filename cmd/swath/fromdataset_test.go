@@ -92,6 +92,11 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a", "gg"), []byte("123"), 0o644); err != nil { // a/g is a prefix of its key
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink("b", filepath.Join(root, "a", "to-b")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ds := filepath.Join(t.TempDir(), "ds")
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
@@ -168,6 +173,14 @@ func TestDuFromDatasetLocal(t *testing.T) {
 				flags := append([]string{"--format", format}, extra...)
 				liveAndSaved(t, append([]string{file}, flags...), append([]string{"--from-dataset", ds, file}, flags...))
 			}
+		}
+	}
+	// A symbolic link is refused: a live swath du follows it to a
+	// directory, whose rows the dataset holds under the target's name.
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(root, "a", "to-b")
+		if out, err := duRun(t, "--from-dataset", ds, link); !errors.As(err, new(usageError)) || !strings.Contains(err.Error(), "a symbolic link in the dataset") || out != "" {
+			t.Fatalf("symbolic link SOURCE: %v\n%s", err, out)
 		}
 	}
 	// A relative path is taken from the working directory, as a live

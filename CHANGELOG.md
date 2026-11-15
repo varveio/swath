@@ -10,7 +10,7 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular
   expression. `.*\.parquet` is still refused, naming `--include-regex`.
 - Go port: `swath du --from-dataset DIR /tree/file`, a file in the dataset's tree, totals that file as a live
-  `swath du /tree/file` does; it sought `file/` and printed zeros.
+  `swath du /tree/file` does; it sought `file/` and printed zeros. A symbolic link there is refused, naming it.
 - Go port: a resumed `swath list ... -o DIR --overwrite` writes `DIR/cuts.txt` again; the parts it kept from
   the interrupted attempt were read where they lay before the installation, so the cut file was skipped with a
   warning.
