@@ -69,7 +69,8 @@ func crashConfig(url, out string, resume bool) Config {
 // stores answer in bursts, so their interval arm cuts by time now and
 // then; the trickling scripted source (one key per range, 1 ms apart, a
 // 4 ms interval) cuts nearly every part by time, so every crash point
-// meets a time-cut part.
+// meets a time-cut part. The s3-rolling arm (rollingCrashMatrix) stops a
+// seeded run inside the segments it writes while listing goes on.
 func TestCrashMatrix(t *testing.T) {
 	datasettest.RequireJournal(t)
 	s3url, gcsep, azep := crashBucket(t), gcsBucket(t, 8000), azblobBucket(t, 8000)
@@ -217,6 +218,7 @@ func TestCrashMatrix(t *testing.T) {
 			}
 		}
 	}
+	t.Run("s3-rolling", rollingCrashMatrix)
 }
 
 // calibrating is the crash matrices' extra occurrence: the first part's

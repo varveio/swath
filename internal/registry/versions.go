@@ -77,6 +77,8 @@ func (v versionSegmenter[P]) BeginSegments() (dataset.SegmentPlan, bool) {
 
 func (v versionSegmenter[P]) AbandonSegments() { v.sg.AbandonSegments() }
 
+func (v versionSegmenter[P]) PlanChanges() int64 { return v.sg.PlanChanges() }
+
 func (v versionSegmenter[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
 	seg, err := v.sg.OpenSegment(ctx, continueOpen)
 	if err != nil {

@@ -5,7 +5,7 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the run report is at `report_version` 12. The report fields the entries below name are new in it.
+- Go port: the run report is at `report_version` 13. The report fields the entries below name are new in it.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the
@@ -13,6 +13,13 @@ Notable changes per release. The full human summary for the current release is i
   time bound of its own) warns and stays committed. `--seed-from DATASET` makes its
   tiles from it instead of the parts' page index when it matches the manifest; a bucket dataset's can be copied
   and passed as a cut file. The run report adds `invocation.prior.cuts_file` and `cuts_refused`.
+- Go port: a seeded run writes the tiles already listed ahead of its output as several Parquet parts at once
+  while listing goes on, instead of one part at a time until listing ends: each such stretch is cut with the
+  part router's own rule, so the parts are the same, byte for byte without the part interval, and its last part
+  stays open for the rows after it. A resume's reused certificates in such a
+  stretch are replayed by its segments, as in the tail. The run report adds
+  `resources.drain.segments.rolling` (#535).
+
 - Go port: a run seeded from a counted prior (`--seed-from` a dataset, or a cut file with counts) lists front to
   back. The prior's tiles are made as the run goes (a dataset's page index read part by part) and admitted in key
   order through a frontier window (8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold

@@ -352,6 +352,8 @@ func (s segSink[P]) BeginSegments() (dataset.SegmentPlan, bool) { return s.r.Beg
 
 func (s segSink[P]) AbandonSegments() { s.r.AbandonSegments() }
 
+func (s segSink[P]) PlanChanges() int64 { return s.r.PlanChanges() }
+
 func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
 	seg, err := s.r.OpenSegment(ctx, continueOpen)
 	if err != nil {

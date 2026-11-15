@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -398,7 +400,10 @@ func damageLedger(t *testing.T, out string) {
 // frames on their own descriptors; both large enough for three workers
 // (the budget sizes them: order.budgetWorkers). The child runs at GOMAXPROCS 4
 // whatever the box (segments need two processors beside the drainer), and
-// with --part-interval=0, so part boundaries are the size rule's alone.
+// with --part-interval=0, so part boundaries are the size rule's alone. A
+// rolling arm seeds a run from the spill arm's dataset and holds it so that
+// it writes segments while listing goes on (rollGate), then kills it inside
+// such a stretch.
 func TestSIGKILLInSegments(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -408,8 +413,10 @@ func TestSIGKILLInSegments(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	t.Parallel()
-	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
+	bucket := s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13)))
+	url := s3test.Serve(t, bucket)
 	env := append(os.Environ(), "GOMAXPROCS=4")
+	refs := map[string]string{}
 	for _, arm := range []struct {
 		name, budget string
 		spilled      bool // the segments read spill frames
@@ -421,6 +428,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 			return append(append(a, runtime...), extra...)
 		}
 		ref := filepath.Join(t.TempDir(), "ref")
+		refs[arm.name] = ref
 		report := filepath.Join(t.TempDir(), "report.json")
 		cmd := exec.Command(bin, args(ref, "--report", report)...)
 		cmd.Env = env
@@ -479,6 +487,138 @@ func TestSIGKILLInSegments(t *testing.T) {
 				}
 			}
 		}
+	}
+	// The rolling arm: a run seeded from the spill arm's dataset writes the
+	// listed tiles ahead of its output as segments while listing goes on
+	// (rollGate holds it so that it must), and is killed inside a stretch
+	// (faults.RollingPoints, but segment-ahead, which listing's crash matrix
+	// forces in process): the stretch planned with none of its parts
+	// opened, a part published with the stretch's spill not yet retired,
+	// the stretch written with its last part kept open. Its reference's
+	// parts are the unseeded run's, and every resume's are too.
+	var gate atomic.Pointer[rollGate]
+	rurl := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if g := gate.Load(); g != nil {
+			g.serve(bucket, w, r)
+			return
+		}
+		bucket.ServeHTTP(w, r)
+	}))
+	runtime := []string{"--part-interval=0", "--encoders", "4", "--sort-buffer", "12MiB"}
+	prior := refs["spill"]
+	args := func(out string, extra ...string) []string {
+		a := []string{"list", "s3://bkt", "--endpoint-url", rurl, "--s3-path-style", "--anonymous", "--workers", "32",
+			"--part-size", "16KiB", "--seed-from", prior, "-o", out}
+		return append(append(a, runtime...), extra...)
+	}
+	rref := filepath.Join(t.TempDir(), "rolling-ref")
+	report := filepath.Join(t.TempDir(), "rolling-report.json")
+	g := newRollGate(filepath.Join(t.TempDir(), "stretch"))
+	gate.Store(g)
+	cmd := exec.Command(bin, args(rref, "--report", report)...)
+	cmd.Env = append(env, "SWATH_TEST_STRETCH_FILE="+g.signal)
+	if out, err := cmd.CombinedOutput(); err != nil || g.late.Load() {
+		t.Fatalf("rolling reference run: %v (hold late %v)\n%s", err, g.late.Load(), out)
+	}
+	var rep struct {
+		Resources struct {
+			Drain struct {
+				Segments *struct {
+					Rolling *struct {
+						Stretches int64 `json:"stretches"`
+						Segments  int64 `json:"segments"`
+						Rows      int64 `json:"rows"`
+					} `json:"rolling"`
+				} `json:"segments"`
+			} `json:"drain"`
+		} `json:"resources"`
+	}
+	if b, err := os.ReadFile(report); err != nil || json.Unmarshal(b, &rep) != nil {
+		t.Fatalf("rolling report: %v", err)
+	}
+	if sg := rep.Resources.Drain.Segments; sg == nil || sg.Rolling == nil || sg.Rolling.Stretches == 0 || sg.Rolling.Segments < 2 {
+		t.Fatalf("rolling: the fixture does not roll: %+v", sg)
+	}
+	sameParts(t, "rolling reference", prior, rref)
+	for _, kill := range []string{"segments-begun:1", "segment-published:1", "segment-published:2", "stretch-kept:1"} {
+		at := "rolling " + kill
+		out := filepath.Join(t.TempDir(), "ds")
+		g := newRollGate(filepath.Join(t.TempDir(), "stretch"))
+		gate.Store(g)
+		cmd := exec.Command(bin, args(out)...)
+		cmd.Env = append(env, "SWATH_TEST_STRETCH_FILE="+g.signal, "SWATH_TEST_KILL_AT="+kill)
+		o, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("%s not reached: the run completed\n%s", at, o)
+		}
+		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+			t.Fatalf("%s: not killed: %v\n%s", at, err, o)
+		}
+		gate.Store(nil)
+		res := exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...)
+		res.Env = env
+		if o, err := res.CombinedOutput(); err != nil {
+			t.Fatalf("%s resume: %v\n%s", at, err, o)
+		}
+		sameParts(t, at, prior, out)
+		if a, b := manifestBytes(t, rref), manifestBytes(t, out); !bytes.Equal(a, b) {
+			t.Fatalf("%s: the manifest differs:\n%s\n%s", at, a, b)
+		}
+	}
+}
+
+// rollGate holds a seeded run so that it writes the listed tiles ahead of
+// its output as segments while listing goes on (listing's rollHolds,
+// from outside the process): the first range request starting in [a, a2)
+// waits until a request starting at or after ahead has been answered, so
+// the output falls behind the tiles listed past it; the first starting at
+// or after b waits until the run signals a stretch kept
+// (SWATH_TEST_STRETCH_FILE), or is killed. A signal that does not come
+// within two minutes is a failure of the fixture (late), not a release.
+type rollGate struct {
+	signal          string
+	a, a2, ahead, b string
+	seenA, seenB    atomic.Int64
+	answered        chan struct{}
+	answeredO       sync.Once
+	late            atomic.Bool
+}
+
+func newRollGate(signal string) *rollGate {
+	return &rollGate{signal: signal, a: "p02/", a2: "p03/", ahead: "p09/", b: "p12/", answered: make(chan struct{})}
+}
+
+func (g *rollGate) serve(h http.Handler, w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	start := q.Get("start-after")
+	if q.Has("list-type") && q.Get("delimiter") == "" && q.Get("continuation-token") == "" {
+		switch {
+		case start >= g.b && g.seenB.Add(1) == 1:
+			for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(10 * time.Millisecond) {
+				if _, err := os.Stat(g.signal); err == nil {
+					break
+				}
+				if r.Context().Err() != nil { // a killed run
+					return
+				}
+				if time.Now().After(deadline) {
+					g.late.Store(true)
+					break
+				}
+			}
+		case start >= g.a && start < g.a2 && g.seenA.Add(1) == 1:
+			select {
+			case <-g.answered:
+			case <-r.Context().Done():
+				return
+			case <-time.After(2 * time.Minute):
+				g.late.Store(true)
+			}
+		}
+	}
+	h.ServeHTTP(w, r)
+	if start >= g.ahead {
+		g.answeredO.Do(func() { close(g.answered) })
 	}
 }
 

@@ -808,6 +808,10 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	if o.seg != nil {
 		st.Segments = o.seg.st
+		if o.win != nil {
+			r := o.seg.roll
+			st.Segments.Rolling = &r
+		}
 		switch {
 		case st.Segments.Reason != "":
 		case o.listedAt.IsZero():
@@ -843,7 +847,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	ctx, cancel := context.WithCancelCause(ctx)
 	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes, schema: s}
 	if sg, ok := sink.(Segmenter[P]); ok {
-		o.seg = &segState[P]{sg: sg, waitRows: -1}
+		o.seg = &segState[P]{sg: sg, waitRows: -1, roll: RollingStats{NotEngaged: map[string]int64{}}}
 	}
 	o.work = sync.NewCond(&o.mu)
 	o.winCond = sync.NewCond(&o.mu)
@@ -1094,6 +1098,9 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 			o.stopped.Store(true)
 		}
 		n.state = done
+		if t := n.tile; t != nil {
+			t.cert.Add(-o.certRows(i)) // its rows are held's now, or handed on
+		}
 		if n.onPath.Load() {
 			o.drain.Broadcast()
 		}
@@ -1133,10 +1140,17 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 				d.Dispose(k.r)
 			}
 		}
-		o.open.Add(-o.listed(e.kids))
+		kids := o.listed(e.kids) // replay ranges are not counted open
+		o.open.Add(-kids)
+		if t := n.tile; t != nil {
+			t.open.Add(-kids)
+		}
 		e.kids = nil
 	}
 	n.state = done
+	if t := n.tile; t != nil && t.open.Add(-1) == 0 {
+		o.win.listed.Add(1)
+	}
 	switch o.open.Add(-1) {
 	case 0:
 		if err == nil && !o.stopped.Load() {
@@ -1276,8 +1290,13 @@ func (e *emitter[R, P]) Child(r R) error {
 	e.kids = append(e.kids, c)
 	e.units += u
 	e.o.g.nodes.add(1)
-	if _, ok := e.o.replayOf(c); !ok { // a replay range is never listed
+	if i, ok := e.o.replayOf(c); !ok { // a replay range is never listed (nor its tile's)
 		e.o.open.Add(1)
+		if t := c.tile; t != nil {
+			t.open.Add(1)
+		}
+	} else if t := c.tile; t != nil {
+		t.cert.Add(e.o.certRows(i))
 	}
 	return e.maybePublish()
 }
@@ -1614,7 +1633,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		if o.win != nil {
 			o.settle()
 		}
-		if o.segmentsDue() {
+		if o.segmentsDue() && o.stretchDue() {
 			done, err := o.trySegments()
 			if err != nil {
 				o.mu.Unlock()

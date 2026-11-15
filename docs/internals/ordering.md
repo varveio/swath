@@ -210,7 +210,8 @@ ranges have received and the drainer has not yet handed to the sink. A row is ch
 of any node in the tile receives it (published, spilled, emitted directly by the drainer's own expansion, or
 replayed from a certificate): a spilled publication's rows stay charged though its items are markers. The
 charge comes back when the drainer's batch holding the row is handed to the sink (`sink.Write` returned), not
-when its budget bytes are released (the drainer releases them before a batch is written). A tile's charge is
+when its budget bytes are released (the drainer releases them before a batch is written), or, for the tiles of a
+[rolling](#rolling-segments-during-listing) stretch, once every segment of the stretch is written. A tile's charge is
 the larger of `est` and `held`; it is released, in key order, once the drainer has closed the tile's node (every
 range in it drained) and nothing of it is held.
 
@@ -265,8 +266,9 @@ some 100 MB ahead of the output whatever the window; past the cap, its frames ar
 stale prior's grown region larger than the cap crawled so with caps of 2 to 6 MB). Under a small cap many workers
 also slow a planned run: past half the cap no tile is admitted, so the workers wait at the window (`spill`)
 while the tiles admitted drain (145 million keys at 2,048 workers: 219 s with a 57 MB cap against 78 s
-uncapped, [measurements](measurements.md#the-seeded-frontier-window)). The rows still leave through the one
-part writer, so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
+uncapped, [measurements](measurements.md#the-seeded-frontier-window)). The listed tiles ahead of the drainer
+leave through several part writers at once ([rolling segments](#rolling-segments-during-listing)); the frontier
+tile still leaves through one, so a capped planned run can be bound by it. The read-ahead plans frames inside the tile being drained only (the
 plan root stays open). The scheduling changes only when rows arrive: a planned run's parts are the unseeded
 run's byte for byte without time cuts, at 1, 4 and 64 workers (`TestPlannedRunIsTheUnseededRun`).
 
@@ -583,7 +585,8 @@ is done, the order stage cuts the rest of the stream into parts itself and write
 (`order/segments.go`, `parquetout/segments.go`):
 
 - **When.** Listing is done (every range finished, so the rest is immutable; a resume's reused certificates
-  are not listed, so listing ends with the gaps around them), the sink states its cut rule
+  are not listed, so listing ends with the gaps around them; a planned run's listed tiles are immutable
+  earlier, [below](#rolling-segments-during-listing)), the sink states its cut rule
   (`order.Segmenter`: the Parquet router once part 0 has frozen its size ratio, and no recovered boundary,
   `parquetout.Options.Cut`, lies ahead), at least two encoders are admitted and two processors are spare
   beside the drainer's. With two processors or one nothing changes.
@@ -725,6 +728,83 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `listing`
   `TestVersionsSegmentsReadDurableFiles` (a versions resume) cover it. The report counts the segments' share:
   `certificates_read`, `certified_rows` and `certificate_scan_ns`, beside the resume's `replayed_certificates`.
+
+### Rolling segments during listing
+
+A seeded run (a [plan](#the-frontier-window)) lists front to back, so a run of tiles right ahead of the drainer is
+often listed, every range in it done, while listing goes on further ahead. The segments do not wait for the end
+of listing there: such a run of tiles is written as segments, a *stretch*, by the same machinery as the tail
+(`order/segments.go`: `trySegments`, `flatten`, `cut`, `runSegments`), while the workers keep listing.
+
+- **Which rows.** A tile is listed when every range in it is done (`tileCredit.open`: the ranges not yet done,
+  counted per tile as the stage counts them all, a resume's replay ranges excepted, which nothing lists): its
+  items are final, and each of its spill files has its trailer (and a durable file its seal) written, since a
+  range writes them before it is done. A stretch is the drain order from the drainer's position through the last
+  tile of the unbroken run of listed tiles that starts with the drainer's own tile; it stops at the first tile
+  still listing. Nothing outside it is read, and a stretch holds whole spill files. A reused certificate in it
+  that the drainer has not replayed is the stretch's, as it is the tail's: scanned before the cut (`scanCert`),
+  its frames read again by offset by their segments, and handed back to its cache once the stretch is written
+  (`drain.segments.rolling.certificates_read`). Its rows are not in a tile's held rows, so they do not count
+  toward the part a stretch needs to be planned.
+- **When.** The drainer looks when another tile has been listed since its last look (`window.listed`), and plans a
+  stretch only when the listed tiles from its own hold at least a part (rows per part estimated from the router's
+  open part, then from each stretch): the window (8M rows by default) holds a few parts at most, and a stretch of
+  one part beyond the open one still writes two at once. Before part 0 has frozen the ratio, or while a recovered
+  boundary lies ahead, the router states no rule; the drainer asks again only once a tile is listed or the
+  router's answer may have changed (`PlanChanges`: a part closed or opened), so the counters count decisions. The rest is
+  the tail's: two encoders and two spare processors, the workers sized to the row budget, at least two segments
+  holding rows. One encoder admitted before listing ends (more come at `ListingDone`) stops the looks until then.
+  Unseeded runs, uncounted cut files and runs without a dataset have no plan: their tail is as before.
+- **The straddling part.** `BeginSegments` ends `Write` and states the open part (its rows, logical bytes and a
+  pending cut), and the first segment continues it, as in the tail. The stretch's last segment does not close its
+  part: it hands it back with the rule's state after its last row (`Segment.Keep`: rows, logical bytes, a cut
+  pending and whether the row cap asked it, and in group mode the last key), and the router makes it the open
+  part `Write` continues; the rows it is told must be the rows the segment wrote. `AbandonSegments` then restarts
+  the interval cut and the drainer walks on serially. A cut pending at a stretch's start is taken by its first
+  segment and counted by its reason (row cap, interval). Every boundary is therefore the router's rule on the
+  same rows: with `--part-interval 0` the parts are the serial run's, byte for byte, and in group mode a cut
+  pending at a stretch's end still waits for a greater key.
+- **Who calls the router.** Only the drainer's goroutine calls `send` (the walk, a spilled frame's replay, an
+  expansion the drainer runs itself, a certificate's replay, which no worker runs), and `Write` is ended only
+  inside a stretch, which runs on that goroutine: no row reaches `Write` while it is ended.
+- **One stretch at a time.** The drainer plans a stretch, waits for its segments and retires its spill files
+  (`drained`) before it reads anything else: the files pass to the workers and back whole, at the join, as in
+  the tail. Every trailer of the stretch is checked before `BeginSegments`, so a trailer that disagrees stops the
+  run before any of the stretch's parts is opened. The read-ahead stops for the stretch (its reads in flight end,
+  its queue is dropped) and restarts afterwards from the drainer's new position; the stretch's tiles are closed
+  and their window charges come back; the plan root drops the items it passed.
+- **Memory.** Before `ListingDone` the router admits the encoders admitted at start (the rest of its slots are
+  reserved until then), each priced against the encoder allowance, and a segment takes a slot to open its part:
+  the writers a stretch runs are within that admission (the listing workers' pages are why no more are admitted
+  before). Rows as in the tail: the tree and the encoders' queues within the row budget for listing's admission,
+  the stretch's frames and queues within one budget more (`segReserve`); a segment writing rows held in memory
+  releases them to listing as it goes.
+- **Crash points** (`faults.RollingPoints`): a stretch planned with none of its parts opened
+  (`segments-begun`); a segment's part finished before the part it follows is published (`segment-ahead`); a
+  part published while the stretch's spill files are not yet retired (`segment-published`); a stretch written,
+  its last part kept open, parts before it possibly not yet published (`stretch-kept`). The journal records
+  parts in ordinal order and K moves only with it, so a resume lists after the last recorded part and relists
+  the rest. A durable certificate drained by a stretch, a reused one included, stays until K covers it, unless
+  the disk budget evicts it first; its rows are then relisted.
+- **What stays serial.** Parts until the ratio is frozen, a recovered (pinned) part, the frontier tile while it
+  lists, the planning (`flatten`, `cut` on the drainer), and `Write` between stretches. The
+  drainer stands while a stretch is written: stretches overlap neither one another nor the serial drain.
+
+The report's `drain.segments.rolling` ([counters.md](counters.md)) counts the stretches, their segments and
+rows, the drainer's time inside them, the segments' time opening their parts, and the looks that wrote no
+stretch, by reason; `writer_before_listing_done` counts the parts published before listing ended. Tests: `order`
+`TestRollingCutWhereTheSinkWould` (random plans, unique keys and groups, spill on and off, 2, 4 and 8 encoders,
+listing ending inside a stretch: the parts the serial drain's), `TestRollingEngagesDuringListing`,
+`TestRollingTrailerFailureClosesNoPart`, `TestRollingFailureMidStretch`, `TestRollingReplaysCertificates` (a seeded
+resume whose stretches replay reused certificates, killed at `segments-begun` and `stretch-kept` and resumed to the
+uninterrupted run's parts), `TestSegmentsLeaveIdleWorkersAlone` (the
+segments wake the listing workers held at admission once per `--sort-buffer`/16 released while listing goes on,
+never after it: at 64 workers a waking per unit written cost about 200 idle wake-ups each); `parquetout` `TestKeptPartContinuesAsWrite`;
+`listing` `TestRollingIsTheSerialRun` (seeded from a dataset and from a coarse counted cut file, 1, 4 and 64
+workers, spill on and off, `--all-versions`: the one-encoder unseeded run's parts; held so that it must roll),
+`TestCrashMatrix` (`s3-rolling`: every rolling crash point, listing ending inside a stretch, a cancellation and
+an encoder failure inside one, each resumed to the same parts); `cmd/swath` `TestSIGKILLInSegments` (its rolling
+arm).
 
 ## Payload delta codec
 

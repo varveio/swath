@@ -47,7 +47,9 @@ import (
 // replayed_certificates. 11 adds resources.window, the frontier window of
 // a run planned from a counted --seed-from (#535). 12 adds
 // invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
-const ReportVersion = 12
+// 13 adds resources.drain.segments.rolling, the segments a seeded run
+// writes while listing goes on (#535).
+const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -665,6 +667,46 @@ type Segments struct {
 	CertificatesRead  int   `json:"certificates_read"`
 	CertifiedRows     int64 `json:"certified_rows"`
 	CertificateScanNs int64 `json:"certificate_scan_ns"`
+	// Rolling is the stretches written while listing went on (a seeded
+	// run's plan; nil without one). The fields above count them too;
+	// reason is the tail's.
+	Rolling *Rolling `json:"rolling,omitempty"`
+}
+
+// Rolling is the segments written before listing ended (rolling): the
+// listed tiles ahead of the drainer, in stretches, each one's last part
+// kept open for the serial drain (order.RollingStats).
+type Rolling struct {
+	Stretches int64 `json:"stretches"`
+	Segments  int64 `json:"segments"`
+	Rows      int64 `json:"rows"`
+	// CertificatesRead is the reused certificates (a resume's) the
+	// stretches replayed (in the segments' certificates_read).
+	CertificatesRead int64 `json:"certificates_read"`
+	// TimeNs is the drainer's time inside the stretches (planning them,
+	// waiting for their segments, retiring their spill files): the serial
+	// drain stands meanwhile. OpenWaitNs is the segments' time opening
+	// their parts, an encoder slot's wait included.
+	TimeNs     int64 `json:"time_ns"`
+	OpenWaitNs int64 `json:"open_wait_ns"`
+	// TimeNs split: PlanNs from the look to the first segment, WriteNs the
+	// segments running, HandOffNs after them (the last part kept, the
+	// spill retired). WritersNs is the segments' time open summed: over
+	// WriteNs, the mean written at once; PeakWriters the most at once.
+	// GapNs is the drainer's time between one stretch's end and the next's
+	// start, MaxGapNs the longest.
+	PlanNs      int64 `json:"plan_ns"`
+	WriteNs     int64 `json:"write_ns"`
+	HandOffNs   int64 `json:"handoff_ns"`
+	WritersNs   int64 `json:"writers_ns"`
+	PeakWriters int   `json:"peak_writers"`
+	GapNs       int64 `json:"gap_ns"`
+	MaxGapNs    int64 `json:"max_gap_ns"`
+	// NotEngaged counts the decisions (a tile listed, or the rule changed) that wrote no
+	// stretch, by reason: frontier_listing (the drainer's tile still
+	// listing), below_one_part, not_planned, single_part, row_budget,
+	// one_encoder (after which it stops looking until listing ends).
+	NotEngaged map[string]int64 `json:"not_engaged"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

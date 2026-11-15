@@ -153,6 +153,15 @@ func (o *run[R, P]) certFile(i int) (*Cert, error) {
 	return d, nil
 }
 
+// certRows is the reused certificate i's captured rows (0 without it):
+// what its replay hands on at most (a stretch's estimate, listedAhead).
+func (o *run[R, P]) certRows(i int) int64 {
+	if o.sp == nil || o.sp.cache == nil || i < 0 || i >= len(o.sp.cache.reused) {
+		return 0
+	}
+	return o.sp.cache.reused[i].captured
+}
+
 // replayCert is a recovery replay on the drainer: the reused certificate
 // i's rows above max(cs, K), in file order, through e (the drainer's
 // direct emitter), checked as walkCert checks them. The file is then

@@ -54,6 +54,15 @@ type partSink struct {
 	segmented bool
 	rowCuts   int
 	keyBytes  int64 // the keys' bytes the parts keep (mu)
+	// kept counts the stretches whose last part was kept for Write
+	// (rolling).
+	kept int
+	// writing is the segments open now, maxWriting the most at once;
+	// segClosed the parts segments closed.
+	writing, maxWriting, segClosed int
+	// meet, if set, holds the first segment write until a second begins.
+	meet    chan struct{}
+	meeting int
 }
 
 type fakePart struct {
@@ -118,6 +127,13 @@ func (s *partSink) BeginSegments() (dataset.SegmentPlan, bool) {
 	return pl, ok
 }
 
+// PlanChanges moves with the parts: the plan is stated from the second.
+func (s *partSink) PlanChanges() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return int64(len(s.parts))
+}
+
 func (s *partSink) AbandonSegments() {
 	s.mu.Lock()
 	s.segmented = false
@@ -128,6 +144,8 @@ func (s *partSink) OpenSegment(_ context.Context, cont bool) (SegmentSink[tp], e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.opened++
+	s.writing++
+	s.maxWriting = max(s.maxWriting, s.writing)
 	if cont {
 		p := s.cur
 		s.cur = nil
@@ -152,6 +170,18 @@ type fakeSeg struct {
 }
 
 func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
+	if f.s.meet != nil {
+		f.s.mu.Lock()
+		f.s.meeting++
+		n := f.s.meeting
+		f.s.mu.Unlock()
+		switch n {
+		case 1:
+			<-f.s.meet
+		case 2:
+			close(f.s.meet)
+		}
+	}
 	if f.s.failAt > 0 && f.n == f.s.failAt {
 		f.s.mu.Lock()
 		f.s.failed = f.p
@@ -172,6 +202,8 @@ func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 func (f *fakeSeg) Close(_ context.Context, rowCut bool) {
 	f.s.mu.Lock()
 	f.p.closed = true
+	f.s.writing--
+	f.s.segClosed++
 	if rowCut {
 		f.s.rowCuts++
 	}
@@ -191,9 +223,26 @@ func (f *fakeSeg) Hold(rowCut bool) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	f.s.cur = f.p
+	f.s.writing--
 	if rowCut {
 		f.s.rowCuts++
 	}
+}
+
+// Keep hands a stretch's last part back for Write to continue, with the
+// rule's state after its last row; the sink refuses a state whose rows are
+// not the part's (the router's check) and counts the stretches kept.
+func (f *fakeSeg) Keep(_ bool, st dataset.SegmentPlan, last string) error {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	if int64(len(f.p.keys)) != st.Rows || f.s.cur != nil || st.Rows > 0 && f.p.keys[len(f.p.keys)-1] != last {
+		return fmt.Errorf("kept at %d rows (last %q), the part holds %d", st.Rows, last, len(f.p.keys))
+	}
+	f.p.logical = st.Logical
+	f.s.cur, f.s.full = f.p, st.Full
+	f.s.writing--
+	f.s.kept++
+	return nil
 }
 
 // boundaries is the parts' keys, closed and final flags.
@@ -945,7 +994,7 @@ func segmentRun(t *testing.T, units []unit[tp], budget int64) *run[fr, tp] {
 	t.Helper()
 	o := &run[fr, tp]{ctx: context.Background(), schema: &testSchema, seg: &segState[tp]{}, g: &Gauges{}}
 	o.opt.Budget = budget
-	o.drain = sync.NewCond(&o.mu)
+	o.drain, o.work = sync.NewCond(&o.mu), sync.NewCond(&o.mu)
 	o.seg.uses = make([]atomic.Int32, len(units))
 	return o
 }
@@ -957,8 +1006,9 @@ func (k *keepSink) Write(_ context.Context, b [][]schema.Row[tp]) error {
 	k.batches = append(k.batches, b)
 	return nil
 }
-func (k *keepSink) Close(context.Context, bool) {}
-func (k *keepSink) Hold(bool)                   {}
+func (k *keepSink) Close(context.Context, bool)                  {}
+func (k *keepSink) Hold(bool)                                    {}
+func (k *keepSink) Keep(bool, dataset.SegmentPlan, string) error { return nil }
 
 // longRows is n rows of about 1,000-byte keys, ascending.
 func longRows(n int) []schema.Row[tp] {
@@ -1221,7 +1271,7 @@ func TestSegmentsSeamInsideAGroup(t *testing.T) {
 		o := segmentRun(t, units, 1<<30)
 		o.cancel = func(error) {}
 		o.opt.Groups = rule
-		segs, err := o.cut(units, pl)
+		segs, _, err := o.cut(units, pl)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1232,7 +1282,7 @@ func TestSegmentsSeamInsideAGroup(t *testing.T) {
 			}
 		}
 		o.seg.sg = &partSink{limit: pl.Limit, maxRows: pl.MaxRows, groups: true, encoders: 4}
-		err = o.runSegments(units, segs, 3)
+		_, err = o.runSegments(units, segs, 3, dataset.SegmentPlan{})
 		var inv *dataset.InvariantError
 		if !rule {
 			if !errors.As(err, &inv) || !strings.Contains(err.Error(), "repeats") {

@@ -389,8 +389,9 @@ func printVersion(w io.Writer) {
 // "point:n": the n-th time the process reaches crash point point, and
 // SWATH_TEST_SLOW_AT (slowAt); and on
 // the order stage's events (order.SetDurableEvents), serialSeals',
-// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and
-// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing).
+// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile),
+// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing) and
+// SWATH_TEST_STRETCH_FILE (stretchFile).
 func testHooks() {
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
@@ -402,6 +403,9 @@ func testHooks() {
 	}
 	if os.Getenv("SWATH_TEST_DRAIN_AFTER_LISTING") != "" {
 		events = append(events, drainAfterListing())
+	}
+	if path := os.Getenv("SWATH_TEST_STRETCH_FILE"); path != "" {
+		events = append(events, stretchFile(path))
 	}
 	if len(events) > 0 {
 		order.SetDurableEvents(func(e string) {
@@ -551,6 +555,21 @@ func drainAfterListing() func(string) {
 			select {
 			case <-listed:
 			case <-time.After(30 * time.Second):
+			}
+		}
+	}
+}
+
+// stretchFile is SWATH_TEST_STRETCH_FILE: the file is created once a
+// stretch written during listing has kept its last part (order's
+// "stretch-kept"). A test that holds a range from outside the process so
+// that listing goes on while the run rolls releases it on the file.
+func stretchFile(path string) func(string) {
+	var made atomic.Bool
+	return func(e string) {
+		if e == "stretch-kept" && made.CompareAndSwap(false, true) {
+			if f, err := os.Create(path); err == nil {
+				f.Close()
 			}
 		}
 	}

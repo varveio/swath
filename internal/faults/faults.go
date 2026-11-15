@@ -25,6 +25,14 @@ var Points = []string{"response-read", "split", "range-done", "encoding", "part-
 // part held, before the router's Close.
 var SegmentPoints = []string{"segments-begun", "segment-published", "segments-written"}
 
+// RollingPoints are the crash points of a stretch written as segments
+// while listing goes on (order's rolling, reached only with a plan): the
+// stretch planned, none of its parts opened; a part finished before the
+// part it follows is published; a part published with the stretch's spill
+// not yet retired; the stretch written, its last part kept open for the
+// serial drain.
+var RollingPoints = []string{"segments-begun", "segment-ahead", "segment-published", "stretch-kept"}
+
 // SpillPoints are the durable spill's crash points in a run, in order: the
 // sync of each directory the run creates (spill/, spill/durable/; twice in
 // a run), a durable file's writes (the first, carrying the header and, at a range's

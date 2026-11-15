@@ -25,6 +25,7 @@ import (
 // until closed.
 type planned struct {
 	tiles, page int
+	rep         int // rows per key (0, 1: every key once; more: groups)
 	rows, est   []int
 	failAt      int
 	failErr     error
@@ -92,7 +93,7 @@ func (p *planned) admitted() int {
 	return p.next
 }
 
-func (p *planned) key(i, j int) string { return fmt.Sprintf("t%04d-%05d", i, j) }
+func (p *planned) key(i, j int) string { return fmt.Sprintf("t%04d-%05d", i, j/max(1, p.rep)) }
 
 func (p *planned) Expand(ctx context.Context, i int, e source.Emitter[int, tp]) error {
 	if i < 0 {

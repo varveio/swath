@@ -192,9 +192,11 @@ type Router[P any] struct {
 	deferred       atomic.Int64
 
 	// segmented: the rest of the stream goes to segments (segments.go),
-	// not Write; segRows counts the rows they routed.
-	segmented bool
-	segRows   atomic.Int64
+	// not Write; segRows counts the rows they routed. planChanges moves
+	// whenever Plan's answer may have changed (PlanChanges).
+	segmented   bool
+	segRows     atomic.Int64
+	planChanges atomic.Int64
 
 	// The encoders' account (WriterStats): their time on batches and part
 	// closes, less the time in the parts' files or uploads (encodeNs), and
@@ -588,6 +590,7 @@ func (r *Router[P]) open(ctx context.Context) error {
 	r.parts = append(r.parts, p)
 	r.cur = p
 	r.active.Add(1)
+	r.planChanges.Add(1) // a recovered boundary may be behind now
 	go r.encode(p)
 	return nil
 }
@@ -682,6 +685,16 @@ func (r *Router[P]) encode(p *part[P]) {
 	base := int64(0)
 	var before *dataset.Part // the part this one follows: published, or resumed
 	if p.prev != nil {
+		if p.segment {
+			select {
+			case <-p.prev.published:
+			default:
+				if p.err = faults.At("segment-ahead"); p.err != nil { // tests: killed with this part finished before the one it follows is published
+					r.fail(p.err)
+					return
+				}
+			}
+		}
 		<-p.prev.published // publication goes in ordinal order
 		if p.prev.err != nil {
 			p.err = fmt.Errorf("part %d: not published after part %d failed", p.ordinal, p.prev.ordinal)
@@ -767,6 +780,7 @@ func (r *Router[P]) cut(ctx context.Context, final bool) error {
 		}
 	}
 	r.cur, r.full, r.byRows, r.byTime = nil, false, false, false
+	defer r.planChanges.Add(1) // the ratio may be frozen now
 	if r.limit == 0 && !final {
 		select {
 		case <-p.done:

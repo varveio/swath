@@ -5,6 +5,7 @@ package parquetout
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -144,5 +145,142 @@ func TestSegmentAbortPublishesNoPartialPart(t *testing.T) {
 		if o >= 1 {
 			t.Fatalf("published %v: part %d after the unfinished part 1", published, o)
 		}
+	}
+}
+
+// keepRun writes rows through a router as a seeded run's drainer does when
+// it rolls: serially until the ratio is frozen and half of part 1 is
+// written; then a stretch (the rest of part 1 as a segment continuing the
+// open part, and the first keep rows of part 2 as a new segment, kept for
+// Write with the rule's state after them, as order's cut states it);
+// then the rest through Write again. full says the kept part reached the
+// size target at its last row (a cut pending). It returns the parts.
+func keepRun(t *testing.T, rows []row, base []dataset.Part, keep int, full bool) ([]dataset.Part, error) {
+	t.Helper()
+	out := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRouter(Options{Out: out, PartSize: 16 << 10, Encoders: 3}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	serial := int(base[0].Rows + base[1].Rows/2)
+	if err := r.Write(ctx, [][]row{rows[:serial]}); err != nil {
+		t.Fatal(err)
+	}
+	pl, ok := r.BeginSegments()
+	if !ok {
+		t.Fatal("segments could not begin")
+	}
+	end1 := int(base[0].Rows + base[1].Rows)
+	s0, err := r.OpenSegment(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := r.OpenSegment(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s0.Write(ctx, [][]row{rows[serial:end1]}); err != nil {
+		t.Fatal(err)
+	}
+	s0.Close(ctx, false)
+	kept := rows[end1 : end1+keep]
+	if err := s1.Write(ctx, [][]row{kept}); err != nil {
+		t.Fatal(err)
+	}
+	st := dataset.SegmentPlan{Open: true, Rows: int64(keep), Full: full}
+	for i := range kept {
+		st.Logical += testSchema.LogicalBytes(&kept[i])
+	}
+	if full != (st.Logical >= pl.Limit) {
+		t.Fatalf("kept %d rows of %d logical bytes against the limit %d: full %v", keep, st.Logical, pl.Limit, full)
+	}
+	if err := s1.Keep(false, st, kept[keep-1].Key); err != nil {
+		t.Fatal(err)
+	}
+	r.AbandonSegments()
+	if err := r.Write(ctx, [][]row{rows[end1+keep:]}); err != nil {
+		t.Fatal(err)
+	}
+	return r.Close()
+}
+
+// TestKeptPartContinuesAsWrite: a stretch's last part kept for Write
+// (Segment.Keep) with the rule's state after its last row, partway through
+// the part and exactly at its size target (a cut pending), continues as
+// the serial run's: every part is the serial run's, byte for byte. Kept at
+// rows its segment did not write, it is refused before anything changes.
+func TestKeptPartContinuesAsWrite(t *testing.T) {
+	rows, base := segmentFixture(t)
+	end1 := int(base[0].Rows + base[1].Rows)
+	var limit, logical int64 // the frozen limit, and part 2's logical bytes until it reaches it
+	{
+		out := t.TempDir()
+		os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
+		r, err := NewRouter(Options{Out: out, PartSize: 16 << 10, Encoders: 1}, &testSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Write(context.Background(), [][]row{rows[:end1+1]}); err != nil {
+			t.Fatal(err)
+		}
+		pl, _ := r.Plan()
+		limit = pl.Limit
+		r.Abort()
+	}
+	atLimit := 0
+	for i := end1; i < len(rows); i++ {
+		if logical += testSchema.LogicalBytes(&rows[i]); logical >= limit {
+			atLimit = i - end1 + 1
+			break
+		}
+	}
+	if atLimit == 0 || int64(atLimit) != base[2].Rows {
+		t.Fatalf("part 2 reaches the limit at %d rows, holds %d", atLimit, base[2].Rows)
+	}
+	for _, keep := range []struct {
+		rows int
+		full bool
+	}{{atLimit / 2, false}, {atLimit, true}} {
+		parts, err := keepRun(t, rows, base, keep.rows, keep.full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parts) != len(base) {
+			t.Fatalf("kept at %d: %d parts vs %d", keep.rows, len(parts), len(base))
+		}
+		for i := range parts {
+			if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
+				t.Fatalf("kept at %d: part %d differs", keep.rows, i)
+			}
+		}
+	}
+	out := t.TempDir()
+	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
+	r, err := NewRouter(Options{Out: out, PartSize: 16 << 10, Encoders: 2}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Abort()
+	ctx := context.Background()
+	if err := r.Write(ctx, [][]row{rows[:end1+1]}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.BeginSegments(); !ok {
+		t.Fatal("segments could not begin")
+	}
+	s, err := r.OpenSegment(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, [][]row{rows[end1+1 : end1+11]}); err != nil {
+		t.Fatal(err)
+	}
+	var inv *dataset.InvariantError
+	if err := s.Keep(false, dataset.SegmentPlan{Open: true, Rows: 12}, rows[end1+10].Key); !errors.As(err, &inv) {
+		t.Fatalf("kept at 12 rows of 11: %v", err)
 	}
 }
