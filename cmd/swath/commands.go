@@ -84,6 +84,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// on: the run finishes the commit's aftermath, then reports complete.
 		return stop(finalizedSample(dir, listing.ErrComplete))
 	}
+	if dataset.InterruptedV03(dir) {
+		return stop(dataset.ErrPriorRelease)
+	}
 	st, err := journal.Read(dir)
 	if errors.Is(err, journal.ErrNoJournal) {
 		if dataset.Resumable(dir) {

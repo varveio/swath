@@ -286,7 +286,7 @@ credential-bearing URLs before errors reach reports or stderr; the Azure destina
 from error bodies. The SDK loggers and token clients are configured by
 [`remote.OpenDestination`](../../objfile/remote/create.go): the S3 credential chain sends through the
 destination's own client and response-header timeout, and the AWS SDK's logger is silenced for it; the Azure
-SDK's process-wide log is turned off by the command before any SDK use. Its `DestinationOptions` owns credential,
+SDK's process-wide log is turned off by the command before any SDK use. Its `Options` own credential,
 endpoint and response-header timeout policy; each provider's `WriteOptions` owns upload buffering and retries.
 A response-header timeout does not bound the upload's body transfer or all retries. Requests use the
 operation's context, except S3 multipart initiation and abort cleanup, which use independent contexts

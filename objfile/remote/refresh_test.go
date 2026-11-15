@@ -42,7 +42,7 @@ func TestOpenDestinationS3RefreshesAhead(t *testing.T) {
 	t.Cleanup(sts.Close)
 	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
 	_, url, auth := s3Destination(t)
-	d, err := OpenDestination(context.Background(), "s3://bkt/ds", DestinationOptions{Endpoint: url, Profile: "dst", Region: "us-east-1"})
+	d, err := OpenDestination(context.Background(), "s3://bkt/ds", Options{Endpoint: url, Profile: "dst", Region: "us-east-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

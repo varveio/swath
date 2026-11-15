@@ -42,8 +42,8 @@ const credentialWait = 30 * time.Second
 // auth is the resolved region and credentials a client signs with.
 type auth struct {
 	credentials objs3.RenewableCredentials // nil: anonymous or bearer
-	source      string             // where the credentials come from (never the secret)
-	region      string             // the signing region
+	source      string                     // where the credentials come from (never the secret)
+	region      string                     // the signing region
 	anonymous   bool
 	bearer      *tokensource.Shared // --s3-bearer-token-command: sent instead of a signature
 	note        string              // a one-time warning for the user, or ""

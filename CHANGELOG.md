@@ -13,6 +13,21 @@ Notable changes per release. The full human summary for the current release is i
   renews them, once for all the requests refused for the same credentials, and the source's request is retried
   once; keys that do not refresh still stop the run with cause `auth`, saying so. The run report counts
   `credentials.refreshes` and `credentials.expired_refreshes` (#523).
+- Go port: `objfile/remote` opens a location with explicit settings: `remote.OpenWith(ctx, location,
+  remote.Options{...})` takes a GCS credentials file, an endpoint (an emulator's for GCS), an S3 region and
+  profile, an Azure SAS and a request timeout; `remote.Open` is `OpenWith` with the zero `Options`. An Azure
+  container on a custom endpoint, Azurite's or the replay server's, can now be read (#384). `Options` replaces
+  `DestinationOptions`, so `OpenDestination` takes the same struct; its write fields (`GCSWrite`, `S3Write`,
+  `AzureWrite`) are the destination's only. A store `Open` builds now waits at most `DefaultRequestTimeout`
+  (2 minutes) for a response's headers, and Azure's token requests are bounded by it; `RequestTimeout` changes
+  it, and zero or negative is the default (there is no unlimited value). GCS Application Default Credentials,
+  for reads and now for destinations too, keep the auth library's own clients, so an X.509 workload identity
+  configuration gets its mTLS client; only a `CredentialsFile`'s token requests are bounded by `RequestTimeout`.
+- Go port: `--include` and `--exclude` refuse, with exit 2 before any listing, a glob that carries a sign of a
+  regular expression (a leading `^`, a final `$`, `\.`, `\d`, `(a|b)`), naming `--include-regex` or
+  `--exclude-regex`; a 0.3 command line no longer lists nothing and exits 0 (#526). A directory an interrupted
+  0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
+  `--overwrite`, and `swath resume` refuses it as written by 0.3.
 - Go port: a seeded run with many workers and a small spill cap no longer crawls on spill the output has passed.
   The frontier window held admission while live spill was past half the cap, and with durable spill most of that
   spill could be certificates already drained, waiting for the part holding their rows to publish, which no
