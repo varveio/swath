@@ -102,7 +102,7 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 // it: sourcePrefix), as swath du of it would print them: an object store's
 // whole keys, with depth counted from its key prefix (or the dataset's
 // scope) up to its last '/'; a local tree's keys below SOURCE, with depth
-// counted from SOURCE. Stderr
+// counted from SOURCE, or the row of the file SOURCE names. Stderr
 // says what the dataset is (eventLog.dataset); a dataset whose listing did
 // not complete, or left out entries it could not read, prints its totals
 // and exits 3 (incomplete), as the run that wrote it did. A file with

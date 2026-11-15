@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -35,7 +36,9 @@ type DatasetRead struct {
 // DatasetTotals sums the rows of the committed dataset d whose keys start
 // with prefix into t, through the filters f (nil: none), as a listing's
 // rows are summed; relative sums them as a listing of the directory prefix
-// names would have keyed them, prefix trimmed and its own row left out: the same binding to the schema (bindTotals,
+// names would have keyed them, prefix trimmed and its own row left out, or,
+// when prefix without its '/' is a row (a file), that row alone, keyed by
+// its name, as a listing of the file: the same binding to the schema (bindTotals,
 // filter.Compile, the version roles and the containers the producer
 // declares, SchemaInfo) over a payload that reads the dataset's columns.
 // It seeks to prefix and reads the key and only the columns the totals and
@@ -85,7 +88,19 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 	if err := d.CheckSchema(ctx); err != nil {
 		return read, fmt.Errorf("the dataset does not hold schema %s as swath writes it: %w", id, err)
 	}
-	plan, err := d.SeekParquet().Plan(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan([]byte(prefix))}}, read.Columns, &read.Plan)
+	span, trim := seekparquet.PrefixSpan([]byte(prefix)), len(prefix)
+	var probe seekparquet.ReadStats
+	if file := strings.TrimSuffix(prefix, "/"); relative && file != prefix {
+		rows, err := d.SeekParquet().Get(ctx, []byte(file), &probe)
+		if err != nil {
+			return read, err
+		}
+		if len(rows) > 0 {
+			span, trim = seekparquet.KeySpan([]byte(file)), strings.LastIndexByte(file, '/')+1
+		}
+	}
+	plan, err := d.SeekParquet().Plan(ctx, []seekparquet.Selection{{Span: span}}, read.Columns, &read.Plan)
+	read.Plan.Add(probe)
 	if err != nil {
 		return read, err
 	}
@@ -102,7 +117,7 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 			// tally copies a prefix it keeps.
 			k := b.Key(i)
 			if relative {
-				if k = k[len(prefix):]; len(k) == 0 {
+				if k = k[trim:]; len(k) == 0 {
 					continue // the directory itself, which its listing does not hold
 				}
 			}
