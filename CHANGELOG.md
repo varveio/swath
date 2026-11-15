@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `--overwrite` of a committed dataset keeps it readable until the new one commits. The new run
+  lists into the output's workspace (`.swath/next/`) and its commit installs the new dataset in place of the
+  old one, whose parts are removed after; a run that fails or is stopped leaves the previous dataset whole, and
+  a stopped object-store run waits there for `swath resume DIR` (`swath show DIR` names it). Before,
+  `--overwrite` removed the previous dataset before listing anything, so a typo in the source or endpoint lost
+  the last good inventory.
 - Go port: a dataset run that no request ever answered (exit 75, cause `unreachable`: a mistyped endpoint, a
   service not up) and that published no part removes its journal and work files, so the corrected command runs
   on the same `-o`; it left an interrupted run that refused the corrected command, while a resume refused another

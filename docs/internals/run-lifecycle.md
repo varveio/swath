@@ -16,7 +16,8 @@ with the manifest's `coverage`, where `complete` means nothing is missing: the e
 `DIR/error.json` holds the same outcome in the dataset (`class`, `exit_code`, `message`, `resumable`, `cause`:
 the provider's failure class such as `throttle` or `access_denied`, or `no_space` for a full disk; the same
 `attempt`, `status` and coverage fields); it never needs stderr. A committed dataset has no `error.json`, a
-partial one (exit 3) included: its manifest's coverage says what is missing, and the run removes a stale one.
+partial one (exit 3) included: its manifest's coverage says what is missing, and the run removes a stale one;
+an `--overwrite` run that does not replace it leaves its own outcome there.
 
 The command classifies the outcome once, before any account is written, and that classification is frozen:
 `DIR/run.json` (a committed dataset), `error.json`, the report, the exit code and a forced exit's outcome agree

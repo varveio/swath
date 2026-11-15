@@ -144,6 +144,19 @@ type OutputConfig struct {
 	// Remote, if set, writes the dataset to an object store; Dir is then
 	// its work directory (the lock, journal, spill and claim receipts).
 	Remote *RemoteOutput
+	// into is the directory whose committed dataset the run replaces
+	// (replace): Dir is then dataset.NextDir(into), and the commit
+	// installs the dataset in into.
+	into string
+}
+
+// final is the directory the dataset ends in: Dir, or the one a
+// replacement installs it in.
+func (o OutputConfig) final() string {
+	if o.into != "" {
+		return o.into
+	}
+	return o.Dir
 }
 
 // Limits are the execution limits; none changes the dataset's content.
@@ -631,8 +644,86 @@ const fdReserve = 32
 // cause (ctx.Err() on cancellation).
 func Run(ctx context.Context, cfg Config) (Report, error) {
 	cfg.Argv = registry.RedactArgv(cfg.Argv)
-	rep, err := run(ctx, cfg)
+	var rep Report
+	var err error
+	if replacing(cfg.Output) {
+		rep, err = replace(ctx, cfg)
+	} else {
+		rep, err = run(ctx, cfg)
+	}
 	cfg.finalize(&rep, err)
+	return rep, err
+}
+
+// replacing says the run replaces the committed local dataset in its
+// output directory (--overwrite), or continues or installs a replacement
+// there (swath resume): the dataset there stays readable until the
+// replacement is committed.
+func replacing(o OutputConfig) bool {
+	switch {
+	case o.Dir == "" || o.Remote != nil || o.Text != nil:
+		return false
+	case o.Replace:
+		return dataset.Committed(o.Dir) || dataset.InstallPending(o.Dir)
+	}
+	return o.Resume && dataset.Staged(o.Dir)
+}
+
+// InstallReplacement finishes, under dir's lock, the installation of a
+// replacement committed in dataset.NextDir(dir) that a crash cut short
+// (nothing when none is pending), and removes what an installed one left
+// (the replaced dataset), whenever a crash left it.
+func InstallReplacement(dir string) error {
+	lock, err := journal.TakeLock(dir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return err
+	}
+	if err := dataset.InstallNext(dir); err != nil {
+		return err
+	}
+	return dataset.RemoveNext(dir)
+}
+
+// replace runs cfg as a replacement of the committed dataset in
+// cfg.Output.Dir (replacing): it lists into dataset.NextDir of it, a dataset
+// directory of its own, whose commit installs the dataset in place of the
+// old one (dataset.InstallNext); the old one's entries are removed after,
+// and so is a replacement that left nothing to continue. The directory's
+// lock is held throughout, so no other run takes it meanwhile, and an
+// installation a crash cut short is finished first (a resume that finds
+// nothing else to do then reports the dataset complete).
+func replace(ctx context.Context, cfg Config) (Report, error) {
+	dir := cfg.Output.Dir
+	fail := func(err error) (Report, error) {
+		r := Unstarted(cfg.Argv, dir, cfg.Attempt, err)
+		r.Invocation.Resume = cfg.Output.Resume
+		return r, err
+	}
+	if err := InstallReplacement(dir); err != nil {
+		return fail(err)
+	}
+	if cfg.Output.Resume && !dataset.Staged(dir) {
+		return run(ctx, cfg) // nothing staged: the dataset in dir is complete
+	}
+	lock, err := journal.TakeLock(dir)
+	if err != nil {
+		return fail(err)
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return fail(err)
+	}
+	inner := cfg
+	inner.Output.Dir, inner.Output.into = dataset.NextDir(dir), dir
+	rep, err := run(ctx, inner)
+	rep.Invocation.Out = dir
+	if rerr := dataset.RemoveNext(dir); rerr != nil && cfg.Warn != nil {
+		cfg.Warn("the replaced dataset's files are not removed: " + rerr.Error())
+	}
 	return rep, err
 }
 
@@ -666,7 +757,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if argv == nil {
 		argv = []string{}
 	}
-	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
+	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.final(), Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
 		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, RowBudget: cfg.Limits.rowBudgetWhy, PartSizeBytes: cfg.Limits.PartSize}
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
@@ -1557,8 +1648,21 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		return nil
 	}
 	commit := step
+	if into := cfg.Output.into; into != "" {
+		// A replacement: committed once its dataset is installed in place
+		// of the one it replaces, in the same step.
+		commit = func(install func() error) error {
+			return step(func() error {
+				if err := install(); err != nil {
+					return err
+				}
+				return dataset.InstallNext(into)
+			})
+		}
+	}
 	if cfg.Commit != nil {
-		commit = func(install func() error) error { return cfg.Commit(func() error { return step(install) }) }
+		gated := commit
+		commit = func(install func() error) error { return cfg.Commit(func() error { return gated(install) }) }
 	}
 	var err2 error
 	if jr != nil && jr.remote != nil {
@@ -1593,11 +1697,11 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 			return *sum, err
 		}
 	} else {
-		if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
+		if err := dataset.WriteReport(cfg.Output.final(), *sum); err != nil && cfg.Warn != nil {
 			cfg.Warn(err.Error())
 		}
 		a.writeCuts(a.ctx, parts, localPageEnds, func(_ context.Context, b []byte) error {
-			return dataset.Replace(filepath.Join(cfg.Output.Dir, dataset.CutsName), b, dataset.Durable)
+			return dataset.Replace(filepath.Join(cfg.Output.final(), dataset.CutsName), b, dataset.Durable)
 		})
 	}
 	return *sum, nil

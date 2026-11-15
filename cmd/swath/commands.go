@@ -80,7 +80,21 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// A text run keeps no journal: there is nothing to continue.
 		return stop(usageError{errText})
 	}
-	if dataset.Committed(dir) && !dataset.Unfinalized(dir) {
+	if dataset.NextFound(dir) {
+		// A replacement committed whose installation a crash cut short is
+		// installed; the leftovers of one installed (a crash before their
+		// removal) are removed.
+		if err := listing.InstallReplacement(dir); err != nil {
+			return stop(err)
+		}
+	}
+	// The run to continue: in dir, or a replacement of the dataset there
+	// (--overwrite) in its own directory.
+	at := dir
+	if dataset.Staged(dir) {
+		at = dataset.NextDir(dir)
+	}
+	if dataset.Committed(dir) && !dataset.Unfinalized(dir) && at == dir {
 		// A bucket dataset's work directory committed but not finalized goes
 		// on: the run finishes the commit's aftermath, then reports complete.
 		return stop(finalizedSample(dir, listing.ErrComplete))
@@ -88,9 +102,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dataset.InterruptedV03(dir) {
 		return stop(dataset.ErrPriorRelease)
 	}
-	st, err := journal.Read(dir)
+	st, err := journal.Read(at)
 	if errors.Is(err, journal.ErrNoJournal) {
-		if dataset.Resumable(dir) {
+		if dataset.Resumable(at) {
 			// The journal's header never became durable: nothing was
 			// published, and the command was not recorded.
 			return stop(errNoCommand)
@@ -165,11 +179,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, shellOperand(dir), name, hint)})
 		}
 	}
-	at := "--output=" + dir
+	output := "--output=" + dir
 	if remote {
-		at = "--work-dir=" + dir
+		output = "--work-dir=" + dir
 	}
-	cmd = append(append(append(cmd, overrides...), at), operand...)
+	cmd = append(append(append(cmd, overrides...), output), operand...)
 	// Parsed with the diagnostic flag set, a superset of swath list's: the
 	// runtime overrides include diagnostic ones (--spill-reserve,
 	// --no-spill-compress), and a recorded swath list command holds none
@@ -322,7 +336,11 @@ func show(args []string, stdout io.Writer) error {
 		return fmt.Errorf("%s holds neither a dataset nor an interrupted run", dir) // a file (a text listing, say)
 	}
 	if raw {
-		st, err := journal.Read(dir)
+		at := dir
+		if dataset.Staged(dir) {
+			at = dataset.NextDir(dir) // the run that replaces the dataset in dir
+		}
+		st, err := journal.Read(at)
 		switch {
 		case errors.Is(err, journal.ErrNoJournal) && dataset.Committed(dir):
 			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, shellOperand(dir))
@@ -394,6 +412,13 @@ func show(args []string, stdout io.Writer) error {
 		if commit != "" {
 			fmt.Fprintln(stdout, commit)
 		}
+		if dataset.Staged(dir) {
+			fmt.Fprintf(stdout, "a run that replaces it (--overwrite) was interrupted: swath resume %s continues it, and this dataset stays until it commits\n", shellOperand(dir))
+		}
+		return nil
+	}
+	if dataset.InstallPending(dir) {
+		fmt.Fprintf(stdout, "%s holds a replacement dataset whose installation was cut short: swath resume %s installs it\n", dir, shellOperand(dir))
 		return nil
 	}
 	st, err := journal.Read(dir)

@@ -509,3 +509,45 @@ func sameRows(t *testing.T, at, ref, out string) {
 		t.Fatalf("%s: %d rows, want %d (or they differ)", at, len(got), len(want))
 	}
 }
+
+// TestSIGKILLAfterReplacementInstalled: a process killed after an
+// --overwrite run installed its manifest (SWATH_TEST_KILL_AT=manifest:1),
+// before it removed the replaced dataset, leaves the new dataset committed
+// and the old one retired in .swath/next. swath resume reports the dataset
+// complete and removes the retired one; before, it left it there for good.
+func TestSIGKILLAfterReplacementInstalled(t *testing.T) {
+	bin := buildSwath(t)
+	src := t.TempDir()
+	for _, n := range []string{"a", "b", "c"} {
+		if err := os.WriteFile(filepath.Join(src, n), []byte("12"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	if o, err := exec.Command(bin, "list", src, "-o", out, "-q").CombinedOutput(); err != nil {
+		t.Fatalf("first run: %v\n%s", err, o)
+	}
+	if err := os.WriteFile(filepath.Join(src, "d"), []byte("12"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "list", src, "-o", out, "--overwrite", "-q")
+	cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT=manifest:1")
+	o, err := cmd.CombinedOutput()
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+		t.Fatalf("not killed at the manifest: %v\n%s", err, o)
+	}
+	if !dataset.Committed(out) || !dataset.NextFound(out) || dataset.Staged(out) {
+		t.Fatalf("after the kill: committed %v, next %v, staged %v", dataset.Committed(out), dataset.NextFound(out), dataset.Staged(out))
+	}
+	if o, err := exec.Command(bin, "resume", out).CombinedOutput(); err != nil || !strings.Contains(string(o), "already complete") {
+		t.Fatalf("resume: %v\n%s", err, o)
+	}
+	if dataset.NextFound(out) {
+		t.Fatal("the retired dataset is left after the resume")
+	}
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(out, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil || len(m.Parts) != 1 || m.Parts[0].Rows != 4 { // the four files
+		t.Fatalf("the installed dataset: %v %+v", err, m.Parts)
+	}
+}

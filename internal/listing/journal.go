@@ -170,6 +170,12 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 			return nil, ErrNothingToResume
 		}
 	default:
+		if into := cfg.Output.into; into != "" {
+			// The dataset a replacement replaces is one it may replace.
+			if _, err := dataset.Usable(into, path, id.SchemaID, true); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := dataset.Usable(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}

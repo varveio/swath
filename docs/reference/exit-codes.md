@@ -72,7 +72,8 @@ each attempt a fresh path outside the output directory: `swath resume` writes a 
 `resumable`, `cause`, `complete` (nothing is missing from the output), `stop_reason`, and `attempt.id` names the
 attempt ([Run report and progress file](run-report.md)).
 
-`DIR/error.json` holds the same outcome inside a dataset directory whose run did not commit:
+`DIR/error.json` holds the same outcome inside a dataset directory whose run did not commit (beside the
+previous dataset, for an `--overwrite` run that did not replace it):
 
 ```json
 {

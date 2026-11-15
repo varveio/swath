@@ -257,17 +257,26 @@ and by dev/inode); a non-empty output is refused unless `--overwrite`, which rep
 this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk
 (`source.Excluder`), as a text file, its temporary and its scratch directory are.
 
-**`--overwrite` is a destructive replacement, not an atomic one.** Under the output lock, before anything is
-listed, the previous dataset's commit record (`manifest.json`, or an earlier layout's `_SUCCESS`) is removed
-and the directory synced, then its other entries. From that moment the path holds no dataset: a run that fails
-or is interrupted leaves none there (an interrupted journaled run can be resumed), and readers see no dataset
-until the new manifest is installed. The commit goes first so that a crash part way through the removal never
-leaves a manifest naming parts already gone (`TestOverwriteRemovesTheCommitFirst`). The removal cannot wait
-for the new run's first part or its publication: parts are published early under the same names in `data/`,
-which the old manifest would then name with different bytes. Where readers must always find a dataset (an
-hourly refresh, say), write each refresh to a new directory, never overwritten, and switch readers to it
-through a pointer outside the datasets (a generation file, a database row, a symlink swapped by rename) once
-its `manifest.json` exists; delete a generation only when no reader uses it.
+**`--overwrite` of a committed dataset keeps it until the replacement commits.** Parts are published early
+under the same names in `data/`, which the old manifest would then name with different bytes, so the
+replacement does not list into the directory itself: under the output's lock, held for the whole run, it lists
+into `.swath/next/`, a dataset directory of its own (`dataset.NextDir`, with its own lock, journal and parts),
+and readers keep reading the previous dataset. Its commit installs it, in the same commit step
+(`dataset.InstallNext`): every entry of the previous dataset moves into `.swath/next/retiring/`, the manifest
+first, which is then renamed `retired/`; the new `data/` moves into the output, and its manifest last, which
+is the installation. Every step is a synced rename, so a crash anywhere leaves a state the next `swath resume
+DIR` or `--overwrite` finishes first (`listing.InstallReplacement`), and the leftovers of an installed one
+(a crash before their removal) are removed the same way. The path holds no committed dataset between the first
+and the last of those renames. The part paths are reused, so a reader that read the old manifest before the
+installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
+during it. The run report and cut file are written to the output after it; the retired dataset and the
+replacement's workspace are removed last. A replacement
+that fails or is interrupted leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
+`swath resume DIR` (`swath show DIR` names it; a new `--overwrite` starts it over), and one without is removed
+(`TestReplaceKeepsPreviousUntilCommit`, `TestReplaceInstallationCrash`, `TestReplaceFailureLeavesPrevious`).
+`DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An output that holds an
+interrupted run instead (no manifest) is replaced as before: its entries are removed, the commit record first,
+before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 
 ## What readers rely on
 

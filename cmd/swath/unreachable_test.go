@@ -262,3 +262,83 @@ func dirNames(t *testing.T, dir string) []string {
 	}
 	return names
 }
+
+// TestOverwriteKeepsThePreviousDataset: --overwrite of a dataset with a
+// command that cannot run (an endpoint nothing answers) leaves the previous
+// dataset as it was: swath show and swath du --from-dataset read it, and
+// the failed attempt leaves nothing to continue. One stopped by its
+// deadline leaves it too, beside its own run, which swath show names and
+// swath resume finishes and installs. Before, --overwrite removed the
+// previous dataset first, and either failure left the directory without
+// one (C-S1).
+func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureSyncStderr(t)
+	s3test.NoCredentials(t)
+	shortGrace(t, 500*time.Millisecond)
+	tree := t.TempDir()
+	mk := func(name string) {
+		if err := os.WriteFile(filepath.Join(tree, name), []byte("12"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("a")
+	mk("b")
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{tree, "-o", dir}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var was strings.Builder
+	if err := show([]string{dir}, &was); err != nil {
+		t.Fatal(err)
+	}
+	s3args := func(ep string, extra ...string) []string {
+		return append([]string{"s3://bkt/", "--endpoint-url", ep, "--s3-path-style", "--s3-region", "us-east-1", "--anonymous", "-o", dir, "--overwrite"}, extra...)
+	}
+	err := run(context.Background(), s3args("http://"+closedPort(t)), io.Discard, false)
+	if code := exitCode(t, err); code != exitStuck {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	var now strings.Builder
+	if err := show([]string{dir}, &now); err != nil || now.String() != was.String() {
+		t.Fatalf("show after the failed overwrite: %v\n%s\nwas\n%s", err, now.String(), was.String())
+	}
+	if got, err := duRun(t, "--from-dataset", dir, "--format", "tsv"); err != nil || !strings.Contains(got, "\ntotal\t0\t2\t") {
+		t.Fatalf("du --from-dataset after the failed overwrite: %v\n%q", err, got)
+	}
+	if dataset.Staged(dir) {
+		t.Fatal("the unanswered overwrite left a run")
+	}
+	// Stopped by its deadline: the previous dataset stands beside the
+	// replacement's run, which a resume finishes and installs.
+	var slow atomic.Bool
+	slow.Store(true)
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow.Load() {
+			time.Sleep(400 * time.Millisecond)
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	err = run(context.Background(), s3args(srv.URL, "--workers", "1", "--part-size", "4KiB", "--part-interval", "0", "--max-duration", "1s"), io.Discard, false)
+	if code := exitCode(t, err); code != exitDeadline {
+		t.Fatalf("exit %d (%v)", code, err)
+	}
+	now.Reset()
+	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+dir+" continues it") {
+		t.Fatalf("show after the stopped overwrite: %v\n%s", err, now.String())
+	}
+	slow.Store(false)
+	report := filepath.Join(t.TempDir(), "report.json")
+	if err := dispatch(context.Background(), []string{"resume", dir, "--report", report}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	now.Reset()
+	if err := show([]string{dir}, &now); err != nil || rep.Outcome.Class != listing.ClassOK || rep.Invocation.Out != dir ||
+		!strings.Contains(now.String(), "source s3://bkt/") || !strings.Contains(now.String(), "3000 rows") || dataset.Staged(dir) {
+		t.Fatalf("after the resume: %v %+v\n%s", err, rep.Outcome, now.String())
+	}
+}

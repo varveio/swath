@@ -302,14 +302,18 @@ was. Restore the original environment, or start over.
 
 ## Overwrite and refresh
 
-`--overwrite` is destructive, not atomic. Under the output lock, before anything is listed, it removes the
-previous `manifest.json` and then the rest of the old dataset. From then until the new manifest is installed
-the path holds no dataset, and a failed run leaves none.
+`--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into the
+output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
+whose parts are removed after. A run that fails or is stopped leaves the previous dataset as it was; a stopped
+object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new `--overwrite`
+starts it over. The previous dataset stays whole until the new manifest is installed. The installation
+reuses the part paths (`data/part-NNNNN.parquet`), so a reader that is reading the dataset while it runs can
+find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
 
-Where readers must always find a dataset (a periodic refresh), write each run to a new directory and never
-overwrite it. Switch readers through a pointer outside the datasets (a generation file, a database row, a
-symlink swapped by rename) once the new directory's `manifest.json` exists, and delete an old generation only
-when no reader uses it.
+Where readers must always find a dataset, even then (a periodic refresh read around the clock), write each run
+to a new directory and never overwrite it. Switch readers through a pointer outside the datasets (a generation
+file, a database row, a symlink swapped by rename) once the new directory's `manifest.json` exists, and delete
+an old generation only when no reader uses it.
 
 ### Seeding a refresh from the previous dataset
 

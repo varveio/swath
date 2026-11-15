@@ -336,7 +336,9 @@ uploads and staged blocks follow the documented protocol, not observed GCS, S3 o
    meanwhile keeps its outcome (`TestOutcomeSettlementAfterConcurrentCommit`). A directory without a journal is
    nothing to resume and is left untouched, without a lock (`TestNothingToResumeLeavesDirectoryUntouched`). Every run with an
    output takes it: fresh runs, overwrites and filesystem runs, which keep no journal.
-   Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
+   Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked;
+   replacing a committed dataset holds its lock while the replacement runs in `.swath/next/` under a lock of
+   its own ([parquet output](parquet-output.md)).
    A lock on an inode does not prove the pathname still names that directory: the lock records the output
    directory's and the lock file's identity (device and inode, `os.SameFile`) and `Lock.Verify` checks both
    before each operation that creates, writes, renames or removes something in the output by its pathname:

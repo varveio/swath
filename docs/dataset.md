@@ -189,7 +189,8 @@ lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listin
 (the run report: operational, written after the commit and never part of the dataset), and `.swath/` (the run's
 private workspace, which readers ignore). A directory whose run did not commit holds `error.json` instead of a
 manifest: that run's outcome ([exit codes](reference/exit-codes.md#the-outcome-of-record)); a committed
-dataset has none, a partial one included, whose coverage says what is missing. The full tree and the publication order are in
+dataset has none, a partial one included, whose coverage says what is missing, except beside one that an
+`--overwrite` run failed to replace, where it is that run's outcome. The full tree and the publication order are in
 [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
 ### The cut file

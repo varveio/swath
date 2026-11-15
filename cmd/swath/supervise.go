@@ -157,7 +157,9 @@ func classify(err, cause error, dir string) outcome {
 	if err == nil {
 		return outcome{Class: listing.ClassOK, ExitCode: exitOK}
 	}
-	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
+	// A run's journal is in dir, or, for a replacement of the dataset there
+	// (--overwrite), in its own directory (dataset.Staged).
+	resumable := dir != "" && (!dataset.Committed(dir) && hasJournal(dir) || dataset.Staged(dir))
 	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
 	var u usageError
 	var se *signalError
