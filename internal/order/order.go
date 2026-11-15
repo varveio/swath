@@ -102,10 +102,6 @@ type Options struct {
 	// encoders admitted after listing and the descriptors); 0: no cap
 	// beyond the processors. Never more than one per spare processor.
 	SegmentWorkers int
-	// SegmentWorkersAsked, above 0, replaces the processors rule for the
-	// segment workers; the encoders, the row budget and SegmentWorkers still
-	// bound them (WorkersByFlag).
-	SegmentWorkersAsked int
 	// Durable, if set (with spill on, and a provider that declares fences:
 	// source.Fencing), is the attempt's durable spill: a spilled range with
 	// a free slot writes a durable file and seals its certificate, and the

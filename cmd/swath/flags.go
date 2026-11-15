@@ -217,9 +217,6 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		def(source.Flag{Name: "spill-reserve", Value: &o.spillReserve, Metavar: "SIZE", Commands: []string{cmdDiagList},
 			Usage: "free space spill leaves on its filesystem (0: derived)",
 			Long:  "Derived: one part per encoder, at least 1 GiB."})
-		def(source.Flag{Name: "segment-workers", Value: source.Count(&o.segmentWorkers, 0), Metavar: "N", Commands: []string{cmdDiagList},
-			Usage: "workers writing the tail (0: one per two CPUs, at least 8)",
-			Long:  "Replaces the processors rule only: the encoders admitted after listing (--encoders), the row budget and the descriptor limit still bound it."})
 	}
 	registerProviders(f, o, diag)
 	undoFlags(f, o)

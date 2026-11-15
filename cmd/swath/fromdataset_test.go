@@ -89,6 +89,14 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err := os.Link(filepath.Join(root, "a", "g"), filepath.Join(root, "c", "g-link")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "a", "gg"), []byte("123"), 0o644); err != nil { // a/g is a prefix of its key
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink("b", filepath.Join(root, "a", "to-b")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ds := filepath.Join(t.TempDir(), "ds")
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
@@ -156,6 +164,24 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	}
 	for _, a := range whole {
 		liveAndSaved(t, []string{root, "-d", "2"}, []string{"--from-dataset", ds, a, "-d", "2"})
+	}
+	// A file below the tree totals as swath du of that file: its row alone,
+	// not the keys its name is a prefix of.
+	for _, file := range []string{filepath.Join(root, "a", "g"), filepath.Join(root, "x"), filepath.Join(root, "c", "g-link")} {
+		for _, format := range []string{"table", "tsv", "jsonl"} {
+			for _, extra := range [][]string{{"-d", "0"}, {"-d", "2"}, {"--include", "[gx]*"}} { // a filter that keeps the file: on Windows an empty live total has no link counts
+				flags := append([]string{"--format", format}, extra...)
+				liveAndSaved(t, append([]string{file}, flags...), append([]string{"--from-dataset", ds, file}, flags...))
+			}
+		}
+	}
+	// A symbolic link is refused: a live swath du follows it to a
+	// directory, whose rows the dataset holds under the target's name.
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(root, "a", "to-b")
+		if out, err := duRun(t, "--from-dataset", ds, link); !errors.As(err, new(usageError)) || !strings.Contains(err.Error(), "a symbolic link in the dataset") || out != "" {
+			t.Fatalf("symbolic link SOURCE: %v\n%s", err, out)
+		}
 	}
 	// A relative path is taken from the working directory, as a live
 	// swath du takes it: the listed tree's own name there is the whole.

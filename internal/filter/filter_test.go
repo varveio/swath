@@ -131,6 +131,7 @@ func TestGlob(t *testing.T) {
 		// Escapes and regex metacharacters are literal.
 		{`\*.txt`, "", []string{"*.txt"}, []string{"a.txt"}},
 		{`a\?`, "", []string{"a?"}, []string{"ab"}},
+		{`*\.parquet`, "", []string{"a.parquet", "x/.parquet"}, []string{"aparquet", "a.parquet.tmp"}},
 		{"a.b(c)+$^|", "", []string{"a.b(c)+$^|"}, []string{"axb(c)+$^|", "a.b(cc)$^|"}},
 		{"日本/*", "", []string{"日本/a"}, []string{"日本/a/b", "x/日本/a"}},
 		// The target is below Base, the source's prefix to its last '/'.
@@ -491,9 +492,11 @@ func TestMissingColumn(t *testing.T) {
 
 // TestGlobRefusesRegexSigns: a glob that carries a sign of a regular
 // expression is refused naming the regex flag; the neighbors that are valid
-// globs, and each escape the message offers, are accepted.
+// globs (a quoted dot among them), and each escape the message offers, are
+// accepted.
 func TestGlobRefusesRegexSigns(t *testing.T) {
-	for _, p := range []string{`\.parquet$`, `*\.tmp$`, `^logs/*`, `*.parquet$`, `\d*.csv`, `a\wb`, `x\s`, `(a|b).txt`, `logs/(2025|2026)/*`} {
+	for _, p := range []string{`\.parquet$`, `*\.tmp$`, `^logs/*`, `*.parquet$`, `\d*.csv`, `a\wb`, `x\s`, `(a|b).txt`, `logs/(2025|2026)/*`,
+		`.*\.parquet`, `logs/.*\.gz`, `\.tmp.*`} {
 		for _, flag := range []string{"include", "exclude"} {
 			s := Spec{}
 			if flag == "include" {
@@ -507,7 +510,7 @@ func TestGlobRefusesRegexSigns(t *testing.T) {
 			}
 		}
 	}
-	for _, p := range []string{`*.parquet`, `.*`, `**/.*`, `\^a`, `a\$`, `a[$]`, `[^]a`, `a$b`, `a^b`, `photo (1).jpg`, `a(b)`, `a|b`, `a+b`, `a\\.b`,
+	for _, p := range []string{`*.parquet`, `*\.parquet`, `\.parquet`, `a\.b*`, `.*.gz`, `.*`, `**/.*`, `\^a`, `a\$`, `a[$]`, `[^]a`, `a$b`, `a^b`, `photo (1).jpg`, `a(b)`, `a|b`, `a+b`, `a\\.b`,
 		`[(|)]*`, `[\\.]x`, `a\|b(c)`, `{a,b}.gz`, `(a)|(b)`, `[!(]|)`} {
 		if err := (&Spec{Include: []string{p}}).Validate(); err != nil {
 			t.Errorf("%q refused: %v", p, err)
