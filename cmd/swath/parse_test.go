@@ -140,7 +140,7 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"https://storage.googleapis.com/bkt/p?x=y"}, "unsupported source https:// (did you mean gs://bkt/p?)"},
 		{[]string{"https://bkt.storage.googleapis.com/p"}, "unsupported source https:// (did you mean gs://bkt/p?)"},
 		{[]string{"gcs://bkt"}, "unsupported source gcs:// (did you mean gs://bkt?)"},
-		{[]string{"file:///data/x"}, `unsupported source file:// (did you mean /data/x?)`},
+		{[]string{"file:///data/x"}, "unsupported source file:// (did you mean " + filepath.FromSlash("/data/x") + "?)"},
 		{[]string{"https://example.com/x"}, "unsupported source https://; SOURCE is a local directory or file, "},
 		{[]string{"abfs://c@acct.dfs.core.windows.net/"}, "unsupported source abfs://; SOURCE is"},
 		{[]string{"s3:/bkt/x"}, "s3:/bkt/x is a local path (did you mean s3://bkt/x?)"},

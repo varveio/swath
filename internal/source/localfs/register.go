@@ -35,13 +35,18 @@ func init() {
 }
 
 // suggest is the local path of a file:// URL on this host
-// (registry.Factory.Suggest).
+// (registry.Factory.Suggest): file:///data/x is /data/x, and
+// file:///C:/x is C:\x on Windows.
 func suggest(root string) (string, bool) {
 	u, err := url.Parse(root)
 	if err != nil || !strings.EqualFold(u.Scheme, "file") || u.Host != "" && u.Host != "localhost" || u.Path == "" {
 		return "", false
 	}
-	return filepath.FromSlash(u.Path), true
+	p := u.Path
+	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p), true
 }
 
 // workersPerCPU and maxWorkers bound the default --workers for a local tree:
