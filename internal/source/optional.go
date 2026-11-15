@@ -232,6 +232,12 @@ type Coverage struct {
 	Filters    []reader.Filter // the row filters applied beyond listing.Config.Filter (a local tree kept to one filesystem)
 	Exclusions []string        // left out by design (an output directory inside a listed tree)
 	Unreadable int64           // entries missing from the listing because they could not be read
-	Complete   bool            // false if the listing stopped early (a key limit)
-	StopReason string          // "completed", or why it stopped
+	Complete   bool            // the listing reached the end of its scope and read every entry (Unreadable 0)
+	StopReason string          // StopEndOfScope, or why it stopped early (StopMaxKeys)
 }
+
+// Coverage stop reasons: how a listing ended.
+const (
+	StopEndOfScope = "end_of_scope" // it reached the end of its scope (whatever it could not read)
+	StopMaxKeys    = "max_keys"     // a key limit stopped it
+)

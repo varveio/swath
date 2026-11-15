@@ -145,8 +145,9 @@ func TestForcedExitCode(t *testing.T) {
 
 // TestOneTerminalAccount: run.json, the external report (--report) and
 // error.json carry the same outcome. A committed dataset with partial
-// coverage (a key limit) is "incomplete", exit 3, in all three (run.json
-// said "completed", exit 0, before the command classified it); a run that
+// coverage (a key limit) is "incomplete", exit 3, in run.json and the
+// report, and has no error.json (run.json said "completed", exit 0, before
+// the command classified it); a run that
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
 func TestOneTerminalAccount(t *testing.T) {
@@ -175,13 +176,14 @@ func TestOneTerminalAccount(t *testing.T) {
 		var rep, rj listing.Report
 		readJSON(t, report, &rep)
 		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
-		var o outcome
-		readJSON(t, filepath.Join(dir, errorName), &o)
 		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitIncomplete {
 			t.Fatalf("report outcome %+v", rep.Outcome)
 		}
 		same(t, "run.json", rj.Outcome, rep.Outcome)
-		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
+		// The manifest's coverage says what is missing: no error.json.
+		if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+			t.Fatalf("error.json beside the committed dataset: %v", err)
+		}
 		if rj.Output.RowsDurable != 10 || rep.Output.RowsDurable != 10 {
 			t.Fatalf("durable rows: run.json %d, report %d", rj.Output.RowsDurable, rep.Output.RowsDurable)
 		}

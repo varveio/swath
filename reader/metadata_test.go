@@ -25,7 +25,7 @@ func TestParseMetadata(t *testing.T) {
 	full := manifestWith(`{"swath": {"version": 1, "published_at": "2026-11-08T18:00:00.123456Z",
 		"source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
 		"scope": {"kind": "prefix", "prefix": "logs/"},
-		"coverage": {"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": [],
+		"coverage": {"complete": true, "stop_reason": "end_of_scope", "unreadable": 0, "exclusions": [],
 			"filters": [{"filter": "modified_since", "value": "2026-11-01T00:00:00.000000Z"}, {"filter": "no_dirs", "value": null}],
 			"listing_started_at": "2026-11-08T17:00:00Z", "listing_finished_at": "2026-11-08T17:59:00Z"},
 		"collected": {"metadata": "statx", "columns": ["link_target"]},
@@ -39,7 +39,7 @@ func TestParseMetadata(t *testing.T) {
 	c := m.Coverage
 	if m.SchemaID != S3ObjectsV1 || !m.Swath || !m.PublishedAt.Equal(time.Date(2026, 11, 8, 18, 0, 0, 123456000, time.UTC)) ||
 		*m.Source.Kind != "s3" || *m.Source.URI != "s3://bucket/logs/" || *m.Source.Container != "bucket" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "logs/" ||
-		!*c.Complete || *c.StopReason != "completed" || *c.Unreadable != 0 || c.Exclusions == nil || len(c.Filters) != 2 ||
+		!*c.Complete || *c.StopReason != "end_of_scope" || *c.Unreadable != 0 || c.Exclusions == nil || len(c.Filters) != 2 ||
 		c.Filters[0].String() != "modified_since=2026-11-01T00:00:00.000000Z" || c.Filters[1].Filter != "no_dirs" || c.Filters[1].Value != nil ||
 		*m.Collected.Metadata != "statx" || len(m.Collected.Columns) != 1 || m.Collected.Columns[0] != "link_target" ||
 		c.ListingStartedAt.Hour() != 17 || c.ListingFinishedAt.Minute() != 59 || m.CommittedObjectBytes == nil || *m.CommittedObjectBytes != 81234 {

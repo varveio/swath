@@ -290,7 +290,7 @@ func TestDuFromDatasetRefusals(t *testing.T) {
 }
 
 // TestDuFromDatasetIncomplete: a dataset whose listing did not complete (a
-// key limit) prints its totals, says INCOMPLETE on stderr and in the JSONL
+// key limit) prints its totals, says partial on stderr and in the JSONL
 // rows, and exits 3 (incomplete), as the run that wrote it; so does one
 // whose listing left out entries it could not read (it exited 0 and
 // warned).
@@ -311,7 +311,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	if !strings.HasPrefix(got, "row_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\ntotal\t0\t10\t") {
 		t.Fatalf("stdout: %q", got)
 	}
-	if s := stderr.String(); !strings.Contains(s, "; INCOMPLETE (max_keys)\n") {
+	if s := stderr.String(); !strings.Contains(s, "; partial: --max-keys reached\n") {
 		t.Fatalf("stderr: %s", s)
 	}
 	got, _ = duRun(t, "--from-dataset", ds, "--format", "jsonl")
@@ -345,7 +345,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 		err.Error() != "2 entries could not be read when the dataset was listed: the totals leave them out" || !strings.HasPrefix(got, "row_type\t") {
 		t.Fatalf("unreadable: %v, stdout %q", err, got)
 	}
-	if s := stderr.String(); !strings.Contains(s, "; complete, 2 unreadable") {
+	if s := stderr.String(); !strings.Contains(s, "; partial: 2 unreadable entries") {
 		t.Fatalf("stderr: %s", s)
 	}
 	got, _ = duRun(t, "--from-dataset", local, "--format", "jsonl")
@@ -416,7 +416,7 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 	rows := &parquetRows{rows: []parquet.Row{s.Deconstruct(nil, &noKindRow{Key: []byte("dir/"), Size: &size, LastModified: &at})}}
 	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
 		"source": map[string]any{"kind": "local", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
-		"coverage": map[string]any{"complete": true, "stop_reason": "completed", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
+		"coverage": map[string]any{"complete": true, "stop_reason": "end_of_scope", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -241,8 +241,12 @@ type Invocation struct {
 // The outcome vocabulary, in one place. Three separate dimensions:
 //   - Status: what became of the output (publication);
 //   - Class (with ExitCode and Resumable): how the invocation ended, the
-//     command's classification; StopReason follows it for a run that did
-//     not commit, and holds the coverage's reason for one that did;
+//     command's classification;
+//   - Complete, StopReason and Unreadable: the output's coverage, as the
+//     manifest's coverage has it: Complete is true only when the listing
+//     reached the end of its scope and read every entry; StopReason says how
+//     the listing ended (a coverage reason: completed, max_keys,
+//     downstream_closed), absent for a run that wrote no output;
 //   - Cause: the underlying failure's class, the provider's (objhttp.Class:
 //     auth, throttle, ...) or the command's (stuck_*, no_space, protocol).
 //
@@ -259,7 +263,7 @@ const (
 	StopDownstreamClosed = "downstream_closed"
 	StatusFailed         = "failed" // nothing was published
 
-	ClassCompleted   = "completed"
+	ClassOK          = "ok"
 	ClassFatal       = "fatal"
 	ClassIncomplete  = "incomplete"
 	ClassUsage       = "usage"
@@ -279,10 +283,16 @@ const (
 type Outcome struct {
 	// Status is StatusCommitted, StatusWritten, StatusListed, StatusStopped or
 	// StatusFailed.
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
-	Complete   bool   `json:"complete"`              // the listing reached the end of its scope
-	StopReason string `json:"stop_reason,omitempty"` // "completed", or why it stopped early
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// Complete: the output holds its whole scope, the listing reached the
+	// end of it and no entry was unreadable (filters aside: they are
+	// recorded, never a gap).
+	Complete bool `json:"complete"`
+	// StopReason is how the listing ended: "end_of_scope" (it reached the end
+	// of its scope), or why it stopped early (max_keys, downstream_closed);
+	// absent for a run that wrote no output.
+	StopReason string `json:"stop_reason,omitempty"`
 	// StopSource is what stopped a run that was stopped: sigint, sigterm,
 	// liveness_watchdog (--stall-timeout), timebox (--max-duration),
 	// spill_wait (--spill-wait-timeout), with "+forced_exit" when it did
@@ -290,11 +300,12 @@ type Outcome struct {
 	// own.
 	StopSource string `json:"stop_source,omitempty"`
 	// Unreadable counts the entries that could not be read: the rows and
-	// totals leave them out, although Complete may be true (the manifest's
-	// coverage.unreadable holds the same count).
-	Unreadable int64 `json:"unreadable"`
+	// totals leave them out, and Complete is false (the manifest's
+	// coverage.unreadable holds the same count). Absent before the source
+	// reported (a run that failed before or during listing).
+	Unreadable *int64 `json:"unreadable,omitempty"`
 	// Class, ExitCode and Resumable are the command's account of how the
-	// run ended (completed, fatal, stuck, deadline, interrupted,
+	// run ended (ok, fatal, stuck, deadline, interrupted,
 	// terminated); Cause is the provider's class of a failure.
 	Class     string `json:"class,omitempty"`
 	ExitCode  int    `json:"exit_code"`
@@ -303,6 +314,14 @@ type Outcome struct {
 	// Unrecorded says why the output's outcome file does not hold this
 	// outcome: it could not be written, or another process owns the output.
 	Unrecorded string `json:"unrecorded,omitempty"`
+}
+
+// Unreadables is Unreadable's count, 0 where it was not measured.
+func (o Outcome) Unreadables() int64 {
+	if o.Unreadable == nil {
+		return 0
+	}
+	return *o.Unreadable
 }
 
 // Timings of the run, wall and CPU. The phase times: listing_ms, drain_ms
@@ -362,6 +381,10 @@ type Output struct {
 	RowsDurable   int64 `json:"rows_durable"`
 	PartsWritten  int   `json:"parts_written"` // written by this invocation (after a failure: journaled, durable)
 	PartsRetained int   `json:"parts_retained"`
+	// Replaced: the committed dataset replaced a previous one in the
+	// output (--overwrite), which stayed readable until this commit
+	// installed it in its place (dataset.InstallNext).
+	Replaced bool `json:"replaced,omitempty"`
 	// ObjectBytes sums the sizes of the objects the order stage accepted
 	// from this invocation (the size column; absent for a schema without
 	// one), every name once: a local file with several hard links counts
@@ -698,7 +721,8 @@ func (r *Report) SourceReport() *source.Report { return r.report }
 func (r *Report) setSource(sr source.Report) {
 	r.report = &sr
 	r.Invocation.Metadata = sr.Fields
-	r.Outcome.Unreadable = sr.Coverage.Unreadable
+	n := sr.Coverage.Unreadable
+	r.Outcome.Unreadable = &n
 	r.Outcome.Complete, r.Outcome.StopReason = sr.Coverage.Complete, sr.Coverage.StopReason
 	r.Source = &SourceStats{Name: sr.Name, Stats: sr.Stats}
 }

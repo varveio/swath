@@ -24,9 +24,11 @@ const (
 	WarnCutsUnwritten        = "cuts_unwritten"                // the dataset is committed; its cut file is not written
 	WarnCommitMarker         = "commit_marker_unwritten"       // a dataset in a bucket: the work directory's commit marker is not written
 	WarnAftermath            = "aftermath_unfinished"          // a dataset in a bucket: committed, its orphan cleanup or report not finished
+	WarnReplacedNotRemoved   = "replaced_not_removed"          // --overwrite: the replaced dataset's files were not removed
 )
 
 // WarningCodes are the codes above, for the documentation's check.
 var WarningCodes = []string{WarnAnonymous, WarnTLSUnverified, WarnFlatAssumed, WarnDirectoryTooLarge, WarnLockUnenforced,
 	WarnDurableSpillOff, WarnUnresumableNotMarked, WarnSeedFromCuts, WarnSeedFromUnavailable, WarnEncodersLimited,
-	WarnSpillNotRemoved, WarnSpillInMemory, WarnRunReportUnwritten, WarnCutsUnwritten, WarnCommitMarker, WarnAftermath}
+	WarnSpillNotRemoved, WarnSpillInMemory, WarnRunReportUnwritten, WarnCutsUnwritten, WarnCommitMarker, WarnAftermath,
+	WarnReplacedNotRemoved}

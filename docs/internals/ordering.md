@@ -551,7 +551,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   kept: the cap bounds spill's own use, the reserve what spill may take from the parts and from other
   processes on the filesystem, whose use the cap cannot see. A refused
   frame is not an error: the emitter waits on the reorder budget, as with `swath diag list --no-spill`, and retries after the
-  drainer moves. An ENOSPC on a frame of rows is handled the same way after truncating the torn frame; one
+  drainer moves. An ENOSPC or EDQUOT (a full quota) on a frame of rows is handled the same way after truncating the torn frame; one
   that cannot be undone, or on a trailer, stops the run (resumable: nothing durable is lost). A
   range's bytes return to the budget when its file is deleted after replay, not frame by frame: a consumed
   frame's bytes stay on disk until the file goes (punching holes is not portable, and a range's file is

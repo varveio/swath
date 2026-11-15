@@ -20,10 +20,10 @@ func Report(name, target, prefix string, stats any, c counters.Snapshot) source.
 		Brief: fmt.Sprintf("objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d peak_active=%d truncated=%v",
 			v("objects"), v("bytes"), v("pages"), v("requests"), v("retries"), v("split.accepted_bounded")+v("split.accepted_frontier"),
 			v("child_empty.lower")+v("child_empty.upper"), v("peak_active"), truncated),
-		Coverage: source.Coverage{Target: target, Prefix: prefix, Complete: !truncated, StopReason: "completed"},
+		Coverage: source.Coverage{Target: target, Prefix: prefix, Complete: !truncated, StopReason: source.StopEndOfScope},
 	}
 	if truncated {
-		r.Coverage.StopReason = "max_keys"
+		r.Coverage.StopReason = source.StopMaxKeys
 	}
 	return r
 }

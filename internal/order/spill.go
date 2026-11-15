@@ -58,8 +58,8 @@ import (
 // free space when it would refuse a frame, and rises when the filesystem
 // has grown (follow). A refused frame is not an error: the emitter waits
 // on the reorder budget, as without spill (graceful backpressure), and
-// retries when woken. An ENOSPC on a frame of rows is
-// treated the same way, after truncating the torn frame; an ENOSPC that
+// retries when woken. An ENOSPC (or EDQUOT, a full quota) on a frame of rows
+// is treated the same way, after truncating the torn frame; an ENOSPC that
 // cannot be undone (opening the file, a failed truncation) or on a
 // trailer stops the run with that error. The reserve is checked, not held:
 // concurrent writers and the parts being published can use it up first.
@@ -608,7 +608,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 		if err == nil {
 			if err = s.check(); err == nil {
 				_, err = faults.Write(fh, buf)
-				if err != nil && errors.Is(err, syscall.ENOSPC) {
+				if err != nil && (errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT)) {
 					if verr := s.check(); verr != nil {
 						err = verr // replaced mid-write: fatal, nothing more touched
 					} else {

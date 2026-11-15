@@ -614,7 +614,7 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 		t.Cleanup(func() { logs.Store(nil) })
 		code := conclude(dispatch(context.Background(), args, io.Discard))
 		var ev map[string]any
-		if code == exitCompleted || json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &ev) != nil || ev["event"] != "outcome" {
+		if code == exitOK || json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &ev) != nil || ev["event"] != "outcome" {
 			t.Errorf("%q: exit %d, stderr %q", args, code, stderr.String())
 		}
 	}

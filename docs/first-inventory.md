@@ -92,15 +92,14 @@ swath show media-inventory
 dataset media-inventory: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
 key key unique=true, published 2026-11-13T20:16:47Z
 source /home/you/media, scope whole ""
-coverage complete=true stop=completed unreadable=0 filters=0 exclusions=0
+coverage: complete
 1 part, 12 rows, 4125 bytes, keys "archive/" .. "videos/trip.mp4"
 ```
 
 `swath show` reads the manifest, not the rows. The lines say which schema the rows follow, when the dataset
-was published, what was listed, how completely, and what the parts hold. Here `complete=true` with
-`unreadable=0`, no filters and no exclusions means the dataset covers the whole tree. Read the coverage line
-before you rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains
-each field. 0.4.0-rc.2 prints `skipped=0` where this prints `unreadable=0`.
+was published, what was listed, how completely, and what the parts hold. Here `coverage: complete`, with no
+filters or exclusions after it, means the dataset covers the whole tree. Read the coverage line before you rely
+on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains it.
 
 To read the rows themselves, open the parts with DuckDB, Python or another Parquet
 reader ([the swath dataset](dataset.md)).

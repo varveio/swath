@@ -183,27 +183,34 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		return fail(err) // stopped (a signal) while the rows were written: interrupted, as a live swath du
 	}
 	c := m.Coverage
+	done := outcome{Class: listing.ClassOK, ExitCode: exitOK, Complete: prov.Complete != nil && *prov.Complete, Unreadable: prov.Unreadable}
+	if prov.StopReason != nil {
+		done.StopReason = *prov.StopReason
+	}
 	switch {
 	case c == nil || c.Complete == nil:
 		l.warn(warnCoverageUnknown, "the dataset's manifest does not say whether its listing completed: the totals may leave entries out")
+	case c.Unreadable != nil && *c.Unreadable > 0:
+		n := *c.Unreadable
+		return datasetIncomplete(done, fmt.Sprintf("%s could not be read when the dataset was listed: the totals leave %s out",
+			plural(n, "1 entry", count(n)+" entries"), plural(n, "it", "them")))
 	case !*c.Complete:
 		why := "its listing did not complete"
 		if c.StopReason != nil {
 			why += " (" + *c.StopReason + ")"
 		}
-		return datasetIncomplete("the dataset is a partial listing: " + why + "; the totals count only the rows it holds")
-	case c.Unreadable != nil && *c.Unreadable > 0:
-		n := *c.Unreadable
-		return datasetIncomplete(fmt.Sprintf("%s could not be read when the dataset was listed: the totals leave %s out",
-			plural(n, "1 entry", count(n)+" entries"), plural(n, "it", "them")))
+		return datasetIncomplete(done, "the dataset is a partial listing: "+why+"; the totals count only the rows it holds")
 	}
+	l.ended(done)
 	return nil
 }
 
 // datasetIncomplete is totals of a dataset that does not hold its whole
-// scope: printed, then exit 3 (incomplete), as a live swath du's.
-func datasetIncomplete(msg string) error {
-	return &exitError{error: errors.New(msg), code: exitIncomplete, out: outcome{Class: listing.ClassIncomplete, ExitCode: exitIncomplete, Message: msg}}
+// scope (o, its coverage): printed, then exit 3 (incomplete), as a live
+// swath du's.
+func datasetIncomplete(o outcome, msg string) error {
+	o.Class, o.ExitCode, o.Message = listing.ClassIncomplete, exitIncomplete, msg
+	return &exitError{error: errors.New(msg), code: exitIncomplete, out: o}
 }
 
 // provenance is where totals read from a dataset came from: the dataset
@@ -279,19 +286,17 @@ func (l *eventLog) dataset(p provenance, now time.Time) {
 			msg += " (" + ago(age) + ")"
 		}
 	}
-	switch c := p.Complete; {
-	case c == nil:
+	if p.Complete == nil {
 		msg += "; coverage unknown"
-	case *c:
-		msg += "; complete"
-	default:
-		msg += "; INCOMPLETE"
+	} else {
+		stop, n := "", int64(0)
 		if p.StopReason != nil {
-			msg += " (" + *p.StopReason + ")"
+			stop = *p.StopReason
 		}
-	}
-	if p.Unreadable != nil && *p.Unreadable > 0 {
-		msg += ", " + count(*p.Unreadable) + " unreadable"
+		if p.Unreadable != nil {
+			n = *p.Unreadable
+		}
+		msg += "; " + coverageVerdict(*p.Complete, stop, n)
 	}
 	if len(p.Filters) > 0 {
 		msg += "; filtered: " + strings.Join(filter.Texts(p.Filters), ", ")

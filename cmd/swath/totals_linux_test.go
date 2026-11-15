@@ -341,7 +341,7 @@ func TestDuLocalRefusals(t *testing.T) {
 		} else {
 			err = run(context.Background(), append(tc.args, "-o", filepath.Join(t.TempDir(), "ds")), &out, false)
 		}
-		if exitOf(err) == exitCompleted || !strings.Contains(fmt.Sprint(err), tc.want) {
+		if exitOf(err) == exitOK || !strings.Contains(fmt.Sprint(err), tc.want) {
 			t.Errorf("du=%v %v: exit %d (%v), want %q", tc.du, tc.args, exitOf(err), err, tc.want)
 		}
 	}
@@ -375,9 +375,11 @@ func TestDuLocalRefusals(t *testing.T) {
 // the totals, the text rows or the dataset; each run finishes with exit 3
 // (class incomplete), names the entry with its cause as a warning and ends
 // with the count as its error line, which -q keeps and -qq drops. The
-// committed dataset's coverage counts it (unreadable 1) beside complete
-// true, its listing having reached the end of the tree. Before, each exited
-// 0, and -q left no trace of the missing entry.
+// committed dataset's coverage counts it (unreadable 1) with complete false
+// and stop_reason completed (its listing reached the end of the tree, and
+// an entry is missing). The closing block's verdict carries the cause
+// after the warning that names it, and the outcome event says partial.
+// Before, each exited 0, and -q left no trace of the missing entry.
 func TestUnreadableIsIncomplete(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory of mode 000")
@@ -410,7 +412,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
+	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
 		t.Fatalf("report outcome %+v", o)
 	}
 	// A listing, text or a dataset, ends the same way.
@@ -425,15 +427,16 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 		!strings.HasSuffix(stderr.String(), warning+end) {
 		t.Fatalf("list -o: exit %d, stderr %q", code, stderr.String())
 	}
+	// The dataset is committed and partial: its coverage says so, and no
+	// error.json stands beside it.
 	var m dataset.Manifest
-	var o outcome
 	readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-	readJSON(t, filepath.Join(dir, errorName), &o)
-	if c := m.Coverage; c.Unreadable != 1 || !c.Complete || c.StopReason != "completed" || o.Class != listing.ClassIncomplete || o.ExitCode != exitIncomplete {
-		t.Fatalf("dataset: coverage %+v, error.json %+v", c, o)
+	_, eerr := os.Stat(filepath.Join(dir, errorName))
+	if c := m.Coverage; c.Unreadable != 1 || c.Complete || c.StopReason != "end_of_scope" || !os.IsNotExist(eerr) {
+		t.Fatalf("dataset: coverage %+v, error.json %v", c, eerr)
 	}
 	out.Reset()
-	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage complete=true stop=completed unreadable=1 ") {
+	if err := show([]string{dir}, &out); err != nil || !strings.Contains(out.String(), "coverage: partial: 1 unreadable entry\n") {
 		t.Fatalf("show: %v %q", err, out.String())
 	}
 	// swath resume of it exits 3, and its report keeps the count and says
@@ -441,12 +444,13 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	stderr.Reset()
 	resumed := filepath.Join(t.TempDir(), "resume.json")
 	err = resume(context.Background(), []string{dir, "--report", resumed}, io.Discard)
-	want := dir + " left out an entry it could not read (coverage unreadable=1): it cannot be resumed; list the tree again once it can be read"
+	want := dir + " is partial: 1 unreadable entry: it cannot be resumed; list the tree again once it can be read"
 	if code := conclude(err); code != exitIncomplete || err.Error() != want {
 		t.Fatalf("resume: exit %d (%v)", code, err)
 	}
+	rep = listing.Report{}
 	readJSON(t, resumed, &rep)
-	if o := rep.Outcome; o.Unreadable != 1 || !o.Complete || o.StopReason != "completed" || o.ExitCode != exitIncomplete || o.Error != want {
+	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Error != want {
 		t.Fatalf("resume report outcome %+v", o)
 	}
 	// swath diag count prints its partial counts, then exits 3 (it printed
@@ -463,8 +467,9 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--report", report}, failingWriter{syscall.EPIPE}); err != nil {
 		t.Fatalf("du into a closed pipe: %v", err)
 	}
+	rep = listing.Report{}
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.ExitCode != exitCompleted || o.StopReason != listing.StopDownstreamClosed || o.Unreadable != 1 {
+	if o := rep.Outcome; o.ExitCode != exitOK || o.Class != listing.ClassOK || o.Complete || o.StopReason != listing.StopDownstreamClosed || o.Unreadables() != 1 {
 		t.Fatalf("du into a closed pipe: outcome %+v", o)
 	}
 	// -q keeps the error line, -qq drops it; the exit code stays.
@@ -473,6 +478,34 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 		if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", q}, &out)); code != exitIncomplete || stderr.String() != want {
 			t.Fatalf("%s: exit %d, stderr %q", q, code, stderr.String())
 		}
+	}
+	// The statistics: the warning, then the block whose verdict names what
+	// is missing, then the error line.
+	stderr.Reset()
+	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--stats", "--no-progress"}, &out)); code != exitIncomplete ||
+		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry\n") || !strings.HasSuffix(stderr.String(), end) {
+		t.Fatalf("--stats: exit %d, stderr %q", code, stderr.String())
+	}
+	// The outcome event tells partial from complete without parsing msg.
+	stderr.Reset()
+	if code := conclude(run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--log-format", "json"}, io.Discard, false)); code != exitIncomplete {
+		t.Fatalf("json: exit %d", code)
+	}
+	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil || ev["event"] != "outcome" || ev["class"] != "incomplete" || ev["status"] != "committed" ||
+		ev["complete"] != false || ev["stop_reason"] != "end_of_scope" || ev["unreadable"] != 1.0 || ev["msg"] != strings.TrimSuffix(strings.TrimPrefix(end, "swath: "), "\n") || ev["message"] != nil {
+		t.Fatalf("outcome event %v (%v): %s", ev, err, stderr.String())
+	}
+	stderr.Reset()
+	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--exclude", "locked/**", "--exclude", "locked", "--log-format", "json"}, &out)); code != exitOK {
+		t.Fatalf("json, nothing missing: exit %d: %s", code, stderr.String())
+	}
+	lines = strings.Split(strings.TrimSpace(stderr.String()), "\n")
+	ev = nil
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &ev); err != nil || ev["class"] != "ok" || ev["status"] != "listed" || ev["complete"] != true ||
+		ev["stop_reason"] != "end_of_scope" || ev["unreadable"] != 0.0 {
+		t.Fatalf("outcome event %v (%v): %s", ev, err, stderr.String())
 	}
 }
 

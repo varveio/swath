@@ -22,9 +22,11 @@ import (
 )
 
 // TestMissingBucketCause: a bucket (S3, GCS) or container (Azure Blob) that
-// does not exist ends the run fatal, exit 1, not resumable, with cause
-// not_found in the report and in error.json, its message kept; a 404 that
-// names an object, or nothing (a wrong endpoint path), has no cause.
+// does not exist ends the run fatal, exit 1, not resumable (the fix is
+// another command), with cause not_found in the report and in error.json,
+// its message kept; a 404 that names an object, or nothing (a wrong
+// endpoint path), has no cause, and is resumable as its journal says
+// (#517).
 func TestMissingBucketCause(t *testing.T) {
 	captureStderr(t)
 	s3test.NoCredentials(t)
@@ -78,7 +80,8 @@ func TestMissingBucketCause(t *testing.T) {
 			var rep listing.Report
 			readJSON(t, report, &rep)
 			o := rep.Outcome
-			if o.Class != listing.ClassFatal || o.Cause != c.cause || o.Resumable || o.ExitCode != exitFatal || !strings.Contains(o.Error, c.message) {
+			resumable := c.cause == "" && !diagList // a journal, and no cause that changes the command
+			if o.Class != listing.ClassFatal || o.Cause != c.cause || o.Resumable != resumable || o.ExitCode != exitFatal || !strings.Contains(o.Error, c.message) {
 				t.Fatalf("report outcome %+v", o)
 			}
 			b, err := os.ReadFile(filepath.Join(dir, dataset.ErrorName))
@@ -89,7 +92,7 @@ func TestMissingBucketCause(t *testing.T) {
 			if err := json.Unmarshal(b, &e); err != nil {
 				t.Fatal(err)
 			}
-			if e.Class != listing.ClassFatal || e.Cause != c.cause || e.Resumable || !strings.Contains(e.Message, c.message) {
+			if e.Class != listing.ClassFatal || e.Cause != c.cause || e.Resumable != resumable || !strings.Contains(e.Message, c.message) {
 				t.Fatalf("error.json %+v", e)
 			}
 			if c.cause == "" && strings.Contains(string(b), "not_found") {

@@ -507,8 +507,10 @@ func TestPruneUnreadableDescendant(t *testing.T) {
 			}
 			report := control.(*opened).Report()
 			stats := report.Stats.(*Stats)
-			if stats.OpenErrors != 1 || report.Coverage.Unreadable != 1 {
-				t.Fatalf("control open errors=%d unreadable=%d, want 1 each", stats.OpenErrors, report.Coverage.Unreadable)
+			// Complete means nothing is missing: an unreadable entry makes
+			// the coverage partial although the walk reached its end.
+			if c := report.Coverage; stats.OpenErrors != 1 || c.Unreadable != 1 || c.Complete || c.StopReason != "end_of_scope" {
+				t.Fatalf("control open errors=%d coverage %+v, want 1 open error, 1 unreadable, not complete", stats.OpenErrors, c)
 			}
 			spec := filter.Spec{Exclude: []string{"dir/**"}}
 			want := pruneReference(t, root, opt, spec)

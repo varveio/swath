@@ -113,12 +113,15 @@ func TestClosedReaderExitsZero(t *testing.T) {
 			Status     string
 			StopReason string `json:"stop_reason"`
 			Complete   bool
+			Class      string
 			ExitCode   int `json:"exit_code"`
 		}
 		Output struct{ Text struct{ Rows int64 } }
 	}
 	readJSON(t, report, &rep)
-	if rep.Outcome.Status != "stopped" || rep.Outcome.ExitCode != 0 || rep.Outcome.Complete || rep.Outcome.StopReason != "downstream_closed" || rep.Output.Text.Rows >= int64(len(keys)) {
+	// The command did what it was asked (class ok, exit 0); the output is
+	// not complete.
+	if rep.Outcome.Status != "stopped" || rep.Outcome.Class != "ok" || rep.Outcome.ExitCode != 0 || rep.Outcome.Complete || rep.Outcome.StopReason != "downstream_closed" || rep.Output.Text.Rows >= int64(len(keys)) {
 		t.Fatalf("report %+v", rep)
 	}
 }

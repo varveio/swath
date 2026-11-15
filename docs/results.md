@@ -103,17 +103,20 @@ with exit code 1 ([troubleshooting](troubleshooting.md#entries-could-not-be-read
 > the count `coverage.skipped_entries`. On rc.2, exit code 0 does not prove a complete scan: check that count
 > ([differences in 0.4.0-rc.2](release-candidate.md)).
 
-A dataset keeps the count. `swath show` prints it on the coverage line:
+A dataset keeps the count. `swath show` prints its verdict on the coverage line:
 
 ```text
-coverage complete=true stop=completed unreadable=1 filters=0 exclusions=0
+coverage: partial: 1 unreadable entry
 ```
 
-`complete=true` says only that the listing reached the end of its scope. The dataset holds the whole scope
-when `stop=completed`, `unreadable=0`, `filters=0` and `exclusions=0` too, or when you accept its exclusions
-explicitly. `exclusions` names what was left out by design, such as an output directory inside the tree. A
-program reads the same fields from the manifest ([dataset](dataset.md#the-swath-extension)); the run report's
-`outcome.unreadable` holds the same count ([run report](reference/run-report.md)).
+The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
+entry. Otherwise it is `partial:` and what is missing (`1 unreadable entry`, `--max-keys reached`). Filters
+and exclusions follow it (`; filtered: include=*.txt`, `; excluded: ...`): a filtered dataset is complete for
+its filters, and `exclusions` names what was left out by design, such as an output directory inside the tree.
+The run that wrote the dataset printed the same verdict, and `swath du --from-dataset` prints it too. A
+program reads `coverage.complete`, `stop_reason`, `unreadable` and `filters` from the manifest
+([dataset](dataset.md#the-swath-extension)); the run report's `outcome.complete` and `outcome.unreadable` hold
+the same ([run report](reference/run-report.md)).
 
 ## Observation time
 

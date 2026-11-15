@@ -211,7 +211,7 @@ func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 		err := run(context.Background(), []string{root, "--endpoint-url", srv.URL, "-v", "--report", report, "-o", out}, io.Discard, false)
 		// The refused SAS is exit 1, as on any request; a root that does
 		// not parse fails at open, as any malformed root does.
-		if c := exitCode(t, err); c == exitCompleted || strings.Contains(root, "sv=") && c != exitFatal {
+		if c := exitCode(t, err); c == exitOK || strings.Contains(root, "sv=") && c != exitFatal {
 			t.Fatalf("%s: exit %d (%v)", azblob.RedactRoot(root), c, err)
 		}
 		if strings.Contains(err.Error(), "SECRET") {

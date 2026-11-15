@@ -336,7 +336,9 @@ uploads and staged blocks follow the documented protocol, not observed GCS, S3 o
    meanwhile keeps its outcome (`TestOutcomeSettlementAfterConcurrentCommit`). A directory without a journal is
    nothing to resume and is left untouched, without a lock (`TestNothingToResumeLeavesDirectoryUntouched`). Every run with an
    output takes it: fresh runs, overwrites and filesystem runs, which keep no journal.
-   Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
+   Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked;
+   replacing a committed dataset holds its lock while the replacement runs in `.swath/next/` under a lock of
+   its own ([parquet output](parquet-output.md)).
    A lock on an inode does not prove the pathname still names that directory: the lock records the output
    directory's and the lock file's identity (device and inode, `os.SameFile`) and `Lock.Verify` checks both
    before each operation that creates, writes, renames or removes something in the output by its pathname:
@@ -439,7 +441,7 @@ first page of each range, as on a fresh run. The ramp-up cost has not been measu
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
-`swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `completed`, the
+`swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `ok`, the
 report saying `complete`; idempotent, as Java's), partial coverage (a key limit, unreadable entries) exits 3 (`incomplete`); on a directory without a journal (an empty
 workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `--overwrite`.
 

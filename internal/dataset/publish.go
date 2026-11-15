@@ -291,14 +291,16 @@ type Scope struct {
 	Prefix string `json:"prefix,omitempty"` // with "prefix"
 }
 
-// Coverage is how much of the scope the dataset holds. A dataset covers its
-// scope fully when complete is true, no entry was unreadable and there are no
-// filters; exclusions name what the listing left out by design (an output
-// directory inside a listed tree). A listing is not a point-in-time
-// snapshot: entries that changed while it ran may or may not be in it.
+// Coverage is how much of the scope the dataset holds. Complete says
+// nothing is missing: the listing reached the end of its scope and read
+// every entry. Filters do not make it partial: it is complete for its
+// filters, which it records; exclusions name what the listing left out by
+// design (an output directory inside a listed tree). A listing is not a
+// point-in-time snapshot: entries that changed while it ran may or may not
+// be in it.
 type Coverage struct {
-	Complete          bool            `json:"complete"`    // the listing reached the end of the scope
-	StopReason        string          `json:"stop_reason"` // "completed", or why it stopped early
+	Complete          bool            `json:"complete"`    // the listing reached the end of the scope, and unreadable is 0
+	StopReason        string          `json:"stop_reason"` // "end_of_scope" (the end of the scope reached), or why it stopped early
 	Unreadable        int64           `json:"unreadable"`  // entries missing because they could not be read
 	Exclusions        []string        `json:"exclusions"`
 	Filters           []reader.Filter `json:"filters"`

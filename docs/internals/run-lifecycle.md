@@ -10,16 +10,21 @@ how it checks the paths it writes beside the output. The user's view is
 A supervisor's outcome of record is the exit code plus the report at the path it names with `--report`
 (outside the output directory, a fresh path per attempt, or removed before the attempt starts): `outcome`
 (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`; `status`, `complete` and `stop_reason` follow the
-class: a run that did not commit is `complete` false with its class as the `stop_reason`, and a committed
-run's agree with the manifest's `coverage`) and `attempt` (`id`, random, and `started_at`), with `run` (`id`: the journal's, the same for every resume). For a run that did
-not complete, `DIR/error.json` holds the same outcome in the dataset (`class`, `exit_code`, `message`,
-`resumable`, `cause`: the provider's failure class such as `throttle` or `access_denied`, or `no_space` for a
-full disk; and the same `attempt`); it never needs stderr.
+class: a run that wrote no output is `complete` false without a `stop_reason`, and a committed run's agree
+with the manifest's `coverage`, where `complete` means nothing is missing: the end of the scope reached and
+`unreadable` 0) and `attempt` (`id`, random, and `started_at`), with `run` (`id`: the journal's, the same for
+every resume). For a run that did not commit, `DIR/error.json` holds the same outcome in the dataset (`class`,
+`exit_code`, `message`, `resumable`, `cause`: the provider's failure class such as `throttle` or
+`access_denied`, or `no_space` for a full disk; the same `attempt` and `run`, `status` and coverage fields); it
+never needs stderr. A committed dataset has no `error.json`, a partial one (exit 3) included: its manifest's
+coverage says what is missing, and the run removes a stale one; an `--overwrite` run that does not replace it
+leaves its own outcome there.
 
 The command classifies the outcome once, before any account is written, and that classification is frozen:
 `DIR/run.json` (a committed dataset), `error.json`, the report, the exit code and a forced exit's outcome agree
 on `class`, `exit_code`, `resumable` and `cause`, also when a stop cause (the deadline, a signal) arrives after
-the run settled (a dataset committed with partial coverage is `incomplete`, exit 3, in all of them). A
+the run settled (a dataset committed with partial coverage is `incomplete`, exit 3, in all of them but
+`error.json`, which it does not write). A
 protocol violation (`cause` `protocol`, which the journal records, so `swath resume` refuses the run), the part
 limit (`part_limit`) and an output layout swath did not make (a linked `data/`, workspace, journal or part,
 `unsafe_layout`) outrank a stop cause; the refused paths are left as they were.
@@ -52,7 +57,7 @@ The outcome as one JSON line on stderr, `swath: outcome: {...}` before the error
 
 A refusal or usage error (exit 2), and a failure before any listing request was answered or directory read
 (a missing directory or bucket, credentials that do not load), print one line on stderr, `swath: MESSAGE`,
-and nothing else: no statistics, no `INCOMPLETE`; a usage error adds its `See 'swath CMD --help'.` hint. A
+and nothing else: no statistics, no verdict; a usage error adds its `See 'swath CMD --help'.` hint. A
 stop (a signal, `--max-duration`, `--stall-timeout`, a full disk) and a failure after requests were answered
 keep the statistics. `--stats` still prints them.
 
@@ -150,7 +155,7 @@ beside `data/`, a `schemaId` manifest) and other tools' manifests are not. The `
 `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files, and the profiles' phase files beside them (`FILE.listing`,
 `FILE.tail`, `FILE.exit`), are checked the same way and may not be symbolic links (a profile is opened, never
 through a link; the report replaces its name by a rename, which replaces a link there rather than writing its
-target). Nor may they be in the output directory, even as an ordinary name: they are opened before the run,
+target, except a device, a descriptor such as `/dev/fd/N` or a named pipe, which it writes as it is). Nor may they be in the output directory, even as an ordinary name: they are opened before the run,
 which would then find the directory it is to create or fill not empty and refuse it; only `--report`, written
 after the run, may go there.
 

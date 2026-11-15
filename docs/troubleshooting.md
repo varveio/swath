@@ -237,8 +237,10 @@ swath: list s3://bucket/: endpoint http://127.0.0.1:9000 cannot be reached (conn
 Exit 75, cause `unreachable`: the run is stuck, found early. Nothing in the run has been answered, and for 30
 seconds (at most half `--stall-timeout`) every connection was refused, its host was not found, or no route led
 to it: a mistyped `--endpoint-url` (or `AWS_ENDPOINT_URL`, `STORAGE_EMULATOR_HOST`), or an emulator (MinIO,
-Azurite, the GCS emulator) that is not running yet. A dataset run of an object store keeps its journal: once
-the endpoint answers, `swath resume DIR` continues it; other runs are run again. Once anything has answered,
+Azurite, the GCS emulator) that is not running yet. Nothing was listed, so a dataset run removes its journal
+and work files: run the corrected command again on the same `-o` (the outcome is in `--report`, not in
+`error.json`). A resume whose run had published parts keeps its journal: once the endpoint answers,
+`swath resume DIR` continues it. Once anything has answered,
 connections that fail later are an outage instead: swath retries them until `--stall-timeout`.
 
 ## The disk filled (exit 74)

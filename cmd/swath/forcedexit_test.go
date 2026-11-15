@@ -156,7 +156,7 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 
 // TestForcedExitAfterCommit (B2): a run that committed its dataset and
 // then blocks writing run.json is stopped by SIGTERM and forced out after
-// the grace. Its classification (completed) stands: the process exits 0,
+// the grace. Its classification (ok) stands: the process exits 0,
 // the report (--report) says committed and complete with the run's
 // statistics, and no error.json is left. Before, the forced path built an
 // unstarted report (status failed, complete false) and wrote error.json.
@@ -215,7 +215,7 @@ func TestForcedExitAfterCommit(t *testing.T) {
 		}
 	}
 	readJSON(t, report, &r)
-	if r.Outcome.Status != "committed" || !r.Outcome.Complete || r.Outcome.Class != "completed" || r.Outcome.ExitCode != 0 ||
+	if r.Outcome.Status != "committed" || !r.Outcome.Complete || r.Outcome.Class != "ok" || r.Outcome.ExitCode != 0 ||
 		r.Outcome.Error != "" || r.Output.RowsCommitted != 20000 {
 		t.Fatalf("report after the forced exit: %+v", r)
 	}
@@ -250,7 +250,7 @@ func TestForcedExitAtCommit(t *testing.T) {
 		class    string
 		complete bool
 	}{
-		{"complete", []string{"list"}, nil, exitCompleted, "completed", true},
+		{"complete", []string{"list"}, nil, exitOK, "ok", true},
 		{"partial", []string{"diag", "list"}, []string{"--sequential", "--max-keys", "10"}, exitIncomplete, "incomplete", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,17 +280,10 @@ func TestForcedExitAtCommit(t *testing.T) {
 			if r.Outcome.Status != listing.StatusCommitted || r.Outcome.Class != tc.class || r.Outcome.ExitCode != tc.code || r.Outcome.Complete != tc.complete {
 				t.Fatalf("report after the forced exit: %+v", r.Outcome)
 			}
-			_, err := os.Stat(filepath.Join(dir, errorName))
-			if tc.complete {
-				if !os.IsNotExist(err) {
-					t.Fatalf("error.json beside the complete dataset: %v", err)
-				}
-				return
-			}
-			var o outcome
-			readJSON(t, filepath.Join(dir, errorName), &o)
-			if o.Class != tc.class || o.ExitCode != tc.code || o.Attempt == nil || r.Attempt == nil || o.Attempt.ID != r.Attempt.ID {
-				t.Fatalf("error.json %+v, report %+v %+v", o, r.Attempt, r.Outcome)
+			// The committed dataset, complete or partial, has no
+			// error.json: its manifest's coverage says what is missing.
+			if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+				t.Fatalf("error.json beside the committed dataset: %v", err)
 			}
 		})
 	}
@@ -340,7 +333,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(errDeadline)
 	committed := func(complete bool) *listing.Report {
-		return &listing.Report{Outcome: listing.Outcome{Status: listing.StatusCommitted, Class: listing.ClassCompleted, Complete: complete}}
+		return &listing.Report{Outcome: listing.Outcome{Status: listing.StatusCommitted, Class: listing.ClassOK, Complete: complete}}
 	}
 	target := func() (*forensicTarget, string) {
 		dir := t.TempDir()
@@ -358,7 +351,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		forcedAccount(f, s, "--max-duration")
 		var r listing.Report
 		readJSON(t, report, &r)
-		if r.Outcome.ExitCode != s.out.ExitCode || (r.Outcome.Class == listing.ClassCompleted) != (s.out.ExitCode == exitCompleted) {
+		if r.Outcome.ExitCode != s.out.ExitCode || (r.Outcome.Class == listing.ClassOK) != (s.out.ExitCode == exitOK) {
 			t.Fatalf("exit %d with report %+v", s.out.ExitCode, r.Outcome)
 		}
 		return s.out.ExitCode, r
@@ -382,7 +375,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		code     int
 		class    string
 	}{
-		{"commit under way/complete", true, exitCompleted, listing.ClassCompleted},
+		{"commit under way/complete", true, exitOK, listing.ClassOK},
 		{"commit under way/partial", false, exitIncomplete, listing.ClassIncomplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -428,9 +421,9 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		if _, ok := f.t.claim(func() outcome { return outcome{ExitCode: exitDeadline} }, 10*time.Millisecond, func(s snapshot) { late <- s }); ok {
 			t.Fatal("a snapshot while the result is held")
 		}
-		f.t.out = &outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
+		f.t.out = &outcome{Class: listing.ClassOK, ExitCode: exitOK}
 		f.t.mu.Unlock()
-		if s := <-late; s.out.ExitCode != exitCompleted || !s.run {
+		if s := <-late; s.out.ExitCode != exitOK || !s.run {
 			t.Fatalf("the late snapshot: %+v", s)
 		}
 	})

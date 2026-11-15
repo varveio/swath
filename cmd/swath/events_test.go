@@ -91,7 +91,7 @@ func TestDocsLogEvents(t *testing.T) {
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
 		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
-	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "completed", int64(0), jsontime.Of(at.Add(-50*time.Hour))
+	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "end_of_scope", int64(0), jsontime.Of(at.Add(-50*time.Hour))
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
 		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []reader.Filter{}, Exclusions: []string{}}, at)
 	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
@@ -237,7 +237,7 @@ func TestPersistentFailureRun(t *testing.T) {
 	warning := regexp.MustCompile(`(?m)^swath: warning: GCS ` + regexp.QuoteMeta(host) + `: ([^(]+) \(retrying; \d+ attempts; the run stops as stuck after 2s without progress\)$`)
 	s := stderr.String()
 	m := warning.FindAllStringSubmatch(s, -1)
-	if len(m) != 1 || !strings.Contains(s, "INCOMPLETE (stuck)") {
+	if len(m) != 1 || !strings.Contains(s, "stopped: no progress within --stall-timeout") {
 		t.Fatalf("stderr %q", s)
 	}
 	if !strings.Contains(err.Error(), "every request was failing: GCS "+host+": "+m[0][1]+" (") {
@@ -330,7 +330,7 @@ func TestRequestPathRedacted(t *testing.T) {
 // TestOneLineFailures (D1, D4): a refusal and a failure before any
 // listing request was answered print the error line alone on stderr
 // (an output inside the root advised without --overwrite, which it refuses),
-// with no statistics, INCOMPLETE, outcome line or internal prefix; -v adds
+// with no statistics, a verdict, outcome line or internal prefix; -v adds
 // the outcome line, --log-format json prints only events. The report is
 // written either way.
 func TestOneLineFailures(t *testing.T) {
@@ -396,7 +396,7 @@ func TestOneLineFailures(t *testing.T) {
 			code := conclude(dispatch(ctx, args, io.Discard))
 			var rep listing.Report
 			readJSON(t, report, &rep)
-			if code == exitCompleted || rep.Outcome.ExitCode != code {
+			if code == exitOK || rep.Outcome.ExitCode != code {
 				t.Fatalf("%s %s: exit %d, report %+v", c.name, mode, code, rep.Outcome)
 			}
 			s := stderr.String()
@@ -406,7 +406,7 @@ func TestOneLineFailures(t *testing.T) {
 					t.Fatalf("%s: stderr %q, want %q", c.name, s, c.line)
 				}
 			case "-v":
-				if !strings.Contains(s, "swath: outcome: {") || (c.line != "" && !strings.HasSuffix(s, c.line)) || strings.Contains(s, "INCOMPLETE") {
+				if !strings.Contains(s, "swath: outcome: {") || (c.line != "" && !strings.HasSuffix(s, c.line)) || strings.Contains(s, "  failed\n") || strings.Contains(s, "  refused\n") {
 					t.Fatalf("%s -v: stderr %q", c.name, s)
 				}
 			default:
@@ -451,7 +451,7 @@ func TestJSONProgress(t *testing.T) {
 	t.Cleanup(func() { stderrTerminal = was })
 	src := t.TempDir()
 	os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644)
-	if code := conclude(dispatch(context.Background(), []string{"--log-format=json", "du", src, "--progress-interval", "1s", "--stats"}, io.Discard)); code != exitCompleted {
+	if code := conclude(dispatch(context.Background(), []string{"--log-format=json", "du", src, "--progress-interval", "1s", "--stats"}, io.Discard)); code != exitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	s := stderr.String()
@@ -461,7 +461,7 @@ func TestJSONProgress(t *testing.T) {
 			t.Fatalf("not an event: %q", line)
 		}
 	}
-	if !strings.Contains(s, `"event":"outcome","attempt_id":"`) || !strings.Contains(s, `"class":"completed","exit_code":0`) {
+	if !strings.Contains(s, `"event":"outcome","attempt_id":"`) || !strings.Contains(s, `"class":"ok","exit_code":0`) {
 		t.Fatalf("stderr %q", s)
 	}
 }
@@ -535,9 +535,11 @@ func TestNeverAnsweredRunNamesCause(t *testing.T) {
 	if code := conclude(err); code != exitDeadline || !strings.Contains(err.Error(), "every request was failing: GCS "+host+": ") {
 		t.Fatalf("exit %d: %v", code, err)
 	}
-	var ev outcomeFields
+	var ev struct {
+		Msg string `json:"msg"`
+	}
 	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
-	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || !strings.Contains(ev.Message, "every request was failing: GCS "+host) {
+	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || !strings.Contains(ev.Msg, "every request was failing: GCS "+host) {
 		t.Fatalf("outcome event %q", lines[len(lines)-1])
 	}
 	var rep listing.Report

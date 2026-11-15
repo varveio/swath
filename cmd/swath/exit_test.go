@@ -87,7 +87,7 @@ func TestExitCodes(t *testing.T) {
 
 	// 0: completed; no error.json.
 	ok := filepath.Join(t.TempDir(), "ok")
-	if c := code(exec.Command(bin, "list", src, "-o", ok).Run()); c != exitCompleted {
+	if c := code(exec.Command(bin, "list", src, "-o", ok).Run()); c != exitOK {
 		t.Fatalf("completed: exit %d", c)
 	}
 	if _, err := os.Stat(filepath.Join(ok, errorName)); !os.IsNotExist(err) {
@@ -112,8 +112,8 @@ func TestExitCodes(t *testing.T) {
 	if c := code(exec.Command(bin, pargs...).Run()); c != exitIncomplete {
 		t.Fatalf("partial: exit %d", c)
 	}
-	if o := outcome(part); o.Class != "incomplete" || o.Resumable {
-		t.Fatalf("partial: %+v", o)
+	if _, err := os.Stat(filepath.Join(part, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("partial: error.json beside the committed dataset: %v", err)
 	}
 	// 124: the deadline, resumable.
 	dl := filepath.Join(t.TempDir(), "deadline")
@@ -129,12 +129,13 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143 and 130: signals, graceful, resumable. The process dies by the
-	// signal once it has cleaned up (a shell sees 128+n), so a calling
-	// shell loop stops; before, it exited with the code. The interrupted
-	// run is traced: its trace parses and ends in run_end with the outcome.
+	// 143, 130 and 129: signals, graceful, resumable. The process dies by
+	// the signal once it has cleaned up (a shell sees 128+n), so a calling
+	// shell loop stops; before, it exited with the code, and a hangup (a
+	// dropped SSH session) killed it with no outcome. The interrupted run is
+	// traced: its trace parses and ends in run_end with the outcome.
 	slow.Store(true)
-	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted} {
+	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted, syscall.SIGHUP: exitHangup} {
 		dir := filepath.Join(t.TempDir(), "sig")
 		args := s3args("bkt", dir)
 		trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
@@ -150,7 +151,7 @@ func TestExitCodes(t *testing.T) {
 		if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
 			t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
 		}
-		if o := outcome(dir); o.ExitCode != want || !o.Resumable {
+		if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != listing.ClassTerminated || o.StopSource != "sighup") {
 			t.Fatalf("%v: %+v", sig, o)
 		}
 		if sig != syscall.SIGINT {
@@ -172,6 +173,18 @@ func TestExitCodes(t *testing.T) {
 		if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
 			t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
 		}
+	}
+	// Under nohup (SIGHUP ignored when swath starts) a hangup changes
+	// nothing: the run completes.
+	nohup := filepath.Join(t.TempDir(), "nohup")
+	cmd := exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, bin}, s3args("bkt", nohup)...)...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	cmd.Process.Signal(syscall.SIGHUP)
+	if c, _ := exitStatus(t, cmd.Wait()); c != exitOK || !dataset.Committed(nohup) {
+		t.Fatalf("nohup: exit %d, committed %v", c, dataset.Committed(nohup))
 	}
 	// 75: stuck, when nothing progresses for the stall timeout.
 	slow.Store(false)
@@ -327,6 +340,56 @@ func TestDiskFullExits74(t *testing.T) {
 	}
 }
 
+// TestResumeKeepsTheRunsReport: swath resume does not replay the run's
+// recorded --report. A plain resume leaves the first attempt's report as it
+// was and writes none; a resume given --report writes its own there. Before,
+// a plain resume replaced the first attempt's report with its own (C-C6).
+func TestResumeKeepsTheRunsReport(t *testing.T) {
+	datasettest.RequireJournal(t)
+	captureStderr(t)
+	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	out := filepath.Join(t.TempDir(), "ds")
+	first := filepath.Join(t.TempDir(), "first.json")
+	var n atomic.Int64
+	restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+		if op == "write" && strings.HasSuffix(file, ".parquet") && n.Add(1) == 4 {
+			return len(b) / 2, syscall.ENOSPC
+		}
+		return 0, nil
+	})
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--part-size", "4KiB", "--part-interval", "0",
+		"--report", first, "-o", out}, io.Discard, true)
+	restore()
+	if c := exitCode(t, err); c != exitDiskFull {
+		t.Fatalf("exit %d (%v)", c, err)
+	}
+	was, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(ctx, []string{out}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if now, err := os.ReadFile(first); err != nil || !bytes.Equal(now, was) {
+		t.Fatalf("the first attempt's report changed: %v\n%s", err, now)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(first)); len(ents) != 1 {
+		t.Fatalf("the resume wrote a report: %v", ents)
+	}
+	// A resume of the committed dataset given a report writes it.
+	second := filepath.Join(t.TempDir(), "second.json")
+	if err := resume(ctx, []string{out, "--report", second}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	var rep listing.Report
+	readJSON(t, second, &rep)
+	if !rep.Invocation.Resume || rep.Outcome.Class != listing.ClassOK || !rep.Outcome.Complete {
+		t.Fatalf("second report: %+v", rep.Outcome)
+	}
+}
+
 // sameParts requires out's data/ to hold ref's parts byte for byte.
 func sameParts(t *testing.T, at, ref, out string) {
 	t.Helper()
@@ -447,7 +510,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 
 // TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
 // dataset whose coverage says incomplete, exits 3 with class incomplete
-// (not resumable), keeps no journal, and swath resume refuses it as
+// (not resumable), writes no error.json, keeps no journal, and swath resume refuses it as
 // complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
 func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	captureStderr(t)
@@ -459,9 +522,10 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	if c := exitCode(t, err); c != exitIncomplete {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
 	}
-	var o outcome
-	if b, err := os.ReadFile(filepath.Join(dir, errorName)); err != nil || json.Unmarshal(b, &o) != nil || o.Class != "incomplete" || o.Resumable {
-		t.Fatalf("capped run: error.json %v %+v", err, o)
+	// The manifest's coverage says what is missing: no error.json beside
+	// the committed dataset.
+	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("capped run: error.json %v", err)
 	}
 	var m dataset.Manifest
 	if b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName)); err != nil || json.Unmarshal(b, &m) != nil {
@@ -482,7 +546,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	// 3, class incomplete, not resumable.
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
-	if msg := dir + " holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
+	if msg := dir + " is a finalized sample, partial: --max-keys reached: it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
 		exitCode(t, err) != exitIncomplete || err.Error() != msg {
 		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
 	}

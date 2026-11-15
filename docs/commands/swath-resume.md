@@ -19,7 +19,7 @@ checks each against the journal (size and SHA-256), and lists from after the las
 
 ```text
 $ swath list s3://bkt/logs/ -o logs-inventory ...
-^C  INCOMPLETE (interrupted) — resume: swath resume logs-inventory
+^C  interrupted — resume: swath resume logs-inventory
   1,000 objects in 6.0s · 167 keys/s
   60 API calls · in flight avg 0.07 · peak 1
   1 part · 3.19 KiB written · peak RSS 44.9 MiB
@@ -72,7 +72,7 @@ exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys
 partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
 
 ```text
-swath: sample holds a finalized partial sample (coverage complete=false stop=max_keys): it cannot be resumed
+swath: sample is a finalized sample, partial: --max-keys reached: it cannot be resumed
 ```
 
 A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
@@ -450,6 +450,9 @@ Continue it with more workers, a deadline and a fresh report path:
 ```bash
 swath resume logs-inventory --workers 128 --max-duration 1h --report /var/log/swath/attempt-2.json
 ```
+
+A resume writes a report only when it is given `--report`: the run's recorded `--report` is not replayed, so
+the earlier attempt's report stays as it was.
 
 Continue a run whose SAS token is not recorded:
 
