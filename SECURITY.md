@@ -29,8 +29,13 @@ swath is a read-only object-store lister. Understanding what it does and does no
 trust helps scope what counts as a vulnerability.
 
 - **Object keys are untrusted input.** Keys are arbitrary byte sequences. swath
-  treats them byte-exactly and escapes control characters before printing them to
-  a terminal.
+  treats them byte-exactly. Every human-readable line on stderr (warnings, errors,
+  the start and dataset lines) writes control characters, line separators and
+  bytes that are not valid UTF-8 as visible escapes such as `\n` and `\x1b`, so a
+  hostile name cannot forge a line or drive the terminal; JSON log lines carry the
+  exact string with those characters as `\u` escapes, and bytes that are not
+  valid UTF-8 read back as U+FFFD there. Rows keep the exact bytes (the `table` and
+  TSV formats escape them, JSONL has `key_base64`).
 - **A hostile or compromised endpoint is a considered actor.** A response from a
   malicious `--endpoint-url` that makes swath hang, loop without bound, or exhaust
   memory is in scope.

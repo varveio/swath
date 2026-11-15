@@ -534,3 +534,52 @@ func TestObjectBytes(t *testing.T) {
 		}
 	}
 }
+
+// TestInterruptedV03Run: a directory an interrupted 0.3 run left is
+// recognised by its own marks; --overwrite replaces it (state file,
+// checkpoint, _staging, data), while a directory with only a generic
+// _staging/ and data/ (no mark of 0.3's) is not swath's and is refused untouched.
+func TestInterruptedV03Run(t *testing.T) {
+	const schemaID = "swath/s3-objects/v1"
+	for _, marks := range [][]string{{".swath-state.json"}, {".swath/checkpoint.sqlite"}, {".swath-state.json", "_staging/seg-0"}} {
+		out := t.TempDir()
+		for _, m := range append([]string{"data/part-w0-1.parquet"}, marks...) {
+			touch(t, filepath.Join(out, m))
+		}
+		if !InterruptedV03(out) {
+			t.Fatalf("%v: not recognised", marks)
+		}
+		if Resumable(out) {
+			t.Fatalf("%v: resumable", marks)
+		}
+		if err := Prepare(out, "", schemaID, true); err != nil {
+			t.Fatalf("%v: overwrite: %v", marks, err)
+		}
+		for _, gone := range []string{".swath-state.json", ".swath/checkpoint.sqlite", "_staging", "data/part-w0-1.parquet"} {
+			if _, err := os.Stat(filepath.Join(out, gone)); !os.IsNotExist(err) {
+				t.Errorf("%v: %s kept", marks, gone)
+			}
+		}
+	}
+	for _, marks := range [][]string{{"_staging/x"}, {"_staging/x", "notes.txt"}, {"_staging/other.txt", "data/mine.csv"}} {
+		out := t.TempDir()
+		for _, m := range marks {
+			touch(t, filepath.Join(out, m))
+		}
+		if InterruptedV03(out) {
+			t.Fatalf("%v: a _staging/ without a mark of 0.3 is recognised", marks)
+		}
+		if err := Prepare(out, "", schemaID, true); !errors.Is(err, ErrNotDataset) {
+			t.Fatalf("%v: %v, want ErrNotDataset", marks, err)
+		}
+		if _, err := os.Stat(filepath.Join(out, marks[0])); err != nil {
+			t.Fatalf("%v: refused directory changed: %v", marks, err)
+		}
+	}
+	committed := t.TempDir()
+	touch(t, filepath.Join(committed, ".swath-state.json"))
+	touch(t, filepath.Join(committed, ManifestName))
+	if InterruptedV03(committed) {
+		t.Fatal("a committed directory reads as an interrupted run")
+	}
+}

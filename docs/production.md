@@ -78,9 +78,9 @@ no frame. Expected, not guaranteed: the window admits tiles, it does not stop th
 range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
 after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
 the bucket's growth, and read `resources.window` and `resources.spill.peak_bytes` in the report. With thousands
-of workers and a cap of a few hundred MB or less, a seeded run can still slow sharply: the window admits no tile
-while live spill is past half the cap, and the workers wait at it (a list of 145 million keys at 2,048 workers took
-219 s with a 57 MB cap against 78 s uncapped, [measurements](internals/measurements.md#the-seeded-frontier-window)).
+of workers and a cap of a few hundred MB or less, the window holds fewer tiles: it admits none while the spill
+ahead of the output is past half the cap (`resources.window.spill_rows` is the mean rows held at its
+refusals), and it evicts the durable certificates behind the output to keep room, so a crash relists those keys.
 Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
 listing. A cut file without counts keeps the cold run's spill ([disk sizing](#disk-sizing)). The previous dataset also gives
 the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
@@ -131,9 +131,10 @@ with exit 75 and writes every goroutine's stack to `DIR/.swath/stacks-stuck.txt`
 if it happens again.
 
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
-`limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
-shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
+`limit` falls below `--workers`. Throttle answers cause no cut while they are under 15 % of the limiter's
+window, the last answers since its last cut (four per worker, at least 256 and at most 4,096); the counter
+`limiter.cuts_suppressed.tolerated` counts those answers. For a quota shared with other clients, set
+`--request-rate N` below it. If a run crawls with the limit near 1 under sustained throttling, use `--no-adaptive-limit --request-rate N` ([Running swath](running.md#throttling)).
 
 ## Resume after a kill
 
@@ -205,8 +206,8 @@ run's metadata.
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. A run whose work directory was lost is abandoned the same way, without that list. A new
   run at the same prefix does not clean them: it is not refused (only a `manifest.json` is), its manifest
-  names its own parts only, and the lost run's stay under `PREFIX/data/RUN/` beside them, so start it at a new
-  prefix. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
+  names its own parts only, and the parts the abandoned run uploaded stay under its own `PREFIX/data/RUN/`
+  beside them, so start it at a new prefix. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
   Azure's uncommitted blocks (a week); S3's incomplete multipart uploads do not ([the rule](sources/s3.md#writing-a-dataset-to-s3)).
 - **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
   whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which

@@ -12,6 +12,7 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | Path | What it is |
 | --- | --- |
 | `index.md` | The home page, served at `/`. |
+| `moved/` | Short pages for addresses that were published once or that readers type (`/docs/sources`, `/docs/commands/`, `/docs/reference/`, `/field-guide/`, `/runs/noaa-gestofs-pds/`): each says where the content is now, and forwards where one page replaces it. `MOVED` in `.vitepress/config.mts` maps them; they are not in search or the sitemap. |
 | `.vitepress/config.mts` | Navigation, sidebar, search, the pages that are published and the link rewriting. |
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm); no custom components. |
 | `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, and `data/channel.json`. |
@@ -24,7 +25,9 @@ The Markdown in `docs/` is the source of truth and stays readable on GitHub: no 
 links, GitHub alerts and GitHub heading anchors. The build adapts it without editing it:
 
 - `docs/PAGE.md` is served at `/docs/PAGE`, and a directory's `README.md` at the directory, as `/docs/`.
-- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/` and `docs/style.md`. Every other Markdown file under `docs/` is published.
+- Contributor pages are not published or searchable: `docs/internals/`, `docs/ops/` and `docs/style.md`; nor is
+  `docs/sources.md`, the old single Sources page, whose address forwards to `/docs/sources/`. Every other
+  Markdown file under `docs/` is published.
 - Headings get GitHub's anchors, so `page.md#heading` links resolve on the site as they do on GitHub.
 - A link from a published page to anything outside the published set (an internals page, code, the
   repository README) is rewritten to its GitHub URL on `main`. The build prints how many it rewrote.

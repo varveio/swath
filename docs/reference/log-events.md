@@ -26,6 +26,13 @@ Each object has `ts` (RFC 3339, UTC, milliseconds), `level` (`debug`, `info`, `w
 | `spill_pressure` | `error` (not with `-qq`) | a sorted run's listing has waited on a full spill cap for 2 minutes, and every 30 minutes while it waits ([production](../production.md#three-bad-patterns)): `since` (when the wait began), `spill_bytes`, `spill_max_bytes`, `spill_reserve_bytes`, `output_rows_per_s` (rows handed to the output a second since the wait began or the previous event) |
 | `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error; without `-v`, a credential refusal's one line: [troubleshooting](../troubleshooting.md#credentials-could-not-be-loaded)) |
 
+Names and messages from the source (a local path, a key, a provider's error, a dataset's recorded source) are
+untrusted, and a line is never a place to forge another. In text, a control character (C0, DEL, C1), U+2028,
+U+2029, a bidirectional control and each byte that is not valid UTF-8 is written as a visible escape (`\n`,
+`\x1b`, `\xff`, `\u2028`) and every other character stays as it is; a backslash is not doubled, so a Windows
+path reads as it is. In JSON the string is exact, with those characters as `\u` escapes; bytes that are not
+valid UTF-8 read back as U+FFFD (the rows' `_base64` members carry the exact bytes: [Output](../output.md#jsonl)).
+
 The verbosity options gate the events as they gate the text lines: `start` needs `-v`, `request` events `-vv`
 or `-vvv`, and progress records `-v` or `--progress`; they come every `--progress-interval` (30 seconds by
 default) whether or not stderr is a terminal. The `outcome` event ends every run and every failure unless

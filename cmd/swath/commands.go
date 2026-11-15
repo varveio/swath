@@ -84,6 +84,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// on: the run finishes the commit's aftermath, then reports complete.
 		return stop(finalizedSample(dir, listing.ErrComplete))
 	}
+	if dataset.InterruptedV03(dir) {
+		return stop(dataset.ErrPriorRelease)
+	}
 	st, err := journal.Read(dir)
 	if errors.Is(err, journal.ErrNoJournal) {
 		if dataset.Resumable(dir) {
@@ -274,6 +277,12 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, rerr)
 }
 
+// showFlags defines swath show's own flags on f, the ones its help lists.
+func showFlags(f *pflag.FlagSet, raw *bool) []*pflag.Flag {
+	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(raw), Usage: "dump the journal's header and records as JSON lines"})
+	return []*pflag.Flag{f.Lookup("journal")}
+}
+
 // show prints what an output directory holds: a committed dataset or an
 // interrupted run; --journal dumps the journal's records as JSON lines.
 func show(args []string, stdout io.Writer) error {
@@ -282,7 +291,7 @@ func show(args []string, stdout io.Writer) error {
 	var raw bool
 	var t termOptions
 	t.registerGlobal(f)
-	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(&raw), Usage: "dump the journal's header and records as JSON lines"})
+	own := showFlags(f, &raw)
 	p, err := parseFlags(f, "show", args, nil)
 	setLog(t, "")
 	if errors.Is(err, pflag.ErrHelp) {
@@ -290,7 +299,7 @@ func show(args []string, stdout io.Writer) error {
 		var b strings.Builder
 		showHelp.write(&b, s)
 		s.heading(&b, "Options")
-		writeFlags(&b, []*pflag.Flag{f.Lookup("journal")}, s, column([]*pflag.Flag{f.Lookup("journal")}))
+		writeFlags(&b, own, s, column(own))
 		fmt.Fprint(stdout, b.String())
 		return err
 	}

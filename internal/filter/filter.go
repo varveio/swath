@@ -150,6 +150,10 @@ func anyOf(flag string, pats []string, globs bool) (*regexp.Regexp, error) {
 		}
 		alt[i] = p
 		if globs {
+			if sign, fix := regexSign(p); sign != "" {
+				return nil, fmt.Errorf("--%s %q looks like a regular expression (%s), which --%s no longer reads: --%s takes a regular expression; to keep it a glob, write %s",
+					flag, p, sign, flag, flag+"-regex", fix)
+			}
 			re, err := globRegexp(p)
 			if err != nil {
 				return nil, fmt.Errorf("--%s %q: %w", flag, p, err)
