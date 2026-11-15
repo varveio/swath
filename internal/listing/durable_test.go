@@ -1374,7 +1374,7 @@ func TestDurableSameDiskDefaultCap(t *testing.T) {
 	old := freeBytes
 	t.Cleanup(func() { freeBytes = old })
 	freeBytes = func(string) int64 { return free }
-	if uncounted := halfFree(free, 0); uncounted >= retained {
+	if uncounted := order.DiskCap(free, 0, 2); uncounted >= retained {
 		t.Fatalf("shape: the uncounted cap %d holds the %d retained bytes", uncounted, retained)
 	}
 	cfg := durableConfig("s3://unused", out, true)
@@ -1383,7 +1383,7 @@ func TestDurableSameDiskDefaultCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := halfFree(free+retained, 0); oopt.SpillMax != want {
+	if want := order.DiskCap(free+retained, 0, 2); oopt.SpillMax != want || oopt.SpillShare != 2 {
 		t.Fatalf("resumed cap %d, want %d (free %d, retained %d)", oopt.SpillMax, want, free, retained)
 	}
 	if err := c.Start(order.Limits(64<<20, 0), oopt.SpillMax, nil); err != nil {

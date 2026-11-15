@@ -336,7 +336,7 @@ func TestRefusedSpillWakesOnCredit(t *testing.T) {
 		t.Fatal("the frame was not refused")
 	}
 	o.mu.Lock()
-	o.sp.max = 1 << 30 // room on disk again ...
+	o.sp.max.Store(1 << 30) // room on disk again ...
 	o.mu.Unlock()
 	o.sp.release(&spillFile{}) // ... returned by a drained range's file
 	if err := expect(t, done, "spill credit"); err != nil {
@@ -387,7 +387,7 @@ func TestWaitCensus(t *testing.T) {
 		t.Fatalf("admission: %+v", g)
 	}
 	o.mu.Lock()
-	o.sp.max = 1 << 30
+	o.sp.max.Store(1 << 30)
 	o.mu.Unlock()
 	o.sp.release(&spillFile{}) // credit returned: the emitter spills, the worker claims
 	if err := expect(t, done, "spill credit"); err != nil {
@@ -452,7 +452,7 @@ func TestSpillPressure(t *testing.T) {
 	refused := func(r string) chan error {
 		t.Helper()
 		o.mu.Lock()
-		o.sp.max = 1
+		o.sp.max.Store(1)
 		o.mu.Unlock()
 		done := publishing(o, &node[string, tp]{r: r, state: expanding}, rows(r), 1)
 		expectWait(t, ws, waitPublish)
@@ -461,7 +461,7 @@ func TestSpillPressure(t *testing.T) {
 	credit := func(done chan error) {
 		t.Helper()
 		o.mu.Lock()
-		o.sp.max = 1 << 30
+		o.sp.max.Store(1 << 30)
 		o.mu.Unlock()
 		o.sp.release(&spillFile{})
 		if err := expect(t, done, "spill credit"); err != nil {
@@ -494,7 +494,7 @@ func TestSpillPressure(t *testing.T) {
 	// No emitter waiting: a worker held at admission by the refused spill
 	// and the full budget is pressure, until credit comes back.
 	o.mu.Lock()
-	o.sp.max = 1
+	o.sp.max.Store(1)
 	o.mu.Unlock()
 	o.sp.refuse()
 	if s := since(o); s != nil {

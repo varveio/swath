@@ -7,9 +7,9 @@ package order
 
 import "golang.org/x/sys/windows"
 
-// freeBytes is the space available to the caller (its quota included) on
+// statFree is the space available to the caller (its quota included) on
 // dir's volume; on error it reports unlimited (the cap and ENOSPC still hold).
-func freeBytes(dir string) int64 {
+func statFree(dir string) int64 {
 	p, err := windows.UTF16PtrFromString(dir)
 	if err != nil {
 		return 1<<63 - 1

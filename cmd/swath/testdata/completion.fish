@@ -76,7 +76,7 @@ complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l stora
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l workers -s j -x -d 'listing workers (default 64; a local tree: 4 per CPU, at most 64)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l encoders -x -d 'Parquet encoders, or a .zst file\'s compression jobs (default: CPUs)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l sort-buffer -x -d 'bytes buffered for sorted output; not a total-memory limit'
-complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l spill-budget -x -d 'cap on spill (default: half the output filesystem\'s free space)'
+complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l spill-budget -x -d 'fixed cap on spill (default: follows the spill disk\'s free space)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l part-size -x -d 'target size of a Parquet part'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l part-interval -x -d 'close a part with rows after this long, full or not'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l part-rotation-max-rows -x -d 'also close a part at N rows (0: by size and --part-interval only)'

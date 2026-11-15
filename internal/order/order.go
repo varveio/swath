@@ -61,6 +61,12 @@ type Options struct {
 	// free space spill leaves on its filesystem (0: none). Past either, an
 	// emitter waits on the budget instead of spilling.
 	SpillMax, SpillReserve int64
+	// SpillShare, when above 0, makes SpillMax the start of a cap that
+	// follows the disk: a frame it would refuse re-reads the spill
+	// filesystem's free space, and the cap rises to DiskCap(free space
+	// plus live spill, SpillReserve, SpillShare) when that admits the
+	// frame (1: all of the room, 2: half of it). 0: SpillMax is fixed.
+	SpillShare int64
 	// SpillVerify, if set, is called before the spill directory is created
 	// and before each spill file is created, appended to or removed: a
 	// spill directory inside the output must still be in the directory
@@ -143,6 +149,9 @@ type Stats struct {
 	// that ended.
 	SpillRefusedTime   time.Duration
 	SpillRefusedSpells int64
+	// SpillMax is the spill cap in effect at the end (Options.SpillMax,
+	// raised as it followed the disk); SpillMaxRaised the times it rose.
+	SpillMax, SpillMaxRaised int64
 	// FrontierWait is the time the drainer waited for the range it needs
 	// next while a worker was still listing it (the slow-frontier cost).
 	// BudgetWait is the time emitters and workers with ranges queued waited
@@ -228,7 +237,8 @@ type Gauges struct {
 	publishWait, admissionWait, idleWait gauge
 	windowWait                           gauge // workers held at the frontier window (window.go)
 	// pressure is spill pressure (spiller.press); spillMax and
-	// spillReserve are the spill cap and reserve in effect (0: none).
+	// spillReserve are the spill cap and reserve in effect (0: none),
+	// spillMax raised as a cap that follows the disk rises.
 	pressure               pressure
 	spillMax, spillReserve atomic.Int64
 	// scanned is the bytes of reused certificates the segments' plan has
@@ -828,6 +838,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles, st.SpillOpens = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load(), o.sp.opens.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
+		st.SpillMax, st.SpillMaxRaised = o.sp.max.Load(), o.sp.raised.Load()
 		st.SpillRefusedTime, st.SpillRefusedSpells, _ = o.sp.refusedTime()
 		st.SpillHandles = o.sp.h.stats()
 		st.SpillFrameBytes, st.SpillFrameRows = o.sp.frameBytes.quantiles(), o.sp.frameRows.quantiles()
@@ -882,6 +893,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			return nil, nil, err
 		}
 		sp.wake, sp.verify, sp.spilling = wake, opt.SpillVerify, opt.Spilling
+		sp.share = opt.SpillShare
 		sp.g = o.g
 		o.g.spillMax.Store(opt.SpillMax)
 		o.g.spillReserve.Store(opt.SpillReserve)

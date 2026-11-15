@@ -54,8 +54,11 @@ import (
 // live spill bytes stay within Max and the spill filesystem keeps Reserve
 // bytes free afterwards (room for the parts still to be published, which
 // share the filesystem when the spill directory is under the output). A
-// refused frame is not an error: the emitter waits on the reorder budget,
-// as without spill (graceful backpressure). An ENOSPC on a frame of rows is
+// cap that follows the disk (Options.SpillShare) is re-derived from the
+// free space when it would refuse a frame, and rises when the filesystem
+// has grown (follow). A refused frame is not an error: the emitter waits
+// on the reorder budget, as without spill (graceful backpressure), and
+// retries when woken. An ENOSPC on a frame of rows is
 // treated the same way, after truncating the torn frame; an ENOSPC that
 // cannot be undone (opening the file, a failed truncation) or on a
 // trailer stops the run with that error. The reserve is checked, not held:
@@ -101,8 +104,12 @@ type spiller[P any] struct {
 	dir      string
 	delta    bool // delta frames (else plain: --spill-plain)
 	compress bool
-	max      int64 // live spill bytes (0: no cap)
-	reserve  int64 // free bytes to leave on the filesystem (0: none)
+	max      atomic.Int64 // live spill bytes (0: no cap)
+	reserve  int64        // free bytes to leave on the filesystem (0: none)
+	// share, when above 0, makes max follow the disk (Options.SpillShare);
+	// raised counts the times it rose.
+	share    int64
+	raised   atomic.Int64
 	live     atomic.Int64
 	peak     atomic.Int64
 	refused  atomic.Int64 // frames refused by the disk budget
@@ -169,7 +176,8 @@ func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress boo
 	if err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	s := &spiller[P]{schema: sch, codec: sch.Codec, dir: dir, delta: !plain, compress: compress, max: max, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s := &spiller[P]{schema: sch, codec: sch.Codec, dir: dir, delta: !plain, compress: compress, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s.max.Store(max)
 	s.dc, _ = sch.Codec.(schema.DeltaCodec[P])
 	s.h = newHandles(s.readers)
 	if compress {
@@ -700,7 +708,7 @@ var errSpillFull = errors.New("spill: disk budget used")
 func (s *spiller[P]) admit(n int64, final bool) bool {
 	live := s.live.Add(n)
 	if !final {
-		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
+		if m := s.max.Load(); (m > 0 && live > m && !s.follow(live, n)) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
 			s.live.Add(-n)
 			s.refuse()
 			// Drained certificates hold credit until K covers them: the
@@ -715,6 +723,46 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	s.track()
 	return true
 }
+
+// follow re-derives a cap that follows the disk (share) for live spill
+// bytes, n of them a frame not yet written, from the free space now: the
+// cap rises to DiskCap of that free space and the spill already on the
+// filesystem when that admits the frame, and it reports whether it did.
+// The cap never falls (the parts written since the start use free space
+// too); a fixed cap, or free space that cannot be measured, never rises. A
+// rise ends a refusal (unrefuse) as returned credit does: room came back.
+func (s *spiller[P]) follow(live, n int64) bool {
+	if s.share <= 0 {
+		return false
+	}
+	free := freeBytes(s.dir)
+	if free == Unlimited {
+		return false
+	}
+	c := DiskCap(free+live-n, s.reserve, s.share)
+	if c < live {
+		return false
+	}
+	for m := s.max.Load(); c > m; m = s.max.Load() {
+		if s.max.CompareAndSwap(m, c) {
+			s.raised.Add(1)
+			break
+		}
+	}
+	if g := s.g; g != nil {
+		for m := g.spillMax.Load(); c > m && !g.spillMax.CompareAndSwap(m, c); m = g.spillMax.Load() {
+		}
+	}
+	if s.full.Load() {
+		s.unrefuse()
+	}
+	return true
+}
+
+// DiskCap is a spill cap that follows the disk: 1/share of the free bytes
+// free on the spill filesystem (spill already there counted as free),
+// after the reserve; at least one byte.
+func DiskCap(free, reserve, share int64) int64 { return max(1, (free-reserve)/share) }
 
 // release returns a deleted file's bytes to the budget and wakes every
 // waiter: a worker held at admission, or an emitter whose frame was
@@ -1175,6 +1223,9 @@ func decodeDelta[P any](src []byte, c schema.Codec[P], dc schema.DeltaCodec[P], 
 
 // Unlimited is what FreeBytes reports when it cannot measure.
 const Unlimited = 1<<63 - 1
+
+// freeBytes is statFree (tests replace it).
+var freeBytes = statFree
 
 // FreeBytes is the space available to an unprivileged writer on dir's
 // filesystem, or Unlimited when it cannot be measured.

@@ -47,7 +47,9 @@ import (
 // replayed_certificates. 11 adds resources.window, the frontier window of
 // a run planned from a counted --seed-from (#535). 12 adds
 // invocation.prior.cuts_file and cuts_refused (a dataset prior's cut file).
-const ReportVersion = 12
+// 13 adds resources.spill.start_max_bytes, max_by and max_raised (the
+// default spill cap follows the disk).
+const ReportVersion = 13
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is

@@ -752,8 +752,8 @@ func evictOnce(t *testing.T, failed bool) {
 	}
 	d := h.n.spill.d
 	sp := h.o.sp
-	undrained := sp.file()  // an undrained disposable file: never evicted
-	sp.max = sp.live.Load() // the next frame is refused
+	undrained := sp.file()       // an undrained disposable file: never evicted
+	sp.max.Store(sp.live.Load()) // the next frame is refused
 	if err := sp.write(undrained, []schema.Row[tp]{{Key: "r0003/a"}}, false); err != errSpillFull {
 		t.Fatalf("not refused while nothing is drained: %v", err)
 	}

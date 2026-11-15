@@ -232,9 +232,13 @@ Performance:
                                 1GiB (128MiB when none is detected; invocation.sort_buffer says
                                 which). Raise it when spill is heavy and memory is free; to use less
                                 memory lower it with --workers and --encoders.
-      --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
-                                Set it when the output filesystem is shared or small. Past it, or at
-                                the reserve, listing waits instead of spilling.
+      --spill-budget SIZE     fixed cap on spill (default: follows the spill disk's free space)
+                                By default spill may use the spill filesystem's free space after a
+                                reserve (half of it unless the dataset is in a bucket, as the output
+                                shares it), re-read when a frame would be refused, so a disk grown
+                                under a live run is used. Set it when the filesystem is shared with
+                                other work. Past it, or at the reserve, listing waits instead of
+                                spilling.
       --part-size SIZE        target size of a Parquet part (default 64MiB)
                                 Smaller parts for readers that load whole parts, larger for fewer
                                 files on a very large listing.

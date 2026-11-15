@@ -188,8 +188,9 @@ func (o *run[R, P]) windowRows() (float64, string) {
 	return rows, by
 }
 
-// storageRows is what the spill cap and the row budget give the window, and
-// the term that set it (mu held).
+// storageRows is what the spill cap in effect (raised as it follows the
+// disk) and the row budget give the window, and the term that set it (mu
+// held).
 func (o *run[R, P]) storageRows() (float64, string) {
 	w := o.win
 	mem := 0.0
@@ -199,7 +200,7 @@ func (o *run[R, P]) storageRows() (float64, string) {
 	switch {
 	case o.sp == nil:
 		return mem, WindowBudget
-	case o.sp.max <= 0:
+	case o.sp.max.Load() <= 0:
 		return math.Inf(1), WindowUnbounded
 	}
 	beta := w.sizes.RowBytes
@@ -209,7 +210,7 @@ func (o *run[R, P]) storageRows() (float64, string) {
 	if beta <= 0 {
 		beta = spillRowBytes
 	}
-	return float64(o.sp.max)/2/beta + mem, WindowSpillCap
+	return float64(o.sp.max.Load())/2/beta + mem, WindowSpillCap
 }
 
 // refuses is why the window refuses a tile of e expected rows, "" when it
@@ -219,7 +220,7 @@ func (o *run[R, P]) refuses(e int64) string {
 	if w.grown.Load() > 0 {
 		return WindowGrowth
 	}
-	if o.sp != nil && (o.sp.full.Load() || o.sp.max > 0 && o.sp.live.Load() > o.sp.max/2) {
+	if sp := o.sp; sp != nil && (sp.full.Load() || sp.max.Load() > 0 && sp.live.Load() > sp.max.Load()/2) {
 		return WindowSpill
 	}
 	rows, by := o.windowRows()

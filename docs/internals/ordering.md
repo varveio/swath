@@ -215,8 +215,8 @@ the larger of `est` and `held`; it is released, in key order, once the drainer h
 range in it drained) and nothing of it is held.
 
 **Admission.** A worker with nothing queued admits the next tile, and lists it, when the charges of the tiles
-held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (`--spill-budget`)
-and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
+held, with the next tile's `est`, fit the window's rows; live spill is at most half its cap (the cap in effect,
+risen as it follows the disk) and no frame was refused; and no tile held has grown to 4 times its expectation (`growth`: no tile is admitted
 ahead of a grown one until the frontier passes it). Otherwise it waits at the window (`window`) holding no
 range. The window's rows are a target of 8,000,000 (`rows`; `swath diag list --seed-from-window-rows` sets
 another, `set`), but never more than what the storage gives: half the spill cap over a spilled row's bytes (the
@@ -492,9 +492,23 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
-- **Disk budget.** A frame is written only if the live spill bytes stay within `--spill-budget` (default: half
-  the space free on the spill filesystem when the run starts, after the reserve; a library caller's negative
-  value means no cap; the cap in effect is the report's `spill.max_bytes`) and the spill filesystem keeps a reserve free afterwards (`listing.spillReserve`: one part per encoder at
+- **Disk budget.** A frame is written only if the live spill bytes stay within the spill cap and the spill
+  filesystem keeps a reserve free afterwards (below). The cap is `--spill-budget`, fixed, or by default one
+  that follows the disk (`listing.spillMax`, `order.Options.SpillShare`): the space free on the spill
+  filesystem after the reserve (retained certified spill counted as free), all of it for a dataset in a
+  bucket (its parts are uploaded from memory), half of it otherwise, as the filesystem is shared: a dataset on
+  disk spills under its directory and a text file beside itself, so the output keeps room, and a stream spills
+  under `$TMPDIR`, which other programs use. A frame the cap would refuse re-reads the free space
+  (`spiller.follow`): when that share of the free space plus the spill already on the filesystem admits the
+  frame, the cap rises to it and a standing refusal ends as when credit returns; so a filesystem grown under a
+  live run (a cloud disk resized and its filesystem grown online) is used without a restart, and with free
+  space unchanged the cap stays where it started. The cap never falls: the parts written meanwhile take free
+  space, and the reserve check, which reads the free space at every frame, guards the disk itself. Where free
+  space cannot be measured the default is no cap; a library caller's negative value means none. The report
+  says what set the cap (`spill.max_by`: `spill_budget`, `disk`, `disk_half` or `none`), the cap the run
+  started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`) and how many times it rose
+  (`max_raised`, `TestSpillCapFollowsDisk`); `progress.json`'s `order.spill_max_bytes` rises with it. The
+  reserve is checked against the filesystem afterwards (`listing.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
   under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
   reserve in effect is the report's `spill.reserve_bytes`). The two protect different things and are both
@@ -779,8 +793,9 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Slots and history.** One non-blocking reservation takes a certificate slot and two ledger records (its
   seal and its retirement); without either the range spills disposably, as before (`no_slot`,
   `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). Both limits scale
-  with the spill the attempt may hold (`order.Limits`): one slot per 64 KiB of the spill cap, or without a cap
-  of the spill filesystem's free space when the run starts (on a resume the certified files it kept count as
+  with the spill the attempt may hold (`order.Limits`): one slot per 64 KiB of the spill cap when the run
+  starts (a cap that follows the disk and rises later leaves them as they were), or without a cap of the
+  spill filesystem's free space when the run starts (on a resume the certified files it kept count as
   free in both), at most 262,144 slots, the metadata ceiling, reached at 16 GiB (10,000 when neither is known; below 16 MiB
   durable spill is off, `durable_off`), and a history cap H of four records per slot, at least 40,000. H
   bounds the ledger's retained prefix plus outstanding reservations; on a resume the prefix's record count is

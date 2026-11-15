@@ -56,9 +56,11 @@ when the report says so.
   heavy (`resources.spill.rows` near the rows listed) or `resources.budget_wait_ns` is large and memory is free,
   raise it: past what a listing holds ahead of its output, more buys only tail workers.
 - **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to
-  disposable spill files on the output's filesystem. By default spill may use half the free space at the
-  start, minus a reserve of at least 1 GiB. Set `--spill-budget` when the filesystem is shared. Size the disk
-  as described below.
+  disposable spill files on the output's filesystem. By default spill may use that filesystem's free space
+  after a reserve of at least 1 GiB: half of it when the parts are written there too, all of it for a
+  dataset in a bucket. The default follows the disk: a frame it would refuse re-reads the free space, so a
+  filesystem grown under the running process is used without a restart. Set `--spill-budget`, a fixed cap,
+  when the filesystem is shared with other work. Size the disk as described below.
 
 ## Warm start for repeat listings
 
@@ -117,10 +119,13 @@ The run does not fail by itself. Once spill has stood refused with workers waiti
 on stderr, an error, and again every 30 minutes while it lasts: how long listing has waited, spill and its
 cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
 alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
-instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk: a larger filesystem for the output, or a larger `--spill-budget` when the
-filesystem has the room. The cap is fixed when a run starts, so enlarging the disk under a running process
-does not raise it: stop the run and resume it, `swath resume DIR --spill-budget 200GiB`; with the default cap a
-plain `swath resume DIR` takes half the free space it finds (the certified spill the stopped run kept counted as
+instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk. With the default
+cap, grow the filesystem under the running process (a cloud persistent disk resized, then its filesystem grown
+online): the next frame spill tries re-reads the free space, the cap rises and listing continues;
+`resources.spill.max_raised` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
+run started with. A `--spill-budget` is fixed: stop the run and resume it with a larger one on a disk that has
+the room, `swath resume DIR --spill-budget 200GiB`; a plain `swath resume DIR` keeps the recorded cap, and with
+the default derives it from the free space it finds (the certified spill the stopped run kept counted as
 free). A repeat listing avoids most of this by seeding from the previous dataset ([warm start](#warm-start-for-repeat-listings)).
 
 **A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `rows`
@@ -242,10 +247,11 @@ machine:
   `--s3-bearer-token-command`): give them again, or the resume is refused. The source's `--azure-sas-token`
   may come from `AZURE_STORAGE_SAS_TOKEN` instead; `--output-azure-sas-token` has no such variable.
 - **The spill cap** is a positive `--spill-budget` the run recorded or the resume gives; without one (or with
-  0) it is half the free space on the new disk, after the reserve, when the resume starts, the certified spill
-  files the resume keeps counted as free (on the same disk the cap is then the stopped run's, less half of
-  what parts took meanwhile). Certified spill files that do not fit under it are
-  listed again (`rejected.budget` in `resources.spill.durable.resume`).
+  0) it is the default, the free space on the new disk after the reserve when the resume starts, the certified
+  spill files the resume keeps counted as free (on the same disk the cap is then the stopped run's, less what
+  the work directory took meanwhile), and it follows the disk from there. Certified spill files that do not
+  fit under the cap the resume starts with are listed again (`rejected.budget` in
+  `resources.spill.durable.resume`).
 - **Verification:** before listing continues, the resume reads every part the journal records back from the
   bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):
   everything published so far is downloaded once, at the bucket's read rate and price.
@@ -263,9 +269,11 @@ machine:
   ahead of the output at the peak, at 18 to 22 bytes per row
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
 - **Peak spill** of a first listing (no prior, or a cut file without counts) ≈ 0.7 × rows × spill bytes per
-  row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget is half
-  of (free space at the start − the 1 GiB reserve), so the free space needed is about the dataset plus twice
-  the peak spill plus the reserve (`resources.spill.reserve_bytes`: one part per encoder, at least 1 GiB).
+  row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget of a
+  dataset on disk is half of (free space − the reserve), so the free space needed is about the dataset plus
+  twice the peak spill plus the reserve (`resources.spill.reserve_bytes`: one part per encoder, at least 1
+  GiB). The default follows the disk: a filesystem that turns out small can be grown under the running process
+  instead of restarting it.
 - **A relist seeded from the previous dataset** (or a counted cut file) keeps the rows ahead of the output near
   its frontier window of at most 8 million rows instead of the bucket ([warm start](#warm-start-for-repeat-listings)),
   so its spill is a small fraction of a first listing's. The window is not a storage bound: a region that grew
@@ -273,11 +281,13 @@ machine:
   disk for the dataset and that growth, and take the spill a seeded run needs from its report's
   `resources.spill.peak_bytes`.
 - **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing of
-  a bucket is the one that can outgrow its disk. Give it room to spare, bound it with `--max-duration`, and
-  size later runs from its manifest's row count.
-- **A dataset in a bucket:** the work directory needs no room for the dataset. Size it as the spill budget
-  plus metadata plus the 1 GiB reserve: set `--spill-budget` explicitly (the default, half the free space,
-  follows whatever disk there is), and allow for the metadata, which grows with the parts (a claim receipt of
+  a bucket is the one that can outgrow its disk. Give it room to spare or a disk that can be grown online (the
+  default spill cap follows it), bound it with `--max-duration`, and size later runs from its manifest's row
+  count.
+- **A dataset in a bucket:** the work directory needs no room for the dataset. The default spill budget is its
+  free space after the 1 GiB reserve, and follows the disk: on a disk that can be grown online, start modest
+  and grow it if spill fills it (`resources.spill.max_raised` counts the rises). Set `--spill-budget` when the
+  disk is shared, and size it as the budget plus the reserve plus the metadata, which grows with the parts (a claim receipt of
   under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
   the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk, S3 part or Azure block) per
   encoder, admitted with its writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
