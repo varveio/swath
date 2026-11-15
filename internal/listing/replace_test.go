@@ -54,8 +54,8 @@ func visible(t *testing.T, dir string) map[string][32]byte {
 // append): the previous dataset still reads whole. Its own run waits in
 // the workspace, and a resume continues it there, then installs it: the
 // output holds the new dataset alone, data/ exactly its parts, and no
-// replacement is left. Before, --overwrite removed the previous dataset
-// before listing anything (C-S1).
+// replacement is left, and its cut file is an uninterrupted run's. Before,
+// --overwrite removed the previous dataset before listing anything (C-S1).
 func TestReplaceKeepsPreviousUntilCommit(t *testing.T) {
 	datasettest.RequireJournal(t)
 	before := fakeS3(t, 3000)
@@ -90,9 +90,23 @@ func TestReplaceKeepsPreviousUntilCommit(t *testing.T) {
 	if keys := checkContract(t, out); !slices.Equal(keys, oldKeys) || !dataset.Staged(out) {
 		t.Fatalf("%d keys, staged %v", len(keys), dataset.Staged(out))
 	}
-	sum, err := Run(context.Background(), crashConfig(after, out, true))
+	resume := crashConfig(after, out, true)
+	var w warnings
+	resume.Warn = w.warn
+	sum, err := Run(context.Background(), resume)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
+	}
+	// Its cut file holds the retained parts' cuts, read where the
+	// installation moved them: an uninterrupted run's.
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(after, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	requireCuts(t, "resumed", out)
+	sameCuts(t, "resumed", ref, out)
+	if got := w.about(dataset.CutsName); len(got) > 0 {
+		t.Fatalf("warnings %q", got)
 	}
 	if keys := checkContract(t, out); len(keys) != 2000 || sum.Invocation.Out != out || sum.Output.PartsRetained == 0 || !sum.Output.Replaced {
 		t.Fatalf("after the resume: %d keys, out %q, %d parts retained", len(keys), sum.Invocation.Out, sum.Output.PartsRetained)

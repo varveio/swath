@@ -5,6 +5,9 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: a resumed `swath list ... -o DIR --overwrite` writes `DIR/cuts.txt` again; the parts it kept from
+  the interrupted attempt were read where they lay before the installation, so the cut file was skipped with a
+  warning.
 - Go port: a run's closing lines state the result: `complete: 60,010 objects, 5.55 TiB in 4.2s · 14,391 keys/s
   → ds1 (1 part, 279 KiB)`, then `next: swath show ds1 · swath du --from-dataset ds1` (or `swath resume DIR`).
   No rate under 2 s, the rate over the time printed; filtered runs say `3 objects kept, 1 filtered out`, an

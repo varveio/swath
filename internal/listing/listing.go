@@ -1722,7 +1722,19 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		if err := dataset.WriteReport(cfg.Output.final(), *sum); err != nil && cfg.Warn != nil {
 			cfg.Warn(source.WarnRunReportUnwritten, err.Error())
 		}
-		a.writeCuts(a.ctx, parts, localPageEnds, func(_ context.Context, b []byte) error {
+		ends := localPageEnds
+		if into := cfg.Output.into; into != "" {
+			// The installation moved the parts from Dir into into.
+			ends = func(ctx context.Context, p dataset.Part) ([]dataset.PageEnd, error) {
+				rel, err := filepath.Rel(cfg.Output.Dir, p.Path)
+				if err != nil {
+					return nil, err
+				}
+				p.Path = filepath.Join(into, rel)
+				return localPageEnds(ctx, p)
+			}
+		}
+		a.writeCuts(a.ctx, parts, ends, func(_ context.Context, b []byte) error {
 			return dataset.Replace(filepath.Join(cfg.Output.final(), dataset.CutsName), b, dataset.Durable)
 		})
 	}
