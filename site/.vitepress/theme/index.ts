@@ -49,6 +49,10 @@ tar    18140     4.5 TiB
 png    22913029  1.3 TiB`],
 ]
 
+// The run report rendered from that run's trace by tools/explainer: a static page in site/static/, outside
+// the VitePress build, so its link loads the page itself (target _self) instead of going through the router.
+const RUN_REPORT = '/runs/noaa-gestofs-pds/'
+
 // The replay of that run, under the hero. The video is a release asset that the deploy fetches and verifies
 // (site/static/data/media.json, scripts/ci/fetch-site-media.sh); the poster is in site/static/media/.
 const REPLAY = {
@@ -63,7 +67,7 @@ const REPLAY = {
     'Measured once on main at d8fbe439 from a shared 4-vCPU cloud VM; the client\'s region was not recorded. ' +
       'The bucket changes over time, so a later listing differs.',
   ],
-  links: [['How this was measured', MEASURED]],
+  links: [['How this was measured', MEASURED], ['The run, range by range', RUN_REPORT], ['How it works', '/field-guide/']],
 }
 
 interface DevDocsNotice {
@@ -112,7 +116,7 @@ const HomeReplay = () =>
         h('h2', { id: 'the-same-run-replayed' }, REPLAY.heading),
         ...REPLAY.text.map((t) => h('p', t)),
         h('p', { class: 'swath-replay-links' }, REPLAY.links.flatMap(([text, href], i) => [
-          i ? ' · ' : '', h('a', { href }, text),
+          i ? ' · ' : '', h('a', { href, target: href === RUN_REPORT ? '_self' : undefined }, text),
         ])),
       ]),
     ]),

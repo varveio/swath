@@ -54,7 +54,10 @@ tools/explainer/explainer.py run.trace.jsonl -o run.html --title "s3://your-buck
 uv run tools/explainer/explainer.py run.trace.jsonl -o run.html
 ```
 
-Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark.
+Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark. Its
+`<title>` and meta description name the run (`--title`, and the trace's objects, workers and splits),
+and it has a `main` landmark and a skip link, so it can be published as a web page as generated
+(the site's copy: [`site/README.md`](../../site/README.md#the-run-report)).
 
 **What to keep** of a run you mean to publish or come back to: the trace itself (the page is
 regenerated from it, byte for byte), the run report (`--report`: the command line, the outcome,

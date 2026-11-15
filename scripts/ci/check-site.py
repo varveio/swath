@@ -20,10 +20,10 @@ Six checks, each independently runnable with `--only`:
                and the current documentation -- not over code or dated evidence notes
   channel      the version the home page offers matches the channel record (and, on the
                release channel, the newest released version), image tags name it, and
-               while the record names the main channel every page carries the
-               development-docs notice
-  metadata     every page has a distinct title, a description and a canonical URL, and
-               robots.txt names the sitemap
+               while the record names the main channel every page but a run report
+               carries the development-docs notice
+  metadata     every page has a distinct title, a description and, but for a run report,
+               a canonical URL, and robots.txt names the sitemap
   a11y         landmark, skip-link, duplicate-id, and text-alternative smoke tests
 
 Usage:
@@ -176,6 +176,12 @@ VERSION_DECLARATIONS = [
 
 # The pages that must always carry one, so the declaration cannot simply be deleted.
 VERSION_DECLARATION_REQUIRED_ON = ("index.html", "docs/install.html")
+
+# Run reports: pages tools/explainer renders from one run's trace, served from site/static/runs/ as
+# generated. They carry their own title, description, landmark and skip link, but not what only the
+# VitePress layout adds: the development-docs notice (a report records one run of a stated build and
+# does not describe main) and a canonical URL.
+RUN_REPORTS = "runs/"
 
 # Contributor pages are published on GitHub only (site/.vitepress/config.mts excludes them).
 UNPUBLISHED_PREFIXES = ("docs/internals/", "docs/ops/")
@@ -575,7 +581,8 @@ def check_channel(site: Path, pages: list[Page], repo: Path) -> list[str]:
     # (DEV_DOCS_NOTICE in site/.vitepress/config.mts).
     if name == "main":
         for page in pages:
-            if page.rel not in A11Y_CLIENT_RENDERED and not page.dev_banner:
+            if (page.rel not in A11Y_CLIENT_RENDERED and not page.rel.startswith(RUN_REPORTS)
+                    and not page.dev_banner):
                 failures.append(f"{page.rel}: no development-docs notice, but data/channel.json "
                                 f"names the main channel")
 
@@ -652,7 +659,7 @@ def check_metadata(site: Path, pages: list[Page]) -> list[str]:
         titles.setdefault(title, []).append(page.rel)
         if not page.description:
             failures.append(f"{page.rel}: no meta description")
-        if not page.canonical.startswith(SITE_ORIGIN + "/"):
+        if not page.rel.startswith(RUN_REPORTS) and not page.canonical.startswith(SITE_ORIGIN + "/"):
             failures.append(f"{page.rel}: no canonical URL on {SITE_ORIGIN}")
     for title, rels in sorted(titles.items()):
         if not title:
