@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/internal/totals"
 )
 
 type obj struct {
@@ -178,5 +180,131 @@ func TestFileCompressedAndAtomic(t *testing.T) {
 	}
 	if _, err := Open(Config{Format: TSV, Path: dir}); err == nil {
 		t.Fatal("a directory destination accepted")
+	}
+}
+
+// TestWriteView: the view's lines: the share with one decimal, the bar in
+// eighths of a cell, a fold line's count grouped or "(more)" when unknown,
+// names indented two blanks a level, no bar where the width leaves too
+// little, color only when asked.
+func TestWriteView(t *testing.T) {
+	rows := []totals.ViewRow{
+		{Name: "s3://b", Bytes: 2048},
+		{Name: "logs/", Level: 1, Bytes: 1536},
+		{Name: "a", Level: 2, Bytes: 1024},
+		{Fold: true, Level: 2, Bytes: 512, More: 1234},
+		{Fold: true, Level: 1, Bytes: 512, More: -1},
+	}
+	var b bytes.Buffer
+	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 60}, rows); err != nil {
+		t.Fatal(err)
+	}
+	want := "" +
+		"2.00 KiB   100%  █████████████████████████  s3://b\n" +
+		"1.50 KiB  75.0%  ██████████████████▊          logs/\n" +
+		"1.00 KiB  50.0%  ████████████▌                  a\n" +
+		"   512 B  25.0%  ██████▎                        (1,234 more)\n" +
+		"   512 B  25.0%  ██████▎                      (more)\n"
+	if b.String() != want {
+		t.Fatalf("got\n%s\nwant\n%s", b.String(), want)
+	}
+	b.Reset()
+	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 40, Color: true}, rows); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "█") || !strings.Contains(b.String(), "\x1b[2m(more)\x1b[0m") || !strings.HasPrefix(b.String(), "2.00 KiB   100%  s3://b\n") {
+		t.Fatalf("narrow, colored:\n%q", b.String())
+	}
+}
+
+// TestWriteViewTimes: each node's newest time, to the second in the zone
+// given, which the total's line names once; a fold line has none, a node
+// without one "-". As the width shrinks the bar goes first, then the time.
+func TestWriteViewTimes(t *testing.T) {
+	at := int64(1_763_210_310_000_000) // 2025-11-15T12:38:30Z
+	rows := []totals.ViewRow{
+		{Name: "s3://b", Bytes: 2048, Newest: at, HasNewest: true},
+		{Name: "logs/", Level: 1, Bytes: 1536, Newest: at - 3_600_000_000, HasNewest: true},
+		{Name: "a", Level: 1, Bytes: 0},
+		{Fold: true, Level: 1, Bytes: 512, More: 3},
+	}
+	write := func(width int) string {
+		var b bytes.Buffer
+		if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: width, Loc: time.UTC}, rows); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	want := map[int]string{
+		120: "" +
+			"2.00 KiB   100%  ██████████████████████████████  2025-11-15 12:38:30 UTC  s3://b\n" +
+			"1.50 KiB  75.0%  ██████████████████████▌         2025-11-15 11:38:30        logs/\n" +
+			"     0 B   0.0%                                  -                          a\n" +
+			"   512 B  25.0%  ███████▌                                                   (3 more)\n",
+		60: "" +
+			"2.00 KiB   100%  2025-11-15 12:38:30 UTC  s3://b\n" +
+			"1.50 KiB  75.0%  2025-11-15 11:38:30        logs/\n" +
+			"     0 B   0.0%  -                          a\n" +
+			"   512 B  25.0%                             (3 more)\n",
+		40: "" +
+			"2.00 KiB   100%  s3://b\n" +
+			"1.50 KiB  75.0%    logs/\n" +
+			"     0 B   0.0%    a\n" +
+			"   512 B  25.0%    (3 more)\n",
+	}
+	for width, w := range want {
+		if got := write(width); got != w {
+			t.Errorf("width %d:\n%s\nwant\n%s", width, got, w)
+		}
+	}
+}
+
+// TestWriteViewClips: no line passes the width: a long name is cut in the
+// middle, its end kept, the total's label too.
+func TestWriteViewClips(t *testing.T) {
+	long := strings.Repeat("n", 40) + "-tail.parquet"
+	rows := []totals.ViewRow{
+		{Name: "s3://bucket/" + long, Bytes: 100},
+		{Name: long, Level: 1, Bytes: 60},
+		{Fold: true, Level: 1, Bytes: 40, More: 2},
+	}
+	for _, width := range []int{40, 80} {
+		var b bytes.Buffer
+		if err := WriteView(&b, ViewLayout{Label: rows[0].Name, Width: width, Color: true}, rows); err != nil {
+			t.Fatal(err)
+		}
+		plain := regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(b.String(), "")
+		for _, l := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
+			if n := utf8.RuneCountInString(l); n > width || !strings.Contains(l, "more") && !strings.HasSuffix(l, "tail.parquet") {
+				t.Errorf("width %d: %q (%d)", width, l, n)
+			}
+		}
+		if width == 40 && !strings.Contains(plain, "…") {
+			t.Errorf("width 40: nothing cut\n%s", plain)
+		}
+	}
+	if got := clip("abcdefghij.txt", 9); got != "abcd….txt" {
+		t.Errorf("clip: %q", got)
+	}
+	// Columns, not runes: an East Asian wide character takes two, a
+	// combining mark none.
+	wide := strings.Repeat("界", 30) + ".bin"
+	for _, room := range []int{10, 21, 40} {
+		if got := clip(wide, room); cells(got) > room || !strings.HasSuffix(got, ".bin") || !strings.Contains(got, "…") {
+			t.Errorf("clip %d: %q, %d columns", room, got, cells(got))
+		}
+	}
+	if n := cells("e\u0301界a"); n != 4 {
+		t.Errorf("cells: %d", n)
+	}
+	var b bytes.Buffer
+	rows = []totals.ViewRow{{Name: "s3://b", Bytes: 2}, {Name: wide, Level: 1, Bytes: 1}, {Fold: true, Level: 1, Bytes: 1, More: 1}}
+	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 40}, rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n") {
+		if cells(l) > 40 {
+			t.Errorf("width 40: %q is %d columns", l, cells(l))
+		}
 	}
 }

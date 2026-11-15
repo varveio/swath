@@ -259,7 +259,7 @@ resumes, and a text file `rows.tsv` is refused as text output.
   no end-of-run statistics on stderr
 
 - <a id="option-color"></a>[`--color auto|always|never`](#option-color)\
-  color the progress line, the statistics and the help (default `auto`)
+  color progress, statistics, the help and du's view (default `auto`)
 
   auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it.
 
@@ -426,7 +426,7 @@ Reporting:
                                 do not complete; not with -q, nor after a closed downstream pipe.
       --no-stats              no end-of-run statistics on stderr
       --color auto|always|never
-                              color the progress line, the statistics and the help (default auto)
+                              color progress, statistics, the help and du's view (default auto)
                                 auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                 forces it.
       --log-format text|json  stderr as text, or json: one JSON object per line (default text)

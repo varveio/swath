@@ -207,6 +207,14 @@ diagnostics.text.compressor.jobs_reason string
 diagnostics.text.formatters int
 diagnostics.text.output_wait_ns int64
 diagnostics.text.sink_wait_ns int64
+diagnostics.totals_view.completed int64
+diagnostics.totals_view.depth_kept int
+diagnostics.totals_view.dropped int64
+diagnostics.totals_view.lowered bool
+diagnostics.totals_view.partial int64
+diagnostics.totals_view.pruned int64
+diagnostics.totals_view.remembered int64
+diagnostics.totals_view.runs int64
 invocation.argv []string
 invocation.encoders int
 invocation.metadata string

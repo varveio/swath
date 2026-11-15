@@ -161,12 +161,17 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	// A tree listed at the names tier has no link counts: its files count
 	// under every name, as a live names-tier swath du counts them.
 	names := info.NamesTier != "" && m.Collected != nil && m.Collected.Metadata != nil && *m.Collected.Metadata == info.NamesTier
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
-		Primary: primaryFigure(&o)}
-	o.filter.Base = origin
 	format, _ := totalsFormat(&o, stdoutTerminal())
+	label := o.fromDataset
+	if o.datasetSource != "" {
+		label = registry.Redact(o.datasetSource)
+	}
+	view := duView(&o, format, label, stdoutTerminal())
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
+		Primary: primaryFigure(&o), View: view != nil}
+	o.filter.Base = origin
 	prov := provenanceOf(o.fromDataset, m)
-	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt)}
+	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view}
 	if t.dataset, err = json.Marshal(prov); err != nil {
 		return err
 	}

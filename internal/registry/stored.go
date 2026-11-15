@@ -4,15 +4,19 @@
 package registry
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
@@ -35,7 +39,8 @@ type DatasetRead struct {
 // filter.Compile, the version roles and the containers the producer
 // declares, SchemaInfo) over a payload that reads the dataset's columns.
 // It seeks to prefix and reads the key and only the columns the totals and
-// the filters read, with workers concurrent scans (Plan.ScanParallel). A
+// the filters read, with workers concurrent scans (Plan.ScanParallel; a
+// tally with a view takes each shard's rows as one run, scanRuns). A
 // totals or filter option the schema cannot answer, and a dataset whose
 // parts break its schema (reader.Dataset.CheckSchema: every part's footer
 // and columns), are refused before any row is read.
@@ -69,7 +74,7 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 	if err != nil {
 		return read, err
 	}
-	sink, err := bindTotals(t, &s, vers, nil)
+	sink, err := bindTotals(t, &s, vers, nil, true)
 	if err != nil {
 		return read, err
 	}
@@ -85,7 +90,7 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 		return read, err
 	}
 	var rows, filtered atomic.Int64
-	err = plan.ScanParallel(ctx, workers, &read.Scan, func(b *seekparquet.Batch) error {
+	scan := func(b *seekparquet.Batch, write func([]schema.Row[stored]) error) error {
 		views := make([]seekparquet.ColumnView, len(read.Columns))
 		for j := range views {
 			views[j] = b.Column(j)
@@ -110,10 +115,89 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 		}
 		rows.Add(int64(b.Len()))
 		filtered.Add(int64(dropped))
-		return sink.Write(ctx, [][]schema.Row[stored]{seg})
-	})
+		return write(seg)
+	}
+	if runs, ok := sink.(order.RangeSink[stored]); ok {
+		err = scanRuns(ctx, plan, workers, &read.Scan, runs, scan)
+	} else {
+		err = plan.ScanParallel(ctx, workers, &read.Scan, func(b *seekparquet.Batch) error {
+			return scan(b, func(seg []schema.Row[stored]) error { return sink.Write(ctx, [][]schema.Row[stored]{seg}) })
+		})
+	}
 	read.Rows, read.Filtered = rows.Load(), filtered.Load()
 	return read, err
+}
+
+// scanRuns scans plan as Plan.ScanParallel does, workers shards at a time
+// (Plan.Split, the same cut), each in dataset order through one run of
+// runs, and checks the keys across the shards' boundaries, as
+// ScanParallel checks its own.
+func scanRuns(ctx context.Context, plan *seekparquet.Plan, workers int, st *seekparquet.ReadStats, runs order.RangeSink[stored],
+	scan func(*seekparquet.Batch, func([]schema.Row[stored]) error) error) error {
+	workers = max(workers, 1)
+	shards, err := plan.Split(ctx, workers*8, st)
+	if err != nil {
+		return err
+	}
+	type shard struct {
+		first, last []byte
+		seen        bool
+		st          seekparquet.ReadStats
+		err         error
+	}
+	done := make([]shard, len(shards))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(workers, len(shards)) {
+		wg.Go(func() {
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(shards) || ctx.Err() != nil {
+					return
+				}
+				s := &done[i]
+				run := runs.Run()
+				s.err = shards[i].Scan(ctx, &s.st, func(b *seekparquet.Batch) error {
+					if n := b.Len(); n > 0 {
+						if !s.seen {
+							s.first, s.seen = bytes.Clone(b.Key(0)), true
+						}
+						s.last = append(s.last[:0], b.Key(n-1)...)
+					}
+					return scan(b, func(seg []schema.Row[stored]) error { return run.Write(ctx, seg) })
+				})
+				run.End()
+				if s.err != nil {
+					cancel()
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	var first error
+	for i := range done {
+		st.Add(done[i].st)
+		if e := done[i].err; e != nil && (first == nil || errors.Is(first, context.Canceled)) {
+			first = e
+		}
+	}
+	if first != nil {
+		return first
+	}
+	var last []byte
+	for i := range done {
+		if !done[i].seen {
+			continue
+		}
+		if last != nil && bytes.Compare(done[i].first, last) <= 0 {
+			return fmt.Errorf("the dataset's keys are out of order: %q follows %q", done[i].first, last)
+		}
+		last = done[i].last
+	}
+	return nil
 }
 
 // stored is a dataset row as a payload: its batch's projected columns and

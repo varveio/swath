@@ -469,6 +469,7 @@ type options struct {
 	// --apparent-size, and the local --allocated, --count-links and
 	// --max-inodes; totals is their output, resolved.
 	depth, maxPrefixes, maxInodes       int
+	depthSet, sortSet                   bool // -d or --sort given: the table, never the view
 	allocated, apparentSize, countLinks bool
 	sortBy                              string // --sort: sortName or sortSize
 	totals                              *totalsOut
@@ -502,6 +503,9 @@ type totalsOut struct {
 	// dataset is the JSON object JSONL rows read from a dataset carry
 	// (textout.TotalsLayout.Dataset); nil for a live run.
 	dataset []byte
+	// view, if set, draws the tally's adaptive view instead of the table
+	// (duView).
+	view *viewOut
 }
 
 // write writes the tally's rows to w. The table shows one figure; for a
@@ -509,6 +513,13 @@ type totalsOut struct {
 // under --log-format json, whose rows are the machine's) gives the total
 // of both (figuresLine).
 func (t *totalsOut) write(w io.Writer) error {
+	if t.view != nil {
+		// Without the primary figure (the names metadata tier reads no
+		// sizes) there is nothing to rank: the table's total instead.
+		if v := t.tally.View(); v.Total.Missing == 0 || v.Total.Missing < v.Total.Objects {
+			return t.writeView(w, v)
+		}
+	}
 	opt := t.tally.Options()
 	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset}
 	rows := t.tally.Result()
@@ -730,6 +741,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", err
 	}
 	o.parsed = err == nil
+	o.depthSet, o.sortSet = f.Changed("depth") || f.Changed("max-depth"), f.Changed("sort")
 	o.argv = commandLine(cmd.name(), p, p.operands...)
 	switch {
 	case err != nil:

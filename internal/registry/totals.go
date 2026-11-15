@@ -36,8 +36,11 @@ type totalsSink[P any] struct {
 	next              order.Sink[P]
 }
 
-// bindTotals binds t to schema s and its version roles (nil for none).
-func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P]) (order.Sink[P], error) {
+// bindTotals binds t to schema s and its version roles (nil for none). A
+// tally with a view (totals.Options.View) takes the rows in runs
+// (order.RangeSink): ordered, each run's rows ascend; otherwise they come
+// in any order (order.Options.Unordered).
+func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P], ordered bool) (order.Sink[P], error) {
 	opt := t.Options()
 	k := totalsSink[P]{t: t, box: s.Container, next: next, strict: opt.Primary == totals.AllocatedBytes}
 	if vers != nil {
@@ -77,10 +80,44 @@ func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versio
 	if k.alloc != nil {
 		t.SetAllocated()
 	}
+	if opt.View {
+		return viewSink[P]{k, ordered}, nil
+	}
 	return k, nil
 }
 
+// viewSink is a totalsSink whose tally builds the view: it takes rows in
+// runs, each a range's (order.RangeSink), and sums each row into the
+// tally and its run.
+type viewSink[P any] struct {
+	totalsSink[P]
+	ordered bool
+}
+
+func (k viewSink[P]) Run() order.RangeRun[P] { return viewRun[P]{k.totalsSink, k.t.ViewRun(k.ordered)} }
+
+// SubtreeEnd completes a local directory once its listing ended
+// (order.SubtreeSink).
+func (k viewSink[P]) SubtreeEnd(prefix string) { k.t.ViewSubtreeEnd(prefix) }
+
+type viewRun[P any] struct {
+	k totalsSink[P]
+	v *totals.ViewRun
+}
+
+func (r viewRun[P]) Write(ctx context.Context, rows []schema.Row[P]) error {
+	return r.k.write(ctx, [][]schema.Row[P]{rows}, r.v)
+}
+
+func (r viewRun[P]) End() { r.v.End() }
+
 func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	return k.write(ctx, segs, nil)
+}
+
+// write sums segs into the tally, and into run v unless nil, then hands
+// them to the next sink.
+func (k totalsSink[P]) write(ctx context.Context, segs [][]schema.Row[P], v *totals.ViewRun) error {
 	b := k.t.Batch()
 	for _, seg := range segs {
 		for i := range seg {
@@ -117,7 +154,13 @@ func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error 
 				}
 			}
 			b.Add(&r)
+			if v != nil {
+				v.Add(&r)
+			}
 		}
+	}
+	if v != nil {
+		v.Flush() // the rows are the provider's once Write returns
 	}
 	if err := b.Flush(); err != nil {
 		return err

@@ -148,6 +148,16 @@ Notable changes per release. The full human summary for the current release is i
   `>= ` its lower bound. For a local tree a line on stderr under the table gives the totals of both figures
   (`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. The `swath list` table heads its local times
   with the zone's abbreviation (`last_modified (CET)`) in place of `(local)`, and prints `-` for a missing value.
+- Go port: `swath du SOURCE` on a terminal, without `-d`, `--sort` or `--format`, draws the largest prefixes and
+  objects at whatever depth they are: a tree, largest first, each with its share of the total and, where the
+  width allows, a bar and the newest modification time in local time (the bar is left out first, then the
+  time; a long name is cut in the middle), color following `--color` and `NO_COLOR`. Each parent's other
+  children fold into one `(N more)` line carrying their sum, so every level adds up. Every figure is exact;
+  memory stays small because a complete prefix (inside one range, or a local directory whose listing ended)
+  is kept only at 1 % of the bytes seen so far and among the 100 largest of its depth. A pipe, `-d N`,
+  `--sort` and an explicit `--format` print the rows as before. The run report's `diagnostics.totals_view` counts
+  what the view kept, dropped and merged across ranges. The idea of the tree with shares is `dust`'s and
+  `pdu`'s (both Apache-2.0), implemented from their documented behavior.
 - Go port: `--no-header` leaves out the TSV header line of `swath list` and `swath du`.
 - Go port: a local `--metadata statx` listing on a filesystem that does not return a field (blocks on some
   network filesystems) records it as null, not 0.

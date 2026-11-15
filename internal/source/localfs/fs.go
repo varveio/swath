@@ -240,6 +240,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if t, ok := e.(source.Subtreer); ok && r.chunk == nil && !p.file {
+		t.Subtree(r.prefix) // a directory's subtree is its subdirectories' ranges, its chunks and their continuations
+	}
 	var st Stats
 	var err error
 	if p.file {

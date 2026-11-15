@@ -88,6 +88,15 @@ type Fencer interface {
 	Fence(x string, top bool)
 }
 
+// Subtreer is an Emitter told which prefix a range owns: every key under
+// it that the listing emits, but the prefix itself, is emitted by the range
+// or by a range it emits, recursively (a local directory's range and its
+// subdirectories'). A provider declares it before the range's first row or
+// child. An adapter between a provider and the order stage forwards it.
+type Subtreer interface {
+	Subtree(prefix string)
+}
+
 // Awaiter is an Emitter that tells whether the order stage's drain is at its
 // range: the output waits for this range's rows. It is read for the run
 // report's account only, never for a decision. An adapter between a

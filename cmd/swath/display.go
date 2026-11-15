@@ -92,7 +92,7 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 	source.Define(f, source.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no end-of-run statistics on stderr"})
 	t.color = "auto"
 	source.Define(f, source.Flag{Name: "color", Value: source.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
-		Usage: "color the progress line, the statistics and the help",
+		Usage: "color progress, statistics, the help and du's view",
 		Long:  "auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it."})
 	t.logFormat = logText
 	source.Define(f, source.Flag{Name: "log-format", Value: source.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
