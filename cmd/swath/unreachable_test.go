@@ -340,7 +340,7 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 	readJSON(t, report, &rep)
 	now.Reset()
 	if err := show([]string{dir}, &now); err != nil || rep.Outcome.Class != listing.ClassOK || rep.Invocation.Out != dir || !rep.Output.Replaced ||
-		!strings.Contains(now.String(), "source s3://bkt/") || !strings.Contains(now.String(), "3000 rows") || dataset.Staged(dir) {
+		!strings.Contains(now.String(), "  source    s3://bkt/") || !strings.Contains(now.String(), "  contents  3,000 objects") || dataset.Staged(dir) {
 		t.Fatalf("after the resume: %v %+v\n%s", err, rep.Outcome, now.String())
 	}
 }

@@ -89,7 +89,8 @@ type TotalsLayout struct {
 	// a fixed shape, and the command states it on stderr instead.
 	Dataset []byte
 	// Total names what the table's total row totals, SOURCE as typed,
-	// before headingTotal ("": headingTotal alone).
+	// before headingTotal ("": headingTotal alone); printed as given, the
+	// caller escapes it (a Windows path keeps its backslashes).
 	Total string
 }
 
@@ -316,7 +317,7 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 	b = append(pad(b, start, w.time), "  "...)
 	if r.Depth == 0 {
 		if l.Total != "" {
-			b = append(appendTSV(b, l.Total), ' ')
+			b = append(append(b, l.Total...), ' ')
 		}
 		return append(b, headingTotal...)
 	}

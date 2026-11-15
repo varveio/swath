@@ -527,7 +527,7 @@ func (t *totalsOut) write(w io.Writer) error {
 	}
 	opt := t.tally.Options()
 	l := textout.TotalsLayout{Primary: opt.Primary, Sort: t.sortBy, LinksOnce: t.tally.LinksOnce(), Local: t.tally.Dirs(), NoHeader: t.noHeader, Dataset: t.dataset,
-		Total: t.label}
+		Total: escapeControl(t.label)}
 	rows := t.tally.Result()
 	for i := range rows {
 		if rows[i].Depth == 0 {
