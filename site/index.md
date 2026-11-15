@@ -44,14 +44,15 @@ features:
     The replay is an MP4 video your browser does not play.
   </video>
   <figcaption>
-    The same bucket, listed a minute before the run above with its trace on (37,064,981 objects in 53.7 s,
-    39,026 requests, 64 workers) and replayed from that trace: one of the 257 key ranges swath started from
-    held 64.5% of the objects, and swath split it 1,904 times while listing it, each time a worker was idle.
+    The run above, replayed from its trace: one of the 257 key ranges swath started from held 64.5% of the
+    bucket's objects, so swath split it 1,977 times while listing it, each time a worker was idle, until all
+    64 workers were sharing it.
   </figcaption>
 </figure>
 
-Both runs were on 2026-11-15 from a 4-vCPU cloud VM. The bucket is still being written to (its newest object
-was under an hour old), so a run today shows other numbers. [How this was measured](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)
+The run was on 2026-11-15 from a 4-vCPU cloud VM. The bucket is still being written to (its newest object was
+written about an hour before the run), so a run today shows other numbers.
+[How this was measured](../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)
 and [how the replay is made](../tools/explainer/README.md).
 
 ## What swath is
@@ -96,8 +97,9 @@ swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-regi
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 | head
 ```
 
-The whole bucket, as at the top of this page, is about 37 million objects: that run took 53 seconds from a
-4-vCPU cloud VM and made 39,191 requests against the public bucket. Start with a prefix.
+The whole bucket, listed at the top of this page, is about 37 million objects: that run took about a minute
+from a 4-vCPU cloud VM, made 39,098 requests against the public bucket and wrote an 825 MiB inventory. Start
+with a prefix.
 
 `-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
 depths of a big bucket, list it once with `-o DIR` and total the saved inventory with

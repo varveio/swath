@@ -10,25 +10,33 @@ import '@fontsource-variable/inter/opsz.css'
 import '@fontsource-variable/geist-mono/wght.css'
 import './custom.css'
 
-// Real output of a live `swath du` of a public bucket on 2026-11-15, with main at d8fbe439 (the run in
-// docs/internals/measurements.md, "A public bucket for the home page"). Prefix rows and the cost line are left
-// out where the lines read "…"; nothing else is changed.
-const HERO_CAPTION = 'A live run on a public NOAA bucket, 2026-11-15: totals per prefix, largest first. … marks lines left out.'
-const HERO_COMMAND = 'swath du s3://noaa-gestofs-pds/ -d 1 --sort size \\\n    --anonymous --s3-region us-east-1'
-const HERO_OUTPUT = `    size   objects  last_modified (local)  prefix
- 217 TiB   2139038  2026-08-28 19:43:10    _para4/
- 146 TiB   1416203  2026-09-26 10:30:08    _para/
- 103 TiB     27538  2026-07-30 12:15:24    _para2/
-59.1 TiB    249640  2026-06-03 06:59:57    _hindcast_archive/
-8.38 TiB      2422  2024-09-20 13:37:44    _archive/
-5.50 TiB    156590  2025-12-11 18:37:31    _not_active/
-2.67 TiB  21315345  2026-11-15 11:10:09    _post_processing/
-       …  (2,162 more prefixes)
-1.38 PiB  37064981  2026-11-15 11:10:09    (total)
-  37,064,981 objects in 53.0s · 699,313 keys/s
-  39,191 API calls · in flight avg 60.71 · peak 64
+// Real output of a live run on 2026-11-15 with main at d8fbe439: a sorted inventory of a public bucket, then a
+// DuckDB query over it (docs/internals/measurements.md, "A public bucket for the home page"). The run was
+// `swath diag list` with --trace and --report added, for the replay further down the page; swath's cost
+// estimate line is left out where the output reads "…". Nothing else is changed.
+const HERO_CAPTION =
+  'A live run on a public NOAA bucket, 2026-11-15: list it once into a sorted Parquet inventory, then query it without listing again (DuckDB took about 3 s). … marks a line left out.'
+const HERO_SESSION = [
+  ['swath list s3://noaa-gestofs-pds/ -o noaa \\\n    --anonymous --s3-region us-east-1',
+    `  37,064,981 objects in 1m02s · 598,740 keys/s
+  39,098 API calls · in flight avg 53.25 · peak 64
   …
-  peak RSS 109 MiB`
+  12 parts · 825 MiB written · peak RSS 1.50 GiB`],
+  [`duckdb -c "SELECT regexp_extract(key, '\\.(\\w+)$', 1) AS ext,
+    count(*) AS objects, format_bytes(sum(size)::BIGINT) AS bytes
+    FROM 'noaa/data/*.parquet'
+    GROUP BY ext ORDER BY sum(size) DESC LIMIT 5"`,
+    `┌─────────┬──────────┬──────────┐
+│   ext   │ objects  │  bytes   │
+│ varchar │  int64   │ varchar  │
+├─────────┼──────────┼──────────┤
+│ nc      │   382202 │ 1.3 PiB  │
+│ grib2   │ 13178305 │ 39.8 TiB │
+│ tgz     │     1051 │ 5.3 TiB  │
+│ tar     │    18140 │ 4.5 TiB  │
+│ png     │ 22913029 │ 1.3 TiB  │
+└─────────┴──────────┴──────────┘`],
+]
 
 interface DevDocsNotice {
   text: string
@@ -54,7 +62,11 @@ const HeroTerminal = () =>
   h('figure', { class: 'swath-terminal' }, [
     h('figcaption', { class: 'swath-terminal-caption' }, HERO_CAPTION),
     h('pre', { tabindex: 0 }, [
-      h('code', [h('span', { class: 'swath-terminal-prompt', 'aria-hidden': 'true' }, '$ '), HERO_COMMAND, '\n', HERO_OUTPUT]),
+      h('code', HERO_SESSION.flatMap(([command, output], i) => [
+        i ? '\n' : '',
+        h('span', { class: 'swath-terminal-prompt', 'aria-hidden': 'true' }, '$ '),
+        command, '\n', output,
+      ])),
     ]),
   ])
 
