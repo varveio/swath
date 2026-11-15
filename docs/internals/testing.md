@@ -795,9 +795,8 @@ through the seekparquet Go module, so the format's own conformance suite is a ga
 `scripts/ci/seekparquet-conformance.sh` (from the repository root; under a minute, most of it installing the suite's Python
 dependencies):
 
-1. It checks out the seekparquet repository at the commit `go.mod` pins (the revision of the
-   pseudo-version, `v0.1.1-0.20261108221443-6401109d1e5d` = `6401109d`; a release's `go/vX.Y.Z` tag once
-   there is one) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
+1. It checks out the seekparquet repository at the commit `go.mod` pins (a release's `go/vX.Y.Z` tag, today
+   `go/v0.2.0`; for a pseudo-version, its revision) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
    (`internal/cmd/conformance`): every target it claims must qualify, the `reader` and the four validator
    levels (`validator-structural`, `-profile`, `-full`, `-digest`), every core and generated case passing.
 2. `listing` `TestSeekParquetFixtures` (skipped unless `SWATH_SEEKPARQUET_FIXTURES` names a directory) writes
