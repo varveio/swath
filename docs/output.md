@@ -1,5 +1,8 @@
 # Output
 
+swath writes what it lists as text rows (a table, TSV or JSONL) on stdout or in a file, as a sorted Parquet
+dataset on disk or in a bucket, or as `swath du` totals. This page shows each and when to choose it.
+
 ```bash
 swath list s3://bucket/logs/ | head          # TSV in a pipe, a table on a terminal
 swath list s3://bucket/logs/ --format jsonl  # JSONL on stdout

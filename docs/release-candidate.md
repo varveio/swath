@@ -37,7 +37,7 @@ rc.2 release binary and a build of the code these pages describe.
 | Text output inside the listed tree, `-o TREE/rows.tsv` | the listing includes its own temporary file and scratch directory | they are left out |
 | `swath diag list --max-keys N` stops before the end | text rows exit 0; a dataset exits 1 | exit 3 (`incomplete`) for both |
 | A malformed source URL (`s3://`) or a `--sort-buffer` below 128 KiB | exit 1 | exit 2, as a usage error |
-| An endpoint nothing answers on (a mistyped `--endpoint-url`) | retries for the whole `--stall-timeout`, 10 minutes by default (still retrying after 2 minutes here) | stops after about 30 seconds, exit 75 (cause `unreachable`), naming the endpoint and the cause |
+| An endpoint that refuses connections or whose host is not found (a mistyped `--endpoint-url`) | retries for the whole `--stall-timeout`, 10 minutes by default (still retrying after 2 minutes here) | stops after about 30 seconds, exit 75 (cause `unreachable`), naming the endpoint and the cause |
 | The spill directory is on tmpfs (`TMPDIR=/dev/shm`) | warns at the start of every run that could spill | warns only when a run first spills |
 | `swath show FILE` on a file that is not a dataset | `journal: open FILE: not a directory` | `FILE holds neither a dataset nor an interrupted run` |
 | `--max-duration` ends a text-file run | the statistics count `1 file` although it is discarded | `no file written`, and the next step: run it again, or `swath resume DIR` for a dataset |

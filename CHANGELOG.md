@@ -15,6 +15,10 @@ Notable changes per release. The full human summary for the current release is i
   cap under 16 MiB) the window is unchanged. The run report adds `resources.window.spill_rows` (the mean rows held
   at the spill gate's refusals, forced admissions' included), `peak_behind_bytes`, `evicted` and `wakes` (the
   window's wake paths that engage only with durable spill) (#535).
+- Go port: a name from the source that reaches stderr (a local path in an unreadable-entry warning, a key or
+  provider error in a message, a dataset's recorded source) can no longer forge a `swath:` line or send
+  terminal control sequences: text lines write control characters, line separators and invalid UTF-8 bytes as
+  visible escapes, and JSON log lines write them as `\u` escapes (#521).
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the

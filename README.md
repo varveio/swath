@@ -37,7 +37,13 @@ On a directory of yours, with no account or credentials:
 ```bash
 swath du -d 1 ~/Downloads                          # totals per directory, one level down
 swath list ~/Downloads -o downloads-inventory      # a sorted Parquet inventory
-swath du --from-dataset downloads-inventory -d 1   # the same totals, from the inventory (main; not in rc.2)
+swath show downloads-inventory                     # what it holds and how complete it is
+```
+
+The same totals from the inventory, without listing again (coming in 0.4.0; not in 0.4.0-rc.2):
+
+```bash
+swath du --from-dataset downloads-inventory -d 1
 ```
 
 On a public S3 prefix, without credentials:
@@ -52,8 +58,8 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 
 `du` and `find` answer most questions about a small directory, and a scheduled provider inventory costs less
 when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
-parallel, which matters once a bucket holds tens of millions of keys. A billion-object S3 bucket lists in about
-three minutes on one 32-vCPU VM
+parallel, which matters once a bucket holds tens of millions of keys. In one live run, swath counted 1.09
+billion S3 objects in 177 seconds on one 32-vCPU VM
 ([how this was measured](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 
@@ -66,7 +72,7 @@ three minutes on one 32-vCPU VM
 - Windows refuses dataset runs of S3, GCS and Azure Blob and `swath resume`, for lack of directory sync;
   listing a directory and text output work ([Platforms](https://swath.varve.io/docs/install.html#platforms)).
 - macOS binaries are not notarized yet, so Gatekeeper blocks a browser download until you clear its
-  quarantine attribute ([Install](https://swath.varve.io/docs/install.html#verify-and-install)).
+  quarantine attribute ([Install](https://swath.varve.io/docs/install.html#macos)).
 
 ## Documentation
 

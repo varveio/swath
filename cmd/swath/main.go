@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
@@ -1327,21 +1328,59 @@ func credentialLine(source, cause string, discovered, verbose bool) string {
 	return msg + " " + strings.ToUpper(a[:1]) + a[1:]
 }
 
-// escapeControl writes each control character of s as its Go escape (\n,
-// \x1b), so the text stays on one line and draws nothing.
+// escapeControl makes s safe to print on a terminal line: a control
+// character (C0, DEL, C1), a line or paragraph separator, a bidirectional
+// control and a byte that is not valid UTF-8 are written as an escape (\n,
+// \t, \r, else \xHH or \uHHHH), so the text stays on one line and draws
+// nothing. Printable Unicode is kept, and a backslash is kept too (a Windows
+// path stays readable), so the escape is for the eye, not a codec: the exact
+// bytes are in JSON output. It is idempotent.
 func escapeControl(s string) string {
-	if !strings.ContainsFunc(s, unicode.IsControl) {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r == utf8.RuneError || unsafeRune(r) }) {
 		return s
 	}
 	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsControl(r) {
-			b.WriteString(strings.Trim(strconv.QuoteRune(r), "'"))
-		} else {
-			b.WriteRune(r)
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && n == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case unsafeRune(r):
+			switch r {
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '\t':
+				b.WriteString(`\t`)
+			default:
+				if r < 0x100 {
+					fmt.Fprintf(&b, `\x%02x`, r)
+				} else {
+					fmt.Fprintf(&b, `\u%04x`, r)
+				}
+			}
+		default:
+			b.WriteString(s[i : i+n])
 		}
+		i += n
 	}
 	return b.String()
+}
+
+// unsafeRune is a rune escapeControl writes as an escape: a control
+// character, U+2028 and U+2029, and the bidirectional controls that
+// reorder what a line shows.
+func unsafeRune(r rune) bool {
+	switch {
+	case unicode.IsControl(r):
+		return true
+	case r == 0x2028 || r == 0x2029, r == 0x061c, r == 0x200e, r == 0x200f:
+		return true
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
 }
 
 // createNoFollow creates or truncates the profile file path, refusing a
