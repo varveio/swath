@@ -30,14 +30,14 @@ Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` 
 [`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0-rc.2.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2.spdx.json))
 and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
 
-Each block below downloads with the [GitHub CLI](https://cli.github.com/), verifies, extracts, installs and
-runs `swath --version`. A failed check stops it before anything is extracted or installed. The cosign step
-proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive matches it, and
+Each block below downloads with the [GitHub CLI](https://cli.github.com/) (`gh`), verifies, extracts, installs
+and runs the installed binary's `--version`. A failed check stops it before anything is extracted or installed.
+The cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive matches it, and
 the attestation records the build that produced it.
 
 ### Linux
 
-With [cosign](https://docs.sigstore.dev/) installed:
+With the [GitHub CLI](https://cli.github.com/) (`gh`) and [cosign](https://docs.sigstore.dev/) installed:
 
 ```bash
 VERSION=0.4.0-rc.2
@@ -52,11 +52,10 @@ gh attestation verify "$ARCHIVE" --repo varveio/swath &&
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-linux-$ARCH/swath" ~/.local/bin/ &&
-swath --version
+"$HOME/.local/bin/swath" --version
 ```
 
-`~/.local/bin` must be on your `PATH` for the last line, and for `swath` to run without its full path.
-`swath --version` prints the version and the commit it was built from:
+The last line prints the version and the commit it was built from:
 
 ```text
 swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
@@ -64,9 +63,19 @@ swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
 
 Every run report carries the same in `build`; keep it with any result you may need to investigate.
 
+To run it as `swath`, put `~/.local/bin` first on your `PATH`: add this line to your shell's startup file
+(`~/.bashrc` for bash, `~/.zshrc` for zsh), and run it in the current shell too. Then check that `swath`
+is the binary you installed, not an older one elsewhere on your `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+command -v swath && swath --version
+```
+
 ### macOS
 
-With cosign installed (`brew install cosign gh`); the block picks the Apple silicon or the Intel archive:
+With the GitHub CLI and cosign installed (`brew install gh cosign`); the block picks the Apple silicon or the
+Intel archive:
 
 ```bash
 VERSION=0.4.0-rc.2
@@ -81,11 +90,12 @@ gh attestation verify "$ARCHIVE" --repo varveio/swath &&
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-darwin-$ARCH/swath" ~/.local/bin/ &&
-swath --version
+"$HOME/.local/bin/swath" --version
 ```
 
-`~/.local/bin` must be on your `PATH`. The macOS binaries are not yet signed with an Apple Developer ID or
-notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `gh` or `curl`, as above,
+Then put `~/.local/bin` on your `PATH` as on [Linux](#linux) (zsh, the macOS default shell, reads
+`~/.zshrc`), and check with `command -v swath && swath --version`. The macOS binaries are not yet signed with
+an Apple Developer ID or notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `gh` or `curl`, as above,
 runs as it is. Gatekeeper refuses a binary downloaded with a browser: after verifying, clear its quarantine
 attribute, `xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-ARCH/swath`, with `arm64` on Apple silicon
 and `amd64` on Intel.
@@ -112,8 +122,16 @@ if ($Ok) {
 
 Then add `%LOCALAPPDATA%\Programs\swath` to your user `PATH` (Settings, "Edit environment variables for your
 account") and open a new terminal. This block checks the checksum and the attestation but not the signature
-on `SHA256SUMS`: for that, install cosign for Windows and run the `cosign verify-blob` command from the Linux
-block. On Windows, dataset runs of S3, GCS and Azure Blob sources are refused ([platforms](#platforms)).
+on `SHA256SUMS`. To check that too, install cosign for Windows and run this in the same PowerShell session and
+directory; do not use the binary if it fails:
+
+```powershell
+cosign verify-blob --bundle SHA256SUMS.sigstore.json `
+  --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$Version" `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+```
+
+On Windows, dataset runs of S3, GCS and Azure Blob sources are refused ([platforms](#platforms)).
 
 ## Container images
 
@@ -128,6 +146,7 @@ The image `ghcr.io/varveio/swath:0.4.0-rc.2` is distroless, with no shell; its e
 `0600` credential files. Run it as yourself instead, and point the AWS SDK at the mounted files:
 
 ```bash
+mkdir -p "$PWD/out"    # yours: a directory Docker creates for the mount belongs to root
 docker run --rm --user "$(id -u):$(id -g)" \
   -v ~/.aws:/aws:ro -e AWS_SHARED_CREDENTIALS_FILE=/aws/credentials -e AWS_CONFIG_FILE=/aws/config \
   -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0-rc.2 \
@@ -153,7 +172,12 @@ cd swath
 `./build.sh` builds a static binary stamped with the checkout's commit; its version reads `devel`. Set
 `GOOS` and `GOARCH` to cross-compile. `-o` names the binary's path relative to the clone, where
 `build.sh` runs. A path that is an existing directory, such as `-o ../swath` from inside a clone named
-`swath`, puts the binary inside that directory instead.
+`swath`, puts the binary inside that directory instead. To run it as `swath`, install it where the release
+binaries go and put that directory on your `PATH` as on [Linux](#linux):
+
+```bash
+mkdir -p ~/.local/bin && install -m 755 swath ~/.local/bin/
+```
 
 Go builds in a work directory under `TMPDIR` (`/tmp` by default), and this module's dependencies need more
 room than a small tmpfs `/tmp` holds: the build then fails with "no space left on device". Point the work
