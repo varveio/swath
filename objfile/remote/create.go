@@ -5,19 +5,15 @@ package remote
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"cloud.google.com/go/auth"
-	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/storage"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -27,34 +23,35 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/logging"
-	"google.golang.org/api/option"
-	htransport "google.golang.org/api/transport/http"
 
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/objfile/azblob"
 	"github.com/varveio/swath/objfile/gcs"
-	"github.com/varveio/swath/objfile/internal/ranged"
 	"github.com/varveio/swath/objfile/internal/redact"
 	"github.com/varveio/swath/objfile/s3"
 )
 
-// DestinationOptions configure the clients OpenDestination owns. They do
-// not change any other client's credentials, endpoint or connection pool.
-type DestinationOptions struct {
+// Options configure the clients OpenWith and OpenDestination build for a
+// location. The zero Options is the provider's environment and SDK
+// defaults (Open). They do not change any other client's credentials,
+// endpoint or connection pool; the fields of another provider are ignored.
+type Options struct {
 	// CredentialsFile (gs://) is a Google credentials JSON file (a service
-	// account's key, or authorized-user credentials) read for the
-	// destination; "" uses Application Default Credentials. Either way the
-	// read-write scope is requested.
+	// account's key, or authorized-user credentials); "" uses Application
+	// Default Credentials. Either way OpenWith requests the read-only scope
+	// and OpenDestination the read-write scope.
 	CredentialsFile string
 	// Endpoint is, for gs://, the JSON API base the client sends to
 	// (https://storage.googleapis.com/storage/v1/ by default), as the SDK
 	// takes it; "" is the default, or the emulator STORAGE_EMULATOR_HOST
 	// names (then without credentials: ResolveEndpoint). For s3://, it is
-	// an S3-compatible endpoint URL, addressed path-style (/BUCKET/KEY); ""
-	// is AWS's regional endpoint (virtual-hosted), and the environment's
-	// endpoint variables (AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, FIPS,
-	// dual-stack) are not applied: the destination is the one named. For
-	// az://, it is a blob service base URL that takes the account as its
+	// an S3-compatible endpoint URL, addressed path-style (/BUCKET/KEY).
+	// With "", OpenWith sends where the AWS SDK's configuration says
+	// (AWS_ENDPOINT_URL_S3, AWS_ENDPOINT_URL, else AWS's regional
+	// endpoint), while OpenDestination applies none of the environment's
+	// endpoint settings (endpoint URLs, FIPS, dual-stack) and sends to AWS's
+	// regional endpoint (virtual-hosted): the destination is the one named.
+	// For az://, it is a blob service base URL that takes the account as its
 	// first path segment, as an emulator's does (ENDPOINT/ACCOUNT/CONTAINER);
 	// "" is https://ACCOUNT.blob.core.windows.net. It may not carry user
 	// information, a query or a fragment.
@@ -67,32 +64,45 @@ type DestinationOptions struct {
 	// RequestTimeout bounds the wait for response headers after sending a
 	// request (0: DefaultRequestTimeout). It also bounds GCS and Azure
 	// token exchanges, and the S3 credential chain's requests (STS, SSO,
-	// container and instance roles), which go through the destination's
-	// client and its response-header timeout. It does not bound an upload's body transfer or all
-	// its retries. Bound those with the operation's context; S3 multipart
-	// initiation and abort cleanup use S3Write.AbortTimeout independently.
+	// container and instance roles), which go through the location's client
+	// and its response-header timeout. It does not bound a read's or an
+	// upload's body transfer, or all its retries. Bound those with the
+	// operation's context; S3 multipart initiation and abort cleanup use
+	// S3Write.AbortTimeout independently.
 	RequestTimeout time.Duration
 	// Region (s3://) is the bucket's region, which requests are signed for;
-	// "" is AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
-	// us-east-1. Destination.Region is the one resolved.
+	// "" is AWS_REGION, AWS_DEFAULT_REGION or the profile's, else (for
+	// OpenDestination) us-east-1. Destination.Region is the one resolved.
 	Region string
 	// Profile (s3://) is the shared config profile the credentials (and,
 	// without Region, the region) come from; "" is the AWS SDK's default
 	// chain (environment, AWS_PROFILE or default, SSO, web identity,
-	// container and instance roles). Requests are always signed. The SDK
-	// also honors AWS_CA_BUNDLE and the profile's ca_bundle for TLS trust.
+	// container and instance roles). OpenDestination always signs, and
+	// honors AWS_CA_BUNDLE and the profile's ca_bundle for TLS trust;
+	// OpenWith fails on a CA bundle, which its observed client cannot take.
 	Profile string
 	// SAS (az://) is a shared access signature (a query string, with or
 	// without a leading '?') appended to every request; "" uses Entra ID
 	// through azidentity's DefaultAzureCredential, which needs an https
 	// endpoint. No error or Scope holds it.
 	SAS string
-	// GCSWrite configures gs:// upload buffering, retries and chunk timeouts.
+	// GCSWrite configures OpenDestination's gs:// upload buffering, retries
+	// and chunk timeouts.
 	GCSWrite gcs.WriteOptions
-	// S3Write configures s3:// upload buffering, retries and abort cleanup.
+	// S3Write configures OpenDestination's s3:// upload buffering, retries
+	// and abort cleanup.
 	S3Write s3.WriteOptions
-	// AzureWrite configures az:// upload buffering and retries.
+	// AzureWrite configures OpenDestination's az:// upload buffering and
+	// retries.
 	AzureWrite azblob.WriteOptions
+}
+
+// timeout is o's RequestTimeout, or DefaultRequestTimeout when unset.
+func (o Options) timeout() time.Duration {
+	if o.RequestTimeout > 0 {
+		return o.RequestTimeout
+	}
+	return DefaultRequestTimeout
 }
 
 // Destination provides reads and conditional writes under a location's
@@ -113,12 +123,12 @@ type Destination struct {
 // use their own contexts. Close it after finishing its reads and uploads.
 //
 // GCS requests the read-write scope; S3 signs every request; Azure uses SAS
-// or Entra ID. DestinationOptions controls their credentials and endpoints.
-// GCS and S3 SDK logging is disabled to keep credentials and upload handles
-// out of their logs, the S3 credential chain's logger included. The Azure
-// SDK's log is process-wide and not changed here: the swath command turns it
-// off before any SDK use.
-func OpenDestination(ctx context.Context, location string, o DestinationOptions) (*Destination, error) {
+// or Entra ID. Options control their credentials and endpoints. GCS and S3
+// SDK logging is disabled to keep credentials and upload handles out of
+// their logs, the S3 credential chain's logger included. The Azure SDK's
+// log is process-wide and not changed here: the swath command turns it off
+// before any SDK use.
+func OpenDestination(ctx context.Context, location string, o Options) (*Destination, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {
 		return nil, err
@@ -131,118 +141,37 @@ func OpenDestination(ctx context.Context, location string, o DestinationOptions)
 		return createAzure(l, o)
 	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
-	pool.ResponseHeaderTimeout = o.RequestTimeout
-	if pool.ResponseHeaderTimeout <= 0 {
-		pool.ResponseHeaderTimeout = DefaultRequestTimeout
-	}
+	pool.ResponseHeaderTimeout = o.timeout()
 	d := &Destination{scope: l.String()}
 	if o.Endpoint == "" && !o.Emulator {
 		o.Endpoint, o.Emulator = ResolveEndpoint("")
 	}
 	s := &Store{scope: d.scope}
 	if err := s.at(o.Endpoint); err != nil {
-		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
+		return nil, err
 	}
 	d.scope = s.scope
-	client, err := writeClient(ctx, pool, o)
+	client, err := gcsClient(ctx, pool, o, storage.ScopeReadWrite)
 	if err != nil {
 		return nil, err
 	}
+	// Reads (metadata, ranges) are bounded as uploads are: the SDK's
+	// default retries them until the context ends.
+	client.SetRetry(storage.WithMaxAttempts(gcs.DefaultMaxAttempts))
 	d.o = objfile.Root(gcs.New(client, l.Container), l.Prefix)
 	d.w = objfile.RootWriter(gcs.NewWriter(client, l.Container, o.GCSWrite), l.Prefix)
 	d.close = func() error { err := client.Close(); pool.CloseIdleConnections(); return err }
 	return d, nil
 }
 
-// writeClient is a read-write GCS client over pool for o (emulator: the
-// SDK's emulator client, without credentials). Reads go through
-// ranged.Transport, as Open's do. The SDK's logger is silenced: its debug
-// output, switched on by the environment, writes request headers
-// unredacted, the bearer token included.
-func writeClient(ctx context.Context, pool http.RoundTripper, o DestinationOptions) (*storage.Client, error) {
-	tr := ranged.Transport(pool)
-	quiet := slog.New(slog.DiscardHandler)
-	opts := []option.ClientOption{option.WithLogger(quiet)}
-	if !o.Emulator {
-		creds, err := writeCredentials(o, quiet)
-		if err != nil {
-			return nil, err
-		}
-		if tr, err = htransport.NewTransport(ctx, tr, option.WithAuthCredentials(creds), option.WithLogger(quiet)); err != nil {
-			return nil, err
-		}
-	}
-	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: tr}))
-	if ep := o.Endpoint; ep != "" {
-		if o.Emulator {
-			// The emulator's JSON API base, as the SDK makes it from
-			// STORAGE_EMULATOR_HOST, given explicitly: the environment
-			// is not read again.
-			if !strings.Contains(ep, "://") {
-				ep = "http://" + ep
-			}
-			ep = strings.TrimSuffix(ep, "/") + "/storage/v1/"
-		} else if ep[len(ep)-1] != '/' {
-			ep += "/"
-		}
-		opts = append(opts, option.WithEndpoint(ep))
-	}
-	c, err := storage.NewClient(ctx, opts...)
-	if err != nil {
-		return nil, err
-	}
-	// Reads (metadata, ranges) are bounded as uploads are: the SDK's
-	// default retries them until the context ends.
-	c.SetRetry(storage.WithMaxAttempts(gcs.DefaultMaxAttempts))
-	return c, nil
-}
-
-// writeCredentials loads the destination's credentials with the read-write
-// scope: the file o names (a service account key or authorized-user
-// credentials, refused otherwise), else Application Default Credentials.
-// Their token exchanges go through a client of their own, bounded by the
-// request timeout (headers and body), and are fetched with the context of
-// the request that needs one; their debug logging is off whatever the
-// environment says (it would print tokens and signed assertions).
-func writeCredentials(o DestinationOptions, quiet *slog.Logger) (*auth.Credentials, error) {
-	timeout := o.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultRequestTimeout
-	}
-	dopts := &credentials.DetectOptions{Scopes: []string{storage.ScopeReadWrite}, Logger: quiet,
-		Client: &http.Client{Timeout: timeout, Transport: http.DefaultTransport.(*http.Transport).Clone()}}
-	if o.CredentialsFile == "" {
-		creds, err := credentials.DetectDefault(dopts)
-		if err != nil {
-			return nil, fmt.Errorf("remote: destination credentials: %w", err)
-		}
-		return creds, nil
-	}
-	b, err := os.ReadFile(o.CredentialsFile)
-	if err != nil {
-		return nil, fmt.Errorf("remote: destination credentials: %w", err)
-	}
-	var kind struct {
-		Type credentials.CredType `json:"type"`
-	}
-	if err := json.Unmarshal(b, &kind); err != nil || kind.Type != credentials.ServiceAccount && kind.Type != credentials.AuthorizedUser {
-		return nil, fmt.Errorf("remote: destination credentials %s: want a service account key or authorized-user credentials", o.CredentialsFile)
-	}
-	creds, err := credentials.NewCredentialsFromJSON(kind.Type, b, dopts)
-	if err != nil {
-		return nil, fmt.Errorf("remote: destination credentials %s: %w", o.CredentialsFile, err)
-	}
-	return creds, nil
-}
-
-// DefaultRequestTimeout is the default for DestinationOptions.RequestTimeout.
+// DefaultRequestTimeout is the default for Options.RequestTimeout.
 const DefaultRequestTimeout = 2 * time.Minute
 
-// ResolveEndpoint resolves a GCS destination endpoint: endpoint when set,
-// else STORAGE_EMULATOR_HOST (with emulator true), else "" for Google's
+// ResolveEndpoint resolves a GCS endpoint: endpoint when set, else
+// STORAGE_EMULATOR_HOST (with emulator true), else "" for Google's
 // default. It does not resolve S3 or Azure endpoints. A caller recording a
-// destination's route passes both results to OpenDestination as Endpoint
-// and Emulator.
+// location's route passes both results to OpenWith or OpenDestination as
+// Options.Endpoint and Options.Emulator.
 func ResolveEndpoint(endpoint string) (string, bool) {
 	if endpoint != "" {
 		return endpoint, false
@@ -256,17 +185,14 @@ func ResolveEndpoint(endpoint string) (string, bool) {
 // createS3 is OpenDestination of an s3:// location: a client of its own over its
 // own connection pool, from the AWS SDK's configuration with o's profile
 // and region, signing every request.
-func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*Destination, error) {
+func createS3(ctx context.Context, l objfile.Location, o Options) (*Destination, error) {
 	d := &Destination{scope: l.String()}
 	s := &Store{scope: d.scope}
 	if err := s.at(o.Endpoint); err != nil {
-		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
+		return nil, err
 	}
 	d.scope = s.scope
-	timeout := o.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultRequestTimeout
-	}
+	timeout := o.timeout()
 	// The SDK's buildable client (which answers a redirect with itself, and
 	// has a pool of its own), so the configuration can add a CA bundle to it
 	// (AWS_CA_BUNDLE, a profile's ca_bundle), which a plain *http.Client
@@ -326,46 +252,18 @@ func createS3(ctx context.Context, l objfile.Location, o DestinationOptions) (*D
 
 // createAzure is OpenDestination of an az:// location: a client of its own over its
 // own connection pool, authorized by o's SAS or by DefaultAzureCredential.
-func createAzure(l objfile.Location, o DestinationOptions) (*Destination, error) {
+func createAzure(l objfile.Location, o Options) (*Destination, error) {
 	d := &Destination{scope: l.String()}
 	s := &Store{scope: d.scope}
 	if err := s.at(o.Endpoint); err != nil {
-		return nil, errors.New("remote: the destination endpoint is not a URL without user information, query or fragment")
+		return nil, err
 	}
 	d.scope = s.scope
-	timeout := o.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultRequestTimeout
-	}
 	pool := http.DefaultTransport.(*http.Transport).Clone()
-	pool.ResponseHeaderTimeout = timeout
-	service := azureService(l.Account, o.Endpoint)
-	sas := strings.TrimPrefix(o.SAS, "?")
-	q, err := url.ParseQuery(sas)
+	pool.ResponseHeaderTimeout = o.timeout()
+	client, err := azureClient(l.Account, o, pool)
 	if err != nil {
-		return nil, errors.New("remote: the destination's shared access signature is not a query string") // the parse error would quote it
-	}
-	var tr http.RoundTripper = pool
-	if q.Has("sig") {
-		tr = scrubbed{next: pool, scrub: redact.SAS(sas)}
-	}
-	opts := &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: tr}}}
-	var client *azsdk.Client
-	if sas != "" {
-		if client, err = azsdk.NewClientWithNoCredential(service+"?"+sas, opts); err != nil {
-			return nil, objfile.RedactError(err)
-		}
-	} else {
-		// Token exchanges go through a client of their own, bounded by the
-		// request timeout.
-		cred, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
-			ClientOptions: azcore.ClientOptions{Transport: &http.Client{Timeout: timeout, Transport: http.DefaultTransport.(*http.Transport).Clone()}}})
-		if err != nil {
-			return nil, fmt.Errorf("remote: destination credentials: %w", err)
-		}
-		if client, err = azsdk.NewClient(service, cred, opts); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	w, err := azblob.NewWriter(client, l.Container, o.AzureWrite)
 	if err != nil {
@@ -375,6 +273,37 @@ func createAzure(l objfile.Location, o DestinationOptions) (*Destination, error)
 	d.w = objfile.RootWriter(w, l.Prefix)
 	d.close = func() error { pool.CloseIdleConnections(); return nil }
 	return d, nil
+}
+
+// azureClient is a client of account's blob service on o's endpoint
+// (azureService) over tr, authorized by o's SAS, which error bodies are
+// scrubbed of (scrubbed), or else by DefaultAzureCredential, whose token
+// exchanges go through a client of their own bounded by the request
+// timeout.
+func azureClient(account string, o Options, tr http.RoundTripper) (*azsdk.Client, error) {
+	service := azureService(account, o.Endpoint)
+	sas := strings.TrimPrefix(o.SAS, "?")
+	q, err := url.ParseQuery(sas)
+	if err != nil {
+		return nil, errors.New("remote: the shared access signature is not a query string") // the parse error would quote it
+	}
+	if q.Has("sig") {
+		tr = scrubbed{next: tr, scrub: redact.SAS(sas)}
+	}
+	opts := &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: tr}}}
+	if sas != "" {
+		client, err := azsdk.NewClientWithNoCredential(service+"?"+sas, opts)
+		if err != nil {
+			return nil, objfile.RedactError(err)
+		}
+		return client, nil
+	}
+	cred, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{
+		ClientOptions: azcore.ClientOptions{Transport: &http.Client{Timeout: o.timeout(), Transport: http.DefaultTransport.(*http.Transport).Clone()}}})
+	if err != nil {
+		return nil, fmt.Errorf("remote: credentials: %w", err)
+	}
+	return azsdk.NewClient(service, cred, opts)
 }
 
 // azureService is the blob service URL of account: on endpoint, the

@@ -5,6 +5,14 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `objfile/remote` opens a location with explicit settings: `remote.OpenWith(ctx, location,
+  remote.Options{...})` takes a GCS credentials file, an endpoint (an emulator's for GCS), an S3 region and
+  profile, an Azure SAS and a request timeout; `remote.Open` is `OpenWith` with the zero `Options`. An Azure
+  container on a custom endpoint, Azurite's or the replay server's, can now be read (#384). `Options` replaces
+  `DestinationOptions`, so `OpenDestination` takes the same struct; its write fields (`GCSWrite`, `S3Write`,
+  `AzureWrite`) are the destination's only. A store `Open` builds now bounds each request's wait for response
+  headers, and its token exchanges, by `DefaultRequestTimeout` (2 minutes) unless `RequestTimeout` says
+  otherwise; GCS reads load their credentials as the destination does.
 - Go port: every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut
   file format (a cut at key page ends, at most 262,144 lines and 16 MiB), collected as the parts are published,
   the segment tail's included, and read back from the retained parts' page index on a resume. It is outside the

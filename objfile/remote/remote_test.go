@@ -22,11 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
-	"google.golang.org/api/option"
-
 	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/objfile/azblob/azfake"
 	"github.com/varveio/swath/objfile/internal/objfiletest"
 	"github.com/varveio/swath/objfile/internal/ranged"
 )
@@ -139,13 +136,19 @@ func serve(t *testing.T, st *store) *server {
 	return srv
 }
 
-// check opens ds/obj through location's Store, pinned under its scope,
-// reads it, closes the Store, which must close its connections to srv, and
-// returns the Store's scope and the snapshot.
-func check(t *testing.T, srv *server, location string) (string, []byte) {
+// check opens ds/obj through location's Store (Open, or OpenWith with o),
+// pinned under its scope, reads it, closes the Store, which must close its
+// connections to srv, and returns the Store's scope and the snapshot.
+func check(t *testing.T, srv *server, location string, o *Options) (string, []byte) {
 	t.Helper()
 	ctx := context.Background()
-	s, err := Open(ctx, location)
+	var s *Store
+	var err error
+	if o == nil {
+		s, err = Open(ctx, location)
+	} else {
+		s, err = OpenWith(ctx, location, *o)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +211,7 @@ func TestOpenS3(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDTEST")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
-	scope, snap := check(t, srv, "s3://bkt/ds")
+	scope, snap := check(t, srv, "s3://bkt/ds", nil)
 	if want := "s3://bkt/ds/ at " + srv.URL; scope != want {
 		t.Errorf("Scope = %q, want %q", scope, want)
 	}
@@ -223,7 +226,7 @@ func TestOpenGCS(t *testing.T) {
 	srv := serve(t, &store{})
 	u, _ := url.Parse(srv.URL)
 	t.Setenv("STORAGE_EMULATOR_HOST", u.Host)
-	if scope, _ := check(t, srv, "gs://bkt/ds/"); scope != "gs://bkt/ds/ at "+u.Host {
+	if scope, _ := check(t, srv, "gs://bkt/ds/", nil); scope != "gs://bkt/ds/ at "+u.Host {
 		t.Errorf("Scope = %q", scope)
 	}
 
@@ -246,17 +249,101 @@ func TestOpenGCS(t *testing.T) {
 	}
 }
 
-func TestOpenAzure(t *testing.T) {
+// TestOpenWithS3: an endpoint, profile and region the Options give are
+// the Store's, path-style; the environment's endpoint is not sent a request.
+func TestOpenWithS3(t *testing.T) {
+	isolate(t)
+	st := &store{}
+	srv := serve(t, st)
+	other := serve(t, &store{})
+	t.Setenv("AWS_ENDPOINT_URL_S3", other.URL)
+	cfg := t.TempDir() + "/config"
+	if err := os.WriteFile(cfg, []byte("[profile src]\naws_access_key_id = AKIDSRC\naws_secret_access_key = "+secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	var signed atomic.Value
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signed.Store(r.Header.Get("Authorization"))
+		st.ServeHTTP(w, r)
+	})
+	scope, _ := check(t, srv, "s3://bkt/ds", &Options{Endpoint: srv.URL, Profile: "src", Region: "eu-west-3"})
+	if want := "s3://bkt/ds/ at " + srv.URL; scope != want {
+		t.Errorf("Scope = %q, want %q", scope, want)
+	}
+	if a, _ := signed.Load().(string); !strings.HasPrefix(a, "AWS4-HMAC-SHA256 Credential=AKIDSRC/") || !strings.Contains(a, "/eu-west-3/s3/") {
+		t.Errorf("a request signed %q", a)
+	}
+	if other.conns.Load() != 0 {
+		t.Error("the environment's endpoint was sent a request")
+	}
+}
+
+// TestOpenWithGCSEmulator: an emulator the Options name is reached without
+// credentials, STORAGE_EMULATOR_HOST unset.
+func TestOpenWithGCSEmulator(t *testing.T) {
 	isolate(t)
 	srv := serve(t, &store{})
-	var account string
-	defer func(f func(string, *http.Client) (*azsdk.Client, error)) { azureClient = f }(azureClient)
-	azureClient = func(a string, hc *http.Client) (*azsdk.Client, error) {
-		account = a
-		return azsdk.NewClientWithNoCredential(srv.URL+"/", &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: hc}})
+	u, _ := url.Parse(srv.URL)
+	if scope, _ := check(t, srv, "gs://bkt/ds/", &Options{Endpoint: u.Host, Emulator: true}); scope != "gs://bkt/ds/ at "+u.Host {
+		t.Errorf("Scope = %q", scope)
 	}
-	if scope, _ := check(t, srv, "az://acct/bkt/ds"); scope != "az://acct/bkt/ds/" || account != "acct" {
-		t.Errorf("Scope = %q, account %q", scope, account)
+}
+
+// TestOpenWithAzure: on the endpoint the Options give, the account its first
+// path segment, every request carries the SAS, which neither the scope nor
+// the snapshot holds.
+func TestOpenWithAzure(t *testing.T) {
+	isolate(t)
+	st := &store{}
+	srv := serve(t, st)
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, ok := strings.CutPrefix(r.URL.Path, "/acct/")
+		if !ok || r.URL.Query().Get("sig") != secret {
+			http.Error(w, "unauthorized", http.StatusForbidden)
+			return
+		}
+		r.URL.Path = "/" + path
+		st.ServeHTTP(w, r)
+	})
+	scope, _ := check(t, srv, "az://acct/bkt/ds", &Options{Endpoint: srv.URL, SAS: "?sv=2026-06-06&sp=rl&sig=" + secret})
+	if want := "az://acct/bkt/ds/ at " + srv.URL; scope != want {
+		t.Errorf("Scope = %q, want %q", scope, want)
+	}
+}
+
+// TestOpenWithAzureFake: a dataset in the Azure fake (a manifest and a
+// part) reads through OpenWith on the fake's endpoint, under the dataset's
+// prefix.
+func TestOpenWithAzureFake(t *testing.T) {
+	isolate(t)
+	f := azfake.New("acct", "ctr")
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	f.Put("ds/manifest.json", []byte(`{"parts":["part-00000.parquet"]}`))
+	part := f.Put("ds/part-00000.parquet", data)
+	ctx := context.Background()
+	s, err := OpenWith(ctx, "az://acct/ctr/ds", Options{Endpoint: srv.URL + "/", SAS: "sv=2026-06-06&sp=rl&sig=" + secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	o := objfile.Pin(objfile.Limit(s, 4), s.Scope())
+	m, _, err := o.ReadObject(ctx, "manifest.json", 1<<10)
+	if err != nil || string(m) != `{"parts":["part-00000.parquet"]}` {
+		t.Fatalf("manifest %q: %v", m, err)
+	}
+	obj, err := o.OpenSized(ctx, "part-00000.parquet", int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Close()
+	got := make([]byte, 1000)
+	if _, err := obj.ReadAt(got, 4000); err != nil || !bytes.Equal(got, data[4000:5000]) {
+		t.Fatalf("ReadAt: %v", err)
+	}
+	if obj.Identity() != part.ETag {
+		t.Errorf("identity %q, the fake's ETag %q", obj.Identity(), part.ETag)
 	}
 }
 
@@ -269,8 +356,9 @@ func TestOpenRefusesLocation(t *testing.T) {
 	}
 }
 
-// TestOpenRefusesCredentialEndpoint: an endpoint the environment sets with
-// user information or a query is refused, and not quoted in the error.
+// TestOpenRefusesCredentialEndpoint: an endpoint the environment sets or the
+// Options give with user information, a query or a fragment is refused, as
+// is a SAS that is not a query string, and neither is quoted in the error.
 func TestOpenRefusesCredentialEndpoint(t *testing.T) {
 	isolate(t)
 	t.Setenv("AWS_REGION", "us-east-1")
@@ -294,6 +382,22 @@ func TestOpenRefusesCredentialEndpoint(t *testing.T) {
 			t.Errorf("%s: the error quotes the credential: %v", c.env, err)
 		}
 		t.Setenv(c.env, "")
+	}
+	for _, c := range []struct{ location, endpoint, sas string }{
+		{"s3://bkt/ds", "https://user:" + secret + "@s3.example.com", ""},
+		{"gs://bkt/ds", "https://storage.example.com/storage/v1/?key=" + secret, ""},
+		{"az://acct/ctr", "https://user:" + secret + "@blob.example.com", ""},
+		{"az://acct/ctr", "https://blob.example.com/?sig=" + secret, ""},
+		{"az://acct/ctr", "https://blob.example.com/#" + secret, ""},
+		{"az://acct/ctr", "https://blob.example.com", "sig=%zz" + secret},
+	} {
+		s, err := OpenWith(context.Background(), c.location, Options{Endpoint: c.endpoint, SAS: c.sas})
+		if err == nil {
+			s.Close()
+			t.Errorf("Options{Endpoint: %s}: OpenWith succeeded, scope %q", c.endpoint, s.Scope())
+		} else if strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: the error quotes the credential: %v", c.location, err)
+		}
 	}
 }
 
@@ -357,11 +461,8 @@ func TestOpenGCSCredentialsOutliveContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", file)
-	defer func(o []option.ClientOption) { gcsEndpoint = o }(gcsEndpoint)
-	gcsEndpoint = []option.ClientOption{option.WithEndpoint(srv.URL + "/storage/v1/")}
-
 	openCtx, cancelOpen := context.WithCancel(context.Background())
-	s, err := Open(openCtx, "gs://bkt/ds")
+	s, err := OpenWith(openCtx, "gs://bkt/ds", Options{Endpoint: srv.URL + "/storage/v1/"})
 	if err != nil {
 		t.Fatal(err)
 	}

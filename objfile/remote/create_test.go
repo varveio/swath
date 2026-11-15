@@ -39,7 +39,7 @@ func TestOpenDestination(t *testing.T) {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	t.Setenv("STORAGE_EMULATOR_HOST", strings.TrimPrefix(srv.URL, "http://"))
-	d, err := OpenDestination(context.Background(), "gs://bkt/ds", DestinationOptions{})
+	d, err := OpenDestination(context.Background(), "gs://bkt/ds", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +69,11 @@ func TestOpenDestination(t *testing.T) {
 // credentials file are refused.
 func TestOpenDestinationRefusals(t *testing.T) {
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
-	if _, err := OpenDestination(context.Background(), "gs://b", DestinationOptions{Endpoint: "https://user:" + secret + "@host/storage/v1/"}); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := OpenDestination(context.Background(), "gs://b", Options{Endpoint: "https://user:" + secret + "@host/storage/v1/"}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("endpoint with user information: %v", err)
 	}
-	_, err := OpenDestination(context.Background(), "gs://b", DestinationOptions{CredentialsFile: filepath.Join(t.TempDir(), "missing.json")})
-	if err == nil || !strings.Contains(err.Error(), "destination credentials") {
+	_, err := OpenDestination(context.Background(), "gs://b", Options{CredentialsFile: filepath.Join(t.TempDir(), "missing.json")})
+	if err == nil || !strings.Contains(err.Error(), "remote: credentials") {
 		t.Errorf("missing credentials file: %v", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestOpenDestinationQuietAuth(t *testing.T) {
 	os.Stderr = wr
 	captured := make(chan []byte)
 	go func() { b, _ := io.ReadAll(rd); captured <- b }()
-	d, err := OpenDestination(context.Background(), "gs://bkt/ds", DestinationOptions{Endpoint: srv.URL + "/storage/v1/", GCSWrite: gcs.WriteOptions{ChunkSize: 256 << 10}})
+	d, err := OpenDestination(context.Background(), "gs://bkt/ds", Options{Endpoint: srv.URL + "/storage/v1/", GCSWrite: gcs.WriteOptions{ChunkSize: 256 << 10}})
 	if err == nil {
 		_, err = d.Writer().PutIfAbsent(context.Background(), "m", []byte("{}"))
 	}
@@ -179,7 +179,7 @@ func TestOpenDestinationTokenBounded(t *testing.T) {
 		ctx     time.Duration
 	}{{"context", 5 * time.Second, 200 * time.Millisecond}, {"request timeout", 200 * time.Millisecond, 0}} {
 		t.Run(c.name, func(t *testing.T) {
-			d, err := OpenDestination(context.Background(), "gs://bkt/ds", DestinationOptions{Endpoint: srv.URL + "/storage/v1/", CredentialsFile: sa, RequestTimeout: c.timeout})
+			d, err := OpenDestination(context.Background(), "gs://bkt/ds", Options{Endpoint: srv.URL + "/storage/v1/", CredentialsFile: sa, RequestTimeout: c.timeout})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,7 +244,7 @@ func TestOpenDestinationS3(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("AWS_CONFIG_FILE", cfg)
-	d, err := OpenDestination(context.Background(), "s3://bkt/ds", DestinationOptions{Endpoint: url, Profile: "dst"})
+	d, err := OpenDestination(context.Background(), "s3://bkt/ds", Options{Endpoint: url, Profile: "dst"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,11 +282,11 @@ func TestOpenDestinationS3(t *testing.T) {
 	}
 
 	// The region given wins; without one or a profile's, us-east-1.
-	if d, err := OpenDestination(context.Background(), "s3://bkt/ds", DestinationOptions{Endpoint: url, Profile: "dst", Region: "ap-south-1"}); err != nil || d.Region() != "ap-south-1" {
+	if d, err := OpenDestination(context.Background(), "s3://bkt/ds", Options{Endpoint: url, Profile: "dst", Region: "ap-south-1"}); err != nil || d.Region() != "ap-south-1" {
 		t.Fatalf("given region: %v", err)
 	}
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
-	if d, err := OpenDestination(context.Background(), "s3://bkt/ds", DestinationOptions{Endpoint: url}); err != nil || d.Region() != "us-east-1" {
+	if d, err := OpenDestination(context.Background(), "s3://bkt/ds", Options{Endpoint: url}); err != nil || d.Region() != "us-east-1" {
 		t.Fatalf("default region: %v", err)
 	}
 }
@@ -295,13 +295,13 @@ func TestOpenDestinationS3(t *testing.T) {
 // refuses, and a missing profile are refused before any request.
 func TestOpenDestinationS3Refusals(t *testing.T) {
 	awsEnv(t)
-	if _, err := OpenDestination(context.Background(), "s3://b", DestinationOptions{Endpoint: "https://user:" + secret + "@host/"}); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := OpenDestination(context.Background(), "s3://b", Options{Endpoint: "https://user:" + secret + "@host/"}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("endpoint with user information: %v", err)
 	}
-	if _, err := OpenDestination(context.Background(), "s3://b", DestinationOptions{S3Write: s3.WriteOptions{PartSize: 1 << 20}}); err == nil {
+	if _, err := OpenDestination(context.Background(), "s3://b", Options{S3Write: s3.WriteOptions{PartSize: 1 << 20}}); err == nil {
 		t.Error("a 1 MiB part size: accepted")
 	}
-	if _, err := OpenDestination(context.Background(), "s3://b", DestinationOptions{Profile: "missing"}); err == nil {
+	if _, err := OpenDestination(context.Background(), "s3://b", Options{Profile: "missing"}); err == nil {
 		t.Error("a missing profile: accepted")
 	}
 }
@@ -321,7 +321,7 @@ func TestOpenDestinationS3CABundle(t *testing.T) {
 	}
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "s3cr3t")
-	put := func(name string, o DestinationOptions) error {
+	put := func(name string, o Options) error {
 		o.Endpoint = srv.URL
 		d, err := OpenDestination(context.Background(), "s3://bkt/ds", o)
 		if err != nil {
@@ -331,12 +331,12 @@ func TestOpenDestinationS3CABundle(t *testing.T) {
 		_, err = d.Writer().PutIfAbsent(context.Background(), name, []byte(`{}`))
 		return err
 	}
-	if err := put("none.json", DestinationOptions{S3Write: s3.WriteOptions{MaxAttempts: 1}}); err == nil {
+	if err := put("none.json", Options{S3Write: s3.WriteOptions{MaxAttempts: 1}}); err == nil {
 		t.Fatal("an endpoint no bundle trusts was reached")
 	}
 	t.Run("environment", func(t *testing.T) {
 		t.Setenv("AWS_CA_BUNDLE", bundle)
-		if err := put("env.json", DestinationOptions{}); err != nil {
+		if err := put("env.json", Options{}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -346,7 +346,7 @@ func TestOpenDestinationS3CABundle(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("AWS_CONFIG_FILE", cfg)
-		if err := put("profile.json", DestinationOptions{Profile: "dst"}); err != nil {
+		if err := put("profile.json", Options{Profile: "dst"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -380,7 +380,7 @@ func azureDestination(t *testing.T) (*azfake.Server, string, *sync.Map) {
 func TestOpenDestinationAzure(t *testing.T) {
 	f, url, sigs := azureDestination(t)
 	sas := "?sv=2026-06-06&sp=rcwd&sig=" + secret
-	d, err := OpenDestination(context.Background(), "az://acct/ctr/ds", DestinationOptions{Endpoint: url + "/", SAS: sas, AzureWrite: azblob.WriteOptions{BlockSize: 64 << 10}})
+	d, err := OpenDestination(context.Background(), "az://acct/ctr/ds", Options{Endpoint: url + "/", SAS: sas, AzureWrite: azblob.WriteOptions{BlockSize: 64 << 10}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,13 +427,13 @@ func TestOpenDestinationAzure(t *testing.T) {
 // before any request, quoting no credential; a write the service refuses
 // shows no signature, even when the service's answer quotes it.
 func TestOpenDestinationAzureRefusals(t *testing.T) {
-	if _, err := OpenDestination(context.Background(), "az://acct/ctr", DestinationOptions{Endpoint: "https://user:" + secret + "@host/", SAS: "sig=x"}); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := OpenDestination(context.Background(), "az://acct/ctr", Options{Endpoint: "https://user:" + secret + "@host/", SAS: "sig=x"}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("endpoint with user information: %v", err)
 	}
-	if _, err := OpenDestination(context.Background(), "az://acct/ctr", DestinationOptions{SAS: "sig=%zz" + secret}); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := OpenDestination(context.Background(), "az://acct/ctr", Options{SAS: "sig=%zz" + secret}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("a SAS that is not a query string: %v", err)
 	}
-	if _, err := OpenDestination(context.Background(), "az://acct/ctr", DestinationOptions{SAS: "sig=x", AzureWrite: azblob.WriteOptions{BlockSize: azblob.MaxBlockSize + 1}}); err == nil {
+	if _, err := OpenDestination(context.Background(), "az://acct/ctr", Options{SAS: "sig=x", AzureWrite: azblob.WriteOptions{BlockSize: azblob.MaxBlockSize + 1}}); err == nil {
 		t.Error("a block size over the limit: accepted")
 	}
 	// The service's answer quotes the request's query back: as sent, with its
@@ -454,7 +454,7 @@ func TestOpenDestinationAzureRefusals(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s</Message></Error>", c.echo(r.URL.RawQuery))
 		}))
-		d, err := OpenDestination(context.Background(), "az://acct/ctr", DestinationOptions{Endpoint: srv.URL, SAS: c.sas})
+		d, err := OpenDestination(context.Background(), "az://acct/ctr", Options{Endpoint: srv.URL, SAS: c.sas})
 		if err != nil {
 			t.Fatal(err)
 		}

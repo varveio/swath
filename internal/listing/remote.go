@@ -233,7 +233,7 @@ func openRemote(ctx context.Context, r *RemoteOutput) (*remoteState, error) {
 	if l.Scheme == "gs" {
 		endpoint, emulator = remote.ResolveEndpoint(r.Endpoint)
 	}
-	dst, err := remote.OpenDestination(ctx, r.Location, remote.DestinationOptions{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
+	dst, err := remote.OpenDestination(ctx, r.Location, remote.Options{CredentialsFile: r.CredentialsFile, Endpoint: endpoint, Emulator: emulator,
 		Region: r.Region, Profile: r.Profile, SAS: r.SAS,
 		GCSWrite:   gcs.WriteOptions{ChunkSize: r.ChunkSize, Retried: rs.stats.Retried},
 		S3Write:    s3.WriteOptions{PartSize: int64(r.ChunkSize), Retried: rs.stats.Retried},
