@@ -60,13 +60,14 @@ func viewTree(t *testing.T) string {
 var viewTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 // TestDuView: bare swath du on a terminal draws the view: the total first
-// under SOURCE, the largest nodes at any depth by size, each parent's
-// rest folded into one "(N more)" line, a bar when the width allows and
+// under SOURCE, the largest nodes at any depth by size as far as the lines
+// go (here logs/ stays whole, x fits), each parent's rest folded into one
+// "(N more)" line, a bar when the width allows and
 // color as --color and NO_COLOR say; the line under it gives the total.
 // -d, an explicit --format and a pipe keep the rows.
 func TestDuView(t *testing.T) {
 	root := viewTree(t)
-	viewTerminal(t, 200, 24) // the temporary directory's name is not cut
+	viewTerminal(t, 200, 13) // the temporary directory's name is not cut; eight lines
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("TERM", "xterm") // not dumb, which turns color off
 	stderr := captureStderr(t)
@@ -86,7 +87,7 @@ func TestDuView(t *testing.T) {
 		"2.93 KiB  31.2%  █████████▎                      " + at + pad + "        b.bin\n" +
 		"   500 B   5.2%  █▌                              " + later + pad + "      c.bin\n" +
 		"   100 B   1.0%  ▎                               " + at + pad + "    logs/\n" +
-		"     1 B   0.0%                                  " + strings.Repeat(" ", len(at)) + pad + "    (1 more)\n"
+		"     1 B   0.0%                                  " + at + pad + "    x\n"
 	if got := strings.Replace(out.String(), root, "ROOT", 1); got != want {
 		t.Fatalf("view\n%s\nwant\n%s", got, want)
 	}
@@ -109,7 +110,7 @@ func TestDuView(t *testing.T) {
 			}
 		}
 		bar, timed := strings.Contains(out.String(), "█"), strings.Contains(out.String(), at)
-		if len(lines) != 8 || bar != (width > 40) || timed != (width > 40) {
+		if len(lines) != 18 || bar != (width > 40) || timed != (width > 40) {
 			t.Errorf("width %d: %d lines, bar %v, time %v\n%s", width, len(lines), bar, timed, out.String())
 		}
 	}
@@ -292,5 +293,40 @@ func TestDuViewFromDatasetSource(t *testing.T) {
 	s, srest, _ := strings.Cut(saved.String(), "\n")
 	if !strings.HasSuffix(l, sub) || !strings.HasSuffix(s, sub) || lrest != srest || !strings.Contains(lrest, "raw/") || strings.Contains(lrest, "logs/") {
 		t.Fatalf("live\n%s\nsaved\n%s", live.String(), saved.String())
+	}
+}
+
+// TestDuViewWideBucket: a bucket of 2,000 top-level prefixes, four of them
+// large, fills a 30-line terminal: the large prefixes, then as many of the
+// others as the lines hold while their rest outweighs the rest, not one
+// fold of them all.
+func TestDuViewWideBucket(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var keys []string
+	for i := range 2000 {
+		keys = append(keys, fmt.Sprintf("p%04d/obj-%d", i, i)) // a body of its key: sizes differ
+	}
+	b := s3test.Backend(t, keys)
+	for i := range 4 {
+		k := fmt.Sprintf("p%04d/big", 500*i)
+		if _, err := b.PutObject(s3test.Name, k, nil, bytes.NewReader(make([]byte, 20_000)), 20_000, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	viewTerminal(t, 100, 30)
+	var out bytes.Buffer
+	src := []string{"s3://" + s3test.Name, "--anonymous", "--endpoint-url", s3test.Serve(t, http.Handler(s3test.Handler(b)))}
+	if err := runDu(context.Background(), append(src, "--no-stats", "-q"), &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	top := 0
+	for _, l := range lines {
+		if f := strings.Fields(l); strings.HasPrefix(f[len(f)-1], "p") { // a deeper name is relative: big, obj-…
+			top++
+		}
+	}
+	if len(lines) != 25 || top < 15 || !strings.HasSuffix(lines[len(lines)-1], "more)") {
+		t.Fatalf("%d lines, %d top-level prefixes\n%s", len(lines), top, out.String())
 	}
 }

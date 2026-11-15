@@ -388,7 +388,7 @@ emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owne
 claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
 subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
 (`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
-before its last is complete, so it is kept only when it holds at least 1 % of the bytes seen so far and is
+before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
 across runs and complete at the end. An unordered count (the local source) gives no order inside a run: there
 only objects complete in a run. A sink that is also an `order.SubtreeSink` is told when a range that declared
@@ -396,9 +396,10 @@ the prefix it owns (`source.Subtreer`, which every emitter adapter forwards: a l
 its prefix, its chunks and subdirectories being its descendants) has ended with every range it emitted: the
 count keeps a node per queued range, with its parent and its pending descendants, and the worker that settles
 the last one reports the prefixes that ended, the deepest first. The view then completes that directory
-through the same rule. Of the complete prefixes above 1 % of the bytes seen, the view keeps the 100 largest
-of each depth (a min-heap a depth), which holds every prefix of 1 % of the total whatever the order they
-complete in; `--max-prefixes` bounds the local directories being listed and the prefixes kept for a hard
+through the same rule. The 100 largest of each depth are a min-heap a depth, ordered by bytes and then by
+key, so which are kept does not depend on the order they complete in; a node below the least of a full depth
+is dropped without the lock (an atomic floor a depth), and at the end the partial and pinned nodes join the
+heaps' in one cut per depth, so a listing and its dataset hold the same nodes; `--max-prefixes` bounds the local directories being listed and the prefixes kept for a hard
 link (an ordered run's partial prefixes are its two edges, a few a range, and count against nothing). A
 run's children are counted once: by the run when complete there, else when first summed as a partial prefix.
 `TestViewExactOrdered` and `TestViewExactUnordered` check the view against a brute-force tree over random

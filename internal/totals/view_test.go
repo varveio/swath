@@ -107,8 +107,9 @@ func exactTree(origin string, rows []Row, linksOnce bool) map[string]*exactNode 
 }
 
 // checkView compares a view with the brute-force tree: the same total, and
-// exactly the nodes of at least 1 % of it (and above 0), with their sums
-// and children.
+// nodes held with their exact sums, children and time, each under a parent
+// held: at least every node among the viewKeep largest of its depth (ties
+// aside) whose ancestors are, so every node of 1 % of the total.
 func checkView(t *testing.T, v *View, origin string, tree map[string]*exactNode) {
 	t.Helper()
 	total := tree[origin]
@@ -116,25 +117,48 @@ func checkView(t *testing.T, v *View, origin string, tree map[string]*exactNode)
 		v.Total.HasNewest != total.timed || v.Total.Newest != total.newest {
 		t.Fatalf("total %+v, want %+v (%d kids, %d self)", v.Total, *total, len(total.kids), total.self)
 	}
-	floor := (total.bytes + viewShare - 1) / viewShare
-	var want []string
+	depth := func(k string) int {
+		d := strings.Count(k[len(origin):], "/")
+		if k != origin && !strings.HasSuffix(k, "/") {
+			d++
+		}
+		return d
+	}
+	// sure: a node no viewKeep others of its depth are as large as, and
+	// its ancestors too.
+	byDepth := map[int][]int64{}
 	for k, n := range tree {
-		if k != origin && n.bytes > 0 && n.bytes >= floor {
-			want = append(want, k)
+		if k != origin && n.bytes > 0 && strings.HasPrefix(k, origin) {
+			byDepth[depth(k)] = append(byDepth[depth(k)], n.bytes)
 		}
 	}
-	slices.Sort(want)
-	var got []string
+	top := func(k string) bool {
+		as := 0
+		for _, b := range byDepth[depth(k)] {
+			if b >= tree[k].bytes {
+				as++
+			}
+		}
+		return as <= viewKeep // itself included
+	}
+	var sure func(k string) bool
+	sure = func(k string) bool {
+		return k == origin || tree[k].bytes > 0 && top(k) && sure(parentOf(k))
+	}
+	got := map[string]bool{}
 	for _, n := range v.Nodes {
-		got = append(got, n.Key)
+		got[n.Key] = true
 		e := tree[n.Key]
 		if e == nil || n.Bytes != e.bytes || n.Objects != e.objects || n.Missing != e.missing || n.Children != int64(len(e.kids))+e.self ||
-			n.HasNewest != e.timed || n.Newest != e.newest {
+			n.HasNewest != e.timed || n.Newest != e.newest || n.Bytes == 0 || parentOf(n.Key) != origin && !got[parentOf(n.Key)] {
 			t.Fatalf("node %+v, want %+v", n, e)
 		}
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("nodes %q, want %q", got, want)
+	floor := (total.bytes + 99) / 100
+	for k, n := range tree {
+		if k != origin && strings.HasPrefix(k, origin) && (sure(k) || n.bytes > 0 && n.bytes >= floor) && !got[k] {
+			t.Fatalf("node %q (%d bytes) not held", k, n.bytes)
+		}
 	}
 }
 
@@ -371,7 +395,7 @@ func TestViewLinksOrdered(t *testing.T) {
 }
 
 // TestViewMemory: a large flat listing in few runs remembers at most
-// viewShare nodes of a depth beyond those it holds partial: memory does not
+// viewKeep nodes of a depth beyond those it holds partial: memory does not
 // grow with the objects.
 func TestViewMemory(t *testing.T) {
 	var rows []Row
@@ -382,10 +406,10 @@ func TestViewMemory(t *testing.T) {
 	tl := New(Options{View: true})
 	feed(tl, [][]Row{rows[:100_000], rows[100_000:]}, true, rand.New(rand.NewPCG(1, 1)))
 	v := tl.view
-	if len(v.kept) > viewShare*2 || len(v.open) > 10 {
+	if len(v.kept) > viewKeep*2 || len(v.open) > 10 {
 		t.Fatalf("held %d remembered and %d partial nodes", len(v.kept), len(v.open))
 	}
-	if s := tl.View().Stats; s.Dropped < 199_000 || s.Partial == 0 || s.Runs != 2 {
+	if s := tl.View().Stats; s.Dropped+s.Pruned < 199_000 || s.Partial == 0 || s.Runs != 2 {
 		t.Fatalf("stats %+v", s)
 	}
 }
@@ -512,7 +536,7 @@ func TestViewLocalBudget(t *testing.T) {
 	if lv.Lowered || sv.Lowered || len(live.view.open) != 1 || heldNow(live.view) != live.view.held {
 		t.Fatalf("lowered %v %v, %d partial, held %d (counted %d)", lv.Lowered, sv.Lowered, len(live.view.open), live.view.held, heldNow(live.view))
 	}
-	if !slices.Equal(lv.Nodes, sv.Nodes) || lv.Total != sv.Total || len(lv.Nodes) != 2 || lv.Total.Children != 2001 {
+	if !slices.Equal(lv.Nodes, sv.Nodes) || lv.Total != sv.Total || len(lv.Nodes) != 2*viewKeep || lv.Total.Children != 2001 {
 		t.Fatalf("live %+v %+v\nsaved %+v %+v", lv.Total, lv.Nodes, sv.Total, sv.Nodes)
 	}
 	checkView(t, lv, "", exactTree("", all, false))
@@ -540,4 +564,36 @@ func TestViewPinnedBudget(t *testing.T) {
 	if got := tl.View(); got.Total.Bytes != 10_000 || got.Total.Objects != 1000 {
 		t.Fatalf("total %+v", got.Total)
 	}
+}
+
+// TestViewSelectFills: on a wide level (2,173 top-level prefixes, a few
+// large, the small ones holding most of the bytes) the lines fill with the
+// large prefixes and then the largest of the small ones, the level's rest
+// in a fold, rather than one fold of them all.
+func TestViewSelectFills(t *testing.T) {
+	var rows []Row
+	for i := range 2173 {
+		size := int64(1000 + i)
+		if i%500 == 0 {
+			size = 300_000 // a few large; the small ones hold three quarters
+		}
+		for j := range 3 {
+			rows = append(rows, Row{Key: fmt.Sprintf("p%04d/s%d/o", i, j), Object: true, Size: size / 3, HasSize: true})
+		}
+	}
+	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+	tl := New(Options{View: true})
+	feed(tl, [][]Row{rows[:len(rows)/2], rows[len(rows)/2:]}, true, rand.New(rand.NewPCG(1, 2)))
+	v := tl.View()
+	lines := v.Select(25)
+	top := 0
+	for _, l := range lines {
+		if l.Level == 1 && !l.Fold {
+			top++
+		}
+	}
+	if len(lines) != 25 || top < 20 || !lines[len(lines)-1].Fold {
+		t.Fatalf("%d lines, %d top-level prefixes:\n%+v", len(lines), top, lines)
+	}
+	checkView(t, v, "", exactTree("", rows, false))
 }

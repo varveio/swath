@@ -211,7 +211,7 @@ seed, from its first delimiter request to its tiles (absent where none ran). `te
 
 `totals_view` is `swath du`'s [view](../commands/swath-du.md#the-view), when it was drawn: `runs` (the ranges'
 stretches of rows it read), `completed` (prefixes and objects complete inside one run, or local directories
-whose listing ended), split into `remembered` (at 1 % of the bytes seen, or holding a hard link) and `dropped`,
+whose listing ended), split into `remembered` (among the 100 largest of their depth, or holding a hard link) and `dropped`,
 `pruned` (remembered, dropped later for 100 larger ones of their depth), `partial` (cut by a run's edge, summed
 across runs), and `depth_kept` with `lowered` (-1 and false, or the deepest level kept once more than
 `output.totals.max_prefixes` were held).

@@ -37,10 +37,11 @@ $ swath du s3://demo-lake
 2.00 KiB   0.0%                                                               (1 more)
  164 GiB  42.6%  ████████████▊                   2025-11-15 09:46:40        warehouse/
  159 GiB  41.5%  ████████████▍                   2025-11-15 09:46:40          events/year=2025/
-4.16 GiB   1.1%  ▎                                                            (1 more)
+4.16 GiB   1.1%  ▎                               2025-11-15 09:46:40          sessions/year=2025/
 27.7 GiB   7.2%  ██▏                             2025-11-15 09:46:40        logs/api/2025/
 24.0 GiB   6.3%  █▉                              2025-11-15 09:46:40        images/
-4.54 GiB   1.2%  ▎                                                          (2 more)
+4.54 GiB   1.2%  ▎                               2025-11-15 09:46:40        tmp/
+5.00 KiB   0.0%                                  2025-11-15 09:46:40        index.html
   384 GiB in 130,453 objects
 ```
 
@@ -48,8 +49,12 @@ Each parent that lists children lists its largest, then one `(N more)` line for 
 and what they hold together, so the lines under a parent always add up to it. Nothing is hidden without being
 counted; only a `(N more)` line of 0 bytes is left out. A name is written as the other terminal lines write
 it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
-terminal's width. A prefix with a single child shares its line with it (`logs/api/2025/`). The view fills the terminal's
-height, less a few lines; what does not fit is in the `(N more)` lines. One figure drives the whole view, its
+terminal's width. A prefix with a single child shares its line with it (`logs/api/2025/`). The view fills the
+terminal's height, less a few lines, from the largest down: line by line, a fold or a prefix shown whole gives
+its largest child (a prefix a fold for the rest too), the one whose child is the largest; a fold of many small
+prefixes that together outweigh one line's share of the view gives them first, so a wide level of small
+prefixes is shown as far as the lines go rather than as one fold. What does not fit is in the `(N more)`
+lines. One figure drives the whole view, its
 order, shares and bars: the size, or the allocated bytes with `--allocated`. A line on stderr under it gives the
 total once, with the other figure where the source has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q`
 leaves it out. Color follows `--color` and `NO_COLOR`. As the terminal narrows the bar is left out first, then
@@ -57,17 +62,17 @@ the time; a `(N more)` line has no time.
 
 Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
 one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
-subdirectories'. A complete prefix below 1 % of the bytes seen so far is dropped: the total can only be larger,
-so it is below 1 % of the total too, and its bytes are already counted in its parent's. Of the rest, the 100
-largest of each depth are kept: a prefix of 1 % of the total is always among them. A prefix cut by the edge
+subdirectories'. Of the complete prefixes and objects, the 100 largest of each depth are kept, far more than
+a terminal shows; one dropped for 100 larger ones of its depth is counted in its parent's bytes, and which are
+kept does not depend on the order the listing completes them in. A prefix cut by the edge
 of a range is summed across ranges and completes when the listing ends: a few a range. The local directories
 being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
 `--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
 report's `diagnostics.totals_view` counts what was kept, dropped and merged.
 
 The view is for reading. In a pipe `swath du` prints its rows (TSV) as before, and an explicit `-d N`
-(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows. `--from-dataset` draws the same view from a saved
-dataset, line for line.
+(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows.
+`--from-dataset` draws the same view from a saved dataset, line for line.
 
 The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
 [pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
