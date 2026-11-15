@@ -47,7 +47,9 @@ manifest that does not say whether its listing completed), `anonymous_credential
 local directory left out), `lock_unenforced`, `durable_spill_off`, `unresumable_not_marked`,
 `seed_from_cuts_refused`, `seed_from_unavailable` (a resume without its `--seed-from` prior), `encoders_limited`,
 `spill_not_removed`, `spill_in_memory` (spill on `tmpfs`), and for a committed dataset whose aftermath failed:
-`run_report_unwritten`, `cuts_unwritten`, `commit_marker_unwritten`, `aftermath_unfinished`.
+`run_report_unwritten`, `cuts_unwritten`, `commit_marker_unwritten`, `aftermath_unfinished`; and
+`replaced_not_removed` (`--overwrite`: the replaced dataset's files were not removed after the new one was
+installed).
 
 The verbosity options gate the events as they gate the text lines: `start` needs `-v`, `request` events `-vv`
 or `-vvv`, and progress records `-v` or `--progress`; they come every `--progress-interval` (30 seconds by
@@ -70,6 +72,6 @@ Each event once:
 {"ts":"2026-11-10T12:00:00.000000Z","level":"info","event":"dataset","attempt_id":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","run_id":"0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a","msg":"totals of the dataset logs-inventory, not a live listing: s3://bucket/logs/ as listed 2026-11-08T10:00:00Z (2 days ago); complete","path":"logs-inventory","source":"s3://bucket/logs/","schema_id":"swath/s3-objects/v1","listing_started_at":"2026-11-08T10:00:00.000000Z","listing_finished_at":"2026-11-08T10:00:00.000000Z","complete":true,"stop_reason":"completed","unreadable":0,"filters":[],"exclusions":[]}
 {"ts":"2026-11-10T12:00:00.000000Z","level":"info","event":"read","attempt_id":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","run_id":"0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a","msg":"read 120,000 rows of logs-inventory (0 dropped by the filters), the key and size, last_modified: 1,048,576 bytes in 9 reads","rows":120000,"filtered":0,"columns":["size","last_modified"],"parts_opened":2,"source_reads":9,"source_bytes":1048576}
 {"ts":"2026-11-10T12:00:00.000000Z","level":"error","event":"spill_pressure","attempt_id":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","run_id":"0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a","msg":"spill cap too small: listing has waited on the output for 2m0s: the spill cap cannot hold the rows listed ahead of it (spill 91.0 GiB, cap 91.0 GiB, free-space reserve 1.00 GiB); the output writes 9,800 rows/s; stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE), or let it run: it finishes, slowly","since":"2026-11-10T11:58:00.000000Z","spill_bytes":97710505984,"spill_max_bytes":97710505984,"spill_reserve_bytes":1073741824,"output_rows_per_s":9800}
-{"ts":"2026-11-10T12:00:00.000000Z","level":"error","event":"outcome","attempt_id":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","run_id":"0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
+{"ts":"2026-11-10T12:00:00.000000Z","level":"error","event":"outcome","attempt_id":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","run_id":"0d4e8f6a2b1c4d3e9f8a7b6c5d4e3f2a","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","status":"failed","complete":false}
 ```
 <!-- events:end -->
