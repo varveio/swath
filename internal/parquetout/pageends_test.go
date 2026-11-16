@@ -6,6 +6,7 @@ package parquetout
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,5 +109,40 @@ func TestPageEndsReadBack(t *testing.T) {
 		if at != len(keys) {
 			t.Fatalf("%s: the cut file covers %d of %d rows", name, at, len(keys))
 		}
+	}
+}
+
+// TestPageCutAtKeyBytes: a page ends at pageKeyBytes of keys before its
+// pageRows rows, so keys past the price (unboundedKeyBytes: a local path
+// deeper than PATH_MAX) keep a page within what the writer is admitted
+// at; keys within the price fill whole pages.
+func TestPageCutAtKeyBytes(t *testing.T) {
+	for _, key := range []int{unboundedKeyBytes, 2 * unboundedKeyBytes} {
+		rows := testRows(3*pageRows, 1)
+		for i := range rows {
+			rows[i].Key = strings.Repeat("p", key-8) + fmt.Sprintf("%08d", i)
+		}
+		f, err := openLocal(nil, filepath.Join(t.TempDir(), "part"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := newCodec(1)
+		w, err := create(f, &testSchema, c, func() int { return 1 }, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.write(rows); err != nil {
+			t.Fatal(err)
+		}
+		per := int64(min(pageRows, pageKeyBytes/key))
+		for i, e := range w.ends {
+			if e.Rows != int64(i+1)*per || e.Key != rows[e.Rows-1].Key {
+				t.Fatalf("keys of %d bytes: page end %d at %d rows, want %d", key, i, e.Rows, int64(i+1)*per)
+			}
+		}
+		if p, err := w.close(); err != nil || p.Rows != int64(len(rows)) {
+			t.Fatalf("close: %v", err)
+		}
+		c.Close()
 	}
 }

@@ -34,7 +34,9 @@ func KeyPages(path string) ([]seekparquet.KeyPage, error) {
 // as its writer collected them, from its key page index (KeyPages): the end
 // of each page of pageRows rows the writer filled (the module may end a key
 // page sooner, at its page buffer, inside one), unless the page after it
-// starts with its last key, and the part's last row.
+// starts with its last key, and the part's last row. A page the writer cut
+// at pageKeyBytes is not told apart: only a local listing's keys reach it,
+// and a local listing does not resume, the one reader of retained parts.
 func PageEnds(pages []seekparquet.KeyPage, rows int64) ([]dataset.PageEnd, error) {
 	var ends []dataset.PageEnd
 	var at int64

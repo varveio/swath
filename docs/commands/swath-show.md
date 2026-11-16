@@ -59,7 +59,7 @@ $ swath show logs-inventory
 logs-inventory: interrupted run
   started   2026-11-15 21:04:35 CET (journal version 1)
   command   swath list --endpoint-url=http://127.0.0.1:19480 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
-  identity  provider s3, schema swath/s3-objects/v1, writer swath/parquet-r4, part size 64.0 MiB, source s3://bkt/logs/, endpoint http://127.0.0.1:19480, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
+  identity  provider s3, schema swath/s3-objects/v1, writer swath/parquet-r5, part size 64.0 MiB, source s3://bkt/logs/, endpoint http://127.0.0.1:19480, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
   saved     1 part, 1,000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
 ```
 
