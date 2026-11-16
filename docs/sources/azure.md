@@ -38,7 +38,8 @@ neither establishes it is the run refused too, unless `--azure-assume-flat` asse
 account that reports a hierarchical namespace is refused whatever is asserted. A credential the service
 refuses during these checks ends the run as an authentication failure (exit 1, cause `auth`). A busy or failing
 service (503 `ServerBusy`, other 5xx, throttling, timeouts) is no answer: swath asks again, as it does a listing
-page, until the account answers or the run stops as stuck (exit 75).
+page, until the account answers or the run stops as stuck (exit 75); an endpoint that never answers at all
+stops as unreachable (exit 75).
 
 ## Options for this source
 

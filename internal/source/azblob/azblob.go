@@ -368,7 +368,8 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // service is no answer: a call whose retries were spent on transient
 // failures (5xx, throttling, timeouts) is asked again after the listing's
 // requeue backoff, for as long as the run lives, as a listing page is; the
-// command's watchdog stops a run that never gets an answer as stuck.
+// command's watchdog stops a run that never gets an answer as stuck. An
+// endpoint nothing ever answered at is unreachable, not refused.
 func (p *provider[P]) admit(ctx context.Context) error {
 	var wait time.Duration
 	hns, how, busy, err := p.namespaceOf(ctx)
@@ -393,6 +394,10 @@ func (p *provider[P]) admit(ctx context.Context) error {
 		if p.opt.Warn != nil {
 			p.opt.Warn(source.WarnFlatAssumed, fmt.Sprintf("Azure Blob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
 		}
+	case errors.Is(err, source.ErrUnreachable):
+		// Nothing answered at all (objhttp's fail-fast): no answer about
+		// the namespace either; the run stops as unreachable.
+		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	case !p.unsigned() && refused(err):
 		// Credentials the service rejected: what any request would meet.
 		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
