@@ -7,13 +7,13 @@ Notable changes per release. The human summary of the current release is in the
 
 ## 0.4.0
 
-0.4.0 replaces the 0.3 tool with a new one under the same name: one static binary per platform that lists S3
-and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted filesystems in parallel,
-totals their sizes (`swath du`), and writes rows as text or a key-sorted Parquet dataset (`swath list`) that
-`swath show` summarizes, `swath du --from-dataset` totals and `swath resume` continues. The command line and
-the dataset format are new: 0.4.0 does not read 0.3 datasets or resume 0.3 runs, and the 0.3 documentation is
-at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 source tree is at the tag
-`java-final`. The entries below describe 0.4.0 as released.
+swath lists S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted
+filesystems in parallel, totals their sizes (`swath du`), and writes rows as text or a key-sorted Parquet
+dataset (`swath list`) that `swath show` summarizes, `swath du --from-dataset` totals and `swath resume`
+continues, from one static binary per platform. 0.4.0 replaces the 0.3 tool under the same name: the command
+line and the dataset format are new, 0.4.0 does not read 0.3 datasets or resume 0.3 runs, and the 0.3
+documentation is at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs). The entries below
+describe 0.4.0 as released.
 
 ### Command line
 
@@ -28,14 +28,16 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   every object store has are bare (`--endpoint-url`, `--anonymous`, `--request-timeout` (default 30 s),
   `--ca-bundle`, `--no-verify-ssl`), and help lists them by registration, shared groups first (#338). An
   option given for another provider's source is refused.
-- An unknown option names the nearest one, 0.3 spellings and GNU `du`'s included: `--region` suggests
+- An unknown option is refused with a suggestion where swath recognizes the spelling, 0.3's and GNU `du`'s
+  included: `--region` suggests
   `--s3-region`, `--force-path-style` `--s3-path-style`, `--idle-timeout` `--stall-timeout`, `--compression`
   the `-o` name, `--format json` `jsonl`, `--format parquet` a dataset (`-o DIR`), and `swath du -s` the
   default `--depth 0`. `swath du` takes `--max-depth N` (as `--depth N`) and `-x` (also on `swath list`) for
-  `--one-file-system`. There are no aliases.
-- Every value error reads `--flag "VALUE": want ...` (sizes name their units), and every usage error of
-  `swath list` and `swath du` ends with the help to read. In a SIZE, `K`, `M`, `KiB`, `MiB` and the like are
-  binary and `KB`, `MB` decimal; a DURATION is Go's form with `d` and `w` (`90s`, `1h30m`, `2d`).
+  `--one-file-system`. The removed 0.3 spellings have no compatibility aliases.
+- A value error names the option and the value and explains what is wanted (`--min-size "1e3": want a size such
+  as 1K, ...`), and a usage error of `swath list` and `swath du` ends with the help to read. In a SIZE, `K`, `M`,
+  `KiB`, `MiB` and the like are binary and `KB`, `MB` decimal; a DURATION is Go's form with `d` and `w` (`90s`,
+  `1h30m`, `2d`).
 - SOURCE is `s3://`, `gs://`, `az://ACCOUNT/CONTAINER` (or its `https://ACCOUNT.blob.core.windows.net/` URL)
   or a path. `s3:/bkt` (one slash) is refused naming `s3://bkt`; an unsupported scheme names the forms SOURCE
   takes, and an S3 or GCS https URL (`https://bkt.s3.amazonaws.com/p`, `https://storage.googleapis.com/bkt/p`),
@@ -43,8 +45,11 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
 - `--include` and `--exclude` take globs, and regular expressions (Go's RE2) take `--include-regex` and
   `--exclude-regex`; both match the key below SOURCE on every source. A glob that carries a sign of a regular
   expression (a leading `^`, a final `$`, `\d` and its kin, `.*` with `\.`, `(a|b)`) is refused with exit 2
-  before any listing, naming the regex option, so a 0.3 command line cannot silently match nothing (#526);
-  `*\.parquet` (a quoted dot) stays a glob.
+  before any listing, naming the regex option (#526); `*\.parquet` (a quoted dot) stays a glob. The check
+  catches common regular-expression spellings, not every one: a 0.3 pattern such as `--include parquet` is a
+  valid glob that matches only the key `parquet`. Move regular expressions to `--include-regex` and
+  `--exclude-regex`. On local and mounted filesystems an exclude ending in `/**` also keeps the walk out of the
+  directories it matches (#504).
 - `--modified-since` and `--modified-until` read a time without an offset as local time (`TZ`), as the tables
   print it and `find -newermt` reads it, and take the tables' form `2026-11-15 07:45[:00]`; `Z` or an offset
   is honored as given, and the run records the UTC time it names.
@@ -64,8 +69,9 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   markers. Credentials come from the AWS SDK's default chain; those that expire (an assumed role, web
   identity, SSO, `credential_process`, container credentials, an instance role) are refreshed ahead of their
   expiry, by the smaller of 5 minutes and a quarter of their lifetime, for the source and for a bucket
-  destination, and an expired-token answer renews them once and retries the request; keys that do not refresh
-  stop the run with cause `auth`, saying so (#523). The report counts `credentials.refreshes` and
+  destination. On the source's listing requests, an expired-token answer also renews them, once for all the
+  requests refused for the same credentials, and the request is retried once; keys that do not refresh stop
+  the run with cause `auth`, saying so (#523). The report counts `credentials.refreshes` and
   `credentials.expired_refreshes`.
 - **Google Cloud Storage** through the JSON API; `--all-versions` lists live and noncurrent generations.
   An error answer without a body names its HTTP status text and path.
@@ -74,18 +80,20 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   `order_*` counters show. Listings ask for the Arrow format and read XML wherever the service answers XML
   (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay), checking an Arrow page before
   decoding it; requests name service version `2026-06-06`, and the report counts pages per format
-  (`list_format.*`) (#440, #451). On a 468,557-blob prefix a listing took 3.4 s and 3.9 CPU-seconds against
-  29.5 s and 58 for XML ([measurements](docs/internals/measurements.md#arrow-listing-format-2026-11-10)). A page
-  is 1,000 entries, not the service's 5,000: about half the time and memory on a 1.84M-blob container, for
-  three times the requests ([measurements](docs/internals/measurements.md#azure-page-size-2026-11-10), #448).
-  A flat namespace is established, anonymously or with a container SAS too, by the Data Lake host's 409
-  `EndpointUnsupportedAccountFeatures` answer (the report's `namespace` reads `filesystem endpoint blocked`),
-  so public open-data containers list without `--azure-assume-flat` (#457).
+  (`list_format.*`) (#440, #451). On a 468,557-blob prefix a listing took 3.4 s and 3.9 CPU-seconds against 29.5
+  s and 58 for XML ([measurements](docs/internals/measurements.md#arrow-listing-format-2026-11-10)). A page is
+  1,000 entries by default, the service's 5,000 with a counted `--seed-from` prior: at 1,000 a 1.84M-blob
+  container listed in about half the time and memory, for three times the requests
+  ([measurements](docs/internals/measurements.md#azure-page-size-2026-11-10), #448). A flat namespace is
+  established, anonymously or with a container SAS too, by the Data Lake host's 409
+  `EndpointUnsupportedAccountFeatures` answer (the report's `namespace` reads `filesystem endpoint blocked`), so
+  public open-data containers list without `--azure-assume-flat` (#457).
 - **Azure `--all-versions`** lists blob versions, snapshots and soft-deleted blobs beside the current blob
   (`include=versions,snapshots,deleted`, no permission beyond listing), a name's rows consecutive, in Azure's
   order, and never split across parts or ranges; a resume restarts after the last complete name. Versions and
   snapshots are tested against recorded and synthetic listings only, soft-deleted blobs also against a public
-  container. Rows carry every property List Blobs returns, at no extra request; `--azure-fetch-metadata`,
+  container. Rows carry the listing's properties the schema documents (tier, encryption, lease, tag count
+  and the rest), at no extra request; `--azure-fetch-metadata`,
   `--azure-fetch-tags` (the SAS `t` permission or an Entra ID role that reads tags; a listing refused for it
   stops naming the permission) and `--azure-fetch-immutability` fill `metadata`, `tags` (JSON objects) and the
   immutability and legal hold columns.
@@ -102,20 +110,21 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   nothing has answered (connections refused, a host not found) stops after 30 s (at most half
   `--stall-timeout`), exit 75, cause `unreachable`, naming the endpoint; once anything has answered,
   failures are retried as an outage, and the persistent-failure warning says how long retrying lasts. A
-  listing of a prefix with no key
-  warns `no key starts with "PREFIX"` (exit 0). The S3, GCS and Azure clients check the requests they send
-  against a wire snapshot (#434, #446).
+  listing of a prefix with no key warns `no key starts with "PREFIX"` (exit 0). Tests hold the requests the
+  S3, GCS and Azure clients send to a wire snapshot, so an SDK update that changes them fails (#434, #446).
 
 ### Text output and the terminal
 
-- Text rows (table, TSV, JSONL) use the dataset's column names for every source, chosen with `--columns`.
-  `--no-header` leaves out the TSV header line of `swath list` and `swath du`. A JSONL row of a local tree
-  always has `key` and `key_base64` (and `link_target`, `link_target_base64`): the text, null when not UTF-8,
-  and the base64 bytes, null when UTF-8.
+- TSV and JSONL rows use the dataset's column names for every source, chosen with `--columns`; the table shows
+  a few columns for people. `--no-header` leaves out the TSV header line of `swath list` and `swath du`. In
+  JSONL a binary column (a local tree's `key`, `link_target`) carries two members, `key` and `key_base64`: the
+  text, null when not UTF-8, and the base64 bytes, null when UTF-8.
 - `swath list`'s table puts the size first, heads a local tree's keys `path`, sizes `kind` to the usual kinds,
   ends a symlink's row with ` -> TARGET`, heads its local times with the zone's abbreviation
   (`last_modified (CET)`) and prints `-` for a missing value.
-- `swath list -o DIR` and `-o FILE` print nothing on stdout, except the report with `--report -`.
+- `swath list -o DIR` and `-o FILE` print nothing on stdout, except the report with `--report -`. A text file
+  written inside the local tree it lists is left out of the listing, with its temporary file and the run's
+  scratch directory (#531).
 - The progress line reads objects, bytes so far, elapsed, rate, then parts and (for an object store) in flight
   and API calls; while every request fails it shows `retrying: CAUSE`. `swath du` shows it on a terminal while
   it lists and erases it before its output.
@@ -184,8 +193,9 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
 
 - A dataset is a SeekParquet dataset, format 1 draft revision 1 (`format_version` 0, `draft_revision` 1),
   with the swath dataset profile ([docs/dataset.md](docs/dataset.md)): `manifest.json`, installed last, commits
-  the parts, and `extensions.swath` carries `"version": 1` first; `swath show`, `--seed-from` and `reader`
-  refuse a manifest without it. SeekParquet is pinned at its release `go/v0.2.0`, which fixes the format. A
+  the parts, and `extensions.swath` carries `"version": 1` first. `reader` and `swath show` open a
+  SeekParquet manifest without `extensions.swath` (a generic dataset) and refuse one whose `extensions.swath`
+  lacks `version` 1. SeekParquet is pinned at its release `go/v0.2.0`, which fixes the format. A
   part's pages end at 1,024 rows or at 4 MiB of keys (the writer recipe `swath/parquet-r5`).
 - Schema ids follow `swath/<row-contract>/vN`: `swath/s3-objects/v1`, `swath/s3-versions/v1`,
   `swath/gcs-objects/v1`, `swath/gcs-generations/v1` (with a required `is_latest`), `swath/azure-objects/v1`,
@@ -200,11 +210,13 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   could not be read. `coverage.filters` is a list of `{"filter": NAME, "value": VALUE}` named for the options
   (`modified_since`, `one_file_system`, `no_dirs`, ...; `null` for a switch). `collected` records the metadata
   tier and the optional columns the run asked for, and `committed_object_bytes` is absent when an object's size
-  was not read (`--metadata names`).
-- Every committed sorted dataset carries `cuts.txt` beside its manifest: its key distribution in the cut file
-  format (a cut at key page ends, at most 262,144 lines and 16 MiB), written last, after the run report, a
-  resumed and an overwritten run's included. A run that cannot write it (in a bucket, within a time bound of
-  its own) warns and stays committed.
+  was not read (`--metadata names`). A local listing records its filesystem's space (`filesystem`:
+  `total_bytes`, `free_bytes`, `available_bytes`) (#503). A dataset holds at most 100,000 parts: a run that
+  would pass it stops with exit 1, cause `part_limit` (#251).
+- A committed sorted dataset with rows carries `cuts.txt` beside its manifest (an empty one has none): its key
+  distribution in the cut file format (a cut at key page ends, at most 262,144 lines and 16 MiB), written last,
+  after the run report, a resumed and an overwritten run's included. A run that cannot write it (in a bucket,
+  within a time bound of its own) warns and stays committed.
 - `swath list -o s3://`, `gs://` or `az://` prefix with `--work-dir DIR` writes the dataset to a bucket; the
   destination takes its own credentials, region and endpoint (`--output-*`).
 
@@ -230,14 +242,18 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   there for `swath resume DIR`. The report's `output.replaced` says whether the commit replaced a dataset. A
   directory an interrupted 0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
   `--overwrite`, and `swath resume` refuses it as written by 0.3.
-- `swath resume DIR` writes a report only when given `--report`.
-- Sorted output needs no merge pass: rows listed ahead of the output wait in memory (`--sort-buffer`, by
-  default 1/16 of the least of physical memory, the cgroup limit and `GOMEMLIMIT`, at most 1 GiB) and then in
-  spill. Without `--spill-budget` spill may use the spill filesystem's free space after the reserve: all of it
-  for a dataset in a bucket, half of it otherwise; a frame the cap would refuse rereads the free space, and so
-  does the run every 2 s while the cap holds it back, so a disk grown under a live run is used without a
-  restart. `--spill-budget` is a fixed cap. `diagnostics.resources.spill` says what set the cap (`max_by`),
-  the cap at the start and the end, and how often it rose.
+- A run that writes to a bucket is resumed by its work directory, which may have moved to another path or
+  machine; the bucket, prefix, endpoint and region stay as recorded (#515).
+- `swath resume DIR` writes `run.json` beside the dataset as any run does, and a `--report FILE` only when
+  given one.
+- Sorted output needs no merge pass: rows listed ahead of the output wait in memory (`--sort-buffer`, by default
+  1/16 of the least of physical memory, the cgroup limit and `GOMEMLIMIT`, at least 128 KiB and at most 1 GiB,
+  and 128 MiB when no memory limit can be read) and then in spill. Without `--spill-budget` spill may use the
+  spill filesystem's free space after the reserve: all of it for a dataset in a bucket, half of it otherwise; a
+  frame the cap would refuse rereads the free space, and so does the run every 2 s while the cap holds it back,
+  so a disk grown under a live run is used without a restart. `--spill-budget` is a fixed cap.
+  `diagnostics.resources.spill` says what set the cap (`max_by`), the cap at the start and the end, and how often
+  it rose.
 - A sorted run whose spill cap is far too small says so: once spill has stood refused with workers waiting on
   it for 2 minutes, the error event `spill_pressure` names the wait, spill and its cap, the output's rate and
   the remedy (with the default cap, grow the spill disk or free space on it; with `--spill-budget`, stop and
@@ -254,8 +270,8 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   engine counts `seed.from.merged` and `seed.from.plan_errors`; `swath diag list --seed-from-tile-pages` sets a
   tile's pages (32) and `--seed-from-window-rows` the window's rows.
 - A resume replays durable-spill certificates through the parallel tail: on 28 production key lists a resume
-  took 0.67 to 0.82 times a fresh run's wall (10 of those lists), and its parts are the uninterrupted run's
-  (#288). The certificate limits scale with the spill cap, one slot per 64 KiB, up to 262,144 certificates
+  took 0.67 to 0.82 times a fresh run's wall (10 of those lists), with keys identical to an uninterrupted
+  run's (#288). The certificate limits scale with the spill cap, one slot per 64 KiB, up to 262,144 certificates
   and 512 MiB of their metadata, with a ledger history of four records per slot, at least 40,000; a resume
   counts the certified files it kept as free space (#513). `progress.json` counts the bytes a resume's
   certificate scans read (`scanned_bytes`), so a long scan is not stopped as stuck.
@@ -318,6 +334,12 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   `ghcr.io/varveio/swath` (distroless static) and `ghcr.io/varveio/swath-replay` (`scratch`), running as
   `65532:65532`. `THIRD_PARTY_NOTICES` is generated by `notices.sh`, which fails the build on a linked module
   whose license is not recognized or not allowed.
+- `swath-replay`, in the same archives and as its own image, serves a recorded listing back through S3's
+  `ListObjectsV2` and, with `--protocols`, GCS's `objects.list` and Azure's flat `List Blobs`, from one
+  sorted-Parquet fixture, with per-route latency profiles (`--inject-latency`), to test and benchmark a lister
+  without the bucket ([swath-replay](docs/internals/swath-replay.md)).
+- `swath diag list --trace FILE` writes an object-store listing's run trace (JSON Lines), from which the site's run
+  report is drawn (#536).
 - Built with Go 1.27.4. azblob 1.8 links `apache/arrow-go` into the binary (about +4.8 MB).
 - `just release` creates the three module tags, and the release workflow refuses a release whose module tags
   are missing or name another commit.

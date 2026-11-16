@@ -49,8 +49,9 @@ documentation is also at [swath.varve.io](https://swath.varve.io/).
   (`--force-path-style` is `--s3-path-style`)
   ([Unknown flag](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#unknown-flag)).
 - **Filters.** `--include` and `--exclude` take globs; regular expressions go to `--include-regex` and
-  `--exclude-regex`. A glob that looks like a regular expression (`'\.parquet$'`) is refused with exit 2, so
-  a 0.3 filter cannot silently match nothing
+  `--exclude-regex`. Common regular-expression spellings given as a glob (`'\.parquet$'`) are refused with
+  exit 2, naming the regex option; others are valid globs that match something else (`--include parquet`
+  matches only the key `parquet`), so move every regular expression to `--include-regex` or `--exclude-regex`
   ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#globs)). In sizes `KB`, `MB`, `GB`
   and `TB` are decimal; `K`, `KiB` and the like are binary.
 - **Durations** are a number with a unit (`90s`, `1h30m`, `2d`). An ISO-8601 duration (`PT30S`), `none`,
@@ -75,18 +76,21 @@ The 0.3 documentation stays at the [v0.3.2 tag](https://github.com/varveio/swath
 
 ## Evidence
 
-- The tagged commit passed `ci.yml` on `main`, whose `go-full-gate` the release requires at that exact
-  commit: `go vet` and the race tests of the three Go modules, the default tier on macOS, Windows and Linux
-  ARM64, cross-builds of the five targets, SeekParquet conformance, the replay fixture tier, and both images
-  built for two architectures and smoked offline
+The release pipeline publishes a tag only after these gates pass
+([Releasing swath](https://github.com/varveio/swath/blob/v0.4.0/RELEASING.md#what-gates-a-release)); the
+results are in the tag's `ci.yml` and `release.yml` runs.
+
+- `ci.yml` on `main` at that exact commit (`go-full-gate`): `go vet` and the race tests of the three Go
+  modules, the default tier on macOS, Windows and Linux ARM64, cross-builds of the five targets, SeekParquet
+  conformance, the replay fixture tier, and both images built for two architectures and smoked offline
   ([testing](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/testing.md)).
-- The release workflow then ran `go vet` and the whole race suite of the main module unsharded on the tag,
-  built the five targets once and checked each linux/amd64 binary's `--version`, and smoked the pushed image
-  digests before tagging them: an anonymous listing of a public S3 prefix into a dataset, read back with
-  DuckDB from the manifest's part list, resumed as a no-op, and served by the replay image. It verified its
-  own signatures and attestations against the published assets before leaving draft
-  ([Releasing swath](https://github.com/varveio/swath/blob/v0.4.0/RELEASING.md#what-gates-a-release)).
-- Every module linked into the binaries passed the license gate that generated `THIRD_PARTY_NOTICES`.
+- `release.yml` on the tag: `go vet` and the whole race suite of the main module unsharded, the five targets
+  built once with each linux/amd64 binary's `--version` checked, and a smoke of the pushed image digests
+  before they are tagged: an anonymous listing of a public S3 prefix into a dataset, read back with DuckDB
+  from the manifest's part list, resumed as a no-op, and served by the replay image. The release stays a
+  draft until its own signatures and attestations verify against the published assets.
+- The license gate that generates `THIRD_PARTY_NOTICES` fails the build on a linked module whose license is
+  not recognized or not allowed.
 - Measured runs, each with its build, date, machine and command, are in
   [measurements.md](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/measurements.md). In one
   live listing swath counted 1.09 billion S3 objects in 177 seconds, and in another wrote them as a sorted

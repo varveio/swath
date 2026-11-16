@@ -11,9 +11,9 @@ whether an inventory is complete and how to verify one are in
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
 operation checks, the key semantics a consumer outside `reader` must know, and how the profile evolves.
-The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/7264a9f88420/spec/format-1.md),
-at the commit `go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
-order and commit. [`reader`](../reader/README.md) is the Go API over this profile;
+The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md),
+at `go/v0.2.0`, the release `go.mod` pins) owns the format: the manifest's own members, part bounds, footer
+stamps, key order and commit. [`reader`](../reader/README.md) is the Go API over this profile;
 [Parquet output (internals)](internals/parquet-output.md) explains how the writer meets it.
 
 ## What a swath dataset is

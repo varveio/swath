@@ -7,7 +7,7 @@ guarantees are in [contracts.md](contracts.md#dataset-guarantees-readers-rely-on
 Go writer meets them.
 
 The format's mechanisms are the [seekparquet Go module](https://github.com/varveio/seekparquet)'s, at the
-commit `go.mod` pins (a pseudo-version of its `main` until it releases): the part writer (`write.NewPart`:
+version `go.mod` pins (its release `go/v0.2.0`): the part writer (`write.NewPart`:
 pages, row groups, page indexes with exact bounds, the ascending key index, `sorting_columns`, the stamps, the
 key-order and profile checks, the SHA-256 computed as bytes are written), the manifest's JSON
 (`seekparquet.MarshalManifest`, `ParseManifest`) and footer inspection (`InspectFooter`, `InspectKeyPages`).
