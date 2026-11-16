@@ -379,7 +379,10 @@ func damagedSnapshot(t *testing.T, out string) {
 // therefore resumed once, uninterrupted, on a copy first (the product
 // contract: the dataset is the uninterrupted one, whatever was replayed),
 // counting the captured frames replayed; a snapshot with fewer than two
-// is crashed again, a bounded number of times, and never skipped.
+// is crashed again, a bounded number of times, and never skipped. The
+// mid-replay pair checks the state its first interruption left the same
+// way: a part published before that crash can retire the first
+// certificate.
 func TestDurableRepeatedRecovery(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
@@ -422,12 +425,9 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 			name += "/unsynced-" + sc.lose + "-lost"
 		}
 		t.Run(name, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "ds")
-			if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
-				t.Fatal(err)
-			}
 			nth := max(sc.nth, 1)
-			for i, point := range []string{sc.first, sc.second} {
+			interrupt := func(dir string, i int, point string) {
+				t.Helper()
 				var seen atomic.Int64
 				synced := int64(-1)
 				var whole []byte
@@ -476,6 +476,31 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 					}
 				}
 			}
+			var dir string
+			for try := 1; ; try++ {
+				dir = filepath.Join(t.TempDir(), "ds")
+				if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+					t.Fatal(err)
+				}
+				interrupt(dir, 0, sc.first)
+				if sc.second != "spill-replay-frame" {
+					break
+				}
+				// Mid replay again: the state the first interruption left
+				// must still replay nth captured frames. The first resume's
+				// encoder can publish the part holding the first
+				// certificate's last row while the drainer lists the gap
+				// before the next certificate's frame; that certificate is
+				// then retired and one frame is left (macOS CI). Such a
+				// state is interrupted again from the snapshot, a bounded
+				// number of times, never skipped.
+				if frames, _ := replayedFrames(t, url, ref, dir); frames >= nth {
+					break
+				} else if try == tries {
+					t.Fatalf("%d first interruptions, none leaving %d captured frames to replay (the last left %d)", tries, nth, frames)
+				}
+			}
+			interrupt(dir, 1, sc.second)
 			sum, err := Run(context.Background(), durableConfig(url, dir, true))
 			if err != nil {
 				t.Fatal(err)
