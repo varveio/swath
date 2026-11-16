@@ -91,6 +91,12 @@ func (lr *layoutRun) resume(t *testing.T) error {
 	if jr != nil && jr.j != nil {
 		jr.j.Close()
 	}
+	if jr != nil {
+		jr.cache.Close()
+		if jr.root != nil {
+			jr.root.Close() // the output's handle: Windows removes no directory held open
+		}
+	}
 	return err
 }
 
@@ -414,6 +420,7 @@ func TestRecoveryRefusesLinkedSuspectUnchanged(t *testing.T) {
 // (journal.ErrOutputReplaced) instead of failing to open the impostor's
 // data/ by name.
 func TestRecoveryPublishesThroughRoot(t *testing.T) {
+	noLiveReplacement(t)
 	lr := newLayoutRun(t, 1)
 	final := filepath.Join(lr.out, dataset.DataDir, dataset.PartName(0))
 	claim := dataset.ClaimPath(lr.out, 0)

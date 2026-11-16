@@ -18,6 +18,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -306,6 +307,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 			got = 0
 		}
 		if p.KillAt > 0 && got >= p.KillAt {
+			if runtime.GOOS == "windows" {
+				os.Exit(137) // no SIGKILL there: the driver reads the code
+			}
 			if self, err := os.FindProcess(os.Getpid()); err == nil {
 				_ = self.Kill() // SIGKILL on unix
 			}
