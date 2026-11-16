@@ -88,7 +88,7 @@ func TestLongPathsEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(ctx, append([]string{root, "-o", out, "--no-stats"}, unjournaled...), io.Discard, diagList); err != nil {
+	if err := run(ctx, []string{root, "-o", out, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	d, err := reader.OpenDir(ctx, out, seekparquet.OpenOptions{})
@@ -177,7 +177,7 @@ func TestLongPathsEndToEnd(t *testing.T) {
 	deep := filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(last, "/")))
 	beside := filepath.Join(t.TempDir(), "deep")
 	for _, again := range [][]string{nil, {"--overwrite"}} {
-		if err := run(ctx, append(append([]string{deep, "-o", beside, "--no-stats"}, again...), unjournaled...), io.Discard, diagList); err != nil {
+		if err := run(ctx, append([]string{deep, "-o", beside, "--no-stats"}, again...), io.Discard, false); err != nil {
 			t.Fatalf("a root of %d bytes %q: %v", len(deep), again, err)
 		}
 	}

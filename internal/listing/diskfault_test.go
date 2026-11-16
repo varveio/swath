@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 )
 
@@ -30,7 +29,6 @@ import (
 // same faults on the run report (run.json), written after the commit,
 // leave the run committed with a warning, and a resume finds it complete.
 func TestDiskFaultMatrix(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

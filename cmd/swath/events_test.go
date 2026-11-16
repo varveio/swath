@@ -230,8 +230,8 @@ func TestPersistentFailureRun(t *testing.T) {
 	var err error
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err = run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
-		"--report", report, "-o", dir}, unjournaled...), io.Discard, len(unjournaled) > 0)
+	err = run(context.Background(), []string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
+		"--report", report, "-o", dir}, io.Discard, false)
 	if exitCode(t, err) != exitStuck {
 		t.Fatalf("exit %v", err)
 	}
@@ -303,7 +303,7 @@ func TestVerbosity(t *testing.T) {
 	}
 	// A dataset run's start line names the directory.
 	dir := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", flakyGCS(t), "--anonymous", "-v", "--no-stats", "-o", dir}, unjournaled...), io.Discard, len(unjournaled) > 0); err != nil {
+	if err := run(context.Background(), []string{"gs://bkt", "--endpoint-url", flakyGCS(t), "--anonymous", "-v", "--no-stats", "-o", dir}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stderr.String(), "swath: listing gs://bkt to "+dir+" (attempt ") {
@@ -366,13 +366,8 @@ func TestOneLineFailures(t *testing.T) {
 		t.Fatal(serr)
 	}
 	notFound := pe.Err.Error() // the platform's words
-	// A dataset run: swath diag list --no-journal where a journal is refused (Windows).
-	dataset := func(args ...string) []string {
-		if len(unjournaled) > 0 {
-			return append(append([]string{"diag", "list"}, args...), unjournaled...)
-		}
-		return append([]string{"list"}, args...)
-	}
+	// A dataset run.
+	dataset := func(args ...string) []string { return append([]string{"list"}, args...) }
 	for _, c := range []struct {
 		name string
 		args []string

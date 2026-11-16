@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 )
@@ -21,7 +20,6 @@ import (
 // (the same route and region) to the uninterrupted dataset; rotated keys
 // together with another region are refused for the region.
 func TestCredentialRotationResumes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	signed := func(out string, resume bool, key, region string) Config {
 		t.Setenv("AWS_ACCESS_KEY_ID", key)

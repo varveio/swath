@@ -382,7 +382,7 @@ func Publish(out string, meta Meta, parts []Part, commit func(install func() err
 	data := filepath.Join(out, DataDir)
 	for i, p := range parts {
 		if final := filepath.Join(data, PartName(i)); p.Path != final {
-			if err := os.Rename(p.Path, final); err != nil {
+			if err := renameFile(p.Path, final); err != nil {
 				return fmt.Errorf("publish part %d: %w", i, err)
 			}
 		}
@@ -421,14 +421,41 @@ func writeJSON(dir, name string, v any) error {
 }
 
 // SyncDir fsyncs a directory, making the entries created or renamed in it
-// durable where DirSyncEnforced (a no-op on Windows).
+// durable (on Windows, FlushFileBuffers on the directory).
 func SyncDir(dir string) error { return syncDir(dir) }
+
+// DirSyncEnforced is false only in tests, to refuse as CheckDirSync does on
+// a filesystem that cannot sync directories.
+var DirSyncEnforced = true
+
+// CheckDirSync returns why the entries of a directory at out cannot be made
+// durable (nil when they can), probing the nearest existing directory on
+// out's path once: on Windows a filesystem may refuse a directory's flush.
+func CheckDirSync(out string) error {
+	if !DirSyncEnforced {
+		return errors.New("directory syncs are off")
+	}
+	dir, err := filepath.Abs(out)
+	if err != nil {
+		return err
+	}
+	for {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return probeDirSync(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+}
 
 // PublishPart renames one closed part to its final name and syncs the data
 // directory: the early publication of a journaled run, after the part's
 // journal record is durable. It returns the part with its final path.
 func PublishPart(out string, ordinal int, p Part) (Part, error) {
-	return PublishPartWith(os.Rename, out, ordinal, p)
+	return PublishPartWith(renameFile, out, ordinal, p)
 }
 
 // PublishPartWith is PublishPart renaming with rename (one relative to the

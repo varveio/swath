@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/internal/listing"
@@ -189,7 +188,6 @@ func TestSpillWatchRecovered(t *testing.T) {
 // timeout changed) once the front answers, it commits the dataset of an
 // uninterrupted run byte for byte.
 func TestSpillWaitTimeoutResumes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	var held atomic.Bool
 	release := make(chan struct{})

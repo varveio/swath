@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
@@ -192,7 +191,6 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 // resume of a run with parts keeps its journal when the endpoint stops
 // answering: it is still resumable.
 func TestUnreachableLeavesNoRun(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)
@@ -274,7 +272,6 @@ func dirNames(t *testing.T, dir string) []string {
 // previous dataset first, and either failure left the directory without
 // one (C-S1).
 func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)

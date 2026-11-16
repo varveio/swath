@@ -26,8 +26,8 @@ func TestTraceFlag(t *testing.T) {
 	url := s3test.Bucket(t, s3test.Keys(60, 3))
 	dir := t.TempDir()
 	trace, report, out := filepath.Join(dir, "run.trace.jsonl"), filepath.Join(dir, "r.json"), filepath.Join(dir, "ds")
-	args := append([]string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--page-size", "10", "--workers", "4",
-		"--report", report, "--trace", trace, "-o", out}, unjournaled...)
+	args := []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--page-size", "10", "--workers", "4",
+		"--report", report, "--trace", trace, "-o", out}
 	if err := run(ctx, args, io.Discard, true); err != nil {
 		t.Fatal(err)
 	}

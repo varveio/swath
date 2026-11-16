@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
@@ -198,12 +197,9 @@ func TestRemoteDataset(t *testing.T) {
 		if _, err := os.Stat(ws2); err == nil {
 			t.Fatal("the refused run created its work directory")
 		}
-		// Resuming the committed work directory: complete (where a journaled
-		// run, and so resume, is offered).
-		if !datasettest.NoJournal() {
-			if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("ds"))); !errors.Is(err, ErrComplete) {
-				t.Fatalf("resume of a committed run: %v", err)
-			}
+		// Resuming the committed work directory: complete.
+		if _, err := Run(context.Background(), remoteConfig(url, ws, true, d.output("ds"))); !errors.Is(err, ErrComplete) {
+			t.Fatalf("resume of a committed run: %v", err)
 		}
 		// A cut file at a fresh prefix that no run of this one wrote is not
 		// replaced: the run commits and warns once.
@@ -241,7 +237,6 @@ var remotePoints = []string{"response-read", "split", "range-done", "encoding", 
 // aftermath (orphans deleted, the run report) and reports it complete.
 func TestRemoteCrashMatrix(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -320,7 +315,6 @@ func TestRemoteCrashMatrix(t *testing.T) {
 // objects, or once recovery is done, is resumed again.
 func TestRemoteRecoveryKilled(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -358,7 +352,6 @@ func TestRemoteRecoveryKilled(t *testing.T) {
 // skipped.
 func TestRemoteResumeMovedWorkDir(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url, _, _ := slowFrontier(t, "d06/")
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
@@ -472,7 +465,6 @@ func crashRemote(t *testing.T, url, ws string, out *RemoteOutput, resume bool, p
 // without it, warning once.
 func TestRemoteCutsSlowIndex(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -524,7 +516,6 @@ func TestRemoteCutsSlowIndex(t *testing.T) {
 // listed or written.
 func TestRemoteRetainedChecked(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		d := newDestination(t, p, nil)
 		for i, change := range []struct {
@@ -594,7 +585,6 @@ func TestRemoteLostResponse(t *testing.T) {
 // winner's are untouched, and resuming the loser is refused.
 func TestRemoteRace(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		urlA, urlB := crashBucket(t), crashBucket(t)
 		d := newDestination(t, p, nil)
 		// A second source, with other rows: the same keys under another
@@ -670,7 +660,7 @@ func TestRemoteEmpty(t *testing.T) {
 		scriptNext = &scripted{chunk: 1}
 		scriptMu.Unlock()
 		ws := filepath.Join(t.TempDir(), "work")
-		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: ws, Remote: d.output("empty"), NoJournal: datasettest.NoJournal()},
+		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: ws, Remote: d.output("empty")},
 			Limits: Limits{PartSize: 2 << 10, Workers: 2, RowBudget: 128 << 10, PartInterval: -1}})
 		if err != nil {
 			t.Fatal(err)
@@ -687,7 +677,6 @@ func TestRemoteEmpty(t *testing.T) {
 // uploads keep failing fails the run, which a resume then completes.
 func TestRemoteUploadsBounded(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -748,7 +737,6 @@ func TestRemoteUploadsBounded(t *testing.T) {
 // of an unfinished upload exists, and the resume completes the dataset.
 func TestRemoteCancelled(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -877,7 +865,6 @@ func TestMeasureRemoteOverhead(t *testing.T) {
 // anything is verified or written.
 func TestRemoteResumeIdentity(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		d := newDestination(t, p, nil)
 		ws := filepath.Join(t.TempDir(), "work")
@@ -905,7 +892,6 @@ func TestRemoteResumeIdentity(t *testing.T) {
 // refuses (ErrAmbiguousTail) and commits nothing.
 func TestRemoteLostJournalTail(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -968,7 +954,6 @@ func TestRemoteLostJournalTail(t *testing.T) {
 // local run's parts and cut file.
 func TestRemoteVersionGroups(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), versionListingConfig(ref, true, false, versionFixture(0))); err != nil {
 			t.Fatal(err)

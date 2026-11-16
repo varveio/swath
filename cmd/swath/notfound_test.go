@@ -72,15 +72,15 @@ func TestMissingBucketCause(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
-			args := append(append(c.args, "--workers", "1", "--report", report, "-o", dir), unjournaled...)
-			err := run(context.Background(), args, io.Discard, diagList)
+			args := append(c.args, "--workers", "1", "--report", report, "-o", dir)
+			err := run(context.Background(), args, io.Discard, false)
 			if code := exitCode(t, err); code != exitFatal {
 				t.Fatalf("exit %d (%v)", code, err)
 			}
 			var rep listing.Report
 			readJSON(t, report, &rep)
 			o := rep.Outcome
-			resumable := c.cause == "" && !diagList // a journal, and no cause that changes the command
+			resumable := c.cause == "" // no cause that changes the command
 			if o.Class != listing.ClassFatal || o.Cause != c.cause || o.Resumable != resumable || o.ExitCode != exitFatal || !strings.Contains(o.Error, c.message) {
 				t.Fatalf("report outcome %+v", o)
 			}
@@ -119,9 +119,9 @@ func TestRegionRedirectCause(t *testing.T) {
 	t.Cleanup(srv.Close)
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	args := append([]string{"s3://bkt/p/", "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous",
-		"--workers", "1", "--report", report, "-o", dir}, unjournaled...)
-	err := run(context.Background(), args, io.Discard, diagList)
+	args := []string{"s3://bkt/p/", "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous",
+		"--workers", "1", "--report", report, "-o", dir}
+	err := run(context.Background(), args, io.Discard, false)
 	if code := exitCode(t, err); code != exitFatal {
 		t.Fatalf("exit %d (%v)", code, err)
 	}

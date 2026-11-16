@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
@@ -86,7 +85,6 @@ func TestRemoteOutputRefusals(t *testing.T) {
 // TestRemoteDatasetDirectoryNames exercises explicit directories, parent prefixes
 // and bucket names through publication and resume of the recorded destination.
 func TestRemoteDatasetDirectoryNames(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	s3test.NoCredentials(t)
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
@@ -206,7 +204,6 @@ func serviceAccount(t *testing.T, token string) string {
 // first part is durable, and swath resume WORK_DIR, given a rotated
 // credentials file, completes it there.
 func TestRemoteListAndResume(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
 	s3test.NoCredentials(t)
@@ -373,7 +370,6 @@ func awsProfiles(t *testing.T, names ...string) {
 // WORK_DIR, given another profile (rotated credentials), completes it
 // there. The region given is frozen in the journal's identity.
 func TestRemoteS3ListAndResume(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	s3test.NoCredentials(t)
 	t.Setenv("AWS_REGION", "")
@@ -454,7 +450,6 @@ func TestRemoteS3ListAndResume(t *testing.T) {
 // account is frozen in the journal's identity; no file of the work
 // directory holds a SAS.
 func TestRemoteAzureListAndResume(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	s3test.NoCredentials(t)
 	h := s3test.Handler(s3test.Backend(t, s3test.Keys(60000, 7)))
@@ -529,7 +524,7 @@ func TestRemoteAzureListAndResume(t *testing.T) {
 // an answer that quotes the request's query back, its escapes in lower
 // case; the SAS's signature, with characters a URL reserves, reaches
 // neither the run's error, error.json nor the report. The source is a
-// local tree, which keeps no journal, so it runs on Windows too.
+// local tree, which keeps no journal.
 func TestRemoteAzureSASEchoed(t *testing.T) {
 	captureStderr(t)
 	root := t.TempDir()
@@ -578,7 +573,6 @@ func TestRemoteAzureSASEchoed(t *testing.T) {
 // the commit finalized) from the manifest the work directory committed,
 // not an error about a local manifest a bucket dataset never has.
 func TestShowRemoteWorkDir(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	s3test.NoCredentials(t)
 	awsProfiles(t, "output")

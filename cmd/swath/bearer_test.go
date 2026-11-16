@@ -16,7 +16,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -28,7 +27,6 @@ import (
 // message (exit 2) and continues with it; a failing command fails the run
 // closed, class auth.
 func TestBearerToken(t *testing.T) {
-	datasettest.RequireJournal(t)
 	fake := s3test.Handler(s3test.Backend(t, gcstest.Keys(3000)))
 	var mu sync.Mutex
 	auths := map[string]int{}

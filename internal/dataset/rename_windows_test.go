@@ -86,3 +86,24 @@ func TestReplaceGivesUpOnAHeldTarget(t *testing.T) {
 		t.Fatalf("%d entries left (a temporary file?)", len(ents))
 	}
 }
+
+// TestReplaceLongPath: a replacement whose path is longer than MAX_PATH
+// is installed (MoveFileEx takes it under the \\?\ prefix).
+func TestReplaceLongPath(t *testing.T) {
+	dir := t.TempDir()
+	for len(dir) < 300 {
+		dir = filepath.Join(dir, "a-directory-name-of-some-length")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "f.json")
+	for _, b := range []string{"old", "new"} {
+		if err := Replace(path, []byte(b), Durable); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != "new" {
+		t.Fatalf("read %q", b)
+	}
+}

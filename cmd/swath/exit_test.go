@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
@@ -36,7 +35,6 @@ import (
 // not complete in an output this tool owns, an error.json with the class,
 // the cause and whether swath resume can continue it.
 func TestExitCodes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
@@ -226,7 +224,6 @@ func exitStatus(t *testing.T, err error) (code int, signaled bool) {
 // outage ends, swath resume completes it with the dataset of an
 // uninterrupted run byte for byte.
 func TestGCSOutageThenResume(t *testing.T) {
-	datasettest.RequireJournal(t)
 	h := gcstest.Handler(gcstest.Keys(20000), 20*time.Millisecond)
 	var served, failed, after atomic.Int64 // after: the outage begins after this many requests (0: never)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +288,6 @@ func TestGCSOutageThenResume(t *testing.T) {
 // larger workspace on the code alone; swath resume then completes the
 // dataset of an uninterrupted run (before: exit 1, class fatal).
 func TestDiskFullExits74(t *testing.T) {
-	datasettest.RequireJournal(t)
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
@@ -345,7 +341,6 @@ func TestDiskFullExits74(t *testing.T) {
 // was and writes none; a resume given --report writes its own there. Before,
 // a plain resume replaced the first attempt's report with its own (C-C6).
 func TestResumeKeepsTheRunsReport(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
@@ -486,8 +481,8 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
 		start := time.Now()
-		err := run(ctx, append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
-			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, unjournaled...), &out, true)
+		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
+			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
@@ -596,7 +591,6 @@ func TestCappedCountPrintsCounts(t *testing.T) {
 // does a resumed run and swath show names the mark. Before, nothing in the
 // journal marked the run and the resume continued.
 func TestProtocolViolationIsUnresumable(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	h := gcstest.Handler(gcstest.Keys(20000), 0)
 	var served, after, swapped atomic.Int64 // after: invalid pages come after this many requests (0: never)

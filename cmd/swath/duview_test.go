@@ -230,7 +230,7 @@ func TestDuViewFromDataset(t *testing.T) {
 			t.Fatalf("%s: report view %+v", src[0], v)
 		}
 		dir := filepath.Join(t.TempDir(), "ds")
-		if err := run(context.Background(), append(append(slices.Clone(src), "-o", dir, "--no-stats", "-q"), unjournaled...), &bytes.Buffer{}, diagList); err != nil {
+		if err := run(context.Background(), append(slices.Clone(src), "-o", dir, "--no-stats", "-q"), &bytes.Buffer{}, false); err != nil {
 			t.Fatal(err)
 		}
 		if err := runDu(context.Background(), append([]string{"--from-dataset", dir, "--no-stats", "-q"}, tc.du...), &saved); err != nil {
@@ -288,7 +288,7 @@ func TestDuViewFromDatasetSource(t *testing.T) {
 	root := viewTree(t)
 	viewTerminal(t, 200, 30)
 	dir := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{root, "-o", dir, "--no-stats", "-q"}, unjournaled...), &bytes.Buffer{}, diagList); err != nil {
+	if err := run(context.Background(), []string{root, "-o", dir, "--no-stats", "-q"}, &bytes.Buffer{}, false); err != nil {
 		t.Fatal(err)
 	}
 	sub := filepath.Join(root, "data")

@@ -7,5 +7,5 @@ package dataset
 
 import "os"
 
-// replaceFile renames tmp over path (an atomic replacement).
-func replaceFile(tmp, path string) error { return os.Rename(tmp, path) }
+// renameFile renames old to new, replacing new (an atomic replacement).
+func renameFile(old, new string) error { return os.Rename(old, new) }

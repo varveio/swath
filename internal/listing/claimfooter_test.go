@@ -15,7 +15,6 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	sourcegcs "github.com/varveio/swath/internal/source/gcs"
@@ -52,7 +51,6 @@ func hasColumn(t *testing.T, path, name string) bool {
 // differed and publish refused the unchanged source with
 // ErrAmbiguousTail.
 func TestClaimedPartKeepsItsColumns(t *testing.T) {
-	datasettest.RequireJournal(t)
 	ep := gcsBucket(t, 4000)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), gcsConfig(ep, ref, false)); err != nil {

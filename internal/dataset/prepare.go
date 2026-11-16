@@ -221,7 +221,7 @@ func InstallNext(out string) error {
 		}
 		for _, n := range append(slices.Clone(commitEntries), ownEntries...) {
 			if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
-				if err := os.Rename(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
+				if err := renameFile(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
 					return fmt.Errorf("retire the replaced dataset: %w", err)
 				}
 			}
@@ -229,7 +229,7 @@ func InstallNext(out string) error {
 		if err := errors.Join(syncDir(retiring), syncDir(out)); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
-		if err := os.Rename(retiring, retired); err != nil {
+		if err := renameFile(retiring, retired); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
 		if err := syncDir(next); err != nil {
@@ -246,7 +246,7 @@ func InstallNext(out string) error {
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(next, n)); err == nil {
-			if err := os.Rename(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
+			if err := renameFile(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
 				return fmt.Errorf("install the replacement: %w", err)
 			}
 		}
@@ -257,7 +257,7 @@ func InstallNext(out string) error {
 	if err := faults.At("install-data"); err != nil {
 		return err
 	}
-	if err := os.Rename(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
+	if err := renameFile(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
 		return fmt.Errorf("install the replacement: %w", err)
 	}
 	if err := syncDir(out); err != nil {

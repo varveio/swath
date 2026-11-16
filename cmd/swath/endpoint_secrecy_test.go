@@ -61,15 +61,15 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					}
 					dir := filepath.Join(t.TempDir(), "ds")
 					report := filepath.Join(t.TempDir(), "report.json")
-					base := append([]string{c.root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
+					base := []string{c.root, "--anonymous", "-o", dir, "--report", report}
 					args := append(slices.Clone(base), flagArgs(u.String())...)
 					var out bytes.Buffer
 					if success {
 						// Current options are clean; the recorded command may predate
 						// the refusal. Listing must sanitize its own copy as well.
-						err = runWith(context.Background(), command{diag: diagList}, append(slices.Clone(base), flagArgs(c.endpoint)...), &out, append([]string{"list"}, args...), false, nil)
+						err = runWith(context.Background(), command{diag: false}, append(slices.Clone(base), flagArgs(c.endpoint)...), &out, append([]string{"list"}, args...), false, nil)
 					} else {
-						err = run(context.Background(), args, io.Discard, diagList)
+						err = run(context.Background(), args, io.Discard, false)
 					}
 					if (err == nil) != success {
 						t.Fatalf("success=%v: %v", success, err)
@@ -159,7 +159,7 @@ func TestEndpointQuerySecrecy(t *testing.T) {
 					stderr := captureStderr(t)
 					dir := filepath.Join(t.TempDir(), "ds")
 					report := filepath.Join(t.TempDir(), "report.json")
-					args := append([]string{root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
+					args := []string{root, "--anonymous", "-o", dir, "--report", report}
 					if eq {
 						args = append(args, "--endpoint-url="+endpoint)
 					} else {
@@ -168,7 +168,7 @@ func TestEndpointQuerySecrecy(t *testing.T) {
 					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 					defer cancel()
 					var stdout bytes.Buffer
-					if code := exitCode(t, run(ctx, args, &stdout, diagList)); code != exitUsage {
+					if code := exitCode(t, run(ctx, args, &stdout, false)); code != exitUsage {
 						t.Errorf("exit %d, want usage %d", code, exitUsage)
 					}
 					check := func(where string, raw []byte) {
@@ -250,7 +250,7 @@ func TestRootUserinfoSecrecy(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			var stdout bytes.Buffer
-			if code := exitCode(t, run(ctx, []string{root, "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--report", report}, &stdout, diagList)); code != exitUsage {
+			if code := exitCode(t, run(ctx, []string{root, "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--report", report}, &stdout, false)); code != exitUsage {
 				t.Fatalf("exit %d, want usage", code)
 			}
 			raw, err := os.ReadFile(report)
@@ -297,12 +297,8 @@ func TestSecrecyRunOutputs(t *testing.T) {
 		for _, format := range []string{logText, logJSON} {
 			t.Run(c.name+"/"+format, func(t *testing.T) {
 				stderr := captureSyncStderr(t)
-				cmd := []string{"list"}
-				if len(unjournaled) > 0 {
-					cmd = []string{"diag", "list"} // --no-journal is a diagnostic flag
-				}
-				argv := append(append([]string{"--log-format", format, "-vvv"}, cmd...), c.args...)
-				argv = append(append(argv, "--stall-timeout", "1s", "--report", "-", "-o", filepath.Join(t.TempDir(), "ds")), unjournaled...)
+				argv := append([]string{"--log-format", format, "-vvv", "list"}, c.args...)
+				argv = append(argv, "--stall-timeout", "1s", "--report", "-", "-o", filepath.Join(t.TempDir(), "ds"))
 				var stdout bytes.Buffer
 				if code := conclude(dispatch(t.Context(), argv, &stdout)); code == exitOK {
 					t.Fatalf("exit 0; stderr %q", stderr.String())
@@ -381,7 +377,7 @@ func TestSecretValuesNeverEchoed(t *testing.T) {
 			if r.flag != "output" {
 				args = append(args, "-o", dir)
 			}
-			args = append(append(args, "--report", report, "--max-duration", "2s"), unjournaled...)
+			args = append(args, "--report", report, "--max-duration", "2s")
 			var stdout bytes.Buffer
 			if code := conclude(dispatch(context.Background(), args, &stdout)); code == exitOK {
 				t.Errorf("%s %s %q: exit 0", format, r.root, r.args)

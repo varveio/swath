@@ -11,7 +11,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -33,9 +32,6 @@ type layoutRun struct {
 
 func newLayoutRun(t *testing.T, records int) *layoutRun {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("journaled output is refused on Windows")
-	}
 	base := t.TempDir()
 	lr := &layoutRun{out: filepath.Join(base, "dataset"), foreign: filepath.Join(base, "unrelated"),
 		id: journal.Identity{Tool: "swath", Format: 2, SchemaID: "layout"}}
@@ -241,9 +237,6 @@ func TestLockRefusesLinkedWorkspace(t *testing.T) {
 // workspace and the lock leaf only, so a lock was created and taken before
 // the resume refused the journal).
 func TestLockRefusesLinkedJournal(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symbolic links need privileges on Windows")
-	}
 	base := t.TempDir()
 	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
 	for _, d := range []string{filepath.Join(out, dataset.Workspace), foreign} {
@@ -288,9 +281,6 @@ func TestLockRefusesLinkedJournal(t *testing.T) {
 // workspace (eleventh durability review: the journal leaf was opened first
 // and the root's escape error surfaced, not the unsafe_layout cause).
 func TestReadRefusesLinkedWorkspace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symbolic links need privileges on Windows")
-	}
 	base := t.TempDir()
 	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
 	for _, d := range []string{out, foreign} {

@@ -115,7 +115,7 @@ func TestOutcomeFilesDurable(t *testing.T) {
 		t.Fatalf("a completed run left error.json: %v", err)
 	}
 	// The removal is made durable: the directory is synced after it.
-	if dataset.DirSyncEnforced && (len(dirSyncs) == 0 || !dirSyncs[len(dirSyncs)-1]) {
+	if len(dirSyncs) == 0 || !dirSyncs[len(dirSyncs)-1] {
 		t.Fatalf("directory syncs after the removal (error.json gone at each): %v", dirSyncs)
 	}
 }

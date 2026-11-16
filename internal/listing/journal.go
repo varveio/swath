@@ -34,11 +34,11 @@ var (
 	ErrInterrupted     = errors.New("it holds an interrupted run")
 	ErrNothingToResume = errors.New("nothing to resume: no interrupted run in the output directory")
 	ErrComplete        = errors.New("the run in the output directory is already complete")
-	// ErrUnenforced: a journaled or resumed run where directory syncs are
-	// not available (Windows): after a power loss the journal or a
-	// published part's name may be missing although its record was
-	// acknowledged.
-	ErrUnenforced = errors.New("journaled output is not supported on this platform: directories cannot be synced here, so a power loss could lose acknowledged parts; use --no-journal (not resumable) or run on Linux or macOS")
+	// ErrUnenforced: a journaled or resumed run where the output's
+	// filesystem refuses a directory sync (dataset.CheckDirSync): after a
+	// power loss the journal or a published part's name may be missing
+	// although its record was acknowledged.
+	ErrUnenforced = errors.New("journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; use --no-journal (not resumable) or an output on another filesystem")
 	// ErrAmbiguousTail: the journal's last record reads as torn, so its
 	// part was set aside (DIR/.swath/suspect), and the source no longer
 	// reproduces that part. The record may have been acknowledged and
@@ -153,9 +153,12 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 		resumable = false
 	}
 	path := src.Locator().Path
+	if cfg.Output.Resume || (resumable && !cfg.Output.NoJournal) {
+		if err := dataset.CheckDirSync(cfg.Output.Dir); err != nil {
+			return nil, fmt.Errorf("%w (%w)", ErrUnenforced, err)
+		}
+	}
 	switch {
-	case !dataset.DirSyncEnforced && (cfg.Output.Resume || (resumable && !cfg.Output.NoJournal)):
-		return nil, ErrUnenforced
 	case cfg.Output.Resume && !resumable:
 		return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
 	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir) && !(cfg.remote != nil && dataset.Unfinalized(cfg.Output.Dir)):

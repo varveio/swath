@@ -334,8 +334,7 @@ func TestReportContinuity(t *testing.T) {
 		var out bytes.Buffer
 		file, ds := filepath.Join(t.TempDir(), "r.json"), filepath.Join(t.TempDir(), "ds")
 		args := append([]string{src, "--endpoint-url", url, "--s3-path-style", "--anonymous", "-o", ds, "--report", file}, extra...)
-		args = append(args, unjournaled...)
-		if err := run(context.Background(), args, &out, diagList); err != nil {
+		if err := run(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}
 		var r rep
@@ -352,7 +351,7 @@ func TestReportContinuity(t *testing.T) {
 	}
 	// The run's id is its journal's (without one, the attempt's); every
 	// time has six fraction digits.
-	if r.Run == nil || len(r.Run.ID) != 32 || (r.Run.ID == r.Attempt.ID) != (len(unjournaled) > 0) || !regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$`).MatchString(r.Timings.StartedAt) {
+	if r.Run == nil || len(r.Run.ID) != 32 || r.Run.ID == r.Attempt.ID || !regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$`).MatchString(r.Timings.StartedAt) {
 		t.Fatalf("run %+v, attempt %+v, started_at %q", r.Run, r.Attempt, r.Timings.StartedAt)
 	}
 	// The progress file's last snapshot: the run's final counts, done.
