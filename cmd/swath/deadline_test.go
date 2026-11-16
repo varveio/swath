@@ -395,4 +395,3 @@ func failOutcomeWrites() (restore func()) {
 		return 0, nil
 	})
 }
-
