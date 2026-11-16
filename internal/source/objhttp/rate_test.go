@@ -72,6 +72,9 @@ func TestRateWaitCancels(t *testing.T) {
 	if err := r.Wait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	r.mu.Lock()
+	due := r.next // the token the cancelled wait takes, and must give back
+	r.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	t0 := time.Now()
@@ -81,8 +84,8 @@ func TestRateWaitCancels(t *testing.T) {
 	r.mu.Lock()
 	next := r.next
 	r.mu.Unlock()
-	if d := time.Until(next); d > time.Second || d < 900*time.Millisecond {
-		t.Fatalf("the canceled token was not given back: next due in %s", d)
+	if !next.Equal(due) {
+		t.Fatalf("the canceled token was not given back: next due %s after the one taken", next.Sub(due))
 	}
 	if NewRate(0) != nil || (*Rate)(nil).Wait(context.Background()) != nil {
 		t.Fatal("no cap waited")
