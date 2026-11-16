@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -68,7 +69,11 @@ func TestBearerToken(t *testing.T) {
 		t.Fatalf("report: %s", raw)
 	}
 	// A failing command: no request goes out, the run fails closed.
-	bad := []string{"s3://bkt", "--endpoint-url", srv.URL, "--s3-bearer-token-command", "echo nope >&2; exit 4", "--report", report}
+	failing := "echo nope >&2; exit 4"
+	if runtime.GOOS == "windows" { // cmd.exe
+		failing = "(echo nope)1>&2 & exit /b 4"
+	}
+	bad := []string{"s3://bkt", "--endpoint-url", srv.URL, "--s3-bearer-token-command", failing, "--report", report}
 	err = runCount(context.Background(), bad, io.Discard)
 	if exitCode(t, err) != exitFatal || !strings.HasPrefix(err.Error(), "could not obtain credentials (--s3-bearer-token-command): ") ||
 		!strings.HasSuffix(err.Error(), "exited 4: nope") {
