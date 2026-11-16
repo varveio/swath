@@ -47,12 +47,13 @@ describe 0.4.0 as released.
   expression (a leading `^`, a final `$`, `\d` and its kin, `.*` with `\.`, `(a|b)`) is refused with exit 2
   before any listing, naming the regex option (#526); `*\.parquet` (a quoted dot) stays a glob. The check
   catches common regular-expression spellings, not every one: a 0.3 pattern such as `--include parquet` is a
-  valid glob that matches only the key `parquet`. Move regular expressions to `--include-regex` and
-  `--exclude-regex`. On local and mounted filesystems an exclude ending in `/**` also keeps the walk out of the
-  directories it matches (#504).
-- `--modified-since` and `--modified-until` read a time without an offset as local time (`TZ`), as the tables
-  print it and `find -newermt` reads it, and take the tables' form `2026-11-15 07:45[:00]`; `Z` or an offset
-  is honored as given, and the run records the UTC time it names.
+  valid glob that keeps only entries named `parquet`, at any depth, not every key containing it. Move regular
+  expressions to `--include-regex` and `--exclude-regex`, and rewrite an anchored one relative to SOURCE: 0.3
+  matched the whole key (for `s3://b/logs/`, `^logs/private/` is now `^private/`). On local and mounted
+  filesystems an exclude ending in `/**` also keeps the walk out of the directories it matches (#504).
+- `--modified-since` and `--modified-until` read a date or a time without an offset as local time (`TZ`), as
+  the tables print it and `find -newermt` reads it (0.3 read it as UTC), and take the tables' form
+  `2026-11-15 07:45[:00]`; `Z` or an offset is honored as given, and the run records the UTC time it names.
 - `-o` chooses the output by its name: a dataset directory, `NAME.tsv` or `NAME.jsonl` optionally followed by
   `.gz` or `.zst` (in any case), `-` for stdout, or a bucket prefix with `--work-dir`. A name with anything
   else after `.tsv` or `.jsonl` (`rows.jsonl.zstd`: did you mean `.zst`) and a name ending in `.parquet` are

@@ -48,12 +48,19 @@ documentation is also at [swath.varve.io](https://swath.varve.io/).
   (`--s3-region`, `--s3-profile`); an old option names what replaced it when you give it
   (`--force-path-style` is `--s3-path-style`)
   ([Unknown flag](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#unknown-flag)).
-- **Filters.** `--include` and `--exclude` take globs; regular expressions go to `--include-regex` and
-  `--exclude-regex`. Common regular-expression spellings given as a glob (`'\.parquet$'`) are refused with
-  exit 2, naming the regex option; others are valid globs that match something else (`--include parquet`
-  matches only the key `parquet`), so move every regular expression to `--include-regex` or `--exclude-regex`
-  ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#globs)). In sizes `KB`, `MB`, `GB`
-  and `TB` are decimal; `K`, `KiB` and the like are binary.
+- **Filters.** `--include` and `--exclude` take globs; 0.3.2's regular expressions go to `--include-regex`
+  and `--exclude-regex`. Common regular-expression spellings given as a glob (`'\.parquet$'`) are refused
+  with exit 2, naming the regex option; others are valid globs that match something else: `--include parquet`
+  keeps only entries named `parquet`, at any depth, not every key containing `parquet` as in 0.3.2. So move
+  every regular expression to `--include-regex` or `--exclude-regex`
+  ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#globs)). They match the key below
+  SOURCE, where 0.3.2 matched the whole key, so rewrite an anchored pattern relative to SOURCE: for
+  `s3://b/logs/`, 0.3.2's `--exclude '^logs/private/'` is `--exclude-regex '^private/'`. In sizes `KB`, `MB`,
+  `GB` and `TB` are decimal (0.3.2 read them as binary); `K`, `KiB` and the like are binary.
+- **Times.** `--modified-since` and `--modified-until` read a date or a time without `Z` or an offset as
+  local time (`TZ`), where 0.3.2 read it as UTC. To keep 0.3.2's meaning, give the UTC time with seconds and
+  `Z`: `2026-01-01T00:00:00Z` for `2026-01-01`
+  ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#sizes-times-and-storage-classes)).
 - **Durations** are a number with a unit (`90s`, `1h30m`, `2d`). An ISO-8601 duration (`PT30S`), `none`,
   `off` and upper-case units are refused with exit 2; `0` turns off `--max-duration`, `--stall-timeout` and
   `--part-interval`.
