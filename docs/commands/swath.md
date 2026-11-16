@@ -232,12 +232,13 @@ swath du -h
 | Code | Meaning |
 |---|---|
 | 0 | completed (also a reader that closed the pipe early, as `head` does) |
-| 1 | failed, and a resume will not fix it |
+| 1 | failed: a person fixes the cause; a run whose outcome says `resumable` then resumes |
 | 2 | a usage error, or a refusal that is the caller's to fix |
 | 3 | finished, but the output is incomplete: entries could not be read, or `--max-keys` stopped the listing |
 | 74 | the output's filesystem is full |
 | 75 | stuck: no progress for `--stall-timeout` |
 | 124 | `--max-duration` reached |
+| 129 | hung up (SIGHUP: a closed terminal or SSH session) |
 | 130 | interrupted (SIGINT) |
 | 143 | terminated (SIGTERM) |
 
