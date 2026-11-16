@@ -28,6 +28,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -67,11 +68,20 @@ func slowFrontier(t *testing.T, slow string) (string, *s3mem.Backend, *reqLog) {
 				log.mu.Unlock()
 			}
 			if h := frontierHold.Load(); h != nil && q.Get("continuation-token") == "" && h.holds(start) {
-				// The held request waits for the hold's release.
+				// The held request waits for the hold's release, or its
+				// run's cancellation. A keyed hold never expires (its test's
+				// barriers and deadline bound it); the other expires after
+				// 20 s, marked late.
+				var expire <-chan time.Time
+				if h.engaged != nil {
+					close(h.engaged)
+				} else {
+					expire = time.After(20 * time.Second)
+				}
 				select {
 				case <-h.release:
 				case <-r.Context().Done():
-				case <-time.After(20 * time.Second):
+				case <-expire:
 					h.late.Store(true)
 				}
 			}
@@ -146,14 +156,20 @@ func (g *sealGate) at(p string) {
 // keep listing, spilling and sealing.
 type hold struct {
 	release chan struct{}
-	after   string // set: the request held is the first to start after it
+	after   string        // keyed: the request held is the first to start after it
+	engaged chan struct{} // keyed: closed once that request is held
 	seen    atomic.Int64
 	late    atomic.Bool
 }
 
+// keyedHold holds the first request starting after after.
+func keyedHold(after string) *hold {
+	return &hold{release: make(chan struct{}), after: after, engaged: make(chan struct{})}
+}
+
 // holds reports whether the request starting after start is the one held:
-// the first after h.after when set, else the second listing from the start
-// (the seed's is the first).
+// the first after h.after when keyed, else the second request from the
+// start of the bucket.
 func (h *hold) holds(start string) bool {
 	if h.after != "" {
 		return start == h.after && h.seen.Add(1) == 1
@@ -371,39 +387,168 @@ func damagedSnapshot(t *testing.T, out string) {
 	os.WriteFile(filepath.Join(out, order.DurableDir, "0123456789abcdef0123456789abcdef.spill"), []byte("orphan"), 0o644)
 }
 
-// heldSnapshot is a durable-spill run's output, killed at a ledger sync
-// once the ledger holds n seal records, its frontier held until then: the
-// first request after the seed's page (S3's default 1,000 keys) waits, so
-// no row past that page is handed on and K stays below every certificate.
-// Nothing is retired before the kill: every record is a live seal.
-func heldSnapshot(t *testing.T, url string, n int) string {
+// snapshotSeals is the seal records a snapshot's ledger holds when its
+// frontier is released or its run killed (heldSnapshot).
+const snapshotSeals = 8
+
+// certSpan is a live seal record's certificate: (cs, ce], ce ⊤ when open.
+type certSpan struct {
+	id     []byte
+	cs, ce string
+	open   bool
+}
+
+// against is how K (nil: no part recorded) stands to c at a recovery:
+// "covered" (retired), "straddled" (its replay skips the rows at or below
+// K) or "above".
+func (c certSpan) against(k *string) string {
+	switch {
+	case k == nil || c.cs >= *k:
+		return "above"
+	case !c.open && c.ce <= *k:
+		return "covered"
+	}
+	return "straddled"
+}
+
+// ledgerSeals is the live seal records of the ledger's bytes b, in ledger
+// order (a retirement record removes its seal).
+func ledgerSeals(b []byte) []certSpan {
+	offs, types, ids := parseLedger(b)
+	var seals []certSpan
+	for i, off := range offs {
+		switch types[i] {
+		case 'S':
+			d := schema.NewDecoder(b[off+9+16 : off+8+int(binary.LittleEndian.Uint32(b[off:]))])
+			seals = append(seals, certSpan{id: ids[i], cs: d.Str(), ce: d.Str(), open: d.Byte() == 1})
+		case 'X':
+			seals = slices.DeleteFunc(seals, func(c certSpan) bool { return bytes.Equal(c.id, ids[i]) })
+		}
+	}
+	return seals
+}
+
+// recordedK is the K of out's part journal (nil: no part recorded).
+func recordedK(out string) (*string, error) {
+	st, err := journal.Read(out)
+	if err != nil || len(st.Records) == 0 {
+		return nil, err
+	}
+	k := string(st.Records[len(st.Records)-1].Part.MaxKey)
+	return &k, nil
+}
+
+// heldSnapshot is a durable-spill run's output built by barriers. Its
+// frontier is held (the request continuing after the bucket's first page,
+// 1,000 keys, waits), so no later row is handed on and K stays below every
+// certificate, until a ledger sync finds snapshotSeals seal records or
+// more with the hold engaged. Without advance the run is killed at that
+// sync, the frontier still held: every ledger record is a live seal above
+// K. With advance the ledger is frozen there (every later flusher cycle is
+// killed at its directory sync, before it writes a record) and the
+// frontier released; the run is killed at the first recorded part whose K
+// covers a certificate damagedSnapshot keeps and lies inside another, with
+// three kept certificates or more not covered. A covered certificate then
+// has no retirement record: recovery retires it as covered, in one batch
+// with the missing one.
+func heldSnapshot(t *testing.T, url string, advance bool) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "ds")
 	keys := slices.Sorted(slices.Values(gcstest.Keys(frontierKeys)))
-	h := &hold{release: make(chan struct{}), after: keys[999]}
+	h := keyedHold(keys[999])
+	release := sync.OnceFunc(func() { close(h.release) })
 	frontierHold.Store(h)
-	defer frontierHold.Store(nil)
-	var seals atomic.Int64
-	var killed atomic.Bool
+	var (
+		lifted, killed atomic.Bool
+		kept           []certSpan // advance: the certificates damagedSnapshot keeps
+		dead           = make(chan struct{})
+		kill           = sync.OnceFunc(func() { close(dead) })
+		why            atomic.Value // a barrier not met
+		seals          atomic.Int64
+	)
 	restore := faults.Set(func(p string) error {
-		if p != "spill-ledger-sync" || killed.Load() {
-			return nil
-		}
-		b, _ := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger")) // the cycle's append written, not yet synced
-		_, types, _ := parseLedger(b)
-		seals.Store(int64(bytes.Count(types, []byte{'S'})))
-		if seals.Load() >= int64(n) && killed.CompareAndSwap(false, true) {
-			close(h.release)
+		switch {
+		case p == "spill-ledger-sync" && !lifted.Load() && !killed.Load():
+			b, _ := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger")) // the cycle's append written, not yet synced
+			s := ledgerSeals(b)
+			if seals.Store(int64(len(s))); len(s) < snapshotSeals {
+				return nil
+			}
+			select {
+			case <-h.engaged:
+			case <-time.After(20 * time.Second):
+				why.Store(fmt.Sprintf("%d seal records, the frontier hold not engaged after 20 s", len(s)))
+				killed.Store(true)
+				return faults.ErrCrash
+			}
+			if !advance {
+				killed.Store(true)
+				return faults.ErrCrash // the frontier released only once Run returned
+			}
+			// Only seals so far (nothing retired with the frontier held):
+			// damagedSnapshot removes the first one's file and loses the
+			// last two records.
+			kept = s[1 : len(s)-2]
+			lifted.Store(true)
+			release()
+		case p == "spill-ledger-dirsync" && lifted.Load():
+			select {
+			case <-dead:
+			case <-time.After(60 * time.Second):
+				why.Store("no recorded part's K covered a kept certificate and straddled another within 60 s")
+			}
 			return faults.ErrCrash
+		case p == "recorded" && lifted.Load() && !killed.Load():
+			k, err := recordedK(out)
+			if err != nil {
+				why.Store(fmt.Sprintf("the journal at a recorded part: %v", err))
+				killed.Store(true)
+				kill()
+				return faults.ErrCrash
+			}
+			n := map[string]int{}
+			for _, c := range kept {
+				n[c.against(k)]++
+			}
+			if n["covered"] >= 1 && n["straddled"] >= 1 && n["straddled"]+n["above"] >= 3 {
+				killed.Store(true)
+				kill()
+				return faults.ErrCrash
+			}
 		}
 		return nil
 	})
 	_, err := Run(context.Background(), durableConfig(url, out, false))
 	restore()
-	if h.seen.Load() == 0 || h.late.Load() || !errors.Is(err, faults.ErrCrash) {
-		t.Fatalf("not killed with %d seal records in the ledger (%d; frontier held %v, in vain %v): %v", n, seals.Load(), h.seen.Load() > 0, h.late.Load(), err)
+	release() // a held request ended with its run's cancellation
+	frontierHold.Store(nil)
+	if w := why.Load(); w != nil {
+		t.Fatalf("%s: %v", w, err)
+	}
+	if !killed.Load() || !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("not killed (%d seal records at the last ledger sync, frontier released %v): %v", seals.Load(), lifted.Load(), err)
 	}
 	return out
+}
+
+// snapshotCerts counts the live certificates of the damaged snapshot out:
+// "missing" (their file gone), else how K stands to them (certSpan.against).
+func snapshotCerts(t *testing.T, out string) map[string]int {
+	t.Helper()
+	b, _, _, _ := ledgerFrames(t, out)
+	k, err := recordedK(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := map[string]int{}
+	for _, c := range ledgerSeals(b) {
+		if _, err := os.Stat(filepath.Join(out, order.DurableDir, hex.EncodeToString(c.id)+".spill")); err != nil {
+			n["missing"]++
+			continue
+		}
+		n[c.against(k)]++
+	}
+	return n
 }
 
 // TestDurableRepeatedRecovery (Sol 1): a resume is interrupted twice
@@ -421,53 +566,70 @@ func heldSnapshot(t *testing.T, url string, n int) string {
 // a resume completes: the part journal is never refused, and the dataset
 // is the uninterrupted one.
 //
-// The snapshot is built, not sampled: a run killed once its ledger holds
-// eight seal records, its frontier held (heldSnapshot), so every record is
-// a certificate above K; the damage takes three of them (the missing file
-// and the two records lost), and the resume, run once uninterrupted on a
-// copy (the dataset must be the uninterrupted one), must replay three
-// captured frames or more. That is what the mid-replay pair needs: the
-// replay is the drainer's (one encoder: no segments), which reaches
-// spill-replay-frame before every captured frame whatever K; the first
-// interruption, before the second frame, can retire only a certificate
-// whose frames were all handed on (the first frame's: a part published
-// before the crash can cover it), so two frames remain for the second.
+// The snapshots are built by barriers, not sampled (heldSnapshot): one
+// whose every certificate lies above K, and one whose K covers a
+// certificate (no retirement record: recovery retires it beside the
+// missing one, in one append) and lies inside another (its replay skips
+// the rows at or below K), checked on the damaged snapshot itself. Every
+// schedule runs from the first; the lost retirement append and the
+// mid-replay pair run from the second as well. Each snapshot's resume, run
+// once uninterrupted on a copy (the dataset must be the uninterrupted
+// one), must replay three captured frames or more. That is what the
+// mid-replay pair needs: the replay is the drainer's (one encoder: no
+// segments), which reaches spill-replay-frame before every captured frame
+// whatever K; the first interruption, before the second frame, can retire
+// only a certificate whose frames were all handed on (the first frame's: a
+// part recorded before the crash can cover it), so two frames remain for
+// the second, which the state it left must show (resumed on a copy, to the
+// uninterrupted dataset) before it is interrupted again.
 func TestDurableRepeatedRecovery(t *testing.T) {
 	url, _, _ := slowFrontier(t, "d06/")
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
-	out := heldSnapshot(t, url, 8)
-	damagedSnapshot(t, out) // five certificates or more left
-	frames, r := replayedFrames(t, url, ref, out)
-	t.Logf("the snapshot's resume replays %d captured frames: %+v", frames, r)
-	if frames < 3 {
-		t.Fatalf("the snapshot's resume replays %d captured frames, want 3 or more: %+v", frames, r)
+	snapshots := map[bool]string{}
+	for _, advanced := range []bool{false, true} {
+		out := heldSnapshot(t, url, advanced)
+		damagedSnapshot(t, out)
+		n := snapshotCerts(t, out)
+		frames, r := replayedFrames(t, url, ref, out)
+		t.Logf("snapshot (advanced K %v): certificates %v; its resume replays %d captured frames: %+v", advanced, n, frames, r)
+		if n["missing"] < 1 || (n["covered"] > 0) != advanced || (n["straddled"] > 0) != advanced || frames < 3 {
+			t.Fatalf("snapshot (advanced K %v): certificates %v, %d captured frames replayed; want one missing, one covered and one straddled with K advanced, none without, and 3 frames or more", advanced, n, frames)
+		}
+		snapshots[advanced] = out
 	}
 	ledger := func(dir string) string { return filepath.Join(dir, order.DurableDir, "ledger") }
 	for _, sc := range []struct {
 		first, second string
 		nth           int64  // the occurrence interrupted (0: the first)
 		lose          string // unsynced state lost at the first interruption: "append", "truncation"
+		advanced      bool   // from the advanced-K snapshot
 	}{
-		{"spill-ledger-truncate", "spill-ledger-truncate", 0, ""},
-		{"spill-ledger-truncated", "spill-ledger-truncated", 0, "truncation"},
-		{"spill-ledger-truncated", "spill-replay", 0, ""},
-		{"spill-recovery-retire", "spill-recovery-retire", 0, ""},
-		{"spill-recovery-sync", "spill-recovery-sync", 0, "append"},
-		{"spill-recovery-sync", "spill-replay", 0, ""},
-		{"spill-recovery-unlink", "spill-replay", 0, ""},
-		{"spill-recovery-dirsync", "spill-replay", 0, ""},
-		{"spill-replay", "spill-replay", 0, ""},
-		{"spill-replay-frame", "spill-replay-frame", 2, ""},
+		{"spill-ledger-truncate", "spill-ledger-truncate", 0, "", false},
+		{"spill-ledger-truncated", "spill-ledger-truncated", 0, "truncation", false},
+		{"spill-ledger-truncated", "spill-replay", 0, "", false},
+		{"spill-recovery-retire", "spill-recovery-retire", 0, "", false},
+		{"spill-recovery-sync", "spill-recovery-sync", 0, "append", false},
+		{"spill-recovery-sync", "spill-replay", 0, "", false},
+		{"spill-recovery-unlink", "spill-replay", 0, "", false},
+		{"spill-recovery-dirsync", "spill-replay", 0, "", false},
+		{"spill-replay", "spill-replay", 0, "", false},
+		{"spill-replay-frame", "spill-replay-frame", 2, "", false},
+		{"spill-recovery-sync", "spill-recovery-sync", 0, "append", true},
+		{"spill-replay-frame", "spill-replay-frame", 2, "", true},
 	} {
+		out := snapshots[sc.advanced]
 		name := sc.first + "+" + sc.second
 		if sc.nth > 1 {
 			name += fmt.Sprintf("#%d", sc.nth)
 		}
 		if sc.lose != "" {
 			name += "/unsynced-" + sc.lose + "-lost"
+		}
+		if sc.advanced {
+			name = "advanced-K/" + name
 		}
 		t.Run(name, func(t *testing.T) {
 			nth := max(sc.nth, 1)
@@ -526,6 +688,14 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			interrupt(dir, 0, sc.first)
+			if sc.second == "spill-replay-frame" {
+				// The state the first interruption left resumes to the
+				// uninterrupted dataset and still replays nth captured
+				// frames (at most the first frame's certificate retired).
+				if frames, r := replayedFrames(t, url, ref, dir); frames < nth {
+					t.Fatalf("the first interruption left %d captured frames to replay, want %d: %+v", frames, nth, r)
+				}
+			}
 			interrupt(dir, 1, sc.second)
 			sum, err := Run(context.Background(), durableConfig(url, dir, true))
 			if err != nil {
