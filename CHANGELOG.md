@@ -21,6 +21,8 @@ Notable changes per release. The full human summary for the current release is i
   a root that deep included: such a directory is opened one name at a time below the root, never following a
   symbolic link, where it was skipped as `file name too long`. A key longer than 32 KiB is left out and counted
   as unreadable. The report's `diagnostics.source.stats.long_paths` counts the directories opened so.
+- Go port: the writer recipe is `swath/parquet-r5`: a page ends at 4 MiB of keys as well as at 1,024 rows, which
+  only keys averaging past 4,096 bytes reach. A run interrupted under `swath/parquet-r4` is not resumed.
 - Go port: the diagnostic `swath diag list --segment-workers` is removed; the tail's worker count keeps its
   rule (one per two processors, at least 8, within the encoders, descriptors and row budget).
 - Go port: `--include '*\.parquet'` (a quoted dot, a valid glob) is accepted; it was refused as a regular

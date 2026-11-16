@@ -13,11 +13,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
-  that was listed. Its stat tier differs by platform: on Linux and macOS one `fstatat` per entry relative to
-  the open directory, and `readlinkat` for a link's target (every stat column, and `created_at` on macOS;
-  `os.DirEntry.Info` is an `lstat` of the full path, which resolves the path again per entry and fails past
-  PATH_MAX), on Windows the directory enumeration's own size, times and attributes (no call per entry; no
-  `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`).
+  that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
+  directory (every stat column and `created_at`; `os.DirEntry.Info` is an `lstat` of the full path, which
+  resolves the path again per entry), on Linux `os.DirEntry.Info` (that `lstat`, or the one `ReadDir` already
+  made for an entry the filesystem did not type, `DT_UNKNOWN`), and `fstatat` relative to the open directory
+  only where the full path is past PATH_MAX; both read a link's target with `readlinkat` relative to it. On
+  Windows the directory enumeration's own size, times and attributes (no call per entry; no `uid`, `gid`,
+  `nlink`, `inode`, `dev` or `allocated_bytes`).
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:

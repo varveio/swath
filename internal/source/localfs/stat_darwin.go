@@ -5,6 +5,7 @@ package localfs
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -25,6 +26,15 @@ func statAt(dirfd int, name string, _ Fields, r *Entry) error {
 		r.Present |= HasBtime
 	}
 	return nil
+}
+
+// statEntry fills r from one fstatat of d relative to its open directory
+// (portable engine). os.DirEntry.Info on darwin is an lstat of the full
+// path, which resolves every component again for each entry, fails past
+// the path length limit and leaves out the fields os.FileInfo does not
+// expose.
+func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
+	return statAt(int(dir.Fd()), d.Name(), Stat, r)
 }
 
 // statLinks: a stat tier reads each entry's link count, device and inode.

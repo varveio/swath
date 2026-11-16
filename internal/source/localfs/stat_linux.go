@@ -7,6 +7,7 @@ package localfs
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -30,6 +31,22 @@ func statAt(dirfd int, name string, f Fields, r *Entry) error {
 		return err
 	}
 	fillStat(r, &s)
+	return nil
+}
+
+// statEntry fills r from d.Info (portable engine): an lstat of the full
+// path, or what os.File.ReadDir already read for an entry the filesystem
+// did not type (DT_UNKNOWN), with no call. A path past the length limit is
+// statted relative to the open directory instead.
+func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
+	fi, err := d.Info()
+	if tooLong(err) {
+		return statAt(int(dir.Fd()), d.Name(), Stat, r)
+	}
+	if err != nil {
+		return err
+	}
+	fromFileInfo(r, fi)
 	return nil
 }
 

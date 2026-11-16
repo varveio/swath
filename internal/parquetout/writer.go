@@ -115,8 +115,8 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: the seekparquet module's part writer
 // (write.NewPart, at the version go.mod pins) on parquet-go v0.32.0, with
-// this schema binding and codec: v2 pages of 1,024 rows (or 4 MiB of keys,
-// which no key within the price reaches),
+// this schema binding and codec: v2 pages of 1,024 rows or 4 MiB of keys
+// (r5; r4 cut pages at 1,024 rows only),
 // 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
 // SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
@@ -129,7 +129,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // DraftRevision), the logical schema (schema IDs), the private journal
 // (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
-const Recipe = "swath/parquet-r4"
+const Recipe = "swath/parquet-r5"
 
 // createdApp, createdVersion and createdBuild make the footer's
 // created_by: the tool, its module version and its VCS revision, from the

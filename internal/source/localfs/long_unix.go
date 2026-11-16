@@ -186,15 +186,6 @@ func readlinkLong(path string, st *Stats) (target string, err error) {
 // past the length limit reads too.
 func readlinkIn(dir *os.File, _, name string) (string, error) { return readlinkAt(int(dir.Fd()), name) }
 
-// statEntry fills r from one fstatat of d relative to its open directory,
-// never following a symlink (portable engine). os.DirEntry.Info is an
-// lstat of the full path, which resolves every component again for each
-// entry, fails past the path length limit and, on macOS, leaves out the
-// fields os.FileInfo does not expose.
-func statEntry(dir *os.File, d os.DirEntry, r *Entry) error {
-	return statAt(int(dir.Fd()), d.Name(), Stat, r)
-}
-
 // readlinkAt reads a symlink target relative to dirfd.
 func readlinkAt(dirfd int, name string) (string, error) {
 	for size := 256; ; size *= 2 {
