@@ -9,6 +9,8 @@ Notable changes per release. The full human summary for the current release is i
   the old dataset) puts the old manifest back only once everything else it moved is back; if something cannot
   return, the directory holds no dataset, never a manifest naming missing parts, and the error says
   `swath resume DIR` finishes the replacement.
+- Go port: on Windows, an upload to a GCS destination whose connection the service reset ("An existing connection
+  was forcibly closed") is retried, as on other systems; before, the run failed.
 - Go port: on Windows, dataset runs of S3, GCS and Azure Blob sources keep their journal and `swath resume`
   continues them, as on Linux and macOS: directories are synced with `FlushFileBuffers` and renames are
   written through. A run whose output's filesystem refuses a directory sync is refused when it starts, with

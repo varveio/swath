@@ -110,7 +110,7 @@ func (w writer) object(name string, budget func() bool) *storage.ObjectHandle {
 	retried := w.o.Retried
 	return w.bucket.Object(name).Retryer(storage.WithMaxAttempts(w.o.MaxAttempts), storage.WithPolicy(storage.RetryIdempotent),
 		storage.WithErrorFuncWithContext(func(err error, rc *storage.RetryContext) bool {
-			if !storage.ShouldRetry(err) || budget != nil && !budget() {
+			if !retryable(err) || budget != nil && !budget() {
 				return false
 			}
 			if retried != nil {
@@ -123,6 +123,10 @@ func (w writer) object(name string, budget func() bool) *storage.ObjectHandle {
 			return true
 		}))
 }
+
+// retryable is the SDK's policy (408, 429, 5xx, connection resets), with
+// a reset worded as Windows words it.
+func retryable(err error) bool { return storage.ShouldRetry(err) || connReset(err) }
 
 func (w writer) NewWriter(ctx context.Context, name string, c objfile.Condition) (objfile.Upload, error) {
 	u := &upload{name: name}
