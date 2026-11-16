@@ -479,7 +479,7 @@ func TestShutdownInterruptsALongDelay(t *testing.T) {
 	go s.Serve()
 	got := make(chan response, 1)
 	go func() { got <- get(t, s, "/bucket?list-type=2") }()
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, "the request's delay", func() bool { return s.responses.Load() == 1 })
 	began := time.Now()
 	if complete, err := s.Shutdown(2 * time.Second); !complete || err != nil {
 		t.Errorf("shutdown: complete %v, %v", complete, err)
