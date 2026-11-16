@@ -120,7 +120,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	// timeout of empty pages.
 	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "6s", "--report", report), io.Discard, false)
 	if c := exitCode(t, err); c != exitDeadline || !strings.HasSuffix(err.Error(), "--max-duration reached (swath resume "+shellOperand(dir)+" --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)") {
-		t.Fatalf("exit %d (%v), want %d naming swath resume", c, err, exitDeadline)
+		t.Fatalf("exit %d (%v), want %d naming swath resume\n%s", c, err, exitDeadline, diagDump(dir))
 	}
 	if d := time.Duration(s.latestNs.Load() - s.firstNs.Load()); d < 2*stall || s.fresh.Load() < 100 {
 		t.Fatalf("%d fresh empty pages over %s, not over twice the stall timeout", s.fresh.Load(), d)
@@ -147,7 +147,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	s.set("healthy")
 	// As the advice says: --max-duration 0 lifts the recorded deadline.
 	if err := resume(ctx, []string{dir, "--max-duration", "0"}, io.Discard); err != nil {
-		t.Fatalf("resume: %v", err)
+		t.Fatalf("resume: %v\n%s", err, diagDump(dir))
 	}
 	sameParts(t, "resume", ref, dir)
 	for p, b := range before {
@@ -230,7 +230,7 @@ func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 	var rep listing.Report
 	readJSON(t, report, &rep)
 	if rep.Outcome.Cause != stuckEmptyChain || !rep.Outcome.Resumable {
-		t.Fatalf("outcome %+v, want cause %s, resumable", rep.Outcome, stuckEmptyChain)
+		t.Fatalf("outcome %+v, want cause %s, resumable\n%s", rep.Outcome, stuckEmptyChain, diagDump(dir))
 	}
 	// The bound's worth of empty pages, then the stop within the stall
 	// timeout of the later of the bound and the last other progress, with
@@ -380,4 +380,20 @@ func failOutcomeWrites() (restore func()) {
 		}
 		return 0, nil
 	})
+}
+
+// diagDump is the stuck dump's swath goroutines (temporary diagnosis).
+func diagDump(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, dataset.Workspace, "stacks-stuck.txt"))
+	if err != nil {
+		return fmt.Sprintf("no goroutine dump: %v", err)
+	}
+	blocks := strings.Split(string(b), "\n\n")
+	kept := blocks[:1]
+	for _, g := range blocks[1:] {
+		if strings.Contains(g, "varveio/swath/internal/") && !strings.Contains(g, "[select]:\ngithub.com/varveio/swath/internal/order.(*run") {
+			kept = append(kept, g)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
