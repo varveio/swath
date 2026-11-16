@@ -214,8 +214,7 @@ func TestReadAheadKeepsOrder(t *testing.T) {
 func heldBoundRun(t *testing.T, sink Sink[tp]) (Stats, *frontier) {
 	t.Helper()
 	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	heldUntilOthersDone(t, f)
 	const workers, budget = 16, 500
 	st, err := Run[fr, tp](context.Background(), f, sink, &testSchema, Options{Workers: workers, Budget: budget, SpillDir: t.TempDir()})
 	if err != nil {
