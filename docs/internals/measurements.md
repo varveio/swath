@@ -2445,7 +2445,11 @@ dataset ([the frontier window](ordering.md#the-frontier-window)):
   78 s uncapped, while admission waited on spill: the window admitted no tile while live spill was past half the
   cap, and that spill was mostly durable certificates behind the output waiting for their part to publish, so
   the drainer forced 84 tiles one at a time. The gate now leaves those out and evicts them under pressure
-  ([spill behind the output](ordering.md#the-frontier-window), #535); not yet re-measured.
+  ([spill behind the output](ordering.md#the-frontier-window), #535). Re-measured in one sweep on `92c68655`
+  (that change) against main at `1bb4f956`, the same caps and workers: 73 s with no forced admission, against
+  219 s; fcp-indi (113 million keys), which timed out at 300 s, took 77 s. With a stale seed and caps of 22 MiB
+  and more, 109 s against 198 s (51 forced) and 169 s against a timeout, none forced; caps under 6 MiB still
+  crawl or time out ([known limits](../troubleshooting.md#known-limits)).
 
 Every completed run was key-identical to the unseeded one.
 

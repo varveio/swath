@@ -109,7 +109,9 @@ func (l *TotalsLayout) primary() string {
 // summed. TSV and JSONL carry both byte figures, exact, each with the
 // objects that had no value for it: a figure is the sum of the values
 // there were, and null (\N in TSV) when no object under a non-empty prefix
-// had one; the time is null when no object had one. Every row repeats the
+// had one; the time is null when no object had one. A directory that could
+// not be read has null for its counts and both figures, as the table's "-",
+// where an empty directory has 0. Every row repeats the
 // primary figure, the order and whether hard links counted once. TSV takes
 // the rows' grammar (appendTSV), so any name round-trips; in JSONL a
 // prefix that is not UTF-8 is prefix_base64, its exact bytes, instead of
@@ -145,13 +147,13 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 		case TSV:
 			b = append(append(b, rowType(r)...), '\t')
 			b = strconv.AppendInt(b, int64(r.Depth), 10)
-			b = strconv.AppendInt(append(b, '\t'), r.Objects, 10)
+			b = appendTSVFigure(append(b, '\t'), r.Objects, !r.Unreadable)
 			if l.Local {
-				b = strconv.AppendInt(append(b, '\t'), r.Dirs, 10)
+				b = appendTSVFigure(append(b, '\t'), r.Dirs, !r.Unreadable)
 			}
-			b = appendTSVFigure(append(b, '\t'), r.Size, r.HasSize)
+			b = appendTSVFigure(append(b, '\t'), r.Size, r.HasSize && !r.Unreadable)
 			b = strconv.AppendInt(append(b, '\t'), r.SizeMissing, 10)
-			b = appendTSVFigure(append(b, '\t'), r.Allocated, r.HasAllocated)
+			b = appendTSVFigure(append(b, '\t'), r.Allocated, r.HasAllocated && !r.Unreadable)
 			b = strconv.AppendInt(append(b, '\t'), r.AllocatedMissing, 10)
 			b = append(b, '\t')
 			if r.HasNewest {
@@ -171,13 +173,13 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 				b = append(b, `,"`+FieldPrefixBase64+`":"`...)
 				b = append(base64.StdEncoding.AppendEncode(b, []byte(r.Prefix)), '"')
 			}
-			b = strconv.AppendInt(append(b, `,"`+FieldObjects+`":`...), r.Objects, 10)
+			b = appendJSONFigure(append(b, `,"`+FieldObjects+`":`...), r.Objects, !r.Unreadable)
 			if l.Local {
-				b = strconv.AppendInt(append(b, `,"`+FieldDirs+`":`...), r.Dirs, 10)
+				b = appendJSONFigure(append(b, `,"`+FieldDirs+`":`...), r.Dirs, !r.Unreadable)
 			}
-			b = appendJSONFigure(append(b, `,"`+FieldSize+`":`...), r.Size, r.HasSize)
+			b = appendJSONFigure(append(b, `,"`+FieldSize+`":`...), r.Size, r.HasSize && !r.Unreadable)
 			b = strconv.AppendInt(append(b, `,"`+FieldSizeMissing+`":`...), r.SizeMissing, 10)
-			b = appendJSONFigure(append(b, `,"`+FieldAllocatedBytes+`":`...), r.Allocated, r.HasAllocated)
+			b = appendJSONFigure(append(b, `,"`+FieldAllocatedBytes+`":`...), r.Allocated, r.HasAllocated && !r.Unreadable)
 			b = strconv.AppendInt(append(b, `,"`+FieldAllocatedBytesMissing+`":`...), r.AllocatedMissing, 10)
 			if r.HasNewest {
 				b = append(appendTime(append(b, `,"`+FieldMaxLastModified+`":"`...), r.Newest), '"')
@@ -214,7 +216,7 @@ func rowType(r *totals.Prefix) string {
 	return RowPrefix
 }
 
-// appendTSVFigure appends a byte figure, \N when unknown.
+// appendTSVFigure appends a byte figure or a count, \N when unknown.
 func appendTSVFigure(b []byte, n int64, ok bool) []byte {
 	if !ok {
 		return append(b, nullTSV...)
@@ -222,7 +224,7 @@ func appendTSVFigure(b []byte, n int64, ok bool) []byte {
 	return strconv.AppendInt(b, n, 10)
 }
 
-// appendJSONFigure appends a byte figure, null when unknown.
+// appendJSONFigure appends a byte figure or a count, null when unknown.
 func appendJSONFigure(b []byte, n int64, ok bool) []byte {
 	if !ok {
 		return append(b, "null"...)

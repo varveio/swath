@@ -144,7 +144,8 @@ Memory grows with the number of distinct prefixes, not objects. A run that would
 
 Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
 the rest, names the entries on stderr (relative to SOURCE) and exits 3 ([exit codes](reference/exit-codes.md)).
-In the table, a directory that could not be read shows `-` for its size and counts. The view marks with `!` after
+In the table, a directory that could not be read shows `-` for its size and counts, and in TSV and JSONL null
+for its counts and both figures, where an empty directory shows 0. The view marks with `!` after
 the size every line whose sums leave out such a directory, at or below it (a `(N more)` line too when one of the
 children it holds does), and says so in one line under it instead of naming them:
 `! 5 directories could not be read (marked ! above); -v lists them`.
@@ -192,7 +193,9 @@ and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unre
 reached`), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
 the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset whose listing did not complete, such as a
 `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
-exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. A file with several hard links
+exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. The dataset counts the
+unreadable entries but does not record which directories they were, so it cannot mark their rows: such a
+directory's row shows 0 (in every format) where the live `swath du` shows `-` or null. A file with several hard links
 counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
 `-l` counts every name. A dataset listed with `--metadata names` holds no lengths, blocks or links, so its rows
 are those of a live `--metadata names` run: both figures null under a prefix with files counted, and

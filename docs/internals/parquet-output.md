@@ -264,18 +264,24 @@ replacement does not list into the directory itself: under the output's lock, he
 into `.swath/next/`, a dataset directory of its own (`dataset.NextDir`, with its own lock, journal and parts),
 and readers keep reading the previous dataset. Its commit installs it, in the same commit step
 (`dataset.InstallNext`): every entry of the previous dataset moves into `.swath/next/retiring/`, the manifest
-first, which is then renamed `retired/`; the new `data/` moves into the output, and its manifest last, which
-is the installation. Every step is a synced rename, so a crash anywhere leaves a state the next `swath resume
-DIR` or `--overwrite` finishes first (`listing.InstallReplacement`), and the leftovers of an installed one
+first, and both directories are synced before any other entry moves; `retiring/` is then renamed `retired/`;
+the new `data/` moves into the output, synced, and its manifest last, which is the installation. Every step is
+a synced rename, so a crash anywhere leaves a state the next `swath resume DIR` or `--overwrite` finishes
+first (`listing.InstallReplacement`, `TestInstallNextFinishesAPartialRetirement`), and the leftovers of an installed one
 (a crash before their removal) are removed the same way. The path holds no committed dataset between the first
 and the last of those renames. The part paths are reused, so a reader that read the old manifest before the
 installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
 during it. The run report and cut file are written to the output after it; the retired dataset and the
 replacement's workspace are removed last. A replacement
-that fails or is interrupted leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
+that fails or is interrupted before its commit leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
 `swath resume DIR` (`swath show DIR` names it; a new `--overwrite` starts it over), and one without is removed
 (`TestReplaceKeepsPreviousUntilCommit`, `TestReplaceInstallationCrash`, `TestReplaceFailureLeavesPrevious`).
-`DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An output that holds an
+`DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An installation refused
+while the previous dataset's entries move aside (Windows: a reader holds a part) is undone: when every entry
+comes back, the previous dataset is readable again and the replacement stays pending for `swath resume DIR`.
+When an entry cannot come back, and when an installation fails after every entry is aside (which is not
+undone), the path holds no dataset until `swath resume DIR` or `--overwrite` finishes the installation, and
+the error says so (`TestReplaceRefusedInstallation`; the Windows item of [the journal](durability.md#the-journal)). An output that holds an
 interrupted run instead (no manifest) is replaced as before: its entries are removed, the commit record first,
 before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 
