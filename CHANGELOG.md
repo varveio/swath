@@ -204,8 +204,9 @@ Notable changes per release. The full human summary for the current release is i
   so no line wraps. A `!` after the size marks a line whose sums leave out a directory that could not be read,
   and one line under the view says so (`-v` names them); the view leaves room for every line printed after it,
   so its top stays on screen. Color follows `--color` and `NO_COLOR`. Each parent's other children fold into one
-  `(N more)` line carrying their sums and newest date, so every level adds up; a wide level of small prefixes is
-  shown as far as it outweighs what is below the large ones. Every figure is exact; memory stays small because
+  `(N more)` line carrying their sums and newest date, so every level adds up; no line goes to an entry under
+  0.5 % of the total, so the largest prefixes open and a long tail of small ones stays folded, the view ending
+  early when nothing above that is left. Every figure is exact; memory stays small because
   a complete prefix (inside one range, or a local directory whose listing ended) is kept only among the 100
   largest of its depth, and a prefix cut by a range's edge completes once the ranges on both sides are listed.
   A pipe, `-d N`, `--sort` and an explicit `--format` print the rows as before. The run report's

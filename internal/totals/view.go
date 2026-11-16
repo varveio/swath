@@ -54,6 +54,10 @@ import (
 // exact, and their nodes at the deepest level kept no longer know how many
 // children they have. The view does not fail.
 
+// viewFloor is the share of the total, as a divisor, below which the view
+// spends no line on a node: 0.5 %.
+const viewFloor = 200
+
 // viewKeep is the complete nodes of each depth remembered, the largest: far
 // more than a terminal shows, and each node of 1 % of the total is among
 // them (at most 100 of one depth can hold 1 %).
@@ -975,10 +979,10 @@ type ViewRow struct {
 // many and their sums, so each level adds up to its parent (a fold of no
 // bytes is left out). Line by line, what is not broken down yet (a fold,
 // or a node shown whole) gives its largest child, a node a fold for the
-// rest too: the one whose child is the largest, or the fold whose bytes,
-// spread over all the lines, would still be. So the largest nodes come first, a
-// wide level of small ones is shown as far as it outweighs them, and the
-// lines fill down to the nodes held.
+// rest too: the one whose child is the largest. So the largest nodes come
+// first and the largest prefixes open, down to a floor (0.5 % of the
+// total, more on a short terminal): a long tail of small prefixes stays in
+// its fold, and the view ends when nothing above the floor is left.
 // Unlike dust, which shows the largest nodes of the whole tree whatever
 // their parents, and pdu, which hides what is below 1 % without saying
 // so. A prefix with one child shares its line with it (it holds the same
@@ -1051,33 +1055,29 @@ func (v *View) Select(rows int) []ViewRow {
 	// joins reports whether s shares its line with its one child: a prefix
 	// (not the total) with exactly one child, shown.
 	joins := func(s *sel) bool { return s != &nodes[0] && s.n.Children == 1 && s.next == 1 }
-	// What is not broken down yet: a shown node not expanded (its bytes)
-	// or a fold (its parent's bytes not shown), each by the node it breaks
-	// down. The next is the one whose next line is the largest, or the fold
-	// whose bytes, were they spread over every line of the view, would still
-	// make a larger line: a fold of many small children is broken down while
-	// it outweighs what the other lines would show.
-	type part struct {
-		bytes int64
-		i     int
-		fold  bool
-	}
+	// What is not broken down yet: a shown node not expanded or a fold, by
+	// the node it breaks down; the next is the one whose next child is the
+	// largest, so the largest prefixes shown open first. No line goes to a
+	// node under the floor: a share of the total that one line of the view
+	// would barely show (viewFloor, or a quarter of a line's share of the
+	// lines), and once none is left above it the view ends, shorter.
+	floor := max(v.Total.Bytes/viewFloor, v.Total.Bytes/int64(4*max(rows, 1)))
+	type part struct{ i int }
 	var parts []part
 	if len(nodes[0].kids) > 0 {
-		parts = append(parts, part{v.Total.Bytes, 0, false})
+		parts = append(parts, part{0})
 	}
 	used := 1 + folds(&nodes[0])
 	for len(parts) > 0 {
 		best, worth := -1, int64(-1)
 		for j, pt := range parts {
 			s := &nodes[pt.i]
-			w := nodes[s.kids[s.next]].n.Bytes
-			if pt.fold {
-				w = max(w, pt.bytes/int64(max(rows, 1)))
-			}
-			if w > worth {
+			if w := nodes[s.kids[s.next]].n.Bytes; w >= floor && w > worth {
 				best, worth = j, w
 			}
+		}
+		if best < 0 {
+			break // nothing left above the floor
 		}
 		pt := parts[best]
 		parts = append(parts[:best], parts[best+1:]...)
@@ -1097,10 +1097,10 @@ func (v *View) Select(rows int) []ViewRow {
 		}
 		used += cost
 		if len(nodes[c].kids) > 0 {
-			parts = append(parts, part{nodes[c].n.Bytes, c, false})
+			parts = append(parts, part{c})
 		}
 		if s.next < len(s.kids) {
-			parts = append(parts, part{s.n.Bytes - s.bytes, pt.i, true})
+			parts = append(parts, part{pt.i})
 		}
 	}
 	// foldNewest is the newest time among the children of s not shown:
