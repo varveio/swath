@@ -2545,16 +2545,17 @@ vCPUs. Alone in `go-stress.yml` on the same commit, without `-race`, `internal/l
 
 After (#608, three legs along the race shards), job wall time in minutes:
 
-| job | [43883096460](https://github.com/varveio/swath/actions/runs/43883096460) | [43886553653](https://github.com/varveio/swath/actions/runs/43886553653) |
-|---|---:|---:|
-| `go-xos (windows-latest, listing-rest)` | 16.8 | 13.8 |
-| `go-xos (windows-latest, cmd)` | 14.1 | 14.3 |
-| `go-xos (windows-latest, matrices-rest)` | 18.6 | 12.1 |
-| `go-xos (macos-latest)`, for comparison | 15.6 | 15.6 |
+| job | [43883096460](https://github.com/varveio/swath/actions/runs/43883096460) | [43886553653](https://github.com/varveio/swath/actions/runs/43886553653) | [43894962300](https://github.com/varveio/swath/actions/runs/43894962300) |
+|---|---:|---:|---:|
+| `go-xos (windows-latest, listing-rest)` | 16.8 | 13.8 | 13.6 |
+| `go-xos (windows-latest, cmd)` | 14.1 | 14.3 | 14.1 |
+| `go-xos (windows-latest, matrices-rest)` | 18.6 | 12.1 | 15.2 |
+| `go-xos (macos-latest)`, for comparison | 15.6 | 15.6 | 12.5 |
 
-No leg restored a build cache in the first run; in the second, `matrices-rest` restored the `go-xos` cache
+The third run is the change rebased onto `main` after #605 merged. No leg restored a build cache in the
+first run; in the second and third, `matrices-rest` restored the `go-xos` cache
 a `main` push had saved meanwhile (its `go vet ./...` took 29 s against 2.5 min). `listing-rest` and `cmd`
-use new keys that only a `main` push saves, so both runs built them cold. Setup, mostly the 500 MB module
+use new keys that only a `main` push saves, so every run built them cold. Setup, mostly the 500 MB module
 cache's restore, took 1.3–1.6 min per leg.
 
 Microsoft Defender was not a cost: on every leg `Get-MpComputerStatus` reported `RealTimeProtectionEnabled`
