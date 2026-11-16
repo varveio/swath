@@ -121,9 +121,11 @@ holding a `manifest.json` is), but nothing removes the lost run's parts, so star
 
 `--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into the
 output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
-whose parts are removed after. A run that fails or is stopped leaves the previous dataset as it was; a stopped
-object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new `--overwrite`
-starts it over. The previous dataset stays whole until the new manifest is installed. The installation
+whose parts are removed after. A run that fails or is stopped before that installation leaves the previous
+dataset as it was; a stopped object-store run waits there for `swath resume DIR`, which `swath show DIR`
+names, and a new `--overwrite` starts it over. An installation another program blocks (Windows) is rolled
+back, or, if the rollback is blocked too, leaves no dataset until `swath resume DIR` finishes it
+([the output directory is refused](troubleshooting.md#the-output-directory-is-refused)). The installation
 reuses the part paths (`data/part-NNNNN.parquet`), so a reader that is reading the dataset while it runs can
 find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
 

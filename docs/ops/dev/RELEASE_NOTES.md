@@ -67,7 +67,19 @@ documentation is also at [swath.varve.io](https://swath.varve.io/).
   under a schema id such as `swath/s3-objects/v1`
   ([The swath dataset format](https://github.com/varveio/swath/blob/v0.4.0/docs/dataset.md)). 0.4.0 neither
   reads a 0.3 dataset nor resumes a 0.3 run; `--overwrite` replaces the directory an interrupted 0.3 run
-  left. List again with 0.4.0, and update queries to the new columns.
+  left. List again with 0.4.0, and update queries to the new columns. `symlink.txt`, the part list for
+  Athena and Trino, is no longer written: the manifest's `parts` lists the parts
+  ([Query an inventory](https://github.com/varveio/swath/blob/v0.4.0/docs/query.md)).
+- **Metrics.** 0.4.0 exports no OTLP metrics. `--metrics-endpoint` and `--no-metrics` are refused as unknown
+  options, but `SWATH_OTLP_ENDPOINT`, `SWATH_OTLP_INTERVAL`, `OTEL_RESOURCE_ATTRIBUTES` and
+  `OTEL_SERVICE_NAME` are not read, so metrics configured only in the environment stop without an error. A
+  run's counts are in its report, `progress.json` and `--log-format json` events.
+- **S3 client setup.** The region comes from `--s3-region`, `AWS_REGION`, `AWS_DEFAULT_REGION` or the
+  profile, else `us-east-1`, never from EC2 instance metadata: on EC2 without one of them, a bucket in
+  another region fails with exit 1 naming the option to give. An `endpoint_url` in `~/.aws/config` is not
+  read (give `--endpoint-url` or `AWS_ENDPOINT_URL_S3`), and requests to `https://` endpoints, AWS's
+  included, go through `HTTPS_PROXY`, not `HTTP_PROXY`
+  ([S3](https://github.com/varveio/swath/blob/v0.4.0/docs/sources/s3.md#s3-compatible-stores)).
 - **The image** `ghcr.io/varveio/swath` is distroless, without a shell: its entrypoint is `/opt/swath/swath`,
   it runs as `65532:65532`, and it cannot run `--s3-bearer-token-command` or a profile's
   `credential_process` ([Container images](https://github.com/varveio/swath/blob/v0.4.0/docs/install.md#container-images)).
@@ -93,9 +105,18 @@ results are in the tag's `ci.yml` and `release.yml` runs.
   not recognized or not allowed.
 - Measured runs, each with its build, date, machine and command, are in
   [measurements.md](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/measurements.md). In one
-  live listing swath counted 1.09 billion S3 objects in 177 seconds, and in another wrote them as a sorted
-  inventory in 846 seconds, on one 32-vCPU VM; 35 production listings of public buckets, 50.6 billion objects
+  live listing with `--workers 1024` swath counted 1.09 billion S3 objects in 177 seconds, and in another,
+  also at 1,024 workers, wrote them as a sorted inventory in 846 seconds, on one 32-vCPU VM; at the default 64
+  workers neither finished within 40 minutes. 35 production listings of public buckets, 50.6 billion objects
   in all, completed. None was taken on this tag.
+- **What has run against the real services**, all on Linux VMs and recorded in measurements.md: anonymous
+  listings of public S3 buckets, the billion-object runs included; the 35 production listings, of public S3
+  buckets with 0.4.0-rc.2, each writing its dataset to a GCS bucket with default credentials; anonymous
+  listings of a public Azure Blob container; and a private GCS bucket of 5.1 million objects, listed by an
+  earlier build. New in 0.4.0 and tested only against emulators, fakes and CI runners: S3 credential refresh
+  ([#577](https://github.com/varveio/swath/issues/577)); Azure Blob with a SAS, Shared Key or Entra ID
+  ([#346](https://github.com/varveio/swath/issues/346)); GCS with a key file; datasets written to S3 and
+  Azure Blob buckets; and journaled runs and `swath resume` on Windows, which run on CI's Windows runners.
 
 ## Limits and known issues
 
@@ -106,7 +127,9 @@ results are in the tag's `ci.yml` and `release.yml` runs.
 - **Windows:** dataset runs and `swath resume` work as on Linux and macOS, on an output whose filesystem
   syncs directories (checked when the run starts). Power loss is safe on local NTFS; on ReFS or an SMB share
   a crash or kill is recovered, but a power loss may lose the latest part names. An `--overwrite` blocked by
-  a file another program holds open fails naming that cause and leaves the previous dataset readable
+  a file another program holds open fails naming that cause and is rolled back: the previous dataset stays
+  readable and `swath resume DIR` installs the replacement later. If the rollback is blocked too, the
+  directory holds no dataset until `swath resume DIR` finishes the replacement
   ([Known limits](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#known-limits)).
 - **S3-compatible stores:** swath trusts a store's empty last page; a store that returns one too early makes
   a listing miss keys ([#265](https://github.com/varveio/swath/issues/265)). Check a first run against a new

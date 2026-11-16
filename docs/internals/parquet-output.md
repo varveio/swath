@@ -272,7 +272,8 @@ and the last of those renames. The part paths are reused, so a reader that read 
 installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
 during it. The run report and cut file are written to the output after it; the retired dataset and the
 replacement's workspace are removed last. A replacement
-that fails or is interrupted leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
+that fails or is interrupted before its installation leaves the previous dataset whole (a refused
+installation is rolled back, [durability](durability.md)); one with a journal waits in `.swath/next/` for
 `swath resume DIR` (`swath show DIR` names it; a new `--overwrite` starts it over), and one without is removed
 (`TestReplaceKeepsPreviousUntilCommit`, `TestReplaceInstallationCrash`, `TestReplaceFailureLeavesPrevious`).
 `DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An output that holds an
