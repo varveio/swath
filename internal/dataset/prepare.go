@@ -225,7 +225,11 @@ func InstallNext(out string) error {
 		var moved []string
 		for _, n := range append(slices.Clone(commitEntries), ownEntries...) {
 			if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
-				if err := renameFile(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
+				err := faults.At("install-retire") // tests: a refused rename
+				if err == nil {
+					err = renameFile(filepath.Join(out, n), filepath.Join(retiring, n))
+				}
+				if err != nil {
 					return fmt.Errorf("retire the replaced dataset: %w", errors.Join(err, restore(out, retiring, moved)))
 				}
 				moved = append(moved, n)
@@ -274,15 +278,37 @@ func InstallNext(out string) error {
 // restore moves the entries a refused retirement moved (names, in order)
 // back from retiring into out, the last first, and syncs both: out holds
 // its dataset again, readable as before, and the replacement stays
-// pending (InstallPending) for a later InstallNext. A refusal is a rename
-// the platform declined (Windows: a reader holds a part open, so data/
-// cannot move), not a crash; a crash part way through the restore leaves a
-// partial retirement, as one during the retirement does, which
-// InstallNext, run again, finishes forward.
+// pending (InstallPending) for a later InstallNext. The commit record (the
+// manifest) goes back only once every other entry is back, data/ and the
+// parts it names among them: a manifest restored beside a data/ that
+// could not return would advertise a dataset whose parts are missing. If
+// any entry stays retired, so does the manifest, and the error says that
+// out holds no dataset until a resume finishes the replacement. A refusal
+// is a rename the platform declined (Windows: a reader holds a part open),
+// not a crash; a crash part way through the restore leaves a partial
+// retirement, as one during the retirement does, which InstallNext, run
+// again, finishes forward.
 func restore(out, retiring string, names []string) error {
 	var err error
+	var commit []string
 	for _, n := range slices.Backward(names) {
-		err = errors.Join(err, renameFile(filepath.Join(retiring, n), filepath.Join(out, n)))
+		if slices.Contains(commitEntries, n) {
+			commit = append(commit, n)
+			continue
+		}
+		e := faults.At("install-restore") // tests: a refused rename
+		if e == nil {
+			e = renameFile(filepath.Join(retiring, n), filepath.Join(out, n))
+		}
+		err = errors.Join(err, e)
+	}
+	if err == nil {
+		for _, n := range commit {
+			err = errors.Join(err, renameFile(filepath.Join(retiring, n), filepath.Join(out, n)))
+		}
+	}
+	if err != nil {
+		err = fmt.Errorf("the rollback is incomplete, so %s holds no dataset until swath resume %s finishes the replacement: %w", out, out, err)
 	}
 	return errors.Join(err, syncDir(out), syncDir(retiring))
 }

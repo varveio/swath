@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
@@ -215,4 +216,72 @@ func TestReplaceFailureLeavesPrevious(t *testing.T) {
 		t.Fatalf("the failed replacement left its directory: %v", err)
 	}
 	checkContract(t, out)
+}
+
+// TestReplaceRefusedInstallation: an --overwrite whose retirement of the
+// old dataset is refused after its manifest and data/ moved (Windows: a
+// reader holds the old run.json) moves them back: the old dataset stands,
+// the replacement stays pending, and a later installation finishes it.
+// When data/ cannot come back either (a scanner holds one of its parts),
+// the old manifest stays retired, never beside a data/ that is gone: out
+// holds no dataset, the error names both refusals and swath resume, and
+// the installation still finishes once the holders let go.
+func TestReplaceRefusedInstallation(t *testing.T) {
+	trees := []string{t.TempDir(), t.TempDir()}
+	mk(t, trees[0], "a/1", "a/2")
+	mk(t, trees[1], "a/1", "a/2", "b/1", "b/2")
+	cfg := func(tree, out string, replace bool) Config {
+		return Config{Source: SourceConfig{URI: tree}, Output: OutputConfig{Dir: out, Replace: replace}, Limits: Limits{PartSize: 1}}
+	}
+	held := errors.New("held by another program")
+	scanned := errors.New("scanned by another program")
+	for _, dataBack := range []bool{true, false} {
+		t.Run(fmt.Sprintf("data-back=%v", dataBack), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "ds")
+			if _, err := Run(context.Background(), cfg(trees[0], out, false)); err != nil {
+				t.Fatal(err)
+			}
+			old := checkContract(t, out)
+			var retires, restores int
+			restore := faults.Set(func(p string) error {
+				switch {
+				case p == "install-retire":
+					if retires++; retires == 3 { // manifest.json and data/ moved; run.json refused
+						return held
+					}
+				case p == "install-restore" && !dataBack:
+					if restores++; restores == 1 { // data/, the first to go back
+						return scanned
+					}
+				}
+				return nil
+			})
+			_, err := Run(context.Background(), cfg(trees[1], out, true))
+			restore()
+			if !errors.Is(err, held) || !dataset.InstallPending(out) {
+				t.Fatalf("the refused installation: %v (pending %v)", err, dataset.InstallPending(out))
+			}
+			if dataBack {
+				if got := checkContract(t, out); len(got) != len(old) {
+					t.Fatalf("after the rollback: %d keys, want the old %d", len(got), len(old))
+				}
+			} else {
+				if dataset.Committed(out) {
+					t.Fatal("the old manifest came back without its data/")
+				}
+				if !errors.Is(err, scanned) || !strings.Contains(err.Error(), "the rollback is incomplete") || !strings.Contains(err.Error(), "swath resume") {
+					t.Fatalf("the incomplete rollback's error: %v", err)
+				}
+			}
+			if err := InstallReplacement(out); err != nil {
+				t.Fatal(err)
+			}
+			if got := checkContract(t, out); len(got) != 6 {
+				t.Fatalf("after the installation: %d keys, want the replacement's 6", len(got))
+			}
+			if _, err := os.Lstat(dataset.NextDir(out)); !os.IsNotExist(err) {
+				t.Fatalf("the replacement's directory is left: %v", err)
+			}
+		})
+	}
 }
