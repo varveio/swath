@@ -13,11 +13,11 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 )
 
-// TestUnenforcedPlatformRefusesJournal (review item 42): where
-// directory syncs are not enforced (Windows), a journaled
-// run and a resume are refused with ErrUnenforced before the output is
-// created or touched. Before, the journaled run went ahead with a warning
-// and no lock.
+// TestUnenforcedPlatformRefusesJournal (review item 42): where the
+// output's filesystem refuses a directory sync (dataset.CheckDirSync), a
+// journaled run and a resume are refused with ErrUnenforced before the
+// output is created or touched. Before, the journaled run went ahead with
+// a warning and no lock.
 func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 	defer func(was bool) { dataset.DirSyncEnforced = was }(dataset.DirSyncEnforced)
 	dataset.DirSyncEnforced = false
@@ -25,7 +25,6 @@ func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
 	for _, destination := range []string{"", "s3://dst/prefix", "gs://dst/prefix", "az://acct/dst/prefix"} {
 		for _, resume := range []bool{false, true} {
-			// Not runScripted: its config lists unjournaled where that is refused.
 			scriptMu.Lock()
 			scriptNext = &scripted{keys: keys, chunk: 1}
 			scriptMu.Unlock()
@@ -52,8 +51,8 @@ func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 	}
 }
 
-// Unjournaled runs still publish datasets when directory sync is not
-// enforced, both locally and to a bucket.
+// Unjournaled runs still publish datasets where a directory sync is
+// refused, both locally and to a bucket.
 func TestUnenforcedPlatformAllowsUnjournaledDataset(t *testing.T) {
 	defer func(was bool) { dataset.DirSyncEnforced = was }(dataset.DirSyncEnforced)
 	dataset.DirSyncEnforced = false

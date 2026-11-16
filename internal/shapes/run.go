@@ -72,6 +72,7 @@ type Result struct {
 	Pages         int64   `json:"pages"`
 	Depth         int64   `json:"split_max_depth"`
 	MeanActive    float64 `json:"mean_active"`
+	PeakActive    int64   `json:"peak_active"`
 	Splits        int64   `json:"splits"`
 	EmptyChildren int64   `json:"empty_children"`
 	SeedTrips     int64   `json:"seed_round_trips"`
@@ -132,7 +133,7 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	n := max(1, float64(len(keys)))
 	r := Result{Name: a.Name, Shape: a.Shape, Keys: len(keys), Workers: a.Workers, WallMs: rep.Timings.ListingMs,
 		RequestsPer1k: float64(v("requests")) * 1000 / n, Pages: v("pages"), Depth: v("split.max_depth"),
-		MeanActive: st.MeanActive, Splits: v("split.accepted_bounded") + v("split.accepted_frontier"),
+		MeanActive: st.MeanActive, PeakActive: v("peak_active"), Splits: v("split.accepted_bounded") + v("split.accepted_frontier"),
 		EmptyChildren: v("child_empty.lower") + v("child_empty.upper"), SeedTrips: v("seed.round_trips"),
 		Rows: rep.Output.RowsEmitted}
 	if rep.Requests != nil {

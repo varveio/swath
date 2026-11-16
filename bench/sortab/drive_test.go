@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -233,6 +234,9 @@ func attempt(bin string, cfg childConfig, cfgPath string) (Attempt, error) {
 	}
 	usage(st, &at)
 	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
+		at.Killed = true
+	}
+	if runtime.GOOS == "windows" && st.ExitCode() == 137 { // the child's kill there
 		at.Killed = true
 	}
 	at.Exit = st.ExitCode()

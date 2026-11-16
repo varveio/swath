@@ -47,9 +47,6 @@ func TestReplace(t *testing.T) {
 			t.Fatalf("%s fault: %d entries left", op, len(ents))
 		}
 	}
-	if !DirSyncEnforced {
-		return
-	}
 	restore := faults.SetIO(func(o, name string, b []byte) (int, error) {
 		if o == "sync" && name == dir {
 			return 0, errors.New("injected")

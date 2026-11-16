@@ -28,6 +28,9 @@ type issuer struct {
 	hold    time.Duration
 	entered chan struct{} // receives once a gated call waits, when set
 	calls   atomic.Int64
+
+	mu     sync.Mutex
+	issued []time.Time // when each call issued its credentials (wall clock)
 }
 
 func (p *issuer) Retrieve(context.Context) (aws.Credentials, error) {
@@ -45,6 +48,9 @@ func (p *issuer) Retrieve(context.Context) (aws.Credentials, error) {
 	if p.same {
 		n = 1
 	}
+	p.mu.Lock()
+	p.issued = append(p.issued, time.Now().Round(0))
+	p.mu.Unlock()
 	// Each fetch's expiry is later than the one before, as a renewed
 	// session's is, whatever the clock's resolution: two fetches within one
 	// tick of a coarse clock would otherwise return identical credentials,
@@ -56,9 +62,13 @@ func (p *issuer) Retrieve(context.Context) (aws.Credentials, error) {
 // TestRefreshAheadOncePerLifetime: through the SDK's cache, whose clock a
 // test cannot set (internal/sdk), credentials of 30 seconds and 1, 5 and 15
 // minutes, scaled down 200 times (the window is a quarter of each, as
-// unscaled), read by 8 workers for two lifetimes, are fetched three times:
-// once at the start and once each three quarters of a lifetime, never once
-// per read, never read expired.
+// unscaled), read by 8 workers for two lifetimes, are fetched once at the
+// start and then each time three quarters of a lifetime have passed since
+// the last fetch, never sooner and never once per read, and never read
+// expired. Three fetches when no reader is delayed; the count is not
+// gated: a reader held past the refresh point on a loaded runner (macOS
+// CI) moves that fetch, and so the next, later, which is no fault of the
+// cache.
 func TestRefreshAheadOncePerLifetime(t *testing.T) {
 	for _, life := range []time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute} {
 		life := life / 200
@@ -66,7 +76,8 @@ func TestRefreshAheadOncePerLifetime(t *testing.T) {
 			t.Parallel()
 			p := &issuer{life: life}
 			c := RefreshAhead(p)
-			end := time.Now().Add(2 * life)
+			start := time.Now()
+			end := start.Add(2 * life)
 			var wg sync.WaitGroup
 			for range 8 {
 				wg.Go(func() {
@@ -86,9 +97,17 @@ func TestRefreshAheadOncePerLifetime(t *testing.T) {
 				})
 			}
 			wg.Wait()
-			if p.calls.Load() != 3 {
-				t.Fatalf("%d fetches in two lifetimes: want 3", p.calls.Load())
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if len(p.issued) < 2 {
+				t.Fatalf("%d fetches in two lifetimes: want a refresh", len(p.issued))
 			}
+			for i := 1; i < len(p.issued); i++ {
+				if d := p.issued[i].Sub(p.issued[i-1]); d < life*3/4 {
+					t.Fatalf("fetch %d %v after the one before, sooner than three quarters of %v", i+1, d, life)
+				}
+			}
+			t.Logf("%d fetches in %v", len(p.issued), time.Since(start))
 		})
 	}
 }

@@ -35,8 +35,8 @@ func TestStatusSignal(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() {
-			done <- run(ctx, append([]string{"gs://bkt", "--endpoint-url", hung.URL + gcstest.Path, "--anonymous", "--stall-timeout", "3s",
-				"--log-format", c.format, "-o", filepath.Join(t.TempDir(), "ds")}, unjournaled...), io.Discard, len(unjournaled) > 0)
+			done <- run(ctx, []string{"gs://bkt", "--endpoint-url", hung.URL + gcstest.Path, "--anonymous", "--stall-timeout", "3s",
+				"--log-format", c.format, "-o", filepath.Join(t.TempDir(), "ds")}, io.Discard, false)
 		}()
 		deadline := time.Now().Add(10 * time.Second)
 		for statusNow.Load() == nil && time.Now().Before(deadline) {

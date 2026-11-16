@@ -55,8 +55,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		t.Helper()
 		var out bytes.Buffer
 		args = append(args, "--report", "-", "-o", filepath.Join(t.TempDir(), "ds"))
-		args = append(args, unjournaled...)
-		if err := run(context.Background(), args, &out, diag || diagList); err != nil {
+		if err := run(context.Background(), args, &out, diag); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
 		var r report

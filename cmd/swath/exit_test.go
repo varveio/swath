@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
@@ -36,14 +36,10 @@ import (
 // not complete in an output this tool owns, an error.json with the class,
 // the cause and whether swath resume can continue it.
 func TestExitCodes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
 	var hang atomic.Bool // after the first request, hold every request (no progress)
 	var served atomic.Int64
@@ -129,62 +125,78 @@ func TestExitCodes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
 	}
-	// 143, 130 and 129: signals, graceful, resumable. The process dies by
-	// the signal once it has cleaned up (a shell sees 128+n), so a calling
-	// shell loop stops; before, it exited with the code, and a hangup (a
-	// dropped SSH session) killed it with no outcome. The interrupted run is
-	// traced: its trace parses and ends in run_end with the outcome.
-	slow.Store(true)
-	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted, syscall.SIGHUP: exitHangup} {
-		dir := filepath.Join(t.TempDir(), "sig")
-		args := s3args("bkt", dir)
-		trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
-		if sig == syscall.SIGINT {
-			args = append(append([]string{"diag"}, args...), "--trace", trace)
+	// Windows delivers no signal to a process: the signal cases are Unix's.
+	if runtime.GOOS != "windows" {
+		// 143, 130 and 129: signals, graceful, resumable. The process dies by
+		// the signal once it has cleaned up (a shell sees 128+n), so a calling
+		// shell loop stops; before, it exited with the code, and a hangup (a
+		// dropped SSH session) killed it with no outcome. The interrupted run is
+		// traced: its trace parses and ends in run_end with the outcome.
+		slow.Store(true)
+		for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted, syscall.SIGHUP: exitHangup} {
+			dir := filepath.Join(t.TempDir(), "sig")
+			args := s3args("bkt", dir)
+			trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
+			if sig == syscall.SIGINT {
+				args = append(append([]string{"diag"}, args...), "--trace", trace)
+			}
+			cmd := exec.Command(bin, args...)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			// Signalled once it lists into its journaled output, and once its
+			// trace holds an event past run_start: before, a fixed 700 ms
+			// could end a slow start before the process owned its output (no
+			// error.json) or traced anything.
+			ready := func() bool {
+				if _, err := os.Stat(filepath.Join(dir, journal.Dir, journal.Name)); err != nil {
+					return false
+				}
+				b, _ := os.ReadFile(trace)
+				return sig != syscall.SIGINT || bytes.Count(b, []byte("\n")) >= 2
+			}
+			for deadline := time.Now().Add(30 * time.Second); !ready() && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+			}
+			cmd.Process.Signal(sig)
+			if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
+				t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
+			}
+			if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != listing.ClassTerminated || o.StopSource != "sighup") {
+				t.Fatalf("%v: %+v", sig, o)
+			}
+			if sig != syscall.SIGINT {
+				continue
+			}
+			b, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
+			var end map[string]any
+			for i, l := range lines {
+				var e map[string]any
+				if err := json.Unmarshal(l, &e); err != nil {
+					t.Fatalf("trace line %d %q: %v", i, l, err)
+				}
+				end = e
+			}
+			if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
+				t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
+			}
 		}
-		cmd := exec.Command(bin, args...)
+		// Under nohup (SIGHUP ignored when swath starts) a hangup changes
+		// nothing: the run completes.
+		nohup := filepath.Join(t.TempDir(), "nohup")
+		cmd := exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, bin}, s3args("bkt", nohup)...)...)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(700 * time.Millisecond)
-		cmd.Process.Signal(sig)
-		if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
-			t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
+		cmd.Process.Signal(syscall.SIGHUP)
+		if c, _ := exitStatus(t, cmd.Wait()); c != exitOK || !dataset.Committed(nohup) {
+			t.Fatalf("nohup: exit %d, committed %v", c, dataset.Committed(nohup))
 		}
-		if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != listing.ClassTerminated || o.StopSource != "sighup") {
-			t.Fatalf("%v: %+v", sig, o)
-		}
-		if sig != syscall.SIGINT {
-			continue
-		}
-		b, err := os.ReadFile(trace)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
-		var end map[string]any
-		for i, l := range lines {
-			var e map[string]any
-			if err := json.Unmarshal(l, &e); err != nil {
-				t.Fatalf("trace line %d %q: %v", i, l, err)
-			}
-			end = e
-		}
-		if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
-			t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
-		}
-	}
-	// Under nohup (SIGHUP ignored when swath starts) a hangup changes
-	// nothing: the run completes.
-	nohup := filepath.Join(t.TempDir(), "nohup")
-	cmd := exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, bin}, s3args("bkt", nohup)...)...)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(700 * time.Millisecond)
-	cmd.Process.Signal(syscall.SIGHUP)
-	if c, _ := exitStatus(t, cmd.Wait()); c != exitOK || !dataset.Committed(nohup) {
-		t.Fatalf("nohup: exit %d, committed %v", c, dataset.Committed(nohup))
 	}
 	// 75: stuck, when nothing progresses for the stall timeout.
 	slow.Store(false)
@@ -226,7 +238,6 @@ func exitStatus(t *testing.T, err error) (code int, signaled bool) {
 // outage ends, swath resume completes it with the dataset of an
 // uninterrupted run byte for byte.
 func TestGCSOutageThenResume(t *testing.T) {
-	datasettest.RequireJournal(t)
 	h := gcstest.Handler(gcstest.Keys(20000), 20*time.Millisecond)
 	var served, failed, after atomic.Int64 // after: the outage begins after this many requests (0: never)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +302,6 @@ func TestGCSOutageThenResume(t *testing.T) {
 // larger workspace on the code alone; swath resume then completes the
 // dataset of an uninterrupted run (before: exit 1, class fatal).
 func TestDiskFullExits74(t *testing.T) {
-	datasettest.RequireJournal(t)
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
@@ -345,7 +355,6 @@ func TestDiskFullExits74(t *testing.T) {
 // was and writes none; a resume given --report writes its own there. Before,
 // a plain resume replaced the first attempt's report with its own (C-C6).
 func TestResumeKeepsTheRunsReport(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
@@ -486,8 +495,8 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
 		start := time.Now()
-		err := run(ctx, append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
-			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, unjournaled...), &out, true)
+		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
+			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
@@ -596,7 +605,6 @@ func TestCappedCountPrintsCounts(t *testing.T) {
 // does a resumed run and swath show names the mark. Before, nothing in the
 // journal marked the run and the resume continued.
 func TestProtocolViolationIsUnresumable(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	h := gcstest.Handler(gcstest.Keys(20000), 0)
 	var served, after, swapped atomic.Int64 // after: invalid pages come after this many requests (0: never)

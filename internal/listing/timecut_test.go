@@ -19,7 +19,6 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
@@ -51,7 +50,6 @@ func footerRows(t *testing.T, path string) int64 {
 // refused the unchanged source with ErrAmbiguousTail). A source changed
 // inside the claimed part is still refused, the part kept.
 func TestTimeCutClaimResumes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 300 {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
@@ -137,7 +135,6 @@ func TestTimeCutClaimResumes(t *testing.T) {
 // same part count. Before, part 0's ratio froze a limit about a fifteenth
 // of the part size for the whole run and every resume of it.
 func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
-	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 6000 {
 		keys = append(keys, fmt.Sprintf("k%05d", i))
@@ -245,7 +242,6 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 // retained part alone, the dataset of a clean run. Deterministic: the
 // tail's first range waits until part 0, cut by time, is being recorded.
 func TestTimeCutLastPartEmptyTail(t *testing.T) {
-	datasettest.RequireJournal(t)
 	keys := []string{"a.csv"}
 	for i := range 20 {
 		keys = append(keys, fmt.Sprintf("b%03d.txt", i))

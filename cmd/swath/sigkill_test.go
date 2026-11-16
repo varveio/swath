@@ -1,8 +1,6 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !windows
-
 package main
 
 import (
@@ -10,10 +8,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"hash/crc32"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -22,7 +23,9 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
+	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -39,10 +42,7 @@ func TestSIGKILLResume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	// Slow enough to kill mid-run.
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
@@ -70,7 +70,7 @@ func TestSIGKILLResume(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	cmd.Wait()
@@ -118,10 +118,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	b := s3test.Backend(t, s3test.Keys(4000, 7))
 	url := s3test.Serve(t, s3test.Handler(b))
@@ -211,7 +208,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 					t.Logf("%s not reached; run completed", at)
 					continue
 				}
-				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+				if !selfKilled(cmd.ProcessState) {
 					t.Fatalf("%s: not killed: %v", at, err)
 				}
 				if o, err := exec.Command(bin, append(append([]string{"resume"}, prov.runtime...), out)...).CombinedOutput(); err != nil {
@@ -266,10 +263,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(30000)))
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -295,7 +289,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 		t.Helper()
 		cmd.Env = append(append(os.Environ(), "SWATH_TEST_KILL_AT="+at), env...)
 		out, err := cmd.CombinedOutput()
-		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+		if err == nil || !selfKilled(cmd.ProcessState) {
 			t.Fatalf("%s: not killed there (not reached): %v\n%s", at, err, out)
 		}
 	}
@@ -389,9 +383,12 @@ func damageLedger(t *testing.T, out string) {
 // handed on and the last part held before the router's Close), resumes,
 // and requires the parts byte-identical, and the manifest but for its
 // observation times, to an
-// uninterrupted run's. The fixture is sized so the tail engages: listing
-// against an undelayed bucket outruns four encoders, the rows wait, and
-// part 0 freezes the size limit long before listing ends. The
+// uninterrupted run's. The tail engages by construction: the drainer
+// starts only once listing is done (SWATH_TEST_DRAIN_AFTER_LISTING), so
+// every row waits for the tail. Before, the fixture relied on listing
+// against an undelayed bucket outrunning four encoders; on a slow runner
+// the drain kept up and the tail was too small (CI: 9 segments, 6,538
+// rows, no spill read) or never engaged in a kill run. The
 // clean run must report segments engaged with more than one worker, and
 // every kill must be reached, so a fixture that stops reaching the tail
 // fails instead of passing vacuously. Two arms: a row budget that holds
@@ -404,13 +401,10 @@ func TestSIGKILLInSegments(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
-	env := append(os.Environ(), "GOMAXPROCS=4")
+	env := append(os.Environ(), "GOMAXPROCS=4", "SWATH_TEST_DRAIN_AFTER_LISTING=1")
 	for _, arm := range []struct {
 		name, budget string
 		spilled      bool // the segments read spill frames
@@ -468,7 +462,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 				if err == nil {
 					t.Fatalf("%s not reached: the run completed\n%s", at, o)
 				}
-				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+				if !selfKilled(cmd.ProcessState) {
 					t.Fatalf("%s: not killed: %v\n%s", at, err, o)
 				}
 				res := exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...)
@@ -536,7 +530,7 @@ func TestSIGKILLAfterReplacementInstalled(t *testing.T) {
 	cmd := exec.Command(bin, "list", src, "-o", out, "--overwrite", "-q")
 	cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT=manifest:1")
 	o, err := cmd.CombinedOutput()
-	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+	if err == nil || !selfKilled(cmd.ProcessState) {
 		t.Fatalf("not killed at the manifest: %v\n%s", err, o)
 	}
 	if !dataset.Committed(out) || !dataset.NextFound(out) || dataset.Staged(out) {
@@ -553,4 +547,123 @@ func TestSIGKILLAfterReplacementInstalled(t *testing.T) {
 	if err != nil || json.Unmarshal(b, &m) != nil || len(m.Parts) != 1 || m.Parts[0].Rows != 4 { // the four files
 		t.Fatalf("the installed dataset: %v %+v", err, m.Parts)
 	}
+}
+
+// selfKilled reports whether ps ended as SWATH_TEST_KILL_AT ends a
+// process: by SIGKILL, or on Windows, where kill terminates the process
+// without a signal, with exit code 137.
+func selfKilled(ps *os.ProcessState) bool {
+	if runtime.GOOS == "windows" {
+		return ps.ExitCode() == 137
+	}
+	ws, ok := ps.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
+}
+
+// buildSwath builds the command for the subprocess tests.
+func buildSwath(t *testing.T) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // os/exec runs a file there only by an executable extension
+	}
+	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// ledgerCert is a sealed certificate's interval (cs, ce].
+type ledgerCert struct {
+	cs, ce string
+	open   bool
+}
+
+// ledgerPrefix is the ledger's durable prefix in out (contract §2: frames
+// up to the first invalid one): each frame's offset, type and body.
+func ledgerPrefix(t *testing.T, out string) (b []byte, offs []int, types []byte, bodies [][]byte) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil, nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab := crc32.MakeTable(crc32.Castagnoli)
+	for off := 0; off+9 <= len(b); {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		if n < 1 || off+8+n > len(b) {
+			break
+		}
+		if crc32.Update(crc32.Checksum(b[off:off+4], tab), tab, b[off+8:off+8+n]) != binary.LittleEndian.Uint32(b[off+4:]) {
+			break
+		}
+		offs, types, bodies = append(offs, off), append(types, b[off+8]), append(bodies, b[off+9:off+8+n])
+		off += 8 + n
+	}
+	return b, offs, types, bodies
+}
+
+// liveCerts is the certificates sealed and not retired in out's ledger
+// prefix: what a resume's recovery accepts when their files are intact.
+func liveCerts(t *testing.T, out string) []ledgerCert {
+	t.Helper()
+	_, _, types, bodies := ledgerPrefix(t, out)
+	live := map[string]ledgerCert{}
+	str := func(b []byte) (string, []byte) {
+		n, k := binary.Uvarint(b)
+		if k <= 0 || uint64(len(b)-k) < n {
+			t.Fatalf("malformed ledger record")
+		}
+		return string(b[k : k+int(n)]), b[k+int(n):]
+	}
+	for i, typ := range types {
+		body := bodies[i]
+		switch {
+		case typ == 'S' && len(body) > 16:
+			cs, rest := str(body[16:])
+			ce, rest := str(rest)
+			live[string(body[:16])] = ledgerCert{cs: cs, ce: ce, open: len(rest) > 0 && rest[0] == 1}
+		case typ == 'X' && len(body) >= 16:
+			delete(live, string(body[:16]))
+		}
+	}
+	certs := make([]ledgerCert, 0, len(live))
+	for _, c := range live {
+		certs = append(certs, c)
+	}
+	return certs
+}
+
+// lastKey is K: the last key of the last part the journal in out records
+// ("" with none).
+func lastKey(t *testing.T, out string) string {
+	t.Helper()
+	st, err := journal.Read(out)
+	if err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	k := ""
+	for _, r := range st.Records {
+		if r.Type == "part" {
+			k = string(r.Part.MaxKey)
+		}
+	}
+	return k
+}
+
+// eligibleCerts counts the certificates with keys above K: those a resume
+// replays.
+func eligibleCerts(certs []ledgerCert, k string) int {
+	n := 0
+	for _, c := range certs {
+		if c.open || c.ce > k {
+			n++
+		}
+	}
+	return n
 }

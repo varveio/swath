@@ -11,7 +11,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -33,9 +32,6 @@ type layoutRun struct {
 
 func newLayoutRun(t *testing.T, records int) *layoutRun {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("journaled output is refused on Windows")
-	}
 	base := t.TempDir()
 	lr := &layoutRun{out: filepath.Join(base, "dataset"), foreign: filepath.Join(base, "unrelated"),
 		id: journal.Identity{Tool: "swath", Format: 2, SchemaID: "layout"}}
@@ -94,6 +90,12 @@ func (lr *layoutRun) resume(t *testing.T) error {
 	jr, err := openLocked(context.Background(), cfg, "", lr.id, lr.lock)
 	if jr != nil && jr.j != nil {
 		jr.j.Close()
+	}
+	if jr != nil {
+		jr.cache.Close()
+		if jr.root != nil {
+			jr.root.Close() // the output's handle: Windows removes no directory held open
+		}
 	}
 	return err
 }
@@ -241,9 +243,6 @@ func TestLockRefusesLinkedWorkspace(t *testing.T) {
 // workspace and the lock leaf only, so a lock was created and taken before
 // the resume refused the journal).
 func TestLockRefusesLinkedJournal(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symbolic links need privileges on Windows")
-	}
 	base := t.TempDir()
 	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
 	for _, d := range []string{filepath.Join(out, dataset.Workspace), foreign} {
@@ -288,9 +287,6 @@ func TestLockRefusesLinkedJournal(t *testing.T) {
 // workspace (eleventh durability review: the journal leaf was opened first
 // and the root's escape error surfaced, not the unsafe_layout cause).
 func TestReadRefusesLinkedWorkspace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symbolic links need privileges on Windows")
-	}
 	base := t.TempDir()
 	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
 	for _, d := range []string{out, foreign} {
@@ -424,6 +420,7 @@ func TestRecoveryRefusesLinkedSuspectUnchanged(t *testing.T) {
 // (journal.ErrOutputReplaced) instead of failing to open the impostor's
 // data/ by name.
 func TestRecoveryPublishesThroughRoot(t *testing.T) {
+	noLiveReplacement(t)
 	lr := newLayoutRun(t, 1)
 	final := filepath.Join(lr.out, dataset.DataDir, dataset.PartName(0))
 	claim := dataset.ClaimPath(lr.out, 0)

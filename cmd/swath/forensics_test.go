@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -59,8 +58,7 @@ func TestStuckCause(t *testing.T) {
 			report := filepath.Join(t.TempDir(), "report.json")
 			args := append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "2",
 				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
-			args = append(args, unjournaled...)
-			if code := exitCode(t, run(context.Background(), args, io.Discard, diagList)); code != exitStuck {
+			if code := exitCode(t, run(context.Background(), args, io.Discard, false)); code != exitStuck {
 				t.Fatalf("exit %d, want %d", code, exitStuck)
 			}
 			var o outcome
@@ -101,16 +99,21 @@ func TestForcedExitCode(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
-			var stderr bytes.Buffer
+			var stderr syncBuffer
+			const hang = "journal-sync:1"
 			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--report", report)...)...)
-			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
+			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT="+hang)
 			cmd.Stderr = &stderr
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
-			time.Sleep(time.Second)
+			// Signalled once the sync hangs: before, a fixed second could
+			// signal a slow start before it, and the run stopped gracefully.
+			for deadline := time.Now().Add(30 * time.Second); !strings.Contains(stderr.String(), hangMarker(hang)) && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+			}
 			start := time.Now()
 			cmd.Process.Signal(sig)
 			var err error
@@ -151,7 +154,6 @@ func TestForcedExitCode(t *testing.T) {
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
 func TestOneTerminalAccount(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	same := func(t *testing.T, name string, a, b listing.Outcome) {

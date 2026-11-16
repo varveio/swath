@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -28,7 +27,7 @@ func TestSpillFormatsIdentical(t *testing.T) {
 	build := func(spill SpillLimits) (string, Resources) {
 		out := filepath.Join(t.TempDir(), "ds")
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}},
-			Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 64 << 10, Workers: 16, RowBudget: MinRowBudget, Spill: spill, PartInterval: -1}})
+			Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: 16, RowBudget: MinRowBudget, Spill: spill, PartInterval: -1}})
 		if err != nil {
 			t.Fatal(err)
 		}

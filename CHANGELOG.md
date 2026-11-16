@@ -87,7 +87,10 @@ describe 0.4.0 as released.
   ([measurements](docs/internals/measurements.md#azure-page-size-2026-11-10), #448). A flat namespace is
   established, anonymously or with a container SAS too, by the Data Lake host's 409
   `EndpointUnsupportedAccountFeatures` answer (the report's `namespace` reads `filesystem endpoint blocked`), so
-  public open-data containers list without `--azure-assume-flat` (#457).
+  public open-data containers list without `--azure-assume-flat` (#457). An account that answers the
+  namespace check only with 5xx, throttling or timeouts is asked again, as a listing page is, until it
+  answers; a run that never gets an answer stops as stuck (exit 75). Only an answered hierarchical
+  namespace, or an account that will not say, is refused (#607).
 - **Azure `--all-versions`** lists blob versions, snapshots and soft-deleted blobs beside the current blob
   (`include=versions,snapshots,deleted`, no permission beyond listing), a name's rows consecutive, in Azure's
   order, and never split across parts or ranges; a resume restarts after the last complete name. Versions and
@@ -242,6 +245,13 @@ describe 0.4.0 as released.
   there for `swath resume DIR`. The report's `output.replaced` says whether the commit replaced a dataset. A
   directory an interrupted 0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
   `--overwrite`, and `swath resume` refuses it as written by 0.3.
+- Dataset runs of S3, GCS and Azure Blob keep their journal and resume on Linux, macOS and Windows. On
+  Windows directories are synced with `FlushFileBuffers` and renames are written through; an output whose
+  filesystem refuses a directory sync is refused when the run starts, with the filesystem's error. A rename
+  blocked by a file another program holds open fails after two seconds naming that cause; an `--overwrite`
+  refused so leaves the previous dataset readable, and `swath resume` installs the replacement once the
+  reader is closed. Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered,
+  but a power loss may lose the latest part names (#605).
 - A run that writes to a bucket is resumed by its work directory, which may have moved to another path or
   machine; the bucket, prefix, endpoint and region stay as recorded (#515).
 - `swath resume DIR` writes `run.json` beside the dataset as any run does, and a `--report FILE` only when

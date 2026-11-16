@@ -68,7 +68,7 @@ decision to add it later).
 | Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1` for current S3 objects; source- and mode-specific schemas include S3 versions and GCS generations | renamed | [current schema registry](../dataset.md#schema-registry); no reserved version columns in current-object schemas |
 | Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id`; then `seekparquet.*` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `-o` directory refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
-| One run per output at a time | output lock; journaled output refused on Windows | kept | – |
+| One run per output at a time | output lock; a journaled run is refused where the output's filesystem cannot sync directories | kept | – |
 
 ## Sorting and parts
 

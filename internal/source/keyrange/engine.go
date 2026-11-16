@@ -464,14 +464,9 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 			// the run still makes progress is the command's watchdog's
 			// decision, not this one's.
 			p.c.Inc(cRequeues)
-			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return nil, context.Cause(ctx)
-			case <-t.C:
+			if err := RequeueBackoff(ctx, &wait); err != nil {
+				return nil, err
 			}
-			wait = min(2*wait, requeueMax)
 			continue
 		}
 		return nil, fmt.Errorf("list %s: %w", p.d.Target, err)
@@ -499,6 +494,25 @@ func strictlyAscending(s []string) bool {
 // requeueBase and requeueMax bound the backoff before a page whose
 // client retries were exhausted is asked again.
 var requeueBase, requeueMax = 2 * time.Second, 60 * time.Second
+
+// RequeueBackoff waits before a request whose client retries were
+// exhausted is asked again: a jittered *wait (requeueBase when 0), which
+// it then doubles up to requeueMax. It returns the context's cause when
+// the context ends first.
+func RequeueBackoff(ctx context.Context, wait *time.Duration) error {
+	if *wait == 0 {
+		*wait = requeueBase
+	}
+	t := time.NewTimer(*wait/2 + rand.N(*wait/2+1))
+	select {
+	case <-ctx.Done():
+		t.Stop()
+		return context.Cause(ctx)
+	case <-t.C:
+	}
+	*wait = min(2**wait, requeueMax)
+	return nil
+}
 
 // SetRequeueBackoff sets the requeue backoff bounds (tests).
 func SetRequeueBackoff(base, maxWait time.Duration) (restore func()) {

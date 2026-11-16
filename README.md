@@ -69,8 +69,6 @@ billion S3 objects in 177 seconds on one 32-vCPU VM
   is refused ([Sources](https://swath.varve.io/docs/sources/azure.html)).
 - Only object-store runs that write a dataset resume; a directory listing, text output and `swath du` start
   over ([Stop, resume and refresh](https://swath.varve.io/docs/resume-and-refresh.html#stopping-and-resuming)).
-- Windows refuses dataset runs of S3, GCS and Azure Blob and `swath resume`, for lack of directory sync;
-  listing a directory and text output work ([Platforms](https://swath.varve.io/docs/install.html#platforms)).
 - macOS binaries are not notarized yet, so Gatekeeper blocks a browser download until you clear its
   quarantine attribute ([Install](https://swath.varve.io/docs/install.html#macos)).
 

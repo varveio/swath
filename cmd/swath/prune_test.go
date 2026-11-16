@@ -56,7 +56,7 @@ func TestPruneCommandParquet(t *testing.T) {
 			t.Setenv("SWATH_LOCALFS_ENGINE", engine)
 			dir := filepath.Join(t.TempDir(), "dataset")
 			args := []string{root, "-o", dir, "--no-stats", "--exclude", "a/**", "--exclude", "x", "--exclude-regex", "^never$"}
-			if err := run(context.Background(), append(args, unjournaled...), io.Discard, diagList); err != nil {
+			if err := run(context.Background(), args, io.Discard, false); err != nil {
 				t.Fatal(err)
 			}
 			want := []string{"a/", "c/", "c/h", "e/"}

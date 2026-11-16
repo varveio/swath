@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -407,6 +409,62 @@ func TestAdmission(t *testing.T) {
 	}
 	if _, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: &pages{}, AllVersions: true}); err == nil {
 		t.Fatal("New lists every entry")
+	}
+}
+
+// busyAPI answers admission's calls busy (a call whose retries were
+// spent on 503 ServerBusy) until busy calls have been made, then flat;
+// with dfs, Get Account Information has no header (client.ErrHNSUnknown)
+// and the Data Lake host is the one busy.
+type busyAPI struct {
+	pages
+	dfs         bool
+	busy, calls atomic.Int64
+}
+
+var errBusy = &objhttp.ExhaustedError{Attempts: 9, Err: &objhttp.Failure{Transient: true, Throttle: true, Status: 503, Code: "ServerBusy",
+	Class: objhttp.ClassThrottle, Cause: errors.New("503 ServerBusy")}}
+
+func (b *busyAPI) answer() error {
+	if b.calls.Add(1) <= b.busy.Load() {
+		return errBusy
+	}
+	return nil
+}
+
+func (b *busyAPI) AccountInfo(context.Context, string) (bool, error) {
+	if b.dfs {
+		return false, client.ErrHNSUnknown
+	}
+	return false, b.answer()
+}
+
+func (b *busyAPI) NamespaceInfo(context.Context, string) (bool, error) { return false, b.answer() }
+
+// TestAdmissionWaitsOutABusyService: a service that answers admission
+// only with 503s is no answer about the namespace. Before, a call whose
+// retries were spent refused the run as unsupported (exit 2, advising
+// --azure-assume-flat); now it is asked again after the requeue backoff,
+// on either host, until it answers, and a run that never gets one ends
+// with its context (the command's watchdog: stuck), never refused.
+func TestAdmissionWaitsOutABusyService(t *testing.T) {
+	defer keyrange.SetRequeueBackoff(time.Millisecond, 4*time.Millisecond)()
+	for _, dfs := range []bool{false, true} {
+		b := &busyAPI{dfs: dfs}
+		b.busy.Store(3)
+		p, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: b})
+		want := map[bool]string{false: "account information", true: "filesystem properties"}[dfs]
+		if err != nil || p.Stats().Namespace != want || b.calls.Load() != 4 {
+			t.Fatalf("dfs %v: %v after %d calls, want admitted by %s on the fourth", dfs, err, b.calls.Load(), want)
+		}
+		b = &busyAPI{dfs: dfs}
+		b.busy.Store(math.MaxInt64)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		_, err = New(ctx, Options{Account: "acct", Container: "c", Client: b})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, source.ErrUnsupported) || b.calls.Load() < 2 {
+			t.Fatalf("dfs %v, never answered: %v after %d calls, want the context's end", dfs, err, b.calls.Load())
+		}
 	}
 }
 

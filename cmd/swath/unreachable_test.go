@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
@@ -70,7 +69,8 @@ func (r *unreachableReport) value(name string) int64 {
 // (exit 75, cause unreachable) once the grace has passed, long before the
 // stall timeout, for S3, GCS and Azure Blob alike: the message names the
 // endpoint and the cause, the report counts the fail-fast, and a text run
-// is not resumable.
+// is not resumable. Azure Blob without --azure-assume-flat stops there at
+// its namespace check, before the provider counts anything.
 func TestUnreachableEndpoint(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	s3test.NoCredentials(t)
@@ -79,12 +79,14 @@ func TestUnreachableEndpoint(t *testing.T) {
 	host := closedPort(t)
 	ep := "http://" + host
 	for _, c := range []struct {
-		name string
-		args []string
+		name      string
+		args      []string
+		admission bool // stopped at admission: no provider counters
 	}{
-		{"s3", []string{"s3://bkt/p/", "--endpoint-url", ep, "--s3-path-style", "--s3-region", "us-east-1"}},
-		{"gcs", []string{"gs://bkt/p/", "--endpoint-url", ep + gcstest.Path}},
-		{"azure", []string{"az://acct/c/p/", "--endpoint-url", ep, "--azure-assume-flat"}},
+		{"s3", []string{"s3://bkt/p/", "--endpoint-url", ep, "--s3-path-style", "--s3-region", "us-east-1"}, false},
+		{"gcs", []string{"gs://bkt/p/", "--endpoint-url", ep + gcstest.Path}, false},
+		{"azure", []string{"az://acct/c/p/", "--endpoint-url", ep, "--azure-assume-flat"}, false},
+		{"azure-admission", []string{"az://acct/c/p/", "--endpoint-url", ep}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			report := filepath.Join(t.TempDir(), "report.json")
@@ -108,7 +110,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 			if o.Class != listing.ClassStuck || o.ExitCode != exitStuck || o.Cause != source.CauseUnreachable || o.Resumable || strings.Contains(o.Error, "every request was failing") {
 				t.Fatalf("outcome %+v", o)
 			}
-			if rep.value("unreachable.stops") < 1 || rep.value("unreachable.attempts") < 2 {
+			if !c.admission && (rep.value("unreachable.stops") < 1 || rep.value("unreachable.attempts") < 2) {
 				t.Fatalf("the fail-fast is not in the report: %v", rep.Diagnostics.Source.Stats.Counters.Values)
 			}
 		})
@@ -192,7 +194,6 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 // resume of a run with parts keeps its journal when the endpoint stops
 // answering: it is still resumable.
 func TestUnreachableLeavesNoRun(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)
@@ -274,7 +275,6 @@ func dirNames(t *testing.T, dir string) []string {
 // previous dataset first, and either failure left the directory without
 // one (C-S1).
 func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)
@@ -328,7 +328,7 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 		t.Fatalf("exit %d (%v)", code, err)
 	}
 	now.Reset()
-	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+dir+" continues it") {
+	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+shellQuote(dir)+" continues it") {
 		t.Fatalf("show after the stopped overwrite: %v\n%s", err, now.String())
 	}
 	slow.Store(false)

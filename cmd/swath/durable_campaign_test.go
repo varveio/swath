@@ -9,11 +9,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"log"
 	"math/rand/v2"
@@ -693,18 +691,6 @@ func startsInside(starts []string, certs []ledgerCert, k string) (n int, first s
 	return n, first
 }
 
-// eligibleCerts counts the certificates with keys above K: those a resume
-// replays.
-func eligibleCerts(certs []ledgerCert, k string) int {
-	n := 0
-	for _, c := range certs {
-		if c.open || c.ce > k {
-			n++
-		}
-	}
-	return n
-}
-
 // appendResult appends line to the results file (none: nothing).
 func appendResult(t *testing.T, path, line string) {
 	if path == "" {
@@ -841,86 +827,6 @@ func (s *rowReader) close() {
 		s.f.Close()
 		s.r, s.f = nil, nil
 	}
-}
-
-// ledgerCert is a sealed certificate's interval (cs, ce].
-type ledgerCert struct {
-	cs, ce string
-	open   bool
-}
-
-// ledgerPrefix is the ledger's durable prefix in out (contract §2: frames
-// up to the first invalid one): each frame's offset, type and body.
-func ledgerPrefix(t *testing.T, out string) (b []byte, offs []int, types []byte, bodies [][]byte) {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil, nil
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	tab := crc32.MakeTable(crc32.Castagnoli)
-	for off := 0; off+9 <= len(b); {
-		n := int(binary.LittleEndian.Uint32(b[off:]))
-		if n < 1 || off+8+n > len(b) {
-			break
-		}
-		if crc32.Update(crc32.Checksum(b[off:off+4], tab), tab, b[off+8:off+8+n]) != binary.LittleEndian.Uint32(b[off+4:]) {
-			break
-		}
-		offs, types, bodies = append(offs, off), append(types, b[off+8]), append(bodies, b[off+9:off+8+n])
-		off += 8 + n
-	}
-	return b, offs, types, bodies
-}
-
-// liveCerts is the certificates sealed and not retired in out's ledger
-// prefix: what a resume's recovery accepts when their files are intact.
-func liveCerts(t *testing.T, out string) []ledgerCert {
-	t.Helper()
-	_, _, types, bodies := ledgerPrefix(t, out)
-	live := map[string]ledgerCert{}
-	str := func(b []byte) (string, []byte) {
-		n, k := binary.Uvarint(b)
-		if k <= 0 || uint64(len(b)-k) < n {
-			t.Fatalf("malformed ledger record")
-		}
-		return string(b[k : k+int(n)]), b[k+int(n):]
-	}
-	for i, typ := range types {
-		body := bodies[i]
-		switch {
-		case typ == 'S' && len(body) > 16:
-			cs, rest := str(body[16:])
-			ce, rest := str(rest)
-			live[string(body[:16])] = ledgerCert{cs: cs, ce: ce, open: len(rest) > 0 && rest[0] == 1}
-		case typ == 'X' && len(body) >= 16:
-			delete(live, string(body[:16]))
-		}
-	}
-	certs := make([]ledgerCert, 0, len(live))
-	for _, c := range live {
-		certs = append(certs, c)
-	}
-	return certs
-}
-
-// lastKey is K: the last key of the last part the journal in out records
-// ("" with none).
-func lastKey(t *testing.T, out string) string {
-	t.Helper()
-	st, err := journal.Read(out)
-	if err != nil {
-		t.Fatalf("journal: %v", err)
-	}
-	k := ""
-	for _, r := range st.Records {
-		if r.Type == "part" {
-			k = string(r.Part.MaxKey)
-		}
-	}
-	return k
 }
 
 // loseUnsealed is the power loss after a kill at a seal: every durable

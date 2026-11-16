@@ -11,8 +11,7 @@ working command, authentication and permissions, its own options, writing a data
 | [Azure Blob Storage](azure.md) | `az://ACCOUNT/CONTAINER[/PREFIX]` | current blobs of a flat namespace | versions, snapshots and soft-deleted blobs | yes | `-o az://ACCOUNT/CONTAINER/PREFIX` |
 
 A dataset of any source can be written to a local directory (`-o DIR`) or to any of the three object stores
-(`-o` a bucket prefix with `--work-dir DIR`). On Windows, dataset runs of an object store, and `swath resume`,
-are refused ([known limits](../troubleshooting.md#known-limits)).
+(`-o` a bucket prefix with `--work-dir DIR`).
 
 swath reads listings only: it needs permission to list, never to read or write objects. Each object-store
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS

@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/listing"
 )
 
@@ -61,7 +60,6 @@ func TestLayout(t *testing.T) {
 // every shape into a dataset that verify accepts (exact rows, payloads,
 // strict adjacency), with B spilling several runs.
 func TestArmsProduceTheDataset(t *testing.T) {
-	datasettest.RequireJournal(t)
 	for _, name := range []string{"slowfirst", "flat", "skewed"} {
 		l, _ := small(name).layout()
 		for _, arm := range []string{"A", "B"} {
@@ -105,7 +103,6 @@ func TestArmsProduceTheDataset(t *testing.T) {
 // the resume accounting: B relists at most its in-memory tail plus a page
 // per range; A relists everything past its last journaled part.
 func TestKillAndRecover(t *testing.T) {
-	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("subprocesses")
 	}

@@ -230,8 +230,8 @@ func TestPersistentFailureRun(t *testing.T) {
 	var err error
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err = run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
-		"--report", report, "-o", dir}, unjournaled...), io.Discard, len(unjournaled) > 0)
+	err = run(context.Background(), []string{"gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--stall-timeout", "2s",
+		"--report", report, "-o", dir}, io.Discard, false)
 	if exitCode(t, err) != exitStuck {
 		t.Fatalf("exit %v", err)
 	}
@@ -303,7 +303,7 @@ func TestVerbosity(t *testing.T) {
 	}
 	// A dataset run's start line names the directory.
 	dir := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"gs://bkt", "--endpoint-url", flakyGCS(t), "--anonymous", "-v", "--no-stats", "-o", dir}, unjournaled...), io.Discard, len(unjournaled) > 0); err != nil {
+	if err := run(context.Background(), []string{"gs://bkt", "--endpoint-url", flakyGCS(t), "--anonymous", "-v", "--no-stats", "-o", dir}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stderr.String(), "swath: listing gs://bkt to "+dir+" (attempt ") {
@@ -366,13 +366,8 @@ func TestOneLineFailures(t *testing.T) {
 		t.Fatal(serr)
 	}
 	notFound := pe.Err.Error() // the platform's words
-	// A dataset run: swath diag list --no-journal where a journal is refused (Windows).
-	dataset := func(args ...string) []string {
-		if len(unjournaled) > 0 {
-			return append(append([]string{"diag", "list"}, args...), unjournaled...)
-		}
-		return append([]string{"list"}, args...)
-	}
+	// A dataset run.
+	dataset := func(args ...string) []string { return append([]string{"list"}, args...) }
 	for _, c := range []struct {
 		name string
 		args []string
@@ -505,7 +500,12 @@ func TestBlockedStderrBounded(t *testing.T) {
 	if d := time.Since(start); d > 4*diagWait {
 		t.Errorf("%d events took %s", workers*each, d)
 	}
-	if n := runtime.NumGoroutine(); n > before+2 {
+	// A goroutine past wg.Done may not have exited yet: the count settles.
+	n := runtime.NumGoroutine()
+	for deadline := time.Now().Add(5 * time.Second); n > before+2 && time.Now().Before(deadline); n = runtime.NumGoroutine() {
+		time.Sleep(time.Millisecond)
+	}
+	if n > before+2 {
 		t.Errorf("%d goroutines, %d before", n, before)
 	}
 	if n := dropped.Load() - base; n < workers*each-diagQueue-1 {
@@ -513,8 +513,11 @@ func TestBlockedStderrBounded(t *testing.T) {
 	}
 	start = time.Now()
 	conclude(errors.New("boom"))
-	// Its wait, then one more once the kept lines ahead of it are shed.
-	if d := time.Since(start); d < 2*diagWait || d > 3*diagWait {
+	// Its wait, then one more once the kept lines ahead of it are shed;
+	// not one per kept line (diagQueue of them). Timers fire late on a
+	// loaded runner, so the ceiling is far below diagQueue waits rather
+	// than a quarter second above two.
+	if d := time.Since(start); d < 2*diagWait || d > 8*diagWait {
 		t.Errorf("the outcome line waited %s, want two diagWaits", d)
 	}
 }

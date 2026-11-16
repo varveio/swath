@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -122,7 +121,7 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 	scriptMu.Lock()
 	scriptNext = p
 	scriptMu.Unlock()
-	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()},
+	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
 		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}})
 }
 
@@ -136,7 +135,6 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 // the final gate refused the manifest: the journal then named overlapping
 // parts and a resume continued after them.
 func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
-	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -203,7 +201,6 @@ func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
 // the size-only run's, not in absolute milliseconds: closing a part takes
 // longer on a loaded runner, which stretches both runs alike.
 func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
-	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 50 {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
