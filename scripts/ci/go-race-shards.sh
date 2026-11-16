@@ -6,6 +6,8 @@
 #   go-race-shards.sh SHARD         the `go test` arguments of SHARD, one per line (run at the root)
 #   go-race-shards.sh --check       every package's tests run in exactly one shard (run at the root)
 #   go-race-shards.sh --arm64-extra packages not already raced on arm64 (run at the root)
+#   go-race-shards.sh --windows-matrix the Windows legs of ci.yml `go-xos`, as JSON (needs no Go)
+#   go-race-shards.sh --windows LEG the `go test` arguments of each shard of LEG, one shard per line
 #   go-race-shards.sh --self-test   the table checks against synthetic package lists (needs no Go)
 #
 # A row names its packages and a -run pattern. A row with a pattern splits one package: the
@@ -49,6 +51,17 @@ table=(
   "rest         $amd -                                         -"
 )
 
+# The Windows legs of ci.yml `go-xos` on a full platform run. Windows runs the suite without -race
+# about three times slower than macOS (internal/listing 17 min alone, 28 min beside the other
+# packages, 2026-11-16), so its run is split along the shards above: a leg names shards,
+# comma-separated, and runs one `go test` per shard in order. Every shard is in exactly one leg. The
+# leg holding `rest` is the full one: it also vets the module and tests the nested modules.
+windows=(
+  "listing-rest   listing-rest"
+  "cmd            cmd-kill,cmd"
+  "matrices-rest  crash,durable,rest-replay,rest-source,rest"
+)
+
 # Every package of the module, one ./relative path per line: set by load_packages (go list) or by
 # the self-test.
 ALL=
@@ -60,11 +73,13 @@ field() {
   if [ "$f" != - ]; then printf '%s' "$f"; fi
 }
 
+# $1 is -race, or empty for the packages of a build without it (the Windows legs, whose runner may
+# have no cgo, which -race needs).
 load_packages() {
   local module
   module=$(go list -m)
-  ALL=$(go list -race ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u)
-  if [ -z "$ALL" ]; then echo "go list -race ./... lists no package" >&2; return 1; fi
+  ALL=$(go list ${1:+"$1"} ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u)
+  if [ -z "$ALL" ]; then echo "go list $1 ./... lists no package" >&2; return 1; fi
 }
 
 # The ordinary PR cross-architecture leg need not rerun the heavy arm64 race
@@ -169,6 +184,64 @@ shard_args() {
   return 2
 }
 
+# The `go test` arguments of each shard of Windows leg $1, one shard per line, space-separated
+# (no argument holds a space).
+windows_args() {
+  local row shard args
+  local -a shards
+  for row in "${windows[@]}"; do
+    [ "$(field "$row" 1)" = "$1" ] || continue
+    IFS=, read -ra shards <<<"$(field "$row" 2)"
+    for shard in "${shards[@]}"; do
+      args=$(shard_args "$shard") || return
+      paste -sd' ' - <<<"$args"
+    done
+    return 0
+  done
+  echo "unknown Windows leg: $1" >&2
+  return 2
+}
+
+# The Windows legs against the shard table: leg names unique, every leg naming known shards, every
+# shard in exactly one leg, and exactly one leg holding `rest` (the row naming no package). Prints
+# every failure, then returns 1.
+validate_windows() {
+  local row name shard named= legs= dup fail=0
+  local -a shards
+  for row in "${windows[@]}"; do
+    legs+="$(field "$row" 1)"$'\n'
+    IFS=, read -ra shards <<<"$(field "$row" 2)"
+    for shard in "${shards[@]}"; do named+="$shard"$'\n'; done
+  done
+  if dup=$(sed '/^$/d' <<<"$legs" | sort | uniq -d) && [ -n "$dup" ]; then
+    echo "::error::Windows legs named twice: $dup"; fail=1
+  fi
+  for row in "${table[@]}"; do
+    name=$(field "$row" 1)
+    if [ "$(grep -cxF -- "$name" <<<"$named")" != 1 ]; then
+      echo "::error::shard $name is in $(grep -cxF -- "$name" <<<"$named") Windows legs, not 1"; fail=1
+    fi
+  done
+  for shard in $(sed '/^$/d' <<<"$named"); do
+    if ! printf '%s\n' "${table[@]}" | awk -v s="$shard" '$1 == s {f=1} END {exit !f}'; then
+      echo "::error::Windows legs name an unknown shard: $shard"; fail=1
+    fi
+  done
+  if [ "$fail" = 0 ] && [ -z "$(full_leg)" ]; then
+    echo "::error::no Windows leg holds the shard naming no package"; fail=1
+  fi
+  return "$fail"
+}
+
+# The Windows leg holding the shard that names no package (`rest`).
+full_leg() {
+  local row rest
+  rest=$(printf '%s\n' "${table[@]}" | awk '$3 == "-" {print $1}')
+  for row in "${windows[@]}"; do
+    if tr , '\n' <<<"$(field "$row" 2)" | grep -qxF -- "$rest"; then field "$row" 1; echo; fi
+  done
+}
+
 # The checks of the table that need only the package list ($ALL). Prints every failure, then
 # returns 1.
 validate() {
@@ -228,6 +301,7 @@ validate() {
 check() {
   local row pkg run tests n rest_n fail=0
   validate || fail=1
+  validate_windows || fail=1
   # Tests of each split package: every row selects something, no test twice.
   for pkg in $(split_packages); do
     tests=$(go test -race -list . "$pkg" | grep -E '^(Test|Fuzz|Example)' || true)
@@ -264,12 +338,16 @@ check() {
   for row in "${table[@]}"; do
     echo "shard $(field "$row" 1) ($(field "$row" 2)): $(shard_args "$(field "$row" 1)" | paste -sd' ' -)"
   done
+  for row in "${windows[@]}"; do
+    echo "Windows leg $(field "$row" 1): $(field "$row" 2)"
+  done
 }
 
 # validate and the expansion against a synthetic package list: each case is a table and whether
 # validate must accept it.
 self_test() {
   local fail=0 got
+  if ! validate_windows; then echo "self-test: the Windows legs do not cover the shard table"; fail=1; fi
   ALL=$(printf '%s\n' ./a ./a/b ./ab ./c ./d)
   expect() {  # expect ok|fail DESCRIPTION ROW...
     local want=$1 what=$2 verdict=ok
@@ -307,6 +385,27 @@ self_test() {
   table=("s $arm ./a ^TestX\$" "s-rest $amd ./a -" "rest $amd - -")
   got=$(arm64_extra | paste -sd' ' -)
   if [ "$got" != "./a ./a/b ./ab ./c ./d" ]; then echo "self-test: mixed-architecture complement is '$got'"; fail=1; fi
+  table=("a r ./a -" "b r ./b -" "rest r - -")
+  expect_windows() {  # expect_windows ok|fail DESCRIPTION LEG...
+    local want=$1 what=$2 verdict=ok
+    shift 2
+    windows=("$@")
+    validate_windows >/dev/null 2>&1 || verdict=fail
+    if [ "$verdict" != "$want" ]; then echo "self-test: $what: validate_windows says $verdict, want $want"; fail=1; fi
+  }
+  expect_windows ok   "every shard once"        "x a,b" "y rest"
+  expect_windows fail "shard in no leg"         "x a" "y rest"
+  expect_windows fail "shard in two legs"       "x a,b" "y b,rest"
+  expect_windows fail "unknown shard"           "x a,b,c" "y rest"
+  expect_windows fail "leg named twice"         "x a,b" "x rest"
+  windows=("x a,b" "y rest")
+  got=$(full_leg)
+  if [ "$got" != y ]; then echo "self-test: the full Windows leg is '$got', want y"; fail=1; fi
+  ALL=$(printf '%s\n' ./a ./b ./c ./d)
+  got=$(windows_args x)
+  if [ "$got" != $'./a\n./b' ]; then echo "self-test: Windows leg x runs '$got'"; fail=1; fi
+  got=$(windows_args y)
+  if [ "$got" != "./c ./d" ]; then echo "self-test: Windows leg y runs '$got'"; fail=1; fi
   if [ "$fail" = 0 ]; then echo "self-test: ok"; fi
   return "$fail"
 }
@@ -321,9 +420,23 @@ case "${1:-}" in
     done
     printf ']\n'
     ;;
+  --windows-matrix)
+    full=$(full_leg)
+    sep=
+    printf '['
+    for row in "${windows[@]}"; do
+      leg=$(field "$row" 1)
+      scope=leg
+      if [ "$leg" = "$full" ]; then scope=full; fi
+      printf '%s{"os":"windows-latest","runner":"windows-latest","scope":"%s","leg":"%s"}' "$sep" "$scope" "$leg"
+      sep=,
+    done
+    printf ']\n'
+    ;;
+  --windows) [ -n "${2:-}" ] || { echo "--windows needs a leg" >&2; exit 2; }; load_packages; windows_args "$2" ;;
   --self-test) self_test ;;
-  --arm64-extra) load_packages; arm64_extra ;;
-  --check) load_packages; check ;;
-  ''|-*) sed -n '2,9s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
-  *) load_packages; shard_args "$1" ;;
+  --arm64-extra) load_packages -race; arm64_extra ;;
+  --check) load_packages -race; check ;;
+  ''|-*) sed -n '2,11s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
+  *) load_packages -race; shard_args "$1" ;;
 esac

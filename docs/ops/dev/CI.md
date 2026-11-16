@@ -65,7 +65,7 @@ The branch rule on `main` requires exactly one status check, `ci.yml` `ci-gate`.
 aggregate job that `needs` every gating job and fails unless each one passed.
 
 It exists because GitHub requires checks by name, and a matrix job reports one name per leg
-(`go-race (crash)`, `go-xos (windows-latest)`). A
+(`go-race (crash)`, `go-xos (windows-latest, cmd)`). A
 rule that names `go-race` matches nothing; a rule that names the legs goes stale the moment a shard
 or platform is added. `needs` collapses all of a matrix's legs into one result, so a new leg extends
 the gate without touching the branch rule. A rule listing jobs also cannot notice a job whose scope
@@ -126,7 +126,8 @@ input-selection mistakes.
 ### Full validation and releases
 
 `go-full-gate` depends directly on every Go job on full-scope PRs and main/dispatch. It requires every job to pass, every
-Go selection to be enabled, the full race-shard matrix and exactly the three full platform legs.
+Go selection to be enabled, the full race-shard matrix, the full macOS and arm64 legs and exactly the
+Windows legs of the shard table.
 Regression tests require both aggregates to include every Go job. Full-scope PRs exercise the
 qualification before merge, but only its main push result can qualify a release. Main runs retain independent concurrency groups, so a newer merge cannot
 cancel the older commit's qualification. A red main run must be fixed or reverted; green PR checks do
@@ -182,7 +183,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
 | `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile`) for two architectures and their smokes; the image build runs the Go license gate (`notices.sh`) |
 | `go-objfile`, `go-reader` | the nested modules `objfile` and `reader`: vet, tidy, race tests, cross-builds |
-| `go-xos (OS)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch |
+| `go-xos (OS)`, `go-xos (windows-latest, LEG)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch, Windows split into legs |
 | `go-fixtures` | the replay fixture tier on the fixtures `bench/replay/fixtures` writes |
 
 The nested modules have their own `go.mod`, so `./...` at the root never reaches them; each needs its
@@ -228,6 +229,16 @@ table. They do not repeat `internal/listing` and `cmd/swath` there. Full platfor
 on main and dispatch, and on PRs selected by platform/dependency inputs or `ci:full`. Cross-builds
 remain on PRs. The selected-module and platform-skip details belong to
 [Go testing](../../internals/testing.md#cross-os).
+
+Windows runs the suite without `-race` about three times slower than macOS: once the journaled,
+crash and kill matrices ran there, its single leg took 32 minutes (`internal/listing` 28 of them,
+beside the other packages on four vCPUs). Its full run is therefore split into legs along the race
+shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
+`go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. The
+leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
+cache, which the nightly and stress Windows runs restore. Microsoft Defender's real-time scanning is
+already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
+([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
 
 macOS and Windows runtime coverage is usually deferred because those jobs and their runner queues
 previously dominated PR turnaround. It has caught real platform differences, so it is retained on
@@ -352,8 +363,9 @@ minutes:
 - **A new test that reads `docs/`:** name it `TestDocs...` and reach the page through `docs.Path`; the
   docs tier then runs it with no edit here. A test that reads `docs/` as data (the provider evidence)
   also needs a policy rule that selects its tier for that file.
-- **A new race shard:** add a row to the table in `go-race-shards.sh` and nothing else; run
-  `--self-test` and `--check` locally, and update the shard table in `docs/internals/testing.md`.
+- **A new race shard:** add a row to the table in `go-race-shards.sh` and its name to one Windows
+  leg there; run `--self-test` and `--check` locally, and update the shard tables in
+  `docs/internals/testing.md`.
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it
   should run.
 - **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`; its build
