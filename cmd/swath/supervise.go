@@ -844,9 +844,16 @@ const progressEvery = 2 * time.Second
 // writeProgress rewrites dir's progress file with pr's snapshot, taken
 // under its ownership: only while the run owns the output (a refused run
 // never overwrites its owner's progress), and never a snapshot older than
-// one written before (the final one, done or failed, stays).
+// one written before (the final one, done or failed, stays). Nothing is
+// written before listing starts: the run owns the output from its lock
+// on, before it checks under the lock that a fresh output is empty, and a
+// progress file written in between made it refuse its own output.
 func writeProgress(dir string, pr *listing.Progress) {
-	pr.Owned(func() { progressWrite(dir, pr) })
+	pr.Owned(func() {
+		if pr.Started() {
+			progressWrite(dir, pr)
+		}
+	})
 }
 
 // progressWrite is writeProgress's write, inside pr.Owned.

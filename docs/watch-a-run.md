@@ -22,7 +22,7 @@ the statistics (API calls, mean and peak in flight, throttles and retries when a
 also for a supervisor's log; `--no-stats` drops them. Warnings come before the lines.
 stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
-`DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
+`DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) from the start of listing while the run holds the output: the live
 counts, the request account (`http_attempts`, `retries`, `inflight`, the limiter's `limit`, `cost_usd`), the order
 stage's resources and the run's `state`. The report written at the end keeps the curve (`diagnostics.history`, up to 300 samples), the phase times
 (`diagnostics.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
