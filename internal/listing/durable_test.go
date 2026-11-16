@@ -179,10 +179,10 @@ func durableConfig(url, out string, resume bool) Config {
 
 // TestDurableSpillResume: a run whose frontier is slow spills the ranges
 // ahead of it into durable files and seals their certificates; killed
-// after its second part, the resume replays the certificates that K does
-// not cover instead of listing them, lists only the gaps, and the dataset
-// is byte-identical to an uninterrupted run. No request of the resume
-// starts inside a replayed certificate's [cs, ce).
+// at its first retirement's unlink, the resume replays the certificates
+// that K does not cover instead of listing them, lists only the gaps (no
+// row is both listed and replayed), and the dataset is byte-identical to
+// an uninterrupted run.
 func TestDurableSpillResume(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url, _, log := slowFrontier(t, "d06/")
@@ -225,10 +225,13 @@ func TestDurableSpillResume(t *testing.T) {
 	if d == nil || d.Resume == nil || d.Resume.Accepted == 0 || d.Resume.ReplayedRows == 0 {
 		t.Fatalf("nothing reused: %+v %+v; files after the crash: %d", d, d.Resume, crashedFiles)
 	}
-	t.Logf("cold: %d sealed; resume: accepted %d, replayed %d rows, skipped %d, gaps %d, %d list requests (rows listed %d, retained %d)",
-		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsEmitted, sum.Output.RowsRetained)
-	if want := sum.Output.RowsEmitted; want <= d.Resume.ReplayedRows {
-		t.Fatalf("listed %d rows, replayed %d", want, d.Resume.ReplayedRows)
+	t.Logf("cold: %d sealed; resume: accepted %d, replayed %d rows, skipped %d, gaps %d, %d list requests (rows emitted %d, fetched %d, retained %d)",
+		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsEmitted, sum.Output.RowsFetched, sum.Output.RowsRetained)
+	// Every row handed on was listed or replayed, none both. Listed rows
+	// are not required: a drain that certified every range ahead before
+	// the kill leaves only empty gaps (ubuntu-24.04-arm CI).
+	if o := sum.Output; o.RowsFetched+d.Resume.ReplayedRows != o.RowsEmitted {
+		t.Fatalf("listed %d rows and replayed %d, handed on %d", o.RowsFetched, d.Resume.ReplayedRows, o.RowsEmitted)
 	}
 }
 
