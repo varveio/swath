@@ -344,8 +344,10 @@ The limits of this build, and what has not been measured:
 - **Seeded runs** (`--seed-from`): on Azure Blob, a seed whose key pages end at a blob name longer than 1,024
   bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
-  with `--workers 2048` and a spill cap under about 6 MiB can crawl or time out; the runs that complete are
-  key-identical ([#576](https://github.com/varveio/swath/issues/576)).
+  at a very high worker count (`--workers 2048`) under a spill cap far below what the listing needs (a tenth,
+  in the runs that showed it) can crawl or time out; the runs that complete are key-identical. At the default 64
+  workers and the default spill cap this was not seen. Give a larger `--spill-budget` or more spill disk, fewer
+  workers, or list without `--seed-from` ([#576](https://github.com/varveio/swath/issues/576)).
 - **Durable spill above 593M keys:** a kill and resume with durable spill was measured on lists of up to 593
   million keys ([measurements](internals/measurements.md#durable-spill-slots)); above that, a billion keys
   included, it is not measured ([#513](https://github.com/varveio/swath/issues/513)).
