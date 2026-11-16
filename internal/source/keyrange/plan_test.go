@@ -568,9 +568,14 @@ func planRun(t *testing.T, keys []string, pr *Prior, workers, tilePages int, spi
 // as the admission gates allow, not by the few pieces of two tiles each a
 // grown range was cut into before, each listed serially while the workers
 // waited at the window (about 60 splits, against about 150 here; the
-// fresh tiles are not split under the bound window). No frame is refused beyond the fresh prior's, the
-// wall stays near a fresh prior's, and the requests within 10 % of it (the
-// grown region, a sixth of the keys, costs about a request per piece).
+// fresh tiles are not split under the bound window), with 21 to 31
+// requests at once in the grown region (8 required). No frame is refused
+// beyond the fresh prior's, and the requests stay within 10 % of it (the
+// grown region, a sixth of the keys, costs about a request per piece). The
+// wall times are logged, not compared: the stale run spills more, and a
+// Windows runner's slow disk once made it 19.7 s against the fresh 6 s
+// with the same requests, splits and concurrency (1.5 s against 5.3 s on
+// Linux).
 func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 	var base, keys []string
 	lo, hi := fmt.Sprintf("k%06d", 16000), fmt.Sprintf("k%06d", 18000)
@@ -592,12 +597,13 @@ func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 	if sst.Window.Grown == 0 || st.Get(cSeedFromOutrun) == 0 || sst.Window.Waits[order.WindowRows]+sst.Window.Waits[order.WindowSpill]+sst.Window.Waits[order.WindowGrowth] == 0 {
 		t.Fatalf("the fixture did not grow tiles under a bound window: %+v", sst.Window)
 	}
-	if st.Get(cSplitAcceptedBounded) < 100 { // about 60 when grown pieces stopped at two tiles
-		t.Fatalf("%d bounded splits: the grown region was not split for the idle workers", st.Get(cSplitAcceptedBounded))
+	if st.Get(cSplitAcceptedBounded) < 100 || stale.most < 8 { // about 60 splits when grown pieces stopped at two tiles
+		t.Fatalf("%d bounded splits, at most %d requests at once in the grown region: it was not split for the idle workers",
+			st.Get(cSplitAcceptedBounded), stale.most)
 	}
-	if sst.SpillRefused > fst.SpillRefused || stale.wall > 3*fresh.wall || float64(stale.requests) > 1.1*float64(fresh.requests) {
-		t.Fatalf("stale prior: %d requests (fresh %d), %v (fresh %v), %d frames refused (fresh %d)",
-			stale.requests, fresh.requests, stale.wall, fresh.wall, sst.SpillRefused, fst.SpillRefused)
+	if sst.SpillRefused > fst.SpillRefused || float64(stale.requests) > 1.1*float64(fresh.requests) {
+		t.Fatalf("stale prior: %d requests (fresh %d), %d frames refused (fresh %d)",
+			stale.requests, fresh.requests, sst.SpillRefused, fst.SpillRefused)
 	}
 }
 
@@ -606,12 +612,14 @@ func TestPlanGrownTileUnderBoundWindow(t *testing.T) {
 // below durable spill's minimum (no certificates: nothing behind the
 // output to leave out or evict, and none of the window's wake paths that
 // engage with durable spill only). The grown tiles hold admission (growth)
-// while their region spills; the run completes within a small factor of
-// the fresh prior's, every key once, in order, and the frames refused stay
+// while their region spills; the run completes with about the fresh
+// prior's requests (3,310 against 3,049; 20 % more allowed), every key
+// once, in order, and the frames refused stay
 // bounded (a frame refused is retried on credit: a crawl refuses about one
 // per row; the bound is a fifth of that, since a slow runner refuses more
 // than a fast one: 7,524 of 145,000 on a Windows runner, against a twentieth
-// allowed before).
+// allowed before). The wall times are logged, not compared (a runner's
+// disk sets them: TestPlanGrownTileUnderBoundWindow).
 func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
 	var base, keys []string
 	lo, hi := fmt.Sprintf("k%06d", 40000), fmt.Sprintf("k%06d", 45000)
@@ -627,8 +635,8 @@ func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
 	const workers, latency, cap, tilePages = 512, 2 * time.Millisecond, 16 << 10, 8
 	fresh, _, fst := planRun(t, keys, priorOf(keys, 100), workers, tilePages, cap, latency)
 	stale, _, sst := planRun(t, keys, priorOf(base, 100), workers, tilePages, cap, latency)
-	t.Logf("fresh: %v, %d refused; stale: %v, %d refused, %d tiles grown, waits %v, read ahead %d frames (drainer %d)",
-		fresh.wall, fst.SpillRefused, stale.wall, sst.SpillRefused, sst.Window.Grown, sst.Window.Waits, sst.ReadAhead.Frames, sst.ReadAhead.DrainerFrames)
+	t.Logf("fresh: %v, %d requests, %d refused; stale: %v, %d requests, %d refused, %d tiles grown, waits %v, read ahead %d frames (drainer %d), forced %d of %d tiles",
+		fresh.wall, fresh.requests, fst.SpillRefused, stale.wall, stale.requests, sst.SpillRefused, sst.Window.Grown, sst.Window.Waits, sst.ReadAhead.Frames, sst.ReadAhead.DrainerFrames, sst.Window.Forced, sst.Window.Tiles)
 	if sst.Window.Grown == 0 || sst.Window.Waits[order.WindowGrowth] == 0 {
 		t.Fatalf("the fixture did not grow tiles: %+v", sst.Window)
 	}
@@ -637,7 +645,7 @@ func TestPlanStaleManyWorkersSmallCap(t *testing.T) {
 			t.Fatalf("without durable spill: %d wakes %s, %d evicted, %d bytes behind", n, why, sst.Window.Evicted, sst.Window.PeakBehindBytes)
 		}
 	}
-	if stale.wall > 3*fresh.wall || sst.SpillRefused > int64(len(keys)/5) {
-		t.Fatalf("stale prior: %v (fresh %v), %d frames refused for %d keys", stale.wall, fresh.wall, sst.SpillRefused, len(keys))
+	if float64(stale.requests) > 1.2*float64(fresh.requests) || sst.SpillRefused > int64(len(keys)/5) {
+		t.Fatalf("stale prior: %d requests (fresh %d), %d frames refused for %d keys", stale.requests, fresh.requests, sst.SpillRefused, len(keys))
 	}
 }
