@@ -333,7 +333,9 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 	}
 	slow.Store(false)
 	report := filepath.Join(t.TempDir(), "report.json")
-	if err := dispatch(context.Background(), []string{"resume", dir, "--report", report}, io.Discard); err != nil {
+	// --max-duration 0 lifts the recorded 1 s deadline, as the advice says:
+	// the resume is not timed (a slow Windows runner reached it).
+	if err := dispatch(context.Background(), []string{"resume", dir, "--max-duration", "0", "--report", report}, io.Discard); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	var rep listing.Report

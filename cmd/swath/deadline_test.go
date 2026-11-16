@@ -39,12 +39,13 @@ type rowlessService struct {
 	listed            atomic.Int64
 	fresh             atomic.Int64
 	firstNs, latestNs atomic.Int64
-	liveEndNs         atomic.Int64 // the keyrange.EmptyChainLive-th fresh page's
+	liveEndNs         atomic.Int64  // the keyrange.EmptyChainLive-th fresh page's
+	pace              time.Duration // each empty page's delay (5 ms unless set before the run)
 	url               string
 }
 
 func newRowlessService(t *testing.T) *rowlessService {
-	s := &rowlessService{}
+	s := &rowlessService{pace: 5 * time.Millisecond}
 	s.set("healthy")
 	h := gcstest.Handler(gcstest.Keys(20000), 0)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +55,7 @@ func newRowlessService(t *testing.T) *rowlessService {
 			return
 		case "empty":
 			if s.listed.Add(1) > 12 {
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(s.pace)
 				now := time.Now().UnixNano()
 				s.firstNs.CompareAndSwap(0, now)
 				s.latestNs.Store(now)
@@ -97,14 +98,18 @@ func readJSON(t *testing.T, path string, v any) []byte {
 // TestInfiniteEmptyPagesHonorsDeadline: a service that answers every
 // request with an empty page and a fresh continuation token keeps the stall
 // clock alive for the first keyrange.EmptyChainLive pages of the run (at
-// 5 ms a page, over 5 s, past the deadline here; TestEndlessEmptyPagesAreStuck
+// 8 ms a page, over 8 s, past the deadline here; TestEndlessEmptyPagesAreStuck
 // covers what follows), so --max-duration stops the run: exit 124,
 // with the report and error.json naming the same attempt, no manifest and
 // the published parts kept; once the service lists again, swath resume
 // completes the dataset of an uninterrupted run byte for byte, the kept
-// parts unchanged (durability review).
+// parts unchanged (durability review). The stall timeout is 3 s: the
+// run's start, before its first page, has no progress to show, and its
+// journal's creation (a file and two directory syncs) took over 1 s on a
+// loaded Windows runner, so a 1 s timeout stopped some runs as stuck
+// before the scenario began.
 func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
-	const stall = time.Second
+	const stall = 3 * time.Second
 	captureStderr(t)
 	s := newRowlessService(t)
 	ctx := context.Background()
@@ -114,13 +119,15 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
+	s.pace = 8 * time.Millisecond // before the mode's store, which the handler loads first
 	s.set("empty")
 	// The deadline leaves room for slow data pages (the race detector on
 	// a shared CI runner took 1.2 s for them) before over twice the stall
-	// timeout of empty pages.
-	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "6s", "--report", report), io.Discard, false)
+	// timeout of empty pages, and comes before the watchdog could: the
+	// empty pages count for at least 8.2 s, then the stall timeout.
+	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "10s", "--report", report), io.Discard, false)
 	if c := exitCode(t, err); c != exitDeadline || !strings.HasSuffix(err.Error(), "--max-duration reached (swath resume "+shellOperand(dir)+" --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)") {
-		t.Fatalf("exit %d (%v), want %d naming swath resume\n%s", c, err, exitDeadline, diagDump(dir))
+		t.Fatalf("exit %d (%v), want %d naming swath resume\n%s", c, err, exitDeadline, stuckEvidence(dir))
 	}
 	if d := time.Duration(s.latestNs.Load() - s.firstNs.Load()); d < 2*stall || s.fresh.Load() < 100 {
 		t.Fatalf("%d fresh empty pages over %s, not over twice the stall timeout", s.fresh.Load(), d)
@@ -146,8 +153,10 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	}
 	s.set("healthy")
 	// As the advice says: --max-duration 0 lifts the recorded deadline.
-	if err := resume(ctx, []string{dir, "--max-duration", "0"}, io.Discard); err != nil {
-		t.Fatalf("resume: %v\n%s", err, diagDump(dir))
+	// The resume is not about stalls: the default stall timeout replaces
+	// the recorded 3 s, which its recovery outlasted on Windows.
+	if err := resume(ctx, []string{dir, "--max-duration", "0", "--stall-timeout", "10m"}, io.Discard); err != nil {
+		t.Fatalf("resume: %v\n%s", err, stuckEvidence(dir))
 	}
 	sameParts(t, "resume", ref, dir)
 	for p, b := range before {
@@ -198,9 +207,12 @@ func TestDeadlineWithoutJournal(t *testing.T) {
 // stops it within the stall timeout of the later of that bound and the
 // run's last other progress: the first pages' rows are still being
 // published, and where syncs are slow (a loaded runner) that outlasts the
-// bound's pages (nightly CI: 2,236 pages; 300 ms syncs reproduce it).
+// bound's pages (nightly CI: 2,236 pages; 300 ms syncs reproduce it). The
+// stall timeout is 3 s, as in TestInfiniteEmptyPagesHonorsDeadline: a
+// slower start than that stops the run before its first page, with cause
+// stuck_no_rows (a loaded Windows runner at 1 s).
 func TestEndlessEmptyPagesAreStuck(t *testing.T) {
-	const stall = time.Second
+	const stall = 3 * time.Second
 	var stuckAt atomic.Int64 // when the watchdog warns that it stops the run
 	errOut = stuckStamp{captureStderr(t), &stuckAt}
 	s := newRowlessService(t)
@@ -230,7 +242,7 @@ func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 	var rep listing.Report
 	readJSON(t, report, &rep)
 	if rep.Outcome.Cause != stuckEmptyChain || !rep.Outcome.Resumable {
-		t.Fatalf("outcome %+v, want cause %s, resumable\n%s", rep.Outcome, stuckEmptyChain, diagDump(dir))
+		t.Fatalf("outcome %+v, want cause %s, resumable\n%s", rep.Outcome, stuckEmptyChain, stuckEvidence(dir))
 	}
 	// The bound's worth of empty pages, then the stop within the stall
 	// timeout of the later of the bound and the last other progress, with
@@ -384,18 +396,3 @@ func failOutcomeWrites() (restore func()) {
 	})
 }
 
-// diagDump is the stuck dump's swath goroutines (temporary diagnosis).
-func diagDump(dir string) string {
-	b, err := os.ReadFile(filepath.Join(dir, dataset.Workspace, "stacks-stuck.txt"))
-	if err != nil {
-		return fmt.Sprintf("no goroutine dump: %v", err)
-	}
-	blocks := strings.Split(string(b), "\n\n")
-	kept := blocks[:1]
-	for _, g := range blocks[1:] {
-		if strings.Contains(g, "varveio/swath/internal/") && !strings.Contains(g, "[select]:\ngithub.com/varveio/swath/internal/order.(*run") {
-			kept = append(kept, g)
-		}
-	}
-	return strings.Join(kept, "\n\n")
-}
