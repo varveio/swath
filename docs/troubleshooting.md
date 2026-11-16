@@ -345,8 +345,12 @@ The limits of this build, and what has not been measured:
   bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
   at a very high worker count (`--workers 2048`) under a spill cap far below what the listing needs (a tenth,
-  in the runs that showed it) can crawl or time out; the runs that complete are key-identical. At the default 64
-  workers and the default spill cap this was not seen. Give a larger `--spill-budget` or more spill disk, fewer
+  in the runs that showed it) can crawl or time out; the runs that complete are key-identical. Those
+  measurements were all at 2,048 workers under a spill cap of about a tenth of what the listing needed. At 64
+  workers a stale seed was measured only by a build of 2026-11-07, before the default spill cap followed the
+  disk: ten lists of 44 to 131 million keys, through a fake, listed near the 64-worker ideal
+  ([measurements](internals/measurements.md#warm-start-from-the-previous-dataset---seed-from)); at today's
+  default spill cap it has not been measured. Give a larger `--spill-budget` or more spill disk, fewer
   workers, or list without `--seed-from` ([#576](https://github.com/varveio/swath/issues/576)).
 - **Durable spill above 593M keys:** a kill and resume with durable spill was measured on lists of up to 593
   million keys ([measurements](internals/measurements.md#durable-spill-slots)); above that, a billion keys
