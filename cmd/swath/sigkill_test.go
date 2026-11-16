@@ -42,10 +42,7 @@ func TestSIGKILLResume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	// Slow enough to kill mid-run.
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
@@ -121,10 +118,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	b := s3test.Backend(t, s3test.Keys(4000, 7))
 	url := s3test.Serve(t, s3test.Handler(b))
@@ -269,10 +263,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(30000)))
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -407,10 +398,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	t.Parallel()
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
 	env := append(os.Environ(), "GOMAXPROCS=4")
@@ -576,6 +564,9 @@ func buildSwath(t *testing.T) string {
 		t.Skip("builds the binary")
 	}
 	bin := filepath.Join(t.TempDir(), "swath")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // os/exec runs a file there only by an executable extension
+	}
 	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}

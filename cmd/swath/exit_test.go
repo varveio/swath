@@ -38,10 +38,7 @@ func TestExitCodes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
 	var hang atomic.Bool // after the first request, hold every request (no progress)
 	var served atomic.Int64

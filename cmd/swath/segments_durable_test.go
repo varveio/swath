@@ -159,10 +159,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(150000)))
 	var gate atomic.Pointer[frontierGate] // the run's; nil on a resume, which lists only gaps
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

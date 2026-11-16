@@ -325,7 +325,7 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 		t.Fatalf("exit %d (%v)", code, err)
 	}
 	now.Reset()
-	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+dir+" continues it") {
+	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+shellQuote(dir)+" continues it") {
 		t.Fatalf("show after the stopped overwrite: %v\n%s", err, now.String())
 	}
 	slow.Store(false)

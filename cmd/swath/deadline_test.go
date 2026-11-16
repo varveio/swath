@@ -289,10 +289,7 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	bin := buildSwath(t)
 	s := newRowlessService(t)
 	var stderr bytes.Buffer
 	dir := filepath.Join(t.TempDir(), "ds")
