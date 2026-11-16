@@ -121,8 +121,8 @@ nothing: a container SAS met it on a flat account and on a hierarchical one alik
 on transient failures (5xx, throttling, timeouts: `objhttp.Requeue`) decides nothing: the round is asked again
 after the engine's requeue backoff (`keyrange.RequeueBackoff`), as a listing page is, for as long as the run
 lives, so a service that never answers stops as stuck (exit 75), never refused; an endpoint nothing ever
-answered at (objhttp's fail-fast) stops as unreachable (exit 75), unless `--azure-assume-flat` lists on to the
-same stop. (3) Anything else (a refusal, another code or a missing header
+answered at (objhttp's fail-fast) stops as unreachable (exit 75); with `--azure-assume-flat` the listing reaches
+the same stop. (3) Anything else (a refusal, another code or a missing header
 there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
