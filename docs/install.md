@@ -25,13 +25,15 @@ Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` 
 and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
 
 Each block below downloads with the [GitHub CLI](https://cli.github.com/) (`gh`), verifies, extracts, installs
-and runs the installed binary's `--version`. A failed check stops it before anything is extracted or installed.
+and runs the installed binary's `--version`. A failed check stops it before anything is extracted or installed;
+`gh attestation verify` fails so, with exit 4, when `gh` is not logged in.
 The cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive matches it, and
 the attestation records the build that produced it.
 
 ### Linux
 
-With the [GitHub CLI](https://cli.github.com/) (`gh`) and [cosign](https://docs.sigstore.dev/) installed:
+With the [GitHub CLI](https://cli.github.com/) (`gh`) installed and logged in (`gh auth login`), and
+[cosign](https://docs.sigstore.dev/) installed:
 
 ```bash
 VERSION=0.4.0
@@ -68,8 +70,8 @@ command -v swath && swath --version
 
 ### macOS
 
-With the GitHub CLI and cosign installed (`brew install gh cosign`); the block picks the Apple silicon or the
-Intel archive:
+With the GitHub CLI and cosign installed (`brew install gh cosign`) and `gh` logged in (`gh auth login`); the
+block picks the Apple silicon or the Intel archive:
 
 ```bash
 VERSION=0.4.0
@@ -96,7 +98,7 @@ and `amd64` on Intel.
 
 ### Windows
 
-In PowerShell, with the GitHub CLI installed:
+In PowerShell, with the GitHub CLI installed and logged in (`gh auth login`):
 
 ```powershell
 $Version = "0.4.0"
@@ -154,7 +156,7 @@ image digest for runs that must use the same image; the image signature and prov
 
 ## Build from source
 
-You need Go 1.26 or later and git:
+You need Go 1.26.3 or later and git:
 
 ```bash
 git clone https://github.com/varveio/swath.git

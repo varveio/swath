@@ -70,7 +70,9 @@ under both its names here), the time, and where the dataset went, then what to r
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 directories;
+manifest, `run.json` (the run report), `cuts.txt` (the cut file, for the next listing's `--seed-from`) and
+`.swath/` (the run's private workspace, which readers ignore)
+([layout](dataset.md#what-a-swath-dataset-is)). Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
 
 A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),

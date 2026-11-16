@@ -84,8 +84,9 @@ Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gc
 swath: unknown flag --summarize (the total alone is the default: --depth 0)
 ```
 
-An option of 0.3.2 names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
-`--stall-timeout`, `--compression` is the `-o` name).
+Most options of 0.3.2 name what replaced them (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
+`--stall-timeout`, `--compression` is the `-o` name); the release notes'
+[moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0) gives the others.
 
 An option given for another provider's source is refused rather than ignored:
 

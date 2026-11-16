@@ -45,9 +45,17 @@ documentation is also at [swath.varve.io](https://swath.varve.io/).
 
 - **The command.** The commands are `swath list`, `swath du`, `swath show` and `swath resume`, and options
   are renamed or removed, without aliases. An option only one provider has carries its prefix
-  (`--s3-region`, `--s3-profile`); an old option names what replaced it when you give it
+  (`--s3-region`, `--s3-profile`). Most old options name what replaced them when you give them
   (`--force-path-style` is `--s3-path-style`)
-  ([Unknown flag](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#unknown-flag)).
+  ([Unknown flag](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#unknown-flag)). Seven
+  are refused as a plain unknown flag: `--text-part-size` and `--text-writers` have no replacement (text rows
+  go to one file, `-o NAME.tsv`), nor has `--writeback-size`; `--object-listing-queue-size` is
+  `--sort-buffer`, in bytes; `--engine-toggle` is `swath diag list`'s options; `--metrics-endpoint` and
+  `--no-metrics` are under "Metrics" below.
+- **Sorted output.** A dataset written with `-o DIR` is always sorted Parquet, so 0.3.2's
+  `swath list SOURCE --format parquet --sort -o out/` is `swath list SOURCE -o out/`. `--sort` is now
+  `swath du`'s and takes a value (`name` or `size`): the old spelling reads `-o` as that value and fails with
+  `swath: unexpected argument "out/"` (exit 2). `--format parquet` is refused, naming `-o DIR`.
 - **Filters.** `--include` and `--exclude` take globs; 0.3.2's regular expressions go to `--include-regex`
   and `--exclude-regex`. Common regular-expression spellings given as a glob (`'\.parquet$'`) are refused
   with exit 2, naming the regex option; others are valid globs that match something else: `--include parquet`
