@@ -251,7 +251,8 @@ describe 0.4.0 as released.
   blocked by a file another program holds open fails after two seconds naming that cause; an `--overwrite`
   refused so leaves the previous dataset readable, and `swath resume` installs the replacement once the
   reader is closed. Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered,
-  but a power loss may lose the latest part names (#605).
+  but a power loss may lose the latest part names (#605). An upload to a GCS destination whose connection the
+  service reset is retried there as on other systems (#611).
 - A run that writes to a bucket is resumed by its work directory, which may have moved to another path or
   machine; the bucket, prefix, endpoint and region stay as recorded (#515).
 - `swath resume DIR` writes `run.json` beside the dataset as any run does, and a `--report FILE` only when
