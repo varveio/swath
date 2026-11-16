@@ -195,17 +195,9 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 	var writes int
 	go func() { // the command's progress writer (supervise), much faster
 		defer close(stopped)
-		// From the start of listing: the run owns its progress (Owned)
-		// from its lock on, before Prepare's check under the lock that the
-		// output is empty, so a write in between made the run refuse its
-		// own output (macOS CI: "output directory is not empty").
-		for !pr.Started() {
-			select {
-			case <-stop:
-				return
-			case <-time.After(time.Millisecond):
-			}
-		}
+		// From the run's start, as the command's ticker: the run owns its
+		// progress (Owned) only once its fresh output is prepared, so no
+		// write can come before Prepare's check that the output is empty.
 		for {
 			select {
 			case <-stop:
