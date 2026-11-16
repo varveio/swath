@@ -32,9 +32,10 @@ you configured (keys in the environment, a profile by `--s3-profile` or `AWS_PRO
 a SAS, a GCS credentials file) or an AWS configuration that does not load gets no such advice: fix it.
 
 The whole cause, which can be long (an SDK's report of every credential it tried, a token endpoint's
-answer), is the outcome's message: in the outcome line `-v` prints first (the `outcome` event's `message`
-under `--log-format json -v`) and in the report's `outcome.message`. "-v shows the details" says the line
-left some of it out:
+answer), is the outcome's message, which has a name in each place it is written: `message` in the outcome
+line `-v` prints first, `msg` in the `outcome` event under `--log-format json -v`, `outcome.error` in the
+report, and `message` in the output directory's `error.json`. "-v shows the details" says the line left some
+of it out:
 
 ```text
 swath: outcome: {"class":"fatal","exit_code":1,"message":"Azure Blob client: credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:\n\tEnvironmentCredential: missing environment variable AZURE_TENANT_ID\n...",...}
@@ -313,8 +314,9 @@ out, names up to five on stderr with their cause (a path below SOURCE relative t
 `incomplete`); the closing line's verdict counts them. Under `-q`, which prints no closing line, the last line
 says it instead: `swath: 1 entry could not be read and is missing from the output`. `swath du`'s view marks
 the lines whose sums leave them out with `!`, and says so in one line under it (`-v` names them). The rows, totals or dataset hold everything else. A symbolic link whose target cannot be read keeps
-its row, an entry removed during the walk is no longer part of the tree, and one the include and exclude rules
-leave out by its name is not selected: none of them counts. A root directory that
+its row, a file removed during the walk is no longer part of the tree, and an entry the include and exclude
+rules leave out by its name is not selected: none of them counts. A directory removed after the walk found it
+and before it read it does count, so the run reports incomplete and exits 3. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
 `coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
 
@@ -338,6 +340,17 @@ The limits of this build, and what has not been measured:
 - **Versioned listing** (`--all-versions`) was checked against an independent serial listing on small public
   buckets (seven S3, one GCS; up to 40,000 versions, pages of 1 to 1,000 entries, interrupted and resumed runs);
   large versioned buckets are unmeasured.
+- **Seeded runs** (`--seed-from`): on Azure Blob, a seed whose key pages end at a blob name longer than 1,024
+  bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
+  list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
+  with `--workers 2048` and a spill cap under about 6 MiB can crawl or time out; the runs that complete are
+  key-identical ([#576](https://github.com/varveio/swath/issues/576)).
+- **Durable spill at a billion keys:** resume with durable spill was measured on listings of up to 150M keys.
+  On billion-key listings its certificate limits bind, so a resume relists more than on smaller ones, and a
+  kill and resume at that scale is not measured ([#513](https://github.com/varveio/swath/issues/513)).
+- **S3 credentials that expire:** their refresh ahead of expiry was tested against fakes only, not real AWS,
+  and an upload to an S3 bucket destination that is answered as expired (clock skew, an early revocation)
+  fails instead of retrying with fresh credentials ([#577](https://github.com/varveio/swath/issues/577)).
 - **Memory:** `--sort-buffer` bounds rows in flight, not resident memory ([Size a run](size-a-run.md#memory)).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
   of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of

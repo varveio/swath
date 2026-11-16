@@ -504,8 +504,7 @@ reason, the time), synced, as Java's `markRunUnresumable`: a resume would walk b
 No frame may follow it (`Append` refuses, `Read` treats one as `ErrCorrupt`), and `swath resume` and a resumed
 run refuse the run with a `journal.UnresumableError` (exit 1, `cause` `protocol`), the parts and journal left
 as they are; `swath list --overwrite` starts over (`TestProtocolViolationIsUnresumable`, `TestUnresumableMark`).
-The frame is a later type within version 7: a build without it reads a marked journal as corrupt, which
-refuses the resume too. Transient oddities are not violations and keep their handling: an unparsed body is
+Transient oddities are not violations and keep their handling: an unparsed body is
 retried, unsorted common prefixes are normalized, empty continuing pages are followed.
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's

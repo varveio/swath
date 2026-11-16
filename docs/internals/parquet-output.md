@@ -273,10 +273,14 @@ and the last of those renames. The part paths are reused, so a reader that read 
 installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
 during it. The run report and cut file are written to the output after it; the retired dataset and the
 replacement's workspace are removed last. A replacement
-that fails or is interrupted leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
+that fails or is interrupted before its commit leaves the previous dataset whole; one with a journal waits in `.swath/next/` for
 `swath resume DIR` (`swath show DIR` names it; a new `--overwrite` starts it over), and one without is removed
 (`TestReplaceKeepsPreviousUntilCommit`, `TestReplaceInstallationCrash`, `TestReplaceFailureLeavesPrevious`).
-`DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An output that holds an
+`DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An installation refused
+while the previous dataset's entries move aside (Windows: a reader holds a part) is undone only when every
+entry can come back, and one that fails after they are all aside is not undone: either way the path then
+holds no dataset until `swath resume DIR` or `--overwrite` finishes the installation, and the error says so
+(`TestReplaceRefusedInstallation`; the Windows item of [the journal](durability.md#the-journal)). An output that holds an
 interrupted run instead (no manifest) is replaced as before: its entries are removed, the commit record first,
 before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 

@@ -10,7 +10,7 @@ one that stopped with exit 1 when its outcome says `resumable` (a fixed credenti
 supervisor does with each code is in [Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
 "Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
-again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
+again with `--overwrite`, which replaces the interrupted output, or in a new or empty directory.
 
 **Signals.** SIGINT, SIGTERM and SIGHUP (a closed terminal or SSH session; not under `nohup`) stop the run
 gracefully: published parts and the journal stay, and `error.json` and the report are written. Only the first
@@ -79,9 +79,8 @@ deleted from the bucket since stays in the dataset, one added inside a certified
 metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
 during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
 that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
-`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8 or
-later (this build writes and resumes version 9 only), spill on, `--spill-budget` of at least
-16 MiB, and a parallel range-engine provider that declares coverage fences (S3, GCS and Azure Blob;
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs spill on, `--spill-budget`
+of at least 16 MiB, and a parallel range-engine provider that declares coverage fences (S3, GCS and Azure Blob;
 not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
@@ -121,11 +120,14 @@ holding a `manifest.json` is), but nothing removes the lost run's parts, so star
 
 `--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into the
 output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
-whose parts are removed after. A run that fails or is stopped leaves the previous dataset as it was; a stopped
-object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new `--overwrite`
-starts it over. The previous dataset stays whole until the new manifest is installed. The installation
-reuses the part paths (`data/part-NNNNN.parquet`), so a reader that is reading the dataset while it runs can
-find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
+whose parts are removed after. A run that fails or is stopped before its commit leaves the previous dataset as
+it was; a stopped object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new
+`--overwrite` starts it over. The installation moves the previous dataset aside, then the new one in. One that
+stops part way (a crash), fails once the previous dataset is aside, or cannot put it all back after a refusal
+(on Windows, [another program holding one of its files](troubleshooting.md#the-output-directory-is-refused))
+leaves the directory with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new
+`--overwrite` finishes the installation. The installation reuses the part paths (`data/part-NNNNN.parquet`),
+so a reader that is reading the dataset while it runs can find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
 
 Where readers must always find a dataset, even then (a periodic refresh read around the clock), write each run
 to a new directory and never overwrite it. Switch readers through a pointer outside the datasets (a generation
