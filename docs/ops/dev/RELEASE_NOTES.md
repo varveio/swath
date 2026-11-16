@@ -1,10 +1,10 @@
-# swath 0.4.0-rc.2
+# swath 0.4.0-rc.3
 
 <!-- Links are absolute and pinned to the tag: the release body does not resolve repository-relative links. -->
 
 ## User-facing changes
 
-This is the second release candidate of 0.4.0, the first release of the Go implementation. Go replaces
+This is the third release candidate of 0.4.0, the first release of the Go implementation. Go replaces
 the Java tool: v0.3.2 was the last Java release, and no later release ships Java.
 
 - **Sources.** Local and mounted filesystems, Amazon S3 general-purpose buckets, Google Cloud Storage
@@ -22,7 +22,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   each holding static `swath` and `swath-replay` binaries with `LICENSE`, `NOTICE` and
   `THIRD_PARTY_NOTICES` (the licenses of every module linked into the binaries); an SPDX SBOM;
   `SHA256SUMS`; a keyless cosign signature for each; and build provenance attestations.
-- **Images.** `ghcr.io/varveio/swath:0.4.0-rc.2` and `ghcr.io/varveio/swath-replay:0.4.0-rc.2` for
+- **Images.** `ghcr.io/varveio/swath:0.4.0-rc.3` and `ghcr.io/varveio/swath-replay:0.4.0-rc.3` for
   linux/amd64 and linux/arm64, carrying the archived linux binaries, signed and attested. A release
   candidate publishes only its own tag: no `latest` and no `0.4`.
 - **Verifying.** The checksum, signature and attestation commands are in
@@ -54,7 +54,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 ### Breaking changes from 0.3.2
 
 - **Launcher.** The Java jar (`java -jar swath.jar`) and its `.zip` and `.tar.gz` distributions are
-  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.2`
+  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.3`
   and the commit.
 - **Command line.** Flags are renamed or removed, without aliases (an unknown flag exits 2). The most
   common: `--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--region` and `--profile`
@@ -108,7 +108,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 ## Limits and known issues
 
 - This is a release candidate, and it is not promoted. Its binaries report
-  `0.4.0-rc.2`; 0.4.0 will be a separate build.
+  `0.4.0-rc.3`; 0.4.0 will be a separate build.
 - Windows refuses journaled object-store runs and `swath resume` (directory sync is unavailable there).
   Local scans and text output do not resume on any platform
   ([known limits](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/running.md#known-limits)).
