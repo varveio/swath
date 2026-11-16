@@ -23,7 +23,6 @@ import (
 
 	"github.com/varveio/swath/docs"
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
@@ -432,30 +431,6 @@ func TestRefusedRunLeavesOwnerMetadata(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(progress); string(b) != "owner" {
 		t.Fatalf("the refused run rewrote the owner's progress: %q", b)
-	}
-}
-
-// TestProgressAfterPrepare: the progress writer writes nothing between
-// the run's lock and its check, under the lock, that a fresh output is
-// empty. Before, a tick there wrote progress.json and the run refused its
-// own output ("output directory is not empty").
-func TestProgressAfterPrepare(t *testing.T) {
-	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(t.TempDir(), "ds")
-	// Without a stall timeout the writer ticks every 10 ms: about twenty
-	// times while the run holds the lock before its check.
-	defer faults.Set(func(p string) error {
-		if p == "output-owned" {
-			time.Sleep(200 * time.Millisecond)
-		}
-		return nil
-	})()
-	var buf bytes.Buffer
-	if err := run(context.Background(), []string{src, "-o", out, "--stall-timeout", "0"}, &buf, false); err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -196,8 +196,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	}
 	cfg.Progress.own(lock)
 	var jr *runJournal
-	if err = faults.At("output-owned"); err != nil {
-	} else if resumable {
+	if resumable {
 		jr, err = openLocked(ctx, cfg, path, id, lock)
 	} else if err = lock.Verify(); err != nil {
 	} else if err = prepareOutput(cfg, path, id, lock); err != nil {

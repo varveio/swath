@@ -989,9 +989,11 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
-		// The run's final snapshot, done or failed; a refusal under the
-		// lock leaves the file as the run before it left it.
-		writeProgress(cfg.Output.Dir, cfg.Progress)
+		if cfg.Progress.Started() {
+			// The run's final snapshot, done or failed; a refusal under
+			// the lock leaves the file as the run before it left it.
+			writeProgress(cfg.Output.Dir, cfg.Progress)
+		}
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
 		if werr := writeOutcome(cfg.Output.Dir, outcomeOf(sum)); werr != nil {
 			unrecorded = "write " + errorName + ": " + werr.Error()
