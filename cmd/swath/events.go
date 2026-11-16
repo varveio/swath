@@ -369,6 +369,9 @@ func conclude(err error) int {
 		b, _ := json.Marshal(o)
 		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
 	}
+	if ee != nil && ee.stated {
+		return o.ExitCode // the closing line said it
+	}
 	noteFinal(errOut, "swath: "+escapeControl(err.Error())+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
@@ -774,10 +777,12 @@ type unreadableFields struct {
 }
 
 // reportUnreadable names the entries a listing could not read: up to
-// unreadableShown of them with their cause (the provider's samples), then
-// the count of the rest. Their count is the run's error line (exit 3,
-// unreadableError), which -q keeps.
-func reportUnreadable(r *listing.Report) {
+// unreadableShown of them with their cause (the provider's samples), a
+// path below the local SOURCE root relative to it, then the count of the
+// rest. Under swath du's view (drawn), which marks the lines they leave
+// out, it is one line unless -v. Their count is the run's error line
+// (exit 3, unreadableError), which -q keeps.
+func reportUnreadable(r *listing.Report, root string, view *viewOut) {
 	n := r.Outcome.Unreadables()
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {
@@ -795,11 +800,22 @@ func reportUnreadable(r *listing.Report) {
 		l.print(lvWarn, evWarning, msg, unreadableFields{warnUnreadable, n, samples})
 		return
 	}
+	if view != nil && view.drawn && !l.shows(lvInfo) {
+		noteKept(errOut, unreadableLine(int(n), view.unreadable)+"\n")
+		return
+	}
 	if len(samples) == 0 {
 		return // the error line counts them; the report's source counters say why
 	}
+	abs := ""
+	if !hasScheme(root) {
+		abs, _ = filepath.Abs(root)
+	}
 	l.warn(warnUnreadable, msg+":")
 	for _, s := range samples {
+		if abs != "" && strings.HasPrefix(s, abs+string(filepath.Separator)) {
+			s = s[len(abs)+1:]
+		}
 		noteKept(errOut, indent+escapeControl(s)+"\n")
 	}
 	if rest := n - int64(len(samples)); rest > 0 && len(samples) > 0 {

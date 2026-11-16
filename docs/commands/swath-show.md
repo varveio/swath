@@ -36,7 +36,7 @@ run applied by their rules (`filtered: include=*.jpg, min_size=200k`), and what 
 (`excluded: ...`, an output directory inside the tree). A complete dataset without filters covers the source
 on the line below the verdict, minus its exclusions
 ([Understand your results](../results.md#coverage-and-unreadable-entries),
-[The swath dataset](../dataset.md#the-swath-extension)). There is no machine form of this summary: a program
+[The swath dataset format](../dataset.md#the-swath-extension)). There is no machine form of this summary: a program
 reads `manifest.json`.
 
 For the work directory of a dataset written to a bucket (`-o s3://...`, `gs://...` or `az://...` with
@@ -68,8 +68,8 @@ shell line: an argument the shell would split or expand (a path with a space, a 
 single quotes, or on Windows in double quotes, so the line can be pasted as it is.
 
 `swath show` reads no rows. `swath du --from-dataset DIR` totals them per prefix
-([swath du](swath-du.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
-lists ([Running swath](../running.md#reading-the-output)).
+([Total a source](../totals.md#totals-from-a-saved-dataset)); to query a dataset otherwise, read the parts its manifest
+lists ([Query an inventory](../query.md)).
 
 ## Options
 
@@ -121,4 +121,4 @@ manifest it committed, under `DIR/.swath/`.
 
 ## See also
 
-[swath list](swath-list.md), [swath resume](swath-resume.md), [The swath dataset](../dataset.md)
+[swath list](swath-list.md), [swath resume](swath-resume.md), [Query an inventory](../query.md), [The swath dataset format](../dataset.md)

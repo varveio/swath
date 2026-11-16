@@ -79,7 +79,7 @@ manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 dire
 two of the names are one hard-linked file.
 
 A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),
-it still writes the dataset, ends with `swath: N entries could not be read and are missing from the output`
+it still writes the dataset, names them on stderr, ends with the closing line `partial: N unreadable entries; …`
 and exits 3 ([exit codes](reference/exit-codes.md)); step 4 shows how the dataset records it.
 
 The output directory must be new or empty. Keep it outside the tree you list; if it is inside, swath skips it
@@ -106,7 +106,7 @@ filters or exclusions, means the dataset covers the whole tree. Read the verdict
 rely on an inventory: [Understand your results](results.md#coverage-and-unreadable-entries) explains them.
 
 To read the rows themselves, open the parts with DuckDB, Python or another Parquet
-reader ([the swath dataset](dataset.md)).
+reader ([Query an inventory](query.md)).
 
 ## 5. Total the saved inventory
 
@@ -120,10 +120,11 @@ swath du --from-dataset media-inventory -d 1
 ```
 
 It prints the totals of step 1 as they were when the tree was listed, and says on stderr when that was and
-whether the listing was complete ([swath du](commands/swath-du.md#totals-from-a-saved-dataset)).
+whether the listing was complete ([swath du](totals.md#totals-from-a-saved-dataset)).
 
 ## Next
 
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
 - [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
+- [Query an inventory](query.md): read the saved inventory with DuckDB, pandas or Spark.
 - [Run large listings](running.md): size, watch, stop and resume a long run.

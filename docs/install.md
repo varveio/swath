@@ -200,7 +200,7 @@ supported yet: the module points its nested `reader` and `objfile` modules at lo
 Release binaries run on Linux (x86-64 and ARM64), macOS (Intel and Apple silicon) and Windows (x86-64). On
 Windows, local listings and text output work, but dataset runs of S3, GCS and Azure Blob sources and
 `swath resume` are refused: they need directory sync, which Windows does not provide
-([known limits](running.md#known-limits)).
+([known limits](troubleshooting.md#known-limits)).
 
 ## Shell completion
 

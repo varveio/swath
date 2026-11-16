@@ -6,6 +6,7 @@ package totals
 import (
 	"cmp"
 	"container/heap"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -26,16 +27,17 @@ import (
 // one range's rows. In an ordered run they ascend and no row of another
 // run sorts between two of its rows (order.RangeSink), so a node the run
 // enters after its first row and leaves before its last is complete: no
-// other run holds any of it. Such a node is remembered only if its figure
-// is at least 1 % of the bytes seen so far (viewShare): the total can only
-// be larger, so a node dropped there is below 1 % of the total too, and
-// its bytes are already in its parent. A node that holds a run's first or
+// other run holds any of it. Such a node is remembered only among the
+// viewKeep largest complete nodes of its depth (its bytes are in its
+// parent either way): which nodes those are does not depend on the order
+// they complete in, so whatever a view shows, from the largest down, is
+// there. A node that holds a run's first or
 // last row may continue in another run: it is partial, and the runs'
 // pieces of it are summed by name and complete when the listing ends. An
 // unordered run (a local directory counted unsorted) completes only its
 // objects; its prefixes are all partial. So memory is the remembered
-// nodes (at most twice viewShare a depth, besides those holding a hard
-// link, below), the partial ones (each run's two edges, a node a level;
+// nodes (at most viewKeep a depth, besides those holding a hard link,
+// below), the partial ones (each run's two edges, a node a level;
 // every directory of a local tree) and each run's open nodes.
 //
 // A node's children (the prefixes and objects directly under it) are
@@ -52,11 +54,14 @@ import (
 // exact, and their nodes at the deepest level kept no longer know how many
 // children they have. The view does not fail.
 
-// viewShare is the share of the bytes seen a complete node needs to be
-// remembered, as a divisor: 1 %. At most viewShare nodes of one depth can
-// each hold that share; a depth's remembered nodes are pruned against the
-// bytes seen once twice as many are held.
-const viewShare = 100
+// viewKeep is the complete nodes of each depth remembered, the largest: far
+// more than a terminal shows, and each node of 1 % of the total is among
+// them (at most 100 of one depth can hold 1 %).
+const viewKeep = 100
+
+// floorDepths is the depths whose admission floor (view.floors) a run reads
+// without the lock; a deeper node takes the lock.
+const floorDepths = 64
 
 // vsum is a node's sums.
 type vsum struct {
@@ -68,12 +73,51 @@ type vsum struct {
 	// hasNewest: an object under it has a time.
 	hasNewest bool
 	pinned    bool // holds a hard-linked object, whose bytes come at the end
+	// recent is its children with the newest times, at most recentKids, the
+	// newest first: a fold's newest time is the first one not shown.
+	recent []kidTime
 }
 
-// add adds o's sums to s, its children included.
+// recentKids is the children a node remembers the times of, the newest:
+// more than a terminal shows of one parent but in a rare view.
+const recentKids = 32
+
+// kidTime is a child's newest time.
+type kidTime struct {
+	name string
+	at   int64
+}
+
+// noteKid takes a child's newest time (a run's piece of it: the newest
+// piece is the child's), name copied if kept.
+func (s *vsum) noteKid(name string, at int64) {
+	if len(s.recent) == recentKids && at <= s.recent[len(s.recent)-1].at {
+		return
+	}
+	i := slices.IndexFunc(s.recent, func(k kidTime) bool { return k.name == name })
+	if i >= 0 {
+		if at <= s.recent[i].at {
+			return
+		}
+		s.recent = slices.Delete(s.recent, i, i+1)
+	} else {
+		name = strings.Clone(name)
+		if len(s.recent) == recentKids {
+			s.recent = s.recent[:len(s.recent)-1]
+		}
+	}
+	j, _ := slices.BinarySearchFunc(s.recent, at, func(k kidTime, at int64) int { return cmp.Compare(at, k.at) })
+	s.recent = slices.Insert(s.recent, j, kidTime{name, at})
+}
+
+// add adds o's sums to s, its children included: o is another piece of
+// the same node.
 func (s *vsum) add(o *vsum) {
 	s.include(o)
 	s.children += o.children
+	for _, k := range o.recent {
+		s.noteKid(k.name, k.at)
+	}
 }
 
 // include adds what o holds to s, a node above it: everything but o's
@@ -94,25 +138,35 @@ type view struct {
 	primary string
 	budget  int // MaxPrefixes: the nodes held (held) before levels are dropped
 
-	seen     atomic.Int64 // bytes of the primary figure the runs have published
+	// floors are, per depth, the least remembered node once viewKeep are
+	// held (nil before): a complete node below it is dropped without the
+	// lock.
+	floors   [floorDepths]atomic.Pointer[kent]
 	maxDepth atomic.Int64 // the deepest level kept (no limit until lowered)
 
 	mu   sync.Mutex
 	open map[string]*onode // partial nodes, complete once their subtree or every run has ended
-	kept map[string]vsum   // complete nodes remembered: at 1 % of the bytes seen, the largest of their depth
-	pins map[string]vsum   // complete nodes holding a hard link, kept to the end
+	// byLo and byHi index the stretches of keys whose runs have all ended
+	// (cover), by bound: a partial node completes when the stretches
+	// around it join.
+	byLo, byHi map[string]*ival
+	kept       map[string]vsum // complete nodes remembered: the viewKeep largest of their depth
+	pins       map[string]vsum // complete nodes holding a hard link, kept to the end
 	// largest holds, per depth, kept's nodes by size, the smallest on top:
-	// past viewShare of a depth the smallest is dropped.
+	// past viewKeep of a depth the smallest is dropped.
 	largest []kheap
 	// held counts the nodes the budget bounds, those that grow with the
 	// listing: the pinned ones, and an unordered run's partial ones (local
 	// directories being listed) that hold something. A partial node that
 	// holds nothing yet (a directory's row, its listing queued) costs what
 	// the queued range already does, an ordered run's partial nodes are its
-	// two edges, a node a level, and kept holds at most viewShare a depth.
+	// two edges, a node a level, and kept holds at most viewKeep a depth.
 	held    int
 	lowered bool
 	stats   ViewStats
+	// unreadable is the directories the source could not read
+	// (Tally.Unreadable): the lines above them miss what they hold.
+	unreadable map[string]bool
 }
 
 // kheap is a depth's remembered nodes, a min-heap by size.
@@ -123,8 +177,15 @@ type kent struct {
 	name  string
 }
 
+// below orders the nodes a depth keeps: by bytes, and of equal bytes the
+// one later in byte order below, so which are kept is the same whatever
+// the order they complete in.
+func (e *kent) below(o *kent) bool {
+	return e.bytes < o.bytes || e.bytes == o.bytes && e.name > o.name
+}
+
 func (h kheap) Len() int           { return len(h) }
-func (h kheap) Less(i, j int) bool { return h[i].bytes < h[j].bytes }
+func (h kheap) Less(i, j int) bool { return h[i].below(&h[j]) }
 func (h kheap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 func (h *kheap) Push(x any)        { *h = append(*h, x.(kent)) }
 func (h *kheap) Pop() any {
@@ -152,9 +213,9 @@ type ViewStats struct {
 	// Completed is the nodes complete inside one run, or when the range
 	// owning them ended with its subtree (a local directory).
 	Completed int64 `json:"completed"`
-	// Remembered and Dropped split Completed: remembered at the 1 % rule
-	// (or for a hard link), dropped below it. Pruned counts remembered
-	// nodes dropped later as the bytes seen grew.
+	// Remembered and Dropped split Completed: remembered among the
+	// viewKeep largest of their depth (or for a hard link), dropped below
+	// them. Pruned counts remembered nodes dropped later for larger ones.
 	Remembered int64 `json:"remembered"`
 	Dropped    int64 `json:"dropped"`
 	Pruned     int64 `json:"pruned"`
@@ -167,7 +228,8 @@ type ViewStats struct {
 }
 
 func newView(opt *Options) *view {
-	v := &view{origin: opt.Origin, primary: opt.Primary, budget: opt.MaxPrefixes, open: map[string]*onode{}, kept: map[string]vsum{}, pins: map[string]vsum{}}
+	v := &view{origin: opt.Origin, primary: opt.Primary, budget: opt.MaxPrefixes, open: map[string]*onode{}, kept: map[string]vsum{}, pins: map[string]vsum{},
+		byLo: map[string]*ival{}, byHi: map[string]*ival{}, unreadable: map[string]bool{}}
 	v.maxDepth.Store(noLimit)
 	v.open[v.origin] = &onode{}
 	return v
@@ -189,14 +251,12 @@ func parentOf(name string) string {
 }
 
 // complete takes a complete node (v.mu held): one holding a hard link is
-// kept to the end; one below 1 % of the bytes seen (the bytes the caller
-// has not published yet, pending, included) is dropped, the total being
-// larger; any other is remembered among the viewShare largest of its
-// depth, the smallest past them dropped. Those can each hold 1 % of the
-// total, and a node larger than one that does holds it too, so whatever
-// the order the nodes complete in, no node of 1 % is dropped. It reports
-// whether the node was dropped.
-func (v *view) complete(name string, depth int, s *vsum, pending int64) bool {
+// kept to the end; any other is remembered among the viewKeep largest of
+// its depth, the smallest past them dropped, one of no bytes or no larger
+// than them all dropped at once. A node is dropped only for viewKeep
+// larger ones of its depth, whatever the order the nodes complete in. It
+// reports whether the node was dropped.
+func (v *view) complete(name string, depth int, s *vsum) bool {
 	switch {
 	case int64(depth) > v.maxDepth.Load():
 		return true // its level was dropped
@@ -204,23 +264,37 @@ func (v *view) complete(name string, depth int, s *vsum, pending int64) bool {
 		v.pins[strings.Clone(name)] = *s
 		v.held++
 		v.fit()
-	case s.bytes == 0 || s.bytes < (v.seen.Load()+pending)/viewShare:
+	case s.bytes == 0:
 		return true
 	default:
-		name = strings.Clone(name)
-		v.kept[name] = *s
 		for len(v.largest) <= depth {
 			v.largest = append(v.largest, nil)
 		}
 		h := &v.largest[depth]
+		if h.Len() == viewKeep && !(*h)[0].below(&kent{s.bytes, name}) {
+			return true
+		}
+		name = strings.Clone(name)
+		v.kept[name] = *s
 		heap.Push(h, kent{s.bytes, name})
-		if h.Len() > viewShare {
+		if h.Len() > viewKeep {
 			delete(v.kept, heap.Pop(h).(kent).name)
 			v.stats.Pruned++
+		}
+		if h.Len() == viewKeep && depth < floorDepths {
+			least := (*h)[0]
+			v.floors[depth].Store(&least)
 		}
 	}
 	v.stats.Remembered++
 	return false
+}
+
+// below reports whether a node is below the least the depth keeps, so
+// not kept, from the floor and without the lock.
+func (v *view) below(depth int, name string, bytes int64) bool {
+	f := v.floors[depth].Load()
+	return f != nil && !f.below(&kent{bytes, name})
 }
 
 // fit keeps the nodes held within the budget (v.mu held), dropping the
@@ -289,7 +363,7 @@ func (v *view) subtreeEnd(name string) {
 		v.held--
 	}
 	v.stats.Completed++
-	if v.complete(name, v.depthOf(name), &n.s, 0) {
+	if v.complete(name, v.depthOf(name), &n.s) {
 		v.stats.Dropped++
 	}
 }
@@ -378,9 +452,80 @@ type ViewRun struct {
 	stack   []frame           // ordered: the nodes the run is in, the root first
 	cache   []*named          // unordered: the last row's prefixes, in m
 	m       map[string]*named // unordered: the run's prefixes
-	pending int64             // bytes added since the last Flush
 	any     bool              // Add was called: the run held rows
 	stats   ViewStats
+	// The interval the run covers, (lo, hi] (top: up to the last key),
+	// when its source tells it (From, Through): its edge nodes inside it
+	// are complete.
+	lo, hi        string
+	from, through bool
+	top           bool
+}
+
+// From takes the run's lower bound, exclusive (order.CoveredRun), before
+// its first row.
+func (r *ViewRun) From(lo string) { r.lo, r.from = lo, true }
+
+// Through takes the run's upper bound, inclusive (top: none), before End.
+func (r *ViewRun) Through(hi string, top bool) { r.hi, r.top, r.through = hi, top, true }
+
+// covers reports whether every key under the node name lies in (lo, hi]
+// (top: no upper bound): a prefix's keys sort from it to before the first
+// string past them all, an object's node is its one key.
+func covers(name, lo, hi string, top bool) bool {
+	if lo >= name {
+		return false
+	}
+	if top {
+		return true
+	}
+	if strings.HasSuffix(name, "/") {
+		return hi > name && !strings.HasPrefix(hi, name)
+	}
+	return hi >= name
+}
+
+// ival is a stretch of keys whose runs have all ended: (lo, hi], top for
+// no upper bound.
+type ival struct {
+	lo, hi string
+	top    bool
+}
+
+// cover records that the keys (lo, hi] are all summed (v.mu held), joins
+// the stretch with those it meets, and completes the partial nodes that
+// were cut where they meet and now lie inside: a node cut by a bound is
+// a prefix of it.
+func (v *view) cover(lo, hi string, top bool, max int) {
+	iv := &ival{lo, hi, top}
+	var joins []string
+	if left := v.byHi[lo]; left != nil {
+		delete(v.byHi, lo)
+		delete(v.byLo, left.lo)
+		iv.lo = left.lo
+		joins = append(joins, lo)
+	}
+	if right := v.byLo[hi]; !top && right != nil {
+		delete(v.byLo, hi)
+		if !right.top {
+			delete(v.byHi, right.hi)
+		}
+		iv.hi, iv.top = right.hi, right.top
+		joins = append(joins, hi)
+	}
+	v.byLo[iv.lo] = iv
+	if !iv.top {
+		v.byHi[iv.hi] = iv
+	}
+	r := ViewRun{v: v, max: max}
+	for _, b := range joins {
+		r.nodes(&Row{Key: b, Object: true})
+		for d := len(r.chain) - 1; d > 0; d-- {
+			if name := r.chain[d]; v.open[name] != nil && covers(name, iv.lo, iv.hi, iv.top) {
+				v.subtreeEnd(name)
+			}
+		}
+	}
 }
 
 // ViewRun starts a run of rows for the view (Options.View): ordered, the
@@ -396,7 +541,7 @@ func (t *Tally) ViewRun(ordered bool) *ViewRun {
 
 // ViewSubtreeEnd completes the prefix a range owned once it ended with
 // its subtree (order.SubtreeSink: a local directory), and the partial
-// nodes below it, each through the 1 % rule.
+// nodes below it, each as a run completes a node (view.complete).
 func (t *Tally) ViewSubtreeEnd(prefix string) {
 	v := t.view
 	v.mu.Lock()
@@ -459,7 +604,6 @@ func (r *ViewRun) Add(row *Row) {
 			c = vsum{} // added once, time too, at the end (View), under its first name
 			link = true
 		}
-		r.pending += c.bytes
 		// An object with no node of its own (a key ending in '/', outside
 		// the origin) is a child of its deepest prefix.
 		if !leaf && !cut {
@@ -471,6 +615,9 @@ func (r *ViewRun) Add(row *Row) {
 		r.addOrdered(&c, leaf, link)
 	} else {
 		r.addUnordered(&c, leaf, link)
+	}
+	if c.children == 1 && c.hasNewest { // its own child, as the deepest node's
+		r.deepest().noteKid(row.Key, c.newest)
 	}
 }
 
@@ -503,14 +650,23 @@ func (r *ViewRun) popTo(n int, ending bool) {
 		if len(r.stack) > 1 {
 			p := &r.stack[len(r.stack)-2]
 			p.s.include(&f.s)
+			if f.s.hasNewest {
+				p.s.noteKid(f.name, f.s.newest)
+			}
 			if !f.left && !ending {
 				p.s.children++
 			}
 		}
-		if f.left || ending {
-			r.partial(f.name, f.depth, &f.s)
-		} else {
+		// An edge node is complete too once the run's interval covers it.
+		whole := !f.left && !ending ||
+			f.depth > 0 && (!f.left || r.from && r.lo < f.name) && (!ending || r.through && covers(f.name, "", r.hi, r.top))
+		if len(r.stack) > 1 && whole && (f.left || ending) {
+			r.stack[len(r.stack)-2].s.children++ // counted here, never as a partial node
+		}
+		if whole {
 			r.complete(f.name, f.depth, &f.s)
+		} else {
+			r.partial(f.name, f.depth, &f.s)
 		}
 		r.stack = r.stack[:len(r.stack)-1]
 	}
@@ -523,12 +679,12 @@ func (r *ViewRun) complete(name string, depth int, s *vsum) {
 	if int64(depth) > v.maxDepth.Load() {
 		return
 	}
-	if !s.pinned && (s.bytes == 0 || s.bytes < (v.seen.Load()+r.pending)/viewShare) {
-		r.stats.Dropped++
+	if !s.pinned && (s.bytes == 0 || depth < floorDepths && v.below(depth, name, s.bytes)) {
+		r.stats.Dropped++ // no larger than the viewKeep largest of its depth: no lock
 		return
 	}
 	v.mu.Lock()
-	if v.complete(name, depth, s, r.pending) {
+	if v.complete(name, depth, s) {
 		r.stats.Dropped++
 	}
 	v.mu.Unlock()
@@ -562,6 +718,13 @@ func (r *ViewRun) addUnordered(c *vsum, leaf, link bool) {
 		n.s.include(c)
 		n.s.pinned = n.s.pinned || link
 	}
+	if c.hasNewest {
+		for d, n := range r.cache[:prefixes] {
+			if d+1 < len(r.chain) {
+				n.s.noteKid(r.chain[d+1], c.newest)
+			}
+		}
+	}
 	deepest := &r.cache[prefixes-1].s
 	deepest.children += c.children
 	if leaf {
@@ -570,11 +733,21 @@ func (r *ViewRun) addUnordered(c *vsum, leaf, link bool) {
 	}
 }
 
-// Flush publishes the bytes added and owns the names the run still needs:
-// call it before the rows added are released.
+// deepest is the row's deepest prefix's sums in the run.
+func (r *ViewRun) deepest() *vsum {
+	if r.ordered {
+		return &r.stack[len(r.stack)-1].s
+	}
+	n := len(r.chain)
+	if len(r.cache) < n {
+		n = len(r.cache)
+	}
+	return &r.cache[n-1].s
+}
+
+// Flush owns the names the run still needs: call it before the rows added
+// are released.
 func (r *ViewRun) Flush() {
-	r.v.seen.Add(r.pending)
-	r.pending = 0
 	for i := range r.stack {
 		if f := &r.stack[i]; !f.owned {
 			f.name, f.owned = strings.Clone(f.name), true
@@ -588,6 +761,11 @@ func (r *ViewRun) End() {
 	r.Flush()
 	if r.ordered {
 		r.popTo(0, true)
+		if r.from && r.through {
+			r.v.mu.Lock()
+			r.v.cover(r.lo, r.hi, r.top, r.max)
+			r.v.mu.Unlock()
+		}
 	} else {
 		v := r.v
 		v.mu.Lock()
@@ -617,8 +795,8 @@ func (v *view) account() ViewStats {
 	return s
 }
 
-// View is the adaptive view's result: every node of at least 1 % of the
-// total, exact.
+// View is the adaptive view's result: the largest nodes of each depth,
+// exact.
 type View struct {
 	Primary string
 	Total   ViewNode
@@ -630,6 +808,9 @@ type View struct {
 	MaxDepth int
 	Lowered  bool
 	Stats    ViewStats
+	// Unreadable is the directories the source could not read
+	// (Tally.Unreadable), sorted.
+	Unreadable []string
 }
 
 // ViewNode is a node's sums. Children is the prefixes and objects directly
@@ -643,6 +824,10 @@ type ViewNode struct {
 	// microseconds, valid with HasNewest (max_last_modified).
 	Newest    int64
 	HasNewest bool
+	// Unreadable: a directory at or below it could not be read, so its
+	// sums leave out what that held.
+	Unreadable bool
+	recent     []kidTime // its children's newest times, the newest first (vsum.recent)
 }
 
 // View is the tally's adaptive view (Options.View): call it after the
@@ -690,6 +875,11 @@ func (t *Tally) View() *View {
 				all[strings.Clone(name)] = n
 			}
 			n.include(&s)
+			if d > 0 && s.hasNewest {
+				if p := all[parentOf(name)]; p != nil {
+					p.noteKid(name, s.newest)
+				}
+			}
 		}
 	}
 	total := all[v.origin]
@@ -700,16 +890,56 @@ func (t *Tally) View() *View {
 		if v.lowered && d == maxDepth {
 			c = -1
 		}
-		return ViewNode{Key: k, Depth: d, Bytes: n.bytes, Objects: n.objects, Missing: n.missing, Children: c, Newest: n.newest, HasNewest: n.hasNewest}
+		return ViewNode{Key: k, Depth: d, Bytes: n.bytes, Objects: n.objects, Missing: n.missing, Children: c, Newest: n.newest, HasNewest: n.hasNewest, recent: n.recent}
+	}
+	out.Unreadable = slices.Sorted(maps.Keys(v.unreadable))
+	below := func(k string) bool { // a directory unreadable at or below k
+		i, _ := slices.BinarySearch(out.Unreadable, k)
+		return i < len(out.Unreadable) && strings.HasPrefix(out.Unreadable[i], k)
 	}
 	out.Total = node(v.origin, total)
-	floor := total.bytes/viewShare + min(total.bytes%viewShare, 1) // 1 % of the total, rounded up
+	out.Total.Unreadable = len(out.Unreadable) > 0
+	// The viewKeep largest of each depth among the nodes held with bytes
+	// (complete ones were kept the same way; partial and pinned ones join
+	// them now): the same nodes however the listing ran. Then only those
+	// under a parent kept too: a node whose parent fell out of its depth's
+	// largest is in that parent's sums only. In byte order a parent comes
+	// before its children.
+	var depths [][]kent
 	for k, n := range all {
-		if k != v.origin && n.bytes > 0 && n.bytes >= floor {
-			out.Nodes = append(out.Nodes, node(k, n))
+		if k != v.origin && n.bytes > 0 {
+			d := v.depthOf(k)
+			for len(depths) <= d {
+				depths = append(depths, nil)
+			}
+			depths[d] = append(depths[d], kent{n.bytes, k})
 		}
 	}
-	slices.SortFunc(out.Nodes, func(a, b ViewNode) int { return cmp.Compare(a.Key, b.Key) })
+	var keys []string
+	for _, es := range depths {
+		slices.SortFunc(es, func(a, b kent) int {
+			switch {
+			case b.below(&a):
+				return -1
+			case a.below(&b):
+				return 1
+			}
+			return 0
+		})
+		for _, e := range es[:min(len(es), viewKeep)] {
+			keys = append(keys, e.name)
+		}
+	}
+	slices.Sort(keys)
+	held := map[string]bool{v.origin: true}
+	for _, k := range keys {
+		if held[parentOf(k)] {
+			held[k] = true
+			n := node(k, all[k])
+			n.Unreadable = strings.HasSuffix(k, "/") && below(k)
+			out.Nodes = append(out.Nodes, n)
+		}
+	}
 	return out
 }
 
@@ -724,7 +954,12 @@ type ViewRow struct {
 	// children's one more.
 	Level                   int
 	Bytes, Objects, Missing int64
-	// Newest and HasNewest are a node's (ViewNode); a fold line has none.
+	// Unreadable: a directory at or below the line's node (a fold: below a
+	// child it holds) could not be read.
+	Unreadable bool
+	// Newest and HasNewest are a node's (ViewNode), or a fold's the newest
+	// of what it holds (unknown, in a rare view, when the thirty-two
+	// newest children of its parent are all shown).
 	Newest    int64
 	HasNewest bool
 	// Fold: the rest of the parent's children, More of them (-1: an
@@ -734,79 +969,160 @@ type ViewRow struct {
 }
 
 // Select chooses the view's lines, at most rows (the total and every fold
-// line included, at least the total and its fold): the nodes by size,
-// largest first, each under its parent, while they fit. Every parent shown
-// with children lists its largest and then one fold line for the rest, the
-// number of them and their sums, so each level adds up to its parent (a
-// fold of no bytes is left out: the bytes still add up);
-// unlike dust, which shows the largest nodes of the whole tree whatever
-// their parents, and pdu, which hides what is below 1 % without saying so.
-// A prefix with one child shares its line with it (it holds the same
+// line included, at least the total and its fold), from the largest down.
+// The lines show, besides the total, nodes and the folds of the nodes
+// shown with children: a fold holds a parent's children not shown, how
+// many and their sums, so each level adds up to its parent (a fold of no
+// bytes is left out). Line by line, what is not broken down yet (a fold,
+// or a node shown whole) gives its largest child, a node a fold for the
+// rest too: the one whose child is the largest, or the fold whose bytes,
+// spread over all the lines, would still be. So the largest nodes come first, a
+// wide level of small ones is shown as far as it outweighs them, and the
+// lines fill down to the nodes held.
+// Unlike dust, which shows the largest nodes of the whole tree whatever
+// their parents, and pdu, which hides what is below 1 % without saying
+// so. A prefix with one child shares its line with it (it holds the same
 // bytes). The lines come in tree order: a parent first, its children by
 // size.
 func (v *View) Select(rows int) []ViewRow {
 	type sel struct {
 		n     *ViewNode
-		on    bool  // selected
-		kids  []int // its selected children
-		shown int64 // len(kids)
+		kids  []int // its children held, by size, the largest first
+		next  int   // kids[:next] are shown
 		bytes int64 // theirs
 	}
 	nodes := make([]sel, len(v.Nodes)+1)
-	nodes[0] = sel{n: &v.Total, on: true}
+	nodes[0] = sel{n: &v.Total}
 	index := map[string]int{v.Total.Key: 0}
-	order := make([]int, 0, len(v.Nodes))
 	for i := range v.Nodes {
 		nodes[i+1].n = &v.Nodes[i]
 		index[v.Nodes[i].Key] = i + 1
-		order = append(order, i+1)
 	}
 	bigger := func(a, b int) int {
 		x, y := nodes[a].n, nodes[b].n
 		if c := cmp.Compare(y.Bytes, x.Bytes); c != 0 {
 			return c
 		}
-		if c := cmp.Compare(x.Depth, y.Depth); c != 0 { // a parent before its child of the same size
-			return c
-		}
 		return cmp.Compare(x.Key, y.Key)
 	}
-	slices.SortFunc(order, bigger)
+	for i := 1; i < len(nodes); i++ {
+		p := &nodes[index[parentOf(nodes[i].n.Key)]]
+		p.kids = append(p.kids, i)
+	}
+	for i := range nodes {
+		slices.SortFunc(nodes[i].kids, bigger)
+	}
+	shown := func(s *sel) int64 { return int64(s.next) }
+	// hiddenUnreadable reports whether a child of s not shown holds a
+	// directory that could not be read.
+	hiddenUnreadable := func(s *sel) bool {
+		if !s.n.Unreadable {
+			return false
+		}
+		shownKey := map[string]bool{}
+		for _, k := range s.kids[:s.next] {
+			shownKey[nodes[k].n.Key] = true
+		}
+		i, _ := slices.BinarySearch(v.Unreadable, s.n.Key)
+		for ; i < len(v.Unreadable) && strings.HasPrefix(v.Unreadable[i], s.n.Key); i++ {
+			u := v.Unreadable[i]
+			if u == s.n.Key {
+				continue // s itself: its line is marked
+			}
+			j := strings.IndexByte(u[len(s.n.Key):], '/')
+			if !shownKey[u[:len(s.n.Key)+j+1]] {
+				return true
+			}
+		}
+		return false
+	}
 	// folds is the fold lines s needs: one when it lists children (the
-	// total always does) and some not shown hold bytes.
+	// total always does) and some not shown hold bytes or a directory that
+	// could not be read.
 	folds := func(s *sel) int {
-		if s.shown == 0 && s != &nodes[0] {
+		if s.next == 0 && s != &nodes[0] {
 			return 0
 		}
-		if (s.n.Children < 0 || s.shown < s.n.Children) && s.bytes < s.n.Bytes {
+		if (s.n.Children < 0 || shown(s) < s.n.Children) && (s.bytes < s.n.Bytes || hiddenUnreadable(s)) {
 			return 1
 		}
 		return 0
 	}
 	// joins reports whether s shares its line with its one child: a prefix
 	// (not the total) with exactly one child, shown.
-	joins := func(s *sel) bool { return s != &nodes[0] && s.n.Children == 1 && s.shown == 1 }
+	joins := func(s *sel) bool { return s != &nodes[0] && s.n.Children == 1 && s.next == 1 }
+	// What is not broken down yet: a shown node not expanded (its bytes)
+	// or a fold (its parent's bytes not shown), each by the node it breaks
+	// down. The next is the one whose next line is the largest, or the fold
+	// whose bytes, were they spread over every line of the view, would still
+	// make a larger line: a fold of many small children is broken down while
+	// it outweighs what the other lines would show.
+	type part struct {
+		bytes int64
+		i     int
+		fold  bool
+	}
+	var parts []part
+	if len(nodes[0].kids) > 0 {
+		parts = append(parts, part{v.Total.Bytes, 0, false})
+	}
 	used := 1 + folds(&nodes[0])
-	for _, i := range order {
-		p := &nodes[index[parentOf(nodes[i].n.Key)]]
-		if !p.on {
-			continue // its parent did not fit
+	for len(parts) > 0 {
+		best, worth := -1, int64(-1)
+		for j, pt := range parts {
+			s := &nodes[pt.i]
+			w := nodes[s.kids[s.next]].n.Bytes
+			if pt.fold {
+				w = max(w, pt.bytes/int64(max(rows, 1)))
+			}
+			if w > worth {
+				best, worth = j, w
+			}
 		}
-		before := folds(p)
-		p.shown++
-		p.bytes += nodes[i].n.Bytes
-		cost := 1 + folds(p) - before
-		if joins(p) {
+		pt := parts[best]
+		parts = append(parts[:best], parts[best+1:]...)
+		s := &nodes[pt.i]
+		before := folds(s)
+		c := s.kids[s.next]
+		s.next++
+		s.bytes += nodes[c].n.Bytes
+		cost := 1 + folds(s) - before
+		if joins(s) {
 			cost = 0 // on its parent's line
 		}
 		if used+cost > rows {
-			p.shown--
-			p.bytes -= nodes[i].n.Bytes
-			break
+			s.next--
+			s.bytes -= nodes[c].n.Bytes
+			continue // a cheaper part may still fit
 		}
 		used += cost
-		p.kids = append(p.kids, i)
-		nodes[i].on = true
+		if len(nodes[c].kids) > 0 {
+			parts = append(parts, part{nodes[c].n.Bytes, c, false})
+		}
+		if s.next < len(s.kids) {
+			parts = append(parts, part{s.n.Bytes - s.bytes, pt.i, true})
+		}
+	}
+	// foldNewest is the newest time among the children of s not shown:
+	// s's own when no child shown has it, else the first of its newest
+	// children (recent) not shown; unknown when those are all shown.
+	foldNewest := func(s *sel, shownNewest int64, shownTimed bool) (int64, bool) {
+		if !s.n.HasNewest {
+			return 0, false
+		}
+		if !shownTimed || s.n.Newest > shownNewest {
+			return s.n.Newest, true
+		}
+		names := map[string]bool{}
+		for _, i := range s.kids[:s.next] {
+			names[nodes[i].n.Key] = true
+		}
+		for _, k := range s.n.recent {
+			if !names[k.name] {
+				return k.at, true
+			}
+		}
+		return 0, false
 	}
 	var out []ViewRow
 	var walk func(i, level int)
@@ -820,19 +1136,26 @@ func (v *View) Select(rows int) []ViewRow {
 			s = &nodes[s.kids[0]]
 			name += s.n.Key[len(parentOf(s.n.Key)):]
 		}
-		out = append(out, ViewRow{Name: name, Level: level, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest})
-		f := ViewRow{Level: level + 1, Fold: true, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, More: s.n.Children - s.shown}
+		out = append(out, ViewRow{Name: name, Level: level, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
+			Unreadable: s.n.Unreadable})
+		f := ViewRow{Level: level + 1, Fold: true, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, More: s.n.Children - shown(s)}
 		if s.n.Children < 0 {
 			f.More = -1
 		}
-		slices.SortFunc(s.kids, bigger)
-		for _, k := range s.kids {
+		var shownNewest int64
+		shownTimed := false
+		for _, k := range s.kids[:s.next] {
 			walk(k, level+1)
 			f.Bytes -= nodes[k].n.Bytes
 			f.Objects -= nodes[k].n.Objects
 			f.Missing -= nodes[k].n.Missing
+			if kn := nodes[k].n; kn.HasNewest && (!shownTimed || kn.Newest > shownNewest) {
+				shownNewest, shownTimed = kn.Newest, true
+			}
 		}
 		if folds(s) > 0 {
+			f.Newest, f.HasNewest = foldNewest(s, shownNewest, shownTimed)
+			f.Unreadable = hiddenUnreadable(s)
 			out = append(out, f)
 		}
 	}

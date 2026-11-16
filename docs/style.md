@@ -140,7 +140,10 @@ sentences and link to that owner.
 | Go output formats and filters | `docs/output.md`, `docs/filters.md` |
 | Go sources, credentials and endpoints | `docs/sources/` (one page per source) |
 | Go exit codes, run report and log events | `docs/reference/` |
-| Go operations and recovery | `docs/running.md` |
+| Go operations and recovery | `docs/running.md` (one run) and the pages it links: `docs/size-a-run.md`, `docs/watch-a-run.md`, `docs/resume-and-refresh.md`, `docs/all-versions.md`; scheduled runs and bucket destinations: `docs/production.md` |
+| Go known limits | `docs/troubleshooting.md` |
+| Go `swath du` totals | `docs/totals.md` |
+| Querying and verifying a dataset | `docs/query.md` |
 | Go schemas and dataset layout | `docs/dataset.md` |
 | Go engine and providers | `docs/internals/` |
 | Go dated measurements | `docs/internals/measurements.md` |

@@ -274,7 +274,7 @@ and all 64 workers listed pieces of it.
   lists the rest alone, one page per round trip.
 - **The store.** swath shares one adaptive request limit across its workers. It reduces concurrency under
   sustained throttling and recovers as the answers improve
-  ([throttling](../../docs/running.md#throttling)). In the NOAA run requests in flight averaged 52.3 of 64.
+  ([throttling](../../docs/watch-a-run.md#throttling)). In the NOAA run requests in flight averaged 52.3 of 64.
 - **The output.** Rows leave through one sorted stream and the part writers, so a run that writes an
   inventory can wait on its output (next section).
 
@@ -300,7 +300,7 @@ that peels a little off the front makes a chain; one that hands out half or more
 
 The request count has a floor: one request per page of keys. The NOAA run made 39,016 requests for 37,064,981
 objects, about 1.05 per 1,000. On S3, a billion objects require at least a million listing requests
-([cost](../../docs/running.md#cost)). A scheduled inventory (S3 Inventory, GCS Storage Insights, Azure Blob
+([cost](../../docs/size-a-run.md#cost)). A scheduled inventory (S3 Inventory, GCS Storage Insights, Azure Blob
 inventory) can cost less, when a daily or weekly report is fresh enough
 ([when swath fits](../../docs/start-here.md#when-swath-fits)).
 
@@ -400,7 +400,7 @@ spilled ahead of the output can be sealed as certified spill files, each holding
 interval as the run listed them, recorded once its bytes are on disk. A resume replays those instead of
 listing them again. The tests stop a run at every crash point, including with a real SIGKILL, and resume it.
 Crash tests compare rows, and compare part bytes when build, encoder path and time-cut conditions permit
-([stopping and resuming](../../docs/running.md#stopping-and-resuming)).
+([stopping and resuming](../../docs/resume-and-refresh.md#stopping-and-resuming)).
 
 A listing is not a point-in-time snapshot. swath publishes the complete result of the live listing it
 performed: an object written or deleted while it runs may or may not be in it.
@@ -420,7 +420,7 @@ With those counts the run lists the bucket front to back. Tiles are taken in key
 admission toward eight million rows at the output, or fewer when the disk or the sort buffer holds less; it is
 not a strict storage bound. Rows listed ahead of the output, and the spill they need, stay near that window
 instead of growing with the bucket. The splits stay adaptive: a region that grew since the previous run is
-split as on any run ([seeding a refresh](../../docs/running.md#seeding-a-refresh-from-the-previous-dataset)).
+split as on any run ([seeding a refresh](../../docs/resume-and-refresh.md#seeding-a-refresh-from-the-previous-dataset)).
 
 <figure class="swath-figure">
 <svg viewBox="0 0 480 128" role="img" aria-labelledby="fg-window-title fg-window-desc">
@@ -452,7 +452,7 @@ complete, so its total is final. The prefixes at a run's two ends are partial; t
 runs and are complete when the listing ends. A complete prefix below 1% of the bytes seen so far is dropped,
 since it is below 1% of the total too; of the rest, the view keeps the 100 largest at each depth. A dropped
 prefix's bytes are already counted in its parent's. Each parent's other children are folded into one counted
-`(N more)` line, so every level adds up ([the view](../../docs/commands/swath-du.md#the-view)).
+`(N more)` line, so every level adds up ([the view](../../docs/totals.md#the-view)).
 
 <figure class="swath-figure">
 <svg viewBox="0 0 480 136" role="img" aria-labelledby="fg-du-title fg-du-desc">

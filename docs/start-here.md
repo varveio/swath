@@ -12,7 +12,7 @@ A source is a local or mounted directory, `s3://bucket/prefix`, `gs://bucket/pre
 |---|---|---|
 | Find where the space went | `swath du -d 1 SOURCE` | [Your first inventory](first-inventory.md) |
 | List every entry, or export rows for a script | `swath list SOURCE`, or `-o rows.tsv.zst` | [Output](output.md) |
-| Save a sorted Parquet inventory to query later | `swath list SOURCE -o DIR` | [The swath dataset](dataset.md) |
+| Save a sorted Parquet inventory to query later | `swath list SOURCE -o DIR` | [Query an inventory](query.md) |
 
 New to swath? [Install](install.md) it, then follow [Your first inventory](first-inventory.md) on a local
 directory. It needs no account and no credentials.

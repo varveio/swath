@@ -317,9 +317,15 @@ export default defineConfig({
         {
           text: 'Tasks',
           items: [
-            { text: 'Run large listings', link: '/docs/running' },
-            { text: 'Run on a schedule', link: '/docs/production' },
+            { text: 'Total a source', link: '/docs/totals' },
+            { text: 'Query an inventory', link: '/docs/query' },
             { text: 'Filter rows', link: '/docs/filters' },
+            { text: 'Run large listings', link: '/docs/running' },
+            { text: 'Size a run', link: '/docs/size-a-run' },
+            { text: 'Watch and tune a run', link: '/docs/watch-a-run' },
+            { text: 'Stop, resume and refresh', link: '/docs/resume-and-refresh' },
+            { text: 'List every version', link: '/docs/all-versions' },
+            { text: 'Run on a schedule', link: '/docs/production' },
           ],
         },
         {
@@ -347,7 +353,7 @@ export default defineConfig({
                 { text: 'swath completion', link: '/docs/commands/swath-completion' },
               ],
             },
-            { text: 'Dataset', link: '/docs/dataset' },
+            { text: 'Dataset format', link: '/docs/dataset' },
             { text: 'Output', link: '/docs/output' },
             { text: 'Exit codes', link: '/docs/reference/exit-codes' },
             { text: 'Run report', link: '/docs/reference/run-report' },

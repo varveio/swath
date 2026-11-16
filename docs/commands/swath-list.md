@@ -21,10 +21,7 @@ receives a [swath dataset](../dataset.md): sorted Parquet parts and a `manifest.
 writes the dataset straight to Google Cloud Storage, S3 or Azure Blob Storage ([A dataset in a bucket](../dataset.md#a-dataset-in-a-bucket)): its
 parts are uploaded as they close, its manifest is created only if the prefix holds none, and `DIR` is a local
 work directory for the lock, the journal and spill, which [`swath resume DIR`](swath-resume.md) continues. The
-destination has its own credentials (GCS: `--output-gcs-credentials-file`, else Application Default
-Credentials; S3: `--output-s3-profile`, else the AWS SDK's chain, always signed; Azure:
-`--output-azure-sas-token`, never recorded, else Entra ID), region (`--output-s3-region`) and endpoint
-(`--output-endpoint-url`: path-style for S3; for Azure the account is its first path segment). A name ending in
+destination has its own credentials, region and endpoint ([Writing to a bucket](../production.md#writing-to-a-bucket)). A name ending in
 an extension swath does not write (`.csv`, `.json`, `.txt`, a bare `.gz`, ...), `--overwrite` of a bucket
 prefix and a destination that overlaps a `gs://`, `s3://` or `az://` SOURCE are refused.
 
@@ -37,7 +34,7 @@ in a listing of its parent: at the `--metadata` tier, and a symbolic link as the
 
 A dataset directory must be new or empty; `--overwrite` replaces a previous swath dataset there, and
 nothing else, keeping it readable until the new one commits ([Overwrite and
-refresh](../running.md#overwrite-and-refresh)). A text file is written beside its name and renamed into place when complete, so a failed run
+refresh](../resume-and-refresh.md#overwrite-and-refresh)). A text file is written beside its name and renamed into place when complete, so a failed run
 leaves the previous file as it was; it always replaces the file, with or without `--overwrite`. A reader that closes stdout early (`| head`) ends the run with exit 0.
 
 Only a dataset run of an object store keeps a journal: if it is interrupted, [`swath resume`](swath-resume.md)
@@ -742,8 +739,8 @@ A dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o a
 lock, the journal, spill, and `remote/`: the allocated names, the claim receipts, the candidate manifest),
 `DIR/error.json` and, once committed, `DIR/commit.json`.
 
-[The swath dataset](../dataset.md) describes the parts and the manifest; [Running swath](../running.md) the workspace
-and its disk.
+[The swath dataset format](../dataset.md) describes the parts and the manifest; [Stop, resume and
+refresh](../resume-and-refresh.md#stopping-and-resuming) the workspace, and [Size a run](../size-a-run.md#disk) its disk.
 
 ## See also
 
