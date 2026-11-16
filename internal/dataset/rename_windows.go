@@ -7,6 +7,7 @@ package dataset
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,9 @@ var replaceRetry = 2 * time.Second
 // not finished): the rename fails with ERROR_ACCESS_DENIED or
 // ERROR_SHARING_VIOLATION and nothing has changed. Such a failure is
 // retried with backoff until replaceRetry has passed (checked before every
-// attempt), then returned.
+// attempt), then returned with a hint naming the likely cause (a reader of
+// the dataset during an --overwrite holds a part, and a directory holding
+// an open file cannot be renamed).
 func renameFile(old, new string) error {
 	from, err := movePath(old)
 	if err != nil {
@@ -46,8 +49,12 @@ func renameFile(old, new string) error {
 		if err == nil {
 			return nil
 		}
-		if !(errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)) || !time.Now().Add(wait).Before(deadline) {
+		held := errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+		if !held {
 			return &os.LinkError{Op: "rename", Old: old, New: new, Err: err}
+		}
+		if !time.Now().Add(wait).Before(deadline) {
+			return fmt.Errorf("%w (another program may hold it, or a file in it, open: close that program and run again)", &os.LinkError{Op: "rename", Old: old, New: new, Err: err})
 		}
 		time.Sleep(wait)
 		wait = min(2*wait, 100*time.Millisecond)

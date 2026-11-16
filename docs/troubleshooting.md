@@ -137,6 +137,13 @@ swath: journaled output needs directory syncs, which the output's filesystem ref
 Put the output on a local NTFS volume, or list without a journal: `swath diag list --no-journal` writes the
 dataset, and an interrupted run starts over.
 
+On Windows a file another program holds open cannot be replaced, and a directory holding one cannot be
+renamed. A run that must replace one (`--overwrite` retiring a dataset whose part a reader has open, a
+`--report` file open in an editor) waits up to two seconds, then fails naming the file, with
+`another program may hold it, or a file in it, open: close that program and run again`. The previous
+dataset stays readable; after an `--overwrite` whose installation was cut short, `swath show DIR` says so and
+`swath resume DIR` installs the replacement.
+
 ## `-o` names a format swath does not write
 
 ```text
