@@ -365,7 +365,9 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 		t.Fatalf("exited after %s without the forced exit: %s", d, stderr.String())
 	}
 	var o outcome
-	readJSON(t, filepath.Join(dir, errorName), &o)
+	if b, err := os.ReadFile(filepath.Join(dir, errorName)); err != nil || json.Unmarshal(b, &o) != nil {
+		t.Fatalf("error.json after the forced exit: %v %q; stderr: %s", err, b, stderr.String())
+	}
 	if o.Class != "deadline" || o.ExitCode != exitDeadline {
 		t.Fatalf("error.json after the forced exit: %+v", o)
 	}
