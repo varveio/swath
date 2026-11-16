@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: on Windows, dataset runs of S3, GCS and Azure Blob sources keep their journal and `swath resume`
+  continues them, as on Linux and macOS: directories are synced with `FlushFileBuffers` and renames are
+  written through. A run whose output's filesystem refuses a directory sync is refused when it starts, with
+  the filesystem's error; it was refused on every Windows output.
 - Docs: the user guide is split by the question a reader asks. `running.md` keeps one run's command, outcome and
   limits and links to Size a run, Watch and tune a run, Stop, resume and refresh, and List every version; known
   limits moved to Troubleshooting. Query an inventory (DuckDB, pandas, Spark, verifying) is apart from the dataset

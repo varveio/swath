@@ -252,16 +252,15 @@ Linux arm64 alone cannot cover those differences.
 Where a platform cannot run a case the test skips with
 the platform behavior as its reason, never silently:
 
-- **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync; #295
-  tracks a write-through mode), so tests of journaled runs, crash recovery, resume and the durable spill call
-  `datasettest.RequireJournal` and skip: `TestCrashMatrix`, the `listing` `TestDurable*` matrices among them.
-  The `order` durable-spill unit tests open the cache directly, with no journaled run in between, and run on
-  Windows too. Their directory listings go through the `os.Root`, never `root.FS()`, whose slash-only paths
-  reject `order.DurableDir` there (#301). A test that checks a directory is empty lists it through a helper that
-  fails on a listing error (`readDir`, `durableEntries`), so a failed listing never passes as an empty one. The
-  process-kill tests (`cmd/swath` `sigkill_test.go`, `forcedexit_test.go`, `segments_durable_test.go`,
-  `durable_campaign_test.go`) are not built there (`//go:build !windows`). Replay fixtures that only need a
-  dataset list it unjournaled. Windows also refuses to rename a directory holding an open file (a running
+- **Windows** runs the journaled, crash-recovery, resume and durable-spill tests as Linux does
+  (`TestCrashMatrix`, the `listing` `TestDurable*` matrices, the `cmd/swath` SIGKILL matrices of
+  `sigkill_test.go` and `segments_durable_test.go`, where a process that kills itself exits with code 137:
+  `selfKilled`). The `order` durable-spill tests' directory listings go through the `os.Root`, never
+  `root.FS()`, whose slash-only paths reject `order.DurableDir` there (#301). A test that checks a directory
+  is empty lists it through a helper that fails on a listing error (`readDir`, `durableEntries`), so a failed
+  listing never passes as an empty one. `forcedexit_test.go` (SIGTERM, nonblocking pipes) and
+  `durable_campaign_test.go` (a shell-script child; the campaign is opt-in) are not built there
+  (`//go:build !windows`). Windows also refuses to rename a directory holding an open file (a running
   output cannot be replaced, the sort-fixture replacement cases), resets a connection closed with unread
   input (the replay diff's residual cases), has no permission bit that hides a directory, refuses `<` and
   `>` in names, needs privileges for symbolic links, has no SIGTERM to send, and its monotonic clock ticks
@@ -269,7 +268,7 @@ the platform behavior as its reason, never silently:
 - **macOS and Windows** refuse names that are not UTF-8 (APFS, NTFS): the byte-for-byte name cases run on
   Linux only.
 
-macOS runs the crash, durable and kill matrices without `-race`.
+macOS and Windows run the crash, durable and kill matrices without `-race`.
 
 The object-file S3 dataset test creates an unsynced local fixture when directory sync is unavailable.
 It tests remote reading, verification, ranges and listing, not durable publication; those assertions

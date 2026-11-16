@@ -261,13 +261,15 @@ Block ids are fixed-width and the upload's own (a random nonce and the block's i
 name never replace each other's staged blocks. Nothing remote
 is deleted during recovery; the crashed attempts' orphans go at the commit.
 
-On Windows a journaled dataset run of an S3, GCS or Azure Blob source is refused with
-`listing.ErrUnenforced`, whether its destination is local or in S3, GCS or Azure Blob. `openJournal`
-checks `dataset.DirSyncEnforced` before taking the output lock: a bucket destination still needs the
-local `--work-dir` entries synced, so direct uploads do not bypass the refusal. Recovery and bucket
-finalization through resume are refused too. The CLI handles an already committed, finalized dataset
-before reaching this guard: there is no work to continue. A local filesystem source or an explicit `--no-journal`
-diagnostic run can write locally or to a bucket without resume. Text output has no journal and works.
+A journaled run whose output (the work directory, for a bucket destination) is on a filesystem that
+refuses a directory sync is refused with `listing.ErrUnenforced` and the filesystem's error, whether its
+destination is local or in S3, GCS or Azure Blob: `openJournal` probes the nearest existing directory on the
+output's path once (`dataset.CheckDirSync`) before taking the output lock, and a bucket destination still
+needs the local `--work-dir` entries synced, so direct uploads do not bypass the refusal. Recovery and
+bucket finalization through resume are refused the same way. The CLI handles an already committed,
+finalized dataset before reaching this guard: there is no work to continue. A local filesystem source or an
+explicit `--no-journal` diagnostic run can write there, without resume. Only Windows probes (below); on Linux
+and macOS a directory opened for reading is fsynced, and the probe passes.
 
 **Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
 (the flag, or for GCS the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and
@@ -555,7 +557,7 @@ tail as JSON lines.
   (`TestDiskFullExits74`). The kernel's behavior after a failed fsync
   (pages it may drop or mark clean) is not modeled.
 - **Power loss or a kernel crash.** Recovery holds when the filesystem honors `fsync` on files and
-  directories (ext4, XFS and APFS do). Before a journal record names a part:
+  directories (ext4, XFS and APFS do), or on Windows `FlushFileBuffers` on both (below). Before a journal record names a part:
   - the part file is synced, and so is its claimed name in `.swath/parts/`;
   - `data/` and `.swath/` were created with their entries in the output directory synced;
   - the journal frame is synced before `Append` returns;
@@ -563,16 +565,27 @@ tail as JSON lines.
   - recovery syncs the journal before renaming on its strength, and `data/` before removing temporary parts.
 
   Nothing tests this: SIGKILL cannot show power-loss behavior.
-- **Refused on Windows:** the output lock is enforced (`LockFileEx`, exclusive and failing at once, with the
-  same identity checks as on Unix), but directories cannot be synced (`dataset.DirSyncEnforced` is false;
-  `syncDir` is a no-op there). A process crash loses nothing; after a power loss NTFS replays its metadata
-  log to a consistent state that need not include the latest creations and renames, so an acknowledged
-  part could lose its name. A journaled run and a resume that reaches the engine are therefore refused with
-  `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
-  The seekparquet module's own publication refuses the same way (`local.ErrDirSyncUnsupported` unless
-  `Ops.AllowUnsynced`); swath does not publish through it (above).
-  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. CI's
-  `go-xos` job runs the suite on Windows (`TestWindowsLock` included); the journaled-run tests skip there
-  (`datasettest.RequireJournal`). `Replace` retries its rename there for up to two seconds while another
+- **Windows:** the contract holds through the same steps, with Windows' calls. A file's sync is `File.Sync`,
+  `FlushFileBuffers`. A directory's sync (`dataset.SyncDir`, `SyncDirIn`) is `FlushFileBuffers` on the
+  directory: a handle from `os.Open` or the output's `os.Root` has no write access, which the flush needs, so
+  the directory is opened again from that handle (an `NtCreateFile` relative to it with an empty name, as
+  `ReOpenFile` does) with `FILE_APPEND_DATA`, the least access the flush accepts (on a directory,
+  `FILE_ADD_SUBDIRECTORY`, which whoever could create the output has). swath relies on that flush for a
+  directory's creations and renames as it relies on a directory's fsync on Unix. The renames by path
+  (`dataset.Replace`: `manifest.json`, `run.json`, the outcome files; `Publish`; a replacement's
+  installation) are `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` and `MOVEFILE_WRITE_THROUGH`, which
+  returns once the move is on disk; the renames through the locked output's `os.Root` (a part's claim and
+  publication, recovery, the remote state) are made durable by the directory sync that follows each, as on
+  Unix. A filesystem that refuses the directory's flush is found by the probe
+  before the run writes anything, and a journaled run or resume there is refused with
+  `listing.ErrUnenforced` and its error (`TestUnenforcedPlatformRefusesJournal`), never run without the
+  syncs. The output lock is enforced (`LockFileEx`, exclusive and failing at once, with the same identity
+  checks as on Unix). The seekparquet module's own publication still refuses on Windows
+  (`local.ErrDirSyncUnsupported` unless `Ops.AllowUnsynced`); swath does not publish through it (above).
+  CI's `go-xos` job runs the whole suite on Windows: the crash matrices
+  (`TestCrashMatrix`, `TestDurableKillMatrix`, `TestDurableRepeatedRecovery`), resume and recovery, and the
+  process-kill matrices (`TestSIGKILLAtEveryPoint`, `TestSIGKILLDurableSpill`, `TestSIGKILLInSegments`),
+  where a process that kills itself terminates with exit code 137, Windows having no SIGKILL. As on Linux,
+  nothing tests a power loss. `Replace` retries its rename there for up to two seconds while another
   handle holds the target (`ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`: a reader of the report, a
   concurrent replacement), which leaves the old file in place until it succeeds.

@@ -125,6 +125,18 @@ A directory that holds an interrupted run is continued with `swath resume DIR`, 
 swath: inventory: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
 ```
 
+A dataset run of an S3, GCS or Azure Blob source keeps a journal, and it and `swath resume` need an output
+directory (for a bucket destination, the `--work-dir`) on a filesystem that syncs directories. On Windows
+swath checks this when the run starts, and where the filesystem refuses, the run is refused before it writes
+anything, the filesystem's error in parentheses:
+
+```text
+swath: journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; write the output on another filesystem, or list with swath diag list --no-journal (not resumable) (...)
+```
+
+Put the output on a local NTFS volume, or list without a journal: `swath diag list --no-journal` writes the
+dataset, and an interrupted run starts over.
+
 ## `-o` names a format swath does not write
 
 ```text
@@ -145,14 +157,6 @@ closing lines say `no file written`. After `--max-duration` the last line says w
 swath: deadline: --max-duration reached (swath resume inv --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
 swath: deadline: --max-duration reached (it cannot be resumed: run it again with a longer --max-duration, or without one)
 ```
-
-On Windows, journaled dataset runs of S3, GCS and Azure Blob sources are refused for both local and
-bucket destinations: a bucket destination still keeps its journal in a local `--work-dir`, whose
-directory entries cannot be synced. `swath resume DIR` cannot continue a run or finish a bucket commit's
-cleanup there; the CLI still handles an already committed, finalized dataset as having no work to
-continue. Use Linux or macOS for recovery. Local filesystem scans can write datasets locally or
-to a bucket without resume; text output and diagnostic `swath diag list --no-journal` runs also work
-([platform limits](install.md#platforms)).
 
 ## The resume is refused
 
@@ -307,11 +311,10 @@ cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the rep
 
 The limits of this build, and what has not been measured:
 
-- **Windows:** journaled object-store dataset runs, recovery and bucket commit cleanup through resume
-  are refused for local and bucket output: directory sync is unavailable, so a power loss could lose
-  acknowledged work. The output lock holds. Filesystem runs work without resume; an already committed,
-  finalized dataset takes the CLI's no-work path. See [platforms](install.md#platforms). The test suite
-  runs there in CI; nothing is measured there.
+- **Windows:** journaled runs and resume work as on Linux and macOS, on an output whose filesystem
+  syncs directories (swath checks when the run starts:
+  [the output directory is refused](#the-output-directory-is-refused)). The test suite, its crash and kill
+  matrices included, runs there in CI; nothing is measured there.
 - **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories

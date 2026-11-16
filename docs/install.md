@@ -131,8 +131,6 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 ```
 
-On Windows, dataset runs of S3, GCS and Azure Blob sources are refused ([platforms](#platforms)).
-
 ## Container images
 
 Each release publishes a multi-arch image for linux/amd64 and linux/arm64, built from the same binaries:
@@ -197,9 +195,10 @@ supported yet: the module points its nested `reader` and `objfile` modules at lo
 
 ## Platforms
 
-Release binaries run on Linux (x86-64 and ARM64), macOS (Intel and Apple silicon) and Windows (x86-64). On
-Windows, local listings and text output work, but dataset runs of S3, GCS and Azure Blob sources and
-`swath resume` are refused: they need directory sync, which Windows does not provide
+Release binaries run on Linux (x86-64 and ARM64), macOS (Intel and Apple silicon) and Windows (x86-64),
+with the same commands everywhere: dataset runs of S3, GCS and Azure Blob sources keep their journal and
+`swath resume` continues them on all three. A journaled run needs an output on a filesystem that syncs
+directories; on Windows swath checks this when the run starts and refuses one that cannot
 ([known limits](troubleshooting.md#known-limits)).
 
 ## Shell completion

@@ -1,8 +1,6 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !windows
-
 package main
 
 import (
@@ -13,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -206,7 +203,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 			}
 			return
 		}
-		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+		if err == nil || !selfKilled(cmd.ProcessState) {
 			t.Fatalf("%s: not killed at %s (not reached): %v\n%s", at, kill, err, out)
 		}
 	}

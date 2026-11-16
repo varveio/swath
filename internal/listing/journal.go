@@ -38,7 +38,7 @@ var (
 	// filesystem refuses a directory sync (dataset.CheckDirSync): after a
 	// power loss the journal or a published part's name may be missing
 	// although its record was acknowledged.
-	ErrUnenforced = errors.New("journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; use --no-journal (not resumable) or an output on another filesystem")
+	ErrUnenforced = errors.New("journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; write the output on another filesystem, or list with swath diag list --no-journal (not resumable)")
 	// ErrAmbiguousTail: the journal's last record reads as torn, so its
 	// part was set aside (DIR/.swath/suspect), and the source no longer
 	// reproduces that part. The record may have been acknowledged and
