@@ -7,6 +7,7 @@ package localfs
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -33,18 +34,20 @@ func statAt(dirfd int, name string, f Fields, r *Entry) error {
 	return nil
 }
 
-// readlinkAt reads a symlink target relative to dirfd.
-func readlinkAt(dirfd int, name string) (string, error) {
-	for size := 256; ; size *= 2 {
-		buf := make([]byte, size)
-		n, err := unix.Readlinkat(dirfd, name, buf)
-		if err != nil {
-			return "", err
-		}
-		if n < size {
-			return string(buf[:n]), nil
-		}
+// statEntry fills r from d.Info (portable engine): an lstat of the full
+// path, or what os.File.ReadDir already read for an entry the filesystem
+// did not type (DT_UNKNOWN), with no call. A path past the length limit is
+// statted relative to the open directory instead.
+func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
+	fi, err := d.Info()
+	if tooLong(err) {
+		return statAt(int(dir.Fd()), d.Name(), Stat, r)
 	}
+	if err != nil {
+		return err
+	}
+	fromFileInfo(r, fi)
+	return nil
 }
 
 // dtKinds maps d_type values (0..15) to kinds; unlisted values are unknown.

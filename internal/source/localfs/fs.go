@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/longpath"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -91,11 +93,65 @@ type Stats struct {
 	// leave out by their key alone (Provider.leftOut): not unreadable.
 	FilteredStatErrors int64           `json:"filtered_stat_errors"`
 	Pruning            *filter.Pruning `json:"pruning,omitempty"`
+	// KeyTooLong counts entries left out because their key passes
+	// maxKeyBytes (a directory with its subtree): unreadable.
+	KeyTooLong int64     `json:"key_too_long"`
+	LongPaths  LongPaths `json:"long_paths"`
 }
+
+// LongPaths account for the paths the kernel refused by their length
+// (ENAMETOOLONG: past PATH_MAX, 4,096 bytes on Linux, 1,024 on macOS),
+// opened again below the root one name at a time (openLong). A path that
+// fits is never counted.
+type LongPaths struct {
+	Attempts int64 `json:"attempts"`
+	Opened   int64 `json:"opened"`
+	// Failed counts the attempts that failed, by reason: not_found,
+	// permission, not_directory, symlink (a component replaced by a
+	// symbolic link, never followed), name_too_long (one name past the
+	// filesystem's limit), other_device (--one-file-system: a component
+	// on another device; the directory is not walked) or other.
+	Failed       map[string]int64 `json:"failed,omitempty"`
+	MaxDepth     int64            `json:"max_depth"`      // the most names below the root opened for one directory
+	MaxPathBytes int64            `json:"max_path_bytes"` // the longest path attempted
+}
+
+func (l *LongPaths) attempt(depth, path int) {
+	l.Attempts++
+	l.MaxDepth = max(l.MaxDepth, int64(depth))
+	l.MaxPathBytes = max(l.MaxPathBytes, int64(path))
+}
+
+func (l *LongPaths) fail(reason string) {
+	if l.Failed == nil {
+		l.Failed = map[string]int64{}
+	}
+	l.Failed[reason]++
+}
+
+func (l *LongPaths) add(o *LongPaths) {
+	l.Attempts += o.Attempts
+	l.Opened += o.Opened
+	for k, v := range o.Failed {
+		if l.Failed == nil {
+			l.Failed = map[string]int64{}
+		}
+		l.Failed[k] += v
+	}
+	l.MaxDepth = max(l.MaxDepth, o.MaxDepth)
+	l.MaxPathBytes = max(l.MaxPathBytes, o.MaxPathBytes)
+}
+
+// maxKeyBytes is the longest key a listing emits. The kernel takes a path
+// of at most PATH_MAX in one call, but a tree may go deeper (openLong); the
+// cap keeps a key within what the rest of the pipeline is sized for (the
+// writer cuts a page by its keys' bytes as well as its rows). A longer
+// entry is left out and counted (KeyTooLong), a directory with its subtree.
+const maxKeyBytes = 32 << 10
 
 // Errors is the sum of the error counters.
 func (s *Stats) Errors() int64 {
-	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe
+	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe + s.KeyTooLong
 }
 
 // ErrorSamples are the first entries the listing could not read, each
@@ -135,6 +191,8 @@ func (s *Stats) add(o *Stats) {
 	s.OtherDevice += o.OtherDevice
 	s.PrunedDirs += o.PrunedDirs
 	s.FilteredStatErrors += o.FilteredStatErrors
+	s.KeyTooLong += o.KeyTooLong
+	s.LongPaths.add(&o.LongPaths)
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -194,14 +252,15 @@ var _ source.Provider[Range, Entry] = (*Provider)(nil)
 // New validates root and returns a provider for it. A root that is not a
 // directory (a file, as du and ls take one) lists as its one entry, keyed
 // by its name. A root directory that cannot be opened is an error, as one
-// that does not exist: a listing of it would hold nothing.
+// that does not exist: a listing of it would hold nothing. A root path
+// past the kernel's length limit is resolved name by name (longpath).
 func New(root string, opt Options) (*Provider, error) {
-	fi, err := os.Stat(root)
+	fi, err := longpath.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 	if fi.IsDir() {
-		d, err := os.Open(root)
+		d, err := longpath.Open(root)
 		if err != nil {
 			return nil, err
 		}
@@ -228,6 +287,7 @@ func (p *Provider) Stats() Stats {
 	defer p.mu.Unlock()
 	s := p.stats
 	s.Samples = slices.Clone(s.Samples)
+	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	return s
 }
 
@@ -263,14 +323,21 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 }
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row. The run's own output (Skip) is
-// dropped, a directory with its subtree.
+// as a child range right after its DIR row. The run's own output (Skip) and
+// an entry whose key passes maxKeyBytes are dropped, a directory with its
+// subtree.
 func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
 		row := &rows[i]
-		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
-			st.Skipped++
+		output, long := len(p.opt.Skip) > 0 && p.opt.Skip[row.Key], len(row.Key) > maxKeyBytes
+		if output || long {
+			if long {
+				name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
+				st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
+			} else {
+				st.Skipped++
+			}
 			if err := e.Rows(rows[start:i]); err != nil {
 				return err
 			}
@@ -325,7 +392,8 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 // expandFile lists a root that is not a directory: its one row, keyed by
 // its name, read as its directory's listing reads the entry: at the run's
 // tier, a symbolic link as itself (New's stat followed it only to find
-// that it does not name a directory).
+// that it does not name a directory). A path the kernel refuses by its
+// length is read relative to its directory (statLong, readlinkLong).
 func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	row := Row{Key: filepath.Base(p.root)}
 	var err error
@@ -341,12 +409,19 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 			fromFileInfo(&row.Data, fi)
 		}
 	}
+	if tooLong(err) {
+		err = statLong(p.root, p.opt.Fields, &row.Data, st)
+	}
 	if err != nil {
 		st.note(&st.StatErrors, p.root, err)
 		return nil
 	}
 	if row.Data.Kind == KindSymlink && p.opt.LinkTarget && p.opt.Fields != Names {
-		if t, err := os.Readlink(p.root); err == nil {
+		t, err := os.Readlink(p.root)
+		if tooLong(err) {
+			t, err = readlinkLong(p.root, st)
+		}
+		if err == nil {
 			row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink
 		} else {
 			st.note(&st.ReadlinkErrors, p.root, err)
@@ -361,15 +436,15 @@ func sortRows(rows []Row) {
 	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 }
 
-// expandPortable lists a directory with os.File.ReadDir and Lstat.
+// expandPortable lists a directory with os.File.ReadDir and a stat per
+// entry (statEntry).
 func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	f, ok := openChecked(r, st)
+	f, ok, err := p.openChecked(ctx, r, st)
 	if !ok {
-		p.unreadableDir(r)
-		return nil
+		return err
 	}
 	st.DirsRead++
-	defer f.Close() // statEntry stats relative to it on darwin
+	defer f.Close() // statEntry and readlinkIn read relative to it (Linux, macOS)
 	ents, err := f.ReadDir(-1)
 	if err != nil {
 		st.note(&st.ReadErrors, r.path, err)
@@ -398,7 +473,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 				continue
 			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
-				if t, err := os.Readlink(path); err == nil {
+				if t, err := readlinkIn(f, path, name); err == nil {
 					row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink
 				} else {
 					st.note(&st.ReadlinkErrors, path, err)
@@ -450,24 +525,37 @@ func (p *Provider) unreadableDir(r Range) {
 // openChecked opens a directory by path. Below the root it then checks that
 // the path is still a real directory (Lstat: not a symlink) and the same
 // object as the opened file (fstat): best-effort protection against a
-// directory swapped for a symlink between listing and open.
-func openChecked(r Range, st *Stats) (*os.File, bool) {
-	f, err := os.Open(r.path)
+// directory swapped for a symlink between listing and open. A path the
+// kernel refuses by its length is opened below the root instead
+// (openLong), which follows no symlink at all. A directory it does not
+// open is accounted for, and err is the context's error when the run
+// stopped.
+func (p *Provider) openChecked(ctx context.Context, r Range, st *Stats) (f *os.File, ok bool, err error) {
+	f, err = os.Open(r.path)
+	if tooLong(err) {
+		var fd int
+		if fd, ok, err = p.openLong(ctx, r, st); !ok {
+			return nil, false, err
+		}
+		return os.NewFile(uintptr(fd), r.path), true, nil
+	}
 	if err != nil {
 		st.note(&st.OpenErrors, r.path, err)
-		return nil, false
+		p.unreadableDir(r)
+		return nil, false, nil
 	}
 	if r.prefix == "" {
-		return f, true
+		return f, true, nil
 	}
 	ffi, err1 := f.Stat()
 	lfi, err2 := os.Lstat(r.path)
 	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
 		f.Close()
 		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
-		return nil, false
+		p.unreadableDir(r)
+		return nil, false, nil
 	}
-	return f, true
+	return f, true, nil
 }
 
 // kindOf maps Go file mode type bits to a kind.
