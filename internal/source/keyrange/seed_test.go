@@ -651,11 +651,10 @@ func TestSeedFirstPage(t *testing.T) {
 // rest, whose first 1,000 keys the first page holds. With SeedFirstPage
 // the seed's tiles are those of a seed without the page, from the scope's
 // start (the regression's tiles started after the page), and the run is as
-// wide. The tiles are the assertion; the mean of active ranges is a
-// timing and is held only to a tenth of the run without the page, a
-// tenfold regression (under -race on the ubuntu runner, 40 runs a width:
-// 0.86 to 1.11 of it at 2 CPUs, 0.89 to 1.08 at GOMAXPROCS=1; 0.69 once
-// in the busy race shard, #298).
+// wide. The tiles are the assertion; the width is the engine's: at least
+// 0.6 of the splits without the page, and a peak of at least half the 64
+// workers (measured: 142 to 160 splits either way, peak 64 to 65). The
+// mean of active ranges is a timing of the runner and is logged (#298).
 func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 	var keys []string
 	for i := range 30000 {
@@ -685,7 +684,7 @@ func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 	if !reflect.DeepEqual(tiles[1], tiles[0]) {
 		t.Fatalf("%d tiles with the first page, from %q; want the %d of a seed without it", len(tiles[1]), tiles[1][0].lo, len(tiles[0]))
 	}
-	var mean [2]float64
+	var splits, peak [2]int64
 	for i, first := range []bool{false, true} {
 		f := newSorted(keys, false, 1)
 		f.Latency = time.Millisecond
@@ -697,10 +696,10 @@ func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 		if first && (st.Get(cSeedFirstPageDiscarded) != 1 || st.Get(cSeedFirstPageKeys) != 0) {
 			t.Fatalf("the truncated first page was not discarded: %d keys", st.Get(cSeedFirstPageKeys))
 		}
-		mean[i] = st.MeanActive
-		t.Logf("first page %v: mean active %.1f, requests %d, depth %d", first, st.MeanActive, st.Get(cRequests), st.Get(cSplitMaxDepth))
+		splits[i], peak[i] = st.Get(cSplitAcceptedFrontier)+st.Get(cSplitAcceptedBounded), st.Get(cMaxActive)
+		t.Logf("first page %v: mean active %.1f, peak %d, requests %d, splits %d, depth %d", first, st.MeanActive, st.Get(cMaxActive), st.Get(cRequests), st.Get(cSplitAcceptedFrontier)+st.Get(cSplitAcceptedBounded), st.Get(cSplitMaxDepth))
 	}
-	if mean[1] < mean[0]/10 {
-		t.Fatalf("mean active %.1f with the first page, %.1f without", mean[1], mean[0])
+	if float64(splits[1]) < 0.6*float64(splits[0]) || peak[1] < 32 {
+		t.Fatalf("with the first page: %d splits (%d without), peak %d ranges at once", splits[1], splits[0], peak[1])
 	}
 }
