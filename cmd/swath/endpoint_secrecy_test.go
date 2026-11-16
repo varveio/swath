@@ -272,7 +272,8 @@ func TestRootUserinfoSecrecy(t *testing.T) {
 // event and the report on stdout. A refused endpoint or root holds its
 // credential back from all of them; so does an Azure SAS, in the root or
 // --azure-sas-token, sent to an endpoint whose every answer is a 503
-// quoting the request.
+// quoting the request: admission asks again whenever its retries are
+// spent, so the stall timeout ends the run.
 func TestSecrecyRunOutputs(t *testing.T) {
 	persistFor = 0 // the first failed request warns: no race with the stall timeout
 	t.Cleanup(func() { persistFor = 10 * time.Second })

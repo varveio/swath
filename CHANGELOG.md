@@ -5,6 +5,11 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: an Azure Blob account that answers the namespace check only with 503 `ServerBusy` (or other 5xx,
+  throttling, timeouts) is asked again, as a listing page is, until it answers; a run that never gets an answer
+  stops as stuck (exit 75). Before, once the retries were spent the run was refused as unsupported (exit 2,
+  advising `--azure-assume-flat`). Only an answered hierarchical namespace, or an account that will not say,
+  refuses.
 - Docs: the user guide is split by the question a reader asks. `running.md` keeps one run's command, outcome and
   limits and links to Size a run, Watch and tune a run, Stop, resume and refresh, and List every version; known
   limits moved to Troubleshooting. Query an inventory (DuckDB, pandas, Spark, verifying) is apart from the dataset

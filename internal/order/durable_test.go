@@ -630,13 +630,17 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 		t.Fatal("nothing charged")
 	}
 	var woke atomic.Bool
+	inside := make(chan struct{})
 	go func() {
 		h.o.mu.Lock()
+		close(inside)
 		h.o.drain.Wait()
 		woke.Store(true)
 		h.o.mu.Unlock()
 	}()
-	time.Sleep(10 * time.Millisecond)
+	// The mutex is free again only inside Wait: a waiter not yet waiting
+	// when the wake came would miss it.
+	<-inside
 	h.o.mu.Lock()
 	if !h.c.evict() {
 		t.Fatal("nothing to evict")

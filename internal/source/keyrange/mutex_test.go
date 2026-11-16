@@ -25,15 +25,18 @@ func TestDecisionMutexCounters(t *testing.T) {
 	}
 	const hold = 50 * time.Millisecond
 	p.lock()
-	var wg sync.WaitGroup
+	var wg, ready sync.WaitGroup
 	for range 4 {
 		wg.Add(1)
+		ready.Add(1)
 		go func() {
 			defer wg.Done()
+			ready.Done()
 			p.lock()
 			p.unlock()
 		}()
 	}
+	ready.Wait() // the hold begins once every waiter is about to wait: a goroutine started late waits less
 	time.Sleep(hold)
 	p.unlock()
 	wg.Wait()
