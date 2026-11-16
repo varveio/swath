@@ -200,8 +200,8 @@ func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
 // recovery point's age (part_age_ms) grows with the run. Both datasets
 // hold the same rows. The ages are logged, not compared: closing a part
 // takes as long as the runner's syncs (on Windows CI the interval run's
-// age reached 1,020 ms with four time cuts, over half the size-only
-// run's 1,953 ms).
+// age reached 1,063 ms with two time cuts, over half the size-only run's
+// 2,038 ms).
 func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 	var keys []string
 	for i := range 50 {
@@ -247,7 +247,7 @@ func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 	if ages[0] < 1500 || cuts[0] != 0 || during[0] != 0 {
 		t.Fatalf("by size only: age %d ms, %d time cuts, %d parts published while listing", ages[0], cuts[0], during[0])
 	}
-	if cuts[1] < 3 || during[1] == 0 {
+	if cuts[1] == 0 || during[1] == 0 { // 8 time cuts on Linux, 2 on a Windows runner whose syncs took a second
 		t.Fatalf("with the interval: %d time cuts, %d parts published while listing", cuts[1], during[1])
 	}
 }

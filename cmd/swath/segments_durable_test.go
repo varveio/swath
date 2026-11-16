@@ -322,9 +322,10 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		reconciled(at, resume(at+" again", out, ""))
 		same(at, ref, out)
 	}
-	// A slow scan is progress: each certificate's scan held 400 ms at its
+	// A slow scan is progress: each certificate's scan held 1.2 s at its
 	// start (SWATH_TEST_SLOW_AT) keeps the scans, which hand no row on, past
-	// a 1 s stall timeout: twelve ledger syncs, one seal each
+	// a 3 s stall timeout (1 s was shorter than a Windows runner's start
+	// and recovery, before any scan): twelve ledger syncs, one seal each
 	// (SWATH_TEST_SERIAL_SEALS), leave eleven certificates or more, scanned
 	// at most three at once (GOMAXPROCS 4). The bytes they read keep the
 	// watchdog's liveness rising (progress scanned_bytes), so the resume is
@@ -333,11 +334,11 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	out = filepath.Join(t.TempDir(), "ds")
 	run(at, exec.Command(bin, args(out)...), "spill-ledger-sync:12", "SWATH_TEST_SERIAL_SEALS=1")
 	rep := filepath.Join(t.TempDir(), "slow.json")
-	run(at+" resume", exec.Command(bin, append(append([]string{"resume", "--report", rep, "--stall-timeout", "1s"}, runtime...), out)...), "",
-		"SWATH_TEST_DRAIN_AFTER_LISTING=1", "SWATH_TEST_SLOW_AT=spill-replay:400ms")
+	run(at+" resume", exec.Command(bin, append(append([]string{"resume", "--report", rep, "--stall-timeout", "3s"}, runtime...), out)...), "",
+		"SWATH_TEST_DRAIN_AFTER_LISTING=1", "SWATH_TEST_SLOW_AT=spill-replay:1200ms")
 	r = readSegReport(t, at, rep)
 	engaged(at, r)
-	if d := time.Duration(r.Diagnostics.Resources.Drain.Segments.CertificateScanNs); d < 1200*time.Millisecond {
+	if d := time.Duration(r.Diagnostics.Resources.Drain.Segments.CertificateScanNs); d < 3600*time.Millisecond {
 		t.Fatalf("%s: the scans took %s, not past the stall timeout", at, d)
 	}
 	same(at, ref, out)
