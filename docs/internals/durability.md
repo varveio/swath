@@ -595,7 +595,10 @@ tail as JSON lines.
   concurrent replacement), which leaves the old file in place until it succeeds; a rename still refused
   then names the likely cause (another program holding the file, or a file in the directory, open). An
   `--overwrite` whose retirement of the old dataset is refused so (a reader holding a part keeps `data/`
-  from moving) moves back what it moved (`dataset.restore`): the old dataset stays readable and the
-  replacement pending until `swath resume` installs it (`TestOverwriteWithAReaderHoldingAPart`). A refusal is
-  not a crash: a crash during the restore leaves a partial retirement, which `InstallNext` finishes forward
+  from moving) moves back what it moved (`dataset.restore`), the manifest last and only once every other
+  entry, `data/` among them, is back. When the rollback completes, the old dataset stays readable and the
+  replacement pending until `swath resume` installs it (`TestOverwriteWithAReaderHoldingAPart`). When an
+  entry cannot return (a scanner holds a part of the retired `data/`), the manifest stays retired too, so
+  the output never names parts that are gone: it holds no dataset until `swath resume` finishes the
+  replacement, and the error says so (`TestReplaceRefusedInstallation`). A refusal is not a crash: a crash during the restore leaves a partial retirement, which `InstallNext` finishes forward
   as it does after a crash during the retirement.
