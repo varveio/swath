@@ -982,7 +982,7 @@ and at 5 workers: both datasets are exactly the shape's keys and their parts are
 run is held to bounds an order of magnitude from what it measures, so a tenfold regression fails and no
 change short of that does (the measured values are beside each bound in the test): at most 10 requests per
 1,000 keys (measured 1.1 to 2.0), `split.max_depth` at most 3·(6·log2(pages)+16) (at most 34 against 55 to
-61), and at least half the workers' ranges active at once (`peak_active` 15 to 17 of 16; shapes of 100 pages or
+61), and at least half the workers' ranges active at once (`peak_active` 14 to 17 of 16; shapes of 100 pages or
 more). The mean of ranges active is logged, not gated: one request a busy runner holds for seconds leaves a lone
 range active through a 0.3 s listing (Windows CI, mean 1.6), whatever the engine decided. The tiny shapes are held to 50 requests per page plus 50 instead. It takes about 15 s on the ubuntu runner (40 s
 on a busy 4-core box); under `-race` it skips (ten times slower, and the code it drives is race-tested by its

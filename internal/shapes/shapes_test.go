@@ -48,14 +48,14 @@ func TestKeysAreDeterministic(t *testing.T) {
 // ubuntu runner and a shared 4-core box, 2026-11-08, beside each bound):
 // at most 10 list requests per 1,000 keys (1.1 to 2.0), a split tree no
 // deeper than 3·(6·log2(pages)+16) (at most 34 against formulas of 55 to
-// 61), and at least half the workers' ranges in Expand at once (peak_active
-// 15 to 17 of 16, 2026-11-16; the bound needs 100 pages or more, which
-// maxlen's 40 are not). The mean of ranges active (8.3 to 15) is logged,
-// not gated: one request the runner holds for seconds leaves a lone range
-// active through a 0.3 s listing (Windows CI: listings of 2.7 and 3.2 s,
-// mean 1.6), whatever the engine decided. The tiny shapes, a page or a
-// few, are held instead to at most 50 requests per page plus 50 (2 for 1
-// page; 62 for 10) and the depth bound.
+// 61), and at least half the workers' ranges in Expand at once
+// (peak_active 14 to 17 of 16 on ubuntu and Windows, 2026-11-16; the bound
+// needs 100 pages or more, which maxlen's 40 are not). The mean of ranges
+// active (7.6 to 15) is logged, not gated: one request the runner holds
+// for seconds leaves a lone range active through a 0.3 s listing (Windows
+// CI: listings of 2.7 and 3.2 s, mean 1.6), whatever the engine decided.
+// The tiny shapes, a page or a few, are held instead to at most 50
+// requests per page plus 50 (2 for 1 page; 62 for 10) and the depth bound.
 //
 // It skips under the race detector, which makes it about ten times slower
 // (six minutes) and adds nothing: the engine, the order stage and the
