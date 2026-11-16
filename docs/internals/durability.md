@@ -267,9 +267,10 @@ destination is local or in S3, GCS or Azure Blob: `openJournal` probes the neare
 output's path once (`dataset.CheckDirSync`) before taking the output lock, and a bucket destination still
 needs the local `--work-dir` entries synced, so direct uploads do not bypass the refusal. Recovery and
 bucket finalization through resume are refused the same way. The CLI handles an already committed,
-finalized dataset before reaching this guard: there is no work to continue. A local filesystem source or an
-explicit `--no-journal` diagnostic run can write there, without resume. Only Windows probes (below); on Linux
-and macOS a directory opened for reading is fsynced, and the probe passes.
+finalized dataset before reaching this guard: there is no work to continue. Every dataset run, journaled or
+not, syncs its output's directories when it prepares them (`dataset.Prepare`), so no dataset run writes to
+such a filesystem; text output does. Only Windows probes (below); on Linux and macOS a directory opened for
+reading is fsynced, and the probe passes.
 
 **Identity, route and credentials.** The destination's provider, bucket, literal prefix, effective endpoint
 (the flag, or for GCS the emulator `STORAGE_EMULATOR_HOST` names, resolved once when the run starts, and
@@ -571,7 +572,10 @@ tail as JSON lines.
   the directory is opened again from that handle (an `NtCreateFile` relative to it with an empty name, as
   `ReOpenFile` does) with `FILE_APPEND_DATA`, the least access the flush accepts (on a directory,
   `FILE_ADD_SUBDIRECTORY`, which whoever could create the output has). swath relies on that flush for a
-  directory's creations and renames as it relies on a directory's fsync on Unix. The renames by path
+  directory's creations and renames as it relies on a directory's fsync on Unix. Only NTFS persists a
+  directory on that flush (MS-FSA); other filesystems (ReFS, an SMB share) may return success without
+  persisting, so there a crash or kill is still recovered but a power loss may lose the latest part names,
+  a documented limit rather than a refusal. The renames by path
   (`dataset.Replace`: `manifest.json`, `run.json`, the outcome files; `Publish`; a replacement's
   installation) are `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` and `MOVEFILE_WRITE_THROUGH`, which
   returns once the move is on disk; the renames through the locked output's `os.Root` (a part's claim and
@@ -588,4 +592,10 @@ tail as JSON lines.
   where a process that kills itself terminates with exit code 137, Windows having no SIGKILL. As on Linux,
   nothing tests a power loss. `Replace` retries its rename there for up to two seconds while another
   handle holds the target (`ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`: a reader of the report, a
-  concurrent replacement), which leaves the old file in place until it succeeds.
+  concurrent replacement), which leaves the old file in place until it succeeds; a rename still refused
+  then names the likely cause (another program holding the file, or a file in the directory, open). An
+  `--overwrite` whose retirement of the old dataset is refused so (a reader holding a part keeps `data/`
+  from moving) moves back what it moved (`dataset.restore`): the old dataset stays readable and the
+  replacement pending until `swath resume` installs it (`TestOverwriteWithAReaderHoldingAPart`). A refusal is
+  not a crash: a crash during the restore leaves a partial retirement, which `InstallNext` finishes forward
+  as it does after a crash during the retirement.

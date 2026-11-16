@@ -9,7 +9,9 @@ Notable changes per release. The full human summary for the current release is i
   continues them, as on Linux and macOS: directories are synced with `FlushFileBuffers` and renames are
   written through. A run whose output's filesystem refuses a directory sync is refused when it starts, with
   the filesystem's error; it was refused on every Windows output. A rename blocked by a file another program
-  holds open fails after two seconds with that cause named.
+  holds open fails after two seconds with that cause named; an `--overwrite` refused so leaves the previous
+  dataset readable, and `swath resume` installs the replacement once the reader is closed. Power-loss
+  safety holds on local NTFS; on ReFS or an SMB share a power loss may lose the latest part names.
 - Docs: the user guide is split by the question a reader asks. `running.md` keeps one run's command, outcome and
   limits and links to Size a run, Watch and tune a run, Stop, resume and refresh, and List every version; known
   limits moved to Troubleshooting. Query an inventory (DuckDB, pandas, Spark, verifying) is apart from the dataset

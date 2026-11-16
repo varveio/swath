@@ -131,18 +131,18 @@ swath checks this when the run starts, and where the filesystem refuses, the run
 anything, the filesystem's error in parentheses:
 
 ```text
-swath: journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; write the output on another filesystem, or list with swath diag list --no-journal (not resumable) (...)
+swath: journaled output needs directory syncs, which the output's filesystem refused, so a power loss could lose acknowledged parts; write the output on another filesystem (...)
 ```
 
-Put the output on a local NTFS volume, or list without a journal: `swath diag list --no-journal` writes the
-dataset, and an interrupted run starts over.
+Put the output on a local NTFS volume. Every dataset run syncs its output's directories, so no dataset run,
+journaled or not, writes to such a filesystem; text output does.
 
 On Windows a file another program holds open cannot be replaced, and a directory holding one cannot be
 renamed. A run that must replace one (`--overwrite` retiring a dataset whose part a reader has open, a
 `--report` file open in an editor) waits up to two seconds, then fails naming the file, with
-`another program may hold it, or a file in it, open: close that program and run again`. The previous
-dataset stays readable; after an `--overwrite` whose installation was cut short, `swath show DIR` says so and
-`swath resume DIR` installs the replacement.
+`another program may hold it, or a file in it, open: close that program and run again`. A refused
+`--overwrite` leaves the previous dataset as it was, readable, with the replacement committed beside it
+(`swath show DIR` says so); once the reader is closed, `swath resume DIR` installs the replacement.
 
 ## `-o` names a format swath does not write
 
@@ -322,6 +322,8 @@ The limits of this build, and what has not been measured:
   syncs directories (swath checks when the run starts:
   [the output directory is refused](#the-output-directory-is-refused)). The test suite, its crash and kill
   matrices included, runs there in CI; nothing is measured there.
+- **Windows power loss:** a power loss keeps the latest part names on local NTFS only; on another filesystem
+  (ReFS, an SMB share) a crash or kill is still recovered, but a power loss may lose the latest part names.
 - **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories
