@@ -197,7 +197,14 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	if err != nil {
 		return nil, err
 	}
-	cfg.Progress.own(lock)
+	// The progress file is the run's to write once it owns the output: a
+	// resume's from now (its recovery reports progress), a fresh run's
+	// once the output is prepared, since Prepare checks under the lock
+	// that the output is empty, and a progress write before that check
+	// would refuse the run its own output.
+	if cfg.Output.Resume {
+		cfg.Progress.own(lock)
+	}
 	var jr *runJournal
 	if resumable {
 		jr, err = openLocked(ctx, cfg, path, id, lock)
@@ -207,6 +214,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	} else {
 		jr = &runJournal{out: cfg.Output.Dir, lock: lock}
 	}
+	cfg.Progress.own(lock)
 	if err == nil && cfg.remote != nil {
 		if err = jr.attachRemote(cfg, cfg.remote); err != nil {
 			jr.cache.Close()
