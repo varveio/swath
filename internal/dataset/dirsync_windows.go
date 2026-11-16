@@ -52,10 +52,10 @@ func probeDirSync(dir string) error {
 // d's handle (an NtCreateFile relative to it with an empty name, as
 // ReOpenFile does) with FILE_APPEND_DATA, the least access the flush
 // accepts: on a directory it is FILE_ADD_SUBDIRECTORY, which the user who
-// created the output has. On NTFS the flush writes the directory's entries
-// and commits the metadata log, so the creations and renames in it survive
-// a power loss, as a directory fsync makes them on Unix. A filesystem that
-// refuses the open or the flush returns its error.
+// created the output has. The durability contract relies on this flush
+// for the creations and renames in the directory as it relies on a
+// directory's fsync on Unix. A filesystem that refuses the open or the
+// flush returns its error.
 func flushDir(d *os.File, sync func(faults.File) error) error {
 	defer d.Close()
 	oa := &windows.OBJECT_ATTRIBUTES{RootDirectory: windows.Handle(d.Fd()), ObjectName: &windows.NTUnicodeString{}}
