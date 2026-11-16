@@ -345,9 +345,9 @@ The limits of this build, and what has not been measured:
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
   with `--workers 2048` and a spill cap under about 6 MiB can crawl or time out; the runs that complete are
   key-identical ([#576](https://github.com/varveio/swath/issues/576)).
-- **Durable spill at a billion keys:** resume with durable spill was measured on listings of up to 150M keys.
-  On billion-key listings its certificate limits bind, so a resume relists more than on smaller ones, and a
-  kill and resume at that scale is not measured ([#513](https://github.com/varveio/swath/issues/513)).
+- **Durable spill above 593M keys:** a kill and resume with durable spill was measured on lists of up to 593
+  million keys ([measurements](internals/measurements.md#durable-spill-slots)); above that, a billion keys
+  included, it is not measured ([#513](https://github.com/varveio/swath/issues/513)).
 - **S3 credentials that expire:** their refresh ahead of expiry was tested against fakes only, not real AWS,
   and an upload to an S3 bucket destination that is answered as expired (clock skew, an early revocation)
   fails instead of retrying with fresh credentials ([#577](https://github.com/varveio/swath/issues/577)).

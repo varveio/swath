@@ -277,10 +277,11 @@ that fails or is interrupted before its commit leaves the previous dataset whole
 `swath resume DIR` (`swath show DIR` names it; a new `--overwrite` starts it over), and one without is removed
 (`TestReplaceKeepsPreviousUntilCommit`, `TestReplaceInstallationCrash`, `TestReplaceFailureLeavesPrevious`).
 `DIR/error.json` holds a failed replacement's outcome beside the previous dataset. An installation refused
-while the previous dataset's entries move aside (Windows: a reader holds a part) is undone only when every
-entry can come back, and one that fails after they are all aside is not undone: either way the path then
-holds no dataset until `swath resume DIR` or `--overwrite` finishes the installation, and the error says so
-(`TestReplaceRefusedInstallation`; the Windows item of [the journal](durability.md#the-journal)). An output that holds an
+while the previous dataset's entries move aside (Windows: a reader holds a part) is undone: when every entry
+comes back, the previous dataset is readable again and the replacement stays pending for `swath resume DIR`.
+When an entry cannot come back, and when an installation fails after every entry is aside (which is not
+undone), the path holds no dataset until `swath resume DIR` or `--overwrite` finishes the installation, and
+the error says so (`TestReplaceRefusedInstallation`; the Windows item of [the journal](durability.md#the-journal)). An output that holds an
 interrupted run instead (no manifest) is replaced as before: its entries are removed, the commit record first,
 before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 

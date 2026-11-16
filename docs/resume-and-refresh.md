@@ -122,10 +122,12 @@ holding a `manifest.json` is), but nothing removes the lost run's parts, so star
 output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
 whose parts are removed after. A run that fails or is stopped before its commit leaves the previous dataset as
 it was; a stopped object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new
-`--overwrite` starts it over. The installation moves the previous dataset aside, then the new one in. One that
-stops part way (a crash), fails once the previous dataset is aside, or cannot put it all back after a refusal
-(on Windows, [another program holding one of its files](troubleshooting.md#the-output-directory-is-refused))
-leaves the directory with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new
+`--overwrite` starts it over. The installation moves the previous dataset aside, then the new one in. One
+refused while it moves the previous dataset aside (on Windows,
+[another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) puts it back:
+the previous dataset is readable again, and `swath resume DIR` installs the replacement later. One that stops
+part way (a crash), fails once the previous dataset is aside, or cannot put it all back after a refusal leaves
+the directory with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new
 `--overwrite` finishes the installation. The installation reuses the part paths (`data/part-NNNNN.parquet`),
 so a reader that is reading the dataset while it runs can find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
 
