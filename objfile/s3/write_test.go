@@ -658,7 +658,9 @@ func TestAbort(t *testing.T) {
 		<-entered
 		aborted := make(chan error, 1)
 		go func() { aborted <- u.Abort() }()
-		time.Sleep(20 * time.Millisecond) // Abort has cancelled the upload and waits for Write
+		for !s3.Cancelled(u) { // Abort has cancelled the upload and waits for Write
+			time.Sleep(time.Millisecond)
+		}
 		close(release)
 		if err := <-wrote; err == nil {
 			t.Fatal("a Write cancelled while creating succeeded")
