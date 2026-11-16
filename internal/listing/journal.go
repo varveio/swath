@@ -197,11 +197,12 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	if err != nil {
 		return nil, err
 	}
-	// The progress file is the run's to write once it owns the output: a
-	// resume's from now (its recovery reports progress), a fresh run's
-	// once the output is prepared, since Prepare checks under the lock
-	// that the output is empty, and a progress write before that check
-	// would refuse the run its own output.
+	// The progress file (and the outcome a stop writes through it) is the
+	// run's to write once it owns the output: a resume's from now (its
+	// recovery reports progress), a fresh run's once the output is
+	// prepared (openLocked), since Prepare checks under the lock that the
+	// output is empty, and a progress write before that check would refuse
+	// the run its own output. A refusal is owned too, for its settlement.
 	if cfg.Output.Resume {
 		cfg.Progress.own(lock)
 	}
@@ -344,6 +345,7 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		if err := prepareOutput(cfg, path, id, lock); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
+		cfg.Progress.own(lock) // prepared: before the journal, whose creation a stop may interrupt
 		if cfg.Output.NoJournal {
 			return &runJournal{out: cfg.Output.Dir, lock: lock}, nil
 		}
