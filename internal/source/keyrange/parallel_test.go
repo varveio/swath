@@ -325,7 +325,10 @@ func TestT4Paging(t *testing.T) {
 	if _, err := order.Run[Range, Object](ctx, p, &collect{}, &Schema, order.Options{Workers: 4, Budget: 100 * 256}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	// Goroutines that saw the cancellation may still be on their way out.
+	for deadline := time.Now().Add(5 * time.Second); runtime.NumGoroutine() > before+2 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if after := runtime.NumGoroutine(); after > before+2 {
 		t.Fatalf("goroutines left: %d -> %d", before, after)
 	}
