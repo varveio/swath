@@ -253,15 +253,16 @@ a time (145 million keys at 2,048 workers, 57 MB cap: 219 s against 78 s uncappe
 [measurements](measurements.md#the-seeded-frontier-window); it appeared when the slots went from one per MiB to
 one per 64 KiB of the cap, #560, so most spilled ranges became certificates). The gate leaves those certificates
 out, and while live spill is past half the cap it evicts them, oldest first, as a refused frame does
-(`window.evicted`; a crash then relists their keys); until the unlinks return the credit the window waits, so
+(`window.evicted`; a crash then relists their keys); until the unlinks return the credit the window waits
+(`TestWindowWaitsForEvictedCredit`), so
 the spill ahead of the output, not the spill behind it, holds the window. The files already retired and awaiting
 their unlink count as credit on its way: a check before the flusher's next cycle evicts only past them
 (`TestWindowEvictsOnlyTheExcess`). Where the spill a window of 8M rows
 needs at that concurrency is past half the cap, the window holds fewer tiles, admitted in order as the spill
 ahead drains (`window.spill_rows` is the mean rows the tiles held were charged over the admission probes the
 spill gate refused, a forced admission's included) (`TestWindowShrinksToTheSpillCap`: 64 workers, a 48 KiB cap, every eighth tile stalled,
-certificates whose K never comes; no frame refused, no tile forced, where the gate counting them forced 295 of
-320). The wake paths added with this gate (the spill gate no longer refusing, and the read-ahead's planning and
+certificates whose K never comes; the window bound by the spill cap, no frame refused, no tile forced, where the
+gate counting them forced 295 of 320). The wake paths added with this gate (the spill gate no longer refusing, and the read-ahead's planning and
 its return under half its share waking a worker at the window, below) engage only with durable spill
 (`window.wakes`); without a durable cache (no journal, or a cap under 16 MiB) nothing lies behind the output,
 the gate is live spill past half the cap, and the window wakes as before.
