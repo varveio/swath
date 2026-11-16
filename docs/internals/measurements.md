@@ -2531,6 +2531,37 @@ requests, scoped to each pull request's ref (0.4–0.8 GB each, 1.8 GB over thre
 GitHub's CodeQL setup keeps a 672 MiB dependency cache per pull request head. #361 writes the BuildKit
 caches from `main` only; its own pull-request run left no `buildkit-blob` entry under its ref.
 
+### Windows legs, 2026-11-16
+
+Before, with #605's journaled, crash and kill matrices on Windows
+([run 43869241395](https://github.com/varveio/swath/actions/runs/43869241395), `151f3d71`): the single
+`go-xos (windows-latest)` job took 31.8 min, 2.1 of them setup and 29.1 the main module's tests, where
+`internal/listing` took 1680 s and `cmd/swath` 869 s side by side with every other package on the four
+vCPUs. Alone in `go-stress.yml` on the same commit, without `-race`, `internal/listing` took 1041 s
+(`TestCrashMatrix` 233 s, `TestDurable*` and `TestDiskFaultMatrix` 233 s, the remainder 576 s,
+[run 43879478559](https://github.com/varveio/swath/actions/runs/43879478559)) and `cmd/swath` 592 s
+(`TestSIGKILL*` and `TestForcedExit*` 587 s of test time, run in parallel; the remainder 313 s,
+[run 43879483396](https://github.com/varveio/swath/actions/runs/43879483396)).
+
+After (#608, three legs along the race shards), job wall time in minutes:
+
+| job | [43883096460](https://github.com/varveio/swath/actions/runs/43883096460) | [43886553653](https://github.com/varveio/swath/actions/runs/43886553653) | [43894962300](https://github.com/varveio/swath/actions/runs/43894962300) |
+|---|---:|---:|---:|
+| `go-xos (windows-latest, listing-rest)` | 16.8 | 13.8 | 13.6 |
+| `go-xos (windows-latest, cmd)` | 14.1 | 14.3 | 14.1 |
+| `go-xos (windows-latest, matrices-rest)` | 18.6 | 12.1 | 15.2 |
+| `go-xos (macos-latest)`, for comparison | 15.6 | 15.6 | 12.5 |
+
+The third run is the change rebased onto `main` after #605 merged. No leg restored a build cache in the
+first run; in the second and third, `matrices-rest` restored the `go-xos` cache
+a `main` push had saved meanwhile (its `go vet ./...` took 29 s against 2.5 min). `listing-rest` and `cmd`
+use new keys that only a `main` push saves, so every run built them cold. Setup, mostly the 500 MB module
+cache's restore, took 1.3–1.6 min per leg.
+
+Microsoft Defender was not a cost: on every leg `Get-MpComputerStatus` reported `RealTimeProtectionEnabled`
+false before any change, and `C:\` and `D:\` were already excluded. A setup step turning it off measured
+nothing and was dropped.
+
 ### Parallel CLI crash tests and Java input filtering, 2026-11-10
 
 PR #410 lets seven isolated CLI crash/recovery tests overlap after their private binary builds,
