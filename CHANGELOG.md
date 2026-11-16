@@ -241,16 +241,18 @@ describe 0.4.0 as released.
   its journal and work files, so the corrected command runs on the same `-o`.
 - `--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into
   `.swath/next/` and its commit installs the new dataset in place of the old one, whose parts are removed
-  after. A run that fails or is stopped leaves the previous dataset whole, and a stopped object-store run waits
-  there for `swath resume DIR`. The report's `output.replaced` says whether the commit replaced a dataset. A
+  after. A run that fails or is stopped before that installation leaves the previous dataset whole, and a
+  stopped object-store run waits there for `swath resume DIR`. The report's `output.replaced` says whether the commit replaced a dataset. A
   directory an interrupted 0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
   `--overwrite`, and `swath resume` refuses it as written by 0.3.
 - Dataset runs of S3, GCS and Azure Blob keep their journal and resume on Linux, macOS and Windows. On
   Windows directories are synced with `FlushFileBuffers` and renames are written through; an output whose
   filesystem refuses a directory sync is refused when the run starts, with the filesystem's error. A rename
-  blocked by a file another program holds open fails after two seconds naming that cause; an `--overwrite`
-  refused so leaves the previous dataset readable, and `swath resume` installs the replacement once the
-  reader is closed. Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered,
+  blocked by a file another program holds open fails after two seconds naming that cause. An `--overwrite`
+  whose installation is refused so is rolled back: the previous dataset stays readable, and `swath resume`
+  installs the replacement once the reader is closed. If the rollback is incomplete too, the old manifest
+  stays retired, so the directory holds no dataset (never a manifest naming missing parts) until
+  `swath resume DIR` finishes the replacement, as the error says (#610). Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered,
   but a power loss may lose the latest part names (#605). An upload to a GCS destination whose connection the
   service reset is retried there as on other systems (#611).
 - A run that writes to a bucket is resumed by its work directory, which may have moved to another path or

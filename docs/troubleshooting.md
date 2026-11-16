@@ -141,8 +141,11 @@ On Windows a file another program holds open cannot be replaced, and a directory
 renamed. A run that must replace one (`--overwrite` retiring a dataset whose part a reader has open, a
 `--report` file open in an editor) waits up to two seconds, then fails naming the file, with
 `another program may hold it, or a file in it, open: close that program and run again`. A refused
-`--overwrite` leaves the previous dataset as it was, readable, with the replacement committed beside it
-(`swath show DIR` says so); once the reader is closed, `swath resume DIR` installs the replacement.
+`--overwrite` puts back what it had moved and leaves the previous dataset as it was, readable, with the
+replacement committed beside it (`swath show DIR` says so); once the reader is closed, `swath resume DIR`
+installs the replacement. If something it moved cannot come back either (another program holds a file in
+it), the error says `the rollback is incomplete`: the directory holds no dataset until `swath resume DIR`,
+run once those programs are closed, finishes the replacement.
 
 ## `-o` names a format swath does not write
 
