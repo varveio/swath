@@ -61,7 +61,7 @@ var viewTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 // TestDuView: bare swath du on a terminal draws the view under a
 // heading: the total first under SOURCE, the largest nodes at any depth by
-// size as far as the lines go (here logs/ stays whole, x fits), each with
+// size down to a floor (here logs/ and x, under it, stay in a fold), each with
 // its count of files, its share, a bar, its newest date and its path, each
 // parent's rest folded into one "(N more)" line; the columns go as the
 // width shrinks (the bar, then the share, then the date), color as --color
@@ -89,8 +89,7 @@ func TestDuView(t *testing.T) {
 		"5.86 KiB      1  62.5%  ████████████▍         " + at + pad + "        a.bin\n" +
 		"2.93 KiB      1  31.2%  ██████▏               " + at + pad + "        b.bin\n" +
 		"   500 B      1   5.2%  █                     " + later + pad + "      c.bin\n" +
-		"   100 B     10   1.0%  ▏                     " + at + pad + "    logs/\n" +
-		"     1 B      1   0.0%                        " + at + pad + "    x\n"
+		"   101 B     11   1.1%  ▏                     " + at + pad + "    (2 more)\n"
 	if got := strings.Replace(out.String(), root, "ROOT", 1); got != want {
 		t.Fatalf("view\n%s\nwant\n%s", got, want)
 	}
@@ -118,7 +117,7 @@ func TestDuView(t *testing.T) {
 		}
 		head := lines[0]
 		cells := strings.Count(lines[1], "█")
-		if len(lines) != 19 || cells > 0 != tc.bar || tc.width >= 100 && cells != 20 || tc.width == 80 && cells > 10 ||
+		if len(lines) != 8 || cells > 0 != tc.bar || tc.width >= 100 && cells != 20 || tc.width == 80 && cells > 10 ||
 			strings.Contains(head, "share") != tc.share || strings.Contains(head, "newest") != tc.date || !strings.HasSuffix(head, "  path") {
 			t.Errorf("width %d: %d lines, bar %d cells\n%s", tc.width, len(lines), cells, out.String())
 		}
@@ -310,9 +309,9 @@ func TestDuViewFromDatasetSource(t *testing.T) {
 }
 
 // TestDuViewWideBucket: a bucket of 2,000 top-level prefixes, four of them
-// large, fills a 30-line terminal: the large prefixes, then as many of the
-// others as the lines hold while their rest outweighs the rest, not one
-// fold of them all.
+// large, opens the large prefixes and leaves the small ones, each under the
+// floor, in one fold: the view ends shorter than the terminal rather than
+// list them.
 func TestDuViewWideBucket(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	var keys []string
@@ -333,13 +332,16 @@ func TestDuViewWideBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	top := 0
+	opened := 0
 	for _, l := range lines {
-		if f := strings.Fields(l); strings.HasPrefix(f[len(f)-1], "p") { // a deeper name is relative: big, obj-…
-			top++
+		if strings.HasSuffix(l, "  big") {
+			opened++
+		}
+		if strings.Contains(l, "obj-1") || strings.Contains(l, "p1001/") {
+			t.Fatalf("a small prefix listed:\n%s", out.String())
 		}
 	}
-	if len(lines) != 29 || top < 15 || !strings.HasSuffix(lines[len(lines)-1], "more)") { // 30 rows less the prompt (-q)
-		t.Fatalf("%d lines, %d top-level prefixes\n%s", len(lines), top, out.String())
+	if opened != 4 || len(lines) >= 29 || !strings.HasSuffix(lines[len(lines)-1], "(1,996 more)") {
+		t.Fatalf("%d lines, %d large prefixes opened\n%s", len(lines), opened, out.String())
 	}
 }

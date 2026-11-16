@@ -15,6 +15,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/longpath"
 )
 
 // Errors returned by Prepare.
@@ -279,7 +280,7 @@ func RemoveNext(out string) error {
 // walking out's physical ancestors and comparing directory identity with
 // root. rel is out's '/'-separated path below root.
 func LocateInside(root, out string) (rel string, inside bool, err error) {
-	rootFi, err := os.Stat(root)
+	rootFi, err := longpath.Stat(root)
 	if err != nil {
 		return "", false, err
 	}
@@ -358,7 +359,7 @@ func insideRoot(root, out string) (bool, error) {
 		a = parent
 	}
 	if a != out {
-		rfi, err := os.Stat(root)
+		rfi, err := longpath.Stat(root)
 		if err != nil {
 			return false, err
 		}

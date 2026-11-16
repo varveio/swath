@@ -15,8 +15,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
   that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
   directory (every stat column and `created_at`; `os.DirEntry.Info` is an `lstat` of the full path, which
-  resolves the path again per entry), on Windows the directory enumeration's own size, times and attributes
-  (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`), elsewhere `Lstat`.
+  resolves the path again per entry), on Linux `os.DirEntry.Info` (that `lstat`, or the one `ReadDir` already
+  made for an entry the filesystem did not type, `DT_UNKNOWN`), and `fstatat` relative to the open directory
+  only where the full path is past PATH_MAX; both read a link's target with `readlinkat` relative to it. On
+  Windows the directory enumeration's own size, times and attributes (no call per entry; no `uid`, `gid`,
+  `nlink`, `inode`, `dev` or `allocated_bytes`).
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
@@ -67,6 +70,36 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   symlinks), `statx` (full mask, adds `created_at`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
+- **Paths past PATH_MAX.** A directory is opened by its full path, one call; children are statted and their
+  links read relative to it. Only when the kernel refuses a path by its length (`ENAMETOOLONG`: 4,096 bytes on
+  Linux, 1,024 on macOS) does `openLong` open it again: the root by its path, as the full path's resolution
+  reaches it (a symbolic link root followed), then each name of the range's key prefix relative to the one
+  before with `openat(O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)`, intermediates `O_PATH` on Linux (no read permission
+  needed; read-only on macOS) and closed as the next opens, the last read-only and kept for the listing. A
+  path that fits costs nothing more. The root is opened again for each such directory rather than held for
+  the walk: the full-path opens resolve it afresh too, so both see the same root, and the provider holds no
+  descriptor beyond a listing; a worker holds at most two descriptors while it descends. The cost is one
+  `openat` per level for each directory past the limit. Ranges stay logical paths, so a queued range pins no
+  descriptor. The descent follows no symbolic link anywhere on the path, where the full-path open checks only
+  its last name (`O_NOFOLLOW`; the portable engine's `Lstat` and `SameFile`): a component replaced by a link
+  since its parent was listed fails as `symlink`; a directory replaced by another directory is a race of any
+  live walk and lists what is there. With `--one-file-system` each component opened is `fstat`ed and the
+  first on another device than the root's stops the descent: the directory is not walked and that is no
+  error, as at a mount point. A failure is counted and named as a failed open (`open_errors`, unreadable);
+  a single name past the filesystem's limit fails the same way (`name_too_long`), never retried. The report's
+  `long_paths` counts `attempts`, `opened`, `failed` by reason (`not_found`, `permission`, `not_directory`,
+  `symlink`, `name_too_long`, `other_device`, `other`), `max_depth` (names below the root) and `max_path_bytes`.
+  A root past the limit, and a single-file root there, are resolved name by name (`internal/longpath`: `New`,
+  output exclusion and the output's checks against the root; a file root statted and its link read relative
+  to its directory); such a root's filesystem space is not measured (`statfs` takes the path). Windows has no
+  fallback: Go gives a long path its extended-length form there.
+- **Key cap: 32 KiB** (`maxKeyBytes`). A tree past PATH_MAX would otherwise have keys of any length; `emit`
+  leaves out an entry whose key passes 32,768 bytes and counts it (`key_too_long`, unreadable, named in the
+  error samples), a directory with its subtree. The schema states no key cap, so the writer's admission
+  still prices a key at 4,096 bytes; it cuts a page at 4 MiB of keys as well as at 1,024 rows
+  ([Parquet output](../parquet-output.md#writer-choices)), which keeps a page of longer keys within that price. The
+  manifest allowance (`dataset.ManifestLimits`) prices both bounds of every part at 4,096 bytes too, in
+  aggregate: only many thousands of parts all bounded by keys past it would exceed it.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the

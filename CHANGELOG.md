@@ -89,8 +89,11 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   `--azure-fetch-tags` (the SAS `t` permission or an Entra ID role that reads tags; a listing refused for it
   stops naming the permission) and `--azure-fetch-immutability` fill `metadata`, `tags` (JSON objects) and the
   immutability and legal hold columns.
-- **Local and mounted filesystems.** A `--metadata statx` listing records a field the filesystem does not
-  return (blocks on some network filesystems) as null, not 0.
+- **Local and mounted filesystems.** A tree deeper than the system's path limit (4,096 bytes on Linux, 1,024
+  on macOS) lists whole, a root that deep included: such a directory is opened one name at a time below the
+  root, never following a symbolic link; a key longer than 32 KiB is left out and counted as unreadable, and
+  the report's `diagnostics.source.stats.long_paths` counts the directories opened so. A `--metadata statx`
+  listing records a field the filesystem does not return (blocks on some network filesystems) as null, not 0.
 - **Every object store.** Credentials that will not load or are refused are reported on one line, the source
   and the first line of its cause, `--anonymous` suggested only when swath was discovering credentials (#447);
   `-v` and the report keep the whole cause. An `--endpoint-url` with user information, a query or a fragment,
@@ -144,7 +147,9 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
   (`12.0k`), its share of the total, a bar (20 cells from 100 columns), the date of its newest object (local,
   the zone named once) and its path. As the terminal narrows the bar goes, then the share, then the date; a
   long path is cut in the middle, so no line wraps. Each parent's other children fold into one `(N more)` line
-  carrying their sums and newest date, so every level adds up. A `!` after the size marks a line whose sums
+  carrying their sums and newest date, so every level adds up; no line goes to an entry under 0.5 % of the
+  total, so the largest prefixes open, a long tail of small ones stays folded, and the view ends early when
+  nothing above that is left. A `!` after the size marks a line whose sums
   leave out a directory that could not be read, and one line under the view says so (`-v` names them). Every
   figure is exact, and memory stays small: a complete prefix is kept only among the 100 largest of its depth,
   and a prefix cut by a range's edge completes once the ranges on both sides are listed. Color follows
@@ -180,7 +185,8 @@ at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs); the 0.3 
 - A dataset is a SeekParquet dataset, format 1 draft revision 1 (`format_version` 0, `draft_revision` 1),
   with the swath dataset profile ([docs/dataset.md](docs/dataset.md)): `manifest.json`, installed last, commits
   the parts, and `extensions.swath` carries `"version": 1` first; `swath show`, `--seed-from` and `reader`
-  refuse a manifest without it. SeekParquet is pinned at its release `go/v0.2.0`, which fixes the format.
+  refuse a manifest without it. SeekParquet is pinned at its release `go/v0.2.0`, which fixes the format. A
+  part's pages end at 1,024 rows or at 4 MiB of keys (the writer recipe `swath/parquet-r5`).
 - Schema ids follow `swath/<row-contract>/vN`: `swath/s3-objects/v1`, `swath/s3-versions/v1`,
   `swath/gcs-objects/v1`, `swath/gcs-generations/v1` (with a required `is_latest`), `swath/azure-objects/v1`,
   `swath/azure-versions/v1` and `swath/local-entries/v1`. One concept has one name in every schema:

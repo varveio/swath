@@ -620,26 +620,51 @@ func TestViewPinnedBudget(t *testing.T) {
 	}
 }
 
-// TestViewSelectFills: on a wide level (2,173 top-level prefixes, a few
-// large, the small ones holding most of the bytes) the lines fill with the
-// large prefixes and then the largest of the small ones, the level's rest
-// in a fold, rather than one fold of them all.
-func TestViewSelectFills(t *testing.T) {
+// TestViewSelectFloor: the lines go to the largest prefixes, opened, never
+// to a node under the floor. A bucket of a few large prefixes with sizable
+// children beside 2,000 near-equal small top-level prefixes holding 60 %
+// opens the large ones and leaves the small ones in the total's fold, the
+// view shorter than the terminal; a wide level of prefixes above the floor
+// fills the lines.
+func TestViewSelectFloor(t *testing.T) {
+	sel := func(rows []Row, n int) []ViewRow {
+		slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
+		tl := New(Options{View: true})
+		feed(tl, [][]Row{rows[:len(rows)/2], rows[len(rows)/2:]}, true, rand.New(rand.NewPCG(1, 2)))
+		checkView(t, tl.View(), "", exactTree("", rows, false))
+		return tl.View().Select(n)
+	}
 	var rows []Row
-	for i := range 2173 {
-		size := int64(1000 + i)
-		if i%500 == 0 {
-			size = 300_000 // a few large; the small ones hold three quarters
-		}
-		for j := range 3 {
-			rows = append(rows, Row{Key: fmt.Sprintf("p%04d/s%d/o", i, j), Object: true, Size: size / 3, HasSize: true})
+	for i, share := range []int64{154, 104, 80, 60} { // per mille of the total
+		for j := range 12 {
+			rows = append(rows, Row{Key: fmt.Sprintf("_big%d/child%02d/o", i, j), Object: true, Size: share * 1_000_000 / 12 * (12 + int64(j)) / 18, HasSize: true})
 		}
 	}
-	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
-	tl := New(Options{View: true})
-	feed(tl, [][]Row{rows[:len(rows)/2], rows[len(rows)/2:]}, true, rand.New(rand.NewPCG(1, 2)))
-	v := tl.View()
-	lines := v.Select(25)
+	for i := range 2000 {
+		rows = append(rows, Row{Key: fmt.Sprintf("daily.%04d/o", i), Object: true, Size: 300_000 + int64(i%7), HasSize: true})
+	}
+	lines := sel(rows, 35)
+	opened, small := 0, 0
+	for _, l := range lines {
+		switch {
+		case l.Level == 2 && !l.Fold:
+			opened++
+		case strings.HasPrefix(l.Name, "daily."):
+			small++
+		}
+	}
+	if small > 0 || opened < 12 || len(lines) > 35 || !lines[len(lines)-1].Fold {
+		t.Fatalf("%d lines, %d children of the large prefixes, %d small prefixes:\n%+v", len(lines), opened, small, lines)
+	}
+
+	rows = rows[:0]
+	for i := range 4 {
+		rows = append(rows, Row{Key: fmt.Sprintf("big%d/o", i), Object: true, Size: 10_000_000, HasSize: true})
+	}
+	for i := range 60 {
+		rows = append(rows, Row{Key: fmt.Sprintf("p%02d/o", i), Object: true, Size: 1_000_000 + int64(i), HasSize: true})
+	}
+	lines = sel(rows, 25)
 	top := 0
 	for _, l := range lines {
 		if l.Level == 1 && !l.Fold {
@@ -649,7 +674,6 @@ func TestViewSelectFills(t *testing.T) {
 	if len(lines) != 25 || top < 20 || !lines[len(lines)-1].Fold {
 		t.Fatalf("%d lines, %d top-level prefixes:\n%+v", len(lines), top, lines)
 	}
-	checkView(t, v, "", exactTree("", rows, false))
 }
 
 // TestViewCoveredRuns: runs told the intervals they cover complete their
@@ -777,7 +801,7 @@ func TestViewCoveredEmptyRuns(t *testing.T) {
 func TestViewUnreadable(t *testing.T) {
 	var rows []Row
 	for i := range 20 {
-		rows = append(rows, Row{Key: fmt.Sprintf("a/%02d", i), Object: true, Size: int64(100 - i), HasSize: true})
+		rows = append(rows, Row{Key: fmt.Sprintf("a/%02d", i), Object: true, Size: int64(1000 - 10*i), HasSize: true})
 	}
 	rows = append(rows, Row{Key: "b/big", Object: true, Size: 10_000, HasSize: true}, Row{Key: "z/", Dir: true})
 	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })

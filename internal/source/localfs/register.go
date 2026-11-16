@@ -20,6 +20,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/longpath"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
@@ -268,7 +269,7 @@ func (o *opened) locate(path string) (string, error) {
 	}
 	dir, name := splitParent(path)
 	name = storedName(dir, name)
-	rfi, err := os.Stat(o.p.root)
+	rfi, err := longpath.Stat(o.p.root)
 	if err != nil {
 		return "", err
 	}
