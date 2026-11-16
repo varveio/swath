@@ -185,30 +185,40 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 	}}
 	scriptMu.Unlock()
 	pr := &Progress{}
-	done := make(chan error, 1)
-	go func() {
-		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
-			Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Progress: pr})
-		done <- err
-	}()
 	stop, stopped := make(chan struct{}), make(chan struct{})
 	var writes int
 	go func() { // the command's progress writer (supervise), much faster
 		defer close(stopped)
-		// From the run's start, as the command's ticker: the run owns its
-		// progress (Owned) only once its fresh output is prepared, so no
-		// write can come before Prepare's check that the output is empty.
+		// Started before the run, and with no pause until listing starts:
+		// it tries a write through Owned all through the run's start, so
+		// ownership taken before Prepare's check that the output is empty
+		// would put progress.json there first and the run would refuse its
+		// own output. Then every millisecond, as the command's ticker.
 		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(time.Millisecond):
+			if pr.Started() {
+				select {
+				case <-stop:
+					return
+				case <-time.After(time.Millisecond):
+				}
+			} else {
+				select {
+				case <-stop:
+					return
+				default:
+				}
 			}
 			writes++
 			pr.Owned(func() {
 				_ = os.WriteFile(filepath.Join(out, dataset.Workspace, "progress.json"), fmt.Appendf(nil, `{"n":%d}`, writes), 0o644)
 			})
 		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
+			Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Progress: pr})
+		done <- err
 	}()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
