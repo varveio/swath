@@ -1277,16 +1277,16 @@ func tearAt(b []byte, k string) (cut, lo, hi int) {
 	return -1, 0, 0
 }
 
-// TestDurableResumeSmallerBudget: killed at its first unlink, a run with
-// a 1 MiB sort buffer and 32 workers resumes with the 128 KiB minimum, 4
-// workers and a 16 MiB spill cap (the durable spill's least), replaying
-// its certificates through the spill read handles; the dataset is the
+// TestDurableResumeSmallerBudget: killed at a ledger sync once four
+// certificates are sealed, its frontier held, a run with a 1 MiB sort
+// buffer and 32 workers resumes with the 128 KiB minimum, 4 workers and a
+// 16 MiB spill cap (the durable spill's least), replaying its
+// certificates through the spill read handles; the dataset is the
 // uninterrupted run's, byte for byte. The same with --all-versions hot
 // groups (a group's versions consecutive, never split at a certificate),
-// killed instead at a ledger sync once eight certificates are sealed, its
-// frontier held: its first unlink can come after the drain has published
-// every certificate (the flusher's cycle lagging a fast drain), leaving
-// nothing to replay.
+// killed once eight are sealed. Neither is killed at its first unlink: it
+// can come after the drain has published every certificate (the flusher's
+// cycle lagging a fast drain), leaving nothing to replay.
 func TestDurableResumeSmallerBudget(t *testing.T) {
 	datasettest.RequireJournal(t)
 	smaller := func(cfg Config) Config {
@@ -1313,7 +1313,31 @@ func TestDurableResumeSmallerBudget(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "ds")
 		cfg := durableConfig(url, out, false)
 		cfg.Limits.RowBudget = 1 << 20
-		crashDurable(t, cfg, "spill-unlink", 1)
+		// The frontier is held until the kill, so K stays below the
+		// certificates the ledger holds then, four or more: killed at the
+		// first unlink instead, a fast drain could publish every
+		// certificate before the flusher's first retirement and leave
+		// nothing to replay (ubuntu-24.04-arm CI).
+		h := &hold{release: make(chan struct{})}
+		frontierHold.Store(h)
+		var sealed atomic.Int64
+		var killed atomic.Bool
+		restore := faults.Set(func(p string) error {
+			if p == "spill-seal" {
+				sealed.Add(1)
+			}
+			if p == "spill-ledger-sync" && sealed.Load() >= 4 && killed.CompareAndSwap(false, true) {
+				close(h.release)
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), cfg)
+		restore()
+		frontierHold.Store(nil)
+		if h.late.Load() || !errors.Is(err, faults.ErrCrash) {
+			t.Fatalf("not killed with four certificates sealed (%d sealed, frontier held in vain %v): %v", sealed.Load(), h.late.Load(), err)
+		}
 		sum, err := Run(context.Background(), smaller(durableConfig(url, out, true)))
 		if err != nil {
 			t.Fatal(err)
