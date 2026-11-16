@@ -184,7 +184,10 @@ prefix	1	1	0	50000	0	53248	0	2026-11-02T09:30:00.000000Z	size	name	true	2026/
 Every row has both figures, whichever `--allocated` puts first. A figure that no object under the prefix had is
 null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones there
 were, and its `*_missing` count says how many it leaves out. An empty prefix has 0 of each figure its source
-has: an empty bucket's `size` is 0 and its `allocated_bytes` null. The byte figures are JSON numbers and can
+has: an empty bucket's `size` is 0 and its `allocated_bytes` null. A local directory that could not be read
+(the run exits 3) has null `objects`, `dirs`, `size` and `allocated_bytes`, where an empty directory has 0;
+totals read from a saved dataset cannot tell that directory apart and give it 0
+([Totals](totals.md#totals-from-a-saved-dataset)). The byte figures are JSON numbers and can
 exceed 2^53; parse them as 64-bit integers, not as floating point (JavaScript's `JSON.parse` rounds them).
 
 TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; `--no-header` leaves

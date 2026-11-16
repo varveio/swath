@@ -262,3 +262,35 @@ func TestTableTotalAndUnreadable(t *testing.T) {
 		t.Fatalf("%v\n%q\nwant\n%q", err, b.String(), want)
 	}
 }
+
+// TestUnreadableIsNullNotZero: in TSV and JSONL a directory that could not
+// be read has null counts and figures (the table's "-"), and an empty
+// directory beside it still has 0 of each.
+func TestUnreadableIsNullNotZero(t *testing.T) {
+	rows := []totals.Prefix{
+		{Objects: 3, Dirs: 2, Size: 10, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Prefix: "empty/", Depth: 1, HasSize: true, HasAllocated: true},
+		{Prefix: "locked/", Depth: 1, HasSize: true, HasAllocated: true, Unreadable: true},
+	}
+	l := TotalsLayout{Local: true, NoHeader: true, Sort: "name"}
+	var b bytes.Buffer
+	if err := WriteTotals(&b, TSV, l, rows); err != nil {
+		t.Fatal(err)
+	}
+	want := "total\t0\t3\t2\t10\t0\t4096\t0\t\\N\tsize\tname\tfalse\t\n" +
+		"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\tempty/\n" +
+		"prefix\t1\t\\N\t\\N\t\\N\t0\t\\N\t0\t\\N\tsize\tname\tfalse\tlocked/\n"
+	if b.String() != want {
+		t.Fatalf("TSV\n%q\nwant\n%q", b.String(), want)
+	}
+	b.Reset()
+	if err := WriteTotals(&b, JSONL, l, rows); err != nil {
+		t.Fatal(err)
+	}
+	want = `{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":2,"size":10,"size_missing":0,"allocated_bytes":4096,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
+		`{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
+		`{"row_type":"prefix","depth":1,"prefix":"locked/","objects":null,"dirs":null,"size":null,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n"
+	if b.String() != want {
+		t.Fatalf("JSONL\n%s\nwant\n%s", b.String(), want)
+	}
+}
