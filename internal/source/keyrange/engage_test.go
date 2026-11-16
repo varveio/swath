@@ -66,7 +66,7 @@ const shapePage = 100
 // cursor is a bound and one worker lists it all. The mean of ranges active
 // is logged, not gated: over a run of about 40 ms it follows the runner's
 // timers and load more than the tree (macOS CI: the control's ranged from
-// 24 to 44 between runs, the splits did not).
+// 15 to 44 between runs, its splits from 228 to 260).
 func TestPercentKeysListInParallel(t *testing.T) {
 	keys := make([]string, 50000)
 	for i := range keys {
