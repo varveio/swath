@@ -21,50 +21,27 @@ type Caption = (string | { text: string; href: string })[]
 type Session = [command: string, output: string][]
 
 // The lead example: real output of `swath du` on a public bucket, run once on a 100x40 terminal with TZ=UTC and
-// main at 69c6c5fd (docs/internals/measurements.md, "A public bucket for the home page"). Escape codes are
+// main at 1085eb58 (docs/internals/measurements.md, "A public bucket for the home page"). Escape codes are
 // stripped (Terminal draws swath's colors again) and the hint lines at the end are left out where the output
 // reads "…". Nothing else is changed.
 const HERO = {
   caption: [
-    'The largest prefixes at any depth in a 1.38 PiB public bucket, listed in 59 seconds on a 4-vCPU cloud VM. ',
+    'The largest prefixes at any depth in a 1.38 PiB public bucket, listed in 54 seconds on a 4-vCPU cloud VM. ',
     { text: 'How this was measured', href: MEASURED },
   ] as Caption,
   session: [
     ['swath du s3://noaa-gestofs-pds --anonymous --s3-region us-east-1',
       `    size  objects  share                        newest          path
-1.38 PiB    37.1M   100%  ████████████████████  2026-11-15 UTC  s3://noaa-gestofs-pds
+1.38 PiB    37.1M   100%  ████████████████████  2026-11-16 UTC  s3://noaa-gestofs-pds
  217 TiB    2.14M  15.4%  ███                   2026-08-28        _para4/
  146 TiB    1.42M  10.4%  ██                    2026-09-26        _para/
  103 TiB    27.5k   7.3%  █▍                    2026-07-30        _para2/
 59.1 TiB     250k   4.2%  ▊                     2026-06-03        _hindcast_archive/
 40.1 TiB    31.9k   2.8%  ▌                     2026-06-03          STOFS3DAlt/
 19.0 TiB     218k   1.3%  ▎                     2026-05-04          AK_Runs/
-8.38 TiB    2.42k   0.6%                        2024-09-20        _archive/
-5.50 TiB     157k   0.4%                        2025-12-11        _not_active/
-2.67 TiB    21.3M   0.2%                        2026-11-15        _post_processing/
-1.11 TiB    5.35k   0.1%                        2026-08-22        stofs_2d_glo.20260821/
-1.05 TiB    5.35k   0.1%                        2026-08-17        stofs_2d_glo.20260816/
-0.98 TiB    5.33k   0.1%                        2026-08-18        stofs_2d_glo.20260817/
- 942 GiB    5.32k   0.1%                        2026-10-25        stofs_2d_glo.20261024/
- 942 GiB    5.32k   0.1%                        2026-10-24        stofs_2d_glo.20261023/
- 942 GiB    5.32k   0.1%                        2026-09-25        stofs_2d_glo.20260924/
- 942 GiB    5.32k   0.1%                        2026-09-26        stofs_2d_glo.20260925/
- 942 GiB    5.32k   0.1%                        2026-10-26        stofs_2d_glo.20261025/
- 942 GiB    5.32k   0.1%                        2026-09-08        stofs_2d_glo.20260907/
- 942 GiB    5.32k   0.1%                        2026-10-08        stofs_2d_glo.20261007/
- 942 GiB    5.32k   0.1%                        2026-10-23        stofs_2d_glo.20261022/
- 942 GiB    5.32k   0.1%                        2026-10-07        stofs_2d_glo.20261006/
- 942 GiB    5.32k   0.1%                        2026-09-24        stofs_2d_glo.20260923/
- 942 GiB    5.32k   0.1%                        2026-09-09        stofs_2d_glo.20260908/
- 942 GiB    5.32k   0.1%                        2026-09-27        stofs_2d_glo.20260926/
- 942 GiB    5.32k   0.1%                        2026-09-28        stofs_2d_glo.20260927/
- 942 GiB    5.32k   0.1%                        2026-09-07        stofs_2d_glo.20260906/
- 942 GiB    5.32k   0.1%                        2026-10-27        stofs_2d_glo.20261026/
- 942 GiB    5.32k   0.1%                        2026-10-06        stofs_2d_glo.20261005/
- 942 GiB    5.32k   0.1%                        2026-10-09        stofs_2d_glo.20261008/
- 849 TiB    11.7M  60.2%  ████████████          2026-11-15        (2,150 more)
-  1.38 PiB in 37,074,995 objects
-  complete: 37,074,995 objects, 1.38 PiB in 59.2s · 626,140 keys/s
+ 884 TiB    33.2M  62.7%  ████████████▌         2026-11-16        (2,174 more)
+  1.38 PiB in 37,081,362 objects
+  complete: 37,081,362 objects, 1.38 PiB in 53.7s · 690,207 keys/s
 …`],
   ] as Session,
 }
@@ -78,7 +55,7 @@ const HERO = {
 const INVENTORY = {
   heading: 'Save an inventory, query it with SQL',
   caption: [
-    'The same bucket, earlier that day: a sorted Parquet inventory in 61 seconds, then a DuckDB query over it in ' +
+    'The same bucket the day before: a sorted Parquet inventory in 61 seconds, then a DuckDB query over it in ' +
       '3 seconds.',
   ] as Caption,
   session: [

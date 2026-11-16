@@ -444,7 +444,7 @@ for the output stay near the window instead of growing with the bucket.</figcapt
 
 `swath du` keeps no rows and needs no order across ranges. Its workers count rows as they arrive: there is no
 drainer, no spill and no file. Bare `swath du` on a terminal shows the largest prefixes at any depth, and every
-figure in it is exact. On the NOAA bucket it took 59.2 s for 37,074,995 objects, with a peak of 145 MiB
+figure in it is exact. On the NOAA bucket it took 53.7 s for 37,081,362 objects, with a peak of 119 MiB
 against the sorted inventory's 1.51 GiB
 ([how it was measured](../../docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)).
 

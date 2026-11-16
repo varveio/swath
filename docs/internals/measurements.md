@@ -669,7 +669,7 @@ duckdb -column -c "SELECT
 | `diag list -o`, earlier (12:12:05) | 37,064,981 | 1,548,830,863,147,448 | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B |
 | `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 | 39,026 | 53.7 s | 111 MiB | none |
 | `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB | 2,169 top-level prefixes |
-| **`du`, the home page's lead view (22:38:58)** | 37,074,995 | 1.38 PiB | not printed | 59.2 s | 145 MiB | 31 lines on a 100x40 terminal, 2,150 more folded |
+| **`du`, the home page's lead view (2026-11-16 07:27:33)** | 37,081,362 | 1.38 PiB | not printed | 53.7 s | 119 MiB | 8 lines on a 100x40 terminal, 2,174 more folded |
 
 - **The home page's run.**
   - No retries, throttles or timeouts.
@@ -679,13 +679,14 @@ duckdb -column -c "SELECT
     publication and finalization continued for about 7.8 s.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
-- **The home page's lead view** is a later bare `swath du` of the whole bucket, run once at 22:38:58 UTC with main at
-  `69c6c5fd`, on the same VM, as
+- **The home page's lead view** is a later bare `swath du` of the whole bucket, run once on 2026-11-16 at 07:27:33
+  UTC with main at `1085eb58`, on the same VM, as
   `script -qfec 'stty cols 100 rows 40; TZ=UTC ./swath du s3://noaa-gestofs-pds --anonymous --s3-region us-east-1' /dev/null`,
-  so swath drew its terminal view at that size, with dates in UTC. Other work shared the VM (load average 2.47
-  after it). Wall and peak memory are from `/usr/bin/time -v` around it. The view prints no request count, and
-  the run was not repeated to get one; the runs above made 39,016 to 39,191. The page strips the escape codes
-  and leaves out the hint lines at the end. The bucket had grown by 10,014 objects since the morning's runs.
+  so swath drew its terminal view at that size, with dates in UTC. The view ended after 8 lines: no other prefix
+  holds 0.5% of the bucket. Other work shared the VM (load average 2.34 after it). Wall and peak memory are from
+  `/usr/bin/time -v` around it. The view prints no request count, and the run was not repeated to get one; the
+  runs above made 39,016 to 39,191. The page strips the escape codes and leaves out the hint lines at the end.
+  The bucket had grown by 16,381 objects since the runs above.
 - **The run at 12:32** shared the VM with other work: the load average was 12.7 when it ended. It took twice
   as long with the same requests and is not the one the home page shows.
 - **The trace.**
