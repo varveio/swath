@@ -5,7 +5,8 @@
 # go-licenses classifies and that ALLOWED_LICENSES names, or the script fails. The list holds SPDX
 # identifiers: permissive licenses (plus ISC, MIT-equivalent and common among Go modules) and the
 # weak-copyleft EPL and CDDL, no GPL, LGPL or AGPL. Then the notices: an
-# inventory of the linked modules and each one's license text, and the Go distribution's own
+# inventory of the linked modules and each one's license text, the NOTICE file of every linked
+# module that ships one at its root (Apache-2.0 section 4(d)), and the Go distribution's own
 # license, since its runtime and standard library are linked into every binary.
 #
 # Both run for each release GOOS, and the notices must agree, so a module linked on one target
@@ -57,12 +58,25 @@ for goos in "${GOOSES[@]}"; do
   }
 done
 
+# The NOTICE files of the linked modules (those of every GOOS) that ship one at their root.
+for goos in "${GOOSES[@]}"; do
+  GOOS=$goos go list -deps -f '{{with .Module}}{{.Path}} {{.Version}} {{.Dir}}{{end}}' "${COMMANDS[@]}"
+done | sort -u | while read -r path version dir; do
+  [[ -n $path && $path != "$FIRST_PARTY" && $path != "$FIRST_PARTY"/* ]] || continue
+  find "$dir" -maxdepth 1 -type f -iname 'notice*' | sort | while read -r notice; do
+    printf '\n================================================================================\n'
+    printf '%s %s: %s\n\n' "$path" "$version" "$(basename "$notice")"
+    cat "$notice"
+  done
+done > "$work/module-notices"
+
 {
   printf 'Third-party notices for swath and swath-replay\n\n'
   printf 'The binaries statically link the Go modules listed below, whose license texts follow\n'
-  printf 'the list, and the runtime and standard library of the Go distribution (%s), whose\n' "$go_version"
-  printf 'license closes this file.\n\n'
+  printf 'the list, then the NOTICE files of the modules that ship one, and the runtime and\n'
+  printf 'standard library of the Go distribution (%s), whose license closes this file.\n\n' "$go_version"
   cat "$work/modules-${GOOSES[0]}"
+  cat "$work/module-notices"
   printf '\n================================================================================\n'
   printf 'Go %s\n\n' "$go_version"
   cat "$(go env GOROOT)/LICENSE"

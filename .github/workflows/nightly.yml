@@ -162,31 +162,69 @@ jobs:
       - name: go test (no -race)
         run: go test -count=1 -timeout 25m ./...
 
-  # The Go default tier on Windows, as ci.yml go-xos runs it: vet and the whole suite without
-  # -race. ci.yml runs it on main and dispatch but not on pull requests, so a Windows-only break in
-  # a pull request shows on its merge to main at the latest; this run is the scheduled backstop.
-  go-xos-windows:
+  # The Windows legs of go-xos-windows: ci.yml's (go-race-shards.sh --windows-matrix, which needs
+  # no Go).
+  go-xos-windows-legs:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-windows'
-    runs-on: windows-latest
-    timeout-minutes: 45 # unsplit: ci.yml splits the Windows run into legs (go-race-shards.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Windows legs
+        id: legs
+        run: |
+          set -euo pipefail
+          matrix=$(./scripts/ci/go-race-shards.sh --windows-matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "go-xos-windows legs: $matrix"
+
+  # The Go default tier on Windows, as ci.yml go-xos runs it: vet and the whole suite without
+  # -race, in the same legs along the race shards. ci.yml runs it on main and dispatch but not on
+  # pull requests, so a Windows-only break in a pull request shows on its merge to main at the
+  # latest; this run is the scheduled backstop.
+  go-xos-windows:
+    needs: go-xos-windows-legs
+    name: go-xos-windows (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.go-xos-windows-legs.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # Restores the shared module cache and the build cache of ci.yml's full Windows leg
-      # (go-xos); saves nothing off a push to main.
+      # Restores the shared module cache and the build cache of ci.yml's same leg (go-xos for the
+      # full one, go-xos-LEG for the others); saves nothing off a push to main.
       - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
-          key: go-xos
+          key: go-xos${{ matrix.scope == 'leg' && format('-{0}', matrix.leg) || '' }}
 
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test (no -race)
-        run: go test -count=1 -timeout 40m ./...
+      # One `go test` per race shard of the leg, each printed first, going on after a failed one
+      # so that every shard reports; the full leg vets the module first.
+      - name: go vet and go test (no -race)
+        env:
+          SCOPE: ${{ matrix.scope }}
+          LEG: ${{ matrix.leg }}
+        run: |
+          set -euo pipefail
+          leg_args=$(./scripts/ci/go-race-shards.sh --windows "$LEG")
+          if [ "$SCOPE" = full ]; then go vet ./...; fi
+          mapfile -t shards <<<"$leg_args"
+          status=0
+          for shard in "${shards[@]}"; do
+            read -ra args <<<"$shard"
+            printf 'go test -count=1 -timeout 25m'; printf " '%s'" "${args[@]}"; echo
+            go test -count=1 -timeout 25m "${args[@]}" || status=1
+          done
+          exit "$status"
 
   # The Go port's shape suite at full scale (bench/shapes; docs/internals/testing.md): every bucket
   # shape at about 2M keys behind the in-process fake, with its service behaviours (latency

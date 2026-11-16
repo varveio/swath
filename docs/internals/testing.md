@@ -25,7 +25,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
 | Cross-OS tier, linux/arm64 | PR: packages not already raced on arm64; full validation: every selected module without `-race`; [platform skips](#cross-os) | PR: main selected or platform escalation; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-xos (ubuntu-24.04-arm)` |
 | Cross-OS default tier, macOS | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
-| Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest, LEG)` ([Windows legs](#windows-legs)); `nightly.yml` `go-xos-windows` |
+| Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest, LEG)` ([Windows legs](#windows-legs)); `nightly.yml` `go-xos-windows (LEG)` |
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
@@ -243,8 +243,8 @@ without `-race`, which needs cgo the runner may lack):
 | `matrices-rest` | `crash`, `durable`, `rest-replay`, `rest-source`, `rest` | `go vet ./...`, the selected nested modules |
 
 `--check` and `--self-test` fail unless every shard is in exactly one leg and one leg holds `rest`. That
-leg keeps the `go-xos` build cache, which `nightly.yml` `go-xos-windows` and Windows `go-stress.yml` runs
-restore; the others' are `go-xos-LEG`.
+leg keeps the `go-xos` build cache, which Windows `go-stress.yml` runs restore; the others' are `go-xos-LEG`.
+`nightly.yml` `go-xos-windows` runs the same legs, each restoring its leg's cache.
 
 The heavy packages race on arm64 only: its weaker memory model makes it the better race target, and the same
 `-race` suite took about 30 % less time there than on amd64 (`internal/listing` 490 s against 700 s). The
@@ -304,13 +304,13 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 |---|---|---|
 | `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | `all`, `go-race-nightly` |
 | `go-xos-macos` | on macos-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-macos` |
-| `go-xos-windows` | on windows-latest, `go vet ./...` and `go test -count=1 -timeout 40m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
+| `go-xos-windows` | on windows-latest, the main module in `ci.yml`'s [Windows legs](#windows-legs) (`go-xos-windows (LEG)`): `go test -count=1 -timeout 25m` once per race shard of the leg, and `go vet ./...` on the leg holding `rest`; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `osv-scan` | builds both `Dockerfile` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
 
 The four Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
 cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on the matching platform
-(`go-xos-macos`, `go-xos-windows`) or `go-nonrace` (`go-shapes`).
+(`go-xos-macos`; `go-xos-windows`, the cache of its leg) or `go-nonrace` (`go-shapes`).
 
 `osv-scan` is the Go dependency scan: osv-scanner reads the Go version and module list embedded in each image's
 binary (the archives carry the same binaries), so it covers the standard library and every linked module, and
@@ -325,7 +325,8 @@ There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in C
 `./cmd/swath-replay` for linux, darwin and windows. It fails when a linked module's license is not recognized
 or is not on its allow-list (SPDX identifiers: Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
 targets link different modules. It then writes `THIRD_PARTY_NOTICES`: the module inventory, each module's
-license text, and the Go distribution's license. `go-build` runs it directly whenever main is selected
+license text, the `NOTICE` file of each linked module that ships one at its root (Apache-2.0 section 4(d)),
+and the Go distribution's license. `go-build` runs it directly whenever main is selected
 and packaging is deferred; otherwise the `Dockerfile`'s build stage runs it. This includes source/import
 changes, not just manifest changes. Both images carry the file in `/licenses/`; `release-assets.sh build` runs it, so
 every release archive carries it. It needs the network: go-licenses is installed with `go install` and looks
@@ -405,14 +406,14 @@ explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the s
 
 | Method | Where | What it does | When it runs |
 |---|---|---|---|
-| `TestCrashMatrix` | `internal/listing` | an injected crash at selected occurrences of each `faults.Points` point (S3: 1st, 4th, 12th; GCS and Azure Blob: 1st, 3rd, 7th), then resume: byte-identical to an uninterrupted run, row-identical in the arms with time cuts on | `go-race (crash)`; `go-race-nightly`; `go-xos (macos-latest)`; skips on Windows |
-| `TestRemoteCrashMatrix` | `internal/listing` | a dataset written to the GCS fake (`objfile/gcs/gcsfake`) to the S3 fake (`objfile/s3/s3fake`, 4 KiB parts, so each part is a multipart upload) and to the Azure fake (`objfile/azblob/azfake`, 4 KiB blocks, so each part is blocks staged and a block list), killed at the 1st and 3rd occurrence of each point of a remote run (the listing's, `allocated`, `upload-chunk`, `upload-completed`, the claim's and the record's, `candidate-saved`, `manifest-put`, `manifest-created`, `manifest`), spill off and on, then resumed: the local run's parts byte for byte, no orphan left; the other remote tests ([durability.md](durability.md#a-dataset-in-a-bucket)) beside it | `go-race (listing-rest)`; `go-race-nightly`; skips on Windows |
-| `TestRemoteResumeMovedWorkDir` | `internal/listing` | per destination fake, a run with durable spill killed at its first retirement (parts recorded, certificates sealed), its work directory copied to another path (`os.CopyFS`) and the original removed; the resume from the copy commits the local run's parts byte for byte, leaves no object but those the crashed attempt allocated and never recorded creating (an upload in flight at the kill; at most the report's `orphans_unproven`), verifies every retained part, replays certificates (a kill that leaves none to replay is tried again, at most six times), and creates nothing at the original path | `go-race (listing-rest)`; `go-race-nightly`; skips on Windows |
-| `TestDurable*`, `TestDiskFaultMatrix` | `internal/listing` | the durable spill's kill matrix (torn writes, lost unsynced state), repeated recovery, ledger damage, ENOSPC and EIO at each write and fsync, the run report's after the commit included | `go-race (durable)`; nightly; macOS; skip on Windows |
+| `TestCrashMatrix` | `internal/listing` | an injected crash at selected occurrences of each `faults.Points` point (S3: 1st, 4th, 12th; GCS and Azure Blob: 1st, 3rd, 7th), then resume: byte-identical to an uninterrupted run, row-identical in the arms with time cuts on | `go-race (crash)`; `go-race-nightly`; `go-xos` on macOS and Windows |
+| `TestRemoteCrashMatrix` | `internal/listing` | a dataset written to the GCS fake (`objfile/gcs/gcsfake`) to the S3 fake (`objfile/s3/s3fake`, 4 KiB parts, so each part is a multipart upload) and to the Azure fake (`objfile/azblob/azfake`, 4 KiB blocks, so each part is blocks staged and a block list), killed at the 1st and 3rd occurrence of each point of a remote run (the listing's, `allocated`, `upload-chunk`, `upload-completed`, the claim's and the record's, `candidate-saved`, `manifest-put`, `manifest-created`, `manifest`), spill off and on, then resumed: the local run's parts byte for byte, no orphan left; the other remote tests ([durability.md](durability.md#a-dataset-in-a-bucket)) beside it | `go-race (listing-rest)`; `go-race-nightly`; `go-xos` on Windows |
+| `TestRemoteResumeMovedWorkDir` | `internal/listing` | per destination fake, a run with durable spill killed at its first retirement (parts recorded, certificates sealed), its work directory copied to another path (`os.CopyFS`) and the original removed; the resume from the copy commits the local run's parts byte for byte, leaves no object but those the crashed attempt allocated and never recorded creating (an upload in flight at the kill; at most the report's `orphans_unproven`), verifies every retained part, replays certificates (a kill that leaves none to replay is tried again, at most six times), and creates nothing at the original path | `go-race (listing-rest)`; `go-race-nightly`; `go-xos` on Windows |
+| `TestDurable*`, `TestDiskFaultMatrix` | `internal/listing` | the durable spill's kill matrix (torn writes, lost unsynced state), repeated recovery, ledger damage, ENOSPC and EIO at each write and fsync, the run report's after the commit included | `go-race (durable)`; nightly; macOS; Windows |
 | `TestVersionsDurableSpill`, `TestDurableVersions`, `TestVersionsSegmentsReadDurableFiles` | `internal/listing` | the durable spill with `--all-versions`: kills at a seal, a ledger append, an unlink, a part claim, mid recovery; the segment tail reading durable files | `go-race (listing-rest)` and `(durable)`; nightly; macOS |
-| `TestSIGKILL*` | `cmd/swath` | the real process SIGKILLs itself at 13 points, in the durable spill and in the segment tail, then `swath resume` | `go-race (cmd-kill)`; nightly; macOS; not built on Windows |
+| `TestSIGKILL*` | `cmd/swath` | the real process SIGKILLs itself at 13 points, in the durable spill and in the segment tail, then `swath resume` | `go-race (cmd-kill)`; nightly; macOS; Windows, where the self-kill exits 137 |
 | `TestForcedExit*` | `cmd/swath` | a run that cannot stop gracefully is forced out after the grace with the right exit code, report and error record | `go-race (cmd-kill)`; nightly; macOS; `forcedexit_test.go` not built on Windows, `TestForcedExitCode` (`forensics_test.go`) skips there |
-| `TestSegmentsReplayDurableFiles` | `cmd/swath` | a sorted run whose segments read durable spill files, killed and resumed; resumes whose segments replay certificates, killed in their tail and resumed again | `go-race (cmd)`; nightly; macOS; not built on Windows |
+| `TestSegmentsReplayDurableFiles` | `cmd/swath` | a sorted run whose segments read durable spill files, killed and resumed; resumes whose segments replay certificates, killed in their tail and resumed again | `go-race (cmd)`; nightly; macOS; Windows |
 | Request-log oracle | `internal/listing` `TestDurableSpillResume`, `TestVersionsDurableSpill`; `cmd/swath` campaign | no data request of a resume starts inside a live certificate's `[max(cs, K), ce)` | in-process: with the tests' shards; campaign: [manual](#durable-spill-campaign-opt-in) |
 | Durable spill campaign | `cmd/swath` `TestDurableMinIO`, `TestDurableCorpus` | the kill schedule through the real binary on MinIO and production key lists | manual; skips without its endpoint |
 

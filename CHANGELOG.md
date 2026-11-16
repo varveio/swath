@@ -175,7 +175,8 @@ describe 0.4.0 as released.
   newest time under the prefix; a hard-linked file counted under another name adds none), `row_type` (`total`
   or `prefix`), `primary`, `sort` and `links_once` (whether the listing reads links). `--allocated` puts the
   allocated bytes first and makes `--sort size` order by them; `--apparent-size` is the default, and the two
-  together are refused. The report's `output.totals` takes the same names.
+  together are refused. The report's `output.totals` takes the same names. A local directory that could
+  not be read has null `objects`, `dirs`, `size` and `allocated_bytes` (`\N` in TSV), where an empty one has 0.
 - The table shows one figure, `size` (or `on disk` with `--allocated`), the counts with grouped digits, each
   prefix's newest time in local time to the second under a heading naming the zone, and each path indented
   two blanks a level; an unknown figure is `-`, a partial one `>= ` its lower bound, a directory that could not
@@ -189,8 +190,9 @@ describe 0.4.0 as released.
   included; any other SOURCE is refused naming the dataset's source, and a symbolic link there is refused.
   Stderr names the dataset's source, when it was listed (local time) and its coverage, and JSONL rows carry
   it as a `dataset` member with the filters; a dataset that is not complete prints its totals and exits 3. A
-  dataset listed with `--metadata names` totals as the live run does. Options that shape a listing, a dataset
-  in a bucket and an interrupted run are refused.
+  dataset listed with `--metadata names` totals as the live run does. Any manifest swath may write is read,
+  as `swath show` reads it. A dataset does not record which directories could not be read, so their rows
+  show 0 there. Options that shape a listing, a dataset in a bucket and an interrupted run are refused.
 
 ### The dataset
 
@@ -241,19 +243,24 @@ describe 0.4.0 as released.
   its journal and work files, so the corrected command runs on the same `-o`.
 - `--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into
   `.swath/next/` and its commit installs the new dataset in place of the old one, whose parts are removed
-  after. A run that fails or is stopped before that installation leaves the previous dataset whole, and a
-  stopped object-store run waits there for `swath resume DIR`. The report's `output.replaced` says whether the commit replaced a dataset. A
-  directory an interrupted 0.3 run left (`.swath-state.json` or `.swath/checkpoint.sqlite`) is replaced by
-  `--overwrite`, and `swath resume` refuses it as written by 0.3.
+  after. A run that fails or is stopped before its commit leaves the previous dataset whole, and a stopped
+  object-store run waits there for `swath resume DIR`. The installation moves the previous dataset aside,
+  its manifest first and synced before anything else moves, then the new one in. One refused while the
+  previous dataset moves aside puts it back, the other entries synced before the manifest returns: the
+  previous dataset is readable again and `swath resume DIR` installs the replacement later. One that stops
+  part way (a crash), fails once the previous dataset is aside, or cannot put it all back leaves the directory
+  with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new `--overwrite`
+  finishes the installation; the error of one that failed says so (#610). The report's `output.replaced`
+  says whether the commit replaced a dataset. A directory an interrupted 0.3 run left (`.swath-state.json`
+  or `.swath/checkpoint.sqlite`) is replaced by `--overwrite`, and `swath resume` refuses it as written by
+  0.3.
 - Dataset runs of S3, GCS and Azure Blob keep their journal and resume on Linux, macOS and Windows. On
   Windows directories are synced with `FlushFileBuffers` and renames are written through; an output whose
   filesystem refuses a directory sync is refused when the run starts, with the filesystem's error. A rename
-  blocked by a file another program holds open fails after two seconds naming that cause. An `--overwrite`
-  whose installation is refused so is rolled back: the previous dataset stays readable, and `swath resume`
-  installs the replacement once the reader is closed. If the rollback is incomplete too, the old manifest
-  stays retired, so the directory holds no dataset (never a manifest naming missing parts) until
-  `swath resume DIR` finishes the replacement, as the error says (#610). Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered,
-  but a power loss may lose the latest part names (#605). An upload to a GCS destination whose connection the
+  blocked by a file another program holds open fails after two seconds naming that cause; an `--overwrite`
+  refused so is put back as above, and `swath resume` installs the replacement once the reader is closed.
+  Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered, but a power loss
+  may lose the latest part names (#605). An upload to a GCS destination whose connection the
   service reset is retried there as on other systems (#611).
 - A run that writes to a bucket is resumed by its work directory, which may have moved to another path or
   machine; the bucket, prefix, endpoint and region stay as recorded (#515).
@@ -345,8 +352,9 @@ describe 0.4.0 as released.
   holding static `swath` and `swath-replay` binaries with `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES`, an
   SPDX SBOM, `SHA256SUMS`, keyless cosign signatures and build provenance; multi-arch images
   `ghcr.io/varveio/swath` (distroless static) and `ghcr.io/varveio/swath-replay` (`scratch`), running as
-  `65532:65532`. `THIRD_PARTY_NOTICES` is generated by `notices.sh`, which fails the build on a linked module
-  whose license is not recognized or not allowed.
+  `65532:65532`. `THIRD_PARTY_NOTICES` is generated by `notices.sh`: it carries each linked module's license
+  and the NOTICE files of those that ship one, and the build fails on a linked module whose license is not
+  recognized or not allowed.
 - `swath-replay`, in the same archives and as its own image, serves a recorded listing back through S3's
   `ListObjectsV2` and, with `--protocols`, GCS's `objects.list` and Azure's flat `List Blobs`, from one
   sorted-Parquet fixture, with per-route latency profiles (`--inject-latency`), to test and benchmark a lister

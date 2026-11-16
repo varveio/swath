@@ -504,8 +504,7 @@ reason, the time), synced, as Java's `markRunUnresumable`: a resume would walk b
 No frame may follow it (`Append` refuses, `Read` treats one as `ErrCorrupt`), and `swath resume` and a resumed
 run refuse the run with a `journal.UnresumableError` (exit 1, `cause` `protocol`), the parts and journal left
 as they are; `swath list --overwrite` starts over (`TestProtocolViolationIsUnresumable`, `TestUnresumableMark`).
-The frame is a later type within version 7: a build without it reads a marked journal as corrupt, which
-refuses the resume too. Transient oddities are not violations and keep their handling: an unparsed body is
+Transient oddities are not violations and keep their handling: an unparsed body is
 retried, unsorted common prefixes are normalized, empty continuing pages are followed.
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
@@ -596,7 +595,8 @@ tail as JSON lines.
   then names the likely cause (another program holding the file, or a file in the directory, open). An
   `--overwrite` whose retirement of the old dataset is refused so (a reader holding a part keeps `data/`
   from moving) moves back what it moved (`dataset.restore`), the manifest last and only once every other
-  entry, `data/` among them, is back. When the rollback completes, the old dataset stays readable and the
+  entry, `data/` among them, is back and the output directory synced; the retirement it undoes moved the
+  manifest first and synced both directories before any other entry moved. When the rollback completes, the old dataset stays readable and the
   replacement pending until `swath resume` installs it (`TestOverwriteWithAReaderHoldingAPart`). When an
   entry cannot return (a scanner holds a part of the retired `data/`), the manifest stays retired too, so
   the output never names parts that are gone: it holds no dataset until `swath resume` finishes the

@@ -56,7 +56,7 @@ them, still reports in the `--log-format` it names:
 
 ```text
 $ swath list /data --bogus --log-format json
-{"ts":"...","level":"error","event":"outcome","msg":"unknown flag --bogus","class":"usage","exit_code":2,"resumable":false,"message":"unknown flag --bogus"}
+{"ts":"...","level":"error","event":"outcome","msg":"unknown flag --bogus","class":"usage","exit_code":2,"resumable":false,"status":"failed","complete":false}
 ```
 
 An unknown option is a usage error that names the nearest one and the help to read:

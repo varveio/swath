@@ -33,15 +33,20 @@ import (
 // nothing progressed, in error.json and the report, and leaves the
 // goroutines as they hung in DIR/.swath/stacks-stuck.txt (Java recorded
 // stuck_throttle or stuck_api_timeouts and logged a forensic snapshot).
+// The throttle and timeouts arms run with a 3 s stall timeout: their
+// cause needs requests inside the stalled window, and at 1 s a start
+// slower than that on a loaded Windows runner (the journal's creation)
+// filled the window before the first request (stuck_no_rows). The
+// no-rows arm keeps 1 s: a slower start gives the same cause.
 func TestStuckCause(t *testing.T) {
 	captureStderr(t)
 	for _, c := range []struct {
-		mode, want string
-		extra      []string
+		mode, want, stall string
+		extra             []string
 	}{
-		{"throttle", stuckThrottle, nil},
-		{"hang", stuckTimeouts, []string{"--request-timeout", "200ms"}},
-		{"hang", stuckNoRows, nil}, // requests outlive the stall timeout: nothing rises
+		{"throttle", stuckThrottle, "3s", nil},
+		{"hang", stuckTimeouts, "3s", []string{"--request-timeout", "200ms"}},
+		{"hang", stuckNoRows, "1s", nil}, // requests outlive the stall timeout: nothing rises
 	} {
 		t.Run(c.want, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +62,7 @@ func TestStuckCause(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
 			args := append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "2",
-				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
+				"--stall-timeout", c.stall, "--report", report, "-o", dir}, c.extra...)
 			if code := exitCode(t, run(context.Background(), args, io.Discard, false)); code != exitStuck {
 				t.Fatalf("exit %d, want %d", code, exitStuck)
 			}

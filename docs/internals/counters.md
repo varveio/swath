@@ -42,7 +42,7 @@ ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the d
 abandons by reason, retirements, retained bytes, its limits with what they derive from (`slots`,
 `history_cap`, `limit_bytes`, `limited_by`), and on a resume `resume` with what it accepted, rejected and
 replayed; [ordering.md](ordering.md#durable-spill)) is absent when durable spill was off, and
-`spill.durable_off` then says why when it could have run (a version 7 journal, a spill budget below 16 MiB, a
+`spill.durable_off` then says why when it could have run (a spill budget or free space below 16 MiB, a
 provider without fences, a directory that could not be set up).
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts

@@ -236,7 +236,8 @@ beside the other packages on four vCPUs). Its full run is therefore split into l
 shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
 `go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. The
 leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
-cache, which the nightly and stress Windows runs restore. Microsoft Defender's real-time scanning is
+cache, which the stress Windows runs restore. The nightly `go-xos-windows` runs the main module in
+the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
 

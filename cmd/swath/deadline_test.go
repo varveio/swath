@@ -281,7 +281,10 @@ func (s stuckStamp) Write(b []byte) (int, error) {
 // its own (124, not the stale 75), and stderr names its attempt, in the
 // report failure and in the outcome line, so a supervisor that accepts
 // error.json only for the current attempt cannot accept the stale one
-// (durability review).
+// (durability review). The first attempt's source hangs from its first
+// request, so its 1 s stall timeout always stops it as stuck; the second
+// must reach its 2 s deadline, so its stall timeout is 10 minutes: at 1 s,
+// a recovery slower than that on a loaded runner would stop it as stuck.
 func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	stderr := captureStderr(t)
 	s := newRowlessService(t)
@@ -308,7 +311,7 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	})()
 	s.set("empty")
 	stderr.Reset()
-	err := resume(ctx, []string{dir, "-v", "--stall-timeout", "1s", "--max-duration", "2s", "--report", report}, io.Discard)
+	err := resume(ctx, []string{dir, "-v", "--stall-timeout", "10m", "--max-duration", "2s", "--report", report}, io.Discard)
 	conclude(err) // -v: the outcome line
 	if c := exitCode(t, err); c != exitDeadline {
 		t.Fatalf("second attempt: exit %d (%v), want %d", c, err, exitDeadline)

@@ -66,7 +66,9 @@ S3, GCS and Azure Blob share the request options:
 
 A failed request that can be retried (a throttle, a timeout, a 5xx, a cut connection) is tried up to nine
 times with exponential backoff (100 ms, at most 5 s apart); a listing page that still fails goes back to the
-queue and is tried again later. `--stall-timeout` and `--max-duration` bound a run that cannot make progress.
+queue and is tried again later. On Azure Blob the 5xx retried are 502, 503, 504 and a 500 whose code is
+`InternalError` or `OperationTimedOut`; any other 500, and a 501, is not retried. `--stall-timeout` and
+`--max-duration` bound a run that cannot make progress.
 Throttling and how to tune for it: [Watch and tune a run](../watch-a-run.md#throttling).
 
 More on each provider, for contributors: [S3](../internals/providers/s3.md), [GCS](../internals/providers/gcs.md),

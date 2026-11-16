@@ -236,7 +236,11 @@ func exitStatus(t *testing.T, err error) (code int, signaled bool) {
 // every request three quarters through a run stops the run as stuck (75,
 // resumable: retry exhaustion requeues, it never fails the run); once the
 // outage ends, swath resume completes it with the dataset of an
-// uninterrupted run byte for byte.
+// uninterrupted run byte for byte. The reference run and the resume must
+// complete: they run with a 10-minute stall timeout (the resume would
+// inherit the outage run's). The outage run's is 3 s: before the outage it
+// lists and publishes, which on a loaded Windows runner went over 1 s
+// without progress (a journal sync) and stopped the run as stuck_no_rows.
 func TestGCSOutageThenResume(t *testing.T) {
 	h := gcstest.Handler(gcstest.Keys(20000), 20*time.Millisecond)
 	var served, failed, after atomic.Int64 // after: the outage begins after this many requests (0: never)
@@ -251,21 +255,21 @@ func TestGCSOutageThenResume(t *testing.T) {
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	args := func(out string) []string {
+	args := func(out, stall string) []string {
 		return []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
-			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--stall-timeout", "1s", "-o", out}
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--stall-timeout", stall, "-o", out}
 	}
 	ctx := context.Background()
 	ref := filepath.Join(t.TempDir(), "ref")
-	if err := run(ctx, args(ref), io.Discard, false); err != nil {
-		t.Fatal(err)
+	if err := run(ctx, args(ref, "10m"), io.Discard, false); err != nil {
+		t.Fatalf("%v\n%s", err, stuckEvidence(ref))
 	}
 	total := served.Load()
 	// The outage begins three quarters through the requests a run makes.
 	served.Store(0)
 	after.Store(total * 3 / 4)
 	out := filepath.Join(t.TempDir(), "ds")
-	err := run(ctx, args(out), io.Discard, false)
+	err := run(ctx, args(out, "3s"), io.Discard, false)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != exitStuck {
 		t.Fatalf("outage: %v, want exit %d", err, exitStuck)
@@ -286,8 +290,8 @@ func TestGCSOutageThenResume(t *testing.T) {
 		t.Fatal("no part was published before the outage")
 	}
 	after.Store(0)
-	if err := resume(ctx, []string{out}, io.Discard); err != nil {
-		t.Fatalf("resume after the outage: %v", err)
+	if err := resume(ctx, []string{out, "--stall-timeout", "10m"}, io.Discard); err != nil {
+		t.Fatalf("resume after the outage: %v\n%s", err, stuckEvidence(out))
 	}
 	sameParts(t, "after the outage", ref, out)
 	if _, err := os.Stat(filepath.Join(out, errorName)); !os.IsNotExist(err) {
@@ -443,14 +447,19 @@ func stuckEvidence(dir string) string {
 // row (--no-seed: the seed would stop following them at its budgets,
 // TestSeedChargesEmptyPages): the run completes (before, it stopped as stuck with 75 while the
 // service answered every request). A source that hangs, or answers only
-// 503, still stops as stuck (durability review).
+// 503, still stops as stuck (durability review). The healthy run's stall
+// timeout is 3 s: its start and its publication show no progress, and on
+// a loaded Windows runner they went over 1 s (a journal sync) and stopped
+// it as stuck; its 150 empty pages, 50 ms apart, last over twice that.
+// The hanging and 503 sources keep 1 s: the source holds them from their
+// first request, so a slower start only stops them sooner.
 func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
-	const stall = time.Second
+	const stall = 3 * time.Second
 	h := gcstest.Handler(gcstest.Keys(2000), 0)
 	var mode atomic.Value // "healthy", "hung" or "503"
 	var served atomic.Int64
 	var firstEmpty, lastEmpty atomic.Int64 // unix nanoseconds
-	const empties = 50
+	const empties = 150
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		served.Add(1)
 		m := mode.Load().(string)
@@ -494,9 +503,12 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
-		start := time.Now()
+		start, timeout := time.Now(), stall
+		if m != "healthy" {
+			timeout = time.Second
+		}
 		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
-			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, &out, true)
+			"--stall-timeout", timeout.String(), "--report", "-", "-o", dir}, &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
