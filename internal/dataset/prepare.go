@@ -200,17 +200,20 @@ func NextFound(out string) bool {
 
 // InstallNext installs the dataset committed in NextDir(out) in out, in
 // place of out's (nothing when none is pending): first every entry of out's
-// dataset moves into NextDir, the manifest first, so that from then on out
-// holds no committed dataset (the retired directory, renamed into place
-// once all are moved, records that); then the new dataset's data/ moves
-// into out, and its manifest last: that rename is the installation. Each
-// step is a rename, synced: a crash at any point leaves a state that
-// InstallNext, run again, finishes. A rename the platform refuses while the
-// entries are retired (Windows, a reader holding a part open) is undone
-// (restore): out keeps its dataset and the replacement stays pending. The
-// part paths are reused: a reader of
-// the old manifest during the installation can find its parts missing or
-// replaced. The caller holds out's lock.
+// dataset moves into NextDir, the commit entries (the manifest) first and
+// durably, out and the retiring directory synced before any other entry
+// moves, so that from then on out holds no committed dataset (the retired
+// directory, renamed into place once all are moved, records that); then
+// the new dataset's data/ moves into out, synced, and its manifest last:
+// that rename is the installation. A crash at any point leaves a state
+// that InstallNext, run again, finishes. A rename the platform refuses
+// while the entries are retired (Windows, a reader holding a part open) is
+// undone (restore): out keeps its dataset and the replacement stays
+// pending. A rename refused after the retirement is not undone: out holds
+// no dataset until InstallNext, run again (swath resume), finishes. The
+// part paths are reused: a reader of the old manifest during the
+// installation can find its parts missing or replaced. The caller holds
+// out's lock.
 func InstallNext(out string) error {
 	if !InstallPending(out) {
 		return nil
@@ -223,23 +226,28 @@ func InstallNext(out string) error {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
 		var moved []string
-		for _, n := range append(slices.Clone(commitEntries), ownEntries...) {
-			if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
-				err := faults.At("install-retire") // tests: a refused rename
-				if err == nil {
-					err = renameFile(filepath.Join(out, n), filepath.Join(retiring, n))
+		// The commit entries move first, and both directories are synced
+		// before any other entry moves (as prepareOut's removal): no later
+		// rename reaches the disk before the manifest has left out.
+		for _, names := range [][]string{commitEntries, ownEntries} {
+			for _, n := range names {
+				if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
+					err := faults.At("install-retire") // tests: a refused rename
+					if err == nil {
+						err = renameFile(filepath.Join(out, n), filepath.Join(retiring, n))
+					}
+					if err != nil {
+						return fmt.Errorf("retire the replaced dataset: %w", errors.Join(err, restore(out, retiring, moved)))
+					}
+					moved = append(moved, n)
 				}
-				if err != nil {
-					return fmt.Errorf("retire the replaced dataset: %w", errors.Join(err, restore(out, retiring, moved)))
-				}
-				moved = append(moved, n)
+			}
+			if err := errors.Join(syncDir(retiring), syncDir(out)); err != nil {
+				return fmt.Errorf("retire the replaced dataset: %w", err)
 			}
 		}
-		if err := errors.Join(syncDir(retiring), syncDir(out)); err != nil {
-			return fmt.Errorf("retire the replaced dataset: %w", err)
-		}
 		if err := renameFile(retiring, retired); err != nil {
-			return fmt.Errorf("retire the replaced dataset: %w", err)
+			return fmt.Errorf("retire the replaced dataset: %w", noDataset(out, err))
 		}
 		if err := syncDir(next); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
@@ -256,7 +264,7 @@ func InstallNext(out string) error {
 		}
 		if _, err := os.Lstat(filepath.Join(next, n)); err == nil {
 			if err := renameFile(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
-				return fmt.Errorf("install the replacement: %w", err)
+				return fmt.Errorf("install the replacement: %w", noDataset(out, err))
 			}
 		}
 	}
@@ -267,7 +275,7 @@ func InstallNext(out string) error {
 		return err
 	}
 	if err := renameFile(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
-		return fmt.Errorf("install the replacement: %w", err)
+		return fmt.Errorf("install the replacement: %w", noDataset(out, err))
 	}
 	if err := syncDir(out); err != nil {
 		return fmt.Errorf("install the replacement: %w", err)
@@ -280,10 +288,11 @@ func InstallNext(out string) error {
 // its dataset again, readable as before, and the replacement stays
 // pending (InstallPending) for a later InstallNext. The commit record (the
 // manifest) goes back only once every other entry is back, data/ and the
-// parts it names among them: a manifest restored beside a data/ that
-// could not return would advertise a dataset whose parts are missing. If
-// any entry stays retired, so does the manifest, and the error says that
-// out holds no dataset until a resume finishes the replacement. A refusal
+// parts it names among them, and out is synced: a manifest restored beside
+// a data/ that could not return, or whose return is not yet on disk, would
+// advertise a dataset whose parts are missing. If any entry stays retired,
+// so does the manifest, and the error says that out holds no dataset until
+// a resume finishes the replacement. A refusal
 // is a rename the platform declined (Windows: a reader holds a part open),
 // not a crash; a crash part way through the restore leaves a partial
 // retirement, as one during the retirement does, which InstallNext, run
@@ -303,14 +312,23 @@ func restore(out, retiring string, names []string) error {
 		err = errors.Join(err, e)
 	}
 	if err == nil {
+		err = syncDir(out)
+	}
+	if err == nil {
 		for _, n := range commit {
 			err = errors.Join(err, renameFile(filepath.Join(retiring, n), filepath.Join(out, n)))
 		}
 	}
 	if err != nil {
-		err = fmt.Errorf("the rollback is incomplete, so %s holds no dataset until swath resume %s finishes the replacement: %w", out, out, err)
+		err = fmt.Errorf("the rollback is incomplete, so %w", noDataset(out, err))
 	}
 	return errors.Join(err, syncDir(out), syncDir(retiring))
+}
+
+// noDataset is err, a failure that leaves out's dataset retired and the
+// replacement not installed, saying so.
+func noDataset(out string, err error) error {
+	return fmt.Errorf("%s holds no dataset until swath resume %s finishes the replacement: %w", out, out, err)
 }
 
 // RemoveNext removes what an installed replacement left in NextDir(out),

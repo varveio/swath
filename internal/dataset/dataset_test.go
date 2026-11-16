@@ -584,3 +584,100 @@ func TestInterruptedV03Run(t *testing.T) {
 		t.Fatal("a committed directory reads as an interrupted run")
 	}
 }
+
+// TestInstallNextFinishesAPartialRetirement: an --overwrite installation
+// stopped part way through retiring the old dataset (a crash, or a refused
+// retirement whose restore brought back everything but the manifest) is
+// finished forward by InstallNext: out ends with the new manifest and
+// exactly its parts, no old part, and at no fault point along the way does
+// out hold a manifest beside a missing data/, or the old manifest at all.
+func TestInstallNextFinishesAPartialRetirement(t *testing.T) {
+	for name, retired := range map[string][]string{
+		"manifest":         {ManifestName}, // also a restore that brought back data/ and run.json
+		"manifest+data":    {ManifestName, DataDir},
+		"all, not renamed": {ManifestName, DataDir, ReportName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "ds")
+			next := NextDir(out)
+			write := func(p, s string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, f := range []string{ManifestName, ReportName, "data/part-00000.parquet", "data/part-00001.parquet"} {
+				write(filepath.Join(out, f), "old")
+			}
+			for _, f := range []string{ManifestName, ReportName, "data/part-00000.parquet"} {
+				write(filepath.Join(next, f), "new")
+			}
+			retiring := filepath.Join(next, retiringName)
+			if err := os.MkdirAll(retiring, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range retired {
+				if err := os.Rename(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check := func(at string) {
+				t.Helper()
+				b, err := os.ReadFile(filepath.Join(out, ManifestName))
+				if err != nil {
+					return
+				}
+				if string(b) != "new" {
+					t.Fatalf("at %s: the old manifest is back in out", at)
+				}
+				if _, err := os.Stat(filepath.Join(out, DataDir)); err != nil {
+					t.Fatalf("at %s: a manifest beside a missing data/: %v", at, err)
+				}
+			}
+			var points []string
+			restore := faults.Set(func(p string) error {
+				points = append(points, p)
+				check(p)
+				return nil
+			})
+			err := InstallNext(out)
+			restore()
+			if err != nil {
+				t.Fatal(err)
+			}
+			check("the end")
+			if !slices.Contains(points, "install-data") {
+				t.Fatalf("the installation passed %v", points)
+			}
+			if b, _ := os.ReadFile(filepath.Join(out, ManifestName)); string(b) != "new" || InstallPending(out) {
+				t.Fatalf("manifest %q, pending %v", b, InstallPending(out))
+			}
+			ents, err := os.ReadDir(filepath.Join(out, DataDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parts []string
+			for _, e := range ents {
+				parts = append(parts, e.Name())
+				if b, _ := os.ReadFile(filepath.Join(out, DataDir, e.Name())); string(b) != "new" {
+					t.Fatalf("%s holds %q", e.Name(), b)
+				}
+			}
+			if !slices.Equal(parts, []string{"part-00000.parquet"}) {
+				t.Fatalf("data/ holds %v, want the new dataset's one part", parts)
+			}
+			if b, _ := os.ReadFile(filepath.Join(out, ReportName)); string(b) != "new" {
+				t.Fatalf("run.json %q", b)
+			}
+			if err := RemoveNext(out); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(next); !os.IsNotExist(err) {
+				t.Fatalf("the replacement's directory is left: %v", err)
+			}
+		})
+	}
+}

@@ -264,9 +264,10 @@ replacement does not list into the directory itself: under the output's lock, he
 into `.swath/next/`, a dataset directory of its own (`dataset.NextDir`, with its own lock, journal and parts),
 and readers keep reading the previous dataset. Its commit installs it, in the same commit step
 (`dataset.InstallNext`): every entry of the previous dataset moves into `.swath/next/retiring/`, the manifest
-first, which is then renamed `retired/`; the new `data/` moves into the output, and its manifest last, which
-is the installation. Every step is a synced rename, so a crash anywhere leaves a state the next `swath resume
-DIR` or `--overwrite` finishes first (`listing.InstallReplacement`), and the leftovers of an installed one
+first, and both directories are synced before any other entry moves; `retiring/` is then renamed `retired/`;
+the new `data/` moves into the output, synced, and its manifest last, which is the installation. Every step is
+a synced rename, so a crash anywhere leaves a state the next `swath resume DIR` or `--overwrite` finishes
+first (`listing.InstallReplacement`, `TestInstallNextFinishesAPartialRetirement`), and the leftovers of an installed one
 (a crash before their removal) are removed the same way. The path holds no committed dataset between the first
 and the last of those renames. The part paths are reused, so a reader that read the old manifest before the
 installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
