@@ -325,7 +325,8 @@ There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in C
 `./cmd/swath-replay` for linux, darwin and windows. It fails when a linked module's license is not recognized
 or is not on its allow-list (SPDX identifiers: Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
 targets link different modules. It then writes `THIRD_PARTY_NOTICES`: the module inventory, each module's
-license text, and the Go distribution's license. `go-build` runs it directly whenever main is selected
+license text, the `NOTICE` file of each linked module that ships one at its root (Apache-2.0 section 4(d)),
+and the Go distribution's license. `go-build` runs it directly whenever main is selected
 and packaging is deferred; otherwise the `Dockerfile`'s build stage runs it. This includes source/import
 changes, not just manifest changes. Both images carry the file in `/licenses/`; `release-assets.sh build` runs it, so
 every release archive carries it. It needs the network: go-licenses is installed with `go install` and looks
