@@ -178,10 +178,10 @@ func durableConfig(url, out string, resume bool) Config {
 
 // TestDurableSpillResume: a run whose frontier is slow spills the ranges
 // ahead of it into durable files and seals their certificates; killed
-// after its second part, the resume replays the certificates that K does
-// not cover instead of listing them, lists only the gaps, and the dataset
-// is byte-identical to an uninterrupted run. No request of the resume
-// starts inside a replayed certificate's [cs, ce).
+// at its first retirement's unlink, the resume replays the certificates
+// that K does not cover instead of listing them, lists only the gaps (no
+// row is both listed and replayed), and the dataset is byte-identical to
+// an uninterrupted run.
 func TestDurableSpillResume(t *testing.T) {
 	url, _, log := slowFrontier(t, "d06/")
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -223,10 +223,13 @@ func TestDurableSpillResume(t *testing.T) {
 	if d == nil || d.Resume == nil || d.Resume.Accepted == 0 || d.Resume.ReplayedRows == 0 {
 		t.Fatalf("nothing reused: %+v %+v; files after the crash: %d", d, d.Resume, crashedFiles)
 	}
-	t.Logf("cold: %d sealed; resume: accepted %d, replayed %d rows, skipped %d, gaps %d, %d list requests (rows listed %d, retained %d)",
-		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsEmitted, sum.Output.RowsRetained)
-	if want := sum.Output.RowsEmitted; want <= d.Resume.ReplayedRows {
-		t.Fatalf("listed %d rows, replayed %d", want, d.Resume.ReplayedRows)
+	t.Logf("cold: %d sealed; resume: accepted %d, replayed %d rows, skipped %d, gaps %d, %d list requests (rows emitted %d, fetched %d, retained %d)",
+		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsEmitted, sum.Output.RowsFetched, sum.Output.RowsRetained)
+	// Every row handed on was listed or replayed, none both. Listed rows
+	// are not required: a drain that certified every range ahead before
+	// the kill leaves only empty gaps (ubuntu-24.04-arm CI).
+	if o := sum.Output; o.RowsFetched+d.Resume.ReplayedRows != o.RowsEmitted {
+		t.Fatalf("listed %d rows and replayed %d, handed on %d", o.RowsFetched, d.Resume.ReplayedRows, o.RowsEmitted)
 	}
 }
 
@@ -374,7 +377,10 @@ func damagedSnapshot(t *testing.T, out string) {
 // therefore resumed once, uninterrupted, on a copy first (the product
 // contract: the dataset is the uninterrupted one, whatever was replayed),
 // counting the captured frames replayed; a snapshot with fewer than two
-// is crashed again, a bounded number of times, and never skipped.
+// is crashed again, a bounded number of times, and never skipped. The
+// mid-replay pair checks the state its first interruption left the same
+// way: a part published before that crash can retire the first
+// certificate.
 func TestDurableRepeatedRecovery(t *testing.T) {
 	url, _, ref, out := durableFixture(t)
 	const tries = 6
@@ -416,12 +422,9 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 			name += "/unsynced-" + sc.lose + "-lost"
 		}
 		t.Run(name, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "ds")
-			if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
-				t.Fatal(err)
-			}
 			nth := max(sc.nth, 1)
-			for i, point := range []string{sc.first, sc.second} {
+			interrupt := func(dir string, i int, point string) {
+				t.Helper()
 				var seen atomic.Int64
 				synced := int64(-1)
 				var whole []byte
@@ -470,6 +473,31 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 					}
 				}
 			}
+			var dir string
+			for try := 1; ; try++ {
+				dir = filepath.Join(t.TempDir(), "ds")
+				if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+					t.Fatal(err)
+				}
+				interrupt(dir, 0, sc.first)
+				if sc.second != "spill-replay-frame" {
+					break
+				}
+				// Mid replay again: the state the first interruption left
+				// must still replay nth captured frames. The first resume's
+				// encoder can publish the part holding the first
+				// certificate's last row while the drainer lists the gap
+				// before the next certificate's frame; that certificate is
+				// then retired and one frame is left (macOS CI). Such a
+				// state is interrupted again from the snapshot, a bounded
+				// number of times, never skipped.
+				if frames, _ := replayedFrames(t, url, ref, dir); frames >= nth {
+					break
+				} else if try == tries {
+					t.Fatalf("%d first interruptions, none leaving %d captured frames to replay (the last left %d)", tries, nth, frames)
+				}
+			}
+			interrupt(dir, 1, sc.second)
 			sum, err := Run(context.Background(), durableConfig(url, dir, true))
 			if err != nil {
 				t.Fatal(err)
@@ -1235,16 +1263,16 @@ func tearAt(b []byte, k string) (cut, lo, hi int) {
 	return -1, 0, 0
 }
 
-// TestDurableResumeSmallerBudget: killed at its first unlink, a run with
-// a 1 MiB sort buffer and 32 workers resumes with the 128 KiB minimum, 4
-// workers and a 16 MiB spill cap (the durable spill's least), replaying
-// its certificates through the spill read handles; the dataset is the
+// TestDurableResumeSmallerBudget: killed at a ledger sync once four
+// certificates are sealed, its frontier held, a run with a 1 MiB sort
+// buffer and 32 workers resumes with the 128 KiB minimum, 4 workers and a
+// 16 MiB spill cap (the durable spill's least), replaying its
+// certificates through the spill read handles; the dataset is the
 // uninterrupted run's, byte for byte. The same with --all-versions hot
 // groups (a group's versions consecutive, never split at a certificate),
-// killed instead at a ledger sync once eight certificates are sealed, its
-// frontier held: its first unlink can come after the drain has published
-// every certificate (the flusher's cycle lagging a fast drain), leaving
-// nothing to replay.
+// killed once eight are sealed. Neither is killed at its first unlink: it
+// can come after the drain has published every certificate (the flusher's
+// cycle lagging a fast drain), leaving nothing to replay.
 func TestDurableResumeSmallerBudget(t *testing.T) {
 	smaller := func(cfg Config) Config {
 		cfg.Limits.RowBudget, cfg.Limits.Workers, cfg.Limits.Spill.Max = MinRowBudget, 4, 16<<20
@@ -1270,7 +1298,31 @@ func TestDurableResumeSmallerBudget(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "ds")
 		cfg := durableConfig(url, out, false)
 		cfg.Limits.RowBudget = 1 << 20
-		crashDurable(t, cfg, "spill-unlink", 1)
+		// The frontier is held until the kill, so K stays below the
+		// certificates the ledger holds then, four or more: killed at the
+		// first unlink instead, a fast drain could publish every
+		// certificate before the flusher's first retirement and leave
+		// nothing to replay (ubuntu-24.04-arm CI).
+		h := &hold{release: make(chan struct{})}
+		frontierHold.Store(h)
+		var sealed atomic.Int64
+		var killed atomic.Bool
+		restore := faults.Set(func(p string) error {
+			if p == "spill-seal" {
+				sealed.Add(1)
+			}
+			if p == "spill-ledger-sync" && sealed.Load() >= 4 && killed.CompareAndSwap(false, true) {
+				close(h.release)
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), cfg)
+		restore()
+		frontierHold.Store(nil)
+		if h.late.Load() || !errors.Is(err, faults.ErrCrash) {
+			t.Fatalf("not killed with four certificates sealed (%d sealed, frontier held in vain %v): %v", sealed.Load(), h.late.Load(), err)
+		}
 		sum, err := Run(context.Background(), smaller(durableConfig(url, out, true)))
 		if err != nil {
 			t.Fatal(err)

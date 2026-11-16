@@ -144,7 +144,20 @@ func TestExitCodes(t *testing.T) {
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(700 * time.Millisecond)
+			// Signalled once it lists into its journaled output, and once its
+			// trace holds an event past run_start: before, a fixed 700 ms
+			// could end a slow start before the process owned its output (no
+			// error.json) or traced anything.
+			ready := func() bool {
+				if _, err := os.Stat(filepath.Join(dir, journal.Dir, journal.Name)); err != nil {
+					return false
+				}
+				b, _ := os.ReadFile(trace)
+				return sig != syscall.SIGINT || bytes.Count(b, []byte("\n")) >= 2
+			}
+			for deadline := time.Now().Add(30 * time.Second); !ready() && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+			}
 			cmd.Process.Signal(sig)
 			if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
 				t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)

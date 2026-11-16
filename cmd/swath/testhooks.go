@@ -23,7 +23,8 @@ import (
 // one; the release binary reads none of them): on the
 // crash points (package faults), in this order, SWATH_TEST_SERIAL_SEALS
 // (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
-// SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
+// SWATH_TEST_HANG_AT (the goroutine writes hangMarker and blocks forever,
+// as on stuck I/O), each
 // "point:n": the n-th time the process reaches crash point point, and
 // SWATH_TEST_SLOW_AT (slowAt); and on
 // the order stage's events (order.SetDurableEvents), serialSeals',
@@ -53,7 +54,10 @@ func testHooks() {
 		fmt.Fprintln(os.Stderr, killMarker(os.Getenv("SWATH_TEST_KILL_ID"), killAt)) // the harness tells this kill from its own
 		kill()
 	}
-	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} }), slowAt(os.Getenv("SWATH_TEST_SLOW_AT"))} {
+	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() {
+		fmt.Fprintln(os.Stderr, hangMarker(os.Getenv("SWATH_TEST_HANG_AT")))
+		select {}
+	}), slowAt(os.Getenv("SWATH_TEST_SLOW_AT"))} {
 		if h != nil {
 			hooks = append(hooks, h)
 		}

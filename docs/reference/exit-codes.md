@@ -40,6 +40,9 @@ The `cause` of exit 75 says what rose while nothing progressed:
 | `stuck_no_rows` | none of these: requests failing or hanging, or a stopped pipeline |
 | `unreachable` | found early: nothing in the run has answered, and every connection was refused, its host not found or unroutable for 30 s (at most half `--stall-timeout`); the message names the endpoint. A run that had published no part removes its journal and work files and writes no `error.json` (`resumable` false): the corrected command runs on the same `-o` |
 
+A service that only fails or throttles before the listing starts (Azure Blob's namespace check) is asked
+again the same way, and stops as stuck too, never refused.
+
 The other causes are the provider's failure class (`auth`, `access_denied`, `not_found`, `region_redirect`, `throttle`, `timeout`,
 `parse`, `unsupported`), `protocol`, `no_space`, `spill_budget`, the limits named above, and a dataset in a bucket's `commit_unresolved`,
 `lost_race`, `remote_altered` and `candidate_mismatch`. A destination that keeps failing an upload past its

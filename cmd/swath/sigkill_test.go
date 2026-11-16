@@ -383,9 +383,12 @@ func damageLedger(t *testing.T, out string) {
 // handed on and the last part held before the router's Close), resumes,
 // and requires the parts byte-identical, and the manifest but for its
 // observation times, to an
-// uninterrupted run's. The fixture is sized so the tail engages: listing
-// against an undelayed bucket outruns four encoders, the rows wait, and
-// part 0 freezes the size limit long before listing ends. The
+// uninterrupted run's. The tail engages by construction: the drainer
+// starts only once listing is done (SWATH_TEST_DRAIN_AFTER_LISTING), so
+// every row waits for the tail. Before, the fixture relied on listing
+// against an undelayed bucket outrunning four encoders; on a slow runner
+// the drain kept up and the tail was too small (CI: 9 segments, 6,538
+// rows, no spill read) or never engaged in a kill run. The
 // clean run must report segments engaged with more than one worker, and
 // every kill must be reached, so a fixture that stops reaching the tail
 // fails instead of passing vacuously. Two arms: a row budget that holds
@@ -401,7 +404,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 	bin := buildSwath(t)
 	t.Parallel()
 	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
-	env := append(os.Environ(), "GOMAXPROCS=4")
+	env := append(os.Environ(), "GOMAXPROCS=4", "SWATH_TEST_DRAIN_AFTER_LISTING=1")
 	for _, arm := range []struct {
 		name, budget string
 		spilled      bool // the segments read spill frames

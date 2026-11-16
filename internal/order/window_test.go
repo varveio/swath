@@ -526,10 +526,15 @@ func (s *pacedSink) Write(ctx context.Context, segs [][]schema.Row[tp]) error {
 // is published), a writer the unlinks keep up with. The spill behind the
 // output does not hold the window: it is evicted while live spill is past
 // half the cap, so the spill ahead holds the window, which shrinks to what
-// the cap serves (spill_rows under its rows) instead of closing on spill
-// the writer has passed and crawling on the drainer's forced admissions
+// the cap serves (bound by spill_cap) instead of closing on spill the
+// writer has passed and crawling on the drainer's forced admissions
 // (counted against the gate, 295 of 320 tiles were forced). No frame is
-// refused and every key is handed on once, in order.
+// refused and every key is handed on once, in order. The spill gate itself
+// refuses a tile only while evicted certificates' unlinks are in flight
+// (TestWindowWaitsForEvictedCredit); when the flusher returns every credit
+// before a worker asks (Windows CI, once in 85), the window's rows, which
+// are the cap's, hold it alone. When the gate did refuse, it held the
+// window below those rows.
 func TestWindowShrinksToTheSpillCap(t *testing.T) {
 	const tiles, rows, page = 320, 120, 30
 	p := newPlanned(tiles, rows, page)
@@ -582,8 +587,37 @@ func TestWindowShrinksToTheSpillCap(t *testing.T) {
 	if st.SpillRefused != 0 || w.Forced > tiles/20 {
 		t.Fatalf("refused %d frames, %d of %d tiles forced: the window crawled", st.SpillRefused, w.Forced, w.Tiles)
 	}
-	if w.Waits[WindowSpill] == 0 || w.Evicted == 0 || w.SpillRows == 0 || w.SpillRows >= w.Rows {
-		t.Fatalf("spill did not bind the window below its rows: %+v", w)
+	if w.BoundBy != WindowSpillCap || w.Evicted == 0 || w.Waits[WindowRows]+w.Waits[WindowSpill] == 0 {
+		t.Fatalf("the spill cap did not bind the window: %+v", w)
+	}
+	if w.Waits[WindowSpill] > 0 && (w.SpillRows == 0 || w.SpillRows >= w.Rows) {
+		t.Fatalf("the spill gate did not hold the window below its rows: %+v", w)
+	}
+}
+
+// TestWindowWaitsForEvictedCredit: the spill gate holds the window while
+// the certificates it evicted are unlinked. A cap of 64 MiB, 56 MiB live,
+// 32 MiB of it drained certificates waiting for K (four of 8 MiB): three
+// are evicted, and until their unlinks land the 24 MiB they hold stays live
+// beside the 24 MiB ahead, past half the cap: the gate refuses, and asked
+// again before the flusher's next cycle refuses without evicting more.
+func TestWindowWaitsForEvictedCredit(t *testing.T) {
+	const mib = 1 << 20
+	c, _, _ := newDurable(t) // not started: no unlink lands
+	defer c.Close()
+	for range 4 {
+		c.drainedFile(&Cert{certified: true, charged: 8 * mib})
+	}
+	o := &run[int, tp]{sp: &spiller[tp]{cache: c}, win: &window[int, tp]{}}
+	o.sp.max.Store(64 * mib)
+	o.sp.live.Store(56 * mib)
+	for i := range 2 {
+		if !o.spillRefuses() || o.win.st.Evicted != 3 {
+			t.Fatalf("check %d: admitted, or evicted %d certificates, want refused with 3", i, o.win.st.Evicted)
+		}
+	}
+	if behind, waiting := c.Behind(); behind != 32*mib || waiting != 8*mib {
+		t.Fatalf("behind %d, waiting %d; want 32 MiB, 8 MiB", behind, waiting)
 	}
 }
 

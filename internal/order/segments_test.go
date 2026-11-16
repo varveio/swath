@@ -432,8 +432,7 @@ func TestSegmentsMemoryIsBounded(t *testing.T) {
 func TestSegmentWorkersCap(t *testing.T) {
 	withProcs(t, 9)
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	heldUntilOthersDone(t, f)
 	s := &partSink{limit: 3000, encoders: 8}
 	var calls atomic.Int64
 	var at time.Time
@@ -480,8 +479,7 @@ func TestSegmenterCalledUnlocked(t *testing.T) {
 	}
 	t.Cleanup(func() { hookSegmenter = nil })
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	heldUntilOthersDone(t, f)
 	s := &partSink{limit: 3000, encoders: 4}
 	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
 	if err != nil {

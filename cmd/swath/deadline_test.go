@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ type rowlessService struct {
 	listed            atomic.Int64
 	fresh             atomic.Int64
 	firstNs, latestNs atomic.Int64
+	liveEndNs         atomic.Int64 // the keyrange.EmptyChainLive-th fresh page's
 	url               string
 }
 
@@ -57,7 +59,11 @@ func newRowlessService(t *testing.T) *rowlessService {
 				s.firstNs.CompareAndSwap(0, now)
 				s.latestNs.Store(now)
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"kind":"storage#objects","nextPageToken":"fresh-%d"}`, s.fresh.Add(1))
+				n := s.fresh.Add(1)
+				if n == keyrange.EmptyChainLive {
+					s.liveEndNs.Store(now)
+				}
+				fmt.Fprintf(w, `{"kind":"storage#objects","nextPageToken":"fresh-%d"}`, n)
 				return
 			}
 		}
@@ -188,12 +194,30 @@ func TestDeadlineWithoutJournal(t *testing.T) {
 // is stopped as stuck (exit 75, cause stuck_empty_chain, resumable) once
 // the run of empty pages passes keyrange.EmptyChainLive and the stall
 // timeout passes after it; before, every answered page kept the watchdog
-// alive and the run went on forever (review R3, 2026-11-06).
+// alive and the run went on forever (review R3, 2026-11-06). The watchdog
+// stops it within the stall timeout of the later of that bound and the
+// run's last other progress: the first pages' rows are still being
+// published, and where syncs are slow (a loaded runner) that outlasts the
+// bound's pages (nightly CI: 2,236 pages; 300 ms syncs reproduce it).
 func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 	const stall = time.Second
-	captureStderr(t)
+	var stuckAt atomic.Int64 // when the watchdog warns that it stops the run
+	errOut = stuckStamp{captureStderr(t), &stuckAt}
 	s := newRowlessService(t)
 	s.set("empty")
+	// The run's durable work (parts, journal) reaches crash points: the
+	// last one reached before the watchdog's stop bounds its other progress.
+	// Every answer is read at response-read: that one is the pages'.
+	var mu sync.Mutex
+	var work []int64
+	defer faults.Set(func(p string) error {
+		if p != "response-read" {
+			mu.Lock()
+			work = append(work, time.Now().UnixNano())
+			mu.Unlock()
+		}
+		return nil
+	})()
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
 	// A guard only: the run used to go on until this.
@@ -208,12 +232,35 @@ func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 	if rep.Outcome.Cause != stuckEmptyChain || !rep.Outcome.Resumable {
 		t.Fatalf("outcome %+v, want cause %s, resumable", rep.Outcome, stuckEmptyChain)
 	}
-	// The bound's worth of empty pages, then the stall timeout's (one
-	// each 5 ms at most), with slack for the watchdog's tick and the stop.
+	// The bound's worth of empty pages, then the stop within the stall
+	// timeout of the later of the bound and the last other progress, with
+	// slack for the watchdog's tick.
 	chain := int64(keyrange.EmptyChainLive)
-	if n := s.fresh.Load(); n <= chain || n > chain+2*int64(stall/(5*time.Millisecond)) {
-		t.Fatalf("%d fresh empty pages, want over %d and within the stall timeout after", n, chain)
+	stop, from := stuckAt.Load(), s.liveEndNs.Load()
+	mu.Lock()
+	for _, at := range work {
+		if at < stop {
+			from = max(from, at)
+		}
 	}
+	mu.Unlock()
+	if n, after := s.fresh.Load(), time.Duration(stop-from); n <= chain || stop == 0 || after > 2*stall {
+		t.Fatalf("%d fresh empty pages, stopped %s after the bound's and the run's other progress; want over %d, within the stall timeout", n, after, chain)
+	}
+}
+
+// stuckStamp writes to w and records in at when the watchdog's warning
+// that it stops the run as stuck is written.
+type stuckStamp struct {
+	w  io.Writer
+	at *atomic.Int64
+}
+
+func (s stuckStamp) Write(b []byte) (int, error) {
+	if bytes.Contains(b, []byte("stopping the run as stuck")) {
+		s.at.CompareAndSwap(0, time.Now().UnixNano())
+	}
+	return s.w.Write(b)
 }
 
 // TestUnwritableReportAndStaleErrorJSON: an attempt that can write neither

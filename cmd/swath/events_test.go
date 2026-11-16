@@ -500,7 +500,12 @@ func TestBlockedStderrBounded(t *testing.T) {
 	if d := time.Since(start); d > 4*diagWait {
 		t.Errorf("%d events took %s", workers*each, d)
 	}
-	if n := runtime.NumGoroutine(); n > before+2 {
+	// A goroutine past wg.Done may not have exited yet: the count settles.
+	n := runtime.NumGoroutine()
+	for deadline := time.Now().Add(5 * time.Second); n > before+2 && time.Now().Before(deadline); n = runtime.NumGoroutine() {
+		time.Sleep(time.Millisecond)
+	}
+	if n > before+2 {
 		t.Errorf("%d goroutines, %d before", n, before)
 	}
 	if n := dropped.Load() - base; n < workers*each-diagQueue-1 {
@@ -508,8 +513,11 @@ func TestBlockedStderrBounded(t *testing.T) {
 	}
 	start = time.Now()
 	conclude(errors.New("boom"))
-	// Its wait, then one more once the kept lines ahead of it are shed.
-	if d := time.Since(start); d < 2*diagWait || d > 3*diagWait {
+	// Its wait, then one more once the kept lines ahead of it are shed;
+	// not one per kept line (diagQueue of them). Timers fire late on a
+	// loaded runner, so the ceiling is far below diagQueue waits rather
+	// than a quarter second above two.
+	if d := time.Since(start); d < 2*diagWait || d > 8*diagWait {
 		t.Errorf("the outcome line waited %s, want two diagWaits", d)
 	}
 }

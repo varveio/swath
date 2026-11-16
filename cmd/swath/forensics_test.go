@@ -99,16 +99,21 @@ func TestForcedExitCode(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
-			var stderr bytes.Buffer
+			var stderr syncBuffer
+			const hang = "journal-sync:1"
 			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--report", report)...)...)
-			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
+			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT="+hang)
 			cmd.Stderr = &stderr
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
-			time.Sleep(time.Second)
+			// Signalled once the sync hangs: before, a fixed second could
+			// signal a slow start before it, and the run stopped gracefully.
+			for deadline := time.Now().Add(30 * time.Second); !strings.Contains(stderr.String(), hangMarker(hang)) && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+			}
 			start := time.Now()
 			cmd.Process.Signal(sig)
 			var err error

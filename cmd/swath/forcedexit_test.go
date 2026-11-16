@@ -17,6 +17,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // waitExit waits for cmd at most limit, then kills it and fails.
@@ -225,10 +226,13 @@ func TestForcedExitAfterCommit(t *testing.T) {
 // exits 3 as incomplete and never as successful. Before, the account came
 // after the manifest's fault point: the forced exit found no result and
 // wrote a current-attempt deadline error.json (124) beside the complete
-// dataset (eighth review).
+// dataset (eighth review). The bucket is 100 keys, one part: the run must
+// reach its commit inside the deadline, and listing 20,000 keys into
+// 4 KiB parts did not always on a loaded runner (CI: 124, the deadline
+// before the commit).
 func TestForcedExitAtCommit(t *testing.T) {
 	bin := buildSwath(t)
-	s := newRowlessService(t)
+	url := gcstest.Bucket(t, gcstest.Keys(100), 0)
 	for _, tc := range []struct {
 		name     string
 		command  []string
@@ -245,7 +249,8 @@ func TestForcedExitAtCommit(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			report := filepath.Join(t.TempDir(), "report.json")
 			const deadline = 3 * time.Second
-			args := append(tc.command, s.args(dir, append([]string{"--max-duration", deadline.String(), "--report", report}, tc.flags...)...)...)
+			args := append(append(tc.command, "gs://bkt", "--endpoint-url", url, "--anonymous", "-o", dir,
+				"--max-duration", deadline.String(), "--report", report), tc.flags...)
 			cmd := exec.Command(bin, args...)
 			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=manifest:1")
 			start := time.Now()

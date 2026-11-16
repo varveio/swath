@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source/keyrange"
@@ -196,11 +197,21 @@ type versionCert struct {
 // ledger prefix (frames up to the first invalid one).
 func liveVersionCerts(t *testing.T, out string) []versionCert {
 	t.Helper()
+	certs, err := readVersionCerts(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certs
+}
+
+// readVersionCerts is liveVersionCerts without a test: for a crash-point
+// hook, off the test's goroutine.
+func readVersionCerts(out string) ([]versionCert, error) {
 	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger"))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	} else if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	tab := crc32.MakeTable(crc32.Castagnoli)
 	str := func(b []byte) (string, []byte) {
@@ -228,7 +239,7 @@ func liveVersionCerts(t *testing.T, out string) []versionCert {
 	for _, c := range live {
 		certs = append(certs, c)
 	}
-	return certs
+	return certs, nil
 }
 
 // TestVersionsDurableSpill: an --all-versions run with hot keys (groups of
@@ -280,21 +291,26 @@ func TestVersionsDurableSpill(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// The journal-append case's point: the claimed part after K
 			// starts inside a live certificate, so the resume reproduces it
-			// from replayed rows and listed ones together. Which ranges have
-			// sealed at the twelfth record is the schedule's (5 of 160 kills
-			// left K outside every certificate under -race on CI), so a run
-			// that misses is killed again on a fresh output, at most
-			// six times, and one that never covers K fails: the case never
-			// passes on listed rows alone.
+			// from replayed rows and listed ones together. Whether the
+			// twelfth record's K is inside one is the schedule's: the range
+			// there may have been drained without spilling (a third of
+			// kills at the twelfth record on a shared box; six in a row on
+			// CI). The run is therefore killed at the first append from the
+			// twelfth on whose K is inside a live certificate; a run where
+			// none is completes, and is run again on a fresh output, at
+			// most six times: the case never passes on listed rows alone.
 			var out string
 			for attempt := 1; ; attempt++ {
 				out = filepath.Join(t.TempDir(), "ds")
-				crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
-				if kill.point != "journal-append" || claimInsideCert(t, out) {
+				if kill.point != "journal-append" {
+					crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
+					break
+				}
+				if killInsideCert(t, hotVersionsConfig(api, out, false), out, kill.nth) && claimInsideCert(t, out) {
 					break
 				}
 				if attempt == 6 {
-					t.Fatalf("K %q is inside no live certificate after %d kills", versionsK(t, out), attempt)
+					t.Fatalf("%d runs, none with a record's K inside a live certificate from the %dth record on", attempt, kill.nth)
 				}
 			}
 			if kill.resumeKill != "" {
@@ -364,6 +380,53 @@ func claimInsideCert(t *testing.T, out string) bool {
 	}
 	t.Logf("K %q is inside no live certificate: killed again", k)
 	return false
+}
+
+// killInsideCert runs cfg, writing to out, and kills it at the first
+// journal append from the nth on whose K (the last recorded part's last
+// key) lies inside a live certificate. It reports false when the run
+// completed without one.
+func killInsideCert(t *testing.T, cfg Config, out string, nth int64) bool {
+	t.Helper()
+	var seen atomic.Int64
+	inside := func() bool {
+		st, err := journal.Read(out)
+		if err != nil {
+			return false
+		}
+		k := ""
+		for _, r := range st.Records {
+			if r.Type == "part" {
+				k = string(r.Part.MaxKey)
+			}
+		}
+		certs, err := readVersionCerts(out)
+		if err != nil {
+			return false
+		}
+		for _, c := range certs {
+			if c.cs <= k && (c.open || k < c.ce) {
+				return true
+			}
+		}
+		return false
+	}
+	restore := faults.Set(gated(func(p string) error {
+		if p == "journal-append" && seen.Add(1) >= nth && inside() {
+			return faults.ErrCrash
+		}
+		return nil
+	}))
+	_, err := Run(context.Background(), cfg)
+	restore()
+	if err == nil {
+		t.Logf("completed with no record's K inside a live certificate (%d appends): run again", seen.Load())
+		return false
+	}
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("killed inside a certificate: %v", err)
+	}
+	return true
 }
 
 // versionsK is the last key of the last part the journal in out records.
