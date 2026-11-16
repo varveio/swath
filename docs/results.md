@@ -147,4 +147,4 @@ it; `swath du`'s `max_last_modified` is the newest of them under a prefix.
 and an interrupted run starts over. A dataset is saved: it describes the source as it was during that
 listing, and reading it later does not check the source again. To see changes, list again into a new
 directory. A dataset run of an object store can be resumed after an interruption
-([stopping and resuming](running.md#stopping-and-resuming)); a local listing is run again.
+([stopping and resuming](resume-and-refresh.md#stopping-and-resuming)); a local listing is run again.

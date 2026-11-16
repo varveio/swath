@@ -1,86 +1,9 @@
-# The swath dataset
+# The swath dataset format
 
 `swath list SOURCE -o DIR` saves an inventory: a directory of sorted Parquet parts and a `manifest.json` that
-commits them. DuckDB, Python or any Parquet reader can query it. Below are a query to start from and how to tell
-whether an inventory is complete; [the format contract](#the-format-contract) after them defines every file,
-column and field.
-
-## Query an inventory with DuckDB
-
-A committed inventory in a local directory holds exactly the parts its manifest lists, under `data/`, so a glob
-of them reads the whole dataset. This query lists the five largest files of a local inventory in `inventory/`:
-
-```bash
-duckdb -c "
-  SELECT try(decode(key)) AS key, size
-  FROM read_parquet('inventory/data/*.parquet')
-  WHERE kind = 'file'
-  ORDER BY size DESC
-  LIMIT 5;"
-```
-
-```text
-┌───────────────────────┬──────────┐
-│          key          │   size   │
-│        varchar        │  int64   │
-├───────────────────────┼──────────┤
-│ archive/disk.img      │ 67108864 │
-│ videos/trip.mp4       │ 31000000 │
-│ photos/2025/beach.jpg │  2400000 │
-│ photos/2026/snow.jpg  │  2100000 │
-│ photos/2025/hills.jpg │  1900000 │
-└───────────────────────┴──────────┘
-```
-
-A local tree's `key` is binary, since file names need not be UTF-8, so `try(decode(key))` reads it as text: a
-name that is not UTF-8 reads as NULL there instead of failing the query (plain `decode` refuses it), and `key`
-itself keeps its exact bytes. An object store's `key` is text already, so write `key`, and leave out `kind`,
-which only a local tree has. Each source's columns are in the [schema registry](#schema-registry); every part
-of a dataset has every column of its schema.
-
-The glob is not enough in two cases. There, read the part list from `manifest.json`:
-
-- **The directory has no `manifest.json`.** Its run has not committed. An interrupted run's `data/` holds the
-  parts written so far, and a glob reads them as a partial listing without an error. `swath show DIR` says
-  whether a dataset is there and how complete it is ([below](#check-that-an-inventory-is-complete)).
-- **The dataset is in a bucket.** Its parts are under `data/RUN/ATTEMPT/`, and a run that was abandoned can
-  leave parts beside them that the manifest does not name ([a dataset in a bucket](#a-dataset-in-a-bucket)).
-
-```bash
-duckdb -c "
-  SET VARIABLE parts = (SELECT list('inventory/' || p.path)
-                        FROM (SELECT unnest(parts) AS p FROM read_json('inventory/manifest.json')));
-  SELECT try(decode(key)) AS key, size
-  FROM read_parquet(getvariable('parts'))
-  WHERE kind = 'file'
-  ORDER BY size DESC
-  LIMIT 5;"
-```
-
-## Check that an inventory is complete
-
-`swath show DIR` prints the coverage on one line; a program reads the same from the manifest:
-
-```bash
-duckdb -c "SELECT c.complete, c.stop_reason, c.unreadable,
-                  len(c.filters) AS filters, len(c.exclusions) AS exclusions
-           FROM (SELECT extensions.swath.coverage AS c FROM read_json('inventory/manifest.json'))"
-```
-
-```text
-┌──────────┬─────────────┬────────────┬─────────┬────────────┐
-│ complete │ stop_reason │ unreadable │ filters │ exclusions │
-│ boolean  │   varchar   │   int64    │  int64  │   int64    │
-├──────────┼─────────────┼────────────┼─────────┼────────────┤
-│ true     │ completed   │          0 │       0 │          0 │
-└──────────┴─────────────┴────────────┴─────────┴────────────┘
-```
-
-`complete` is true when nothing is missing: the listing reached the end of its scope (`stop_reason`
-`end_of_scope`) and read every entry (`unreadable` 0). Filters do not make it partial: an inventory is complete for
-the filters it records, so check that `filters` and `exclusions` are empty, or that you accept them. Check too that the manifest's
-`source` and `scope` are the ones you expect, and treat a missing field as unknown, not as 0
-([the swath extension](#the-swath-extension)).
+commits them. This page is its contract: every file, column and field. Queries to start from, how to tell
+whether an inventory is complete and how to verify one are in
+<a id="query-an-inventory-with-duckdb"></a><a id="check-that-an-inventory-is-complete"></a>[Query an inventory](query.md).
 
 ## The format contract
 
@@ -146,35 +69,7 @@ Whether a dataset suits a purpose is the application's decision. The manifest re
 source, scope and coverage, `one_file_system` included, and what it collected) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
 expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
-after it is copied or moved, not for ordinary reads. `swath verify` is planned
-([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
-[SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
-section of its `go/README.md`). From the root of a SeekParquet checkout that includes `cmd/seekparquet`
-and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
-`github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the release that fixed draft revision 1; use that
-release (tag `go/v0.2.0`) or a later one with a matching format.
-
-```bash
-go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
-go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
-```
-
-`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
-swath declares one for every part. `full` separately checks the format, key order and decoded pages
-(including the structural and profile levels); it does not check digests or swath's extension and
-schema semantics. Neither proves that the listing covers the source you intended.
-
-The validator exits 0 when all requested levels complete, 1 when any level fails, and 2 when validation
-is incomplete, cannot run, or the arguments are invalid. With `go run`, a nonzero validator status is
-printed as `exit status N`; the `go` command itself exits 1.
-
-For a dataset produced with local output, the repository also has
-[`verify.py`](../verify.py): `python3 verify.py /path/to/dataset` from the repository root, with
-DuckDB installed. It checks swath metadata, schema-specific rules, row counts, key order and bounds,
-footer stamps and part SHA-256 digests independently of the Go reader. It expects the producer's flat
-`data/part-NNNNN.parquet` layout and `run.json`, so it is not a general validator for a bucket dataset
-copied locally with its nested run/attempt part paths. See the [verifier guide](internals/testing.md#verifypy)
-for its checks and optional reference comparison.
+after it is copied or moved, not for ordinary reads: [Verify a dataset](query.md#verify-a-dataset) shows how.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
@@ -193,6 +88,15 @@ dataset has none, a partial one included, whose coverage says what is missing, e
 `--overwrite` run failed to replace, where it is that run's outcome. The full tree and the publication order are in
 [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
+```text
+DIR/
+  data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
+  manifest.json             the commit: written last, names every part with exact key bounds and coverage
+  run.json                  the run report (after the commit)
+  error.json                the outcome of an attempt that did not complete
+  .swath/                   private workspace: lock, journal, parts/, spill/, suspect/, progress.json, stack dumps
+```
+
 ### The cut file
 
 `cuts.txt` is the dataset's key distribution for the next listing of the same source and scope. It is
@@ -202,7 +106,7 @@ orphan cleanup too, within a time bound of its own); one it cannot write, or not
 dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the
 dataset complete), and a dataset of no rows has none.
 
-It is a [cut file](running.md#seeding-a-refresh-from-the-previous-dataset): one line per cut, the key, a tab, and
+It is a [cut file](resume-and-refresh.md#seeding-a-refresh-from-the-previous-dataset): one line per cut, the key, a tab, and
 the rows after the previous cut through that key; the counts sum to the manifest's rows and the last line is the
 dataset's last key. A cut falls only where a 1,024-row key page the writer filled ends, never where the next
 page continues a key's versions. With R rows a cut, it is the first such page end where the dataset's rows reach
@@ -441,7 +345,7 @@ This section is for consumers that read the parts without `reader`: DuckDB, Pyth
 
 - **The dataset is the parts `manifest.json` lists**, in the listed order. In a committed local directory those
   are exactly the files under `data/`, so a glob reads them; elsewhere, read the manifest's list
-  ([Query an inventory with DuckDB](#query-an-inventory-with-duckdb)): a run in progress publishes parts under
+  ([Query an inventory with DuckDB](query.md#query-an-inventory-with-duckdb)): a run in progress publishes parts under
   `data/` before its commit, and a bucket prefix can hold parts no manifest names.
   Columns a schema id does not define may appear anywhere and are ignored.
 - **Order is unsigned byte order.** Rows ascend by `key`'s bytes compared as unsigned bytes, within each part and
