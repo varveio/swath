@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
@@ -195,7 +194,6 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 // resume of a run with parts keeps its journal when the endpoint stops
 // answering: it is still resumable.
 func TestUnreachableLeavesNoRun(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)
@@ -277,7 +275,6 @@ func dirNames(t *testing.T, dir string) []string {
 // previous dataset first, and either failure left the directory without
 // one (C-S1).
 func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureSyncStderr(t)
 	s3test.NoCredentials(t)
 	shortGrace(t, 500*time.Millisecond)
@@ -331,7 +328,7 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 		t.Fatalf("exit %d (%v)", code, err)
 	}
 	now.Reset()
-	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+dir+" continues it") {
+	if err := show([]string{dir}, &now); err != nil || !strings.HasPrefix(now.String(), was.String()) || !strings.Contains(now.String(), "swath resume "+shellQuote(dir)+" continues it") {
 		t.Fatalf("show after the stopped overwrite: %v\n%s", err, now.String())
 	}
 	slow.Store(false)

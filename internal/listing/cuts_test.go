@@ -21,7 +21,6 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/source"
@@ -311,7 +310,7 @@ func TestCutsFileKeyBytes(t *testing.T) {
 	scriptNext = &scripted{keys: keys, chunk: 50}
 	scriptMu.Unlock()
 	var w warnings
-	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()},
+	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
 		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Warn: w.warn})
 	if err != nil || sum.Outcome.Status != StatusCommitted {
 		t.Fatal(err)
@@ -449,7 +448,7 @@ func TestSeedFromDatasetCuts(t *testing.T) {
 		var w warnings
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", SeedFrom: prior,
 			Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: true}}},
-			Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}, Warn: w.warn})
+			Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10, Workers: 8}, Warn: w.warn})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -504,7 +503,7 @@ func TestSeedFromDatasetBadCuts(t *testing.T) {
 		var w warnings
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", SeedFrom: prior,
 			Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: true}}},
-			Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}, Warn: w.warn})
+			Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10, Workers: 8}, Warn: w.warn})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

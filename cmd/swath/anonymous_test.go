@@ -102,7 +102,7 @@ func TestPublicBucketHint(t *testing.T) {
 	} {
 		t.Setenv("AWS_ACCESS_KEY_ID", c.env)
 		out := filepath.Join(t.TempDir(), "ds")
-		err := run(context.Background(), append(append(c.args, "-o", out), unjournaled...), io.Discard, diagList)
+		err := run(context.Background(), append(c.args, "-o", out), io.Discard, false)
 		var ce *objhttp.CredentialError
 		var ee *exitError
 		if !errors.As(err, &ce) || !ce.CredentialRefused() || !strings.Contains(ce.Err.Error(), c.cause) ||
@@ -118,7 +118,7 @@ func TestPublicBucketHint(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	// The hint is right: the public container lists with --anonymous.
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint-url", azEndpoint(az), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
+	if err := run(context.Background(), []string{"az://replay/corpus", "--endpoint-url", azEndpoint(az), "--anonymous", "-o", out}, io.Discard, false); err != nil {
 		t.Fatalf("--anonymous: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {

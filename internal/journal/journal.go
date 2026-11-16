@@ -690,8 +690,10 @@ func Sync(out string) error {
 }
 
 // SyncIn is Sync through r, the output root (the journal a regular file).
+// The journal is opened for writing: Windows flushes only a handle that
+// may write.
 func SyncIn(r *os.Root) error {
-	f, err := openIn(r, os.O_RDONLY)
+	f, err := openIn(r, os.O_WRONLY)
 	if err != nil {
 		return err
 	}

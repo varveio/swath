@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/order"
@@ -184,7 +183,7 @@ func hotVersionsConfig(api *hotVersions, out string, resume bool) Config {
 		api.gate.Store(&versionsGate{release: make(chan struct{})})
 	}
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: true, Policy: keyrange.Policy{PageSize: 7}}},
-		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()},
+		Output: OutputConfig{Dir: out, Resume: resume},
 		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: MinRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
 }
 
@@ -255,7 +254,6 @@ func readVersionCerts(out string) ([]versionCert, error) {
 // so certificates begin and end at complete keys, and a replay accepts a
 // key repeated within its group.
 func TestVersionsDurableSpill(t *testing.T) {
-	datasettest.RequireJournal(t)
 	api := newHotVersions(t)
 	defer order.SetDurableEvents(api.event)()
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -556,7 +554,6 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 // replay its reused certificates, its cut file too (the parts written from
 // certificates collected in publication order like any other).
 func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
-	datasettest.RequireJournal(t)
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
 	api := newHotVersionsN(t, 60000)
 	defer order.SetDurableEvents(api.event)()

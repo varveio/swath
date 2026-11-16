@@ -26,7 +26,6 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -225,7 +224,6 @@ func TestRemoteDelayedCommit(t *testing.T) {
 		committedPartsExist(t, d, "late503")
 	})
 	t.Run("resume retries the candidate", func(t *testing.T) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		d := newDestination(t, gcsProvider, nil)
 		ws := filepath.Join(t.TempDir(), "work")
@@ -314,7 +312,6 @@ func TestRemoteSessionSecrecy(t *testing.T) {
 // directory before a resume, and the claims directory swapped for one
 // while the run goes.
 func TestRemoteWorkDirLinks(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	d := newDestination(t, gcsProvider, nil)
 	for i, c := range []struct {
@@ -372,7 +369,6 @@ func TestRemoteWorkDirLinks(t *testing.T) {
 // parts were acknowledged is corruption, never a fresh start: the work
 // directory's remote state proves the header was durable.
 func TestRemoteDamagedHeader(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
@@ -403,7 +399,6 @@ func readLedger(ws string) (dataset.Ledger, error) {
 // another value of the variable is refused, and nothing reaches the other
 // server.
 func TestRemoteEndpointFrozen(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	a, b := newDestination(t, gcsProvider, nil), newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
@@ -487,7 +482,6 @@ func bigBucket(t *testing.T) string {
 // dataset is the local run's; a kill inside a later chunk of an upload is
 // resumed to the same dataset, with nothing of the killed session left.
 func TestRemoteMultiChunk(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := bigBucket(t)
 	config := func(ws string, resume bool, out *RemoteOutput) Config {
 		c := crashConfig(url, ws, resume)
@@ -639,7 +633,6 @@ func TestRemoteAmbiguityKept(t *testing.T) {
 // and replaces neither the candidate nor any part: the earlier creation
 // landing later commits a dataset whose parts all exist.
 func TestRemoteCandidateKept(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	d := newDestination(t, gcsProvider, nil)
 	ws := filepath.Join(t.TempDir(), "work")
@@ -705,7 +698,6 @@ func (o stallingOpener) Open(ctx context.Context, n string) (objfile.Object, err
 // answers or its body stalls after the headers, on the client a run
 // builds.
 func TestRemoteResumeBounded(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	t.Run("open", func(t *testing.T) {
 		d := newDestination(t, gcsProvider, nil)
@@ -766,7 +758,6 @@ func TestRemoteResumeBounded(t *testing.T) {
 // deletes refused) is not finalized: the next resume deletes them and
 // finalizes.
 func TestRemoteFinalizeRetried(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -816,7 +807,6 @@ func TestRemoteFinalizeRetried(t *testing.T) {
 // Per provider.
 func TestRemoteLostRaceResumed(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		d := newDestination(t, p, nil)
 		ws := filepath.Join(t.TempDir(), "work")
@@ -861,7 +851,6 @@ func TestRemoteLostRaceResumed(t *testing.T) {
 // dataset.
 func TestRemoteWithProfilesAndSpill(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		url := crashBucket(t)
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

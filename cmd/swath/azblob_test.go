@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/azblob"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
@@ -39,7 +38,6 @@ func azEndpoint(r *azblobtest.Replay) string { return strings.TrimSuffix(r.Endpo
 // commits every key once in byte order, the adapter's counters in the
 // report.
 func TestAzblobHostileCorpus(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
@@ -120,7 +118,6 @@ func noSecret(t *testing.T, at string, stderr *bytes.Buffer, out string, extra .
 // another one (credentials are not identity) and completes; the endpoint
 // stays frozen.
 func TestAzblobSASNeverRecorded(t *testing.T) {
-	datasettest.RequireJournal(t)
 	stderr := captureStderr(t)
 	t.Setenv(azblob.EnvSAS, "")
 	t.Setenv(azblob.EnvKey, "")
@@ -168,7 +165,6 @@ func TestAzblobSASNeverRecorded(t *testing.T) {
 // provider reads it when the flag is absent); without either the resume
 // is refused, naming both.
 func TestAzblobSASFlagThenEnvironment(t *testing.T) {
-	datasettest.RequireJournal(t)
 	stderr := captureStderr(t)
 	t.Setenv(azblob.EnvSAS, "")
 	t.Setenv(azblob.EnvKey, "")
@@ -249,7 +245,7 @@ func TestAzblobSASReservedParameter(t *testing.T) {
 		t.Setenv(azblob.EnvSAS, c.env)
 		out := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(context.Background(), append(append(c.args, "--endpoint-url", srv.URL, "--report", report, "-o", out), unjournaled...), io.Discard, diagList)
+		err := run(context.Background(), append(c.args, "--endpoint-url", srv.URL, "--report", report, "-o", out), io.Discard, false)
 		if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "names comp,") || strings.Contains(err.Error(), "SECRET") || requests.Load() != 0 {
 			t.Fatalf("%s: %v, %d requests; want the refusal naming comp, before any request", c.name, err, requests.Load())
 		}
@@ -258,7 +254,7 @@ func TestAzblobSASReservedParameter(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a"})
 	t.Setenv(azblob.EnvSAS, sas)
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint-url", azEndpoint(r), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
+	if err := run(context.Background(), []string{"az://replay/corpus", "--endpoint-url", azEndpoint(r), "--anonymous", "-o", out}, io.Discard, false); err != nil {
 		t.Fatalf("--anonymous: %v", err)
 	}
 }
@@ -330,7 +326,6 @@ func TestAzureSDKLogProcess(t *testing.T) {
 // counts equal the keys. The engine's group mode over names with several
 // entries is azblob's TestVersionsListing.
 func TestAzblobAllVersions(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)

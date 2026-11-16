@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -89,7 +88,6 @@ func committedObjectBytes(t *testing.T, name string, sum Report, out string, wan
 // object_bytes (it listed every row). A resume whose final part is
 // already recorded (the commit only) states the same from the records.
 func TestCommittedObjectBytes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	keys := gcstest.Keys(8000)
 	want := allKeyBytes(keys)
 	url := crashBucket(t)
@@ -149,7 +147,6 @@ func TestCommittedObjectBytes(t *testing.T) {
 // bytes: the retained parts' counts from their records, the rest from the
 // resume's writers. This invocation's object_bytes is what it listed only.
 func TestCommittedObjectBytesResumed(t *testing.T) {
-	datasettest.RequireJournal(t)
 	want := allKeyBytes(gcstest.Keys(8000))
 	url := crashBucket(t)
 	for _, spill := range []bool{false, true} {
@@ -191,7 +188,6 @@ func TestCommittedObjectBytesResumed(t *testing.T) {
 // files (rows it never listed, which its object_bytes leaves out) states
 // the dataset's object bytes exactly, each replayed row counted once.
 func TestCommittedObjectBytesReplayed(t *testing.T) {
-	datasettest.RequireJournal(t)
 	want := allKeyBytes(gcstest.Keys(30000))
 	url, _, ref, out := durableFixture(t)
 	var m dataset.Manifest
@@ -283,7 +279,6 @@ func TestCommittedObjectBytesEmpty(t *testing.T) {
 // nothing listed or emitted by the invocation.
 func TestRemoteResumedCommitAccount(t *testing.T) {
 	eachProvider(t, func(t *testing.T, p provider) {
-		datasettest.RequireJournal(t)
 		want := allKeyBytes(gcstest.Keys(8000))
 		url := crashBucket(t)
 		d := newDestination(t, p, nil)

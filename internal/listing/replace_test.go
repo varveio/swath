@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 )
 
@@ -57,7 +56,6 @@ func visible(t *testing.T, dir string) map[string][32]byte {
 // replacement is left, and its cut file is an uninterrupted run's. Before,
 // --overwrite removed the previous dataset before listing anything (C-S1).
 func TestReplaceKeepsPreviousUntilCommit(t *testing.T) {
-	datasettest.RequireJournal(t)
 	before := fakeS3(t, 3000)
 	after := fakeS3(t, 2000)
 	out := filepath.Join(t.TempDir(), "ds")

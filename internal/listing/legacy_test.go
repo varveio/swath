@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/journal"
 )
 
@@ -86,7 +85,6 @@ func snapshot(t *testing.T, out string) map[string][]byte {
 // no replacement part or record is written and no manifest appears
 // (durability review: version 7 recovery would remove that part as unrecorded).
 func TestLegacyTemporaryProtocolIsRefusedOrRecovered(t *testing.T) {
-	datasettest.RequireJournal(t)
 	for _, damage := range []string{"intact", "five-byte truncation", "whole last frame removed"} {
 		url, b := crashBackend(t)
 		out := filepath.Join(t.TempDir(), "ds")
@@ -191,7 +189,6 @@ func setSourceIdentity(t *testing.T, out string, fields []journal.Field) {
 // workspace are byte for byte as they were, with no manifest. The same
 // dataset with the current identity then resumes to the uninterrupted one.
 func TestLegacyS3IdentityIsRefused(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

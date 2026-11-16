@@ -148,7 +148,7 @@ runs the tier and prints its command; `UPDATE=1` with that command rewrites the 
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
-| `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest and windows-latest for escalated PRs, main and dispatch |
+| `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` (40m on Windows, whose job limit is 45 minutes) on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest and windows-latest for escalated PRs, main and dispatch |
 | `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
@@ -252,16 +252,15 @@ Linux arm64 alone cannot cover those differences.
 Where a platform cannot run a case the test skips with
 the platform behavior as its reason, never silently:
 
-- **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync; #295
-  tracks a write-through mode), so tests of journaled runs, crash recovery, resume and the durable spill call
-  `datasettest.RequireJournal` and skip: `TestCrashMatrix`, the `listing` `TestDurable*` matrices among them.
-  The `order` durable-spill unit tests open the cache directly, with no journaled run in between, and run on
-  Windows too. Their directory listings go through the `os.Root`, never `root.FS()`, whose slash-only paths
-  reject `order.DurableDir` there (#301). A test that checks a directory is empty lists it through a helper that
-  fails on a listing error (`readDir`, `durableEntries`), so a failed listing never passes as an empty one. The
-  process-kill tests (`cmd/swath` `sigkill_test.go`, `forcedexit_test.go`, `segments_durable_test.go`,
-  `durable_campaign_test.go`) are not built there (`//go:build !windows`). Replay fixtures that only need a
-  dataset list it unjournaled. Windows also refuses to rename a directory holding an open file (a running
+- **Windows** runs the journaled, crash-recovery, resume and durable-spill tests as Linux does
+  (`TestCrashMatrix`, the `listing` `TestDurable*` matrices, the `cmd/swath` SIGKILL matrices of
+  `sigkill_test.go` and `segments_durable_test.go`, where a process that kills itself exits with code 137:
+  `selfKilled`). The `order` durable-spill tests' directory listings go through the `os.Root`, never
+  `root.FS()`, whose slash-only paths reject `order.DurableDir` there (#301). A test that checks a directory
+  is empty lists it through a helper that fails on a listing error (`readDir`, `durableEntries`), so a failed
+  listing never passes as an empty one. `forcedexit_test.go` (SIGTERM, nonblocking pipes) and
+  `durable_campaign_test.go` (a shell-script child; the campaign is opt-in) are not built there
+  (`//go:build !windows`). Windows also refuses to rename a directory holding an open file (a running
   output cannot be replaced, the sort-fixture replacement cases), resets a connection closed with unread
   input (the replay diff's residual cases), has no permission bit that hides a directory, refuses `<` and
   `>` in names, needs privileges for symbolic links, has no SIGTERM to send, and its monotonic clock ticks
@@ -269,7 +268,7 @@ the platform behavior as its reason, never silently:
 - **macOS and Windows** refuse names that are not UTF-8 (APFS, NTFS): the byte-for-byte name cases run on
   Linux only.
 
-macOS runs the crash, durable and kill matrices without `-race`.
+macOS and Windows run the crash, durable and kill matrices without `-race`.
 
 The object-file S3 dataset test creates an unsynced local fixture when directory sync is unavailable.
 It tests remote reading, verification, ranges and listing, not durable publication; those assertions
@@ -285,7 +284,7 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 |---|---|---|
 | `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | `all`, `go-race-nightly` |
 | `go-xos-macos` | on macos-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-macos` |
-| `go-xos-windows` | on windows-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
+| `go-xos-windows` | on windows-latest, `go vet ./...` and `go test -count=1 -timeout 40m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `osv-scan` | builds both `Dockerfile` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
 

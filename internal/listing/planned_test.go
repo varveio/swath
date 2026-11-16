@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source/keyrange"
@@ -193,7 +192,6 @@ func outside(t span, certs []span) []span {
 // of each tile (K, c1], (c1, c2], ..., (cn, ⊤] after the certificates; the
 // dataset is the uninterrupted run's byte for byte.
 func TestDurableResumePlannedAcrossTiles(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	keys := checkContract(t, ref)
 	cuts := filepath.Join(t.TempDir(), "fine.cuts")

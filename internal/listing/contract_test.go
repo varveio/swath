@@ -26,7 +26,6 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/s3"
@@ -331,7 +330,7 @@ func TestDatasetContract(t *testing.T) {
 	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
 		o.Endpoint, o.PathStyle, o.Anonymous = url, true, true
 		out := filepath.Join(t.TempDir(), "ds")
-		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()},
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out},
 			Limits: Limits{PartSize: 16 << 10, Workers: 8}}); err != nil {
 			t.Fatal(err)
 		}

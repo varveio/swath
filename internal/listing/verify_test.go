@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 )
@@ -27,7 +26,6 @@ import (
 // advance), so the watchdog does not take a long verification for a
 // stall. Before, the read could not be stopped and was invisible.
 func TestRecoveryVerificationIsCancellableAndReported(t *testing.T) {
-	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 20000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))

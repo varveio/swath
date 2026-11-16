@@ -168,7 +168,7 @@ jobs:
   go-xos-windows:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-windows'
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45 # the journaled, crash and kill matrices: ci.yml go-xos
     defaults:
       run:
         shell: bash
@@ -186,7 +186,7 @@ jobs:
         run: go vet ./...
 
       - name: go test (no -race)
-        run: go test -count=1 -timeout 25m ./...
+        run: go test -count=1 -timeout 40m ./...
 
   # The Go port's shape suite at full scale (bench/shapes; docs/internals/testing.md): every bucket
   # shape at about 2M keys behind the in-process fake, with its service behaviours (latency

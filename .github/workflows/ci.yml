@@ -515,7 +515,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.go_xos) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Windows runs the journaled, crash and kill matrices about three times slower than macOS
+    # (internal/listing 23 min against 8, 2026-11-16): its package timeout and job limit are longer.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     defaults:
       run:
         shell: bash
@@ -540,7 +542,9 @@ jobs:
             mapfile -t packages <<<"$selected"
           fi
           go vet "${packages[@]}"
-          go test -count=1 -timeout 25m "${packages[@]}"
+          timeout=25m
+          if [ "$RUNNER_OS" = Windows ]; then timeout=40m; fi
+          go test -count=1 -timeout "$timeout" "${packages[@]}"
 
       - name: Reader module vet and tests (no -race)
         if: matrix.scope == 'full' && needs.changes.outputs.reader == 'true'

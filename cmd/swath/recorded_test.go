@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -28,7 +27,6 @@ import (
 // that started it: before the first release no build promises to resume
 // another's runs.
 func TestResumeRefusesRemovedFlag(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
@@ -60,7 +58,6 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 // (--row-budget, now --sort-buffer) resumes with the recorded value under
 // the new name, and a --sort-buffer given to swath resume wins over it.
 func TestResumeRenamedFlag(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
@@ -114,7 +111,6 @@ func slowBucket(t *testing.T) string {
 // diagnostic disk overrides (--spill-reserve, --spill-compress), and the
 // report states the reserve in effect.
 func TestResumeTakesDiagnosticDiskFlags(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()

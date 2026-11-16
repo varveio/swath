@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -64,7 +63,6 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 // names) has no committed_object_bytes, in its manifest or the report,
 // never 0.
 func TestResumeCompleteAccount(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	src := t.TempDir()
@@ -123,7 +121,6 @@ func TestResumeCompleteAccount(t *testing.T) {
 // completed with exit 0 when it covers its scope, incomplete with exit 3
 // when a key limit left it partial, as --report says.
 func TestRemoteResumeFindsCommit(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
 	s3test.NoCredentials(t)

@@ -254,7 +254,7 @@ func TestDuFromDatasetObjectStore(t *testing.T) {
 	store := []string{"--endpoint-url", end, "--anonymous"}
 	ds, logs := filepath.Join(t.TempDir(), "ds"), filepath.Join(t.TempDir(), "logs")
 	for _, l := range []struct{ src, dir string }{{"s3://bkt", ds}, {"s3://bkt/logs/", logs}} {
-		if err := run(context.Background(), append(append([]string{l.src, "-o", l.dir, "--no-stats"}, store...), unjournaled...), io.Discard, diagList); err != nil {
+		if err := run(context.Background(), append([]string{l.src, "-o", l.dir, "--no-stats"}, store...), io.Discard, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -596,7 +596,7 @@ func TestDuFromDatasetManyParts(t *testing.T) {
 	end := s3test.Bucket(t, s3test.Keys(3000, 7))
 	store := []string{"--endpoint-url", end, "--anonymous"}
 	ds := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), append(append([]string{"s3://bkt", "-o", ds, "--part-size", "4KiB", "--no-stats"}, store...), unjournaled...), io.Discard, diagList); err != nil {
+	if err := run(context.Background(), append([]string{"s3://bkt", "-o", ds, "--part-size", "4KiB", "--no-stats"}, store...), io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	var m dataset.Manifest

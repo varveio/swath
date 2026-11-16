@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 )
@@ -36,7 +35,6 @@ const (
 // heap within linear ceilings in n, for 200 and 800 parts;
 // SWATH_GROWTH=1 adds 10,000 parts and logs the peak heap and the wall.
 func TestPartCountGrowth(t *testing.T) {
-	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("lists 1,000 parts")
 	}

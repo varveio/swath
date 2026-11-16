@@ -5,6 +5,13 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: on Windows, dataset runs of S3, GCS and Azure Blob sources keep their journal and `swath resume`
+  continues them, as on Linux and macOS: directories are synced with `FlushFileBuffers` and renames are
+  written through. A run whose output's filesystem refuses a directory sync is refused when it starts, with
+  the filesystem's error; it was refused on every Windows output. A rename blocked by a file another program
+  holds open fails after two seconds with that cause named; an `--overwrite` refused so leaves the previous
+  dataset readable, and `swath resume` installs the replacement once the reader is closed. Power-loss
+  safety holds on local NTFS; on ReFS or an SMB share a power loss may lose the latest part names.
 - Go port: an Azure Blob account that answers the namespace check only with 503 `ServerBusy` (or other 5xx,
   throttling, timeouts) is asked again, as a listing page is, until it answers; a run that never gets an answer
   stops as stuck (exit 75). Before, once the retries were spent the run was refused as unsupported (exit 2,

@@ -21,7 +21,6 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -51,7 +50,7 @@ func crashConfig(url, out string, resume bool) Config {
 	// interleaved, so crashes during listing find published parts. One
 	// encoder: no other upload is in flight when a crash or a failure
 	// lands, so every object a resume finds is proven or deleted.
-	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Encoders: 1, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Encoders: 1, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
@@ -71,7 +70,6 @@ func crashConfig(url, out string, resume bool) Config {
 // 4 ms interval) cuts nearly every part by time, so every crash point
 // meets a time-cut part.
 func TestCrashMatrix(t *testing.T) {
-	datasettest.RequireJournal(t)
 	s3url, gcsep, azep := crashBucket(t), gcsBucket(t, 8000), azblobBucket(t, 8000)
 	// The seeded arm's prior: an earlier listing's dataset, its page index
 	// read as the run goes (its cut file removed; and its reader failing
@@ -231,7 +229,6 @@ var calibrating = map[string][]int64{"journal-append": {2}}
 // part is the clean run's, byte for byte: the reproduction calibrates as
 // the original did.
 func TestCalibratingClaimRecoversRepeatedly(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -301,7 +298,6 @@ func TestCalibratingClaimRecoversRepeatedly(t *testing.T) {
 // TestResumeChecksIdentity: a resume with settings that change the dataset
 // is refused with a typed error; one with new workers is accepted.
 func TestResumeChecksIdentity(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	out := filepath.Join(t.TempDir(), "ds")
 	var n atomic.Int64
@@ -363,7 +359,6 @@ func TestResumeChecksIdentity(t *testing.T) {
 // TestAlteredPartIsRefused: a retained part that no longer matches its
 // journal record (size or digest) stops the resume.
 func TestAlteredPartIsRefused(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	out := filepath.Join(t.TempDir(), "ds")
 	var n atomic.Int64
@@ -410,7 +405,6 @@ func TestAlteredPartIsRefused(t *testing.T) {
 // earlier part or the last recorded one, which has no claimed copy to
 // publish from either.
 func TestMissingPartIsRefused(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	tree := func(out string) map[string]string {
 		m := map[string]string{}
@@ -516,7 +510,6 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 // they touch anything, and the owner then finishes byte-identically
 // (durability P1-2).
 func TestCompetingRunsAreRefused(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -582,7 +575,6 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 // durable record and its rename leaves the recorded temporary part in
 // place, and -resume publishes it (durability P1-3).
 func TestRenameFailureAfterRecordResumes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -627,7 +619,6 @@ func TestRenameFailureAfterRecordResumes(t *testing.T) {
 // (overrunning the file) and a corrupt last frame of an acknowledged,
 // published part are refused, and nothing is deleted (durability P1-6).
 func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	for _, damage := range []string{"interior length", "last frame"} {
 		out := filepath.Join(t.TempDir(), "ds")
@@ -673,7 +664,6 @@ func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 // resume publishes without listing again, so a bucket that changed in
 // between cannot add a second final part (durability P2, finality).
 func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -704,7 +694,6 @@ func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
 // TestENOSPCOnJournalResumes: a disk-full error on a journal append fails
 // the run without losing anything durable; -resume completes it.
 func TestENOSPCOnJournalResumes(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -763,7 +752,6 @@ func crashAtRecorded(t *testing.T, url, out string) {
 // that never reached the disk) is dropped and the run resumes identically.
 // A damaged header length is refused too, never taken for "no journal".
 func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -824,7 +812,6 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 // keeps refusing (durability review; the static-source cases above cannot
 // see the loss).
 func TestAmbiguousTailRefusesOnChangedSource(t *testing.T) {
-	datasettest.RequireJournal(t)
 	for _, damage := range []string{"truncated", "zero tail", "truncated, rest deleted"} {
 		url, b := crashBackend(t)
 		out := filepath.Join(t.TempDir(), "ds")
@@ -881,7 +868,6 @@ func TestAmbiguousTailRefusesOnChangedSource(t *testing.T) {
 // deleting anything, for a truncated frame and a damaged closing byte alike,
 // and the published part stays.
 func TestAcknowledgedTailTruncationRefuses(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	for _, damage := range []string{"truncated", "zero tail", "closing byte"} {
 		out := filepath.Join(t.TempDir(), "ds")
@@ -925,7 +911,6 @@ func TestAcknowledgedTailTruncationRefuses(t *testing.T) {
 // a deleted suffix is refused with the part kept, at every attempt
 // (durability review).
 func TestAcknowledgedWholeLastFrameLossPreservesPart(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url0 := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url0, ref, false)); err != nil {
@@ -996,7 +981,6 @@ func TestAcknowledgedWholeLastFrameLossPreservesPart(t *testing.T) {
 // after renaming the recorded part and before retiring the temporary
 // parts, is recovered by the next resume, identically.
 func TestRepeatedRecovery(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

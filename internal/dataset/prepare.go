@@ -205,7 +205,10 @@ func NextFound(out string) bool {
 // once all are moved, records that); then the new dataset's data/ moves
 // into out, and its manifest last: that rename is the installation. Each
 // step is a rename, synced: a crash at any point leaves a state that
-// InstallNext, run again, finishes. The part paths are reused: a reader of
+// InstallNext, run again, finishes. A rename the platform refuses while the
+// entries are retired (Windows, a reader holding a part open) is undone
+// (restore): out keeps its dataset and the replacement stays pending. The
+// part paths are reused: a reader of
 // the old manifest during the installation can find its parts missing or
 // replaced. The caller holds out's lock.
 func InstallNext(out string) error {
@@ -219,17 +222,19 @@ func InstallNext(out string) error {
 		if err := os.MkdirAll(retiring, 0o755); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
+		var moved []string
 		for _, n := range append(slices.Clone(commitEntries), ownEntries...) {
 			if _, err := os.Lstat(filepath.Join(out, n)); err == nil {
-				if err := os.Rename(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
-					return fmt.Errorf("retire the replaced dataset: %w", err)
+				if err := renameFile(filepath.Join(out, n), filepath.Join(retiring, n)); err != nil {
+					return fmt.Errorf("retire the replaced dataset: %w", errors.Join(err, restore(out, retiring, moved)))
 				}
+				moved = append(moved, n)
 			}
 		}
 		if err := errors.Join(syncDir(retiring), syncDir(out)); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
-		if err := os.Rename(retiring, retired); err != nil {
+		if err := renameFile(retiring, retired); err != nil {
 			return fmt.Errorf("retire the replaced dataset: %w", err)
 		}
 		if err := syncDir(next); err != nil {
@@ -246,7 +251,7 @@ func InstallNext(out string) error {
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(next, n)); err == nil {
-			if err := os.Rename(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
+			if err := renameFile(filepath.Join(next, n), filepath.Join(out, n)); err != nil {
 				return fmt.Errorf("install the replacement: %w", err)
 			}
 		}
@@ -257,13 +262,29 @@ func InstallNext(out string) error {
 	if err := faults.At("install-data"); err != nil {
 		return err
 	}
-	if err := os.Rename(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
+	if err := renameFile(filepath.Join(next, ManifestName), filepath.Join(out, ManifestName)); err != nil {
 		return fmt.Errorf("install the replacement: %w", err)
 	}
 	if err := syncDir(out); err != nil {
 		return fmt.Errorf("install the replacement: %w", err)
 	}
 	return nil
+}
+
+// restore moves the entries a refused retirement moved (names, in order)
+// back from retiring into out, the last first, and syncs both: out holds
+// its dataset again, readable as before, and the replacement stays
+// pending (InstallPending) for a later InstallNext. A refusal is a rename
+// the platform declined (Windows: a reader holds a part open, so data/
+// cannot move), not a crash; a crash part way through the restore leaves a
+// partial retirement, as one during the retirement does, which
+// InstallNext, run again, finishes forward.
+func restore(out, retiring string, names []string) error {
+	var err error
+	for _, n := range slices.Backward(names) {
+		err = errors.Join(err, renameFile(filepath.Join(retiring, n), filepath.Join(out, n)))
+	}
+	return errors.Join(err, syncDir(out), syncDir(retiring))
 }
 
 // RemoveNext removes what an installed replacement left in NextDir(out),

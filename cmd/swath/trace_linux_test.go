@@ -42,8 +42,8 @@ func TestTraceFileThatNeverDrains(t *testing.T) {
 	if _, err := unix.FcntlInt(reader.Fd(), unix.F_SETPIPE_SZ, 4096); err != nil {
 		t.Log("pipe size unchanged:", err)
 	}
-	args := append([]string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--page-size", "1", "--workers", "4",
-		"--no-progress", "--report", report, "--trace", fifo, "-o", out}, unjournaled...)
+	args := []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--page-size", "1", "--workers", "4",
+		"--no-progress", "--report", report, "--trace", fifo, "-o", out}
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() { done <- run(context.Background(), args, io.Discard, true) }()

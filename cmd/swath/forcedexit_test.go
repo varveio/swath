@@ -20,19 +20,6 @@ import (
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
-// buildSwath builds the command for the subprocess tests.
-func buildSwath(t *testing.T) string {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("builds the binary")
-	}
-	bin := filepath.Join(t.TempDir(), "swath")
-	if out, err := exec.Command("go", "build", "-tags", "swathtest", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
-	return bin
-}
-
 // waitExit waits for cmd at most limit, then kills it and fails.
 func waitExit(t *testing.T, cmd *exec.Cmd, start time.Time, limit time.Duration) (code int, took time.Duration) {
 	t.Helper()

@@ -12,12 +12,12 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/dataset/datasettest"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 )
@@ -55,7 +55,7 @@ func fileTree(t *testing.T, dir string) map[string]string {
 // dataset. Before, the run went on writing parts by pathname into the
 // impostor and renamed them over its published parts.
 func TestReplacedOutputIsNeverTouched(t *testing.T) {
-	datasettest.RequireJournal(t)
+	noLiveReplacement(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -162,7 +162,7 @@ func copyTree(t *testing.T, dir, dst string) {
 // writer rewrote the impostor's progress.json and the spill cleanup
 // removed the impostor's spill directory.
 func TestReplacedOutputWithLiveWriters(t *testing.T) {
-	datasettest.RequireJournal(t)
+	noLiveReplacement(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -291,7 +291,7 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 // at its next check. Before, the file was created by pathname, in the
 // impostor's .swath/parts.
 func TestReplacedAfterCheckGetsNoPart(t *testing.T) {
-	datasettest.RequireJournal(t)
+	noLiveReplacement(t)
 	var keys []string
 	for i := range 20000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -330,5 +330,14 @@ func TestReplacedAfterCheckGetsNoPart(t *testing.T) {
 	}
 	if after := fileTree(t, out); !maps.Equal(before, after) {
 		t.Fatalf("the impostor changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// noLiveReplacement skips t on Windows, which refuses to rename a directory
+// while a file in it is open (the run's lock and journal), so an output
+// cannot be replaced under a live run there.
+func noLiveReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows refuses to rename a directory holding an open file: a live output cannot be replaced")
 	}
 }

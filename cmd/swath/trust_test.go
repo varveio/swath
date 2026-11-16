@@ -82,9 +82,9 @@ func TestTrustFlags(t *testing.T) {
 				t.Helper()
 				errBuf := captureStderr(t)
 				var out bytes.Buffer
-				args = append(append([]string{r.root, "--endpoint-url", endpoint, "--anonymous", "--request-timeout", "5s",
-					"--report", "-", "-o", filepath.Join(t.TempDir(), "ds")}, args...), unjournaled...)
-				err = run(context.Background(), args, &out, diagList)
+				args = append([]string{r.root, "--endpoint-url", endpoint, "--anonymous", "--request-timeout", "5s",
+					"--report", "-", "-o", filepath.Join(t.TempDir(), "ds")}, args...)
+				err = run(context.Background(), args, &out, false)
 				var rep struct {
 					Diagnostics struct {
 						Source struct{ Stats map[string]any }
