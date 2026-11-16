@@ -25,7 +25,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
 | Cross-OS tier, linux/arm64 | PR: packages not already raced on arm64; full validation: every selected module without `-race`; [platform skips](#cross-os) | PR: main selected or platform escalation; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-xos (ubuntu-24.04-arm)` |
 | Cross-OS default tier, macOS | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
-| Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest)`; `nightly.yml` `go-xos-windows` |
+| Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest, LEG)` ([Windows legs](#windows-legs)); `nightly.yml` `go-xos-windows` |
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
@@ -148,7 +148,8 @@ runs the tier and prints its command; `UPDATE=1` with that command rewrites the 
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
-| `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` (40m on Windows, whose job limit is 45 minutes) on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest and windows-latest for escalated PRs, main and dispatch |
+| `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest for escalated PRs, main and dispatch |
+| `go-xos (windows-latest, LEG)` | full platform runs on Windows, one leg per row of the [Windows legs](#windows-legs): `go test -count=1 -timeout 25m` once per race shard of the leg; the leg holding `rest` also runs `go vet ./...` and the selected nested modules | windows-latest for escalated PRs, main and dispatch |
 | `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
@@ -225,6 +226,25 @@ rows are checked for packages, not tests: a row whose packages have no tests (`.
 say) passes and runs nothing.
 `--self-test`, also in `go-lint`, runs these table checks against synthetic package lists, with no Go. A new
 package needs no edit; a new `-run` row needs its package's remainder to stay nonempty.
+
+#### Windows legs
+
+Windows runs the suite without `-race` about three times slower than macOS. `internal/listing` took 17
+minutes alone there and 28 beside the other packages, `cmd/swath` about 10 (2026-11-16), so the full
+Windows run is split into legs along the race shards. The second table in `go-race-shards.sh` names each
+leg's shards; `changes` expands it into the Windows rows of the `go-xos` matrix (`--windows-matrix`), and a
+leg runs one `go test` per shard, in order, with the arguments `--windows LEG` prints (the packages listed
+without `-race`, which needs cgo the runner may lack):
+
+| leg | race shards | also |
+|---|---|---|
+| `listing-rest` | `listing-rest` | |
+| `cmd` | `cmd-kill`, `cmd` | |
+| `matrices-rest` | `crash`, `durable`, `rest-replay`, `rest-source`, `rest` | `go vet ./...`, the selected nested modules |
+
+`--check` and `--self-test` fail unless every shard is in exactly one leg and one leg holds `rest`. That
+leg keeps the `go-xos` build cache, which `nightly.yml` `go-xos-windows` and Windows `go-stress.yml` runs
+restore; the others' are `go-xos-LEG`.
 
 The heavy packages race on arm64 only: its weaker memory model makes it the better race target, and the same
 `-race` suite took about 30 % less time there than on amd64 (`internal/listing` 490 s against 700 s). The

@@ -86,7 +86,10 @@ jobs:
           if [ "$GO_ANY" != true ]; then
             matrix='[{"os":"off","runner":"ubuntu-latest","scope":"off"}]'
           elif [ "$PLATFORMS" = true ]; then
-            matrix='[{"os":"macos-latest","runner":"macos-latest","scope":"full"},{"os":"windows-latest","runner":"windows-latest","scope":"full"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm","scope":"full"}]'
+            # Windows runs as legs along the race shards (go-race-shards.sh --windows-matrix).
+            windows=$(./scripts/ci/go-race-shards.sh --windows-matrix)
+            matrix=$(jq -cn --argjson windows "$windows" '[{os: "macos-latest", runner: "macos-latest", scope: "full"}]
+              + $windows + [{os: "ubuntu-24.04-arm", runner: "ubuntu-24.04-arm", scope: "full"}]')
           elif [ "$GO_CHANGED" = true ]; then
             matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm","scope":"extra"}]'
           else
@@ -507,17 +510,18 @@ jobs:
   # Ordinary PRs keep arm64 coverage of the packages raced on amd64, without
   # repeating the CLI/engine matrices already raced on arm64. The shard table owns
   # that complement. Escalated PRs/main/dispatch run every selected module in full.
+  # Windows runs the suite about three times slower than macOS, so its full run is legs along
+  # the race shards (`leg`, go-race-shards.sh --windows-matrix); the leg of scope `full` also
+  # vets the module and tests the nested modules, and keeps the go-xos build cache.
   go-xos:
     needs: changes
-    name: go-xos (${{ matrix.os }})
+    name: go-xos (${{ matrix.os }}${{ matrix.leg && format(', {0}', matrix.leg) || '' }})
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.go_xos) }}
     runs-on: ${{ matrix.runner }}
-    # Windows runs the journaled, crash and kill matrices about three times slower than macOS
-    # (internal/listing 23 min against 8, 2026-11-16): its package timeout and job limit are longer.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -528,23 +532,36 @@ jobs:
         if: matrix.scope != 'off'
         uses: ./.github/actions/setup-go
         with:
-          key: go-xos
+          key: go-xos${{ matrix.scope == 'leg' && format('-{0}', matrix.leg) || '' }}
 
+      # A Windows leg runs one `go test` per race shard it names, each printed first, and goes on
+      # after a failed one so that every shard reports.
       - name: Main module vet and tests (no -race)
         if: matrix.scope != 'off' && needs.changes.outputs.go == 'true'
         env:
           SCOPE: ${{ matrix.scope }}
+          LEG: ${{ matrix.leg }}
         run: |
           set -euo pipefail
+          if [ -n "$LEG" ]; then
+            leg_args=$(./scripts/ci/go-race-shards.sh --windows "$LEG")
+            if [ "$SCOPE" = full ]; then go vet ./...; fi
+            mapfile -t shards <<<"$leg_args"
+            status=0
+            for shard in "${shards[@]}"; do
+              read -ra args <<<"$shard"
+              printf 'go test -count=1 -timeout 25m'; printf " '%s'" "${args[@]}"; echo
+              go test -count=1 -timeout 25m "${args[@]}" || status=1
+            done
+            exit "$status"
+          fi
           packages=(./...)
           if [ "$SCOPE" = extra ]; then
             selected=$(./scripts/ci/go-race-shards.sh --arm64-extra)
             mapfile -t packages <<<"$selected"
           fi
           go vet "${packages[@]}"
-          timeout=25m
-          if [ "$RUNNER_OS" = Windows ]; then timeout=40m; fi
-          go test -count=1 -timeout "$timeout" "${packages[@]}"
+          go test -count=1 -timeout 25m "${packages[@]}"
 
       - name: Reader module vet and tests (no -race)
         if: matrix.scope == 'full' && needs.changes.outputs.reader == 'true'
@@ -677,10 +694,13 @@ jobs:
           set -euo pipefail
           jq -e 'all(.[]; .result == "success")' <<<"$NEEDS"
           shards=$(./scripts/ci/go-race-shards.sh --matrix)
-          jq -e --argjson shards "$shards" '
+          windows=$(./scripts/ci/go-race-shards.sh --windows-matrix)
+          jq -e --argjson shards "$shards" --argjson windows "$windows" '
             (.full == "true") and (.go == "true") and (.reader == "true") and
             (.objfile == "true") and (.fixtures == "true") and (.images == "true") and
             (.platforms == "true") and (.docs == "true") and (.go_shards | fromjson == $shards) and
             (.go_xos | fromjson |
-              (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm", "windows-latest"] and
-              all(.[]; .scope == "full" and .runner == .os))' <<<"$SELECTION"
+              ([.[] | select(.os != "windows-latest")] |
+                (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm"] and
+                all(.[]; .scope == "full" and .runner == .os)) and
+              [.[] | select(.os == "windows-latest")] == $windows)' <<<"$SELECTION"

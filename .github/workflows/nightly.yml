@@ -168,15 +168,15 @@ jobs:
   go-xos-windows:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-windows'
     runs-on: windows-latest
-    timeout-minutes: 45 # the journaled, crash and kill matrices: ci.yml go-xos
+    timeout-minutes: 45 # unsplit: ci.yml splits the Windows run into legs (go-race-shards.sh)
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # Restores the shared module cache and ci.yml's Windows build cache (go-xos); saves nothing
-      # off a push to main.
+      # Restores the shared module cache and the build cache of ci.yml's full Windows leg
+      # (go-xos); saves nothing off a push to main.
       - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
