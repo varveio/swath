@@ -431,6 +431,11 @@ func printVersion(w io.Writer) {
 // attempt (SWATH_TEST_KILL_ID), so the line names this attempt and point.
 func killMarker(id, spec string) string { return "swath-test-kill " + id + " " + spec }
 
+// hangMarker is the line SWATH_TEST_HANG_AT=spec writes to stderr when
+// the goroutine reaching the point blocks, so a harness signals the hung
+// run, not one still starting.
+func hangMarker(spec string) string { return "swath-test-hang " + spec }
+
 type options struct {
 	diag                   bool // swath diag list or count: the diagnostic flags too
 	out                    string
