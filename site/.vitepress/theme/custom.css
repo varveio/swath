@@ -86,10 +86,11 @@ html:has(.swath-dev-banner) {
   }
 }
 
-/* The home page's terminal example, in the hero's image slot: beside the text on a wide
-   screen, below it on a narrow one. */
+/* The home page's lead terminal example, in the hero's image slot: under the hero text at every
+   width, so swath's table has the page's width. */
 .VPHero.has-image .container {
   text-align: left !important;
+  flex-direction: column !important;
 }
 .VPHero.has-image .name,
 .VPHero.has-image .text,
@@ -100,39 +101,46 @@ html:has(.swath-dev-banner) {
   justify-content: flex-start !important;
 }
 .VPHero .image {
-  order: 3;
-  margin: 32px 0 0;
+  order: 3 !important;
+  margin: 40px 0 0 !important;
+  min-height: 0 !important;
 }
 .VPHero .image-container {
+  margin: 0 !important;
+  justify-content: flex-start;
   width: auto;
   height: auto;
   transform: none;
 }
+@media (min-width: 960px) {
+  .VPHero.has-image .main {
+    max-width: 880px !important;
+  }
+  .VPHero.has-image .text {
+    max-width: 880px;
+  }
+  .VPHero.has-image .tagline {
+    max-width: 720px;
+  }
+}
 .VPHero .image-bg {
   display: none;
-}
-@media (min-width: 960px) {
-  .VPHero .image {
-    order: 2;
-    margin: 0 0 0 32px;
-    display: flex;
-    align-items: center;
-  }
-  .VPHero .image-container {
-    width: 100%;
-  }
 }
 .swath-terminal {
   margin: 0;
   text-align: left;
   width: 100%;
-  max-width: 600px;
+}
+.VPHero .swath-terminal {
+  width: fit-content;
+  max-width: 100%;
 }
 .swath-terminal-caption {
   margin-bottom: 8px;
   color: var(--vp-c-text-2);
   font-size: 13px;
 }
+/* A line longer than the box scrolls inside it, never the page: swath's table does not wrap. */
 .swath-terminal pre {
   margin: 0;
   padding: 14px 14px;
@@ -143,13 +151,11 @@ html:has(.swath-dev-banner) {
   font-family: var(--vp-font-family-mono);
   font-size: 12px;
   line-height: 1.55;
-  /* On a phone a line of swath's output longer than the screen wraps rather than scrolling
-     sideways; the commands are written to fit. */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-x: auto;
 }
 @media (max-width: 639px) {
-  /* Edge to edge on a phone, so the lines fit the screen at a readable size. */
+  /* Edge to edge on a phone. */
   .swath-terminal-caption {
     margin-bottom: 12px;
   }
@@ -168,17 +174,16 @@ html:has(.swath-dev-banner) {
   }
 }
 @media (min-width: 960px) {
-  .swath-terminal {
-    max-width: 600px;
-  }
   .swath-terminal pre {
     font-size: 14px;
-    white-space: pre;
-    overflow-x: auto;
   }
 }
-.swath-terminal-prompt {
+.swath-terminal-prompt,
+.swath-terminal-cyan {
   color: #46aaba;
+}
+.swath-terminal-dim {
+  color: #9a9a95;
 }
 
 /* A long code block (the plain-text --help under a command's options, a long example) is capped
@@ -331,8 +336,9 @@ html:has(.swath-dev-banner) {
   }
 }
 
-/* The replay of the hero's run, between the hero and the feature cards (the home-features-before
-   slot): the 4:5 video and its explanation side by side on a wide screen, stacked on a narrow one.
+/* The inventory example and the replay of its run, between the hero and the feature cards (the
+   home-features-before slot): the 4:5 video and the text side by side on a wide screen, stacked on a
+   narrow one.
    The padding follows the theme's .VPFeatures, so the section lines up with the cards. */
 .swath-replay {
   padding: 0 24px 48px;
@@ -357,6 +363,9 @@ html:has(.swath-dev-banner) {
   font-weight: 600;
   line-height: 1.3;
   color: var(--vp-c-text-1);
+}
+.swath-replay-text .swath-terminal {
+  margin: 0 0 16px;
 }
 .swath-replay-text p {
   margin: 0 0 12px;
@@ -389,8 +398,4 @@ html:has(.swath-dev-banner) {
   color: var(--vp-c-brand-1);
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-.swath-terminal-caption code {
-  font-family: var(--vp-font-family-mono);
-  font-size: 0.92em;
 }
