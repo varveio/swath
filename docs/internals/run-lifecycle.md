@@ -184,7 +184,7 @@ says), apart from the rows, and the descriptor limit (after the spill readers, t
 connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given; it bypasses
 default resource admission, with a warning when the resources cannot carry it. For a `.zst` text file the same
 flag is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
-synchronous encoder on the order stage ([running.md](../running.md#memory)). A job is a 4 MiB input section
+synchronous encoder on the order stage ([size-a-run.md](../size-a-run.md#memory)). A job is a 4 MiB input section
 (four 1 MiB windows: sorted listings match between neighboring keys, and a 1 MiB window measured the ratio and
 speed of the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
 encoder: measured at 5 to 13 MiB a job. A file's rows are formatted by `--encoders` goroutines

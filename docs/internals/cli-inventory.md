@@ -95,7 +95,7 @@ decision to add it later).
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
 | `--restart` | none; `--overwrite` starts over an interrupted run, a 0.3 run's directory included (resume refuses that one: it was written by 0.3) | renamed | – |
 | `--overwrite`, `--force` | `--overwrite` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](../running.md#stopping-and-resuming) replaces the earlier prefix-only description |
+| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](../resume-and-refresh.md#stopping-and-resuming) replaces the earlier prefix-only description |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts a few operational options | accepts the listed runtime and operational flags only (the set is broader than Java's, which took `--tune`, `--stats`, `--progress`, the bearer flags and `-v`/`-q`/`--color`) | changed (broader) | – |
 | Resume of a completed dataset exits 0 | exit 0, class `ok`, report `complete` true (partial coverage: 3, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |

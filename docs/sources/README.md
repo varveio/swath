@@ -12,11 +12,11 @@ working command, authentication and permissions, its own options, writing a data
 
 A dataset of any source can be written to a local directory (`-o DIR`) or to any of the three object stores
 (`-o` a bucket prefix with `--work-dir DIR`). On Windows, dataset runs of an object store, and `swath resume`,
-are refused ([known limits](../running.md#known-limits)).
+are refused ([known limits](../troubleshooting.md#known-limits)).
 
 swath reads listings only: it needs permission to list, never to read or write objects. Each object-store
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS
-([Running swath](../running.md#cost)).
+([Cost](../size-a-run.md#cost)).
 
 ## Credentials on every object store
 
@@ -68,7 +68,7 @@ S3, GCS and Azure Blob share the request options:
 A failed request that can be retried (a throttle, a timeout, a 5xx, a cut connection) is tried up to nine
 times with exponential backoff (100 ms, at most 5 s apart); a listing page that still fails goes back to the
 queue and is tried again later. `--stall-timeout` and `--max-duration` bound a run that cannot make progress.
-Throttling and how to tune for it: [Running swath](../running.md#throttling).
+Throttling and how to tune for it: [Watch and tune a run](../watch-a-run.md#throttling).
 
 More on each provider, for contributors: [S3](../internals/providers/s3.md), [GCS](../internals/providers/gcs.md),
 [Azure Blob](../internals/providers/azblob.md), [local filesystems](../internals/providers/local.md).

@@ -31,7 +31,7 @@ such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-sty
 The same name rule applies to `swath resume DIR`. An existing file, or a device such as `/dev/null`, is
 refused as a dataset directory (exit 2): rows to stdout need no `-o`, and `swath diag count` lists without
 writing.
-Querying one is shown in [Running swath](running.md#reading-the-output).
+Querying one is shown in [Query an inventory](query.md).
 
 A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,
 compare or schedule. A dataset is not a direct `rclone --files-from` input: a handoff must generate and test a
@@ -52,7 +52,7 @@ with everything the run writes beside it: the file itself (a previous run's, on 
 
 TSV and JSONL rows have the dataset's columns under the dataset's names, by default `key`, then `size`,
 `last_modified` and the rest of the source's schema, in the schema's order
-([The swath dataset](dataset.md#schema-registry)). Columns after `last_modified` differ between sources: read them by
+([The swath dataset format](dataset.md#schema-registry)). Columns after `last_modified` differ between sources: read them by
 name, not by position. `--columns size,key` prints only those columns, in that order. The table shows a few
 columns for people, with `key` last.
 
@@ -252,7 +252,7 @@ $ swath du -d 1 s3://bucket
 The table fits 80 columns at `-d 2` while a path stays within about 34 characters; a longer path is printed
 whole and wraps.
 
-Without `-d` or `--format`, on a terminal, `swath du` draws [the view](commands/swath-du.md#the-view) instead
+Without `-d` or `--format`, on a terminal, `swath du` draws [the view](totals.md#the-view) instead
 of the table: the largest prefixes and objects at any depth, with their shares of the total. It is for reading
 only; the rows above are what a pipe, `-d` and `--format` print.
 

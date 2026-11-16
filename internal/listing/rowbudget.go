@@ -16,7 +16,7 @@ const (
 	// rowBudgetShare is the share of memory the default row budget takes
 	// (1/16): the budget is one of several allowances beside it (the
 	// encoders' allowance equal to it, the tail's segment reservations,
-	// pages in flight, codec state, GC headroom: running.md's Memory).
+	// pages in flight, codec state, GC headroom: size-a-run.md's Memory).
 	rowBudgetShare = 16
 	// maxAutoRowBudget caps the default row budget at 1 GiB: past it a
 	// listing larger than memory spills anyway, and more encoders and tail

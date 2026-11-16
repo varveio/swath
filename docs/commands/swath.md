@@ -251,7 +251,7 @@ What each one means and what to do: [Exit codes](../reference/exit-codes.md).
 | `CLICOLOR_FORCE` | color even when stderr is not a terminal |
 | `TERM` | `dumb`: no color with `--color auto` |
 | `TZ` | the time zone of the tables' local times |
-| `TMPDIR` | where text rows on stdout spill (see [Running swath](../running.md#sizing-a-run)) |
+| `TMPDIR` | where text rows on stdout spill (see [Size a run](../size-a-run.md)) |
 | `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `AZURE_STORAGE_*` | credentials, regions and endpoints: [Sources](../sources/README.md) |
 
 The development variables (profiles, engine switches) are in [Diagnostics](../internals/diagnostics.md#environment).

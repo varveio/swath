@@ -1693,7 +1693,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   sustained throttling it holds the limit at 1–2 for the whole run ([above](#throttling-through-the-fault-proxy)).
   It has never met real 503s.
 - **Not built:** versions mode, Azure. *Superseded 2026-11-13: both are built (`--all-versions` for S3, GCS and
-  Azure Blob, [running.md](../running.md#listing-every-version); Azure Blob in `internal/source/azblob`).*
+  Azure Blob, [all-versions.md](../all-versions.md); Azure Blob in `internal/source/azblob`).*
   Java CLI features deliberately not ported, each with its reason, are in [cli-inventory.md](cli-inventory.md).
 - **Restored Java CLI features, tested in process only.** Text output (TSV, JSONL, table; stdout and files;
   gzip and zstd), the seven filters (Go RE2, not Java regular expressions), the stderr progress display and

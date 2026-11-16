@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Docs: the user guide is split by the question a reader asks. `running.md` keeps one run's command, outcome and
+  limits and links to Size a run, Watch and tune a run, Stop, resume and refresh, and List every version; known
+  limits moved to Troubleshooting. Query an inventory (DuckDB, pandas, Spark, verifying) is apart from the dataset
+  format; `production.md` covers scheduled runs and bucket destinations only; `swath du`'s and `swath resume`'s
+  explanations moved from their command pages to Total a source and Stop, resume and refresh. Old anchors still
+  resolve.
 - Site: the field guide has its pictures back, drawn for the Go engine: an animated miniature model of a
   listing (seed, owner-side splits, the sorted stream, commit before emit; still frames with reduced motion), a
   diagram per section, and two figures from the home page's run (its 257 starting ranges, and requests in flight
