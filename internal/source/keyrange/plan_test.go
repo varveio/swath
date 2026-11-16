@@ -568,8 +568,10 @@ func planRun(t *testing.T, keys []string, pr *Prior, workers, tilePages int, spi
 // as the admission gates allow, not by the few pieces of two tiles each a
 // grown range was cut into before, each listed serially while the workers
 // waited at the window (about 60 splits, against about 150 here; the
-// fresh tiles are not split under the bound window), with 21 to 31
-// requests at once in the grown region (8 required). No frame is refused
+// fresh tiles are not split under the bound window), with 13 to 35
+// requests at once in the grown region (8 required; Windows runners the
+// fewest, Linux under -race the most; the pieces of two tiles each, listed
+// serially, held a handful). No frame is refused
 // beyond the fresh prior's, and the requests stay within 10 % of it (the
 // grown region, a sixth of the keys, costs about a request per piece). The
 // wall times are logged, not compared: the stale run spills more, and a
