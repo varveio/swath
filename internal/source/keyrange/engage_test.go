@@ -59,10 +59,14 @@ const shapePage = 100
 // TestPercentKeysListInParallel: keys that all hold '%' (URL-encoded
 // names, the red team's percent_keys shape) list in parallel under S3's
 // bound policy (SafeKey: a real key's '%' may be a start bound): the tree
-// stays within 4·log2(pages)+8, the run is wide, no cursor is refused, the
-// density step reads '%' as a digit, the output is the keyspace and every
-// pivot adds only safe scalars to the cursor's prefix. Under the pivot
-// alphabet alone (Safe) no cursor is a bound and one worker lists it all.
+// stays within 4·log2(pages)+8 and splits as often as the control's (at
+// least 0.6 of its splits), no cursor is refused, the density step reads
+// '%' as a digit, the output is the keyspace and every pivot adds only safe
+// scalars to the cursor's prefix. Under the pivot alphabet alone (Safe) no
+// cursor is a bound and one worker lists it all. The mean of ranges active
+// is logged, not gated: over a run of about 40 ms it follows the runner's
+// timers and load more than the tree (macOS CI: the control's ranged from
+// 24 to 44 between runs, the splits did not).
 func TestPercentKeysListInParallel(t *testing.T) {
 	keys := make([]string, 50000)
 	for i := range keys {
@@ -70,13 +74,14 @@ func TestPercentKeysListInParallel(t *testing.T) {
 	}
 	slices.Sort(keys)
 	// The control: the same names without '%' ("/" and "?" where it encoded
-	// them), the width a listing of this shape reaches.
+	// them), the tree a listing of this shape builds.
 	plain := make([]string, len(keys))
 	for i := range plain {
 		plain[i] = fmt.Sprintf("web/https:-example.com-p-%08d?q=%d", i, i%97)
 	}
 	_, ctl, _ := runPolicy(t, func() *sorted { f := newSorted(plain, false, 1); f.Latency = time.Millisecond; return f }(),
 		Options{PageSize: shapePage}, 64, 1<<20, SafeKey)
+	splits := func(st Stats) int64 { return st.Get(cSplitAcceptedFrontier) + st.Get(cSplitAcceptedBounded) }
 	for _, policy := range []struct {
 		name   string
 		accept func(string) bool
@@ -103,22 +108,22 @@ func TestPercentKeysListInParallel(t *testing.T) {
 			}
 		}
 		g := st.Get
-		t.Logf("%s: depth=%d mean_active=%.1f (control %.1f, depth %d) splits=%d/%d unsafe_cursor=%d density=%d/%d refused.alphabet=%d",
-			policy.name, g(cSplitMaxDepth), st.MeanActive, ctl.MeanActive, ctl.Get(cSplitMaxDepth), g(cSplitAcceptedFrontier), g(cSplitAcceptedBounded),
+		t.Logf("%s: depth=%d mean_active=%.1f splits=%d/%d (control: depth %d, mean active %.1f, splits %d) unsafe_cursor=%d density=%d/%d refused.alphabet=%d",
+			policy.name, g(cSplitMaxDepth), st.MeanActive, g(cSplitAcceptedFrontier), g(cSplitAcceptedBounded), ctl.Get(cSplitMaxDepth), ctl.MeanActive, splits(ctl),
 			g(cSplitRejectedUnsafeCursor), g(cSplitPivotDensityBounded), g(cSplitPivotDensityFrontier), g(cDensityRefusedAlphabet))
 		if policy.name == "Safe" {
-			if g(cSplitAcceptedFrontier)+g(cSplitAcceptedBounded) != 0 || g(cSplitRejectedUnsafeCursor) == 0 {
-				t.Errorf("Safe: splits %d, unsafe cursors %d: want none and some", g(cSplitAcceptedFrontier)+g(cSplitAcceptedBounded), g(cSplitRejectedUnsafeCursor))
+			if splits(st) != 0 || g(cSplitRejectedUnsafeCursor) == 0 {
+				t.Errorf("Safe: splits %d, unsafe cursors %d: want none and some", splits(st), g(cSplitRejectedUnsafeCursor))
 			}
 			continue
 		}
 		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
 			t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
 		}
-		if st.MeanActive < 0.6*ctl.MeanActive || g(cSplitRejectedUnsafeCursor) != 0 || g(cDensityRefusedAlphabet) != 0 ||
+		if float64(splits(st)) < 0.6*float64(splits(ctl)) || g(cSplitRejectedUnsafeCursor) != 0 || g(cDensityRefusedAlphabet) != 0 ||
 			g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier) == 0 {
-			t.Errorf("mean active %.1f (want >= 0.6 x the control's %.1f), unsafe cursors %d, alphabet refusals %d, density pivots %d",
-				st.MeanActive, ctl.MeanActive, g(cSplitRejectedUnsafeCursor), g(cDensityRefusedAlphabet), g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier))
+			t.Errorf("splits %d (want >= 0.6 x the control's %d), unsafe cursors %d, alphabet refusals %d, density pivots %d",
+				splits(st), splits(ctl), g(cSplitRejectedUnsafeCursor), g(cDensityRefusedAlphabet), g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier))
 		}
 	}
 }
