@@ -81,7 +81,7 @@ func openSaved(ctx context.Context, dir string) (*reader.Dataset, error) {
 	fi, err := os.Stat(filepath.Join(dir, dataset.ManifestName))
 	switch {
 	case err == nil && fi.Mode().IsRegular():
-		d, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
+		d, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{Limits: dataset.ManifestLimits}) // every manifest swath may write, as swath show reads
 		if err != nil {
 			return nil, fmt.Errorf("--from-dataset %s: %w", dir, err)
 		}
