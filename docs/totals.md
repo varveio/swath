@@ -27,8 +27,11 @@ $ swath du s3://demo-lake
  164 GiB    2.18k  42.6%  ████████▌             2025-11-15        warehouse/
  159 GiB    1.85k  41.5%  ████████▎             2025-11-15          events/year=2025/
 14.4 GiB      159   3.8%  ▊                     2025-11-15            month=12/
- 145 GiB    1.69k  37.8%  ███████▌              2025-11-15            (11 more)
-4.16 GiB      336   1.1%  ▏                     2025-11-15          sessions/year=2025/
+14.1 GiB      167   3.7%  ▋                     2025-11-15            month=03/
+13.9 GiB      162   3.6%  ▋                     2025-11-15            month=09/
+13.7 GiB      156   3.6%  ▋                     2025-11-15            month=02/
+ 103 GiB    1.20k  26.9%  █████▍                2025-11-15            (8 more)
+4.16 GiB      336   1.1%  ▏                     2025-11-15          (1 more)
 27.7 GiB    8.06k   7.2%  █▍                    2025-11-15        logs/api/2025/
 24.0 GiB     120k   6.3%  █▎                    2025-11-15        images/
 4.54 GiB      201   1.2%  ▏                     2025-11-15        (2 more)
@@ -38,11 +41,12 @@ $ swath du s3://demo-lake
 Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are,
 what they hold together (size, count, share) and their newest date, so the lines under a parent always add up
 to it. Nothing is hidden without being counted; only a `(N more)` line of 0 bytes is left out. A prefix with a
-single child shares its line with it (`logs/api/2025/`). The view fills the terminal's height, less a few
+single child shares its line with it (`logs/api/2025/`). The view takes the terminal's height, less a few
 lines, from the largest down: line by line, a fold or a prefix shown whole gives its largest child (a prefix a
-fold for the rest too), the one whose child is the largest; a fold of many small prefixes that together
-outweigh one line's share of the view gives them first, so a wide level of small prefixes is shown as far as
-the lines go rather than as one fold. What does not fit is in the `(N more)` lines.
+fold for the rest too), the one whose child is the largest, so the largest prefixes open first. No line goes to
+an entry under a floor, 0.5 % of the total (a quarter of one line's share on a short terminal): a long tail of
+small prefixes stays in its fold, and when nothing above the floor is left the view ends, shorter than the
+terminal. What is not shown is in the `(N more)` lines.
 
 The columns fit the terminal's width, and a line never wraps: from 100 columns the bar has 20 cells (the rest
 goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
