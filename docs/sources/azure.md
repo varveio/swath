@@ -36,7 +36,9 @@ say (an anonymous caller is always refused that question), swath asks the accoun
 refusal of a flat account with blob soft delete or events on also establishes a flat namespace. Only when
 neither establishes it is the run refused too, unless `--azure-assume-flat` asserts a flat namespace; an
 account that reports a hierarchical namespace is refused whatever is asserted. A credential the service
-refuses during these checks ends the run as an authentication failure (exit 1, cause `auth`).
+refuses during these checks ends the run as an authentication failure (exit 1, cause `auth`). A busy or failing
+service (503 `ServerBusy`, other 5xx, throttling, timeouts) is no answer: swath asks again, as it does a listing
+page, until the account answers or the run stops as stuck (exit 75).
 
 ## Options for this source
 

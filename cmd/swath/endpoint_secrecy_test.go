@@ -272,15 +272,12 @@ func TestRootUserinfoSecrecy(t *testing.T) {
 // event and the report on stdout. A refused endpoint or root holds its
 // credential back from all of them; so does an Azure SAS, in the root or
 // --azure-sas-token, sent to an endpoint whose every answer is a 503
-// quoting the request. The 503 asks for a minute's wait (Retry-After), so
-// the stall timeout ends the run during the first wait: without it the
-// admission's jittered retry waits can sum to under the 1 s timeout, and
-// the run ends refused, its retries spent, before it stalls.
+// quoting the request: admission asks again whenever its retries are
+// spent, so the stall timeout ends the run.
 func TestSecrecyRunOutputs(t *testing.T) {
 	persistFor = 0 // the first failed request warns: no race with the stall timeout
 	t.Cleanup(func() { persistFor = 10 * time.Second })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "60")
 		w.Header().Set("x-ms-error-code", "ServerBusy")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?><Error><Code>ServerBusy</Code><Message>busy: %s</Message></Error>`, html.EscapeString(r.URL.String()))

@@ -204,7 +204,8 @@ service answered only empty pages), `stuck_no_rows` (requests failed or hung). s
 stack to `DIR/.swath/stacks-stuck.txt` (without an output directory, to the file in the temporary directory
 that its warning names; `-v` prints the stacks on stderr too). Resume once; if it happens again on the same output, keep that file and
 the report: a person needs to look. A service that is slow for minutes at a time needs a larger
-`--stall-timeout`.
+`--stall-timeout`. An Azure account busy before the listing starts (503 `ServerBusy` on its namespace check)
+stops the same way: run the command again once the service answers.
 
 ## The run crawls under throttling
 

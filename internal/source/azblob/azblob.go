@@ -364,26 +364,22 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // refuses unless Options.Flat asserts a flat namespace. Credentials that
 // could not be had, or that the service refused (a signed caller's 401 or
 // 403), are that failure (class auth or access denied), as on any later
-// request: the Data Lake host would need the same.
+// request: the Data Lake host would need the same. A busy or failing
+// service is no answer: a call whose retries were spent on transient
+// failures (5xx, throttling, timeouts) is asked again after the listing's
+// requeue backoff, for as long as the run lives, as a listing page is; the
+// command's watchdog stops a run that never gets an answer as stuck.
 func (p *provider[P]) admit(ctx context.Context) error {
-	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
+	var wait time.Duration
+	hns, how, busy, err := p.namespaceOf(ctx)
+	for busy && ctx.Err() == nil {
+		if werr := keyrange.RequeueBackoff(ctx, &wait); werr != nil {
+			return werr
+		}
+		hns, how, busy, err = p.namespaceOf(ctx)
+	}
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
 		return fmt.Errorf("Azure Blob client: %w", err)
-	}
-	how := "account information"
-	if err != nil && ctx.Err() == nil && fallback(err) {
-		if n, ok := p.client.(namespaced); ok {
-			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
-				hns, err, how = h, nil, "filesystem properties"
-			} else if flatFeatures(nerr) && (p.unsigned() || class(err) != objhttp.ClassAuth) {
-				// The Data Lake host answers this 409 before it checks
-				// credentials, so a signed caller's rejected credential
-				// (Get Account Information's auth failure) stays that failure.
-				hns, err, how = false, nil, "filesystem endpoint blocked"
-			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
-				err = fmt.Errorf("%w; filesystem properties: %w", err, nerr)
-			}
-		}
 	}
 	switch {
 	case err != nil && ctx.Err() != nil:
@@ -404,6 +400,33 @@ func (p *provider[P]) admit(ctx context.Context) error {
 		return source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
+}
+
+// namespaceOf is one round of admit's calls: whether the namespace is
+// hierarchical, which call told (how), or why none did (err). busy
+// reports that the call deciding it spent its retries on transient
+// failures (objhttp.Requeue), so asking again may answer.
+func (p *provider[P]) namespaceOf(ctx context.Context) (hns bool, how string, busy bool, err error) {
+	hns, err = p.client.AccountInfo(ctx, p.opt.Container)
+	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
+		return false, "", false, err
+	}
+	how = "account information"
+	if err != nil && ctx.Err() == nil && fallback(err) {
+		if n, ok := p.client.(namespaced); ok {
+			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
+				return h, "filesystem properties", false, nil
+			} else if flatFeatures(nerr) && (p.unsigned() || class(err) != objhttp.ClassAuth) {
+				// The Data Lake host answers this 409 before it checks
+				// credentials, so a signed caller's rejected credential
+				// (Get Account Information's auth failure) stays that failure.
+				return false, "filesystem endpoint blocked", false, nil
+			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
+				return hns, how, objhttp.Requeue(nerr), fmt.Errorf("%w; filesystem properties: %w", err, nerr)
+			}
+		}
+	}
+	return hns, how, objhttp.Requeue(err), err
 }
 
 // unsigned says requests go anonymous, which Get Account Information

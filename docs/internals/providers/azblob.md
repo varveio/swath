@@ -117,7 +117,10 @@ credential Get Account Information rejected (class auth) keeps that failure; a c
 Information only refuses (403 `AuthorizationPermissionMismatch`) is admitted by the 409. One report attributes the
 same message to an account reached through a private endpoint for `blob` without one for `dfs`; whether a
 hierarchical account can answer it that way is unverified. A 403 `AuthorizationPermissionMismatch` there proves
-nothing: a container SAS met it on a flat account and on a hierarchical one alike. (3) Anything else (a refusal, another code or a missing header
+nothing: a container SAS met it on a flat account and on a hierarchical one alike. A call whose retries were spent
+on transient failures (5xx, throttling, timeouts: `objhttp.Requeue`) decides nothing: the round is asked again
+after the engine's requeue backoff (`keyrange.RequeueBackoff`), as a listing page is, for as long as the run
+lives, so a service that never answers stops as stuck (exit 75), never refused. (3) Anything else (a refusal, another code or a missing header
 there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
