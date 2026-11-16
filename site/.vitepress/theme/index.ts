@@ -13,6 +13,7 @@ import './custom.css'
 
 const REPO = 'https://github.com/varveio/swath/blob/main/'
 const MEASURED = REPO + 'docs/internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15'
+const MEASURED_LEAD = REPO + 'docs/internals/measurements.md#the-home-pages-lead-view-1000genomes-2026-11-16'
 // The run report rendered from the inventory run's trace by tools/explainer: a static page in site/static/, outside
 // the VitePress build, so its link loads the page itself (target _self) instead of going through the router.
 const RUN_REPORT = '/runs/noaa-gestofs-pds/'
@@ -20,34 +21,50 @@ const RUN_REPORT = '/runs/noaa-gestofs-pds/'
 type Caption = (string | { text: string; href: string })[]
 type Session = [command: string, output: string][]
 
-// The lead example: real output of `swath du` on a public bucket, run once on a 100x40 terminal with TZ=UTC and
-// main at 1085eb58 (docs/internals/measurements.md, "A public bucket for the home page"). Escape codes are
-// stripped (Terminal draws swath's colors again) and the hint lines at the end are left out where the output
-// reads "…". Nothing else is changed.
+// The lead example: real output of `swath du` on a public bucket, run once on a 100x30 terminal with TZ=UTC and
+// main at a07cba64 (docs/internals/measurements.md, "The home page's lead view"). Escape codes are stripped
+// (Terminal draws swath's colors again); nothing else is changed.
 const HERO = {
   caption: [
-    'The largest prefixes at any depth in a 1.38 PiB public bucket, listed in 54 seconds on a 4-vCPU cloud VM. ',
-    { text: 'How this was measured', href: MEASURED },
+    'Where 697 TiB sits in a public genomics bucket: 477,714 objects totalled in 3.5 seconds on a 4-vCPU cloud VM. ',
+    { text: 'How this was measured', href: MEASURED_LEAD },
   ] as Caption,
   session: [
-    ['swath du s3://noaa-gestofs-pds --anonymous --s3-region us-east-1',
+    ['swath du s3://1000genomes --anonymous --s3-region us-east-1',
       `    size  objects  share                        newest          path
-1.38 PiB    37.1M   100%  ████████████████████  2026-11-16 UTC  s3://noaa-gestofs-pds
- 217 TiB    2.14M  15.4%  ███                   2026-08-28        _para4/
- 146 TiB    1.42M  10.4%  ██                    2026-09-26        _para/
- 103 TiB    27.5k   7.3%  █▍                    2026-07-30        _para2/
-59.1 TiB     250k   4.2%  ▊                     2026-06-03        _hindcast_archive/
-40.1 TiB    31.9k   2.8%  ▌                     2026-06-03          STOFS3DAlt/
-19.0 TiB     218k   1.3%  ▎                     2026-05-04          AK_Runs/
- 884 TiB    33.2M  62.7%  ████████████▌         2026-11-16        (2,174 more)
-  1.38 PiB in 37,081,362 objects
-  complete: 37,081,362 objects, 1.38 PiB in 53.7s · 690,207 keys/s
-…`],
+ 697 TiB     478k   100%  ████████████████████  2022-01-25 UTC  s3://1000genomes
+ 242 TiB     119k  34.7%  ██████▉               2016-04-29        technical/
+ 156 TiB    20.0k  22.4%  ████▍                 2016-04-29          working/
+79.8 TiB    5.15k  11.4%  ██▎                   2014-09-03            20130718_phase…_cortex_graphs/
+44.4 TiB    1.56k   6.4%  █▎                    2014-09-03            20121015_cortex_phase2/
+32.2 TiB    13.3k   4.6%  ▉                     2016-04-29            (294 more)
+37.2 TiB    11.7k   5.3%  █                     2014-09-03          ncbi_varpipe_data/
+37.2 TiB    11.7k   5.3%  █                     2014-09-03            alignment/
+1.38 MiB        3   0.0%                        2014-09-02            (3 more)
+28.0 TiB    4.69k   4.0%  ▊                     2014-09-04          other_exome_alignments/
+20.6 TiB    82.2k   3.0%  ▌                     2015-07-18          (14 more)
+ 236 TiB     280k  33.8%  ██████▊               2016-03-23        phase3/
+ 235 TiB     279k  33.7%  ██████▋               2016-03-23          data/
+ 588 GiB    1.18k   0.1%                        2016-03-22          (1 more)
+89.1 TiB    21.7k  12.8%  ██▌                   2016-03-22        phase1/
+51.6 TiB    13.3k   7.4%  █▍                    2014-09-09          data/
+36.5 TiB    7.90k   5.2%  █                     2016-03-22          technical/
+17.2 TiB    3.85k   2.5%  ▍                     2014-09-03            ncbi_varpipe_data/
+19.3 TiB    4.05k   2.8%  ▌                     2016-03-22            (3 more)
+1.00 TiB      538   0.1%                        2014-12-02          (10 more)
+63.3 TiB    8.08k   9.1%  █▊                    2015-09-08        data/
+49.3 TiB    6.66k   7.1%  █▍                    2022-01-25        1000G_2504_high_coverage/
+37.6 TiB    5.01k   5.4%  █                     2019-04-25          data/
+11.7 TiB    1.65k   1.7%  ▎                     2022-01-25          (3 more)
+17.5 TiB    42.4k   2.5%  ▌                     2016-12-15        (26 more)
+  697 TiB in 477,714 objects
+  complete: 477,714 objects, 697 TiB in 3.5s · 135,869 keys/s`],
   ] as Session,
 }
 
-// The second example: real output of a live run on 2026-11-15 with main at d8fbe439, a sorted inventory of the same
-// bucket, then a DuckDB query over it (the same measurements section). The run was `swath diag list` with --trace
+// The second example: real output of a live run on 2026-11-15 with main at d8fbe439, a sorted inventory of
+// s3://noaa-gestofs-pds, then a DuckDB query over it (docs/internals/measurements.md, "A public bucket for the home
+// page"). The run was `swath diag list` with --trace
 // and --report added, for the replay beside it; swath's cost estimate line is left out where the output reads
 // "…", and DuckDB's trailing spaces are trimmed. Nothing else is changed. The video is a release asset that the
 // deploy fetches and verifies (site/static/data/media.json, scripts/ci/fetch-site-media.sh); the poster is in
@@ -55,8 +72,8 @@ const HERO = {
 const INVENTORY = {
   heading: 'Save an inventory, query it with SQL',
   caption: [
-    'The same bucket the day before: a sorted Parquet inventory in 61 seconds, then a DuckDB query over it in ' +
-      '3 seconds.',
+    'A bigger public bucket, s3://noaa-gestofs-pds: a sorted Parquet inventory of 37 million objects in 61 seconds, ' +
+      'then a DuckDB query over it in 3 seconds.',
   ] as Caption,
   session: [
     [`swath list s3://noaa-gestofs-pds/ -o noaa \\

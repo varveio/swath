@@ -57,7 +57,7 @@ verify it and put `swath` on your `PATH`, or run the container image `ghcr.io/va
 ## Try a public bucket
 
 A public NOAA prefix of 5,252 objects, with no account: `--anonymous` sends no credentials. Start with a prefix
-like this one: listing the whole bucket, as at the top of this page, takes about 39,000 requests.
+like this one: listing the whole bucket, as in the inventory example at the top of this page, takes about 39,000 requests.
 
 ```bash
 swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1
