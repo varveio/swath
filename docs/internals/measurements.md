@@ -640,7 +640,7 @@ recording.
 
 ## A public bucket for the home page (noaa-gestofs-pds, 2026-11-15)
 
-These runs are behind the home page's terminal example and replay video. `s3://noaa-gestofs-pds` (AWS us-east-1, public) was
+These runs are behind the home page's inventory example and replay video, and the field guide's `swath du` figures. `s3://noaa-gestofs-pds` (AWS us-east-1, public) was
 listed anonymously on 2026-11-15 from a 4-vCPU cloud VM with 7.7 GiB of RAM and an ext4 disk. The VM was shared
 with other work, and its region was not recorded. The build was main at `d8fbe439` (`CGO_ENABLED=0 go build ./cmd/swath`), at its
 defaults: 64 workers, seeded. Each run ran once, one after the other.
@@ -669,6 +669,7 @@ duckdb -column -c "SELECT
 | `diag list -o`, earlier (12:12:05) | 37,064,981 | 1,548,830,863,147,448 | 39,098 | 62.1 s | 1.50 GiB | 12 parts, 865,458,715 B |
 | `diag count --trace` (12:00:04) | 37,064,981 | 1,548,830,863,147,448 | 39,026 | 53.7 s | 111 MiB | none |
 | `du -d 1 --sort size` (12:01:18) | 37,064,981 | 1,548,830,863,147,448 | 39,191 | 53.0 s | 109 MiB | 2,169 top-level prefixes |
+| **bare `du`, the terminal view (2026-11-16 07:27:33)** | 37,081,362 | 1.38 PiB | not printed | 53.7 s | 119 MiB | 8 lines on a 100x40 terminal, 2,174 more folded |
 
 - **The home page's run.**
   - No retries, throttles or timeouts.
@@ -678,6 +679,13 @@ duckdb -column -c "SELECT
     publication and finalization continued for about 7.8 s.
   - `swath show` reported the dataset complete (`stop=completed`, `unreadable=0`).
   - The newest object was last modified at 11:10:09 UTC, about an hour before the run.
+- **The terminal view** is a later bare `swath du` of the whole bucket, run once on 2026-11-16 at 07:27:33
+  UTC with main at `1085eb58`, on the same VM, as
+  `script -qfec 'stty cols 100 rows 40; TZ=UTC ./swath du s3://noaa-gestofs-pds --anonymous --s3-region us-east-1' /dev/null`,
+  so swath drew its terminal view at that size, with dates in UTC. The view ended after 8 lines: no other prefix
+  holds 0.5% of the bucket. Other work shared the VM (load average 2.34 after it). Wall and peak memory are from
+  `/usr/bin/time -v` around it. The view prints no request count, and the run was not repeated to get one; the
+  runs above made 39,016 to 39,191. The bucket had grown by 16,381 objects since the runs above.
 - **The run at 12:32** shared the VM with other work: the load average was 12.7 when it ended. It took twice
   as long with the same requests and is not the one the home page shows.
 - **The trace.**
@@ -694,6 +702,26 @@ duckdb -column -c "SELECT
   The poster is frame 750 of the capture.
 
 Each figure comes from one run, on one VM, on one day, against a bucket that is still being written to. It is an observation, not a rate.
+
+## The home page's lead view (1000genomes, 2026-11-16)
+
+The home page's first terminal block is bare `swath du` on `s3://1000genomes` (AWS us-east-1, public), an uneven
+tree of 477,714 objects. It ran once, anonymously, on 2026-11-16 at 11:21:13 UTC, with main at `a07cba64`
+(`CGO_ENABLED=0 go build ./cmd/swath`), from the same 4-vCPU cloud VM with 7.7 GiB of RAM as the runs above, with
+no other listing running (load average 0.81 after it):
+
+```bash
+script -qfec 'stty cols 100 rows 30; TZ=UTC ./swath du s3://1000genomes --anonymous --s3-region us-east-1' /dev/null
+```
+
+| Run (started, UTC) | Objects | Bytes | Wall | Peak RSS | Output |
+|---|---:|---:|---:|---:|---|
+| **bare `du`, 100x30 terminal (2026-11-16 11:21:13)** | 477,714 | 697 TiB | 3.5 s | 108 MiB | 25 lines, four levels deep |
+
+`script` gives swath a terminal of that size, so it draws its view, with dates in UTC. Wall time is swath's own
+closing line (3.5 s; `/usr/bin/time -v` around `script` measured 3.54 s) and peak memory is from `/usr/bin/time -v`.
+The view prints no request count. The page strips the escape codes and changes nothing else. One run, on one VM,
+on one day: an observation, not a rate.
 
 ## Throttling through the fault proxy
 
