@@ -48,7 +48,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
 | `order.ahead_rows`, `diagnostics.resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--sort-buffer`; a count holds none | not by itself; read it with `diagnostics.resources.spill.refused`, `budget_wait_ns` and `max_frontier_stuck_ns` |
 | `diagnostics.resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
-| `diagnostics.resources.max_frontier_stuck_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
+| `diagnostics.resources.max_frontier_stuck_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on measured sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
 | `diagnostics.resources.peak_heap_live_bytes` against `invocation.sort_buffer_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
 | `diagnostics.resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
 | `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
@@ -138,8 +138,8 @@ timeout and latency brakes, and counters.
   [troubleshooting](troubleshooting.md#the-endpoint-cannot-be-reached)).
 
 Measured on the synthetic S3 fake ([measurements](internals/measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
-throttle answers no longer move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
-throttling have been measured only under the earlier per-answer rule ([history](internals/measurements.md#throttling-through-the-fault-proxy)).
+throttle answers do not move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
+throttling are not measured under this rule.
 If a run crawls with `throttles` rising and the report's
 `limiter.decreases` high (`limiter.peak_depth` near `--workers`: the limit fell to about 1), use
 `--no-adaptive-limit` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
@@ -162,7 +162,7 @@ when the report says so.
   not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The
   writers are admitted against their own allowance, the same 1/16 of memory whatever `--sort-buffer` says
   (`diagnostics.resources.drain.encoder_allowance_bytes`), so a smaller sort buffer does not mean fewer encoders. The measurements
-  that follow were taken at a fixed 128 MiB budget, an earlier default: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
+  that follow were taken at a fixed 128 MiB budget (`--sort-buffer 128MiB`): sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
   vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured

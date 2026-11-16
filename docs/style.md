@@ -76,14 +76,9 @@ snapshot semantics.
   sorted-key format, whoever wrote it. Use it when the format itself matters:
   interoperability, generic readers, conformance and diagnostics.
 - **swath dataset profile** is swath's contract on top of the format: its schema ids, the
-  `extensions.swath` metadata and what it records. The Go port's
+  `extensions.swath` metadata and what it records.
   [`docs/dataset.md`](dataset.md) owns it.
 - **Parquet part** is one Parquet file the manifest lists.
-- **Legacy Java dataset** is the Java tool's format 1, with its own commit rules
-  (`_SUCCESS`, the run summary). Use the term in migration documents and legacy
-  diagnostics. The Java tool's own pages call it a **managed Parquet dataset**: a
-  directory of Parquet parts plus swath's manifest, completion marker, run report, and
-  temporary resume state.
 
 ### Supported and experimental
 

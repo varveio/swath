@@ -4,8 +4,8 @@ swath is one static binary with nothing else to install. Download a release, ver
 your `PATH`.
 
 The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
-Versions 0.3.x were a different tool, with another command line and dataset format
-([release notes](https://github.com/varveio/swath/releases/tag/v0.4.0)).
+Coming from 0.3.2: the command line and the dataset format are new
+([moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0)).
 
 ## Download a release
 

@@ -83,7 +83,7 @@ Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gc
 swath: unknown flag --summarize (the total alone is the default: --depth 0)
 ```
 
-A 0.3 option names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
+An option of 0.3.2 names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
 `--stall-timeout`, `--compression` is the `-o` name).
 
 An option given for another provider's source is refused rather than ignored:
@@ -161,6 +161,7 @@ to a bucket without resume; text output and diagnostic `swath diag list --no-jou
 | exit 2, `--NAME is fixed for the run` | the option cannot change on resume | give only the options `swath resume --help` lists |
 | exit 2, identity mismatch | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `swath list --overwrite` |
 | exit 2, `nothing to resume` | no interrupted run in the directory | start a fresh `swath list` |
+| exit 2, `an interrupted run written by swath 0.3` | the directory holds a 0.3.2 run's state (`.swath-state.json` or `.swath/checkpoint.sqlite`) | `swath list ... --overwrite` replaces it |
 | exit 1, another swath process owns this output directory | a process still holds the output lock: the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |
 | exit 1, `cause` `protocol` | the service returned an invalid page; the run cannot be resumed | `swath list --overwrite` |
 | exit 1, journal version | the run was written by another build | finish with that build, or `--overwrite` |

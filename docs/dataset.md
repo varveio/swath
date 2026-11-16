@@ -16,9 +16,6 @@ at the commit `go.mod` pins) owns the format: the manifest's own members, part b
 order and commit. [`reader`](../reader/README.md) is the Go API over this profile;
 [Parquet output (internals)](internals/parquet-output.md) explains how the writer meets it.
 
-Nothing here is released. Until the first release, any of this profile may change outright, with no
-compatibility window for datasets written by earlier builds.
-
 ## What a swath dataset is
 
 A directory (or object-store prefix) is a swath dataset when all of the following are true:

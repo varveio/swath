@@ -48,9 +48,9 @@ prunes when combined with regex filters or includes, because excludes always win
 
 An empty or malformed pattern is refused with exit 2.
 
-Versions 0.3.x read `--include` and `--exclude` as regular expressions. A glob that carries a sign of one is
-refused with exit 2 before anything is listed, and the message names `--include-regex` or `--exclude-regex`,
-so an old command line cannot silently match nothing. The signs are a leading `^`, a final `$`, `\d`, `\D`,
+A glob that carries a sign of a regular expression is refused with exit 2 before anything is listed, and the
+message names `--include-regex` or `--exclude-regex`, so a regular expression given as a glob cannot silently
+match nothing. The signs are a leading `^`, a final `$`, `\d`, `\D`,
 `\w`, `\W`, `\s` or `\S`, `.*` together with `\.` (`.*\.parquet`), and a `|` between `(` and `)`: a glob
 matches its whole key, needs no anchors, and quotes with a backslash only what is special. To keep such a
 pattern a glob, escape the character (`\^`, `\$` or `[$]`, `\|`), write the plain character (`d` for `\d`), or
