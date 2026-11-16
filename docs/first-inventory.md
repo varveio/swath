@@ -33,11 +33,6 @@ counts every name.
 [Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
 newest modification time ([Output](output.md#du-rows)).
 
-> [!NOTE]
-> 0.4.0-rc.2 counts a hard-linked file under each of its names: there `archive/` shows 65.5 MiB in 3 files and
-> the total 101 MiB in 7, and `--count-links-once` counts it once
-> ([differences in 0.4.0-rc.2](release-candidate.md)).
-
 ## 2. List every entry
 
 ```bash
@@ -109,9 +104,6 @@ To read the rows themselves, open the parts with DuckDB, Python or another Parqu
 reader ([Query an inventory](query.md)).
 
 ## 5. Total the saved inventory
-
-> [!NOTE]
-> Coming in 0.4.0: 0.4.0-rc.2 does not have `--from-dataset` and stops with `unknown flag --from-dataset`.
 
 The saved inventory answers step 1 again without walking the tree:
 

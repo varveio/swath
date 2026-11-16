@@ -3,31 +3,25 @@
 swath is one static binary with nothing else to install. Download a release, verify it, and put `swath` on
 your `PATH`.
 
-The current builds are release candidates for 0.4.0, published on the
-[releases page](https://github.com/varveio/swath/releases). A candidate is for trying swath before the final
-release; GitHub marks it as a pre-release, so choose it explicitly. Versions 0.3.x and earlier were a different
-tool, written in Java, with another command line ([changelog](../CHANGELOG.md)).
+The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
+Versions 0.3.x were a different tool, with another command line and dataset format
+([release notes](https://github.com/varveio/swath/releases/tag/v0.4.0)).
 
-> [!NOTE]
-> These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, which does not yet
-> have everything described here, such as `swath du --from-dataset`. [Differences in 0.4.0-rc.2](release-candidate.md)
-> lists what behaves differently.
+## Download a release
 
-## Download a release candidate
-
-For v0.4.0-rc.2, choose the archive for your platform:
+For 0.4.0, choose the archive for your platform:
 
 | Platform | Archive |
 |---|---|
-| Linux, x86-64 | [`swath-0.4.0-rc.2-linux-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-linux-amd64.tar.gz) |
-| Linux, ARM64 | [`swath-0.4.0-rc.2-linux-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-linux-arm64.tar.gz) |
-| macOS, Intel | [`swath-0.4.0-rc.2-darwin-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-darwin-amd64.tar.gz) |
-| macOS, Apple silicon | [`swath-0.4.0-rc.2-darwin-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-darwin-arm64.tar.gz) |
-| Windows, x86-64 | [`swath-0.4.0-rc.2-windows-amd64.zip`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2-windows-amd64.zip) |
+| Linux, x86-64 | [`swath-0.4.0-linux-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-linux-amd64.tar.gz) |
+| Linux, ARM64 | [`swath-0.4.0-linux-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-linux-arm64.tar.gz) |
+| macOS, Intel | [`swath-0.4.0-darwin-amd64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-darwin-amd64.tar.gz) |
+| macOS, Apple silicon | [`swath-0.4.0-darwin-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-darwin-arm64.tar.gz) |
+| Windows, x86-64 | [`swath-0.4.0-windows-amd64.zip`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-windows-amd64.zip) |
 
 Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` on Windows), `LICENSE`,
-`NOTICE` and `THIRD_PARTY_NOTICES` in a `swath-0.4.0-rc.2-OS-ARCH/` directory. The release also carries
-[`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0-rc.2.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0-rc.2/swath-0.4.0-rc.2.spdx.json))
+`NOTICE` and `THIRD_PARTY_NOTICES` in a `swath-0.4.0-OS-ARCH/` directory. The release also carries
+[`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0.spdx.json))
 and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
 
 Each block below downloads with the [GitHub CLI](https://cli.github.com/) (`gh`), verifies, extracts, installs
@@ -40,7 +34,7 @@ the attestation records the build that produced it.
 With the [GitHub CLI](https://cli.github.com/) (`gh`) and [cosign](https://docs.sigstore.dev/) installed:
 
 ```bash
-VERSION=0.4.0-rc.2
+VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 ARCHIVE=swath-$VERSION-linux-$ARCH.tar.gz
 gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
@@ -55,10 +49,10 @@ install -m 755 "swath-$VERSION-linux-$ARCH/swath" ~/.local/bin/ &&
 "$HOME/.local/bin/swath" --version
 ```
 
-The last line prints the version and the commit it was built from:
+The last line prints the version and the commit it was built from, a 40-digit hash in place of `COMMIT`:
 
 ```text
-swath 0.4.0-rc.2 (be8768aea7e5135847b06ff604c499479187313c)
+swath 0.4.0 (COMMIT)
 ```
 
 Every run report carries the same in `build`; keep it with any result you may need to investigate.
@@ -78,7 +72,7 @@ With the GitHub CLI and cosign installed (`brew install gh cosign`); the block p
 Intel archive:
 
 ```bash
-VERSION=0.4.0-rc.2
+VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/')
 ARCHIVE=swath-$VERSION-darwin-$ARCH.tar.gz
 gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
@@ -97,7 +91,7 @@ Then put `~/.local/bin` on your `PATH` as on [Linux](#linux) (zsh, the macOS def
 `~/.zshrc`), and check with `command -v swath && swath --version`. The macOS binaries are not yet signed with
 an Apple Developer ID or notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `gh` or `curl`, as above,
 runs as it is. Gatekeeper refuses a binary downloaded with a browser: after verifying, clear its quarantine
-attribute, `xattr -d com.apple.quarantine swath-0.4.0-rc.2-darwin-ARCH/swath`, with `arm64` on Apple silicon
+attribute, `xattr -d com.apple.quarantine swath-0.4.0-darwin-ARCH/swath`, with `arm64` on Apple silicon
 and `amd64` on Intel.
 
 ### Windows
@@ -105,7 +99,7 @@ and `amd64` on Intel.
 In PowerShell, with the GitHub CLI installed:
 
 ```powershell
-$Version = "0.4.0-rc.2"
+$Version = "0.4.0"
 $Archive = "swath-$Version-windows-amd64.zip"
 gh release download "v$Version" --repo varveio/swath --pattern $Archive --pattern "SHA256SUMS*"
 $Sum = Select-String -Path SHA256SUMS -SimpleMatch "  $Archive"
@@ -138,10 +132,10 @@ On Windows, dataset runs of S3, GCS and Azure Blob sources are refused ([platfor
 Each release publishes a multi-arch image for linux/amd64 and linux/arm64, built from the same binaries:
 
 ```bash
-docker run --rm -v "$PWD:/data:ro" ghcr.io/varveio/swath:0.4.0-rc.2 du -d 1 /data
+docker run --rm -v "$PWD:/data:ro" ghcr.io/varveio/swath:0.4.0 du -d 1 /data
 ```
 
-The image `ghcr.io/varveio/swath:0.4.0-rc.2` is distroless, with no shell; its entrypoint is
+The image `ghcr.io/varveio/swath:0.4.0` is distroless, with no shell; its entrypoint is
 `/opt/swath/swath` and it runs as user `65532:65532`, which cannot write your directories or read your
 `0600` credential files. Run it as yourself instead, and point the AWS SDK at the mounted files:
 
@@ -149,14 +143,14 @@ The image `ghcr.io/varveio/swath:0.4.0-rc.2` is distroless, with no shell; its e
 mkdir -p "$PWD/out"    # yours: a directory Docker creates for the mount belongs to root
 docker run --rm --user "$(id -u):$(id -g)" \
   -v ~/.aws:/aws:ro -e AWS_SHARED_CREDENTIALS_FILE=/aws/credentials -e AWS_CONFIG_FILE=/aws/config \
-  -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0-rc.2 \
+  -v "$PWD/out:/out" ghcr.io/varveio/swath:0.4.0 \
   list s3://bucket/prefix/ -o /out/inventory
 ```
 
 Credentials in the environment work too (`-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e
 AWS_SESSION_TOKEN`). Without a shell the image cannot run `--s3-bearer-token-command` or a profile's
 `credential_process` (both run under `sh -c`): use the release binary for those, or an image of your own that
-adds a shell and the command. A release candidate publishes only its own tag, never `latest`. Pin the
+adds a shell and the command. Besides `0.4.0`, a release moves the tags `0.4` and `latest`. Pin the
 image digest for runs that must use the same image; the image signature and provenance checks are in
 [Releasing swath](../RELEASING.md#verifying-a-release).
 

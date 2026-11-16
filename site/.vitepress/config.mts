@@ -145,11 +145,7 @@ const resolveFromSite = {
 // While the site documents main ahead of a release, a notice above the navigation says so and
 // links to what differs in the newest download. Set it to false when a release is documented
 // (scripts/ci/check-site.py requires it while data/channel.json names the main channel).
-const DEV_DOCS_NOTICE: false | { text: string; linkText: string; link: string } = {
-  text: 'These docs describe the upcoming 0.4.0; the newest download is 0.4.0-rc.2.',
-  linkText: 'What differs',
-  link: '/docs/release-candidate',
-}
+const DEV_DOCS_NOTICE: false | { text: string; linkText: string; link: string } = false
 
 // Titles that would repeat the site's name or another page's.
 const TITLES: Record<string, string> = {
@@ -309,7 +305,6 @@ export default defineConfig({
           items: [
             { text: 'Start here', link: '/docs/start-here' },
             { text: 'Install', link: '/docs/install' },
-            { text: 'Differences in 0.4.0-rc.2', link: '/docs/release-candidate' },
             { text: 'Your first inventory', link: '/docs/first-inventory' },
             { text: 'Understand your results', link: '/docs/results' },
           ],

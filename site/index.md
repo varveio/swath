@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: Save an inventory you can query
-    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
+    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code>.
     link: /docs/dataset
     linkText: The swath dataset
   - title: List and export rows
@@ -45,14 +45,9 @@ minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which 
 
 ## Download
 
-> [!NOTE]
-> These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, a release
-> candidate, which does not yet have everything described here, such as `swath du --from-dataset`
-> ([what differs](../docs/release-candidate.md)).
-
-Download the archive for your platform from the [releases page](https://github.com/varveio/swath/releases),
-verify it and put `swath` on your `PATH`, or run the container image `ghcr.io/varveio/swath:0.4.0-rc.2`.
-[Install](../docs/install.md) has the steps.
+The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
+Download the archive for your platform, verify it and put `swath` on your `PATH`, or run the container image
+`ghcr.io/varveio/swath:0.4.0`. [Install](../docs/install.md) has the steps.
 
 ## Try a public bucket
 
@@ -66,7 +61,7 @@ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region 
 
 `-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
 depths of a big bucket, list it once with `-o DIR` and total the saved inventory with
-`swath du --from-dataset DIR -d N` (coming in 0.4.0).
+`swath du --from-dataset DIR -d N`.
 
 ## Try it on a local directory
 

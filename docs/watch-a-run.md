@@ -162,7 +162,7 @@ when the report says so.
   not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The
   writers are admitted against their own allowance, the same 1/16 of memory whatever `--sort-buffer` says
   (`diagnostics.resources.drain.encoder_allowance_bytes`), so a smaller sort buffer does not mean fewer encoders. The measurements
-  that follow were taken at a 128 MiB budget, the default before 0.4.0: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
+  that follow were taken at a fixed 128 MiB budget, an earlier default: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
   vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured

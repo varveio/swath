@@ -98,10 +98,8 @@ Use these labels consistently:
 - **Planned:** not implemented. Planned controls must not be presented as selectable
   current behavior.
 
-Name the implementation and release when the support differs. The Java v0.3.2 release
-supports S3 general-purpose buckets; its GCS XML access is experimental. Unreleased Go
-also has native GCS, local/mounted filesystem and Azure Blob flat-namespace providers.
-Use the Go CLI and provider docs for their exact limits.
+Name the release when the support differs between releases, and leave each source's exact
+limits to its page under `docs/sources/`.
 
 ## Evidence and performance claims
 
