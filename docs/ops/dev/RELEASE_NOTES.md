@@ -103,8 +103,11 @@ results are in the tag's `ci.yml` and `release.yml` runs.
   and Outposts, and GCS soft-deleted objects.
 - **Resume:** only object-store runs that write a dataset resume. A filesystem listing, text output and
   `swath du` are run again.
-- **Windows** refuses dataset runs of S3, GCS and Azure Blob and `swath resume`, for lack of directory sync;
-  filesystem listings and text output work.
+- **Windows:** dataset runs and `swath resume` work as on Linux and macOS, on an output whose filesystem
+  syncs directories (checked when the run starts). Power loss is safe on local NTFS; on ReFS or an SMB share
+  a crash or kill is recovered, but a power loss may lose the latest part names. An `--overwrite` blocked by
+  a file another program holds open fails naming that cause and leaves the previous dataset readable
+  ([Known limits](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#known-limits)).
 - **S3-compatible stores:** swath trusts a store's empty last page; a store that returns one too early makes
   a listing miss keys ([#265](https://github.com/varveio/swath/issues/265)). Check a first run against a new
   store with an independent count
