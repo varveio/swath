@@ -45,7 +45,8 @@ Where the line appears:
 ### The progress file
 
 A dataset run (`-o DIR`) also rewrites `DIR/.swath/progress.json` every 2 seconds, for a script or a
-supervisor. Read during the run above:
+supervisor. Read in another terminal while the run above goes (with `jq`, if you have it; any JSON reader
+will do):
 
 ```bash
 jq '{state, rows_fetched, object_bytes, parts_written, part_age_ms, advance, throttles, inflight, limit}' \
@@ -121,9 +122,11 @@ and what to do:
 | `stopped: the endpoint cannot be reached` | 75 | [The endpoint cannot be reached](troubleshooting.md#the-endpoint-cannot-be-reached) |
 | `stopped: --spill-wait-timeout reached`, `stopped: the disk is full` | 74 | [Short of disk](#disk) |
 | `interrupted` (Ctrl-C), `interrupted: SIGTERM`, `interrupted: SIGHUP` | 130, 143, 129 | `swath resume DIR` |
-| `failed`, or an error line alone | 1 | the error says why: [Troubleshooting](troubleshooting.md) |
+| `failed` | 1 | the error line says why: [Troubleshooting](troubleshooting.md) |
 
-Only a dataset run of an object store keeps the journal a resume needs; a local directory, a text file and
+A command that stops before it lists can print its error line alone, without a verdict; the exit status says
+which kind it is: 2 for a command line or an output refused before anything ran (an unknown flag, a non-empty
+`-o` directory), 1 for a failure such as a bucket that does not exist. Only a dataset run of an object store keeps the journal a resume needs; a local directory, a text file and
 `swath du` are run again. Every code is in [Exit codes](reference/exit-codes.md).
 
 **The run report.** A committed dataset has its report in `DIR/run.json`; `--report FILE` writes it for any run,
@@ -188,7 +191,8 @@ Throttled requests are retried: they cost time, not rows.
   `--no-adaptive-limit --request-rate N`. Without the limit each worker waits on one page at a time, and
   swath's own probes of the key space run beside them, so more than `--workers` requests can be in flight.
 
-A request that keeps failing with the same cause (not only throttles) prints a warning after 10 seconds:
+Requests that keep failing with the same cause (not only throttles) print a warning once they have done so
+for 10 seconds without any request answered successfully:
 [A warning repeats about failing requests](troubleshooting.md#a-warning-repeats-about-failing-requests).
 
 ## Short of memory or disk
@@ -212,11 +216,10 @@ Memory is the least of the physical memory, the container's limit and `GOMEMLIMI
 - Many rows spilled (the report's `diagnostics.resources.spill.rows`, the rows written to spill, near the rows
   listed) and memory free: raise `--sort-buffer` so more rows wait in memory.
 - On a machine of one vCPU and 1 to 2 GB, start from the defaults: on one core the sorted output is the
-  limit, so keep the default `--workers` ([workers](size-a-run.md#workers)). Sorted runs through a test server
-  at a 128 MiB sort buffer peaked at a median 0.46 GB and at most 0.9 GB over 251 lists, and at 0.6 to 0.7 GB
-  on six lists of 267 to 523 million keys, on machines of 16 to 32 vCPU
-  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
-  A machine of 1 to 2 GB has not been measured: read the peak on a representative run first.
+  limit, so keep the default `--workers` ([workers](size-a-run.md#workers)). Peak memory has been measured
+  only on larger machines
+  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)):
+  read the peak on a representative run first.
 - A warning that spill is in memory:
 
   ```text
@@ -267,8 +270,9 @@ bucket can be hours or days.
 
 - A repeat listing of the same bucket spills far less when it starts from the previous dataset
   ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)).
-- A part or the manifest that cannot be written stops the run with `stopped: the disk is full`, exit 74:
-  [The disk filled](troubleshooting.md#the-disk-filled-exit-74).
+- A part, the journal or the manifest that cannot be written because the filesystem or the quota is full
+  stops the run with `stopped: the disk is full`, exit 74: [The disk filled](troubleshooting.md#the-disk-filled-exit-74).
+  Another write failure, such as a read-only filesystem or a permission refused, is `failed`, exit 1.
 
 How much disk to plan for: [Disk sizing](size-a-run.md#disk-sizing).
 
@@ -310,7 +314,9 @@ report's `outcome.cause` says what kept rising: `stuck_throttle`,
 - Stuck again on the same output: keep `stacks-stuck.txt` and the report, and
   [report the problem](troubleshooting.md#reporting-a-problem).
 - A service that is slow to answer for minutes at a time: raise `--stall-timeout`.
-- An endpoint that has never answered stops after 30 seconds instead:
+- An endpoint that nothing in the run has ever answered, with every connection refused, its host not found or
+  no route to it, stops sooner: after 30 seconds by default, at most half `--stall-timeout` (exit 75, cause
+  `unreachable`). Timeouts and reset connections do not count: they wait for `--stall-timeout`.
   [The endpoint cannot be reached](troubleshooting.md#the-endpoint-cannot-be-reached).
 
 The objects can also keep rising while the parts stay flat and `part_age_ms` grows: one slow range at the start

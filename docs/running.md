@@ -126,7 +126,7 @@ in [Run on a schedule](production.md).
 - <a id="sizing-a-run"></a><a id="disk"></a><a id="memory"></a><a id="cost"></a>[Size a run](size-a-run.md):
   workers, disk, memory and the cost of requests.
 - <a id="watching-a-run"></a><a id="throttling"></a>[Watch and tune a run](watch-a-run.md): the progress line
-  and file, the signals to read, throttling and the flags to change.
+  and file, the closing lines, throttling, memory and disk, a stuck run.
 - <a id="stopping-and-resuming"></a><a id="overwrite-and-refresh"></a><a id="seeding-a-refresh-from-the-previous-dataset"></a>[Stop, resume and refresh](resume-and-refresh.md):
   signals, `swath resume`, replacing an inventory and seeding a refresh.
 - [Run on a schedule](production.md): a nightly run under a supervisor, a dataset written to a bucket,

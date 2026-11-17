@@ -279,7 +279,7 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 With a `--spill-budget` the remedy reads `stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `diagnostics.resources.spill.refused` above 0
-([the first bad pattern](watch-a-run.md#three-bad-patterns)). With the default cap, grow the spill filesystem
+([short of disk](watch-a-run.md#disk)). With the default cap, grow the spill filesystem
 under the running process: the cap follows the disk, and listing continues once the next frame finds the room
 (`diagnostics.resources.spill.cap_raises`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
 the room (a plain resume keeps the recorded cap; with the default cap it derives one from the free space it
