@@ -323,7 +323,6 @@ func TestWalkRefuses(t *testing.T) {
 		"not UTF-8":  {listing.WalkRequest{Prefix: []byte{0xff}}, emit, listing.ErrInvalidRequest},
 		"a negative": {listing.WalkRequest{Budget: listing.Budget{MaxEntries: -1}}, emit, listing.ErrInvalidRequest},
 		"workers":    {listing.WalkRequest{Workers: -1}, emit, listing.ErrInvalidRequest},
-		"a depth":    {listing.WalkRequest{MaxDepth: -1}, emit, listing.ErrInvalidRequest},
 	} {
 		if _, err := src.Walk(context.Background(), c.req, c.emit); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -451,174 +450,6 @@ func TestWrongRegion(t *testing.T) {
 	}
 }
 
-// depthKeys are 10,000 objects in 20 folders, an object at the top, under
-// no folder, and a folder two levels down. They hold no object at a
-// folder's key: gofakes3 lists one as an object of the level above, where
-// S3 rolls it into the folder's common prefix.
-func depthKeys() []string {
-	keys := append(s3test.Keys(10_000, 20), "top", "p01/sub/a", "p01/sub/b")
-	slices.Sort(keys)
-	return keys
-}
-
-// within is what a walk of keys under prefix to depth reads: each object
-// at most depth "/" below the prefix, and, as a KindPrefix entry, each
-// folder at depth that holds a key below it, ending in "+".
-func within(keys []string, prefix string, depth int) []string {
-	var out []string
-	for _, k := range under(keys, prefix) {
-		rest := k[len(prefix):]
-		parts := strings.SplitAfter(rest, "/")
-		if len(parts) <= depth {
-			out = append(out, k)
-			continue
-		}
-		folder := prefix + strings.Join(parts[:depth], "") + "+"
-		if !slices.Contains(out, folder) {
-			out = append(out, folder)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// walkDepth walks src with req, which sets a depth, keeping each entry's
-// key, a prefix's ending in "+", and its unread extents; it checks each
-// object as walk does.
-func walkDepth(t *testing.T, src *swath.Source, req listing.WalkRequest) (walked, listing.WalkSummary, error) {
-	t.Helper()
-	var w walked
-	sum, err := src.Walk(context.Background(), req, func(b listing.WalkBatch) error {
-		for _, e := range b.Entries {
-			switch {
-			case e.Kind == listing.KindPrefix && e.Size == nil:
-				w.keys = append(w.keys, string(e.Key)+"+")
-			case e.Kind == listing.KindObject && e.Size != nil && *e.Size == int64(len(e.Key)):
-				w.keys = append(w.keys, string(e.Key))
-			default:
-				return fmt.Errorf("entry %q: kind %v, size %v", e.Key, e.Kind, e.Size)
-			}
-		}
-		for _, u := range b.Unread {
-			w.unread = append(w.unread, listing.Unread{Key: bytes.Clone(u.Key), Scope: u.Scope, Class: u.Class})
-		}
-		return nil
-	})
-	return w, sum, err
-}
-
-// TestWalkDepth: a walk with a depth hands emit the objects within it,
-// the object at exactly the prefix included, and each folder at the depth
-// as a KindPrefix entry, never as an object, each once; it completes with
-// nothing unread.
-func TestWalkDepth(t *testing.T) {
-	s3test.NoCredentials(t)
-	keys, selfKeys := depthKeys(), walkKeys()
-	endpoint, _ := serveKeys(t, keys, 0)
-	selfEndpoint, _ := serveKeys(t, selfKeys, 0)
-	src, self := open(t, endpoint, s3test.Name), open(t, selfEndpoint, s3test.Name)
-
-	for _, c := range []struct {
-		src    *swath.Source
-		keys   []string
-		prefix string
-		depth  int
-	}{
-		{src, keys, "", 1}, {src, keys, "", 2}, {src, keys, "", 3}, {src, keys, "p01/", 1}, {src, keys, "p0", 1},
-		{self, selfKeys, "p03/", 1}, {self, selfKeys, "p03/", 2},
-	} {
-		keys := c.keys
-		w, sum, err := walkDepth(t, c.src, listing.WalkRequest{Prefix: []byte(c.prefix), MaxDepth: c.depth})
-		if err != nil {
-			t.Fatalf("%q to %d: %v", c.prefix, c.depth, err)
-		}
-		slices.Sort(w.keys)
-		if want := within(keys, c.prefix, c.depth); !slices.Equal(w.keys, want) {
-			t.Errorf("%q to %d: %d entries, want %d", c.prefix, c.depth, len(w.keys), len(want))
-		}
-		if sum.Entries != int64(len(w.keys)) || len(w.unread) != 0 || sum.Evidence.Stop != listing.StopCompleted {
-			t.Errorf("%q to %d: %+v, unread %v", c.prefix, c.depth, sum, w.unread)
-		}
-	}
-}
-
-// TestWalkDepthBudget: a walk with a depth stopped by its entry budget
-// returns no error and says so, having counted no KindPrefix entry toward
-// it; every entry within the depth was emitted once or lies in an extent
-// it hands emit as unread: the level it had begun as a listing, whose
-// emitted children are read, every level it had not as a subtree, none
-// of which it emitted. The stop falls between levels, and inside a level
-// of three pages.
-func TestWalkDepthBudget(t *testing.T) {
-	s3test.NoCredentials(t)
-	flat := make([]string, 2500)
-	for i := range flat {
-		flat[i] = fmt.Sprintf("k%05d", i)
-	}
-	folders, wide := depthKeys(), append(flat, "d/a", "d/b")
-	folderEndpoint, _ := serveKeys(t, folders, 0)
-	wideEndpoint, _ := serveKeys(t, wide, 0)
-
-	for _, c := range []struct {
-		name     string
-		src      *swath.Source
-		keys     []string
-		depth    int
-		max      int64
-		listings int
-	}{
-		{"between levels", open(t, folderEndpoint, s3test.Name), folders, 2, 1500, 0},
-		{"inside a level", open(t, wideEndpoint, s3test.Name), wide, 2, 1000, 1},
-	} {
-		w, sum, err := walkDepth(t, c.src, listing.WalkRequest{MaxDepth: c.depth, Budget: listing.Budget{MaxEntries: c.max}})
-		if err != nil || sum.Evidence.Stop != listing.StopEntryBudget || len(w.unread) == 0 {
-			t.Fatalf("%s: %+v, unread %v, %v", c.name, sum, w.unread, err)
-		}
-		objects := int64(0)
-		for _, k := range w.keys {
-			if !strings.HasSuffix(k, "+") {
-				objects++
-			}
-		}
-		if objects < c.max || objects >= c.max+1000 {
-			t.Errorf("%s: %d objects emitted", c.name, objects)
-		}
-
-		listings := 0
-		for _, u := range w.unread {
-			if u.Class != listing.UnreadBudget || u.Scope != listing.UnreadListing && u.Scope != listing.UnreadSubtree {
-				t.Fatalf("%s: unread %+v", c.name, u)
-			}
-			if u.Scope == listing.UnreadListing {
-				listings++
-			}
-		}
-		if listings != c.listings {
-			t.Errorf("%s: %d listings unread, want %d", c.name, listings, c.listings)
-		}
-
-		emitted := map[string]int{}
-		for _, k := range w.keys {
-			emitted[k]++
-		}
-		for _, k := range within(c.keys, "", c.depth) {
-			var subtree, listed bool
-			for _, u := range w.unread {
-				subtree = subtree || u.Scope == listing.UnreadSubtree && strings.HasPrefix(k, string(u.Key))
-				listed = listed || u.Scope == listing.UnreadListing && strings.HasPrefix(k, string(u.Key)) && k != string(u.Key)
-			}
-			switch {
-			case emitted[k] > 1:
-				t.Fatalf("%s: %q emitted %d times", c.name, k, emitted[k])
-			case emitted[k] == 1 && subtree:
-				t.Fatalf("%s: %q emitted and in an unread subtree", c.name, k)
-			case emitted[k] == 0 && !subtree && !listed:
-				t.Fatalf("%s: %q neither emitted nor unread", c.name, k)
-			}
-		}
-	}
-}
-
 // TestWalkRefusesObjectWithoutSize: an object listed without a size is
 // ErrInvalidPage to a walk and a Summarize, never a size of zero.
 func TestWalkRefusesObjectWithoutSize(t *testing.T) {
@@ -630,10 +461,8 @@ func TestWalkRefusesObjectWithoutSize(t *testing.T) {
 	}))
 	src := open(t, endpoint, "bkt")
 	emit := func(listing.WalkBatch) error { return nil }
-	for _, depth := range []int{0, 1} {
-		if _, err := src.Walk(context.Background(), listing.WalkRequest{Prefix: []byte("a/"), MaxDepth: depth}, emit); !errors.Is(err, listing.ErrInvalidPage) {
-			t.Errorf("depth %d: %v", depth, err)
-		}
+	if _, err := src.Walk(context.Background(), listing.WalkRequest{Prefix: []byte("a/")}, emit); !errors.Is(err, listing.ErrInvalidPage) {
+		t.Errorf("walk: %v", err)
 	}
 	_, _, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
 	if !errors.Is(err, listing.ErrInvalidPage) {

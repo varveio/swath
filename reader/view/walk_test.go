@@ -53,40 +53,22 @@ func keysOf(entries []listing.Entry) []string {
 	return out
 }
 
-// deep lists what a walk of prefix down to depth (0 for every level) hands
-// on, from the records alone: every record whose key lies within the
-// depth, and on an object store one prefix for each prefix at the depth
-// below which a key lies.
-func deep(rs []rec, prefix string, depth int, isLocal bool) []string {
+// under lists what a walk of prefix hands on, from the records alone:
+// every record whose key begins with it.
+func under(rs []rec, prefix string, isLocal bool) []string {
 	var out []string
-	prefixes := map[string]bool{}
 	for _, r := range rs {
-		rest, ok := strings.CutPrefix(r.key, prefix)
-		if !ok {
-			continue
-		}
-		slashes := strings.Count(rest, "/")
-		if depth == 0 || slashes < depth || slashes == depth && strings.HasSuffix(rest, "/") {
+		if strings.HasPrefix(r.key, prefix) {
 			out = append(out, r.key+" "+kindOf(r, isLocal).String())
 		}
-		if depth > 0 && slashes >= depth && !isLocal {
-			cut := 0
-			for range depth {
-				cut += strings.IndexByte(rest[cut:], '/') + 1
-			}
-			prefixes[prefix+rest[:cut]] = true
-		}
-	}
-	for p := range prefixes {
-		out = append(out, p+" "+listing.KindPrefix.String())
 	}
 	slices.Sort(out)
 	return out
 }
 
 // TestWalkEveryEntryOnce walks every level of every schema's fixture,
-// sequentially and in parallel shards, and to a depth: each entry the
-// records give comes back once, with its values, and no other.
+// sequentially and in parallel shards: each entry the records give comes
+// back once, with its values, and no other.
 func TestWalkEveryEntryOnce(t *testing.T) {
 	for _, id := range append(slices.Clone(objectSchemas), reader.LocalV1) {
 		t.Run(string(id), func(t *testing.T) {
@@ -104,22 +86,20 @@ func TestWalkEveryEntryOnce(t *testing.T) {
 				for _, req := range []listing.WalkRequest{
 					{Prefix: []byte(prefix), Workers: 1},
 					{Prefix: []byte(prefix), Workers: 4},
-					{Prefix: []byte(prefix), MaxDepth: 1},
-					{Prefix: []byte(prefix), MaxDepth: 2},
 				} {
 					w, s, err := walk(t, inv, req)
 					if err != nil {
 						t.Fatalf("walk %+v: %v", req, err)
 					}
-					want := deep(rs, prefix, req.MaxDepth, isLocal)
+					want := under(rs, prefix, isLocal)
 					if got := keysOf(w.entries); !slices.Equal(got, want) {
-						t.Fatalf("walk %q workers %d depth %d:\n got %q\nwant %q", prefix, req.Workers, req.MaxDepth, got, want)
+						t.Fatalf("walk %q workers %d:\n got %q\nwant %q", prefix, req.Workers, got, want)
 					}
 					if s.Entries != int64(len(w.entries)) || len(w.unread) != 0 || s.Evidence.Stop != listing.StopCompleted {
 						t.Fatalf("walk %+v: summary %+v, unread %v", req, s, w.unread)
 					}
 					for _, e := range w.entries {
-						if r, ok := byKey[string(e.Key)]; ok && e.Kind != listing.KindPrefix && !sameEntry(e, r, isLocal) {
+						if r := byKey[string(e.Key)]; !sameEntry(e, r, isLocal) {
 							t.Fatalf("entry %+v, want %+v", e, r)
 						}
 					}
@@ -129,9 +109,9 @@ func TestWalkEveryEntryOnce(t *testing.T) {
 	}
 }
 
-// TestWalkEntryBudget: a walk stops exactly at MaxEntries, KindPrefix
-// entries not counted, and hands on the interval after the last key it
-// handed as unread; a walk resumed after it reads the rest.
+// TestWalkEntryBudget: a walk stops exactly at MaxEntries and hands on
+// the interval after the last key it handed as unread; a walk resumed
+// after it reads the rest.
 func TestWalkEntryBudget(t *testing.T) {
 	rs := objects()
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: rs}))
@@ -160,15 +140,6 @@ func TestWalkEntryBudget(t *testing.T) {
 	if _, s, err := walk(t, inv, listing.WalkRequest{Budget: listing.Budget{MaxEntries: int64(len(rs))}}); err != nil || s.Evidence.Stop != listing.StopCompleted {
 		t.Fatalf("whole budget: %+v, %v", s, err)
 	}
-
-	// At a depth, prefixes are not counted.
-	w, s, err := walk(t, inv, listing.WalkRequest{MaxDepth: 1, Budget: listing.Budget{MaxEntries: 2}})
-	if err != nil || s.Evidence.Stop != listing.StopEntryBudget {
-		t.Fatalf("depth: %+v, %v", s, err)
-	}
-	if got := keysOf(w.entries); !slices.Equal(got, []string{"a object", "a/ object", "a/ prefix", "ab/ prefix", "bulk/ prefix", "deep/ prefix", "nulls/ prefix"}) {
-		t.Fatalf("depth: %q", got)
-	}
 }
 
 // TestWalkTimeBudget: a walk its MaxDuration ends hands on the interval
@@ -176,25 +147,23 @@ func TestWalkEntryBudget(t *testing.T) {
 func TestWalkTimeBudget(t *testing.T) {
 	rs := objects()
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: rs}))
-	for _, depth := range []int{0, 2} {
-		var entries []string
-		var unread []listing.Unread
-		s, err := inv.Walk(context.Background(), listing.WalkRequest{MaxDepth: depth, Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}}, func(b listing.WalkBatch) error {
-			for _, e := range b.Entries {
-				entries = append(entries, string(e.Key))
-			}
-			unread = append(unread, b.Unread...)
-			if len(b.Entries) > 0 {
-				time.Sleep(20 * time.Millisecond)
-			}
-			return nil
-		})
-		if err != nil || s.Evidence.Stop != listing.StopTimeBudget || len(entries) == 0 || len(entries) >= len(rs) {
-			t.Fatalf("depth %d: %+v, %d entries, %v", depth, s, len(entries), err)
+	var entries []string
+	var unread []listing.Unread
+	s, err := inv.Walk(context.Background(), listing.WalkRequest{Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}}, func(b listing.WalkBatch) error {
+		for _, e := range b.Entries {
+			entries = append(entries, string(e.Key))
 		}
-		if len(unread) != 1 || string(unread[0].Key) != entries[len(entries)-1] || unread[0].Class != listing.UnreadBudget {
-			t.Fatalf("depth %d: unread %+v after %q", depth, unread, entries[len(entries)-1])
+		unread = append(unread, b.Unread...)
+		if len(b.Entries) > 0 {
+			time.Sleep(20 * time.Millisecond)
 		}
+		return nil
+	})
+	if err != nil || s.Evidence.Stop != listing.StopTimeBudget || len(entries) == 0 || len(entries) >= len(rs) {
+		t.Fatalf("%+v, %d entries, %v", s, len(entries), err)
+	}
+	if len(unread) != 1 || string(unread[0].Key) != entries[len(entries)-1] || unread[0].Class != listing.UnreadBudget {
+		t.Fatalf("unread %+v after %q", unread, entries[len(entries)-1])
 	}
 }
 
@@ -203,7 +172,7 @@ func TestWalkTimeBudget(t *testing.T) {
 func TestWalkEmitError(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	stop := errors.New("stop here")
-	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}, {MaxDepth: 3}, {Budget: listing.Budget{MaxEntries: 5}}} {
+	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}, {Budget: listing.Budget{MaxEntries: 5}}} {
 		calls := 0
 		_, err := inv.Walk(context.Background(), req, func(listing.WalkBatch) error {
 			calls++
@@ -219,7 +188,8 @@ func TestWalkEmitError(t *testing.T) {
 }
 
 // TestWalkScopeAndDirectories: a walk outside the scope is ErrOutOfScope;
-// a local directory the inventory has as another kind is ErrNotDirectory,
+// a local directory the inventory has as another kind, or below a
+// symbolic link, is ErrNotDirectory,
 // one it proves absent ErrNotFound, one at or under an entry of unknown
 // kind neither; an empty one is its own entry.
 func TestWalkScopeAndDirectories(t *testing.T) {
@@ -234,11 +204,9 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 	}
 
 	files := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
-	for prefix, want := range map[string]error{"missing/": listing.ErrNotFound, "a.txt/": listing.ErrNotDirectory} {
-		for _, depth := range []int{0, 1} {
-			if _, _, err := walk(t, files, listing.WalkRequest{Prefix: []byte(prefix), MaxDepth: depth}); !errors.Is(err, want) {
-				t.Errorf("walk %q depth %d: %v, want %v", prefix, depth, err, want)
-			}
+	for prefix, want := range map[string]error{"missing/": listing.ErrNotFound, "a.txt/": listing.ErrNotDirectory, "link/x/": listing.ErrNotDirectory} {
+		if _, _, err := walk(t, files, listing.WalkRequest{Prefix: []byte(prefix)}); !errors.Is(err, want) {
+			t.Errorf("walk %q: %v, want %v", prefix, err, want)
 		}
 	}
 	for _, prefix := range []string{"u/", "u/x/"} {
@@ -254,7 +222,7 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 // TestWalkCancelled: a cancelled ctx ends the walk with its error.
 func TestWalkCancelled(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}, {MaxDepth: 1}} {
+	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}} {
 		ctx, cancel := context.WithCancel(context.Background())
 		_, err := inv.Walk(ctx, req, func(listing.WalkBatch) error {
 			cancel()

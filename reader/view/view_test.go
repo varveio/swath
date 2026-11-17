@@ -160,12 +160,6 @@ func TestRowFaults(t *testing.T) {
 			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Page = %v, want %v", err, c.want)
 			}
-			if c.want == listing.ErrInvalidPage {
-				_, err := inv.Walk(ctx, listing.WalkRequest{MaxDepth: 1}, func(listing.WalkBatch) error { return nil })
-				if !errors.Is(err, c.want) {
-					t.Errorf("Walk to depth 1 = %v, want %v", err, c.want)
-				}
-			}
 			if c.want == listing.ErrInvalidPage || strings.Contains(c.name, "slash") {
 				return
 			}
@@ -226,7 +220,7 @@ func TestRequestChecks(t *testing.T) {
 		"zero limit":              second(objects.Page(ctx, listing.PageRequest{})),
 		"local prefix no slash":   second(files.Page(ctx, listing.PageRequest{Prefix: []byte("d"), Limit: 1})),
 		"local walk no slash":     second(files.Walk(ctx, listing.WalkRequest{Prefix: []byte("d")}, emit)),
-		"negative depth":          second(objects.Walk(ctx, listing.WalkRequest{MaxDepth: -1}, emit)),
+		"negative workers":        second(objects.Walk(ctx, listing.WalkRequest{Workers: -1}, emit)),
 		"no emit":                 second(objects.Walk(ctx, listing.WalkRequest{}, nil)),
 		"negative budget":         second(objects.Walk(ctx, listing.WalkRequest{Budget: listing.Budget{MaxValueBytes: -1}}, emit)),
 		"no kind":                 third(objects.Summarize(ctx, nil, listing.SummaryOptions{Kinds: []listing.Kind{0}})),

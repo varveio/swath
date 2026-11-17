@@ -12,8 +12,7 @@ import "time"
 // inventory's key intervals. A negative bound is ErrInvalidRequest.
 type Budget struct {
 	// MaxEntries bounds the entries read. A walk counts the entries it
-	// hands to emit, the prefix's own entry included, KindPrefix entries
-	// and Unread excluded. Workers stop at the next batch boundary, so a
+	// hands to emit, the prefix's own entry included. Workers stop at the next batch boundary, so a
 	// walk may deliver up to one batch per worker past the bound, and a
 	// total it cuts short stays a lower bound. An inventory's Summarize
 	// counts the rows it reads at and under its targets, each once, the
@@ -44,11 +43,6 @@ type WalkRequest struct {
 	// prefix; on a local source it is empty, for the root, or a
 	// directory's key.
 	Prefix []byte
-	// MaxDepth bounds the levels below Prefix the walk reads: 1 reads
-	// Prefix's own entry and its children. Zero reads every level. A walk
-	// with a depth proves nothing below it. With a depth, an object store's
-	// keys below it come back as KindPrefix entries.
-	MaxDepth int
 	// Workers is how many requests or directory reads run at once; zero
 	// selects the backend's default. One selects the sequential mode: one
 	// serial request chain, never split, the reference a parallel walk is
@@ -80,7 +74,7 @@ type WalkBatch struct {
 
 // WalkSummary is how a walk ended. A walk is complete when it returned no
 // error, Evidence.Stop is StopCompleted, no batch held an Unread, and
-// Evidence.Unlocated is 0: then every entry within its MaxDepth was read.
+// Evidence.Unlocated is 0: then every entry under its prefix was read.
 type WalkSummary struct {
 	// Entries counts the entries handed to emit.
 	Entries int64

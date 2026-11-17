@@ -4,7 +4,6 @@
 package view
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"runtime"
@@ -14,10 +13,6 @@ import (
 
 	"github.com/varveio/swath/reader/listing"
 )
-
-// listBatch is the entries one listing request of a walk with a depth
-// returns.
-const listBatch = 1024
 
 // Walk hands emit every entry at or under req.Prefix, the prefix's own
 // included when the inventory has it, each once. A walk of every level is
@@ -31,13 +26,9 @@ const listBatch = 1024
 // Evidence.Stop names the bound. It stops exactly at MaxEntries.
 // MaxValueBytes and MaxHeldBytes do not bound it.
 //
-// With req.MaxDepth, the walk lists level by level in key order
-// (SeekParquet's List): an object store's keys below the depth come back
-// as one KindPrefix entry for each prefix at the depth, which the object
-// at exactly its key, if any, precedes; a local walk hands only the
-// inventory's rows. A local prefix the inventory has as another kind is
-// ErrNotDirectory; one it lacks, ErrNotFound when it proves the absence,
-// and an empty walk otherwise.
+// A local prefix the inventory has as another kind, or below a symbolic
+// link, is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
+// absence, and an empty walk otherwise.
 //
 // A batch, its entries and their values belong to the walk and are valid
 // until emit returns. An error from emit stops the walk and is returned
@@ -87,8 +78,8 @@ func (inv *Inventory) checkWalk(req listing.WalkRequest, emit func(listing.WalkB
 	switch {
 	case emit == nil:
 		return invalid("no emit callback")
-	case req.MaxDepth < 0 || req.Workers < 0:
-		return invalid("a negative depth or number of workers")
+	case req.Workers < 0:
+		return invalid("a negative number of workers")
 	}
 	return checkBudget(req.Budget)
 }
@@ -101,10 +92,8 @@ var errEntryBudget = errors.New("view: the walk's entry budget is reached")
 type walker struct {
 	inv  *Inventory
 	emit func(listing.WalkBatch) error
-	// max is the budget's MaxEntries, zero for none, and counted the
-	// entries it counts.
-	max     int64
-	counted int64
+	// max is the budget's MaxEntries, zero for none.
+	max int64
 	// entries counts the entries handed to emit, and last is the key of
 	// the last one, in key order unless the walk is parallel.
 	entries int64
@@ -113,17 +102,14 @@ type walker struct {
 	emitErr error
 }
 
-// run walks req.Prefix as req asks: level by level down to its MaxDepth,
-// in parallel shards when it sets workers and no bound, or in key order.
+// run walks req.Prefix as req asks: in parallel shards when it sets
+// workers and no bound, else in key order.
 func (w *walker) run(ctx context.Context, req listing.WalkRequest) error {
 	workers := req.Workers
 	if workers == 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
-	switch {
-	case req.MaxDepth > 0:
-		return w.level(ctx, req.Prefix, req.MaxDepth)
-	case workers > 1 && req.Budget.MaxEntries == 0 && req.Budget.MaxDuration == 0:
+	if workers > 1 && req.Budget.MaxEntries == 0 && req.Budget.MaxDuration == 0 {
 		return w.parallel(ctx, req.Prefix, workers)
 	}
 	return w.scan(ctx, req.Prefix)
@@ -133,18 +119,8 @@ func (w *walker) run(ctx context.Context, req listing.WalkRequest) error {
 // errEntryBudget when it cut one.
 func (w *walker) hand(entries []listing.Entry) error {
 	n, over := len(entries), false
-	for i := range entries {
-		if w.max == 0 {
-			break
-		}
-		if entries[i].Kind == listing.KindPrefix {
-			continue
-		}
-		if w.counted == w.max {
-			n, over = i, true
-			break
-		}
-		w.counted++
+	if w.max > 0 && w.entries+int64(n) > w.max {
+		n, over = int(w.max-w.entries), true
 	}
 
 	if n > 0 {
@@ -220,54 +196,4 @@ func (w *walker) parallel(ctx context.Context, prefix []byte, workers int) error
 		h.done <- failed
 	}
 	return <-scanned
-}
-
-// level hands emit the entries of prefix's level, in key order, and those
-// of the levels below it down to depth: each listed row, and for each
-// common prefix its own level, or at the depth its exact row and, on an
-// object store, a KindPrefix entry.
-func (w *walker) level(ctx context.Context, prefix []byte, depth int) error {
-	d := decoder{rows: w.inv.rows}
-	q := seekparquet.ListQuery{Prefix: prefix, Delimiter: '/', Limit: listBatch, Columns: w.inv.rows.columns}
-	var pending []listing.Entry
-	for {
-		listed, err := w.inv.sp.List(ctx, q, nil)
-		if err != nil {
-			return err
-		}
-		pending = pending[:0]
-		for _, le := range listed {
-			if le.CommonPrefix != nil && depth > 1 {
-				if err := w.hand(pending); err != nil {
-					return err
-				}
-				pending = pending[:0]
-				if err := w.level(ctx, le.CommonPrefix, depth-1); err != nil {
-					return err
-				}
-				continue
-			}
-			if row := cmp.Or(le.Row, le.Exact); row != nil {
-				e, err := d.entry(ownedRow(row))
-				if err != nil {
-					return err
-				}
-				pending = append(pending, e)
-			}
-			if le.CommonPrefix != nil && !w.inv.rows.local {
-				e, err := prefixEntry(le.CommonPrefix, listing.KindPrefix)
-				if err != nil {
-					return err
-				}
-				pending = append(pending, *e)
-			}
-		}
-		if err := w.hand(pending); err != nil {
-			return err
-		}
-		if len(listed) < q.Limit {
-			return nil
-		}
-		q.Cursor = listed[len(listed)-1].Cursor()
-	}
 }

@@ -123,12 +123,6 @@ What the walk handed over and those intervals hold every key under the prefix on
 afterwards completes it. A walk whose context ends returns the context's error, even if the function took every
 batch.
 
-A walk with a depth (`MaxDepth`) reads one level of `/` at a time instead, one request at a time whatever
-`Workers` says: the objects within the depth, and each folder at the depth as a `KindPrefix` entry, which counts
-toward no budget and stands for the keys below it. A walk with a depth shows nothing below it. A budget stops it
-between requests; the level it was reading comes back as an `Unread` extent of scope `listing` at the level's
-prefix (the children it handed over are read), and each level it had not begun as a `subtree`.
-
 ```go
 var objects, size int64
 var unread []listing.Unread
@@ -390,5 +384,5 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 ## Not in the library yet
 
 The library answers Page and Lookup on S3, GCS, Azure Blob Storage and a local directory, and Walk and Summarize on
-the three object stores. On a local directory a walk with a depth reads its levels with pages; a walk without one,
-and a summary with a subtree target, are `listing.ErrUnsupported`. A source's request limits hold within one process only.
+the three object stores. On a local directory a walk, and a summary with a subtree target, are
+`listing.ErrUnsupported`. A source's request limits hold within one process only.

@@ -60,16 +60,12 @@ var (
 // an UnreadInterval of class UnreadBudget, before Walk returns. A walk
 // that meets more unread extents than it holds at once (65,536) drops the
 // rest and says so with a nil Evidence.Unlocated. MaxHeldBytes and
-// MaxValueBytes do not bound a walk of an object store. A walk with a
-// MaxDepth reads one level at a time instead (walkDepth). When ctx ends,
+// MaxValueBytes do not bound a walk of an object store. When ctx ends,
 // Walk returns its error, even when emit has accepted every batch. A panic
 // in the walk's workers is returned as an error of no class.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
-	}
-	if req.MaxDepth > 0 {
-		return s.walkDepth(ctx, req, emit)
 	}
 	walker, ok := s.store.(live.Walker)
 	if !ok {
@@ -124,8 +120,8 @@ func checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) erro
 		return invalid("the prefix holds a NUL byte")
 	case !utf8.Valid(req.Prefix):
 		return invalid("the prefix is not UTF-8")
-	case req.MaxDepth < 0 || req.Workers < 0:
-		return invalid("a negative depth or number of workers")
+	case req.Workers < 0:
+		return invalid("a negative number of workers")
 	case b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0:
 		return invalid("a negative bound")
 	}
@@ -142,12 +138,11 @@ type walk struct {
 	emit   func(listing.WalkBatch) error
 	queue  chan handoff
 
-	// The emitting goroutine's: the entries handed to emit, those that
-	// count toward max (MaxEntries, zero for none), emit's error, and
-	// whether the walk emits no more entries.
+	// The emitting goroutine's: the entries handed to emit, which max
+	// bounds (MaxEntries, zero for none), emit's error, and whether the
+	// walk emits no more entries.
 	max     int64
 	entries int64
-	counted int64
 	emitErr error
 	halted  bool
 
@@ -229,12 +224,7 @@ func (w *walk) deliver(entries []listing.Entry) error {
 	}
 
 	w.entries += int64(len(entries))
-	for i := range entries {
-		if entries[i].Kind != listing.KindPrefix {
-			w.counted++
-		}
-	}
-	if w.max > 0 && w.counted >= w.max {
+	if w.max > 0 && w.entries >= w.max {
 		w.halted = true
 		w.stop(errEntryBudget)
 	}
