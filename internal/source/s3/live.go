@@ -86,10 +86,14 @@ func (l *Live) List(ctx context.Context, prefix []byte, token string, max int) (
 	return lvl, nil
 }
 
-// listed is a listed object's entry.
+// listed is a listed object's entry, with no size when the store sent
+// none.
 func listed(o *client.Object) listing.Entry {
-	size := o.Size
-	e := listing.Entry{Key: []byte(o.Key), Kind: listing.KindObject, Size: &size}
+	e := listing.Entry{Key: []byte(o.Key), Kind: listing.KindObject}
+	if !o.NoSize {
+		size := o.Size
+		e.Size = &size
+	}
 	if o.Mtime != 0 {
 		t := time.UnixMicro(o.Mtime).UTC()
 		e.LastModified = &t

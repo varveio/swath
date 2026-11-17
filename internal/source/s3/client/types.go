@@ -26,6 +26,7 @@ type Object struct {
 	Key               string
 	ETag              string // as sent, quotes included
 	Size              int64
+	NoSize            bool  // a <Contents> without <Size>: Size is 0, not the object's
 	Mtime             int64 // LastModified in Unix microseconds; 0 when absent
 	StorageClass      string
 	OwnerID           string

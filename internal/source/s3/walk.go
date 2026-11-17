@@ -22,8 +22,9 @@ const walkWorkers = 64
 // over the source's client, on the range engine with no seed and no
 // probes, so that a prefix that fits in one page is one request and only
 // a larger one spreads, as idle workers ask for splits; one worker lists
-// one continuation chain (Sequential). Each range's keys are checked
-// strictly ascending. A range a stop cuts short is reported unread by its
+// one continuation chain (Sequential). An object listed without a size is
+// listing.ErrInvalidPage, and each range's keys are checked strictly
+// ascending and apart from every other range's (live.Count). A range a stop cuts short is reported unread by its
 // key interval (keyrange). Its errors are classed as the source's other
 // calls' are.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
@@ -32,7 +33,7 @@ func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 		workers = walkWorkers
 	}
 
-	p, err := New(ctx, Options{Bucket: l.bucket, Prefix: string(w.Prefix), Workers: workers, Client: l.client,
+	p, err := New(ctx, Options{Bucket: l.bucket, Prefix: string(w.Prefix), Workers: workers, Client: l.client, NeedSize: true,
 		Policy: keyrange.Policy{Sequential: workers == 1}})
 	if err != nil {
 		return failure(ctx, err)

@@ -296,6 +296,7 @@ func (p *oldParser) contents(self []byte, i int) error {
 			if o.size, err = oldParseInt(t); err != nil {
 				return err
 			}
+			o.sized = true
 		case "LastModified":
 			t, err := p.scalar(name, empty)
 			if err != nil {
@@ -446,7 +447,7 @@ func (p *oldParser) own() (release func()) {
 func (p *oldParser) object(s *objSpan) Object {
 	return Object{Key: p.text(s.key), ETag: p.text(s.etag), StorageClass: p.text(s.class),
 		OwnerID: p.text(s.ownerID), OwnerDisplayName: p.text(s.ownerName),
-		ChecksumAlgorithm: p.text(s.algo), ChecksumType: p.text(s.ctype), Size: s.size, Mtime: s.mtime}
+		ChecksumAlgorithm: p.text(s.algo), ChecksumType: p.text(s.ctype), Size: s.size, NoSize: !s.sized && !p.versions, Mtime: s.mtime}
 }
 
 // prefixStrings is the page's common prefixes, or nil.
