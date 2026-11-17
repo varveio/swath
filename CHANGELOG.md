@@ -5,6 +5,17 @@ Notable changes per release. The human summary of the current release is in the
 
 ## Unreleased
 
+### Changed
+
+- `swath du`'s table heads the newest time under a prefix `newest (ZONE)`, as the terminal view does, instead
+  of `last_modified (ZONE)`. TSV and JSONL keep the field `max_last_modified`.
+- `swath show` names a dataset's storage by its Parquet parts and schema; `-v` adds the SeekParquet format id.
+- `swath show` on an interrupted run prints when it started, its command and the parts saved; `-v` adds the
+  journal version and the identity a resume must match, without the settings that have no value (an AWS run's
+  endpoint).
+- A dataset of a local tree has no `cuts.txt`: `--seed-from` does not take a local source. `--overwrite`
+  removes the one an earlier version wrote.
+
 ## 0.4.0
 
 swath lists S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted

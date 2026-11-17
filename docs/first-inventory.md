@@ -12,7 +12,7 @@ swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
@@ -71,8 +71,7 @@ under both its names here), the time, and where the dataset went, then what to r
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest, `run.json` (the run report), `cuts.txt` (the cut file, which `--seed-from` reads to seed the next
-listing of a bucket; a directory listing does not use it) and
+manifest, `run.json` (the run report) and
 `.swath/` (the run's private workspace, which readers ignore)
 ([layout](dataset.md#what-a-swath-dataset-is)). Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
@@ -96,7 +95,7 @@ media-inventory: complete
   listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
   contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
   coverage  nothing unreadable; no filters; no exclusions
-  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
+  storage   1 part, 4.05 KiB of Parquet (schema swath/local-entries/v1)
 ```
 
 `swath show` reads the manifest, not the rows. The first line is the verdict; then what was listed, when, what

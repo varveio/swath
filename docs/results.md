@@ -24,7 +24,7 @@ shows the size, and the line under it the totals of both: the example tree holds
 
 ```text
 $ swath du -d 1 media
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
@@ -37,7 +37,7 @@ allocated bytes instead, and `--sort size` then orders by them:
 
 ```text
 $ swath du -d 1 media --allocated
- on disk  files  dirs  last_modified (CET)  path
+ on disk  files  dirs  newest (CET)         path
  784 KiB      2     0  2026-11-02 10:30:00  archive/
 6.11 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
@@ -85,7 +85,7 @@ no closing line, a last line `swath: N entries could not be read and are missing
 
 ```text
 $ swath du -d 1 media
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
        -      -     -  -                    private/

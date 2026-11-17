@@ -70,7 +70,7 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	if l.Local {
 		countHead = headingFiles
 	}
-	const sizeHead, shareHead, dateHead, pathHead = "size", "share", "newest", "path"
+	const sizeHead, shareHead, dateHead, pathHead = "size", "share", headingNewest, "path"
 	names := make([]string, len(rows))
 	sizes := make([]string, len(rows))
 	counts := make([]string, len(rows))

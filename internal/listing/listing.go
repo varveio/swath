@@ -959,7 +959,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// A dry run counts: nothing consumes its rows in order, so it holds
 	// no reorder storage and never spills (order.Count).
 	env.Count = dryRun(cfg)
-	a := &attempt{ctx: ctx, cfg: cfg, jr: jr, sum: sum}
+	_, seeded := src.(source.Seeded)
+	a := &attempt{ctx: ctx, cfg: cfg, jr: jr, sum: sum, seeded: seeded}
 	oopt, scratch, err := orderOptions(cfg, jr, sum.Invocation.RowBudgetBytes, shared)
 	if err != nil {
 		return a.sum.failed(err)
@@ -1355,6 +1356,9 @@ type attempt struct {
 	jr     *runJournal
 	router parquetout.Encoder
 	sum    Report
+	// seeded: the source takes a --seed-from prior (source.Seeded), so its
+	// dataset carries a cut file for the next listing (writeCuts).
+	seeded bool
 	// retained and committed are the rows the history reads as durable
 	// besides the journal's acknowledgements: those kept from an
 	// interrupted run, and the committed dataset's once the manifest is
@@ -1742,8 +1746,13 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 // with put, last, once the run report is written: the cuts the router
 // collected of the parts this run wrote, after those of the parts it
 // retained, read from their key page index (ends, retainedCuts) within
-// ctx. It is advisory: a failure is a warning, and the dataset stands.
+// ctx. It is advisory: a failure is a warning, and the dataset stands. A
+// source that takes no --seed-from prior (a local tree) gets none: an
+// overwritten dataset's cut file has gone with its other entries.
 func (a *attempt) writeCuts(ctx context.Context, parts []dataset.Part, ends func(context.Context, dataset.Part) ([]dataset.PageEnd, error), put func(context.Context, []byte) error) {
+	if !a.seeded {
+		return
+	}
 	err := faults.At("cuts") // tests: the cut file is not written
 	c := dataset.NewCuts(0)
 	if err == nil {

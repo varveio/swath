@@ -16,8 +16,8 @@ For a committed dataset, `swath show` prints the manifest's summary for people, 
 first, then labelled lines for the source, when it was listed (local time, the zone named), what the dataset
 holds (its rows, the bytes of the objects they list when every size is known, and the key range, clipped to
 a terminal's width and left out where it cannot fit), the
-coverage, and last how it is stored (the Parquet parts and their bytes, the SeekParquet format and the swath
-schema):
+coverage, and last how it is stored (the Parquet parts, their bytes and the swath schema; `-v` adds the
+SeekParquet format id before the schema):
 
 ```text
 $ swath show media-inventory
@@ -26,7 +26,7 @@ media-inventory: complete
   listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
   contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
   coverage  nothing unreadable; no filters; no exclusions
-  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
+  storage   1 part, 4.05 KiB of Parquet (schema swath/local-entries/v1)
 ```
 
 The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
@@ -51,11 +51,23 @@ s3://out/inv/: complete
 committed from the work directory work (finalized)
 ```
 
-For an interrupted run, it prints the command the journal recorded, the frozen identity, the parts saved so
-far and where `swath resume` will continue:
+For an interrupted run, it prints when it started, the command the journal recorded, the parts saved so far
+and where `swath resume` will continue:
 
 ```text
 $ swath show logs-inventory
+logs-inventory: interrupted run
+  started   2026-11-15 21:04:35 CET
+  command   swath list --endpoint-url=http://127.0.0.1:19480 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
+  saved     1 part, 1,000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
+```
+
+`-v` adds the journal's version to the start line and, after the command, the identity a resume must match:
+the provider, the schema, the writer recipe, the part size and the source's frozen settings, each with its
+value (a setting without one, such as the endpoint of a run against AWS, is left out):
+
+```text
+$ swath show logs-inventory -v
 logs-inventory: interrupted run
   started   2026-11-15 21:04:35 CET (journal version 1)
   command   swath list --endpoint-url=http://127.0.0.1:19480 --anonymous --output=logs-inventory --request-rate=10 --part-interval=1s s3://bkt/logs/
