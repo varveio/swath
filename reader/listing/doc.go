@@ -29,8 +29,9 @@
 // only when it gives no answer: a request it refuses, or ctx ending.
 //
 // Walk hands every entry at or under a prefix to emit, exactly once, in no
-// order; a live walk adds every extent it did not read as an Unread. It lists
-// its scope flat, in parallel only when the scope is larger than a page; a
+// order; a live walk adds every extent it did not read as an Unread, and an
+// inventory's walk the key interval a budget kept it from. It lists its
+// scope flat, in parallel only when the scope is larger than a page; a
 // page is not a walk with parallelism off. A live walk spills nothing to disk
 // and retains no key after it returns. When ctx ends, Walk returns the
 // context's error.

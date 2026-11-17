@@ -29,7 +29,8 @@ const (
 	// KindSymlink is a symbolic link. It is listed, never followed, and its
 	// key has no trailing "/" whatever it points to.
 	KindSymlink
-	// KindOther is any other local entry: a FIFO, a socket or a device.
+	// KindOther is any other local entry: a FIFO, a socket, a device, or
+	// an entry whose kind the source did not report.
 	KindOther
 )
 

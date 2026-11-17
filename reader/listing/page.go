@@ -24,7 +24,8 @@ const (
 // as the only delimiter.
 type PageRequest struct {
 	// Prefix is the parent: the children are the keys that begin with it.
-	// On a local source it is empty, for the root, or a directory's key.
+	// On an object store it is any key prefix; on a local source it is
+	// empty, for the root, or a directory's key.
 	Prefix []byte
 	// Token continues the level after an earlier page: that page's Next,
 	// unchanged. Empty starts the level. A token is opaque and versioned:

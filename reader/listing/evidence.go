@@ -34,6 +34,8 @@ const (
 	StopHeldBudget StopReason = "held_budget"
 	// StopScanBudget: a page reached PageRequest.MaxScanned.
 	StopScanBudget StopReason = "scan_budget"
+	// StopValueBudget: an inventory's call reached Budget.MaxValueBytes.
+	StopValueBudget StopReason = "value_budget"
 )
 
 // Evidence says where an answer came from and what it can prove. The zero
@@ -89,10 +91,12 @@ const (
 	// children the call never met. A child the call returned, and whose
 	// own subtree it finished, was read.
 	UnreadListing UnreadScope = "listing"
-	// UnreadInterval: an object store's keys in (Key, Hi] were not read.
-	// Key, exclusive, is empty when the interval starts at the beginning of
-	// the call's scope; Hi, inclusive, is empty when it runs to the end.
-	// Only keys within the call's scope are meant.
+	// UnreadInterval: the keys in (Key, Hi] were not read: an object
+	// store's, or an inventory's when a bound of the request stopped its
+	// call. Key, exclusive, is empty when the interval starts at the
+	// beginning of the call's scope, or of the target's in a
+	// TargetSummary; Hi, inclusive, is empty when it runs to the end.
+	// Only keys within that scope are meant.
 	UnreadInterval UnreadScope = "interval"
 )
 
@@ -127,15 +131,16 @@ const (
 	UnreadBudget UnreadClass = "budget"
 )
 
-// Unread is an extent a call did not read: an entry or directory, or an
-// object store's key interval. Everything in the call's scope that
-// lies in no Unread extent was read. An entry at or under an UnreadSubtree
-// key, or inside an UnreadInterval, may be missing from the answer; under
-// an UnreadListing key, only the children the call did not return, and
-// what lies under them, may be. Not following a symbolic link is policy,
-// never an Unread. An inventory reports none of its listing's gaps as an
-// Unread: they are unlocated (Evidence.Unlocated), and it never reports a
-// root extent to stand for them.
+// Unread is an extent a call did not read: an entry or directory, or a
+// key interval. Everything in the call's scope that lies in no Unread
+// extent was read. An entry at or under an UnreadSubtree key, or inside an
+// UnreadInterval, may be missing from the answer; under an UnreadListing
+// key, only the children the call did not return, and what lies under
+// them, may be. Not following a symbolic link is policy, never an Unread.
+// An inventory reports none of its listing's gaps as an Unread: they are
+// unlocated (Evidence.Unlocated), and it never reports a root extent to
+// stand for them. Its Unread extents are its query's: the key intervals a
+// bound of the request kept the call from reading, of class UnreadBudget.
 type Unread struct {
 	// Key is the entry or directory not read, or an interval's exclusive
 	// low bound.
