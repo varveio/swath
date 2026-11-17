@@ -33,9 +33,9 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/runtrace"
 	"github.com/varveio/swath/internal/source"
@@ -61,10 +61,10 @@ var forensics atomic.Pointer[forensicTarget]
 type forensicTarget struct {
 	ctx    context.Context // the run's: its cause is why it stopped
 	dir    string
-	pr     *listing.Progress
+	pr     *inventory.Progress
 	report string // --report
 	argv   []string
-	att    *listing.Attempt
+	att    *inventory.Attempt
 	t      *terminal // the run's terminal result
 }
 
@@ -149,10 +149,10 @@ func main() {
 // limit) exits 3, never 0 (a supervisor must not take it as complete), and
 // the provider names the class of its errors. A reader that closed the
 // stream took what it wanted: exit 0, whatever was left out.
-func classifyRun(ctx context.Context, dir string, provider func(error) string, sum listing.Report, err error) (error, outcome) {
+func classifyRun(ctx context.Context, dir string, provider func(error) string, sum inventory.Report, err error) (error, outcome) {
 	var pe *textout.ProjectionError
 	switch {
-	case err == nil && sum.Outcome.StopReason == listing.StopDownstreamClosed:
+	case err == nil && sum.Outcome.StopReason == inventory.StopDownstreamClosed:
 	case err == nil && sum.Outcome.Unreadables() > 0:
 		err = unreadableError(sum.Outcome.Unreadables())
 	case err == nil && dir != "" && !sum.Outcome.Complete:
@@ -160,7 +160,7 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 	case err == nil && !sum.Outcome.Complete:
 		// Text rows or totals.
 		err = &incompleteError{"the output is partial: the listing stopped before the end of its scope (" + sum.Outcome.StopReason + ")"}
-	case errors.Is(err, listing.ErrComplete):
+	case errors.Is(err, inventory.ErrComplete):
 		err = finalizedSample(dir, err)
 	case errors.As(err, &pe):
 		// Found when the schema is bound, before the listing's first
@@ -175,11 +175,11 @@ func classifyRun(ctx context.Context, dir string, provider func(error) string, s
 	return err, classify(err, context.Cause(ctx), dir)
 }
 
-// newAttempt identifies this invocation (listing.Attempt).
-func newAttempt() *listing.Attempt {
+// newAttempt identifies this invocation (inventory.Attempt).
+func newAttempt() *inventory.Attempt {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
-	return &listing.Attempt{ID: hex.EncodeToString(b[:]), StartedAt: jsontime.Of(time.Now())}
+	return &inventory.Attempt{ID: hex.EncodeToString(b[:]), StartedAt: jsontime.Of(time.Now())}
 }
 
 // cfgOut is the output directory a run with o would own ("" for swath
@@ -207,7 +207,7 @@ var reported sync.Map
 //
 // --report - prints it on stdout instead (nil: an account with no stdout
 // of its own, a forced exit's, writes none).
-func writeReport(path string, r listing.Report, stdout io.Writer) error {
+func writeReport(path string, r inventory.Report, stdout io.Writer) error {
 	switch {
 	case path == "-" && stdout != nil:
 		enc := json.NewEncoder(stdout)
@@ -252,7 +252,7 @@ func streamed(path string) bool {
 
 // writeStream writes r to path, opened as it is, in ReplaceJSON's
 // encoding.
-func writeStream(path string, r listing.Report) error {
+func writeStream(path string, r inventory.Report) error {
 	b, err := dataset.EncodeJSON(r)
 	if err != nil {
 		return err
@@ -279,16 +279,16 @@ func reportFailed(err, rerr error) error {
 	case err != nil:
 		return fmt.Errorf("%w; %w", err, rerr)
 	}
-	return &exitError{error: rerr, code: exitFatal, out: outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: rerr.Error()}}
+	return &exitError{error: rerr, code: exitFatal, out: outcome{Class: inventory.ClassFatal, ExitCode: exitFatal, Message: rerr.Error()}}
 }
 
 // stopEarly ends an attempt that stopped before a run began (an unknown
 // scheme, say): the report (--report, or stdout for --report -) holds its
 // outcome.
-func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *listing.Attempt, err error) error {
+func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *inventory.Attempt, err error) error {
 	o := classify(err, nil, "")
 	o.Attempt = att
-	r := listing.Unstarted(argv, dir, att, err)
+	r := inventory.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
 	o = o.withCoverage(r.Outcome)
 	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, writeReport(report, r, stdout))
@@ -412,7 +412,7 @@ func isDir(path string) bool {
 
 // printVersion prints swath VERSION (REVISION).
 func printVersion(w io.Writer) {
-	b := listing.BuildInfo()
+	b := inventory.BuildInfo()
 	fmt.Fprintf(w, "swath %s", b.Version)
 	if b.Revision != "" {
 		fmt.Fprintf(w, " (%s)", b.Revision)
@@ -627,7 +627,7 @@ func providerSecrets() ([]string, map[string]string) {
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
-// redactArgv is the recorded form shared with listing.Run.
+// redactArgv is the recorded form shared with inventory.Run.
 func redactArgv(argv []string) []string { return registry.RedactArgv(argv) }
 
 // resumeFlags are the flags swath resume accepts.
@@ -801,8 +801,8 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if o.filter.Base, err = keyOrigin(root); err != nil {
 		return o, "", usageError{err} // a malformed URL: s3://, az://ACCOUNT
 	}
-	if f.Changed("sort-buffer") && o.rowBudget < listing.MinRowBudget {
-		return o, "", usageError{fmt.Errorf("--sort-buffer %q: want at least %s", sizeText(int64(o.rowBudget)), sizeText(listing.MinRowBudget))}
+	if f.Changed("sort-buffer") && o.rowBudget < inventory.MinRowBudget {
+		return o, "", usageError{fmt.Errorf("--sort-buffer %q: want at least %s", sizeText(int64(o.rowBudget)), sizeText(inventory.MinRowBudget))}
 	}
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
@@ -846,7 +846,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 
 // runWith runs a list command; recorded is the recorded command (a
 // resume's), resumed tells a resume, att is the attempt (nil: a new one).
-func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, recorded []string, resumed bool, att *listing.Attempt) error {
+func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, recorded []string, resumed bool, att *inventory.Attempt) error {
 	if att == nil {
 		att = newAttempt()
 	}
@@ -889,13 +889,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		noteKept(errOut, "hint: "+escapeControl(root)+" is a swath dataset; to total what it lists: swath du --from-dataset "+shellOperand(root)+"\n")
 	}
 	root, narrowing := narrowRoot(root, &o.filter)
-	cfg := listing.Config{
-		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
+	cfg := inventory.Config{
+		Source: inventory.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
 		// A text file is always replaced (written beside its name and
 		// renamed into place): --overwrite asks for what happens anyway.
-		Output: listing.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
-		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
+		Output: inventory.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
+		Limits: inventory.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
+			Spill: inventory.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
@@ -911,7 +911,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		// The dataset goes to the bucket; the work directory is owned as a
 		// dataset directory is (lock, journal, spill, receipts).
 		cfg.Output.Dir = o.workDir
-		cfg.Output.Remote = &listing.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
+		cfg.Output.Remote = &inventory.RemoteOutput{Location: o.remote.String(), Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds,
 			Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	}
 	prof, err := startProfiles(o.cpuProfile, o.memProfile, o.memProfileRate, func(m string) { elog().warn(warnProfile, m) })
@@ -950,7 +950,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		})
 		defer stopGrace()
 	}
-	cfg.Progress = &listing.Progress{}
+	cfg.Progress = &inventory.Progress{}
 	logRun(cfg.Progress.RunID)
 	fw := newFailureWatch(pf.Title, o.stall)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
@@ -959,12 +959,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// report before run.json, error.json (Settle) or --report is written,
 	// and every one of them derives from it. error.json is written while
 	// the run still owns the output (Settle), never by a run that did not.
-	cfg.Finalize = func(r *listing.Report, err error) {
+	cfg.Finalize = func(r *inventory.Report, err error) {
 		if (toStdout || o.totals != nil) && brokenPipe(err) {
 			// The reader closed the stream: exit 0, as Java's, and the
 			// report says the listing did not reach its end.
 			err = nil
-			r.Outcome.Status, r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Error = listing.StatusStopped, false, listing.StopDownstreamClosed, ""
+			r.Outcome.Status, r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Error = inventory.StatusStopped, false, inventory.StopDownstreamClosed, ""
 		}
 		if r.Requests != nil {
 			r.Requests.FailureWarnings, r.Requests.LogDropped = fw.warnings.Load(), dropped.Load()
@@ -982,7 +982,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		}
 	}
 	settled, unrecorded := false, ""
-	cfg.Settle = func(sum listing.Report, err error) {
+	cfg.Settle = func(sum inventory.Report, err error) {
 		if cfg.Progress.Started() {
 			// The run's final snapshot, done or failed; a refusal under
 			// the lock leaves the file as the run before it left it.
@@ -1022,7 +1022,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	defer statusNow.Store(nil)
 	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait, fixed: cfg.Limits.Spill.Max > 0}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp)
-	sum, err := listing.Run(ctx, cfg)
+	sum, err := inventory.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	tt.disp.stop()
@@ -1093,7 +1093,7 @@ type runEnd struct {
 // any listing request was answered or directory read, other than a stop
 // (a signal, the deadline, the stall timeout, a full disk), whose
 // statistics stand.
-func oneLine(sum listing.Report, out outcome, started bool) bool {
+func oneLine(sum inventory.Report, out outcome, started bool) bool {
 	switch {
 	case out.ExitCode == exitOK:
 		return false
@@ -1109,11 +1109,11 @@ func oneLine(sum listing.Report, out outcome, started bool) bool {
 // accounts derived from the frozen outcome out (the report, -json, the
 // outcome on stderr when error.json does not hold it) and the error main
 // exits with.
-func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, end runEnd, tt *termUI) error {
+func finishList(stdout io.Writer, o options, dir string, sum inventory.Report, err error, out outcome, end runEnd, tt *termUI) error {
 	settled, unrecorded := end.settled, end.unrecorded
 	brief := oneLine(sum, out, end.started)
 	failing := ""
-	if err != nil && end.failing != "" && out.Cause != source.CauseUnreachable && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
+	if err != nil && end.failing != "" && out.Cause != source.CauseUnreachable && (out.Class == inventory.ClassStuck || out.Class == inventory.ClassDeadline) {
 		// The report's error and the outcome's message name the cause
 		// too, not only the error line.
 		failing = "; every request was failing: " + end.failing
@@ -1137,12 +1137,12 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if unrecorded == "" {
 			unrecorded = "stopped before owning the output"
 		}
-		if (!brief || o.term.verbose > 0) && unrecorded != listing.UnrecordedDiscarded {
+		if (!brief || o.term.verbose > 0) && unrecorded != inventory.UnrecordedDiscarded {
 			reportUnrecorded(dir, unrecorded)
 		}
 	}
 	account(&sum.Outcome, out)
-	if errors.Is(err, listing.ErrComplete) {
+	if errors.Is(err, inventory.ErrComplete) {
 		committedAccount(dir, &sum)
 	}
 	sum.Outcome.Unrecorded = unrecorded
@@ -1161,7 +1161,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	reportUnreadable(&sum, end.source, view)
 	closed := false // the closing block's verdict states what is missing
 	if !brief || o.term.stats.set {
-		closed = tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
+		closed = tt.stats(&sum, sum.Outcome.StopReason == inventory.StopDownstreamClosed)
 	}
 	if o.countOnly && !o.du && o.report != "-" && rerr == nil && (err == nil || errors.Is(err, errIncomplete)) {
 		countLine(stdout, sum) // partial counts too, as swath du prints partial totals (exit 3)
@@ -1169,7 +1169,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	switch {
 	case err != nil:
 		err = explain(err)
-		if out.Class == listing.ClassDeadline {
+		if out.Class == inventory.ClassDeadline {
 			err = deadlineAdvice(err, out.Resumable, dir)
 		}
 		if failing != "" {
@@ -1189,7 +1189,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 }
 
 // countLine is swath diag count's output: its one line of counts.
-func countLine(stdout io.Writer, sum listing.Report) {
+func countLine(stdout io.Writer, sum inventory.Report) {
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
@@ -1222,20 +1222,20 @@ func explain(err error) error {
 		Unwrap() error
 	}
 	switch {
-	case errors.Is(err, listing.ErrAmbiguousTail):
+	case errors.Is(err, inventory.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
 	case errors.Is(err, dataset.ErrPartLimit):
 		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-max-rows)", err)
-	case errors.Is(err, listing.ErrUnsafeLayout):
+	case errors.Is(err, inventory.ErrUnsafeLayout):
 		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
-	case errors.Is(err, dataset.ErrInsideRoot) && errors.Is(err, listing.ErrInterrupted):
+	case errors.Is(err, dataset.ErrInsideRoot) && errors.Is(err, inventory.ErrInterrupted):
 		// --overwrite is refused inside the root: it starts nothing over.
 		return fmt.Errorf("-o: %w (swath resume DIR continues it; a new dataset goes to a new directory outside the listed root)", err)
 	case errors.Is(err, dataset.ErrInsideRoot):
 		// Not empty, or --overwrite given: either way --overwrite cannot
 		// help here.
 		return fmt.Errorf("-o: %w (write the dataset to a new directory outside the listed root)", err)
-	case errors.Is(err, listing.ErrInterrupted):
+	case errors.Is(err, inventory.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)

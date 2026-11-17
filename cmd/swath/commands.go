@@ -22,8 +22,8 @@ import (
 	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/reader"
@@ -86,7 +86,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		// A replacement committed whose installation a crash cut short is
 		// installed; the leftovers of one installed (a crash before their
 		// removal) are removed.
-		if err := listing.InstallReplacement(dir); err != nil {
+		if err := inventory.InstallReplacement(dir); err != nil {
 			return stop(err)
 		}
 	}
@@ -99,7 +99,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dataset.Committed(dir) && !dataset.Unfinalized(dir) && at == dir {
 		// A bucket dataset's work directory committed but not finalized goes
 		// on: the run finishes the commit's aftermath, then reports complete.
-		return stop(finalizedSample(dir, listing.ErrComplete))
+		return stop(finalizedSample(dir, inventory.ErrComplete))
 	}
 	if dataset.InterruptedV03(dir) {
 		return stop(dataset.ErrPriorRelease)
@@ -111,7 +111,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			// published, and the command was not recorded.
 			return stop(errNoCommand)
 		}
-		return stop(listing.ErrNothingToResume)
+		return stop(inventory.ErrNothingToResume)
 	}
 	if err == nil {
 		err = st.Resumable()
@@ -269,13 +269,13 @@ func textRun(dir string) bool {
 //
 // A dataset already committed and complete is no refusal: the resume
 // exits 0 (idempotent, as Java's), its report saying complete.
-func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report string, argv []string, verbose bool) error {
+func refuse(stdout io.Writer, dir, seen string, err error, att *inventory.Attempt, report string, argv []string, verbose bool) error {
 	o := classify(err, nil, dir)
 	o.Attempt = att
-	r := listing.Unstarted(argv, dir, att, err)
+	r := inventory.Unstarted(argv, dir, att, err)
 	r.Invocation.Resume = true
 	account(&r.Outcome, o)
-	if errors.Is(err, listing.ErrComplete) {
+	if errors.Is(err, inventory.ErrComplete) {
 		committedAccount(dir, &r)
 	}
 	done := o.ExitCode == exitOK

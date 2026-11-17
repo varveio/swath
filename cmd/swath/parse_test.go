@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/cli"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/registry"
 )
 
@@ -389,14 +389,14 @@ func TestParquetOutputNameRefusal(t *testing.T) {
 				}
 				err := dispatch(context.Background(), args, io.Discard)
 				want := "-o " + dest + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
-				if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+				if exitOf(err) != exitUsage || classify(err, nil, "").Class != inventory.ClassUsage || err.Error() != want {
 					t.Fatalf("%q: %v, want usage error %q", args, err, want)
 				}
 			}
 			if !hasScheme(dest) {
 				err := dispatch(context.Background(), []string{"resume", dest}, io.Discard)
 				want := "resume " + dest + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
-				if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+				if exitOf(err) != exitUsage || classify(err, nil, "").Class != inventory.ClassUsage || err.Error() != want {
 					t.Fatalf("resume %s: %v, want usage error %q", dest, err, want)
 				}
 			}
@@ -434,7 +434,7 @@ func TestDatasetDirectoryNames(t *testing.T) {
 			}
 			err := dispatch(ctx, []string{"resume", refused}, io.Discard)
 			want := "resume " + refused + ": a dataset is a directory of parts; use a name without .parquet, or add / to select a directory"
-			if exitOf(err) != exitUsage || classify(err, nil, "").Class != listing.ClassUsage || err.Error() != want {
+			if exitOf(err) != exitUsage || classify(err, nil, "").Class != inventory.ClassUsage || err.Error() != want {
 				t.Fatalf("resume %s: %v, want usage error %q", refused, err, want)
 			}
 			if err := dispatch(ctx, []string{"resume", refused + "/"}, io.Discard); err != nil {
@@ -552,7 +552,7 @@ func TestReportStdout(t *testing.T) {
 	if err := run(context.Background(), []string{src, "-o", filepath.Join(t.TempDir(), "ds"), "--no-stats", "--report", "-"}, &out, false); err != nil {
 		t.Fatal(err)
 	}
-	var r listing.Report
+	var r inventory.Report
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Output.RowsEmitted != 2 {
 		t.Fatalf("stdout %q: %v", out.String(), err)
 	}
@@ -569,7 +569,7 @@ func TestReportStdout(t *testing.T) {
 	// A refusal before the run (an unknown scheme) prints its report too.
 	out.Reset()
 	err := run(context.Background(), []string{"bad://b", "-o", filepath.Join(t.TempDir(), "ds"), "--report", "-"}, &out, false)
-	r = listing.Report{}
+	r = inventory.Report{}
 	if exitOf(err) != exitUsage || json.Unmarshal(out.Bytes(), &r) != nil || r.Outcome.ExitCode != exitUsage {
 		t.Fatalf("unknown scheme, --report -: %v, stdout %q", err, out.String())
 	}

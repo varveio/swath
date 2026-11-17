@@ -22,9 +22,9 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -73,7 +73,7 @@ func unreadableMessage(n int64) string {
 }
 
 // Stuck causes (error.json and the report's outcome cause on 75): what
-// rose while the run's liveness (listing.ProgressSnapshot.Liveness) did
+// rose while the run's liveness (inventory.ProgressSnapshot.Liveness) did
 // not.
 const (
 	// stuckEmptyChain: the service answered only empty continuing pages,
@@ -93,7 +93,7 @@ func (e *stuckError) Is(target error) bool { return target == errStuck }
 
 // stuckCause names what rose in the stalled window: from the counts at
 // the last progress (at) to now.
-func stuckCause(at, now listing.ProgressSnapshot) string {
+func stuckCause(at, now inventory.ProgressSnapshot) string {
 	switch {
 	case now.EmptyChain > at.EmptyChain:
 		return stuckEmptyChain
@@ -127,7 +127,7 @@ func (e *signalError) Error() string {
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {
-	Class     string `json:"class"` // listing.Class*: ok, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
+	Class     string `json:"class"` // inventory.Class*: ok, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
 	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message,omitempty"`
 	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
@@ -138,10 +138,10 @@ type outcome struct {
 	StopSource string `json:"stop_source,omitempty"`
 	// Attempt is the invocation this outcome belongs to; the report
 	// (--report) carries the same one.
-	Attempt *listing.Attempt `json:"attempt,omitempty"`
-	Run     *listing.RunInfo `json:"run,omitempty"` // the report's run
+	Attempt *inventory.Attempt `json:"attempt,omitempty"`
+	Run     *inventory.RunInfo `json:"run,omitempty"` // the report's run
 	// Status, Complete, StopReason and Unreadable are the report's
-	// (listing.Outcome): what became of the output and its coverage, so
+	// (inventory.Outcome): what became of the output and its coverage, so
 	// that the outcome event tells a complete output from a partial one.
 	Status     string `json:"status,omitempty"`
 	Complete   bool   `json:"complete"`
@@ -151,7 +151,7 @@ type outcome struct {
 
 // withCoverage is o with the accounted report outcome r's status and
 // coverage.
-func (o outcome) withCoverage(r listing.Outcome) outcome {
+func (o outcome) withCoverage(r inventory.Outcome) outcome {
 	o.Status, o.Complete, o.StopReason, o.Unreadable = r.Status, r.Complete, r.StopReason, r.Unreadable
 	return o
 }
@@ -160,7 +160,7 @@ func (o outcome) withCoverage(r listing.Outcome) outcome {
 // cancelled with) to an outcome. dir is the output directory, if any.
 func classify(err, cause error, dir string) outcome {
 	if err == nil {
-		return outcome{Class: listing.ClassOK, ExitCode: exitOK}
+		return outcome{Class: inventory.ClassOK, ExitCode: exitOK}
 	}
 	// A run's journal is in dir, or, for a replacement of the dataset there
 	// (--overwrite), in its own directory (dataset.Staged).
@@ -171,7 +171,7 @@ func classify(err, cause error, dir string) outcome {
 	var ue *journal.UnresumableError
 	switch {
 	case errors.As(err, &u), errors.Is(err, pflag.ErrHelp):
-		o.Class, o.ExitCode, o.Resumable = listing.ClassUsage, exitUsage, false
+		o.Class, o.ExitCode, o.Resumable = inventory.ClassUsage, exitUsage, false
 	case refusal(err):
 		// The caller's to fix (another output, --overwrite, the original
 		// settings): nothing ran, and the output is as it was, so
@@ -179,7 +179,7 @@ func classify(err, cause error, dir string) outcome {
 		// there. A source refused mid-run (source.Unsupported) keeps its
 		// journal, so it stays resumable by a build that lists it; the
 		// provider's class is its cause.
-		o.Class, o.ExitCode = listing.ClassRefused, exitUsage
+		o.Class, o.ExitCode = inventory.ClassRefused, exitUsage
 		var ce interface{ Class() string }
 		if errors.As(err, &ce) {
 			o.Cause = ce.Class()
@@ -188,73 +188,73 @@ func classify(err, cause error, dir string) outcome {
 		// The service broke the listing contract: never resumable, and
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
 		// Java's; the journal marks the run unresumable.
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "protocol"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "protocol"
 	case errors.Is(err, dataset.ErrUnsafeLayout):
 		// The output needs a person: a stop cause selected meanwhile (a
 		// stall, the deadline, a signal) must not make it resumable.
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "unsafe_layout"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "unsafe_layout"
 	case errors.Is(err, dataset.ErrPartLimit):
 		// The part size and row cap are frozen in the identity, so a
 		// resume would reach the limit again; it outranks a stop cause.
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "part_limit"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "part_limit"
 	case errors.Is(err, dataset.ErrCandidateMismatch):
 		// An earlier attempt's manifest may still appear: a person settles
 		// it, never a resume.
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "candidate_mismatch"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "candidate_mismatch"
 	case errors.Is(err, dataset.ErrCommitUnresolved):
 		// Nothing was removed: a resume creates the same manifest again.
 		// It outranks a stop cause, which may be what cut the commit short.
-		o.Class, o.ExitCode, o.Cause = listing.ClassUnresolved, exitStuck, "commit_unresolved"
+		o.Class, o.ExitCode, o.Cause = inventory.ClassUnresolved, exitStuck, "commit_unresolved"
 	case errors.Is(err, dataset.ErrLostRace):
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "lost_race"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "lost_race"
 	case errors.Is(err, dataset.ErrRemoteAltered):
-		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "remote_altered"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "remote_altered"
 	case errors.Is(err, errIncomplete):
-		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitIncomplete, false
+		o.Class, o.ExitCode, o.Resumable = inventory.ClassIncomplete, exitIncomplete, false
 	case errors.Is(err, source.ErrUnreachable):
 		// Nothing in the run answered and every connection failed
 		// deterministically for the grace (objhttp's fail-fast): no
 		// progress and nothing reachable, the stall reached early.
 		// Resumable as the journal says, once the endpoint answers.
-		o.Class, o.ExitCode, o.Cause = listing.ClassStuck, exitStuck, source.CauseUnreachable
+		o.Class, o.ExitCode, o.Cause = inventory.ClassStuck, exitStuck, source.CauseUnreachable
 	case errors.Is(cause, errStuck):
-		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
+		o.Class, o.ExitCode = inventory.ClassStuck, exitStuck
 		var st *stuckError
 		if errors.As(cause, &st) {
 			o.Cause = st.cause
 		}
 	case errors.Is(cause, errDeadline):
-		o.Class, o.ExitCode = listing.ClassDeadline, exitDeadline
+		o.Class, o.ExitCode = inventory.ClassDeadline, exitDeadline
 	case errors.Is(cause, errSpillWait):
 		// Out of the disk the run was given, as a full disk is: resumable
 		// with more of it (a larger --spill-budget, or a larger disk).
-		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, causeSpillBudget
+		o.Class, o.ExitCode, o.Cause = inventory.ClassDiskFull, exitDiskFull, causeSpillBudget
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
-		o.Class, o.ExitCode = listing.ClassTerminated, exitTerminated
+		o.Class, o.ExitCode = inventory.ClassTerminated, exitTerminated
 	case errors.As(cause, &se) && se.sig == syscall.SIGHUP:
-		o.Class, o.ExitCode = listing.ClassTerminated, exitHangup
+		o.Class, o.ExitCode = inventory.ClassTerminated, exitHangup
 	case errors.As(cause, &se):
-		o.Class, o.ExitCode = listing.ClassInterrupted, exitInterrupted
-	case errors.Is(err, listing.ErrComplete):
+		o.Class, o.ExitCode = inventory.ClassInterrupted, exitInterrupted
+	case errors.Is(err, inventory.ErrComplete):
 		// swath resume on a committed dataset has nothing to do: it is
 		// idempotent, exit 0, as Java's, when the dataset covers its
 		// scope; one committed with partial coverage stays incomplete.
 		o.Resumable = false
 		if m, ok := committedManifest(dir); ok && m.Coverage.Complete {
-			o.Class, o.ExitCode = listing.ClassOK, exitOK
+			o.Class, o.ExitCode = inventory.ClassOK, exitOK
 		} else {
-			o.Class, o.ExitCode = listing.ClassIncomplete, exitIncomplete
+			o.Class, o.ExitCode = inventory.ClassIncomplete, exitIncomplete
 		}
 	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
 		// A full disk or quota stops the run (a part, a journal append,
 		// spill or the manifest cannot be written) but loses nothing
 		// durable: resumable once there is space, when the journal is
 		// intact. Its own code lets a runner retry with a larger workspace.
-		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, "no_space"
+		o.Class, o.ExitCode, o.Cause = inventory.ClassDiskFull, exitDiskFull, "no_space"
 	case errors.Is(err, journal.ErrLocked):
 		// Another process owns the output: this attempt changed nothing,
 		// and the run there is that process's to finish.
-		o.Class, o.ExitCode, o.Resumable = listing.ClassFatal, exitFatal, false
+		o.Class, o.ExitCode, o.Resumable = inventory.ClassFatal, exitFatal, false
 	default:
 		// A person fixes the cause (credentials, permissions, a disk that
 		// fails or turned read-only); a journaled run whose journal is
@@ -263,7 +263,7 @@ func classify(err, cause error, dir string) outcome {
 		// above). A missing bucket and another region are fixed by
 		// another command (the bucket and the region are the run's
 		// identity), not by a resume.
-		o.Class, o.ExitCode = listing.ClassFatal, exitFatal
+		o.Class, o.ExitCode = inventory.ClassFatal, exitFatal
 		var ce interface{ Class() string }
 		if errors.As(err, &ce) {
 			o.Cause = ce.Class()
@@ -308,8 +308,8 @@ func stopSource(cause error) string {
 // (an S3 directory bucket).
 func refusal(err error) bool {
 	var mm *journal.MismatchError
-	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrPriorRelease, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, listing.ErrPrior, source.ErrUnsupported,
-		listing.ErrDestinationExists, listing.ErrOverlap} {
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrPriorRelease, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, inventory.ErrInterrupted, inventory.ErrNothingToResume, inventory.ErrPrior, source.ErrUnsupported,
+		inventory.ErrDestinationExists, inventory.ErrOverlap} {
 		if errors.Is(err, r) {
 			return true
 		}
@@ -339,22 +339,22 @@ func committedManifest(dir string) (*dataset.Manifest, bool) {
 // source's coverage says complete once its listing loop ends, also after
 // a failure): its class says why it ended. A run that wrote its output
 // keeps the source's coverage, which the manifest holds too.
-func account(r *listing.Outcome, o outcome) {
+func account(r *inventory.Outcome, o outcome) {
 	r.Class, r.ExitCode, r.Resumable, r.Cause, r.StopSource = o.Class, o.ExitCode, o.Resumable, o.Cause, o.StopSource
 	if o.ExitCode != exitOK && o.Message != "" {
 		r.Error = o.Message
 	}
-	if o.ExitCode != exitOK && o.Class != listing.ClassIncomplete {
+	if o.ExitCode != exitOK && o.Class != inventory.ClassIncomplete {
 		r.Complete, r.StopReason = false, ""
 	}
 }
 
 // committedAccount gives the report of an invocation that found its output
-// committed (listing.ErrComplete) the dataset's status, the manifest's
+// committed (inventory.ErrComplete) the dataset's status, the manifest's
 // coverage and its dataset account (rows, part bytes, object bytes); this
 // invocation's own counts stay 0.
-func committedAccount(dir string, r *listing.Report) {
-	r.Outcome.Status = listing.StatusCommitted
+func committedAccount(dir string, r *inventory.Report) {
+	r.Outcome.Status = inventory.StatusCommitted
 	if m, ok := committedManifest(dir); ok {
 		n := m.Coverage.Unreadable
 		r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Unreadable = m.Coverage.Complete, m.Coverage.StopReason, &n
@@ -362,7 +362,7 @@ func committedAccount(dir string, r *listing.Report) {
 	}
 }
 
-// finalizedSample is err, a resume's listing.ErrComplete, as the user reads
+// finalizedSample is err, a resume's inventory.ErrComplete, as the user reads
 // it for dir: a dataset committed with partial coverage (a --max-keys
 // sample) is a finalized partial sample, which nothing continues, not a
 // complete one; so is one that left out entries it could not read. It
@@ -394,8 +394,8 @@ func (e *restated) Unwrap() error { return e.error }
 // alreadyComplete accounts for a resume that found its output committed
 // and complete (exit 0): the report says so from the manifest's coverage,
 // and the text report says it in one line.
-func alreadyComplete(stdout io.Writer, report, dir string, r *listing.Report) {
-	r.Outcome.Error, r.Outcome.Unrecorded = "", listing.UnrecordedComplete
+func alreadyComplete(stdout io.Writer, report, dir string, r *inventory.Report) {
+	r.Outcome.Error, r.Outcome.Unrecorded = "", inventory.UnrecordedComplete
 	committedAccount(dir, r)
 	if report != "-" { // else stdout carries the report
 		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
@@ -437,13 +437,13 @@ const errorName = dataset.ErrorName
 // replace), so a supervisor never parses stderr; a run that committed its
 // dataset (ok, or incomplete: the manifest's coverage says what is
 // missing) removes a stale one. The caller owns the output
-// (listing.Config.Settle, settleOutside).
+// (inventory.Config.Settle, settleOutside).
 func writeOutcome(dir string, o outcome) error {
 	if dir == "" {
 		return nil
 	}
 	path := filepath.Join(dir, errorName)
-	if o.ExitCode == exitOK || o.Class == listing.ClassIncomplete {
+	if o.ExitCode == exitOK || o.Class == inventory.ClassIncomplete {
 		err := os.Remove(path)
 		switch {
 		case os.IsNotExist(err):
@@ -464,9 +464,9 @@ var errOut io.Writer = os.Stderr
 // settleOutside records o in dir's error.json for a command that stopped
 // before any run owned the output (a resume refused on a damaged journal),
 // over the unfinished run the command read (seen, its journal.Witness):
-// listing.SettleUnfinished, whose unrecorded says why not, never empty.
+// inventory.SettleUnfinished, whose unrecorded says why not, never empty.
 func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded string) {
-	why := listing.SettleUnfinished(dir, seen, func() error {
+	why := inventory.SettleUnfinished(dir, seen, func() error {
 		if err := writeOutcome(dir, o); err != nil {
 			return fmt.Errorf("write %s: %w", errorName, err)
 		}
@@ -680,7 +680,7 @@ const stacksWait = 2 * time.Second
 // the supervisor that collects the log. The stacks are taken on entry, as
 // the goroutines are then. It returns where the dump went: the file, or
 // "stderr".
-func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.ProgressSnapshot) string {
+func dumpStacks(dir string, pr *inventory.Progress, why, detail string, s inventory.ProgressSnapshot) string {
 	var stacks bytes.Buffer
 	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
 	buf := stacks.Bytes()
@@ -801,7 +801,7 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 		}
 		r, ok := s.report()
 		if !ok {
-			r = listing.Unstarted(f.argv, f.dir, f.att, err)
+			r = inventory.Unstarted(f.argv, f.dir, f.att, err)
 		}
 		// The escalation is part of the provenance: the stop that began
 		// it, and the forced exit that ended it.
@@ -818,7 +818,7 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 				if f.pr.Started() {
 					// The run's final snapshot: done once committed.
 					var failed error
-					if r.Outcome.Status != listing.StatusCommitted {
+					if r.Outcome.Status != inventory.StatusCommitted {
 						failed = err
 					}
 					f.pr.End(failed)
@@ -845,12 +845,12 @@ const progressEvery = 2 * time.Second
 // under its ownership: only while the run owns the output (a refused run
 // never overwrites its owner's progress), and never a snapshot older than
 // one written before (the final one, done or failed, stays).
-func writeProgress(dir string, pr *listing.Progress) {
+func writeProgress(dir string, pr *inventory.Progress) {
 	pr.Owned(func() { progressWrite(dir, pr) })
 }
 
 // progressWrite is writeProgress's write, inside pr.Owned.
-func progressWrite(dir string, pr *listing.Progress) {
+func progressWrite(dir string, pr *inventory.Progress) {
 	_ = dataset.ReplaceJSON(filepath.Join(dir, progressName), pr.Snapshot(), dataset.Atomic)
 }
 
@@ -870,7 +870,7 @@ func progressWrite(dir string, pr *listing.Progress) {
 // requests (Answered). It is the only place that decides a run cannot go
 // on; nothing in the pipeline gives up on a slow source. It also watches
 // listing wait on a full spill cap (spill), which may stop the run.
-func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(code, msg string), d *display) (stop func()) {
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *inventory.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(code, msg string), d *display) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -886,7 +886,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 		defer t.Stop()
 		var written time.Time
 		last, since, warned := int64(-1), time.Now(), false
-		var at listing.ProgressSnapshot // the counts at the last progress
+		var at inventory.ProgressSnapshot // the counts at the last progress
 		for {
 			select {
 			case <-done:

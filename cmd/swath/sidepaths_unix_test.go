@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // TestReportToDescriptorOrPipe: --report naming a descriptor (/dev/fd/N,
@@ -42,9 +42,9 @@ func TestReportToDescriptorOrPipe(t *testing.T) {
 	if err := runDu(context.Background(), []string{src, "--format=tsv", "--report", fd}, io.Discard); err != nil {
 		t.Fatalf("--report %s: %v", fd, err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, f.Name(), &rep)
-	if rep.Outcome.Class != listing.ClassOK {
+	if rep.Outcome.Class != inventory.ClassOK {
 		t.Fatalf("report through %s: %+v", fd, rep.Outcome)
 	}
 	fifo := filepath.Join(t.TempDir(), "report.fifo")
@@ -59,8 +59,8 @@ func TestReportToDescriptorOrPipe(t *testing.T) {
 	if err := runDu(context.Background(), []string{src, "--format=tsv", "--report", fifo}, io.Discard); err != nil {
 		t.Fatalf("--report FIFO: %v", err)
 	}
-	rep = listing.Report{}
-	if err := json.Unmarshal(<-got, &rep); err != nil || rep.Outcome.Class != listing.ClassOK {
+	rep = inventory.Report{}
+	if err := json.Unmarshal(<-got, &rep); err != nil || rep.Outcome.Class != inventory.ClassOK {
 		t.Fatalf("report through the FIFO: %v %+v", err, rep.Outcome)
 	}
 	if fi, err := os.Lstat(fifo); err != nil || fi.Mode()&os.ModeNamedPipe == 0 {

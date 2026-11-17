@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
@@ -91,7 +91,7 @@ func TestResumeRenamedFlag(t *testing.T) {
 					} `json:"sort_buffer"`
 				}
 			}
-			if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Invocation.SortBufferBytes != tc.want || r.Diagnostics.SortBuffer.Reason != listing.BudgetExplicit {
+			if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.Invocation.SortBufferBytes != tc.want || r.Diagnostics.SortBuffer.Reason != inventory.BudgetExplicit {
 				t.Fatalf("report: %v %+v %+v, want %d bytes, explicit", err, r.Invocation, r.Diagnostics, tc.want)
 			}
 			if !dataset.Committed(dir) {

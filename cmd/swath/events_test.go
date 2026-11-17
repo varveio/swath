@@ -29,9 +29,9 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/docs"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -81,7 +81,7 @@ func TestDocsLogEvents(t *testing.T) {
 	l := elog()
 	l.start(startFields{"s3://bucket/logs/", modeRows, "-"})
 	objectBytes := int64(1_234_567_890)
-	l.progress(listing.ProgressSnapshot{ProgressVersion: listing.ProgressVersion, AttemptID: "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f", State: listing.StateListing, Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
+	l.progress(inventory.ProgressSnapshot{ProgressVersion: inventory.ProgressVersion, AttemptID: "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f", State: inventory.StateListing, Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
 		ObjectBytes: &objectBytes, StartedAt: jsontime.Of(at.Add(-time.Minute)), AsOf: jsontime.Of(at), DurationMs: 60000, PartAgeMs: 60000},
 		"listing · 120,000 objects · 1.15 GiB · 1m00s elapsed · 2,000 keys/s (avg 2,000) · 8 in flight · 122 API calls")
 	w := newFailureWatch("S3", 10*time.Minute)
@@ -107,7 +107,7 @@ func TestDocsLogEvents(t *testing.T) {
 	if sw.check(pressured(since, 0), since) != nil || sw.check(pressured(since, 9800*120), at) != nil {
 		t.Fatal("the spill watch stopped the run")
 	}
-	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
+	o := outcome{Class: inventory.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
 	}
@@ -245,7 +245,7 @@ func TestPersistentFailureRun(t *testing.T) {
 	if !strings.Contains(err.Error(), "every request was failing: GCS "+host+": "+m[0][1]+" (") {
 		t.Fatalf("the final error does not name the cause %q: %v", m[0][1], err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if rep.Requests == nil || rep.Requests.FailureWarnings != 1 {
 		t.Fatalf("report requests %+v", rep.Requests)
@@ -391,7 +391,7 @@ func TestOneLineFailures(t *testing.T) {
 				args = append(args, mode)
 			}
 			code := conclude(dispatch(ctx, args, io.Discard))
-			var rep listing.Report
+			var rep inventory.Report
 			readJSON(t, report, &rep)
 			if code == exitOK || rep.Outcome.ExitCode != code {
 				t.Fatalf("%s %s: exit %d, report %+v", c.name, mode, code, rep.Outcome)
@@ -547,7 +547,7 @@ func TestNeverAnsweredRunNamesCause(t *testing.T) {
 	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || !strings.Contains(ev.Msg, "every request was failing: GCS "+host) {
 		t.Fatalf("outcome event %q", lines[len(lines)-1])
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if !strings.Contains(rep.Outcome.Error, "every request was failing") {
 		t.Fatalf("report error %q", rep.Outcome.Error)
@@ -591,7 +591,7 @@ func TestOutcomeBeforeBacklog(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	conclude(&exitError{error: errDeadline, code: exitDeadline, out: outcome{Class: listing.ClassDeadline, ExitCode: exitDeadline, Message: errDeadline.Error()}})
+	conclude(&exitError{error: errDeadline, code: exitDeadline, out: outcome{Class: inventory.ClassDeadline, ExitCode: exitDeadline, Message: errDeadline.Error()}})
 	r.mu.Lock()
 	got := r.b.String()
 	r.mu.Unlock()
@@ -614,7 +614,7 @@ func TestStatusRecordsStayDisposable(t *testing.T) {
 	setLog(termOptions{}, "a")
 	tt := &termUI{began: time.Now()}
 	for range 1200 {
-		tt.status(listing.ProgressSnapshot{Rows: 1})
+		tt.status(inventory.ProgressSnapshot{Rows: 1})
 		elog().warn("test", "a warning")
 	}
 	diagMu.Lock()

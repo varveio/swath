@@ -22,8 +22,8 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/totals"
@@ -202,7 +202,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 		return fail(err) // stopped (a signal) while the rows were written: interrupted, as a live swath du
 	}
 	c := m.Coverage
-	done := outcome{Class: listing.ClassOK, ExitCode: exitOK, Complete: prov.Complete != nil && *prov.Complete, Unreadable: prov.Unreadable}
+	done := outcome{Class: inventory.ClassOK, ExitCode: exitOK, Complete: prov.Complete != nil && *prov.Complete, Unreadable: prov.Unreadable}
 	if prov.StopReason != nil {
 		done.StopReason = *prov.StopReason
 	}
@@ -307,7 +307,7 @@ func urlPrefix(src, arg string) (string, bool) {
 // scope (o, its coverage): printed, then exit 3 (incomplete), as a live
 // swath du's.
 func datasetIncomplete(o outcome, msg string) error {
-	o.Class, o.ExitCode, o.Message = listing.ClassIncomplete, exitIncomplete, msg
+	o.Class, o.ExitCode, o.Message = inventory.ClassIncomplete, exitIncomplete, msg
 	return &exitError{error: errors.New(msg), code: exitIncomplete, out: o}
 }
 

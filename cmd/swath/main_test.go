@@ -26,8 +26,8 @@ import (
 	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 )
 
 func TestRun(t *testing.T) {
@@ -210,7 +210,7 @@ func TestPrintedCommandsQuoted(t *testing.T) {
 		return ""
 	}
 	dir := filepath.Join(t.TempDir(), "my inventory")
-	r := &listing.Report{Outcome: listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
+	r := &inventory.Report{Outcome: inventory.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}}
 	r.Invocation.Out = dir
 	if l := statsLines(r, false, rowNouns(false, false), false); l[1] != "next: swath resume "+quoted(dir) {
 		t.Fatalf("next %q", l)
@@ -578,8 +578,8 @@ func TestPartIntervalDefault(t *testing.T) {
 			t.Fatalf("diag %v: --part-interval default %s", diag, o.partInterval)
 		}
 	}
-	if listing.DefaultPartInterval != 30*time.Second {
-		t.Fatalf("listing.DefaultPartInterval %s", listing.DefaultPartInterval)
+	if inventory.DefaultPartInterval != 30*time.Second {
+		t.Fatalf("inventory.DefaultPartInterval %s", inventory.DefaultPartInterval)
 	}
 }
 

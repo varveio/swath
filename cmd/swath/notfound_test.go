@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -77,11 +77,11 @@ func TestMissingBucketCause(t *testing.T) {
 			if code := exitCode(t, err); code != exitFatal {
 				t.Fatalf("exit %d (%v)", code, err)
 			}
-			var rep listing.Report
+			var rep inventory.Report
 			readJSON(t, report, &rep)
 			o := rep.Outcome
 			resumable := c.cause == "" // no cause that changes the command
-			if o.Class != listing.ClassFatal || o.Cause != c.cause || o.Resumable != resumable || o.ExitCode != exitFatal || !strings.Contains(o.Error, c.message) {
+			if o.Class != inventory.ClassFatal || o.Cause != c.cause || o.Resumable != resumable || o.ExitCode != exitFatal || !strings.Contains(o.Error, c.message) {
 				t.Fatalf("report outcome %+v", o)
 			}
 			b, err := os.ReadFile(filepath.Join(dir, dataset.ErrorName))
@@ -92,7 +92,7 @@ func TestMissingBucketCause(t *testing.T) {
 			if err := json.Unmarshal(b, &e); err != nil {
 				t.Fatal(err)
 			}
-			if e.Class != listing.ClassFatal || e.Cause != c.cause || e.Resumable != resumable || !strings.Contains(e.Message, c.message) {
+			if e.Class != inventory.ClassFatal || e.Cause != c.cause || e.Resumable != resumable || !strings.Contains(e.Message, c.message) {
 				t.Fatalf("error.json %+v", e)
 			}
 			if c.cause == "" && strings.Contains(string(b), "not_found") {
@@ -125,10 +125,10 @@ func TestRegionRedirectCause(t *testing.T) {
 	if code := exitCode(t, err); code != exitFatal {
 		t.Fatalf("exit %d (%v)", code, err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	o := rep.Outcome
-	if o.Class != listing.ClassFatal || o.Cause != "region_redirect" || o.Resumable || !strings.Contains(o.Error, "eu-west-2") {
+	if o.Class != inventory.ClassFatal || o.Cause != "region_redirect" || o.Resumable || !strings.Contains(o.Error, "eu-west-2") {
 		t.Fatalf("report outcome %+v", o)
 	}
 }

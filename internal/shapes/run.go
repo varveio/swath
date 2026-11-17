@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/internal/source/scalefake"
@@ -113,15 +113,15 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	// The row budget is pinned: the default follows the host's memory,
 	// and an arm's counters (encoders admitted, spill) must not move with
 	// the runner the baselines are compared on.
-	cfg := listing.Config{Source: listing.SourceConfig{URI: "s3://bkt", Options: opts},
-		Limits: listing.Limits{Workers: a.Workers, PartInterval: -1, RowBudget: listing.DefaultRowBudget}}
+	cfg := inventory.Config{Source: inventory.SourceConfig{URI: "s3://bkt", Options: opts},
+		Limits: inventory.Limits{Workers: a.Workers, PartInterval: -1, RowBudget: inventory.DefaultRowBudget}}
 	m := &matcher{keys: keys}
 	if a.Out != "" {
 		cfg.Output.Dir, cfg.Output.NoJournal = a.Out, true
 	} else {
 		cfg.Output.Text = &textout.Config{Format: textout.TSV, Stdout: m}
 	}
-	rep, err := listing.Run(ctx, cfg)
+	rep, err := inventory.Run(ctx, cfg)
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: %w", a.Name, err)
 	}

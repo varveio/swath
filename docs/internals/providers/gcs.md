@@ -77,10 +77,10 @@ for a missing bucket, a missing prefix listing empty; a 404 without that reason 
 `timeout`, `parse` and `unsupported`
 ([Run report](../../reference/run-report.md)); other errors keep status/reason without a separate label.
 A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
-(`listing` `TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `objhttp.ErrInvalidPage`;
+(`inventory` `TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `objhttp.ErrInvalidPage`;
 the engine wraps it as a protocol violation (`cause` `protocol`, unresumable). Redirects are never
 followed, including with a supplied HTTP client, so they cannot change the resume source
-(`listing` `TestGCSRedirectCannotChangeResumeSource`).
+(`inventory` `TestGCSRedirectCannotChangeResumeSource`).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`

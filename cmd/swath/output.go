@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
@@ -235,12 +235,12 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 }
 
 // resolveRemote resolves an -o that is a URL: a bucket prefix the listing
-// writes to (listing.ParseDestination, over objfile.ParseLocation: a literal
+// writes to (inventory.ParseDestination, over objfile.ParseLocation: a literal
 // prefix, a dataset root, a scheme it writes), the work directory it needs,
 // and the refusals of phase one: no replacement, no text format.
 func resolveRemote(o *options) error {
 	shown := registry.Redact(o.out)
-	l, err := listing.ParseDestination(o.out)
+	l, err := inventory.ParseDestination(o.out)
 	if err == nil && l.Prefix != "" {
 		if err := checkDatasetName(o.out); err != nil {
 			return fmt.Errorf("-o %w", err)
@@ -258,7 +258,7 @@ func resolveRemote(o *options) error {
 	case o.format != "":
 		return fmt.Errorf("--format %s: -o %s is a dataset, not text rows", o.format, shown)
 	}
-	r := listing.RemoteOutput{Location: o.out, CredentialsFile: o.outputCreds, Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
+	r := inventory.RemoteOutput{Location: o.out, CredentialsFile: o.outputCreds, Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	if err := r.Check(); err != nil {
 		return fmt.Errorf("-o %s: %w", shown, err)
 	}

@@ -306,7 +306,7 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         env:
           SWATH_HEAP_GATES: "1"
-        run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
+        run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/inventory
 
       # The shape suite at 200,000 keys per shape (internal/shapes, docs/internals/testing.md): a
       # measurement with order-of-magnitude bounds, skipped under -race (ten times slower, and the
@@ -540,7 +540,7 @@ jobs:
   # repeating the CLI/engine matrices already raced on arm64. The shard table owns
   # that complement. Escalated PRs/main/dispatch run every selected module in full.
   # macOS and Windows run their full suite in legs along the race shards (`leg`, go-race-shards.sh
-  # --macos-matrix and --windows-matrix): macOS in two, internal/listing and the rest, Windows,
+  # --macos-matrix and --windows-matrix): macOS in two, internal/inventory and the rest, Windows,
   # about three times slower, mostly one shard per leg. The leg of scope `full` also vets the
   # module and tests the nested modules, and keeps the go-xos build cache. A leg's build cache is
   # the one the table names (`cache`).

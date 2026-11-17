@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // TestExcludedUnstattableIsNotUnreadable: in a directory the walk can read
@@ -61,7 +61,7 @@ func TestExcludedUnstattableIsNotUnreadable(t *testing.T) {
 			report := filepath.Join(t.TempDir(), "report.json")
 			var out bytes.Buffer
 			err := run(context.Background(), append([]string{root, "--format=tsv", "--no-stats", "--report", report}, c.filters...), &out, false)
-			var rep listing.Report
+			var rep inventory.Report
 			readJSON(t, report, &rep)
 			want := exitOK
 			if c.unreadable > 0 {

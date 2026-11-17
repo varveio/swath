@@ -98,7 +98,7 @@ type Options struct {
 	// failed or stopped listing never calls it.
 	ListingDone func()
 	// SegmentWorkers caps the workers writing the tail's segments
-	// (segments.go) by the run's resources (listing.segmentWorkers: the
+	// (segments.go) by the run's resources (inventory.segmentWorkers: the
 	// encoders admitted after listing and the descriptors); 0: no cap
 	// beyond the processors. Never more than one per spare processor.
 	SegmentWorkers int

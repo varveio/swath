@@ -37,8 +37,8 @@ that the remainder and both children are worth their requests. It then emits `(c
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath` | the commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix the process then dies by the signal it got), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, cli, journal, dataset; no provider (`cli` registers them) |
-| `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
+| `cmd/swath` | the commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `inventory.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*inventory.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix the process then dies by the signal it got), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, cli, journal, dataset; no provider (`cli` registers them) |
+| `internal/inventory` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/cli` | the command line's flag table (`Flag`, `Define`, `Described`, the flag values) and help groups; the flag groups the providers share, `StoreGroup` (filling `source.Store`) and `EngineGroup` (filling `keyrange.Common`); each provider's registration, one file each (`s3.go`, `gcs.go`, `azblob.go`, `localfs.go`): its factory, registered from `init`, its flags and their environment variables and conflicts turned into the provider's options, and the source a run takes (the provider's opened view joined with `registry.From`) | registry, source, keyrange, objhttp, parquetout, pflag, every provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`From`, `Bind[R, P]`, `Run`: a `bind.Bound` whose rows go where the run's `Env` sends them, the part router, a text stream or nowhere); `SchemaInfo`, the producers' schema declarations by id (`Factory.Schemas`), and `DatasetTotals`, the same totals and filters over a committed dataset's rows (`swath du --from-dataset`) | bind, source, schema, order, parquetout, textout, dataset, totals, reader, seekparquet |
@@ -118,7 +118,7 @@ and `objfile.Limit` bounds request concurrency. See the
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`
 beside its code: columns as accessors of `P`, the logical size the router cuts parts by, the heap bytes the
 budget counts, and the spill codec ([shared payload delta helper](ordering.md#payload-delta-codec)). The order stage and the router are generic over `P`; the pipeline
-(`listing`) never names it. Two places do, each where `P` is known (Go has no generic methods): a provider's
+(`inventory`) never names it. Two places do, each where `P` is known (Go has no generic methods): a provider's
 opener binds the provider to its schema (`bind.Provider[R, P]`, which erases the range type), and the
 command's composition joins that binding with the writers (`registry.From`), a `Source` whose `Run`
 instantiates the order stage and the router for `P`. Code that knows `P` lists the bound provider into a sink
@@ -155,11 +155,11 @@ the run's sink.
 ## Errors
 
 Errors are wrapped Go errors (`errors.Is`/`As`, cancellation causes), with types only where a caller decides
-something: `*listing.ConfigError` (an invalid value or combination, before anything is opened),
+something: `*inventory.ConfigError` (an invalid value or combination, before anything is opened),
 `*journal.MismatchError` (a resume asked with frozen settings changed), `*journal.VersionError` (a journal of
 another build), `*dataset.InvariantError` (the publication gate or the row count found a violated invariant;
 nothing is published), `*dataset.ReportError` (the report failed after the commit: the dataset stands),
-`listing.ErrComplete`, `ErrNothingToResume`, `ErrInterrupted`, and the S3 client's `*client.Error` (status,
+`inventory.ErrComplete`, `ErrNothingToResume`, `ErrInterrupted`, and the S3 client's `*client.Error` (status,
 code, request id, the bucket's region). `cmd/swath`'s `explain` adds actionable flag advice. `Run`
 returns the run report with every error, and `--report -` prints it on failure too (outcome
 `failed` with the error).
@@ -177,7 +177,7 @@ and the shared groups it names: the store's and range engine's), which of them a
 secrets and its root form, the conversion of the parsed flags into the provider's options, and an `Open` that
 calls the provider's and returns the view joined with `registry.From(view.Bound())`. The command derives its
 flag set, help, resume rules and redaction from the registered factories and names no provider; it imports
-`internal/cli`, not the provider, and `listing` does the rest. The [provider integration checklist](providers.md#adding-a-provider)
+`internal/cli`, not the provider, and `inventory` does the rest. The [provider integration checklist](providers.md#adding-a-provider)
 lists reader, verifier, test and dependency touch points outside the provider directory. Restart belongs to
 [the engine](range-engine.md#resume); Azure's per-expansion adapter lifetime belongs to
 [its provider](providers/azblob.md#order-the-byte-order-adapter).

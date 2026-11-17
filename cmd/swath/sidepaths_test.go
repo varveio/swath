@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // exitOf is the exit code main gives err.
@@ -711,7 +711,7 @@ func TestReportDestination(t *testing.T) {
 	}
 	report := filepath.Join(base, "r.json")
 	err := run(context.Background(), []string{src, "--s3-region", "x", "--report", report}, io.Discard, false)
-	var rep listing.Report
+	var rep inventory.Report
 	if exitOf(err) != exitUsage {
 		t.Fatalf("--s3-region on a local source: %v", err)
 	}

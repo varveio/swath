@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/cli"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/totals"
@@ -161,7 +161,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
 		Value: cli.Func(names(&o.filter.StorageClasses))})
 
-	o.partSize, o.partInterval, o.stall = listing.DefaultPartSize, listing.DefaultPartInterval, 10*time.Minute
+	o.partSize, o.partInterval, o.stall = inventory.DefaultPartSize, inventory.DefaultPartInterval, 10*time.Minute
 	def(cli.Flag{Name: "workers", Familiar: []string{"concurrency"}, Short: "j", Value: cli.Count(&o.workers, 1), Metavar: "N", Group: cli.GroupPerformance,
 		Usage: "listing workers (default 64; a local tree: 4 per CPU, at most 64)",
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
@@ -174,10 +174,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(cli.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "fixed cap on spill (default: follows the spill disk's free space)",
 		Long:  "By default spill may use the spill filesystem's free space after a reserve (half of it unless the dataset is in a bucket, as the output shares it), re-read while it holds listing back, so a disk grown under a live run is used. Set it when the filesystem is shared with other work. Past it, or at the reserve, listing waits instead of spilling."})
-	def(cli.Flag{Name: "part-size", Familiar: []string{"parquet-part-size"}, Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: cli.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "part-size", Familiar: []string{"parquet-part-size"}, Value: &o.partSize, Metavar: "SIZE", Default: sizeText(inventory.DefaultPartSize), Group: cli.GroupPerformance, Commands: writing,
 		Usage: "target size of a Parquet part",
 		Long:  "Smaller parts for readers that load whole parts, larger for fewer files on a very large listing."})
-	def(cli.Flag{Name: "part-interval", Familiar: []string{"part-rotation-interval"}, Value: cli.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(listing.DefaultPartInterval),
+	def(cli.Flag{Name: "part-interval", Familiar: []string{"part-rotation-interval"}, Value: cli.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(inventory.DefaultPartInterval),
 		Group: cli.GroupPerformance, Commands: writing, Usage: "close a part with rows after this long, full or not",
 		Long: "0: by size only. Lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing."})
 	def(cli.Flag{Name: "part-max-rows", Familiar: []string{"part-rotation-max-rows"}, Value: cli.Count64(&o.partMaxRows, 0), Metavar: "N", Group: cli.GroupPerformance, Commands: writing,

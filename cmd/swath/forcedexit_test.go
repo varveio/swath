@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
@@ -211,9 +211,9 @@ func TestForcedExitAfterCommit(t *testing.T) {
 		t.Fatalf("error.json after a completed run's forced exit: %v", err)
 	}
 	// The progress file's last snapshot is the committed run's.
-	var p listing.ProgressSnapshot
+	var p inventory.ProgressSnapshot
 	readJSON(t, filepath.Join(dir, progressName), &p)
-	if p.State != listing.StateDone || p.Rows != 20000 {
+	if p.State != inventory.StateDone || p.Rows != 20000 {
 		t.Fatalf("progress.json after a completed run's forced exit: state %q, rows_fetched %d", p.State, p.Rows)
 	}
 }
@@ -267,9 +267,9 @@ func TestForcedExitAtCommit(t *testing.T) {
 			if !dataset.Committed(dir) {
 				t.Fatal("no manifest")
 			}
-			var r listing.Report
+			var r inventory.Report
 			readJSON(t, report, &r)
-			if r.Outcome.Status != listing.StatusCommitted || r.Outcome.Class != tc.class || r.Outcome.ExitCode != tc.code || r.Outcome.Complete != tc.complete {
+			if r.Outcome.Status != inventory.StatusCommitted || r.Outcome.Class != tc.class || r.Outcome.ExitCode != tc.code || r.Outcome.Complete != tc.complete {
 				t.Fatalf("report after the forced exit: %+v", r.Outcome)
 			}
 			// The committed dataset, complete or partial, has no
@@ -324,8 +324,8 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 	captureStderr(t)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(errDeadline)
-	committed := func(complete bool) *listing.Report {
-		return &listing.Report{Outcome: listing.Outcome{Status: listing.StatusCommitted, Class: listing.ClassOK, Complete: complete}}
+	committed := func(complete bool) *inventory.Report {
+		return &inventory.Report{Outcome: inventory.Outcome{Status: inventory.StatusCommitted, Class: inventory.ClassOK, Complete: complete}}
 	}
 	target := func() (*forensicTarget, string) {
 		dir := t.TempDir()
@@ -335,15 +335,15 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 			t: &terminal{ctx: ctx, dir: dir, att: att}}, report
 	}
 	// check forces the exit as main does and returns its code and report.
-	check := func(f *forensicTarget, report string, s snapshot, ok bool) (int, listing.Report) {
+	check := func(f *forensicTarget, report string, s snapshot, ok bool) (int, inventory.Report) {
 		t.Helper()
 		if !ok {
 			t.Fatal("no snapshot")
 		}
 		forcedAccount(f, s, "--max-duration")
-		var r listing.Report
+		var r inventory.Report
 		readJSON(t, report, &r)
-		if r.Outcome.ExitCode != s.out.ExitCode || (r.Outcome.Class == listing.ClassOK) != (s.out.ExitCode == exitOK) {
+		if r.Outcome.ExitCode != s.out.ExitCode || (r.Outcome.Class == inventory.ClassOK) != (s.out.ExitCode == exitOK) {
 			t.Fatalf("exit %d with report %+v", s.out.ExitCode, r.Outcome)
 		}
 		return s.out.ExitCode, r
@@ -357,7 +357,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 			t.Fatalf("a commit after the forced snapshot: %v, ran %v", err, ran)
 		}
 		f.t.account(committed(true), nil) // a classification after it
-		if code, r := check(f, report, s, ok); code != exitDeadline || r.Outcome.Class != listing.ClassDeadline {
+		if code, r := check(f, report, s, ok); code != exitDeadline || r.Outcome.Class != inventory.ClassDeadline {
 			t.Fatalf("exit %d, %+v", code, r.Outcome)
 		}
 	})
@@ -367,8 +367,8 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		code     int
 		class    string
 	}{
-		{"commit under way/complete", true, exitOK, listing.ClassOK},
-		{"commit under way/partial", false, exitIncomplete, listing.ClassIncomplete},
+		{"commit under way/complete", true, exitOK, inventory.ClassOK},
+		{"commit under way/partial", false, exitIncomplete, inventory.ClassIncomplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, report := target()
@@ -388,7 +388,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 			}
 			got := make(chan result, 1)
 			go func() {
-				s, ok := f.t.claim(func() outcome { return outcome{Class: listing.ClassDeadline, ExitCode: exitDeadline} }, time.Minute, nil)
+				s, ok := f.t.claim(func() outcome { return outcome{Class: inventory.ClassDeadline, ExitCode: exitDeadline} }, time.Minute, nil)
 				got <- result{s, ok}
 			}()
 			select {
@@ -413,7 +413,7 @@ func TestForcedSnapshotIsTheResult(t *testing.T) {
 		if _, ok := f.t.claim(func() outcome { return outcome{ExitCode: exitDeadline} }, 10*time.Millisecond, func(s snapshot) { late <- s }); ok {
 			t.Fatal("a snapshot while the result is held")
 		}
-		f.t.out = &outcome{Class: listing.ClassOK, ExitCode: exitOK}
+		f.t.out = &outcome{Class: inventory.ClassOK, ExitCode: exitOK}
 		f.t.mu.Unlock()
 		if s := <-late; s.out.ExitCode != exitOK || !s.run {
 			t.Fatalf("the late snapshot: %+v", s)

@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/internal/totals"
@@ -160,7 +160,7 @@ func TestDu(t *testing.T) {
 	if sums["0"] != 9 || sums["1"] != 8 || sums["all"] != 22 {
 		t.Fatalf("sums %v", sums)
 	}
-	var r listing.Report
+	var r inventory.Report
 	readJSON(t, report, &r)
 	tt := r.Output.Totals
 	if tt == nil || tt.Depth != 2 || tt.Prefixes != 5 || tt.Objects != 4 || tt.Dirs != 4 || tt.Size == nil || *tt.Size != 9 || tt.SizeMissing != 0 || tt.NotObjects != 4 ||
@@ -292,7 +292,7 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "c/", "--exclude", "c/**", "--no-stats", "--report", report}, &out, false); err != nil {
 		t.Fatal(err)
 	}
-	var r listing.Report
+	var r inventory.Report
 	readJSON(t, report, &r)
 	if b := r.Output.ObjectBytes; b == nil || *b != 8 || r.Output.RowsEmitted != 6 { // a/b/f, a/g, x; a/, a/b/, e/
 		t.Fatalf("object_bytes %v, rows %d", b, r.Output.RowsEmitted)
@@ -469,7 +469,7 @@ func TestDuCap(t *testing.T) {
 	if out.Len() != 0 {
 		t.Fatalf("rows printed after a failure: %q", out.String())
 	}
-	var r listing.Report
+	var r inventory.Report
 	readJSON(t, report, &r)
 	if r.Outcome.Cause != "prefix_limit" || r.Output.Totals == nil || r.Output.Totals.MaxPrefixes != 2 || r.Output.Totals.Prefixes > 2 {
 		t.Fatalf("outcome %+v totals %+v", r.Outcome, r.Output.Totals)
@@ -512,13 +512,13 @@ func TestDuWriteFailure(t *testing.T) {
 		if exitOf(err) != tc.code || !strings.Contains(fmt.Sprint(err), tc.err.Error()) {
 			t.Fatalf("%v: exit %d: %v", tc.err, exitOf(err), err)
 		}
-		var r listing.Report
+		var r inventory.Report
 		readJSON(t, report, &r)
-		if r.Outcome.Complete || r.Outcome.ExitCode != tc.code || r.Outcome.Status != listing.StatusFailed || r.Outcome.Class != tc.class {
+		if r.Outcome.Complete || r.Outcome.ExitCode != tc.code || r.Outcome.Status != inventory.StatusFailed || r.Outcome.Class != tc.class {
 			t.Fatalf("%v: outcome %+v", tc.err, r.Outcome)
 		}
 	}
-	var r listing.Report
+	var r inventory.Report
 	pr, pw, perr := os.Pipe()
 	if perr != nil {
 		t.Fatal(perr)
@@ -527,7 +527,7 @@ func TestDuWriteFailure(t *testing.T) {
 	defer pw.Close()
 	err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--report", report}, pw)
 	readJSON(t, report, &r)
-	if err != nil || r.Outcome.StopReason != listing.StopDownstreamClosed || r.Outcome.Status != listing.StatusStopped {
+	if err != nil || r.Outcome.StopReason != inventory.StopDownstreamClosed || r.Outcome.Status != inventory.StatusStopped {
 		t.Fatalf("closed reader: %v, outcome %+v", err, r.Outcome)
 	}
 }
@@ -541,7 +541,7 @@ func TestDuStopDuringOutput(t *testing.T) {
 	report := filepath.Join(t.TempDir(), "r.json")
 	w := &slowWriter{delay: 600 * time.Millisecond}
 	err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--max-duration=300ms", "--report", report}, w)
-	var r listing.Report
+	var r inventory.Report
 	readJSON(t, report, &r)
 	if exitOf(err) != exitDeadline || r.Outcome.ExitCode != exitDeadline || r.Outcome.Complete {
 		t.Fatalf("exit %d (%v), outcome %+v", exitOf(err), err, r.Outcome)
