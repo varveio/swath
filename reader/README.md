@@ -137,3 +137,14 @@ versions (every current-object schema). Otherwise the schema's keys repeat (`Uni
 not a delete marker, noncurrent when neither. `swath/azure-versions/v1` declares `{ID: "version_id", Latest:
 "is_latest"}` and includes versions, snapshots and soft-deleted blobs; interpret its additional fields with the
 Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registry).
+
+## The listing contract
+
+The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the four questions
+swath answers about a listed location, from a live source or from an opened inventory: Page (the next children
+of a prefix), Lookup (what is at exactly one key), Walk (every entry under a prefix) and Summarize (count, bytes,
+space on disk and newest change under each of several targets). It defines their requests and results, the
+common `Entry`, the `Evidence` every answer carries (its origin, acquisition interval, scope, unlocated gaps and
+whether the call completed), the `Unread` extents of a live answer, and the error classes with `Retryable`. It
+holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
+any release.
