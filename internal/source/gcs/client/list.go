@@ -19,12 +19,19 @@ import (
 	"github.com/varveio/swath/internal/buildinfo"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/objfile"
 )
 
 // List sends one objects.list request per attempt, retrying retryable
-// failures (objhttp.Do).
+// failures (objhttp.Do). Each attempt is reported to ctx's
+// objfile.Observer as a list request of in.Prefix.
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) { return c.attempt(ctx, in) })
+	r := &objfile.Request{Kind: objfile.ListRequest, Name: in.Prefix}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) {
+		return exchange(c, ctx, r, func(svc *storage.Service, actx context.Context) caller[*storage.Objects] {
+			return c.listCall(svc, actx, in)
+		}, page)
+	})
 }
 
 // selector is the partial-response selector a listing sends (versions: a
@@ -40,11 +47,9 @@ func (c *Client) selector(versions bool) string {
 	return fields
 }
 
-func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
-	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
-	defer cancel()
-	var s objhttp.Capture
-	call := c.svc[c.pick()].Objects.List(in.Bucket).Projection("noAcl").Context(objhttp.WithCapture(actx, &s))
+// listCall is in's objects.list request on svc, sent on actx.
+func (c *Client) listCall(svc *storage.Service, actx context.Context, in *ListInput) *storage.ObjectsListCall {
+	call := svc.Objects.List(in.Bucket).Projection("noAcl").Context(actx)
 	if f := c.selector(in.Versions); f != "" {
 		call.Fields(googleapi.Field(f))
 	}
@@ -72,34 +77,81 @@ func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 	if in.MaxResults > 0 {
 		call.MaxResults(int64(in.MaxResults))
 	}
+	return call
+}
+
+// caller is one request of the generated client, built and not yet sent.
+type caller[T any] interface {
+	Header() http.Header
+	Do(opts ...googleapi.CallOption) (T, error)
+}
+
+// exchange is one attempt of a request: build makes it on the next pooled
+// service, to be sent on the context it is given (the attempt's deadline,
+// with the Guard's capture); parse reads the decoded 200. The attempt
+// carries swath's User-Agent and the credentials' token, is counted, and
+// is reported to ctx's objfile.Observer as r (observe). A failure is the
+// answer as an *Error, or one this client's failure resolves.
+func exchange[T, R any](c *Client, ctx context.Context, r *objfile.Request, build func(svc *storage.Service, actx context.Context) caller[T], parse func(T) (R, error)) (R, error) {
+	var zero R
+	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
+	defer cancel()
+	var s objhttp.Capture
+	call := build(c.svc[c.pick()], objhttp.WithCapture(actx, &s))
 	h := call.Header()
 	h.Set("User-Agent", buildinfo.UserAgent()+" "+googleapi.UserAgent)
 	tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.discovered, c.cfg.RequestTimeout, transientToken)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 	if tok != nil {
 		h.Set("Authorization", tok.Type()+" "+tok.AccessToken)
 	}
+
+	end := observe(ctx, r)
 	done := c.Tally.Attempt()
 	out, err := call.Do()
 	done()
-	if err != nil {
-		return nil, c.failure(actx, ctx, &s, err)
-	}
-	if s.Status != http.StatusOK {
-		// any 2xx is the generated client's success; a listing is a 200,
-		// any other status an answer
-		return nil, responseError(s.Status, s.Body)
+	v, err := outcome(c, actx, ctx, &s, out, err, parse)
+	end(int64(len(s.Body)), err)
+	return v, err
+}
+
+// outcome reads an attempt's answer: the decoded 200, parsed, or the
+// failure.
+func outcome[T, R any](c *Client, actx, ctx context.Context, s *objhttp.Capture, out T, err error, parse func(T) (R, error)) (R, error) {
+	var zero R
+	switch {
+	case err != nil:
+		return zero, c.failure(actx, ctx, s, err)
+	case s.Status != http.StatusOK:
+		// any 2xx is the generated client's success; only a 200 is the
+		// resource asked for, any other status an answer
+		return zero, responseError(s.Status, s.Body)
 	}
 	if err := faults.At("response-read"); err != nil {
-		return nil, err
+		return zero, err
 	}
-	p, err := page(out)
-	if err != nil {
-		return nil, err
+	return parse(out)
+}
+
+// observe reports an attempt of r to ctx's objfile.Observer, when it
+// carries one, and returns what reports the attempt's end, with the bytes
+// of the answer read and its failure, redacted. Every attempt after the
+// first is a retry.
+func observe(ctx context.Context, r *objfile.Request) func(bytes int64, err error) {
+	o := objfile.ObserverFromContext(ctx)
+	if o == nil {
+		return func(int64, error) {}
 	}
-	return p, nil
+
+	end := o.Begin(*r)
+	r.Retry = true
+	return func(bytes int64, err error) {
+		if end != nil {
+			end(objfile.RequestResult{Bytes: bytes, Err: objfile.RedactError(err)})
+		}
+	}
 }
 
 // validate rejects a 200 whose body carries a top-level error member
@@ -212,24 +264,33 @@ func page(out *storage.Objects) (*Page, error) {
 		if o == nil {
 			return nil, fmt.Errorf("%w: item %d is null", objhttp.ErrSyntax, i)
 		}
-		if o.Size > math.MaxInt64 {
-			return nil, fmt.Errorf("%w: size %d", objhttp.ErrSyntax, o.Size)
-		}
-		x := &p.Items[i]
-		*x = Object{Name: o.Name, Size: int64(o.Size), ETag: o.Etag, Generation: o.Generation, Metageneration: o.Metageneration,
-			StorageClass: o.StorageClass, MD5: o.Md5Hash, CRC32C: o.Crc32c, ContentType: o.ContentType}
 		var err error
-		if x.Updated, err = micros("updated", o.Updated); err != nil {
-			return nil, err
-		}
-		if x.TimeCreated, err = micros("timeCreated", o.TimeCreated); err != nil {
-			return nil, err
-		}
-		if x.TimeDeleted, err = micros("timeDeleted", o.TimeDeleted); err != nil {
+		if p.Items[i], err = item(o); err != nil {
 			return nil, err
 		}
 	}
 	return p, nil
+}
+
+// item converts one decoded object resource strictly: a size that fits
+// int64, RFC 3339 times.
+func item(o *storage.Object) (Object, error) {
+	if o.Size > math.MaxInt64 {
+		return Object{}, fmt.Errorf("%w: size %d", objhttp.ErrSyntax, o.Size)
+	}
+	x := Object{Name: o.Name, Size: int64(o.Size), ETag: o.Etag, Generation: o.Generation, Metageneration: o.Metageneration,
+		StorageClass: o.StorageClass, MD5: o.Md5Hash, CRC32C: o.Crc32c, ContentType: o.ContentType}
+	var err error
+	if x.Updated, err = micros("updated", o.Updated); err != nil {
+		return Object{}, err
+	}
+	if x.TimeCreated, err = micros("timeCreated", o.TimeCreated); err != nil {
+		return Object{}, err
+	}
+	if x.TimeDeleted, err = micros("timeDeleted", o.TimeDeleted); err != nil {
+		return Object{}, err
+	}
+	return x, nil
 }
 
 // micros reads field's RFC 3339 time as Unix microseconds; 0 when absent.
