@@ -69,7 +69,7 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/runtrace` | the run trace's writer (`swath diag list --trace`): events encoded by their caller, written by one goroutine through a bounded buffer, dropped and counted rather than waited for ([trace.md](trace.md)) | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 | `internal/longpath` | `Stat` and `Open` of a path past PATH_MAX, resolved one name at a time when the kernel refuses it by its length (Linux, macOS): a local root that deep, and the output's checks against it | – |
-| `internal/buildinfo` | the binary's identity (tool, version, VCS revision; the linker's `Version` and `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
+| `internal/buildinfo` | the binary's identity (tool, version, VCS revision; the linker's `Version` and `Revision` first; in a host that embeds `command`, swath's dependency version and no revision, since the toolchain's stamps are the host's): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
 The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
 [clients.md](clients.md).

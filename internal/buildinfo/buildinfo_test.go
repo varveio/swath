@@ -4,6 +4,7 @@
 package buildinfo
 
 import (
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -60,5 +61,38 @@ func TestUserAgent(t *testing.T) {
 	}
 	if got, want := UserAgent(), Read().userAgent(); got != want {
 		t.Fatalf("UserAgent() = %q, want %q", got, want)
+	}
+}
+
+// TestReadHost: in a program that embeds swath, the build is swath's
+// dependency version, never the host's version or VCS revision; in the
+// swath binary, the main module's.
+func TestReadHost(t *testing.T) {
+	oldV, oldR := Version, Revision
+	defer func() { Version, Revision = oldV, oldR }()
+	Version, Revision = "", ""
+	stamp := []debug.BuildSetting{{Key: "vcs.revision", Value: "0123abcd"}, {Key: "vcs.modified", Value: "true"}}
+	host := func(dep *debug.Module) *debug.BuildInfo {
+		info := &debug.BuildInfo{Main: debug.Module{Path: "example.com/host", Version: "v9.9.9"}, Settings: stamp}
+		if dep != nil {
+			info.Deps = []*debug.Module{{Path: "example.com/other", Version: "v1.0.0"}, dep}
+		}
+		return info
+	}
+	for _, tc := range []struct {
+		name string
+		info *debug.BuildInfo
+		want Build
+	}{
+		{"swath", &debug.BuildInfo{Main: debug.Module{Path: Module, Version: "v0.5.0"}, Settings: stamp}, Build{Tool, "0.5.0", "0123abcd-dirty"}},
+		{"host", host(&debug.Module{Path: Module, Version: "v0.4.2"}), Build{Tool, "0.4.2", ""}},
+		{"host replacing swath with a release", host(&debug.Module{Path: Module, Version: "v0.4.2", Replace: &debug.Module{Path: "example.com/fork", Version: "v0.4.3"}}), Build{Tool, "0.4.3", ""}},
+		{"host replacing swath with a directory", host(&debug.Module{Path: Module, Version: "v0.4.2", Replace: &debug.Module{Path: "../swath"}}), Build{Tool, "devel", ""}},
+		{"host in a workspace", host(&debug.Module{Path: Module, Version: "(devel)"}), Build{Tool, "devel", ""}},
+		{"no build info", nil, Build{Tool, "devel", ""}},
+	} {
+		if got := read(tc.info); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }

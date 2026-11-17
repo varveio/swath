@@ -34,20 +34,46 @@ type Build struct {
 	Revision string `json:"revision,omitempty"` // VCS revision, "-dirty" if modified
 }
 
-// Read is this binary's build.
+// Module is swath's module path. In a program that embeds swath (package
+// command), the main module is the host's, and swath's version is that of
+// its entry among the dependencies.
+const Module = "github.com/varveio/swath"
+
+// Read is this binary's build: swath's, also in a host that embeds it.
 func Read() Build {
+	info, _ := debug.ReadBuildInfo() // nil without module support
+	return read(info)
+}
+
+// read is the build info describes (nil: none). The toolchain's version
+// and VCS stamp are the main module's, so in a host only swath's
+// dependency version is used: its version, devel for a local replacement
+// or a workspace module, and no revision unless one was set at link time.
+func read(info *debug.BuildInfo) Build {
 	b := Build{Tool: Tool, Version: Version, Revision: Revision}
 	if b.Version == "" {
 		b.Version = "devel"
 	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+	if info == nil {
 		return b
 	}
-	if v := info.Main.Version; Version == "" && v != "" && v != "(devel)" {
-		b.Version = strings.TrimPrefix(v, "v") // the release's X.Y.Z, as build.sh stamps it
+	mod, host := &info.Main, info.Main.Path != Module
+	if host {
+		mod = nil
+		for _, d := range info.Deps {
+			if d.Path == Module {
+				mod = d
+				if d.Replace != nil {
+					mod = d.Replace
+				}
+				break
+			}
+		}
 	}
-	if b.Revision != "" {
+	if mod != nil && Version == "" && mod.Version != "" && mod.Version != "(devel)" {
+		b.Version = strings.TrimPrefix(mod.Version, "v") // the release's X.Y.Z, as build.sh stamps it
+	}
+	if b.Revision != "" || host {
 		return b
 	}
 	dirty := false
