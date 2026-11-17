@@ -32,7 +32,7 @@ run the examples as written.
 
 ## Try it
 
-On a directory of yours, with no account or credentials:
+On a directory of yours, with no account or credentials (replace `~/Downloads` with any directory):
 
 ```bash
 swath du -d 1 ~/Downloads                          # totals per directory, one level down

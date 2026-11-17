@@ -129,7 +129,21 @@ provider's caveats in the [schema registry](dataset.md#schema-registry) before c
 
 ## Verify a dataset
 
-`swath verify` is planned ([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
+To check that a copied or moved dataset's parts are the bytes its manifest committed, compare each part with
+the SHA-256 the manifest records for it. Run this in the directory that holds `manifest.json`, with `jq` and
+`sha256sum`:
+
+```bash
+jq -r '.parts[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum -c
+```
+
+Each part prints `OK`, and the command exits 0, when every part matches; a part that differs prints `FAILED`
+and the command exits 1. A dataset with no parts (`"parts": []`, an empty listing) has nothing to check, and
+`sha256sum` says `no properly formatted checksum lines found` and exits 1. `swath show DIR` then says what the
+dataset covers.
+
+For the format, key order and pages as well, `swath verify` is planned
+([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
 [SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
 section of its `go/README.md`). From the root of a SeekParquet checkout that includes `cmd/seekparquet`
 and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins

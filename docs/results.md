@@ -112,7 +112,8 @@ inv: partial: 1 unreadable entry
 ```
 
 The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
-entry. Otherwise it is `partial:` and what is missing (`1 unreadable entry`, `--max-keys reached`). The
+entry. Otherwise it is `partial:` and what is missing (`1 unreadable entry`, or `--max-keys reached` for a
+diagnostic `swath diag list` sample). The
 coverage line names the filters and exclusions (`filtered: include=*.txt`, `excluded: ...`): a filtered
 dataset is complete for its filters, and an exclusion is what was left out by design, such as an output
 directory inside the tree.

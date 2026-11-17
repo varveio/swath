@@ -33,10 +33,11 @@ and reporting options that `swath resume --help` lists may be given again, the l
 ([swath-resume](commands/swath-resume.md)); `--max-duration` and the other runtime values are replayed from the
 first attempt unless given again. Pass a fresh `--report` path each time.
 
-The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
-retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm on a 4-vCPU VM
-([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take
-roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
+The resume keeps every published part, verifies each against its journal record (size and SHA-256), which reads
+every retained part in full once: budget for it on a very large dataset. From the read rates measured on a
+4-vCPU VM ([measurements](internals/measurements.md#recovery-and-part-count)), 10,000 parts of 64 MiB take
+roughly 30-45 minutes, an estimate;
+progress shows as `verified_bytes`. It then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
 a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
 as listed), and the resume replays each certificate it can validate instead of listing it, then lists only
@@ -54,7 +55,7 @@ at most 262,144, reached at 16 GiB), so a listing with fewer ranges than that ce
 its spill turns over more than about twice (`no_slot`, `history_exhausted` and `metadata_exhausted` in
 `diagnostics.resources.spill.durable` count the ranges that were not). Certified files stay in the work directory,
 so resume on the same disk, or on a persistent disk moved to another machine
-([Running swath in production](production.md#on-a-preemptible-or-spot-machine)).
+([on a preemptible or spot machine](production.md#on-a-preemptible-or-spot-machine)).
 
 Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in `AZURE_STORAGE_SAS_TOKEN`) or
 `--s3-bearer-token-command` must be given it again.
@@ -114,7 +115,7 @@ Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azur
 prefix, endpoint and S3 region are fixed. A lost work directory loses the
 resume: the parts already uploaded are not reused. A new run at the same prefix is not refused (only a prefix
 holding a `manifest.json` is), but nothing removes the lost run's parts, so start it at a new prefix
-([Running swath in production](production.md#on-a-preemptible-or-spot-machine)).
+([on a preemptible or spot machine](production.md#on-a-preemptible-or-spot-machine)).
 
 ## Overwrite and refresh
 
@@ -122,14 +123,12 @@ holding a `manifest.json` is), but nothing removes the lost run's parts, so star
 output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
 whose parts are removed after. A run that fails or is stopped before its commit leaves the previous dataset as
 it was; a stopped object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new
-`--overwrite` starts it over. The installation moves the previous dataset aside, then the new one in. One
-refused while it moves the previous dataset aside (on Windows,
-[another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) puts it back:
-the previous dataset is readable again, and `swath resume DIR` installs the replacement later. One that stops
-part way (a crash), fails once the previous dataset is aside, or cannot put it all back after a refusal leaves
-the directory with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new
-`--overwrite` finishes the installation. The installation reuses the part paths (`data/part-NNNNN.parquet`),
-so a reader that is reading the dataset while it runs can find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
+`--overwrite` starts it over. The installation that follows the commit reuses the part paths
+(`data/part-NNNNN.parquet`), so a reader reading the dataset meanwhile can find parts missing or replaced: do
+not query a dataset while `--overwrite` replaces it. An installation that is interrupted (a crash, or on
+Windows [another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) leaves
+either the previous dataset or no dataset, never a manifest naming missing parts, until `swath resume DIR` or
+a new `--overwrite` finishes it.
 
 Where readers must always find a dataset, even then (a periodic refresh read around the clock), write each run
 to a new directory and never overwrite it. Switch readers through a pointer outside the datasets (a generation
@@ -154,9 +153,14 @@ is not compared for Azure; verify that the prior belongs to the same Azure accou
 and region are not checked either. A bad prior is refused before listing pages, but Azure namespace
 admission requests can already have run. It cannot be the output directory, and `--overwrite` of the prior's
 own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
-changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
-`seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
-them), and `seed.from.expected_keys` against the source counter `objects` is the growth.
+changed shape since is still listed whole and in order; the run report's source counters
+(`diagnostics.source.stats.counters.values`) `seed.from.error.grown` and `seed.from.error.shrunk` count the
+ranges whose keys moved by more than a factor of 2 (adaptive splits covered them), and
+`seed.from.expected_keys` against the counter `objects` is the growth.
+
+Two limits apply to a seeded run: a seed far out of date, run at a very high worker count under a spill cap
+much smaller than the listing needs, can crawl or time out; and on Azure Blob a seed whose key pages end at a
+blob name longer than 1,024 bytes fails the run ([known limits](troubleshooting.md#known-limits)).
 
 A cut file seeds from anything else that knows the keys (an S3 Inventory, a prefix list, a dataset's
 `cuts.txt`), but carries no identity; prefer the dataset. A cut file holds one key per line, ascending bytewise without repeats, each

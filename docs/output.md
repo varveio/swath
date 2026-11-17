@@ -8,9 +8,6 @@ swath list s3://bucket/logs/ | head          # TSV in a pipe, a table on a termi
 swath list s3://bucket/logs/ --format jsonl  # JSONL on stdout
 swath list s3://bucket/logs/ -o rows.tsv.zst # a compressed TSV file
 swath list s3://bucket/logs/ -o logs-inventory # a sorted Parquet dataset
-swath list s3://bucket/logs/ -o gs://out/logs/2026-11-11 --work-dir work  # the dataset in a GCS bucket
-swath list s3://bucket/logs/ -o s3://out/logs/2026-11-11 --work-dir work  # the dataset in an S3 bucket
-swath list s3://bucket/logs/ -o az://acct/out/logs/2026-11-11 --work-dir work  # in an Azure Blob container
 swath du s3://bucket -d 1                    # totals per prefix
 ```
 
@@ -21,7 +18,7 @@ swath du s3://bucket -d 1                    # totals per prefix
 | text rows on stdout | you read the rows, or pipe them to `head`, `grep`, `awk`, `jq` |
 | a `.tsv` or `.jsonl` file | another program reads the rows once, or you keep a small listing |
 | a dataset (`-o DIR`) | you query the listing with SQL or DataFrames, keep it, compare it with a later one, or list a large source: only a dataset run can be resumed, and it says whether it is complete |
-| a dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS, S3 or Azure Blob Storage: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [Running swath in production](production.md#writing-to-a-bucket)) |
+| a dataset in a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) | the same, written straight to GCS, S3 or Azure Blob Storage: the runner keeps only spill and the run's metadata ([A dataset in a bucket](dataset.md#a-dataset-in-a-bucket), [writing to a bucket](production.md#writing-to-a-bucket)) |
 | `swath du` | you want sizes and counts, not rows |
 
 A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `manifest.json` that commits them.
@@ -29,7 +26,7 @@ A bare local destination or bucket prefix whose final path element ends in `.par
 refused. Use a name without that suffix, or add a trailing separator to explicitly select a directory,
 such as `-o inventory.parquet/` or `-o s3://out/inventory.parquet/` (a Spark-style directory).
 The same name rule applies to `swath resume DIR`. An existing file, or a device such as `/dev/null`, is
-refused as a dataset directory (exit 2): rows to stdout need no `-o`, and `swath diag count` lists without
+refused as a dataset directory (exit 2): rows to stdout need no `-o`, and `swath du` counts without
 writing.
 Querying one is shown in [Query an inventory](query.md).
 
@@ -43,7 +40,8 @@ The `-o` name chooses the format and the compression: `NAME.tsv` or `NAME.jsonl`
 `.gz` or `.zst`, in any case. A name with anything else after its `.tsv` or `.jsonl` (`rows.jsonl.zstd`,
 `rows.tsv.lz4`) is refused, never taken for a dataset directory; end it with `/` for a directory of that name.
 The part options (`--part-size`, `--part-interval`, `--part-max-rows`) shape a dataset and are refused with
-text rows. Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
+text rows (exit 2).
+Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
 is the table on a terminal and TSV otherwise, or `table`, `tsv`, `jsonl`. Compress stdout with a pipe
 (`| zstd`). The file's directory must exist; the file is written beside its name and renamed into place when
 complete, replacing a previous file. A file written inside the local tree it lists is left out of the listing,
@@ -251,9 +249,6 @@ $ swath du -d 1 s3://bucket
    18 B        3  2026-01-01 01:00:00  weird/
 357 MiB   60,004  2026-11-15 06:59:58  s3://bucket (total)
 ```
-
-The table fits 80 columns at `-d 2` while a path stays within about 34 characters; a longer path is printed
-whole and wraps.
 
 Without `-d` or `--format`, on a terminal, `swath du` draws [the view](totals.md#the-view) instead
 of the table: the largest prefixes and objects at any depth, with their shares of the total. It is for reading

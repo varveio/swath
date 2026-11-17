@@ -1,8 +1,8 @@
-# Running swath in production
+# Run on a schedule
 
 A short guide for whoever schedules and supervises swath: the nightly command, what to do with each exit code,
 and writing the dataset to a bucket from a machine that may not last. One run's command, outcome and limits are
-in [Running swath](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
+in [Run large listings](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
 observations on the stated runs ([Measurements (internals)](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
@@ -76,13 +76,9 @@ run's metadata.
   dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
   only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe, and on S3
   required ([Amazon S3](sources/s3.md#writing-a-dataset-to-s3)).
-- **Debug logging:** the destination's credentials and clients are built with a logger that discards
-  everything, as the GCS source's client is, so `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` never logs a token, a signed
-  assertion or a session URL. The storage SDK (v1.70.0) does not hand that logger to the JSON API client it
-  builds inside, so with the variable set that client may still log request lines: the method, the object name
-  and a URL without credentials. An S3 destination's AWS SDK logs nothing: its logger discards everything and
-  its request logging is off, whatever the AWS configuration says. The Azure SDK's log is off in swath
-  (`AZURE_SDK_GO_LOGGING=all` prints nothing), for the destination as for the source.
+- **Debug logging:** swath turns the storage SDKs' own logging off, so no SDK setting logs a token, a signed
+  assertion or a session URL; with `GOOGLE_SDK_GO_LOGGING_LEVEL=debug`, a GCS destination may still log request
+  lines: the method, the object name and a URL without credentials.
 - **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
   `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
   rule on the bucket. A run whose work directory was lost is abandoned the same way, without that list. A new

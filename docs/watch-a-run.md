@@ -165,8 +165,8 @@ when the report says so.
   that follow were taken at a fixed 128 MiB budget (`--sort-buffer 128MiB`): sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
-  vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured
-  over those lists. If `process.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
+  vCPU, and no run has been measured on a 1.8 GB machine, whose default budget is 1/16 of its memory, about
+  110 MiB. If `process.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
   heavy (`diagnostics.resources.spill.rows` near the rows listed) or `diagnostics.resources.budget_wait_ns` is large and memory is free,
   raise it: past what a listing holds ahead of its output, more buys only tail workers.
 - **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to

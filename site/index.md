@@ -54,8 +54,8 @@ Download the archive for your platform and put `swath` on your `PATH`, or run th
 ## Try a public bucket
 
 A public NOAA prefix of 5,252 objects, with no account: `--anonymous` sends no credentials. Start with a prefix
-like this one: listing the whole bucket, 37 million objects, as the "Save an inventory, query it with SQL"
-example above does, takes about 39,000 requests.
+like this one: the recorded listing of the whole bucket, the "Save an inventory, query it with SQL" example
+above, covered 37,064,981 objects in 39,016 requests.
 
 ```bash
 swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1

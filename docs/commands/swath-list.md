@@ -714,7 +714,7 @@ swath list s3://bucket/logs/ --all-versions -o logs-versions
 0 when the listing completed, or the reader closed stdout. 1 when it failed (access denied, no such bucket),
 2 for a usage error or a refusal (a non-empty `-o` directory without `--overwrite`), 3 when the output is
 written but incomplete (entries could not be read; `swath diag list --max-keys`). A dataset run of an object
-store that stops early exits 74, 75, 124, 130 or 143 and can be resumed. See
+store that stops early exits 74, 75, 124, 129, 130 or 143 and can be resumed. See
 [Exit codes](../reference/exit-codes.md).
 
 ## Environment
@@ -730,6 +730,7 @@ A dataset directory holds:
 DIR/data/part-NNNNN.parquet   the parts, in key order
 DIR/manifest.json             the commit: written last; a reader starts only once it exists
 DIR/run.json                  the run report, after the commit
+DIR/cuts.txt                  the cut file, for the next listing's --seed-from, after run.json
 DIR/error.json                the outcome of an attempt that did not complete
 DIR/.swath/                   swath's workspace: the lock, the journal, spill, progress.json
 ```

@@ -1,8 +1,8 @@
-# Running swath
+# Run large listings
 
 How to run one large listing: the command, the output directory it needs, the outcome it leaves and the limits
 that stop it. Running it unattended, on a schedule and under a supervisor, is
-[Running swath in production](production.md); what each exit code means is [Exit codes](reference/exit-codes.md).
+[Run on a schedule](production.md); what each exit code means is [Exit codes](reference/exit-codes.md).
 
 ```bash
 swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \

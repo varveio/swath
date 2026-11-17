@@ -236,7 +236,7 @@ swath du -h
 | 2 | a usage error, or a refusal that is the caller's to fix |
 | 3 | finished, but the output is incomplete: entries could not be read, or `--max-keys` stopped the listing |
 | 74 | the output's filesystem is full |
-| 75 | stuck: no progress for `--stall-timeout` |
+| 75 | stuck: no progress for `--stall-timeout`, an endpoint that never answered, or a bucket commit whose outcome is unknown |
 | 124 | `--max-duration` reached |
 | 129 | hung up (SIGHUP: a closed terminal or SSH session) |
 | 130 | interrupted (SIGINT) |
