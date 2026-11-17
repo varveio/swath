@@ -20,9 +20,8 @@
 // whole process.
 //
 // Terminal detection (the --format auto choice, color, the live progress
-// line) reads the process's standard output and standard error, as the
-// binary does: a host passes os.Stdout and os.Stderr for the binary's
-// output.
+// line) follows the stdout and stderr given to Main: a writer that is not
+// an *os.File is not a terminal, as a pipe is not to the binary.
 package command
 
 import (
@@ -105,6 +104,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// turns it off before any SDK use (TestAzureSDKLogSuppressed).
 	azlog.SetListener(nil)
 	errOut = stderr
+	stdoutFile, stderrFile = streamFile(stdout), streamFile(stderr)
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	sigs := make(chan os.Signal, 2)

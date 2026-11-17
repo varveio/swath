@@ -41,7 +41,10 @@ func duView(o *options, format, label string, stdoutTTY bool) *viewOut {
 // stdoutSize is the terminal's columns and lines on stdout, 0 when
 // unknown.
 var stdoutSize = func() (width, height int) {
-	w, h, err := term.GetSize(int(os.Stdout.Fd()))
+	if stdoutFile == nil {
+		return 0, 0
+	}
+	w, h, err := term.GetSize(int(stdoutFile.Fd()))
 	if err != nil {
 		return 0, 0
 	}

@@ -132,10 +132,24 @@ func (t *termOptions) validate() error {
 // minUsableWidth is the narrowest terminal a redrawn line is drawn on (Java's).
 const minUsableWidth = 24
 
-// stderrTerminal reports whether fd 2 is a terminal, and its width (0 when
-// unknown).
+// stdoutFile and stderrFile are the files under the command's stdout and
+// stderr, nil for a writer that is not a file (and so never a terminal):
+// Main sets them from the streams it is given (streamFile).
+var stdoutFile, stderrFile = os.Stdout, os.Stderr
+
+// streamFile is the file under w, nil when w is not one.
+func streamFile(w io.Writer) *os.File {
+	f, _ := w.(*os.File)
+	return f
+}
+
+// stderrTerminal reports whether stderr is a terminal, and its width (0
+// when unknown).
 var stderrTerminal = func() (bool, int) {
-	fd := int(os.Stderr.Fd())
+	if stderrFile == nil {
+		return false, 0
+	}
+	fd := int(stderrFile.Fd())
 	if !term.IsTerminal(fd) {
 		return false, 0
 	}
@@ -146,15 +160,16 @@ var stderrTerminal = func() (bool, int) {
 	return true, w
 }
 
-// stdoutTerminal reports whether fd 1 is a terminal (the --format auto choice).
-var stdoutTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+// stdoutTerminal reports whether stdout is a terminal (the --format auto
+// choice).
+var stdoutTerminal = func() bool { return stdoutFile != nil && term.IsTerminal(int(stdoutFile.Fd())) }
 
-// stdoutWidth is the width of the terminal on fd 1, 0 when it is none.
+// stdoutWidth is the width of the terminal on stdout, 0 when it is none.
 func stdoutWidth() int {
 	if !stdoutTerminal() {
 		return 0
 	}
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	w, _, err := term.GetSize(int(stdoutFile.Fd()))
 	if err != nil {
 		return 0
 	}
