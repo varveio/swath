@@ -338,7 +338,7 @@ func TestAzureSDKLogProcess(t *testing.T) {
 			"--request-timeout", "2s", "-o", filepath.Join(t.TempDir(), "ds")}
 		failed := false
 		if mode == "main" {
-			failed = Main(context.Background(), append([]string{"list"}, args...), nil, io.Discard, os.Stderr) != exitOK
+			failed = Main(context.Background(), "", append([]string{"list"}, args...), io.Discard, os.Stderr) != exitOK
 		} else {
 			failed = run(context.Background(), args, io.Discard, false) != nil
 		}

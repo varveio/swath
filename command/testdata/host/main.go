@@ -14,6 +14,5 @@ import (
 )
 
 func main() {
-	command.Host = "testhost"
-	command.Exit(command.Main(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	command.Exit(command.Main(context.Background(), "testhost", os.Args[1:], os.Stdout, os.Stderr))
 }

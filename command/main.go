@@ -73,11 +73,9 @@ const shutdownGrace = 15 * time.Second
 // timeout. Main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
 
-// Host names the program this copy of swath is built into, empty in the
-// swath binary. A host sets it before it calls Main, and swath --version
-// then says that the copy is the one built into Host, whose version is
-// whatever Host pinned and can trail a swath release.
-var Host string
+// host is the program this copy of swath is built into, as Main was given
+// it; empty in the swath binary.
+var host string
 
 // forensics is the running attempt, for the goroutine dump and the
 // outcome written at a forced exit.
@@ -95,14 +93,18 @@ type forensicTarget struct {
 
 // Main runs the swath command line args, without the program name, and
 // returns its exit code; it sets the process-wide policy the package
-// documentation lists. Rows, help, the version and --report - go to
-// stdout; the log, the progress line, the statistics and the outcome to
-// stderr. No command reads stdin. A run stops when ctx is canceled.
-func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+// documentation lists. hostName names the program this copy of swath is
+// built into, empty in the swath binary: swath --version then says that
+// the copy is the one built into it, whose version is whatever that
+// program pinned and can trail a swath release. Rows, help, the version
+// and --report - go to stdout; the log, the progress line, the statistics
+// and the outcome to stderr. A run stops when ctx is canceled.
+func Main(ctx context.Context, hostName string, args []string, stdout, stderr io.Writer) int {
 	// The Azure SDK's own log (azcore writes it to stderr when
 	// AZURE_SDK_GO_LOGGING=all) quotes request URLs, a SAS included: swath
 	// turns it off before any SDK use (TestAzureSDKLogSuppressed).
 	azlog.SetListener(nil)
+	host = hostName
 	errOut = stderr
 	stdoutFile, stderrFile = streamFile(stdout), streamFile(stderr)
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -450,15 +452,15 @@ func isDir(path string) bool {
 }
 
 // printVersion prints swath VERSION (REVISION), and in a host's copy
-// ", the copy built into HOST" after it (Host).
+// ", the copy built into HOST" after it (host).
 func printVersion(w io.Writer) {
 	b := inventory.BuildInfo()
 	fmt.Fprintf(w, "swath %s", b.Version)
 	if b.Revision != "" {
 		fmt.Fprintf(w, " (%s)", b.Revision)
 	}
-	if Host != "" {
-		fmt.Fprintf(w, ", the copy built into %s", Host)
+	if host != "" {
+		fmt.Fprintf(w, ", the copy built into %s", host)
 	}
 	fmt.Fprintln(w)
 }

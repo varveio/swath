@@ -82,10 +82,10 @@ func TestMainStreamsProcess(t *testing.T) {
 	}
 	args := []string{"list", src} // --columns would choose TSV itself
 	var auto, tsv bytes.Buffer
-	if code := Main(context.Background(), args, nil, &auto, io.Discard); code != exitOK {
+	if code := Main(context.Background(), "", args, &auto, io.Discard); code != exitOK {
 		t.Fatalf("auto: exit %d", code)
 	}
-	if code := Main(context.Background(), append(args, "--format", "tsv"), nil, &tsv, io.Discard); code != exitOK {
+	if code := Main(context.Background(), "", append(args, "--format", "tsv"), &tsv, io.Discard); code != exitOK {
 		t.Fatalf("tsv: exit %d", code)
 	}
 	if auto.String() != tsv.String() {
