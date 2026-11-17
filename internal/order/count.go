@@ -52,6 +52,9 @@ func CountWithSink[R, P any](ctx context.Context, p source.Provider[R, P], count
 	c := &counter[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, counted: counted, g: opt.Gauges, sink: sink}
 	c.runs, _ = sink.(RangeSink[P])
 	c.unreads, _ = sink.(UnreadSink)
+	if r, ok := sink.(Recovering); ok {
+		c.recovers = r.Recovers()
+	}
 	if c.trees, _ = sink.(SubtreeSink[P]); c.trees != nil {
 		c.subs = []*subtree{{pending: 1}}
 	}
@@ -144,6 +147,14 @@ type UnreadSink interface {
 	Unread(u listing.Unread)
 }
 
+// Recovering is a count's sink that takes a panic in a provider's Expand
+// as the count's error when Recovers says so: a library walk's, which
+// runs in its host's process. Any other count lets the panic end the
+// process.
+type Recovering interface {
+	Recovers() bool
+}
+
 // subtree is a range in the tree a count expands, for a SubtreeSink.
 type subtree struct {
 	parent  *subtree
@@ -170,6 +181,9 @@ type counter[R, P any] struct {
 	// cancel) or the caller's stop: emitters poll it without a lock (ctx.Err
 	// takes the context's mutex).
 	done <-chan struct{}
+
+	// recovers: a panic in Expand is the count's error (Recovering).
+	recovers bool
 
 	mu      sync.Mutex
 	cond    *sync.Cond // a range pushed, the last range finished, or a stop
@@ -237,11 +251,14 @@ func (c *counter[R, P]) worker() {
 	}
 }
 
-// expand expands r, a panic in the provider's Expand returned as the
-// count's error: a library count runs in its host's process, which one
-// listing's panic must not end. What the provider holds stays as the
-// panic left it.
+// expand expands r. For a Recovering sink, a panic in the provider's
+// Expand is returned as the count's error: a library count runs in its
+// host's process, which one listing's panic must not end. What the
+// provider holds stays as the panic left it.
 func (c *counter[R, P]) expand(r R, e *countEmitter[R, P]) (err error) {
+	if !c.recovers {
+		return c.p.Expand(c.ctx, r, e)
+	}
 	defer func() {
 		if v := recover(); v != nil {
 			err = fmt.Errorf("order: a range's listing panicked: %v\n%s", v, debug.Stack())

@@ -93,12 +93,19 @@ func TestCountTellsUnread(t *testing.T) {
 	}
 }
 
-// TestCountRecoversAPanic: a panic in a provider's Expand ends the count
-// with an error naming it, not the process, and the ranges it handed over
-// are dropped as at any stop.
+// recoveringSink is an unreadSink that asks for a provider's panic as
+// the count's error (Recovering).
+type recoveringSink struct{ unreadSink }
+
+func (*recoveringSink) Recovers() bool { return true }
+
+// TestCountRecoversAPanic: for a Recovering sink, a panic in a provider's
+// Expand ends the count with an error naming it, not the process, and the
+// ranges it handed over are dropped as at any stop. (Any other count lets
+// the panic end the process, which a test cannot observe.)
 func TestCountRecoversAPanic(t *testing.T) {
 	u := &unreading{n: 2, panics: true, cancel: func() {}}
-	sink := &unreadSink{}
+	sink := &recoveringSink{}
 	_, err := CountWithSink(context.Background(), u, nil, Options{Workers: 2}, sink)
 	if err == nil || !strings.Contains(err.Error(), "panicked: a provider's bug") {
 		t.Fatalf("err %v", err)
