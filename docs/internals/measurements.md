@@ -2655,32 +2655,38 @@ of which `TestRemoteCrashMatrix` 122 s. The Actions cache held 10.9 GB with one 
 56 % of the Go jobs on 8 `main` runs missed the module cache.
 
 After (#619, full scope; [44060041658](https://github.com/varveio/swath/actions/runs/44060041658) with six
-Windows legs, `durable` and `remote-crash` in one, and
-[44062912533](https://github.com/varveio/swath/actions/runs/44062912533) with seven), minutes:
+Windows legs, `durable` and `remote-crash` in one, then
+[44062912533](https://github.com/varveio/swath/actions/runs/44062912533) and
+[44067561509](https://github.com/varveio/swath/actions/runs/44067561509) with seven), minutes, first attempts:
 
-| | 44060041658 | 44062912533 |
-|---|---:|---:|
-| trigger to `ci-gate` | 15.7 | 15.5 |
-| critical job | `go-xos (macos-latest)` 15.1 | `go-xos (macos-latest)` 14.5 |
-| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`listing-rest`) |
-| Windows legs, the others | 5.7–11.8 | 5.5–8.1 |
-| `go-race (listing-rest)` | 6.1 (binary 297–313 s) | 6.1 |
-| `go-race (remote-crash)` | 3.0 (binary 124–127 s) | 3.2 |
-| `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 |
+| | 44060041658 | 44062912533 | 44067561509 |
+|---|---:|---:|---:|
+| trigger to `ci-gate` | 15.7 | 15.5, red | 15.3 |
+| critical job | `go-xos (macos-latest)` 15.1 | `go-xos (macos-latest)` 14.5 | `go-xos (macos-latest)` 14.8 |
+| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`listing-rest`) | 11.0 (`listing-rest`) |
+| Windows legs, the others | 5.7–11.8 | 5.5–8.1 | 3.9–6.5 |
+| `go-race (listing-rest)` | 6.1 (binary 297–313 s) | 6.1 | 6.0 |
+| `go-race (remote-crash)` | 3.0 (binary 124–127 s) | 3.2 | 3.1 |
+| `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 | 6.5 |
+
+The first attempt of 44062912533 ended with a red `ci-gate`: `TestColumns` (`cmd/swath`) failed on macOS,
+a test the change does not touch; the macOS job passed on its rerun, 29.2 min after the trigger.
 
 On Windows `TestRemoteCrashMatrix` took 298 and 216 s and `durable` 319 and 264 s, so the two do not
 share a leg. The Windows legs printed the same package results as the three legs of `main` run
 44046353331: the same packages, `internal/listing` run by four `go test` commands instead of three.
 
-The trim, on disk (Actions stores the caches zstd-compressed, at 0.16–0.20 of these sizes as the restored
-caches showed): the arm64 `internal/listing` shards restored 7.4 GB and kept 937 MiB, each of the four the
-same 5,703 entries; `cmd-kill` and `cmd` kept 7,803 and 7,807 entries (1.7 GiB); arm64 `go-xos` 10.4 GB to
-1.4; macOS `go-xos` 4.8 to 1.6; `go-build` 6.6 to 4.6; the Windows legs 1.1–3.0 to 0.86–1.36. Summed over
-the 17 build-cache families a `main` push now saves, the kept sizes are 27.1 GB on disk, about 5.0 GB
-compressed; with the four module caches (1.8 GB), BuildKit (0.4) and CodeQL (0.1), one generation is
-about 7.3 GB of the 10 GB. A pull request saves nothing, so the sizes `main` saves, the second
-generation an overlapping `main` run holds until the prune, and the eviction rate are measured only after
-the merge. Aging took 0.1–5 s per job and the trim 1–10 s, Windows the slowest.
+The trim, on disk in MiB (Actions stores the caches zstd-compressed, at 0.16–0.20 of the on-disk size as
+the restored caches showed): the arm64 `internal/listing` shards restored 7,416 and kept 937, each of the
+four the same 5,703 entries; `cmd-kill` and `cmd` kept 7,803 and 7,807 entries (1,705 and 1,711 MiB); arm64
+`go-xos` 10,394 to 1,397; macOS `go-xos` 4,832 to 1,591; `go-build` 6,562 to 4,615; the Windows legs
+1,089–2,976 to 855–1,364. Summed over the 17 build-cache families a `main` push now saves, the kept sizes
+are 27,137 MiB on disk (28.5 GB), about 5.2 GB compressed (4.6–5.7 at that ratio). With the four module
+caches (about 0.47 GB each, 1.9 GB), BuildKit (0.4 GB) and CodeQL's main caches (the dependency cache the
+prune keeps, about 0.38 GB, and the overlay databases, about 0.11 GB), one generation is about 8.0 GB
+(7.4–8.5) of the 10 GB. A pull request saves nothing, so the sizes `main` saves, the second generation an
+overlapping `main` run holds until the prune, and the eviction rate are measured only after the merge.
+Aging took 0.1–6 s per job and the trim 1–10 s, Windows the slowest.
 
 ### Parallel CLI crash tests and Java input filtering, 2026-11-10
 

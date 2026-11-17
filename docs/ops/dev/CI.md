@@ -344,9 +344,15 @@ Newest means creation time, not this run's commit: overlapping main runs must no
 run's caches. A fixed-order, deduplicated snapshot limits deletions to observed IDs; new entries
 are left for the next pass. This bounds generations, not bytes: concurrent writes can temporarily
 exceed the quota, and the retained families still need to fit the repository budget. With the
-trim, one generation is estimated at about 7.3 GB: 17 build-cache families of about 5.0 GB
-compressed, four module caches of 1.8 GB, BuildKit and CodeQL
+trim, one generation is estimated at about 8.0 GB: 17 build-cache families of about 5.2 GB
+compressed, four module caches of 1.9 GB, BuildKit's 0.4 GB and CodeQL's main dependency cache and
+overlay databases, about 0.5 GB
 ([measurements](../../internals/measurements.md#windows-shard-legs-remote-crash-and-trimmed-build-caches-2026-11-17)).
+Two things push the occupancy past that. A `main` run saves a second build generation, about 5 GB,
+which lives beside the first until the prune after the run. And the prune removes superseded
+generations, not retired families: when a job or shard stops using a key (a shard renamed, or
+made to share another's cache), the newest entry of its old family stays until it is deleted by
+hand or evicted.
 
 ### Other caches
 
