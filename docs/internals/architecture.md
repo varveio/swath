@@ -82,7 +82,11 @@ public package opens one with typed options and no flags: `github.com/varveio/sw
 then HeadBucket after a 404; `github.com/varveio/swath/azblob` (`azblob.Open`) over
 `internal/source/azblob.OpenLive`, whose one-level call is one delimiter List Blobs served in byte order
 ([its live source](providers/azblob.md#the-live-source)) and whose lookup is Get Blob Properties, then a one-entry
-List Blobs after a 404. `internal/live` joins the two: the `Store` a provider implements, and the constructor
+List Blobs after a 404; `github.com/varveio/swath/gcs` (`gcs.Open`) over `internal/source/gcs.OpenLive`, whose
+one-level call is one delimiter objects.list and whose lookup is objects.get, then buckets.get after a 404 with reason
+`notFound`; and `github.com/varveio/swath/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
+the caller holds, whose one-level call reads one directory relative to it and whose lookup resolves a key one name
+at a time. `internal/live` joins the two: the `Store` a provider implements, and the constructor
 package `swath` sets when it is initialized. A provider's failures take the contract's classes through
 `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither package links the command,
 pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).

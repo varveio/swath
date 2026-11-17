@@ -34,7 +34,8 @@ func init() {
 // is not the prefix "a/". On S3 a key is absent only when HeadObject finds
 // no object and HeadBucket then shows the bucket is there; a 403, a
 // missing bucket and a failed probe leave it unknown, with the class of
-// the failure as Reason. Lookup returns an error only for a key of the
+// the failure as Reason. Each provider package says how its store shows
+// a key absent. Lookup returns an error only for a key of the
 // wrong form (ErrInvalidRequest) or once ctx has ended.
 func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := checkKey(key); err != nil {

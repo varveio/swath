@@ -37,6 +37,7 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 | `cmd/swath` | the swath binary, which runs `command` |
 | `command` | the command line, as a function another Go program can call ([library](../library.md#run-the-command-line)) |
 | `*.go`, `s3/` | the experimental Go library: a live `Source` and its S3 provider ([library](../library.md)) |
+| `gcs/` | the library's Google Cloud Storage provider ([library](../library.md#google-cloud-storage)) |
 | `azblob/` | the experimental Go library's Azure Blob Storage provider ([library](../library.md#azure-blob-storage)) |
 | `local/` | the library's local source: a directory the caller opened ([library](../library.md#a-local-directory)) |
 | `cmd/swath-replay` | the replay server ([swath-replay.md](swath-replay.md)) |
@@ -45,7 +46,6 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 | `docs/` | the documentation; `go test ./docs` checks the relative links of the repository's Markdown |
 | `site/` | the website: a VitePress build of the user pages in `docs/` ([site/README.md](../../site/README.md)) |
 | `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
-| `gcs/` | the library's Google Cloud Storage provider ([library](../library.md#google-cloud-storage)) |
 
 The gate is `go vet ./... && go test -race ./...` at the root, and the same in `objfile/` and `reader/`
 ([testing](testing.md)).

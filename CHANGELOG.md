@@ -50,6 +50,22 @@ Notable changes per release. The human summary of the current release is in the
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
+- The root package's `Source` also walks and summarizes live on S3. `Walk` hands a callback every object under a
+  prefix once, listed flat and in parallel on the range engine, or one `/` level at a time down to a `MaxDepth`;
+  an entry or time budget stops it, and the key intervals it did not read reach the callback as `Unread` extents.
+  `Summarize` totals the objects, bytes and newest time at or under several targets from those walks; a total
+  with an `Unread` is a lower bound ([library guide](docs/library.md#walks)).
+- `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
+  of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
+  ([library guide](docs/library.md#google-cloud-storage)).
+- `azblob.Open` opens an Azure Blob Storage container (`ACCOUNT/CONTAINER`) as a `Source`. A level that one answer
+  holds is sorted from Azure's UTF-16 order into byte order; a longer level is `ErrUnsupported` from the page
+  where it leaves byte order. A hierarchical namespace's directories come back once, as prefixes
+  ([library guide](docs/library.md#azure-blob-storage)).
+- `local.Open` opens a directory the program already opened as a `Source` (Linux and macOS). Each page and lookup
+  opens what it reads relative to that directory, one name at a time, never following a symbolic link or
+  crossing to another device; a page is one directory level in byte order, its held names bounded by
+  `Options.MaxHeldBytes` ([library guide](docs/library.md#a-local-directory)).
 - `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
 - `command` (experimental) is the swath command line as a function: `Main(ctx, args, stdin, stdout, stderr)` runs
