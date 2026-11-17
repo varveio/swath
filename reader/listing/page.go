@@ -30,10 +30,13 @@ type PageRequest struct {
 	// Token continues the level after an earlier page: that page's Next,
 	// unchanged. Empty starts the level. A token is opaque and versioned:
 	// it carries the backend's resume state, the last key returned, and a
-	// fingerprint of the source (an inventory's manifest digest), the
-	// request's options and Prefix. A token that does not match them is
-	// ErrInvalidToken, refused before any request. Tokens are not signed;
-	// a caller that hands them to others signs its own.
+	// fingerprint of the source (an inventory's manifest digest), of
+	// Prefix and of the options that decide what the level's pages hold:
+	// whether ChildTotals is set, and the kinds it counts. A token that
+	// does not match them is ErrInvalidToken, refused before any request.
+	// Limit and the bounds of work (MaxScanned, MaxDuration, the
+	// ChildTotals Budget) may change from page to page. Tokens are not
+	// signed; a caller that hands them to others signs its own.
 	Token string
 	// Limit is the most entries the page returns. It must be positive.
 	Limit int

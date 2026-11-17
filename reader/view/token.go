@@ -20,31 +20,47 @@ import (
 const tokenVersion = "inv1"
 
 // binding is the part of a token that ties it to one inventory, by its
-// manifest digest, and to one prefix. Tokens are not signed: it detects a
-// token used with another inventory or prefix, not a forged one.
-func (inv *Inventory) binding(prefix []byte) string {
+// manifest digest, to one prefix, and to what the request's child totals
+// count: none, or the kinds totals selects. Limit, MaxScanned, MaxDuration
+// and the child totals' Budget bound one page's work, not what the level
+// holds, and may change from page to page. Tokens are not signed: the
+// binding detects a token used with another inventory, prefix or count,
+// not a forged one.
+func (inv *Inventory) binding(prefix []byte, totals *selection) string {
 	h := sha256.New()
 	h.Write([]byte("swath view page token\x00"))
 	h.Write([]byte(inv.base.Manifest))
 	h.Write([]byte{0})
 	h.Write(prefix)
+	h.Write([]byte{0})
+	if totals != nil {
+		// One byte per kind, 1 where totals counts it, so that the same
+		// count spelt in two ways binds alike.
+		for k := listing.KindObject; k <= listing.KindOther; k++ {
+			var counted byte
+			if totals.counts(k) {
+				counted = 1
+			}
+			h.Write([]byte{counted})
+		}
+	}
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:16])
 }
 
-// encodeToken is the token that continues the level of prefix after c.
-func (inv *Inventory) encodeToken(prefix []byte, c *seekparquet.Cursor) (string, error) {
+// encodeToken is the token that continues the level bind names after c.
+func encodeToken(bind string, c *seekparquet.Cursor) (string, error) {
 	cursor, err := c.Encode()
 	if err != nil {
 		return "", err
 	}
-	return tokenVersion + "." + inv.binding(prefix) + "." + cursor, nil
+	return tokenVersion + "." + bind + "." + cursor, nil
 }
 
-// decodeToken returns the cursor a token of prefix's level carries: nil for
-// the empty token, which starts the level. A token of another version,
-// inventory or prefix, or whose cursor is not after an entry of the level,
-// is ErrInvalidToken.
-func (inv *Inventory) decodeToken(prefix []byte, token string) (*seekparquet.Cursor, error) {
+// decodeToken returns the cursor a token of prefix's level, bound as bind,
+// carries: nil for the empty token, which starts the level. A token of
+// another version or binding, or whose cursor is not after an entry of
+// the level, is ErrInvalidToken.
+func decodeToken(prefix []byte, bind, token string) (*seekparquet.Cursor, error) {
 	if token == "" {
 		return nil, nil
 	}
@@ -52,8 +68,8 @@ func (inv *Inventory) decodeToken(prefix []byte, token string) (*seekparquet.Cur
 	if len(parts) != 3 || parts[0] != tokenVersion {
 		return nil, badToken("not a token of this version")
 	}
-	if parts[1] != inv.binding(prefix) {
-		return nil, badToken("issued for another inventory or prefix")
+	if parts[1] != bind {
+		return nil, badToken("issued for another inventory, prefix or count of child totals")
 	}
 	c, err := seekparquet.ParseCursor(parts[2])
 	if err != nil {

@@ -18,7 +18,8 @@ import (
 // child prefix is a KindPrefix entry; a local child directory is its own
 // row, a KindDir. The entry at exactly the prefix comes back as Self on
 // the level's first page. A token is bound to the inventory's manifest
-// digest and to the prefix: one issued for another is ErrInvalidToken.
+// digest, to the prefix and to the kinds req.ChildTotals counts, if any:
+// one issued for another is ErrInvalidToken.
 //
 // A prefix outside the inventory's scope is ErrOutOfScope. A local
 // directory the inventory has as another kind is ErrNotDirectory; one it
@@ -40,7 +41,8 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	if !inv.inScope(req.Prefix) {
 		return listing.Page{}, errOutOfScope
 	}
-	cursor, err := inv.decodeToken(req.Prefix, req.Token)
+	bind := inv.binding(req.Prefix, sel)
+	cursor, err := decodeToken(req.Prefix, bind, req.Token)
 	if err != nil {
 		return listing.Page{}, err
 	}
@@ -86,12 +88,12 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		}
 	}
 	if req.ChildTotals != nil {
-		if page.Totals, err = inv.childTotals(ctx, op, entries, sel, req.ChildTotals.Budget); err != nil {
+		if page.Totals, err = inv.childTotals(ctx, op, entries, *sel, req.ChildTotals.Budget); err != nil {
 			return listing.Page{}, err
 		}
 	}
 	if next != nil {
-		if page.Next, err = inv.encodeToken(req.Prefix, next); err != nil {
+		if page.Next, err = encodeToken(bind, next); err != nil {
 			return listing.Page{}, err
 		}
 	}
@@ -125,23 +127,27 @@ func (inv *Inventory) self(prefix []byte, limit int, entries []seekparquet.PageE
 }
 
 // checkPage refuses a request this package does not serve, and returns
-// the kinds its child totals count.
-func (inv *Inventory) checkPage(req listing.PageRequest) (selection, error) {
+// the kinds its child totals count: nil when it asks for none.
+func (inv *Inventory) checkPage(req listing.PageRequest) (*selection, error) {
 	if err := inv.checkPrefix(req.Prefix); err != nil {
-		return selection{}, err
+		return nil, err
 	}
 	switch {
 	case req.Limit < 1 || req.Limit >= math.MaxInt-1:
-		return selection{}, invalid("a page's Limit is positive")
+		return nil, invalid("a page's Limit is positive")
 	case req.MaxScanned < 0 || req.MaxDuration < 0:
-		return selection{}, invalid("a negative bound")
+		return nil, invalid("a negative bound")
 	case req.ChildTotals == nil:
-		return selection{}, nil
+		return nil, nil
 	}
 	if err := checkBudget(req.ChildTotals.Budget); err != nil {
-		return selection{}, err
+		return nil, err
 	}
-	return selectionOf(req.ChildTotals.Kinds)
+	sel, err := selectionOf(req.ChildTotals.Kinds)
+	if err != nil {
+		return nil, err
+	}
+	return &sel, nil
 }
 
 // listedEntry is one entry of a delimited listing, the caller's to keep.

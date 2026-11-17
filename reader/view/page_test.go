@@ -143,8 +143,49 @@ func TestPageTokens(t *testing.T) {
 		}
 	}
 	// A cursor outside the level, bound as a real token is: refused.
-	if _, err := inv.decodeToken([]byte("a/"), tokenVersion+"."+inv.binding([]byte("a/"))+".spc1.r.Yg.0"); !errors.Is(err, listing.ErrInvalidToken) {
+	if _, err := decodeToken([]byte("a/"), inv.binding([]byte("a/"), nil), tokenVersion+"."+inv.binding([]byte("a/"), nil)+".spc1.r.Yg.0"); !errors.Is(err, listing.ErrInvalidToken) {
 		t.Errorf("cursor outside the level: %v", err)
+	}
+}
+
+// TestPageTokenOptions: a token continues only under the child totals it
+// was issued with, the same kinds however spelt; a page's bounds of work
+// may change.
+func TestPageTokenOptions(t *testing.T) {
+	ctx := context.Background()
+	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
+	files := &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile}}
+	first, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: files})
+	if err != nil || first.Next == "" {
+		t.Fatalf("first page = %+v, %v", first, err)
+	}
+	for name, totals := range map[string]*listing.SummaryOptions{
+		"no child totals":   nil,
+		"every kind":        {},
+		"directories":       {Kinds: []listing.Kind{listing.KindDir}},
+		"files and objects": {Kinds: []listing.Kind{listing.KindFile, listing.KindObject}},
+	} {
+		if _, err := inv.Page(ctx, listing.PageRequest{Token: first.Next, Limit: 1, ChildTotals: totals}); !errors.Is(err, listing.ErrInvalidToken) {
+			t.Errorf("%s: %v, want ErrInvalidToken", name, err)
+		}
+	}
+	for name, req := range map[string]listing.PageRequest{
+		"the same kinds spelt twice": {Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile, listing.KindFile}}},
+		"another limit and budget":   {Limit: 3, MaxDuration: time.Hour, ChildTotals: &listing.SummaryOptions{Kinds: files.Kinds, Budget: listing.Budget{MaxEntries: 1}}},
+	} {
+		req.Token = first.Next
+		if _, err := inv.Page(ctx, req); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	all := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile, listing.KindDir, listing.KindSymlink, listing.KindOther}
+	every, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inv.Page(ctx, listing.PageRequest{Token: every.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: all}}); err != nil {
+		t.Errorf("every kind, listed: %v", err)
 	}
 }
 
