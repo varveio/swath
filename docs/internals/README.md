@@ -43,6 +43,7 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 | `docs/` | the documentation; `go test ./docs` checks the relative links of the repository's Markdown |
 | `site/` | the website: a VitePress build of the user pages in `docs/` ([site/README.md](../../site/README.md)) |
 | `bench/`, `verify.py` | benchmarks and the independent DuckDB verifier |
+| `gcs/` | the library's Google Cloud Storage provider ([library](../library.md#google-cloud-storage)) |
 
 The gate is `go vet ./... && go test -race ./...` at the root, and the same in `objfile/` and `reader/`
 ([testing](testing.md)).

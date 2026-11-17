@@ -24,7 +24,8 @@ const wireSnapshot = "testdata/wire.txt"
 // fixed token, on Google's endpoint (with and without a billed project)
 // and on a custom one: objects.list of the live objects and of every
 // generation, each with no options and with every option (a continuation:
-// offsets, delimiter, page size, page token), is method, intended
+// offsets, delimiter, page size, page token), objects.get of a name that
+// needs escaping and buckets.get, is method, intended
 // authority, escaped path, every query parameter as sent, in order, every
 // header value (duplicates kept) and the body's length, exactly as
 // testdata/wire.txt has it. The generated client's X-Goog-Api-Client
@@ -66,15 +67,17 @@ func TestWireSnapshot(t *testing.T) {
 		generations.Versions = true
 		for _, call := range []struct {
 			name string
-			in   ListInput
+			do   func() error
 		}{
-			{"objects", ListInput{Bucket: "bkt"}},
-			{"objects, every option", full},
-			{"generations", ListInput{Bucket: "bkt", Versions: true}},
-			{"generations, every option", generations},
+			{"objects", func() error { _, err := c.List(ctx, &ListInput{Bucket: "bkt"}); return err }},
+			{"objects, every option", func() error { _, err := c.List(ctx, &full); return err }},
+			{"generations", func() error { _, err := c.List(ctx, &ListInput{Bucket: "bkt", Versions: true}); return err }},
+			{"generations, every option", func() error { _, err := c.List(ctx, &generations); return err }},
+			{"object", func() error { _, err := c.Get(ctx, "bkt", "p/a b+c%/é&=#?"); return err }},
+			{"bucket", func() error { return c.Bucket(ctx, "bkt") }},
 		} {
 			n := len(rec.reqs)
-			if _, err := c.List(ctx, &call.in); err != nil {
+			if err := call.do(); err != nil {
 				t.Fatalf("%s, %s: %v", cl.name, call.name, err)
 			}
 			if len(rec.reqs) != n+1 {

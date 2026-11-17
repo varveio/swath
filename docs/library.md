@@ -236,3 +236,30 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 ## Not in the library yet
 
 The library answers Page, Lookup, Walk and Summarize on S3. The GCS, Azure and local sources are not in it yet. A source's request limits hold within one process only.
+
+## Google Cloud Storage
+
+`github.com/varveio/swath/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
+tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
+
+```go
+src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
+```
+
+`gcs.Options` takes a JSON API endpoint (an emulator's or a proxy's), a credentials file, anonymous access to a
+public bucket, the project billed for a requester-pays bucket, and the same two request limits as S3. Credentials
+otherwise come from Application Default Credentials, as for the command
+([Authentication and permissions](sources/gcs.md#authentication-and-permissions)). What differs from S3:
+
+- A page is one `objects.list` with the delimiter `/`. GCS may answer with a page that holds nothing and still
+  carries a token: the level goes on. A zero-length object whose name ends in `/`, such as a folder placeholder,
+  is an object like any other: in a page of its own prefix it is the `Self`.
+- A lookup reads the object's metadata (`objects.get`). GCS answers a missing object and a missing bucket with the
+  same 404 with reason `notFound`, so after one the lookup reads the bucket's (`buckets.get`), and the key is absent
+  only when that succeeds. A 403 to either, a 404 without that reason, a missing bucket (`listing.ErrNotFound`) and
+  a probe that fails leave the key unknown.
+- A page needs `storage.objects.list` on the bucket. A lookup needs `storage.objects.get`, and
+  `storage.buckets.get` to show a key absent: without it a missing key is unknown (`listing.ErrAuth`).
+- A token is bound to the bucket and the endpoint it is read through; the billed project is not part of it.
+- The observer sees a lookup's `objects.get` and `buckets.get` as metadata requests, the bucket's with an empty
+  name.

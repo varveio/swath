@@ -52,6 +52,26 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
+== anonymous: object
+GET https://storage.googleapis.com/storage/v1/b/bkt/o/p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%23%3F
+  query alt=json
+  query fields=kind%2Cname%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous: bucket
+GET https://storage.googleapis.com/storage/v1/b/bkt
+  query alt=json
+  query fields=kind%2Cname
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
 == token: objects
 GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query alt=json
@@ -105,6 +125,28 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query projection=noAcl
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   query versions=true
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: object
+GET https://storage.googleapis.com/storage/v1/b/bkt/o/p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%23%3F
+  query alt=json
+  query fields=kind%2Cname%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: bucket
+GET https://storage.googleapis.com/storage/v1/b/bkt
+  query alt=json
+  query fields=kind%2Cname
+  query prettyPrint=false
+  query projection=noAcl
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> google-api-go-client/<version>
@@ -172,6 +214,30 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
+== token, billed project: object
+GET https://storage.googleapis.com/storage/v1/b/bkt/o/p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%23%3F
+  query alt=json
+  query fields=kind%2Cname%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType
+  query prettyPrint=false
+  query projection=noAcl
+  query userProject=billed-p
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token, billed project: bucket
+GET https://storage.googleapis.com/storage/v1/b/bkt
+  query alt=json
+  query fields=kind%2Cname
+  query prettyPrint=false
+  query projection=noAcl
+  query userProject=billed-p
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
 == anonymous, custom endpoint: objects
 GET http://gcs.example/storage/v1/b/bkt/o
   query alt=json
@@ -218,6 +284,24 @@ GET http://gcs.example/storage/v1/b/bkt/o
   query projection=noAcl
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   query versions=true
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: object
+GET http://gcs.example/storage/v1/b/bkt/o/p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%23%3F
+  query alt=json
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: bucket
+GET http://gcs.example/storage/v1/b/bkt
+  query alt=json
+  query prettyPrint=false
+  query projection=noAcl
   header Accept-Encoding: gzip
   header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
