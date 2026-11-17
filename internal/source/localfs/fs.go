@@ -71,8 +71,10 @@ type Options struct {
 	MaxDepth int
 	// MaxDescriptors bounds every descriptor the listing holds at once:
 	// the directories it keeps for queued work and those each worker
-	// opens, which Opened.Begin reserves from it by the workers. Zero
-	// leaves the command's limit, on kept directories only (keepLimit).
+	// opens, and bounds the names a directory is opened below a kept one
+	// (Provider.boundDescriptors, which Opened.Begin applies for its
+	// workers; it needs MaxDepth). Zero leaves the command's limit, on
+	// kept directories only (keepLimit).
 	MaxDescriptors int
 	// MaxHeldBytes, when positive, makes an unordered listing (a count)
 	// keep the names of each directory whose enumeration has not ended,
@@ -85,12 +87,6 @@ type Options struct {
 	// NoPaths keeps no entry's path once the listing returns: no error
 	// samples and no warnings, which name one.
 	NoPaths bool
-	// Unread, if set, is told each place the listing did not read, as
-	// a worker meets it: the key of a directory or entry, how much at
-	// it was not read and why. It is called concurrently, before the
-	// Expand that met the place returns, or from Dispose for a range a
-	// stopped listing never expanded; the key is not kept after.
-	Unread func(key string, scope listing.UnreadScope, class listing.UnreadClass)
 }
 
 // Stats count what a listing saw. Per-entry problems are counted, never fatal.
@@ -152,20 +148,22 @@ type DirOpens struct {
 	Opened     int64 `json:"opened"`
 	Redescents int64 `json:"redescents"` // opens attempted from an ancestor, more than one name down
 	Refused    int64 `json:"refused"`    // directories the limit did not keep for their subdirectories
-	// Checkpoints counts directories kept past the ordinary share of the
-	// limit, maxRedescent names below a kept ancestor (adopt).
-	Checkpoints int64 `json:"checkpoints"`
+	// Checkpoints counts directories kept in the limit's checkpoint
+	// reserve, maxRedescent names below a kept ancestor (adopt).
 	// RedescentNames counts the names the redescents open, intermediates
-	// included, and MaxRedescent the most one opens.
-	RedescentNames int64 `json:"redescent_names"`
-	MaxRedescent   int64 `json:"max_redescent"`
+	// included, and MaxRedescent the most one opens. All three are
+	// counted with Options.MaxDescriptors only.
+	Checkpoints    int64 `json:"checkpoints,omitempty"`
+	RedescentNames int64 `json:"redescent_names,omitempty"`
+	MaxRedescent   int64 `json:"max_redescent,omitempty"`
 	// Failed counts the opens that failed, by reason, as LongPaths.Failed.
 	Failed   map[string]int64 `json:"failed,omitempty"`
 	PeakKept int64            `json:"peak_kept"` // the most descriptors of kept directories at once
 	MaxKept  int64            `json:"max_kept"`  // the limit on them (keepLimit, Options.MaxDescriptors)
 	// PeakOpen is the most descriptors the walk had open at once, kept
-	// or not, the ones each worker opens included.
-	PeakOpen int64 `json:"peak_open"`
+	// or not, the ones each worker opens included (Options.MaxDescriptors
+	// only).
+	PeakOpen int64 `json:"peak_open,omitempty"`
 }
 
 func (o *DirOpens) fail(reason string) {
@@ -193,17 +191,21 @@ func (o *DirOpens) add(x *DirOpens) {
 // keptFDs count the directory descriptors a walk holds. open counts those
 // of the directories it keeps (dirFD), which limit bounds: a directory's,
 // from its open until its chunks are read and its queued subdirectories
-// opened relative to it. Past three quarters of limit only a checkpoint is
-// kept (keepCheckpoint). Past limit a directory is still read, whole by
-// the worker that opened it, but not kept: its subdirectories are opened
-// from a kept ancestor. The root is always kept. all counts every
-// descriptor the walk has open, kept or not.
+// opened relative to it. The last reserve of limit keeps only checkpoints
+// (keepCheckpoint); the command reserves none. Past limit a directory is
+// still read, whole by the worker that opened it, but not kept: its
+// subdirectories are opened from a kept ancestor. The root is always
+// kept. With countAll (Options.MaxDescriptors), all counts every
+// descriptor the walk has open, kept or not; the command does not pay for
+// counting them.
 type keptFDs struct {
-	limit   int64
-	open    atomic.Int64
-	peak    atomic.Int64
-	all     atomic.Int64
-	allPeak atomic.Int64
+	limit    int64
+	reserve  int64 // of limit, for checkpoints only (Provider.boundDescriptors)
+	countAll bool
+	open     atomic.Int64
+	peak     atomic.Int64
+	all      atomic.Int64
+	allPeak  atomic.Int64
 }
 
 // keepAs is why a directory asks to be kept (keptFDs.take).
@@ -211,7 +213,7 @@ type keepAs uint8
 
 const (
 	keepRoot       keepAs = iota // always
-	keepOrdinary                 // within three quarters of the limit
+	keepOrdinary                 // within the limit less its reserve
 	keepCheckpoint               // within the limit: maxRedescent names below a kept ancestor (adopt)
 )
 
@@ -220,7 +222,7 @@ func (k *keptFDs) take(how keepAs, n int64) bool {
 	open := k.open.Add(n)
 	ceiling := k.limit
 	if how == keepOrdinary {
-		ceiling -= k.limit / 4
+		ceiling -= k.reserve
 	}
 	if how != keepRoot && open > ceiling {
 		k.open.Add(-n)
@@ -230,10 +232,47 @@ func (k *keptFDs) take(how keepAs, n int64) bool {
 	return true
 }
 
+// maxRedescent is the most names a directory is opened below a kept one
+// while the checkpoint reserve lasts (adopt).
+const maxRedescent = 8
+
+// boundDescriptors sets the limit on kept descriptors from n, every
+// descriptor the walk may hold (Options.MaxDescriptors), for workers. Two
+// per worker are left to what a worker opens beyond the kept ones (one it
+// reads, or two while it descends). Of the rest, reserve keeps checkpoints
+// for each worker's branch down to Options.MaxDepth, one per maxRedescent
+// levels (adopt). The directories one worker's walk keeps are ancestors of
+// the one it reads, so with one worker the reserve never runs out and no
+// directory is opened more than maxRedescent names below a kept one. A
+// limit too small for the reserve and the root is refused, and so is one
+// without MaxDepth, whose branches have no length to reserve for.
+func (p *Provider) boundDescriptors(n, workers int64) error {
+	if p.opt.MaxDepth <= 0 {
+		return errors.New("localfs: a limit on descriptors needs a limit on depth")
+	}
+	cost := p.dirCost()
+	reserve := workers * int64((p.opt.MaxDepth+maxRedescent-1)/maxRedescent) * cost
+	kept := n - 2*workers
+	if need := reserve + cost; kept < need {
+		return fmt.Errorf("localfs: a limit of %d descriptors is below the %d that %d workers need to a depth of %d", n, need+2*workers, workers, p.opt.MaxDepth)
+	}
+	p.keep.limit, p.keep.reserve, p.keep.countAll = kept, reserve, true
+	return nil
+}
+
 // opened and closed count n descriptors the walk opened or closed, kept or
-// not.
-func (k *keptFDs) opened(n int64) { raise(&k.allPeak, k.all.Add(n)) }
-func (k *keptFDs) closed(n int64) { k.all.Add(-n) }
+// not, when it counts them all.
+func (k *keptFDs) opened(n int64) {
+	if k.countAll {
+		raise(&k.allPeak, k.all.Add(n))
+	}
+}
+
+func (k *keptFDs) closed(n int64) {
+	if k.countAll {
+		k.all.Add(-n)
+	}
+}
 
 // raise sets peak to n if n is higher.
 func raise(peak *atomic.Int64, n int64) {
@@ -387,6 +426,9 @@ type Provider struct {
 	// opened (Opened.Begin's unreadable; nil: nobody asks), set before
 	// workers start.
 	unreadable func(string)
+	// unreadTo is told each place the listing did not read (unread),
+	// concurrently; set before workers start.
+	unreadTo func(key string, scope listing.UnreadScope, class listing.UnreadClass)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -484,8 +526,8 @@ func (p *Provider) Stats() Stats {
 }
 
 // Dispose releases what a range that will never be expanded holds (a
-// stopped listing's), a continuation's name set included, and tells
-// Options.Unread it was not read. It implements source.Disposer.
+// stopped listing's), a continuation's name set included, and reports it
+// not read (unread). It implements source.Disposer.
 func (p *Provider) Dispose(r Range) {
 	p.unreadStopped(r, false)
 	disposeContinuation(r)
@@ -532,15 +574,20 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	return err
 }
 
-// unread tells Options.Unread of a place the listing did not read.
+// unread reports a place the listing did not read, as a worker meets it:
+// the key of a directory or entry, how much at it was not read and why,
+// in the contract's terms (reader/listing). Every such place is reported
+// here, before the Expand that met it returns, or from Dispose for a
+// range a stopped listing never expanded. Nothing delivers the reports
+// to a caller yet: unreadTo, nil outside tests, is told them.
 func (p *Provider) unread(key string, scope listing.UnreadScope, class listing.UnreadClass) {
-	if p.opt.Unread != nil {
-		p.opt.Unread(key, scope, class)
+	if p.unreadTo != nil {
+		p.unreadTo(key, scope, class)
 	}
 }
 
-// unreadStopped tells Options.Unread of a range a stopped listing did not
-// finish (UnreadBudget: the caller's stop): a chunk, a continuation or a
+// unreadStopped reports a range a stopped listing did not finish
+// (UnreadBudget: the caller's stop): a chunk, a continuation or a
 // directory it opened did not end its enumeration; nothing at or under a
 // directory it never opened was read.
 func (p *Provider) unreadStopped(r Range, opened bool) {

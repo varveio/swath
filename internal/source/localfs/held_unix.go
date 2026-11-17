@@ -63,6 +63,14 @@ func OpenDir(root *os.File, prefix string, opt Options) (*Opened, error) {
 	return &Opened{bound: b, p: p}, nil
 }
 
+// Lookup's system calls: the opens on the way, the device check of each,
+// and the stat of the key. Tests replace them to fail as a disk does.
+var (
+	lookupOpenat = unix.Openat
+	lookupFstat  = unix.Fstat
+	lookupStatAt = statAt
+)
+
 // Lookup answers what is at exactly key below the root OpenDir holds: "a/b"
 // names an entry of any kind, "a/b/" a directory only. Each directory on
 // the way is opened relative to the one before, from the held root, with
@@ -98,7 +106,7 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 		if err := ctx.Err(); err != nil {
 			return LookupResult{}, err
 		}
-		fd, err := unix.Openat(dir, name, longpath.Search|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		fd, err := lookupOpenat(dir, name, longpath.Search|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return lookupAncestor(dir, name, i+1, err), nil
 		}
@@ -107,7 +115,7 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 		}
 		dir = fd
 		var s unix.Stat_t
-		if err := unix.Fstat(fd, &s); err != nil {
+		if err := lookupFstat(fd, &s); err != nil {
 			return lookupUnknown(unreadClass(err), err), nil
 		}
 		if int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
@@ -120,7 +128,7 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 
 	last := names[len(names)-1]
 	var row Row
-	if err := statAt(dir, last, p.opt.Fields, &row.Data); err != nil {
+	if err := lookupStatAt(dir, last, p.opt.Fields, &row.Data); err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
 			return LookupResult{State: listing.LookupAbsent}, nil
 		}

@@ -51,7 +51,7 @@ func (s *swapAt) Expand(ctx context.Context, r Range, e source.Emitter[Range, En
 // a link in place of the directory it opens: unsafe_dirs, unreadable,
 // named in the error samples (with the level refused, from the root), the
 // directory told to the run (Opened.Begin's unreadable) and reported
-// unread, its subtree behind a symbolic link (Options.Unread).
+// unread, its subtree behind a symbolic link (unread).
 func TestSwappedDirectoryNotFollowed(t *testing.T) {
 	listed := []string{"a/", "a/b/", "a/b/c/"}
 	whole := append(slices.Clone(listed), "a/b/c/d/", "a/b/c/d/e", "a/b/c/in")
@@ -86,7 +86,7 @@ func TestSwappedDirectoryNotFollowed(t *testing.T) {
 				var unread []string
 				p.unreadable = func(prefix string) { unread = append(unread, prefix) }
 				var u unreads
-				p.opt.Unread = u.add
+				p.unreadTo = u.add
 				s := &swapAt{Provider: p, prefix: "a/b/c/", swap: func() error {
 					at := filepath.Join(root, filepath.FromSlash(c.replaced))
 					if err := os.Rename(at, at+".moved"); err != nil {

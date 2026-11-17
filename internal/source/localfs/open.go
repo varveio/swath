@@ -119,17 +119,13 @@ const (
 // readahead, the other readers of GOMAXPROCS. Every listing that writes
 // output keeps the setting as it is.
 //
-// With Options.MaxDescriptors, Begin reserves two descriptors per worker
-// (opt.Workers) from it, the most a worker holds beyond the kept ones (one
-// it reads, or two while it descends), and keeps the rest for kept
-// directories; a limit that leaves fewer than two is refused.
+// With Options.MaxDescriptors, Begin bounds the walk's descriptors for
+// opt.Workers (Provider.boundDescriptors), and refuses a limit too small.
 func (o *Opened) Begin(f *filter.Spec, unreadable func(prefix string), count bool, opt *order.Options) (end func(), err error) {
 	if n := o.p.opt.MaxDescriptors; n > 0 {
-		kept := int64(n) - 2*int64(max(opt.Workers, 1))
-		if kept < 2 {
-			return nil, fmt.Errorf("localfs: a limit of %d descriptors leaves fewer than 2 to keep beyond the 2 each of %d workers holds", n, opt.Workers)
+		if err := o.p.boundDescriptors(int64(n), int64(max(opt.Workers, 1))); err != nil {
+			return nil, err
 		}
-		o.p.keep.limit = kept
 	}
 	prune, plan, err := f.PruneDirectories()
 	if err != nil {

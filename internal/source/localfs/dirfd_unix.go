@@ -40,7 +40,7 @@ type dirFD struct {
 	f      *os.File // the portable engine's handle on fd, which closes it
 	refs   atomic.Int32
 	fds    *keptFDs // the walk's counts; nil for the caller's directory
-	cost   int64    // the descriptors it holds (streamFDs)
+	cost   int64    // the descriptors it is counted as holding (dirCost)
 	pooled bool     // kept: counted in fds.open
 	from   *dirFD
 	below  int
@@ -86,10 +86,6 @@ func (d *dirFD) child() (*dirFD, int) {
 // maxKept caps the directory descriptors a walk keeps (keepLimit).
 const maxKept = 1024
 
-// maxRedescent is the most names a directory is opened below a kept one
-// while the limit's checkpoint share lasts (adopt).
-const maxRedescent = 8
-
 // keepLimit is how many directory descriptors a walk keeps (keptFDs): a
 // quarter of the process's soft descriptor limit, at most maxKept, so the
 // rest stays the output's (encoders, spill readers) and the process's.
@@ -112,8 +108,8 @@ func keepLimit() int64 {
 // relative to another, intermediates included, is checked against the
 // root's device.
 //
-// A directory it does not open is accounted for, told to Options.Unread,
-// and ok is false: a symbolic link in its place as unsafe_dirs, a
+// A directory it does not open is accounted for, reported unread, and ok
+// is false: a symbolic link in its place as unsafe_dirs, a
 // directory on another device as other_device_dirs (no error, as at a
 // mount point), any other failure as open_errors; each by reason in
 // dir_opens, and in long_paths when its path passes PATH_MAX. err is the
@@ -132,8 +128,10 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	} else {
 		if r.below > 1 && r.at != p.held {
 			st.DirOpens.Redescents++
-			st.DirOpens.RedescentNames += int64(r.below)
-			st.DirOpens.MaxRedescent = max(st.DirOpens.MaxRedescent, int64(r.below))
+			if p.opt.MaxDescriptors > 0 {
+				st.DirOpens.RedescentNames += int64(r.below)
+				st.DirOpens.MaxRedescent = max(st.DirOpens.MaxRedescent, int64(r.below))
+			}
 		}
 		fd, err = p.descend(ctx, r)
 	}
@@ -233,16 +231,14 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 }
 
 // adopt holds the directory fd opened for r, with the caller's reference:
-// the root always kept; another kept within the ordinary share of the
-// limit or, at maxRedescent names or more below r.at, as a checkpoint
-// within the whole limit, so that while the limit lasts no directory is
-// opened more than maxRedescent names below a kept one. One the limit
+// the root always kept; another kept within the limit less its reserve
+// or, at maxRedescent names or more below r.at, as a checkpoint within the
+// whole limit (Provider.boundDescriptors), so that while the reserve
+// lasts no directory is opened more than maxRedescent names below a kept
+// one. The command reserves none: it keeps no checkpoint. One the limit
 // refuses takes a reference on r.at for its subdirectories (child).
 func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
-	d := &dirFD{fd: fd, fds: &p.keep, cost: 1}
-	if !p.native {
-		d.cost = streamFDs
-	}
+	d := &dirFD{fd: fd, fds: &p.keep, cost: p.dirCost()}
 	d.refs.Store(1)
 	if r.at != p.held {
 		st.DirOpens.Opened++
@@ -252,7 +248,7 @@ func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
 		d.pooled = p.keep.take(keepRoot, d.cost)
 	case p.keep.take(keepOrdinary, d.cost):
 		d.pooled = true
-	case r.below >= maxRedescent && p.keep.take(keepCheckpoint, d.cost):
+	case p.keep.reserve > 0 && r.below >= maxRedescent && p.keep.take(keepCheckpoint, d.cost):
 		d.pooled = true
 		st.DirOpens.Checkpoints++
 	}
@@ -266,15 +262,25 @@ func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
 }
 
 // streamFDs is how many descriptors a directory the portable engine reads
-// holds (dirFD.cost): on macOS os.File.ReadDir reads through a directory
-// stream on a duplicate of the descriptor (fdopendir), open until the file
-// closes.
+// holds: on macOS os.File.ReadDir reads through a directory stream on a
+// duplicate of the descriptor (fdopendir), open until the file closes.
 var streamFDs = func() int64 {
 	if runtime.GOOS == "darwin" {
 		return 2
 	}
 	return 1
 }()
+
+// dirCost is the descriptors a directory the walk opens is counted as
+// holding (dirFD.cost): streamFDs for the portable engine when the walk
+// bounds every descriptor (Options.MaxDescriptors), else one, as the
+// command's limit on kept directories counts them.
+func (p *Provider) dirCost() int64 {
+	if !p.native && p.opt.MaxDescriptors > 0 {
+		return streamFDs
+	}
+	return 1
+}
 
 // openPortable opens r's directory for the portable engine (openRange),
 // with an os.File that reads its entries, counting the descriptor its

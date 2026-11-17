@@ -31,6 +31,9 @@ func (d *dirFD) child() (*dirFD, int) { return nil, 0 }
 // keepLimit: no directory descriptor is kept for a subdirectory here.
 func keepLimit() int64 { return 0 }
 
+// dirCost: a directory holds one descriptor here.
+func (p *Provider) dirCost() int64 { return 1 }
+
 // openPortable opens r's directory for the portable engine (openChecked).
 func (p *Provider) openPortable(_ context.Context, r Range, st *Stats) (*dirFD, bool, error) {
 	f, ok := p.openChecked(r, st)
