@@ -44,12 +44,12 @@ type Factory struct {
 	// Request.Options. diag adds the provider's diagnostic flags
 	// (comparison modes and policy toggles, for swath diag list only).
 	// shared holds the values of the groups the provider names (Shared),
-	// read with source.Shared.
-	Flags func(fs *pflag.FlagSet, diag bool, shared source.SharedValues) any
+	// read with Shared.
+	Flags func(fs *pflag.FlagSet, diag bool, shared SharedValues) any
 	// Shared are the flag groups the provider shares with others (the
 	// store's, the range engine's): the command registers each once and
 	// passes its value to every provider naming it.
-	Shared []*source.FlagGroup
+	Shared []*FlagGroup
 	// Operational are the provider's own flags a resume may change: how
 	// requests are authenticated, which no identity holds. Secrets are
 	// operational without being listed here.
@@ -142,7 +142,7 @@ func SchemaInfo(id string) (schema.Info, bool) {
 // options value. The command instead registers each group once for every
 // provider (Groups).
 func (f Factory) RegisterFlags(fs *pflag.FlagSet, diag bool) any {
-	shared := source.SharedValues{}
+	shared := SharedValues{}
 	for _, g := range f.Shared {
 		shared[g] = g.Flags(fs, diag)
 	}
@@ -152,8 +152,8 @@ func (f Factory) RegisterFlags(fs *pflag.FlagSet, diag bool) any {
 // Groups returns the flag groups the registered factories share, each
 // once (by identity), in the order the factories (by scheme) first name
 // them.
-func Groups() []*source.FlagGroup {
-	var out []*source.FlagGroup
+func Groups() []*FlagGroup {
+	var out []*FlagGroup
 	for _, f := range Factories() {
 		for _, g := range f.Shared {
 			if !slices.Contains(out, g) {
@@ -404,7 +404,7 @@ func Register(f Factory) {
 // from a credential in, when it has a query or a fragment or does not parse.
 func Redact(root string) string { return RedactPlace(Canonical(root)) }
 
-// RedactPlace is a URL-valued flag's value (source.ShownURL) as it may be
+// RedactPlace is a URL-valued flag's value (cli.ShownURL) as it may be
 // shown or recorded: redacted as Redact redacts a root, in the form given.
 func RedactPlace(root string) string {
 	if rootCredentials(root) {
@@ -446,10 +446,10 @@ func rootCredentials(root string) bool {
 
 // RedactArgv copies a canonical command line (each flag --name=value or
 // --name, then the operands) for reports and journals: registered secret
-// flags, credential-bearing URL flags (source.FlagGroup.URLs) and
+// flags, credential-bearing URL flags (FlagGroup.URLs) and
 // credentials in the operands (source roots) are redacted; any other
 // flag's value is data (a filter), kept as given. The command redacts by
-// each flag's table entry (source.Flag.Shown) as it records the line;
+// each flag's table entry (cli.Flag.Shown) as it records the line;
 // this is the second pass of a caller that hands one on.
 func RedactArgv(argv []string) []string {
 	secrets, urls := map[string]bool{}, map[string]bool{}
@@ -499,7 +499,7 @@ func RedactArgv(argv []string) []string {
 
 // OutputURLFlags are the output's flags whose value is a URL that may
 // carry a credential (a destination's endpoint, a dataset URI): RedactArgv
-// hides each as it hides a provider's (source.FlagGroup.URLs), whichever
+// hides each as it hides a provider's (FlagGroup.URLs), whichever
 // caller records the command line.
 var OutputURLFlags = []string{"output", "output-endpoint-url"}
 

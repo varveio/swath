@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -27,7 +28,7 @@ func init() {
 	registry.Register(registry.Factory{
 		EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionsSchema.Info}, Classify: objhttp.Label,
 		Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix, Suggest: suggest,
-		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Flags: flags, Shared: []*registry.FlagGroup{cli.StoreGroup, cli.EngineGroup}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "s3-bearer-token-command"}},
 		Operational: []string{"s3-profile", "s3-bearer-token-refresh-interval"},
 		Title:       "S3", Example: "s3://bucket/logs/", Usage: "s3://bucket[/prefix]"})
@@ -84,7 +85,7 @@ type flagged struct {
 // tracked is a switch's value that sets *p to whether the value given is
 // on, and records in *set that it was given.
 func tracked(p *bool, on bool, set *bool) pflag.Value {
-	return source.Func(func(s string) error {
+	return cli.Func(func(s string) error {
 		v, err := strconv.ParseBool(s)
 		if err != nil {
 			return errors.New("want true or false")
@@ -98,21 +99,21 @@ func defaults() any { return &flagged{} }
 
 // flags registers the S3 flag group beside the shared groups' values; the
 // returned value is filled when the flag set is parsed.
-func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
-	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	source.Define(f, source.Flag{Name: "s3-region", Familiar: []string{"region"}, Value: source.Text(&o.Region), Metavar: "NAME", Usage: "the bucket's region",
+func flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
+	o := &flagged{store: registry.Shared[source.Store](shared, cli.StoreGroup), common: registry.Shared[keyrange.Common](shared, cli.EngineGroup)}
+	cli.Define(f, cli.Flag{Name: "s3-region", Familiar: []string{"region"}, Value: cli.Text(&o.Region), Metavar: "NAME", Usage: "the bucket's region",
 		Long: "Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else us-east-1."})
-	source.Define(f, source.Flag{Name: "s3-profile", Familiar: []string{"profile"}, Value: source.Text(&o.Profile), Metavar: "NAME", Usage: "the shared config profile to take credentials and region from",
+	cli.Define(f, cli.Flag{Name: "s3-profile", Familiar: []string{"profile"}, Value: cli.Text(&o.Profile), Metavar: "NAME", Usage: "the shared config profile to take credentials and region from",
 		Long: "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS)."})
-	source.Define(f, source.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: source.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
-	source.Define(f, source.Flag{Name: "s3-path-style", Familiar: []string{"path-style", "force-path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
-	source.Define(f, source.Flag{Name: "no-s3-path-style", Familiar: []string{"no-force-path-style"}, Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
-	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Shown: source.ShownNever, Familiar: []string{"bearer-token-command"}, Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
+	cli.Define(f, cli.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: cli.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
+	cli.Define(f, cli.Flag{Name: "s3-path-style", Familiar: []string{"path-style", "force-path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
+	cli.Define(f, cli.Flag{Name: "no-s3-path-style", Familiar: []string{"no-force-path-style"}, Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
+	cli.Define(f, cli.Flag{Name: "s3-bearer-token-command", Shown: cli.ShownNever, Familiar: []string{"bearer-token-command"}, Value: cli.Text(&o.BearerCommand), Metavar: "COMMAND",
 		Usage: "a shell command printing a bearer token, sent instead of SigV4",
 		Long:  "For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again."})
-	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Familiar: []string{"bearer-token-refresh-interval"}, Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
+	cli.Define(f, cli.Flag{Name: "s3-bearer-token-refresh-interval", Familiar: []string{"bearer-token-refresh-interval"}, Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
 		Usage: "run --s3-bearer-token-command again after this long",
-		Value: source.Func(func(v string) error {
+		Value: cli.Func(func(v string) error {
 			d, err := source.ParseDuration(v)
 			if err != nil || d <= 0 {
 				return fmt.Errorf("want a positive duration such as 90s, 1h30m")
@@ -120,11 +121,11 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 			o.BearerRefresh, o.refreshSet = d, true
 			return nil
 		})})
-	source.Define(f, source.Flag{Name: "s3-fips", Familiar: []string{"fips"}, Value: tracked(&o.FIPS, true, &o.fipsSet), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)",
+	cli.Define(f, cli.Flag{Name: "s3-fips", Familiar: []string{"fips"}, Value: tracked(&o.FIPS, true, &o.fipsSet), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)",
 		Long: "Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
-	source.Define(f, source.Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
+	cli.Define(f, cli.Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
 		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
-	source.Define(f, source.Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: source.Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
+	cli.Define(f, cli.Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: cli.Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
 	return o
 }
 

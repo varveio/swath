@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
@@ -73,30 +74,30 @@ var termFlags = []string{"progress", "no-progress", "progress-interval", "stats"
 var globalFlags = []string{"verbose", "quiet", "color", "log-format"}
 
 func (t *termOptions) register(f *pflag.FlagSet) {
-	g := source.GroupReporting
-	source.Define(f, source.Flag{Name: "verbose", Short: "v", Value: source.Counter(&t.verbose), Group: g,
+	g := cli.GroupReporting
+	cli.Define(f, cli.Flag{Name: "verbose", Short: "v", Value: cli.Counter(&t.verbose), Group: g,
 		Usage: "a start line, progress records; -vv, -vvv: the request log",
 		Long:  "-vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted)."})
-	source.Define(f, source.Flag{Name: "quiet", Short: "q", Value: source.Counter(&t.quiet), Group: g,
+	cli.Define(f, cli.Flag{Name: "quiet", Short: "q", Value: cli.Counter(&t.quiet), Group: g,
 		Usage: "no warnings, no automatic progress or closing lines (-qq: no errors)",
 		Long:  "With -qq the exit code and the reports stand alone."})
-	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
+	cli.Define(f, cli.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
 		Usage: "show progress on stderr (default: a terminal that rows do not share)",
 		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal, where swath list refuses it; swath du's table comes after the line is erased."})
-	source.Define(f, source.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
-	source.Define(f, source.Flag{Name: "progress-interval", Value: source.Duration(&t.interval), Metavar: "DURATION", Group: g,
+	cli.Define(f, cli.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
+	cli.Define(f, cli.Flag{Name: "progress-interval", Value: cli.Duration(&t.interval), Metavar: "DURATION", Group: g,
 		Usage: "how often progress is printed (at least 1s); implies --progress",
 		Long:  "Default 1s while the line redraws on a terminal, 30s for appended records."})
-	source.Define(f, source.Flag{Name: "stats", Value: triFlag{&t.stats, false}, Group: g,
+	cli.Define(f, cli.Flag{Name: "stats", Value: triFlag{&t.stats, false}, Group: g,
 		Usage: "print the closing lines on stderr, with the run's statistics",
 		Long:  "The closing lines (the verdict, the count, the time, where the output went, what to run next) print by default for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe. --stats prints them always, followed by the requests, in flight, throttles, retries, the estimate and the peak RSS."})
-	source.Define(f, source.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no closing lines on stderr"})
+	cli.Define(f, cli.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no closing lines on stderr"})
 	t.color = "auto"
-	source.Define(f, source.Flag{Name: "color", Value: source.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
+	cli.Define(f, cli.Flag{Name: "color", Value: cli.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
 		Usage: "color progress, closing lines, the help and du's view",
 		Long:  "auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it."})
 	t.logFormat = logText
-	source.Define(f, source.Flag{Name: "log-format", Value: source.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
+	cli.Define(f, cli.Flag{Name: "log-format", Value: cli.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
 		Usage: "stderr as text, or json: one JSON object per line",
 		Long:  "json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines."})
 }

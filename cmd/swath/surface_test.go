@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/listing"
-	"github.com/varveio/swath/internal/source"
 )
 
 // localSource is a directory with two files.
@@ -94,7 +94,7 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 // takes reports whether the list command cmd takes flag name (its table
 // entry's Commands).
 func takes(name, cmd string) bool {
-	cmds := source.Described(newFlags(&options{}, true).Lookup(name)).Commands
+	cmds := cli.Described(newFlags(&options{}, true).Lookup(name)).Commands
 	return cmds == nil || slices.Contains(cmds, cmd)
 }
 

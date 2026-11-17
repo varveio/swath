@@ -29,6 +29,7 @@ import (
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/filter"
@@ -320,7 +321,7 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	var t termOptions
 	t.register(g)
 	var version bool
-	source.Define(g, source.Flag{Name: "version", Short: "V", Value: source.Switch(&version)})
+	cli.Define(g, cli.Flag{Name: "version", Short: "V", Value: cli.Switch(&version)})
 	p, err := parseFlags(g, "", args, func(fl *pflag.Flag) error {
 		if fl.Name != "version" && !slices.Contains(globalFlags, fl.Name) {
 			return usageError{fmt.Errorf("--%s goes after the command (swath list ... --%s)", fl.Name, fl.Name)}
@@ -578,14 +579,14 @@ func figuresLine(total *totals.Prefix, primary string) string {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", source.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", cli.TraceFlag, "max-duration", "stall-timeout", "spill-wait-timeout", "seed-from",
 	"output-gcs-credentials-file", "output-s3-profile", "output-azure-sas-token"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile. They are the shared
-// flag groups' and the providers' (source.FlagGroup.Operational,
+// flag groups' and the providers' (registry.FlagGroup.Operational,
 // registry.Factory.Operational), secrets included.
 var operationalFlags = providerOperational()
 
@@ -830,8 +831,8 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
 	}
-	if fl := f.Lookup(source.TraceFlag); fl != nil {
-		o.trace = fl.Value.String() // the range engine's flag group's (keyrange.Flags)
+	if fl := f.Lookup(cli.TraceFlag); fl != nil {
+		o.trace = fl.Value.String() // the range engine's flag group's (cli.EngineGroup)
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}

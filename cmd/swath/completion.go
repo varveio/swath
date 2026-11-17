@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source"
 )
 
 // completionShells are the shells swath completion writes a script for.
@@ -84,7 +84,7 @@ func (c compContext) valued() []compFlag {
 // compFlagOf is fl as completion offers it, by its metavar: a|b|c is an
 // enum, PATH and FILE name files, DIR a directory, none a switch.
 func compFlagOf(fl *pflag.Flag) compFlag {
-	d := source.Described(fl)
+	d := cli.Described(fl)
 	c := compFlag{long: fl.Name, short: fl.Shorthand, usage: fl.Usage, metavar: d.Metavar, kind: kindValue}
 	switch {
 	case d.Metavar == "":

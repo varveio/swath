@@ -91,7 +91,7 @@ func providerSpellings(command []string) spellings {
 }
 
 // commandFlags are the flag names the files register: the Name of each
-// flag table entry (source.Flag{Name: "name", ...}) when it is a string
+// flag table entry (cli.Flag{Name: "name", ...}) when it is a string
 // literal.
 func commandFlags(files []*ast.File) []string {
 	var names []string

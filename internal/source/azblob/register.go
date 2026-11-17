@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -23,7 +24,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionSchema.Info}, Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
-		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
+		Flags: flags, Shared: []*registry.FlagGroup{cli.StoreGroup, cli.EngineGroup}, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azure-sas-token", Env: EnvSAS}},
 		FromURL: fromURL, Title: "Azure Blob", Example: "az://account/container", Usage: "az://account/container[/prefix] (or https://account.blob.core.windows.net/container[/prefix])"})
 }
@@ -41,16 +42,16 @@ func defaults() any { return &flagged{} }
 
 // flags registers the Azure flag group beside the shared groups' values.
 // The flags are prefixed: one flag set serves every provider.
-func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
-	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	source.Define(f, source.Flag{Name: "azure-sas-token", Shown: source.ShownNever, Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
+func flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
+	o := &flagged{store: registry.Shared[source.Store](shared, cli.StoreGroup), common: registry.Shared[keyrange.Common](shared, cli.EngineGroup)}
+	cli.Define(f, cli.Flag{Name: "azure-sas-token", Shown: cli.ShownNever, Familiar: []string{"azblob-sas"}, Value: cli.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
 		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
-	source.Define(f, source.Flag{Name: "azure-fetch-metadata", Value: source.Switch(&o.FetchMetadata), Usage: "fill the metadata column with each blob's user metadata",
+	cli.Define(f, cli.Flag{Name: "azure-fetch-metadata", Value: cli.Switch(&o.FetchMetadata), Usage: "fill the metadata column with each blob's user metadata",
 		Long: "A JSON object, keys sorted; {} for a blob without any, null for one encrypted with a customer-provided key. Up to 8 KiB a blob: it grows the responses, the memory a row holds and the dataset."})
-	source.Define(f, source.Flag{Name: "azure-fetch-tags", Value: source.Switch(&o.FetchTags), Usage: "fill the tags column with each blob's index tags",
+	cli.Define(f, cli.Flag{Name: "azure-fetch-tags", Value: cli.Switch(&o.FetchTags), Usage: "fill the tags column with each blob's index tags",
 		Long: "A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included."})
-	source.Define(f, source.Flag{Name: "azure-fetch-immutability", Value: source.Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
-	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
+	cli.Define(f, cli.Flag{Name: "azure-fetch-immutability", Value: cli.Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
+	cli.Define(f, cli.Flag{Name: "azure-assume-flat", Value: cli.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
 		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
 	return o
 }

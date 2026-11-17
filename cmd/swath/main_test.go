@@ -23,11 +23,11 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/docs"
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
-	"github.com/varveio/swath/internal/source"
 )
 
 func TestRun(t *testing.T) {
@@ -324,7 +324,7 @@ func TestDocsCLIFlags(t *testing.T) {
 		}
 	})
 	var journal bool
-	diagnostic := func(fl *pflag.Flag) bool { return groupOf(fl) == source.GroupDiagnostics }
+	diagnostic := func(fl *pflag.Flag) bool { return groupOf(fl) == cli.GroupDiagnostics }
 	for _, b := range []struct {
 		path, marker string
 		list         optionList
@@ -366,7 +366,7 @@ func (l optionList) markdown() string {
 			b.WriteString("### " + g.title + "\n\n")
 		}
 		for _, fl := range g.flags {
-			d := source.Described(fl)
+			d := cli.Described(fl)
 			names, _ := flagNames(fl, helpStyle{})
 			id := "option-" + fl.Name
 			// A backslash ending a line is a hard line break.

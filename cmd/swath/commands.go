@@ -19,12 +19,12 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/reader"
 )
@@ -300,7 +300,7 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 
 // showFlags defines swath show's own flags on f, the ones its help lists.
 func showFlags(f *pflag.FlagSet, raw *bool) []*pflag.Flag {
-	source.Define(f, source.Flag{Name: "journal", Value: source.Switch(raw), Usage: "dump the journal's header and records as JSON lines (diagnostic: the journal's private format, which may change in any release)"})
+	cli.Define(f, cli.Flag{Name: "journal", Value: cli.Switch(raw), Usage: "dump the journal's header and records as JSON lines (diagnostic: the journal's private format, which may change in any release)"})
 	return []*pflag.Flag{f.Lookup("journal")}
 }
 

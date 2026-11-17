@@ -21,9 +21,9 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source"
 )
 
 // TestGNUParsing: short flags bundle and take attached values, long flags
@@ -464,13 +464,13 @@ func TestRecordedCommandCanonical(t *testing.T) {
 // (--name=, not --name, which would take the next argument), one that
 // starts with a dash, one that holds '=', and one that looks like a URL
 // with credentials (s3://user@host/p?sig=x#f): a flag that does not name a
-// place or a secret (source.Flag.Shown) holds data, a filter, recorded
+// place or a secret (cli.Flag.Shown) holds data, a filter, recorded
 // as given, through the registry's second pass too, so a resume's filters
 // equal the run's.
 func TestRecordedCommandRoundTrip(t *testing.T) {
 	accepted := 0
 	newFlags(&options{}, true).VisitAll(func(fl *pflag.Flag) {
-		if fl.NoOptDefVal != "" || source.Described(fl).Shown != "" {
+		if fl.NoOptDefVal != "" || cli.Described(fl).Shown != "" {
 			return
 		}
 		for _, v := range []string{"", "-x", "a=b", "s3://user@host/p?sig=x#f", "a@b", "?x", "#x", "sig=x"} {
@@ -670,11 +670,11 @@ func TestShortHelp(t *testing.T) {
 		if !cmd.count && len(lines) >= 60 {
 			t.Errorf("%s -h: %d lines", cmd.name(), len(lines))
 		}
-		if !strings.HasSuffix(out, fmt.Sprintf(shortTail, cmd.name())) || strings.Contains(out, source.GroupPerformance+":") {
+		if !strings.HasSuffix(out, fmt.Sprintf(shortTail, cmd.name())) || strings.Contains(out, cli.GroupPerformance+":") {
 			t.Errorf("%s -h:\n%s", cmd.name(), out)
 		}
 		f.VisitAll(func(fl *pflag.Flag) {
-			if shown(fl, cmd) && slices.Contains(shortGroups, groupOf(fl)) && !strings.Contains(out, source.Described(fl).Usage) {
+			if shown(fl, cmd) && slices.Contains(shortGroups, groupOf(fl)) && !strings.Contains(out, cli.Described(fl).Usage) {
 				t.Errorf("%s -h: --%s's description wraps or is missing", cmd.name(), fl.Name)
 			}
 		})

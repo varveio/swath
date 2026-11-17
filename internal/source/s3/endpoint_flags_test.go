@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3/client"
@@ -88,7 +89,7 @@ func TestPathStyleFlag(t *testing.T) {
 		// Both spellings are switches: the help shows neither =true nor
 		// =false.
 		for _, n := range []string{"s3-path-style", "no-s3-path-style"} {
-			if fl := fs.Lookup(n); fl == nil || fl.NoOptDefVal != "true" || source.Described(fl).Metavar != "" {
+			if fl := fs.Lookup(n); fl == nil || fl.NoOptDefVal != "true" || cli.Described(fl).Metavar != "" {
 				t.Fatalf("--%s is not a switch", n)
 			}
 		}
