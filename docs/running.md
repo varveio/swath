@@ -16,11 +16,12 @@ swath list s3://bucket/prefix/ -o inventory --max-duration 6h
 - `-o inventory` writes a swath dataset, sorted Parquet parts and a `manifest.json` that commits them, to the
   directory `inventory`. It must be new or empty: a non-empty one is refused (exit 2) unless you give
   `--overwrite`, which replaces only a previous swath dataset. Put it on a disk with room for the dataset and for
-  the spill a sorted run writes there on its way ([disk sizing](size-a-run.md#disk-sizing)). When you list a
-  mounted filesystem, keep the directory outside the tree you list.
+  its spill, the temporary sorting data a sorted run writes there on its way
+  ([disk sizing](size-a-run.md#disk-sizing)). When you list a mounted filesystem, keep the directory outside the
+  tree you list.
 - `--max-duration 6h` stops the run if it is still going after six hours (exit 124); `swath resume` can
   continue it. There is no limit by default. Give one to every run you will not watch: it is the one stop for a
-  service that keeps answering without the listing ever ending.
+  service that keeps returning rows without the listing ever finishing.
 
 The workers (64 by default), memory and disk need no flag for a first run. For a bucket of hundreds of
 millions of objects, read [Size a run](size-a-run.md) first.
@@ -66,9 +67,17 @@ A run that stops early says why on its first closing line, and on the second wha
 | `stopped: --max-duration reached` | 124 | `swath resume inventory`, which keeps the recorded deadline; `swath resume inventory --max-duration 0` lifts it |
 | `partial: N unreadable entries` (a mounted filesystem) | 3 | the dataset is committed without the entries that could not be read; fix their permissions and list again ([coverage](results.md#coverage-and-unreadable-entries)) |
 
-A run that fails prints one `swath:` line with the cause instead, such as a bucket that does not exist or access
-that is denied (exit 1). [Troubleshooting](troubleshooting.md) has each message and its fix, and
-[Exit codes](reference/exit-codes.md) every code, the stuck run (75) and the full disk (74) among them.
+A run that fails before listing starts, on a bucket that does not exist or access that is denied, prints one
+`swath:` line with the cause (exit 1). A run that fails later prints a `failed:` closing line first, then the
+`swath:` line; here the output directory's `data/` could not be written:
+
+```text
+  failed: 5,252 objects, 383 GiB in 6.0s · 869 keys/s
+swath: encode: publish part 0: renameat .swath/parts/part-00000.parquet.claimed data/part-00000.parquet: permission denied
+```
+
+[Troubleshooting](troubleshooting.md) has each message and its fix, and [Exit codes](reference/exit-codes.md)
+every code, the stuck run (75) and the full disk (74) among them.
 
 <a id="limits-and-the-outcome-of-record"></a>For a script, the exit code and a file in the directory are the
 outcome: `inventory/run.json` beside a committed dataset, else `inventory/error.json`, each with `class`,
