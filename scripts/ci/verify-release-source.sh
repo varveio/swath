@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Prove that a release job is testing the tag commit itself, that it belongs to main, and that the
-# root module at that commit is what an outside project gets: it requires the nested modules at
-# this release's tags, carries no replace, and those tags hold the same nested-module trees.
+# root module at that commit is what an outside project gets: it carries no replace, and each nested
+# module's tag that its go.mod requires holds that module's code at the commit. The nested modules
+# keep their own versions: a release tags one only when its code changed since its last tag.
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --self-test | tags <vX.Y.Z> | module-tags <vX.Y.Z>" >&2
-  echo "       $0 modules <commit> <ref-prefix> <vX.Y.Z>" >&2
+  echo "usage: $0 --self-test | required-tags <commit> | changed <commit> <ref-prefix>" >&2
+  echo "       $0 modules <commit> <ref-prefix>" >&2
   echo "       $0 <expected-sha> <main-ref> <ref-prefix> <vX.Y.Z>" >&2
   exit 2
 }
@@ -19,76 +20,84 @@ module_dirs() {
   done
 }
 
-# The nested modules' tags of one release: DIR/vX.Y.Z, the directory prefix Go requires of a
-# nested module's version.
-module_tags() {
-  local dir
+# The nested modules' tags that the go.mod at commit $1 requires, one per line: DIR/vX.Y.Z, the
+# directory prefix Go requires of a nested module's version.
+required_tags() {
+  local commit=$1 gomod dir path version
+  gomod=$(git show "$commit:go.mod") || return 1
   for dir in $(module_dirs); do
-    echo "$dir/$1"
+    path=$(git show "$commit:$dir/go.mod" | awk '$1 == "module" { print $2; exit }')
+    version=$(awk -v path="$path" '
+      $1 == "require" && $2 == "(" { block = 1; next }
+      block && $1 == ")" { block = 0; next }
+      block && $1 == path { print $2; exit }
+      $1 == "require" && $2 == path { print $3; exit }' <<<"$gomod")
+    [[ -n $version ]] || {
+      echo "go.mod at $commit does not require $path" >&2
+      return 1
+    }
+    echo "$dir/$version"
   done
 }
 
-# Every tag of one release: vX.Y.Z for the root module, then the nested modules' tags.
-tags() {
-  echo "$1"
-  module_tags "$1"
+# The tag $2 (under ref prefix $1) as a commit, or a message that it is missing.
+tag_commit() {
+  git rev-parse -q --verify "$1$2^{commit}" || {
+    echo "no tag $2" >&2
+    return 1
+  }
 }
 
-# Succeeds when the go.mod text on stdin requires module $1 at version $2.
-requires() {
-  awk -v path="$1" -v version="$2" '
-    $1 == "require" && $2 == "(" { block = 1; next }
-    block && $1 == ")" { block = 0; next }
-    block && $1 == path && $2 == version { found = 1 }
-    $1 == "require" && $2 == path && $3 == version { found = 1 }
-    END { exit !found }'
+# The nested modules whose directory at commit $1 differs from the tag its go.mod requires (under
+# ref prefix $2): the ones a release must tag first.
+changed() {
+  local commit=$1 prefix=$2 tags tag tagged
+  tags=$(required_tags "$commit") || return 1
+  for tag in $tags; do
+    tagged=$(tag_commit "$prefix" "$tag") || return 1
+    git diff --quiet "$tagged" "$commit" -- "${tag%/v*}" || echo "${tag%/v*}"
+  done
 }
 
 # The root module at commit $1 as an outside project resolves it: no replace directive (Go
 # ignores one outside the main module, and `go install module@version` refuses a module that has
-# one), and for each nested module DIR a requirement of its module path at version $3, where the
-# tag DIR/$3 (under ref prefix $2) is an ancestor of the commit with the same DIR tree.
+# one), and each nested tag go.mod requires (under ref prefix $2) is an ancestor of the commit with
+# the same directory tree.
 modules() {
-  local commit prefix=$2 version=$3 gomod dir tag_commit path
+  local commit prefix=$2 gomod tags tag tagged dir
   commit=$(git rev-parse --verify "$1^{commit}") || return 1
   gomod=$(git show "$commit:go.mod") || return 1
   if awk '$1 == "replace" { found = 1 } END { exit !found }' <<<"$gomod"; then
     echo "go.mod at $commit has a replace directive; a released root module carries none" >&2
     return 1
   fi
-  for dir in $(module_dirs); do
-    tag_commit=$(git rev-parse --verify "${prefix}${dir}/${version}^{commit}") || {
-      echo "no tag $dir/$version" >&2
+  tags=$(required_tags "$commit") || return 1
+  for tag in $tags; do
+    dir=${tag%/v*}
+    tagged=$(tag_commit "$prefix" "$tag") || return 1
+    git merge-base --is-ancestor "$tagged" "$commit" || {
+      echo "tag $tag ($tagged) is not an ancestor of $commit" >&2
       return 1
     }
-    git merge-base --is-ancestor "$tag_commit" "$commit" || {
-      echo "tag $dir/$version ($tag_commit) is not an ancestor of $commit" >&2
-      return 1
-    }
-    git diff --quiet "$tag_commit" "$commit" -- "$dir" || {
-      echo "$dir/ changed between its tag $dir/$version ($tag_commit) and $commit" >&2
-      return 1
-    }
-    path=$(git show "$commit:$dir/go.mod" | awk '$1 == "module" { print $2; exit }')
-    requires "$path" "$version" <<<"$gomod" || {
-      echo "go.mod at $commit does not require $path $version" >&2
+    git diff --quiet "$tagged" "$commit" -- "$dir" || {
+      echo "$dir/ changed between its tag $tag ($tagged) and $commit" >&2
       return 1
     }
   done
-  echo "release modules verified at $commit: $(module_tags "$version" | tr '\n' ' ')"
+  echo "release modules verified at $commit: $(tr '\n' ' ' <<<"$tags")"
 }
 
 verify() {
-  local expected=$1 main_ref=$2 prefix=$3 version=$4 head tag_commit
+  local expected=$1 main_ref=$2 prefix=$3 version=$4 head tagged
   head=$(git rev-parse --verify 'HEAD^{commit}')
   expected=$(git rev-parse --verify "${expected}^{commit}")
   [[ $head == "$expected" ]] || {
     echo "checkout HEAD $head does not equal event SHA $expected" >&2
     return 1
   }
-  tag_commit=$(git rev-parse --verify "${prefix}${version}^{commit}")
-  [[ $tag_commit == "$expected" ]] || {
-    echo "tag $version resolves to $tag_commit, not event SHA $expected" >&2
+  tagged=$(git rev-parse --verify "${prefix}${version}^{commit}")
+  [[ $tagged == "$expected" ]] || {
+    echo "tag $version resolves to $tagged, not event SHA $expected" >&2
     return 1
   }
   git rev-parse --verify "${main_ref}^{commit}" >/dev/null || return 1
@@ -97,7 +106,7 @@ verify() {
     return 1
   }
   # Every failure returns explicitly: the self-test runs this where errexit is off.
-  modules "$expected" "$prefix" "$version" || return 1
+  modules "$expected" "$prefix" || return 1
   echo "release source verified: $version -> $expected; ancestor of $main_ref"
 }
 
@@ -123,8 +132,19 @@ refuses() {
   }
 }
 
+# Fails the self-test unless command $2 run in scratch repository $1 prints $3 (lines joined by
+# spaces).
+prints() {
+  local got
+  got=$(cd "$1" && $2 | tr '\n' ' ')
+  [[ $got == "$3" ]] || {
+    echo "self-test failed: $2 printed '$got', want '$3'" >&2
+    exit 1
+  }
+}
+
 self_test() {
-  local scratch release got
+  local scratch release
   scratch=$(mktemp -d)
   SELF_TEST_SCRATCH=$scratch
   trap 'rm -rf -- "${SELF_TEST_SCRATCH:?}"' EXIT
@@ -136,41 +156,49 @@ self_test() {
   touch "$scratch/go.mod"
   git -C "$scratch" add go.mod lib/go.mod
   git -C "$scratch" commit -q -m base
-  got=$(cd "$scratch" && tags v1.2.3 | tr '\n' ' ')
-  [[ $got == "v1.2.3 lib/v1.2.3 " ]] || {
-    echo "self-test failed: release tags are '$got', want 'v1.2.3 lib/v1.2.3 '" >&2
-    exit 1
-  }
 
-  # The release order: the nested tag, the commit that points the root at it, the root tag.
+  # A release with a nested change: the nested tag, the commit that points the root at it, the
+  # root tag.
   git -C "$scratch" tag -a lib/v1.2.3 -m lib/v1.2.3
   commit_root "$scratch" v1.2.3
   release=$(git -C "$scratch" rev-parse HEAD)
   git -C "$scratch" tag -a v1.2.3 -m v1.2.3
+  prints "$scratch" "required_tags HEAD" "lib/v1.2.3 "
+  prints "$scratch" "changed HEAD refs/tags/" ""
   git -C "$scratch" commit -q --allow-empty -m snapshot
   git -C "$scratch" checkout -q --detach "$release"
   (cd "$scratch" && verify "$release" refs/heads/main refs/tags/ v1.2.3) >/dev/null
   refuses "$scratch" "does not equal event SHA" HEAD^ refs/heads/main refs/tags/ v1.2.3
 
+  # A release with no nested change: one root tag, its go.mod still requiring the earlier lib tag.
+  git -C "$scratch" checkout -q -b root-only "$release"
+  echo '// root changed' >> "$scratch/go.mod"
+  git -C "$scratch" commit -q -am "root changed"
+  git -C "$scratch" tag -a v1.3.0 -m v1.3.0
+  (cd "$scratch" && verify HEAD refs/heads/root-only refs/tags/ v1.3.0) >/dev/null
+
   # Each on a branch of its own, so that only the named defect can refuse it.
-  git -C "$scratch" checkout -q -b other-version "$release"
+  git -C "$scratch" checkout -q -b untagged "$release"
   commit_root "$scratch" v1.2.2
   git -C "$scratch" tag -a v1.2.4 -m v1.2.4
-  git -C "$scratch" tag -a lib/v1.2.4 -m lib/v1.2.4
-  refuses "$scratch" "does not require example.com/m/lib v1.2.4" HEAD refs/heads/other-version refs/tags/ v1.2.4
+  refuses "$scratch" "no tag lib/v1.2.2" HEAD refs/heads/untagged refs/tags/ v1.2.4
+
+  git -C "$scratch" checkout -q -b unrequired "$release"
+  printf 'module example.com/m\n' > "$scratch/go.mod"
+  git -C "$scratch" commit -q -am "lib not required"
+  git -C "$scratch" tag -a v1.2.7 -m v1.2.7
+  refuses "$scratch" "does not require example.com/m/lib" HEAD refs/heads/unrequired refs/tags/ v1.2.7
 
   git -C "$scratch" checkout -q -b replaced "$release"
-  commit_root "$scratch" v1.2.5 $'\nreplace example.com/m/lib => ./lib\n'
+  commit_root "$scratch" v1.2.3 $'\nreplace example.com/m/lib => ./lib\n'
   git -C "$scratch" tag -a v1.2.5 -m v1.2.5
-  git -C "$scratch" tag -a lib/v1.2.5 -m lib/v1.2.5 "$release"
   refuses "$scratch" "has a replace directive" HEAD refs/heads/replaced refs/tags/ v1.2.5
 
   git -C "$scratch" checkout -q -b changed "$release"
   echo '// changed' >> "$scratch/lib/go.mod"
   git -C "$scratch" commit -q -am "lib changed"
-  commit_root "$scratch" v1.2.6
-  git -C "$scratch" tag -a lib/v1.2.6 -m lib/v1.2.6 "$release"
   git -C "$scratch" tag -a v1.2.6 -m v1.2.6
+  prints "$scratch" "changed HEAD refs/tags/" "lib "
   refuses "$scratch" "lib/ changed between its tag" HEAD refs/heads/changed refs/tags/ v1.2.6
 
   git -C "$scratch" branch unrelated "$release^"
@@ -186,17 +214,17 @@ case ${1:-} in
     [[ $# -eq 1 ]] || usage
     self_test
     ;;
-  tags)
+  required-tags)
     [[ $# -eq 2 ]] || usage
-    tags "$2"
+    required_tags "$2"
     ;;
-  module-tags)
-    [[ $# -eq 2 ]] || usage
-    module_tags "$2"
+  changed)
+    [[ $# -eq 3 ]] || usage
+    changed "$2" "$3"
     ;;
   modules)
-    [[ $# -eq 4 ]] || usage
-    modules "$2" "$3" "$4"
+    [[ $# -eq 3 ]] || usage
+    modules "$2" "$3"
     ;;
   *)
     [[ $# -eq 4 ]] || usage

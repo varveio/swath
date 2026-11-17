@@ -44,17 +44,15 @@ jobs:
           ./scripts/ci/verify-release-notes.sh --self-test
 
       # Ancestor, rather than equality with origin/main: `just release` tags a commit already
-      # on main, and main may have moved on by the time the tag is pushed. A release tags every
-      # module in dependency order: DIR/vX.Y.Z for each nested module (reader, objfile) at a main
-      # commit (`just release-modules`), then vX.Y.Z for this one at the merged pull request
-      # that points go.mod at them (`just release-prep`, then `just release`). The tag commit's
-      # go.mod must require exactly those versions and carry no replace, and each nested tag must
-      # be its ancestor with the same DIR/ tree (verify-release-source.sh). The tags are fetched
-      # from origin here, not taken from the event, so a rerun after pushing a missing tag sees it.
+      # on main, and main may have moved on by the time the tag is pushed. The tag commit's go.mod
+      # must carry no replace, and each nested-module tag it requires (DIR/vX.Y.Z, pushed before
+      # it by `just release-modules` when that module changed) must be its ancestor with the same
+      # DIR/ tree (verify-release-source.sh). The tags are fetched from origin here, not taken
+      # from the event, so a rerun after pushing a missing tag sees it.
       - name: Verify the module tags, go.mod's requirements and origin/main ancestry
         run: |
           set -euo pipefail
-          tags=$(./scripts/ci/verify-release-source.sh tags "$GITHUB_REF_NAME")
+          tags="$GITHUB_REF_NAME $(./scripts/ci/verify-release-source.sh required-tags "$GITHUB_SHA")"
           tags=${tags//$'\n'/ }
           refspecs=(+refs/heads/main:refs/remotes/origin/main)
           for tag in $tags; do
@@ -66,7 +64,7 @@ jobs:
           }
           ./scripts/ci/verify-release-source.sh "$GITHUB_SHA" refs/remotes/origin/main \
             refs/remotes/release/ "$GITHUB_REF_NAME" || {
-            echo "::error::$GITHUB_REF_NAME must name $GITHUB_SHA, whose go.mod requires the nested modules at their tags among $tags"
+            echo "::error::$GITHUB_REF_NAME must name $GITHUB_SHA, whose go.mod requires the nested modules at tags with the same code: $tags"
             exit 1
           }
 
