@@ -39,6 +39,8 @@ compatible path list. Names, sizes and times alone do not validate a backup.
 The `-o` name chooses the format and the compression: `NAME.tsv` or `NAME.jsonl`, optionally followed by
 `.gz` or `.zst`, in any case. A name with anything else after its `.tsv` or `.jsonl` (`rows.jsonl.zstd`,
 `rows.tsv.lz4`) is refused, never taken for a dataset directory; end it with `/` for a directory of that name.
+The part options (`--part-size`, `--part-interval`, `--part-max-rows`) shape a dataset and are refused with
+text rows (exit 2).
 Without `-o`, or with `-o -`, the rows go to stdout as `--format` says: `auto` (the default)
 is the table on a terminal and TSV otherwise, or `table`, `tsv`, `jsonl`. Compress stdout with a pipe
 (`| zstd`). The file's directory must exist; the file is written beside its name and renamed into place when

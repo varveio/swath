@@ -10,7 +10,7 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 | 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](results.md#coverage-and-unreadable-entries) says which |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
-| 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
+| 124, 129, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
 
 <!-- The first lines of the messages quoted under Unknown flag, The output directory is refused and
 -o names a format are checked against the binary, with their exit code 2, by TestDocsTroubleshootingMessages
@@ -159,7 +159,7 @@ Write `.tsv` and convert it, or read the TSV directly ([Output](output.md#readin
 
 ## The run was interrupted
 
-A dataset run of an object store stopped by a signal (130, 143), `--max-duration` (124), `--stall-timeout`
+A dataset run of an object store stopped by a signal (129, 130, 143), `--max-duration` (124), `--stall-timeout`
 (75), a full disk or `--spill-wait-timeout` (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
 A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
@@ -320,7 +320,7 @@ its row, a file removed during the walk is no longer part of the tree, and an en
 rules leave out by its name is not selected: none of them counts. A directory removed after the walk found it
 and before it read it does count, so the run reports incomplete and exits 3. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
-`coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
+`coverage.unreadable` hold the count; `diagnostics.source.stats` in the report breaks the errors down.
 
 ## Known limits
 
@@ -332,7 +332,9 @@ The limits of this build, and what has not been measured:
   matrices included, runs there in CI; performance is not measured there.
 - **Windows power loss:** a power loss keeps the latest part names on local NTFS only; on another filesystem
   (ReFS, an SMB share) a crash or kill is still recovered, but a power loss may lose the latest part names.
-- **macOS:** the test suite runs there in CI; performance is not measured there. APFS refuses names that are not
+- **macOS:** the test suite runs there in CI. Performance has one recorded observation, a local tree on a
+  Mac ([measurements](internals/measurements.md#spill-read-handles-on-local-trees-2026-11-11)), and no
+  systematic benchmark. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.

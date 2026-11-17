@@ -34,8 +34,9 @@ and reporting options that `swath resume --help` lists may be given again, the l
 first attempt unless given again. Pass a fresh `--report` path each time.
 
 The resume keeps every published part, verifies each against its journal record (size and SHA-256), which reads
-every retained part in full once: budget for it on a very large dataset, where 10,000 parts of 64 MiB took
-roughly 30-45 minutes on a 4-vCPU VM ([measurements](internals/measurements.md#recovery-and-part-count));
+every retained part in full once: budget for it on a very large dataset. From the read rates measured on a
+4-vCPU VM ([measurements](internals/measurements.md#recovery-and-part-count)), 10,000 parts of 64 MiB take
+roughly 30-45 minutes, an estimate;
 progress shows as `verified_bytes`. It then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
 a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,

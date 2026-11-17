@@ -89,9 +89,9 @@ only spill and the run's metadata in `DIR` ([writing to a bucket](../production.
 
 - Hierarchical namespaces (Data Lake Storage Gen2) are not supported.
 - Azure lists names in UTF-16 order; swath reorders them into byte order, as every other source's.
-- An `--include` does not reduce what is listed: swath lists the whole source URL and filters the rows (the
-  report's `invocation.narrowing` is `provider_lists_root`). Put the prefix in the URL instead,
-  `az://acct/ctr/logs/2026/` rather than `--include 'logs/2026/**'` on `az://acct/ctr/`.
+- An `--include` does not reduce what is listed: swath lists the whole source URL and filters the rows. Put
+  the prefix in the URL instead, `az://acct/ctr/logs/2026/` rather than `--include 'logs/2026/**'` on
+  `az://acct/ctr/` (whose report says `invocation.narrowing` `provider_lists_root`).
 - The report has no cost estimate for an Azure listing.
 - `--seed-from` fails the run on a seed whose key pages end at a blob name longer than 1,024 bytes; list
   without it ([known limits](../troubleshooting.md#known-limits)).
