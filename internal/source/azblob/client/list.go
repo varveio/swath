@@ -49,9 +49,10 @@ package client
 //     TestArrowColumnTypes). Other columns may have any type: swath does
 //     not read them, so a change there does not fail a listing.
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
-//     (TestRedactedRefusal). The SDK's own log, which quotes failed
-//     requests' URLs, is not swath's: the command turns it off at startup
-//     (package command), whatever AZURE_SDK_GO_LOGGING says.
+//     (TestRedactedRefusal) and out of an error answer's body before the
+//     SDK's own log can quote it (scrubbed, TestSDKLogScrubbed). The
+//     command also turns that log off at startup (package command),
+//     whatever AZURE_SDK_GO_LOGGING says.
 //   - merge: the SDK returns a hierarchy page's blobs and prefixes as two
 //     arrays; the provider's byte-order adapter needs them as one sequence
 //     in wire (UTF-16 code-unit) order. Both arrays are in that order and
@@ -93,7 +94,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -128,7 +128,7 @@ func (c *Client) services(bodyCap int64) error {
 		opt := &service.ClientOptions{ClientOptions: azcore.ClientOptions{
 			Transport:       &h,
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
-			PerCallPolicies: []policy.Policy{pin{}},
+			PerCallPolicies: []policy.Policy{pin{}, scrubbed{c}},
 			Telemetry:       policy.TelemetryOptions{ApplicationID: buildinfo.UserAgent()}, // swath's token, then the SDK's
 		}}
 		var svc *service.Client
@@ -324,7 +324,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 		}
 		actx = policy.WithHTTPHeader(actx, http.Header{headerAuthorization: {"Bearer " + tok.AccessToken}})
 	}
-	return objhttp.WithCapture(actx, &s.Capture), cancel, nil
+	return context.WithValue(objhttp.WithCapture(actx, &s.Capture), sentKey{}, s), cancel, nil
 }
 
 // failure is the error of an attempt that got no page: the service's answer
@@ -335,8 +335,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error, container string) error {
 	u := s.safeURL(c, container)
 	if re, ok := errors.AsType[*azcore.ResponseError](err); ok && re.RawResponse != nil {
-		body, _ := runtime.Payload(re.RawResponse)
-		return c.responseError(re.RawResponse, re.ErrorCode, body, u)
+		return c.responseError(re.RawResponse, re.ErrorCode, s.answer, u)
 	}
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)
@@ -616,7 +615,10 @@ func xmlEnvelope(body []byte) error {
 // whether a 200 passed the Guard to the SDK.
 type sent struct {
 	objhttp.Capture
+	answer []byte // an error answer's body as received, kept by scrubbed
 }
+
+type sentKey struct{}
 
 // refused reports err as the SDK's refusal of a 200 the Guard passed (its
 // decoder's or a header's), not a failure to get one: a 200 reached it and
@@ -653,4 +655,26 @@ type pin struct{}
 func (pin) Do(req *policy.Request) (*http.Response, error) {
 	req.Raw().Header["x-ms-version"] = []string{Version}
 	return req.Next()
+}
+
+// scrubbed is the per-call policy that scrubs the SAS out of an answer the
+// SDK makes an error of (any but a 200) before the SDK reads it: azcore
+// writes that error, its body quoted, to the log AZURE_SDK_GO_LOGGING
+// turns on. The body as received goes to the attempt's sent, for
+// responseError, which scrubs what it decodes. The Guard below has the
+// body in memory, bounded.
+type scrubbed struct{ c *Client }
+
+func (p scrubbed) Do(req *policy.Request) (*http.Response, error) {
+	resp, err := req.Next()
+	if err != nil || resp.StatusCode == http.StatusOK {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if s, ok := req.Raw().Context().Value(sentKey{}).(*sent); ok {
+		s.answer = body
+	}
+	resp.Body = io.NopCloser(strings.NewReader(p.c.scrub(string(body))))
+	return resp, err
 }

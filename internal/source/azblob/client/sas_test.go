@@ -123,8 +123,13 @@ func TestSASRedacted(t *testing.T) {
 		case "json-code":
 			// No x-ms-error-code: azcore reads JSON too. Values differ from
 			// the configured SAS, so each parameter must be scrubbed by name.
+			// The '&'s go unescaped: the SDK reads the scrubbed body, and
+			// an escaped '&' (\u0026) ends no value, so all from sig= on
+			// would read as one.
 			w.WriteHeader(403)
-			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "sig=UnexpectedSecret&se=other-expiry&sp=other-permissions&ss=other-service&srt=other-resource&sv=other-version"}})
+			enc := json.NewEncoder(w)
+			enc.SetEscapeHTML(false)
+			enc.Encode(map[string]any{"error": map[string]string{"code": "sig=UnexpectedSecret&se=other-expiry&sp=other-permissions&ss=other-service&srt=other-resource&sv=other-version"}})
 		case "long-code":
 			w.Header().Set(headerErrorCode, strings.Repeat("x", maxErrorBody+1))
 			w.WriteHeader(403)
