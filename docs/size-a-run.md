@@ -43,7 +43,7 @@ these pages (give your own bucket's prefix and credentials instead):
 
 ```bash
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -o sample --anonymous --s3-region us-east-1 \
-  --report sample.json --stats
+  --report sample.json
 jq '{peak_rss_bytes: .process.peak_rss_bytes,
      bytes_per_row: (.output.output_bytes / .output.rows_committed),
      spill_peak_bytes: .diagnostics.resources.spill.peak_bytes}' sample.json
@@ -52,11 +52,8 @@ jq '{peak_rss_bytes: .process.peak_rss_bytes,
 ```text
   complete: 5,252 objects, 383 GiB in 1.0s → sample (1 part, 121 KiB)
   next: swath show sample · swath du --from-dataset sample
-  32 API calls · in flight avg 3.07 · peak 11
-  <$0.001 (est. @ $0.005/1k LIST)
-  peak RSS 61.7 MiB
 {
-  "peak_rss_bytes": 64708608,
+  "peak_rss_bytes": 64380928,
   "bytes_per_row": 23.62966488956588,
   "spill_peak_bytes": 0
 }
