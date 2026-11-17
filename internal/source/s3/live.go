@@ -22,16 +22,20 @@ import (
 // maxListKeys is the most keys one ListObjectsV2 answer holds.
 const maxListKeys = 1000
 
-// Live is a bucket opened for one-level listings and lookups (OpenLive):
-// the built client, with its credentials and admission, and no range
-// engine. It is a live.Store, safe for concurrent use.
+// Live is a bucket opened for one-level listings, lookups and walks
+// (OpenLive): the built client, with its credentials and admission, and
+// no range engine, which each walk builds for itself (Walk). It is a
+// live.Store and a live.Walker, safe for concurrent use.
 type Live struct {
 	bucket   string
 	client   *client.Client
 	location string
 }
 
-var _ live.Store = (*Live)(nil)
+var (
+	_ live.Store  = (*Live)(nil)
+	_ live.Walker = (*Live)(nil)
+)
 
 // OpenLive builds opt.Bucket's client as New does, which may load
 // credentials, and lists nothing. It does not use opt.Prefix, the range
@@ -111,7 +115,7 @@ func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, er
 	case ctx.Err() != nil:
 		return listing.LookupResult{}, ctx.Err()
 	case !notFound(err):
-		return unknown(objhttp.Classed(err)), nil
+		return unknown(classed(err)), nil
 	}
 
 	err = l.client.HeadBucket(ctx, l.bucket)
@@ -123,7 +127,7 @@ func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, er
 	case notFound(err):
 		return unknown(fmt.Errorf("%w: bucket %q: %w", listing.ErrNotFound, l.bucket, err)), nil
 	}
-	return unknown(objhttp.Classed(err)), nil
+	return unknown(classed(err)), nil
 }
 
 // headed is the entry a HeadObject answer describes. S3 names the storage
@@ -152,8 +156,34 @@ func failure(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return objhttp.Classed(err)
+	return classed(err)
 }
+
+// classed is err in its class (objhttp.Classed), told as a library caller
+// reads it (library).
+func classed(err error) error {
+	return objhttp.Classed(library(err))
+}
+
+// library is err with the message a library caller reads: a wrong-region
+// answer names the bucket's region but not the command's flag, which a
+// library caller does not have (it sets s3.Options.Region). The answer
+// stays in the chain, for errors.As and the classes.
+func library(err error) error {
+	var e *client.Error
+	if !errors.As(err, &e) || e.Region == "" {
+		return err
+	}
+	return libraryError{err: err, msg: strings.Replace(err.Error(), e.Error(), e.Library(), 1)}
+}
+
+type libraryError struct {
+	err error
+	msg string
+}
+
+func (e libraryError) Error() string { return e.msg }
+func (e libraryError) Unwrap() error { return e.err }
 
 // Close closes the client's idle connections (live.Store).
 func (l *Live) Close() error {
