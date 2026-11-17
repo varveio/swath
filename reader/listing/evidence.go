@@ -30,12 +30,6 @@ const (
 	StopEntryBudget StopReason = "entry_budget"
 	// StopTimeBudget: the call reached its MaxDuration.
 	StopTimeBudget StopReason = "time_budget"
-	// StopHeldBudget: the call reached Budget.MaxHeldBytes.
-	StopHeldBudget StopReason = "held_budget"
-	// StopScanBudget: a page reached PageRequest.MaxScanned.
-	StopScanBudget StopReason = "scan_budget"
-	// StopValueBudget: an inventory's call reached Budget.MaxValueBytes.
-	StopValueBudget StopReason = "value_budget"
 )
 
 // Evidence says where an answer came from and what it can prove. The zero
@@ -130,8 +124,7 @@ const (
 	// walk could not reconcile.
 	UnreadUnstable UnreadClass = "unstable"
 	// UnreadBudget: a bound of the request ended the reading of the
-	// extent: the call stopped, and Evidence.Stop names the bound, or a
-	// directory was too wide for Budget.MaxHeldBytes.
+	// extent: the call stopped, and Evidence.Stop names the bound.
 	UnreadBudget UnreadClass = "budget"
 )
 

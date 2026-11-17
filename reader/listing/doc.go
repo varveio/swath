@@ -38,8 +38,8 @@
 //
 // Summarize counts the entries at or under each of several targets and sums
 // their sizes, space on disk and newest change, one TargetSummary per target,
-// in the order of targets. A live source walks the union of the targets once;
-// an inventory aggregates key ranges.
+// in the order of targets. A live source looks up or walks each target on
+// its own; an inventory aggregates key ranges.
 //
 // # Keys
 //
@@ -49,6 +49,17 @@
 // keys. No key holds a NUL byte. Where this package states an order, it is
 // unsigned byte order of the keys (bytes.Compare), unless a Page names
 // another.
+//
+// A folder's prefix ends in "/". On an object store a prefix is taken
+// literally, so a page or walk of "a" holds "ab" and "a.txt" as well as
+// what is under "a/"; a local source, and an inventory of one, take "" or
+// a directory's key, and refuse a prefix without its "/". On an object
+// store a prefix exists if and only if some key begins with it: one with
+// none pages and walks empty, never ErrNotFound, and a Lookup of "a/" says
+// whether an object has exactly that key, not whether anything is under
+// it. A local directory is an entry of its own, present when empty; a
+// missing one is ErrNotFound, from an inventory only where it proves the
+// absence.
 //
 // # Evidence
 //

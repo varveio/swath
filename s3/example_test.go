@@ -94,7 +94,7 @@ func Example_walk() {
 }
 
 // Summarize a prefix, a prefix nested in it and one key: the nested one is
-// counted in full by the same walk, and the key is a lookup.
+// counted in full by a walk of its own, and the key is a lookup.
 func Example_summarize() {
 	ctx := context.Background()
 	src, err := s3.Open(ctx, "example-bucket", s3.Options{Region: "eu-west-1"})
@@ -105,7 +105,7 @@ func Example_summarize() {
 
 	targets := []listing.Target{
 		{Key: []byte("logs/"), Subtree: true},
-		{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, in the same walk
+		{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
 		{Key: []byte("README")},                    // exact: a lookup
 	}
 	sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})

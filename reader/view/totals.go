@@ -21,14 +21,17 @@ import (
 // lastKind is the greatest Kind.
 const lastKind = listing.KindUnknown
 
-// selection is the kinds a summary counts. KindPrefix is never counted.
+// selection is the kinds a summary counts: files and objects unless the
+// options name others. KindPrefix is never counted.
 type selection struct {
-	all   bool
 	kinds [lastKind + 1]bool
 }
 
 func selectionOf(kinds []listing.Kind) (selection, error) {
-	s := selection{all: len(kinds) == 0}
+	var s selection
+	if len(kinds) == 0 {
+		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
+	}
 	for _, k := range kinds {
 		if k == 0 || k > lastKind {
 			return selection{}, invalid("%v is no kind", k)
@@ -39,7 +42,7 @@ func selectionOf(kinds []listing.Kind) (selection, error) {
 }
 
 func (s selection) counts(k listing.Kind) bool {
-	return k != listing.KindPrefix && (s.all || s.kinds[k])
+	return k != listing.KindPrefix && s.kinds[k]
 }
 
 // countsAny reports whether the selection counts any row of the shape.
@@ -77,15 +80,14 @@ const (
 	reduceUnallocated
 )
 
-// errUnknownTotal reports a reduction SeekParquet left unknown with no
-// budget in force, which reads every value it needs.
-var errUnknownTotal = errors.New("view: an aggregation left a total unknown without a budget")
+// errUnknownTotal reports a reduction SeekParquet left unknown, which with
+// no value budget it reads every value to give.
+var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown")
 
 // aggregate counts and sums the rows of the selection's kinds in each
-// span, in one aggregation: an element is nil where the value budget
-// (SeekParquet's: -1 for none) did not reach the span. checkKeys checks
-// the order of every key it counts.
-func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection, budget int64, checkKeys bool) ([]*listing.Totals, error) {
+// span, in one aggregation that reads every value it needs. checkKeys
+// checks the order of every key it counts.
+func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection, checkKeys bool) ([]*listing.Totals, error) {
 	out := make([]*listing.Totals, len(spans))
 	if len(spans) == 0 {
 		return out, nil
@@ -101,38 +103,30 @@ func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan
 	if inv.rows.local {
 		reductions = localReductions
 	}
-	opt := seekparquet.AggregateOptions{ValueBudgetBytes: budget, Workers: runtime.GOMAXPROCS(0), CheckKeys: checkKeys, Filter: inv.filter(sel)}
+	opt := seekparquet.AggregateOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: checkKeys, Filter: inv.filter(sel)}
 	results, err := inv.sp.AggregateRows(ctx, spans, reductions, opt, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, r := range results {
-		if out[i], err = inv.totals(r, budget >= 0); err != nil {
+		if out[i], err = inv.totals(r); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-// totals reads one span's reductions: nil when a value budget did not
-// reach them. A sum that overflows, or that a counted row cannot supply,
-// is nil.
-func (inv *Inventory) totals(r []seekparquet.AggregateResult, bounded bool) (*listing.Totals, error) {
+// totals reads one span's reductions. A sum that overflows, or that a
+// counted row cannot supply, is nil.
+func (inv *Inventory) totals(r []seekparquet.AggregateResult) (*listing.Totals, error) {
 	for _, x := range r {
-		switch x.Status {
-		case seekparquet.AggregateExact, seekparquet.AggregateOverflow:
-		case seekparquet.AggregateBudgetExceeded, seekparquet.AggregateUnpriced:
-			return nil, nil
-		default:
-			if bounded {
-				return nil, nil
-			}
+		if x.Status != seekparquet.AggregateExact && x.Status != seekparquet.AggregateOverflow {
 			return nil, errUnknownTotal
 		}
 	}
 	if r[reduceCount].Status != seekparquet.AggregateExact {
-		return nil, errors.New("view: a count of rows overflowed")
+		return nil, wrap(listing.ErrUnsupported, "a count of rows overflowed")
 	}
 
 	t := &listing.Totals{Entries: r[reduceCount].Value.Int64()}
@@ -287,7 +281,7 @@ func established(span seekparquet.RowSpan) bool {
 }
 
 // errUnknownSpan reports a span SeekParquet did not establish.
-var errUnknownSpan = errors.New("view: a selection's rows are not established")
+var errUnknownSpan = wrap(listing.ErrUnsupported, "a selection's rows are not established")
 
 // merge sorts intervals and joins those that overlap or touch.
 func merge(intervals [][2]int64) [][2]int64 {

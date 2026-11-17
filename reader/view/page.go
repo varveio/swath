@@ -22,11 +22,11 @@ import (
 // one issued for another is ErrInvalidToken.
 //
 // A prefix outside the inventory's scope is ErrOutOfScope. A local
-// directory the inventory has as another kind is ErrNotDirectory; one it
-// lacks, ErrNotFound when it proves the absence, and an empty page
-// otherwise. req.MaxScanned never stops it: it reads the children it
-// returns. When req.MaxDuration ends the page it holds no entry, and its
-// Next is req.Token, which starts the page again.
+// directory the inventory has as another kind, or below a symbolic link,
+// is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
+// absence, and an empty page otherwise. When req.MaxDuration ends the
+// page it holds no entry, and its Next is req.Token, which starts the
+// page again.
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
@@ -70,14 +70,14 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	entries, next := listed.Entries, listed.Next
 	if limit > req.Limit {
 		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 	}
 	page.Entries = make([]listing.Entry, len(entries))
 	for i := range entries {
 		e, err := inv.listedEntry(entries[i].ListEntry)
 		if err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 		page.Entries[i] = *e
 	}
@@ -94,20 +94,20 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	}
 	if next != nil {
 		if page.Next, err = encodeToken(bind, next); err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 	}
 	return page, nil
 }
 
 // stopped is the page err ended: at the page's time budget, a page with
-// no entry whose Next is token, which starts it again; else the error, or
-// ctx's once ctx has ended.
+// no entry whose Next is token, which starts it again; else the error in
+// its class, or ctx's once ctx has ended.
 func (inv *Inventory) stopped(ctx, op context.Context, token string, err error) (listing.Page, error) {
 	if timeUp(ctx, op) {
 		return listing.Page{Order: listing.OrderBytes, Next: token, Evidence: inv.evidence(listing.StopTimeBudget)}, nil
 	}
-	return listing.Page{}, ctxOr(ctx, err)
+	return listing.Page{}, failed(ctx, err)
 }
 
 // self takes the entry at exactly prefix from the first page of its
@@ -135,7 +135,7 @@ func (inv *Inventory) checkPage(req listing.PageRequest) (*selection, error) {
 	switch {
 	case req.Limit < 1 || req.Limit >= math.MaxInt-1:
 		return nil, invalid("a page's Limit is positive")
-	case req.MaxScanned < 0 || req.MaxDuration < 0:
+	case req.MaxDuration < 0:
 		return nil, invalid("a negative bound")
 	case req.ChildTotals == nil:
 		return nil, nil
@@ -180,17 +180,20 @@ func prefixEntry(key []byte, kind listing.Kind) (*listing.Entry, error) {
 
 // missingDirectory explains a local directory key with no row and nothing
 // under it: nothing when its name or an ancestor is an entry of unknown
-// kind, ErrNotDirectory when the inventory has its name as another kind,
-// ErrNotFound when the inventory proves it absent, else nothing.
+// kind, ErrNotDirectory when an ancestor is a symbolic link or the
+// inventory has its name as another kind, ErrNotFound when the inventory
+// proves it absent, else nothing.
 func (inv *Inventory) missingDirectory(ctx context.Context, prefix []byte) error {
 	name := prefix[:len(prefix)-1]
-	names := inv.ancestors(prefix) // name and the names on the way to it
+	names := inv.ancestors(prefix) // the names on the way to it, then name
 	found, err := inv.entries(ctx, names)
 	switch {
 	case err != nil:
 		return err
-	case unresolved(found, names):
+	case foundKind(found, names, listing.KindUnknown):
 		return nil
+	case foundKind(found, names[:len(names)-1], listing.KindSymlink):
+		return errThroughLink
 	case found[string(name)] != nil:
 		return errNotDirectory
 	case inv.provable:
@@ -232,23 +235,15 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 
 	totalsCtx, cancel := withBudget(op, budget.MaxDuration)
 	defer cancel()
-	totals, err := inv.aggregate(totalsCtx, spans, sel, valueBudget(budget), false)
+	totals, err := inv.aggregate(totalsCtx, spans, sel, false)
 	if err != nil {
 		if ctx.Err() == nil && totalsCtx.Err() != nil {
 			return out, nil
 		}
-		return nil, ctxOr(ctx, err)
+		return nil, failed(ctx, err)
 	}
 	for j, i := range counted {
 		out[i] = totals[j]
 	}
 	return out, nil
-}
-
-// ctxOr is ctx's error once ctx has ended, else err.
-func ctxOr(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return err
 }

@@ -19,9 +19,9 @@ type Target struct {
 
 // SummaryOptions say what to count and how much work to spend.
 type SummaryOptions struct {
-	// Kinds are the kinds counted, such as KindFile alone for a local
-	// source's files. Empty counts every kind. KindPrefix is never
-	// counted.
+	// Kinds are the kinds counted. Empty counts files and objects
+	// (KindFile and KindObject); name the kinds to count others, such as
+	// KindDir for directories' own sizes. KindPrefix is never counted.
 	Kinds []Kind
 	// Budget bounds the call.
 	Budget Budget
@@ -63,4 +63,12 @@ type TargetSummary struct {
 	Totals
 	// Unread are the extents inside the target that were not read.
 	Unread []Unread
+	// Stop says whether the call finished this target (StopCompleted) or
+	// which bound of the request stopped it. The target is complete when
+	// Stop is StopCompleted, it has no Unread, and the Evidence's
+	// Unlocated is 0. Stop is empty when the call did not read the target
+	// and no bound is why, such as a lookup refused access or a target
+	// outside an inventory's scope: State is LookupUnknown and Reason says
+	// why.
+	Stop StopReason
 }

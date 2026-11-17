@@ -27,7 +27,8 @@ const (
 	// way, EACCES, EPERM, ENAMETOOLONG and I/O errors leave the key
 	// unknown: it was not reached. An inventory proves it only inside its
 	// scope, from a listing whose Evidence.Unlocated is 0, never at or
-	// under the key of a KindUnknown entry, and only as of that listing.
+	// under the key of a KindUnknown entry nor below a KindSymlink entry,
+	// and only as of that listing.
 	LookupAbsent
 )
 
@@ -61,9 +62,10 @@ type LookupResult struct {
 	// Reason says why State is LookupUnknown: an error matching one of
 	// the error classes where one applies, such as ErrAuth for an access
 	// denial, which S3 returns for a missing key without list permission,
-	// or ErrOutOfScope for a key outside an inventory's scope; otherwise
-	// an error of no class naming the cause, such as a symbolic link or
-	// another device on the way to a local key. Nil when Evidence alone
+	// ErrOutOfScope for a key outside an inventory's scope, or
+	// ErrNotDirectory for a symbolic link on the way to a local key, which
+	// no backend follows; otherwise an error of no class naming the cause,
+	// such as another device on the way to a local key. Nil when Evidence alone
 	// explains it (an inventory with unlocated gaps), and on any other
 	// state.
 	Reason error

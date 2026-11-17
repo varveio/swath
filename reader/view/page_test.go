@@ -161,7 +161,7 @@ func TestPageTokenOptions(t *testing.T) {
 	}
 	for name, totals := range map[string]*listing.SummaryOptions{
 		"no child totals":   nil,
-		"every kind":        {},
+		"the default kinds": {},
 		"directories":       {Kinds: []listing.Kind{listing.KindDir}},
 		"files and objects": {Kinds: []listing.Kind{listing.KindFile, listing.KindObject}},
 	} {
@@ -179,13 +179,13 @@ func TestPageTokenOptions(t *testing.T) {
 		}
 	}
 
-	all := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile, listing.KindDir, listing.KindSymlink, listing.KindOther, listing.KindUnknown}
-	every, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
+	defaults, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inv.Page(ctx, listing.PageRequest{Token: every.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: all}}); err != nil {
-		t.Errorf("every kind, listed: %v", err)
+	listed := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile}
+	if _, err := inv.Page(ctx, listing.PageRequest{Token: defaults.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: listed}}); err != nil {
+		t.Errorf("the default kinds, listed: %v", err)
 	}
 }
 
@@ -228,19 +228,14 @@ func TestPageChildTotals(t *testing.T) {
 
 	ctx := context.Background()
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	for name, b := range map[string]listing.Budget{
-		"value bytes": {MaxValueBytes: 1},
-		"entries":     {MaxEntries: 3},
-	} {
-		p, err := inv.Page(ctx, listing.PageRequest{Limit: 100, ChildTotals: &listing.SummaryOptions{Budget: b}})
-		if err != nil || p.Evidence.Stop != listing.StopCompleted || len(p.Entries) != 7 {
-			t.Fatalf("%s: page %+v, %v", name, p, err)
-		}
-		for i, e := range p.Entries {
-			small := string(e.Key) == "ab/" || string(e.Key) == "deep/" || string(e.Key) == "nulls/"
-			if p.Totals[i] != nil && (name == "value bytes" || !small) {
-				t.Errorf("%s: %q has totals %s past the budget", name, e.Key, showTotals(*p.Totals[i]))
-			}
+	p, err := inv.Page(ctx, listing.PageRequest{Limit: 100, ChildTotals: &listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 3}}})
+	if err != nil || p.Evidence.Stop != listing.StopCompleted || len(p.Entries) != 7 {
+		t.Fatalf("page %+v, %v", p, err)
+	}
+	for i, e := range p.Entries {
+		small := string(e.Key) == "ab/" || string(e.Key) == "deep/" || string(e.Key) == "nulls/"
+		if p.Totals[i] != nil && !small {
+			t.Errorf("%q has totals %s past the budget", e.Key, showTotals(*p.Totals[i]))
 		}
 	}
 }
@@ -263,7 +258,8 @@ func TestPageScope(t *testing.T) {
 }
 
 // TestPageMissingDirectory: a local directory the inventory has as another
-// kind is ErrNotDirectory; one it lacks is ErrNotFound when it proves the
+// kind, or below a symbolic link, is ErrNotDirectory; one it lacks is
+// ErrNotFound when it proves the
 // absence, an empty page otherwise, and always at or under an entry of
 // unknown kind; an empty directory is its Self alone.
 func TestPageMissingDirectory(t *testing.T) {
@@ -280,6 +276,13 @@ func TestPageMissingDirectory(t *testing.T) {
 	for _, inv := range []*Inventory{complete, partial} {
 		if _, err := page(inv, "a.txt/"); !errors.Is(err, listing.ErrNotDirectory) {
 			t.Errorf("a file: %v, want ErrNotDirectory", err)
+		}
+	}
+	// A symbolic link is never followed: a directory below one is not
+	// reached, never absent.
+	for _, prefix := range []string{"link/", "link/x/"} {
+		if _, err := page(complete, prefix); !errors.Is(err, listing.ErrNotDirectory) {
+			t.Errorf("%q through a symbolic link: %v, want ErrNotDirectory", prefix, err)
 		}
 	}
 	if p, err := page(partial, "missing/"); err != nil || len(p.Entries) != 0 || p.Self != nil {

@@ -76,7 +76,8 @@ func TestLookup(t *testing.T) {
 // TestLookupLocal: a local key names a file or, without a trailing "/", a
 // directory too, answered with its directory key; a directory key names
 // a directory only. The root has no entry. Nothing at or under an entry
-// of unknown kind is absent.
+// of unknown kind is absent; a key below a symbolic link is not reached,
+// on a listing that may lack entries too.
 func TestLookupLocal(t *testing.T) {
 	ctx := context.Background()
 	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
@@ -102,18 +103,28 @@ func TestLookupLocal(t *testing.T) {
 		}
 	}
 	// An entry of unknown kind may be a directory the listing did not
-	// read: nothing at or under it is absent. Under another kind it is.
-	for key, want := range map[string]listing.LookupState{
-		"u/": listing.LookupUnknown, "u/x": listing.LookupUnknown, "u/x/y/": listing.LookupUnknown,
-		"fifo/x": listing.LookupAbsent, "link/x": listing.LookupAbsent,
+	// read: nothing at or under it is absent. A symbolic link is never
+	// followed: nothing below it is reached. Under another kind a key is
+	// absent.
+	for key, want := range map[string]error{
+		"u/": errUnresolvedKind, "u/x": errUnresolvedKind, "u/x/y/": errUnresolvedKind,
+		"link/": listing.ErrNotDirectory, "link/x": listing.ErrNotDirectory, "link/x/y": listing.ErrNotDirectory,
+		"fifo/x": nil, "a.txt/x": nil,
 	} {
 		r, err := inv.Lookup(ctx, []byte(key))
-		if err != nil || r.State != want || (want == listing.LookupUnknown) != errors.Is(r.Reason, errUnresolvedKind) {
-			t.Errorf("Lookup(%q) = %v %v, %v; want %v", key, r.State, r.Reason, err, want)
+		if err != nil || (want == nil) != (r.State == listing.LookupAbsent) || want != nil && (r.State != listing.LookupUnknown || !errors.Is(r.Reason, want)) {
+			t.Errorf("Lookup(%q) = %v %v, %v; want the reason %v", key, r.State, r.Reason, err, want)
 		}
 	}
 	if _, err := inv.Lookup(ctx, nil); !errors.Is(err, listing.ErrInvalidRequest) {
 		t.Errorf("Lookup of the root: %v", err)
+	}
+
+	// A listing that may lack entries still names the link on the way.
+	partial := open(t, write(t, fixture{id: reader.LocalV1, rows: tree(),
+		ext: coverage(extension(reader.LocalV1), map[string]any{"complete": false, "unreadable": 1})}))
+	if r, err := partial.Lookup(ctx, []byte("link/x")); err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrNotDirectory) {
+		t.Errorf("partial, Lookup(link/x) = %v %v, %v; want ErrNotDirectory", r.State, r.Reason, err)
 	}
 }
 

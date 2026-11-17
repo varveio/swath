@@ -4,8 +4,10 @@
 // Package view answers the four questions of package listing (Page, Lookup,
 // Walk and Summarize) from one opened swath dataset: an inventory. It plans
 // and checks the questions, and SeekParquet executes them (Dataset.Page,
-// Plan, Scan, List and AggregateRows); it reads a row's columns into the
+// Plan, Scan and AggregateRows); it reads a row's columns into the
 // common listing.Entry, with nil for every value the row does not hold.
+// OpenDir opens a dataset directory for it in one call; Open takes a
+// reader.Dataset the caller opened.
 //
 // The API is experimental: it may change in any release.
 //
@@ -22,7 +24,8 @@
 // exclusion; otherwise it is nil. A key is proven absent only when
 // Unlocated is 0, never at or under a local entry of unknown kind
 // (listing.KindUnknown), which may be a directory the listing did not
-// read, and only as of the listing.
+// read, never below a symbolic link, which no listing follows (unknown,
+// with listing.ErrNotDirectory as the Reason), and only as of the listing.
 //
 // An inventory's own gaps are never located. When a bound of the request
 // stops a Walk or a Summarize, the keys it did not reach come back as
@@ -45,7 +48,18 @@
 // reads is checked as it is read: a column a part lacks or holds with
 // another physical type, a negative size, a local kind swath does not
 // write, or a directory whose key does not end in "/" (and the reverse) is
-// a *reader.SemanticError, and a key holding a NUL byte, which no listing
-// key may hold, is listing.ErrInvalidPage. Summarize checks the values it
-// sums, and the order of the keys it counts but not their form.
+// a *reader.SemanticError, and it, a key holding a NUL byte, which no
+// listing key may hold, and any data SeekParquet refuses are
+// listing.ErrInvalidPage. Summarize checks the values it sums, and the
+// order of the keys it counts but not their form.
+//
+// # Errors
+//
+// A call that fails returns an error of a class of package listing, with
+// the cause wrapped beside it: a missing object is listing.ErrNotFound, a
+// refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
+// a feature or limit SeekParquet does not support listing.ErrUnsupported,
+// and any other failure to read the dataset, an I/O or network error
+// past the storage's retries, listing.ErrUnavailable. A context's error
+// is returned as it is, and so is an error of a Walk's emit.
 package view

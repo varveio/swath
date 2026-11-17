@@ -78,7 +78,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 				if target.Subtree {
 					keep = func(r rec) bool { return strings.HasPrefix(r.key, key) }
 				}
-				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || len(s.Unread) != 0 {
+				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || len(s.Unread) != 0 || s.Stop != listing.StopCompleted {
 					t.Fatalf("%s %v: %q subtree %t = %s, unread %v; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, showTotals(want))
 				}
 			}
@@ -87,8 +87,8 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 }
 
 // TestSummarizeUnknownKind: an entry of unknown kind is counted only when
-// every kind or KindUnknown is selected, never as a file or another kind,
-// and nothing at or under it is absent.
+// KindUnknown is selected, never as a file or another kind, and nothing
+// at or under it is absent.
 func TestSummarizeUnknownKind(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
 	targets := []listing.Target{
@@ -98,7 +98,7 @@ func TestSummarizeUnknownKind(t *testing.T) {
 		kinds       []listing.Kind
 		root, entry int64
 	}{
-		{nil, 13, 1},
+		{nil, 5, 0},
 		{[]listing.Kind{listing.KindFile}, 5, 0},
 		{[]listing.Kind{listing.KindOther}, 1, 0},
 		{[]listing.Kind{listing.KindUnknown}, 1, 1},
@@ -165,7 +165,7 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 		t.Fatalf("%+v, %v", e, err)
 	}
 	for i := range 3 {
-		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 {
+		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 || s.Stop != "" {
 			t.Errorf("target %d outside the scope: %+v", i, s)
 		}
 	}
@@ -175,7 +175,7 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 
 	partial := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects(), ext: coverage(extension(reader.S3ObjectsV1), map[string]any{"complete": false, "unreadable": 5})}))
 	sums, e, err = partial.Summarize(ctx, []listing.Target{{Key: []byte("missing")}, {Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
-	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[1].Entries != 4 {
+	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[0].Stop != "" || sums[1].Entries != 4 {
 		t.Fatalf("partial: %+v, %+v, %v", sums, e, err)
 	}
 }
@@ -193,7 +193,7 @@ func TestSummarizeBudgets(t *testing.T) {
 	targets := []listing.Target{{Subtree: true}, {Key: []byte("a/"), Subtree: true}, {Key: []byte("a/c/"), Subtree: true}, {Key: []byte("z")}}
 	unread := func(s listing.TargetSummary) bool {
 		return len(s.Unread) == 1 && s.Unread[0].Key == nil && s.Unread[0].Hi == nil && s.Unread[0].Scope == listing.UnreadInterval &&
-			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0
+			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0 && s.Stop != listing.StopCompleted
 	}
 	unreached := func(s listing.TargetSummary) bool {
 		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, listing.ErrBudgetExceeded) &&
@@ -218,7 +218,7 @@ func TestSummarizeBudgets(t *testing.T) {
 		exact = append(exact, listing.Target{Key: []byte(r.key)})
 	}
 	exact = append(exact, listing.Target{Key: []byte("missing")})
-	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 1, MaxValueBytes: 1 << 20}})
+	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 1}})
 	if err != nil || e.Stop != listing.StopEntryBudget || sums[0].State != listing.LookupPresent || sums[0].Entries != 1 || sums[len(sums)-1].State != listing.LookupAbsent {
 		t.Fatalf("exact entries: %+v, %v", e, err)
 	}
@@ -227,30 +227,9 @@ func TestSummarizeBudgets(t *testing.T) {
 			t.Fatalf("exact target %d past the entry budget: %+v", i+1, s)
 		}
 	}
-	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: 1}})
-	if err != nil || e.Stop != listing.StopValueBudget || sums[len(sums)-1].State != listing.LookupAbsent || !slices.ContainsFunc(sums, unreached) {
-		t.Fatalf("exact value bytes: %+v, %v", e, err)
-	}
-	for i, s := range sums[:len(sums)-1] {
-		if !unreached(s) {
-			t.Fatalf("exact target %d past the value budget: %+v", i, s)
-		}
-	}
 
-	// The value budget reaches no entry at a key, and no subtree's values;
-	// a/c/ has no entry to read, and is absent.
-	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: 1}})
-	if err != nil || e.Stop != listing.StopValueBudget || !unread(sums[0]) || !unreached(sums[1]) || !unread(sums[2]) || sums[2].State != listing.LookupAbsent || !unreached(sums[3]) {
-		t.Fatalf("value bytes: %+v, %+v, %v", sums, e, err)
-	}
-
-	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 5, MaxValueBytes: 1}})
-	if err != nil || e.Stop != listing.StopEntryBudget || !slices.ContainsFunc(sums[:3], unread) {
-		t.Fatalf("both: %+v, %+v, %v", sums, e, err)
-	}
-
-	// A value budget both phases fit counts everything.
-	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: int64(len(rs)), MaxValueBytes: 1 << 20}})
+	// A budget both phases fit counts everything.
+	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: int64(len(rs))}})
 	if err != nil || e.Stop != listing.StopCompleted || sums[0].Entries != int64(len(rs)) || sums[1].Entries != 4 || sums[3].State != listing.LookupPresent {
 		t.Fatalf("enough: %+v, %+v, %v", sums, e, err)
 	}
@@ -259,40 +238,6 @@ func TestSummarizeBudgets(t *testing.T) {
 	sums, e, err = slow.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}})
 	if err != nil || e.Stop != listing.StopTimeBudget || !unread(sums[0]) || !unreached(sums[3]) {
 		t.Fatalf("time: %+v, %+v, %v", sums, e, err)
-	}
-}
-
-// TestSummarizeSharedValueBudget: the value bytes the entries at the
-// targets' keys take come out of what the aggregation may read.
-func TestSummarizeSharedValueBudget(t *testing.T) {
-	ctx := context.Background()
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	exact := listing.Target{Key: []byte("z")}
-	subtree := listing.Target{Key: []byte("a/c/"), Subtree: true}
-	summarize := func(budget int64, targets ...listing.Target) []listing.TargetSummary {
-		sums, _, err := inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: budget}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return sums
-	}
-	// least is the least budget for which target is read in full.
-	least := func(target listing.Target) int64 {
-		lo, hi := int64(1), int64(1<<20)
-		for lo < hi {
-			mid := lo + (hi-lo)/2
-			if len(summarize(mid, target)[0].Unread) == 0 {
-				hi = mid
-			} else {
-				lo = mid + 1
-			}
-		}
-		return lo
-	}
-	budget := max(least(exact), least(subtree))
-	sums := summarize(budget, exact, subtree)
-	if sums[0].State != listing.LookupPresent || len(sums[1].Unread) == 0 {
-		t.Errorf("within %d bytes: z %v, the subtree unread %v; want z read and the subtree not", budget, sums[0].State, sums[1].Unread)
 	}
 }
 

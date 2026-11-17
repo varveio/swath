@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package live
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/reader/listing"
 )
 
@@ -19,8 +18,8 @@ type unreading struct{ n int }
 
 func (unreading) Location() string { return "unreading" }
 
-func (unreading) List(context.Context, []byte, string, int) (*live.Level, error) {
-	return &live.Level{}, nil
+func (unreading) List(context.Context, []byte, string, int) (*Level, error) {
+	return &Level{}, nil
 }
 
 func (unreading) Lookup(context.Context, []byte) (listing.LookupResult, error) {
@@ -29,7 +28,7 @@ func (unreading) Lookup(context.Context, []byte) (listing.LookupResult, error) {
 
 func (unreading) Close() error { return nil }
 
-func (u unreading) Walk(_ context.Context, w live.Walk, sink live.Sink) error {
+func (u unreading) Walk(_ context.Context, w Walk, sink Sink) error {
 	for i := range u.n {
 		sink.Unread(listing.Unread{Key: fmt.Appendf(nil, "%sx%08d", w.Prefix, i), Scope: listing.UnreadSubtree, Class: listing.UnreadPermission})
 	}
@@ -38,16 +37,15 @@ func (u unreading) Walk(_ context.Context, w live.Walk, sink live.Sink) error {
 
 // TestWalkDropsUnreadPastItsBound: a walk that meets more unread extents
 // than it holds hands emit as many as it holds and says it dropped the
-// rest (a nil Evidence.Unlocated); a Summarize over it then leaves a
-// target whose own entry it did not read unknown, never absent.
+// rest (a nil Evidence.Unlocated); a Summarize over it then leaves the
+// target, which its walk did not read whole, unknown, never absent.
 func TestWalkDropsUnreadPastItsBound(t *testing.T) {
 	for _, c := range []struct {
-		n     int
-		lost  bool
-		state listing.LookupState
+		n    int
+		lost bool
 	}{
-		{maxPendingUnread, false, listing.LookupAbsent},
-		{maxPendingUnread + 10, true, listing.LookupUnknown},
+		{maxPendingUnread, false},
+		{maxPendingUnread + 10, true},
 	} {
 		src := &Source{store: unreading{n: c.n}}
 		got := 0
@@ -60,10 +58,10 @@ func TestWalkDropsUnreadPastItsBound(t *testing.T) {
 		}
 
 		out, ev, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("b/"), Subtree: true}}, listing.SummaryOptions{})
-		if err != nil || (ev.Unlocated == nil) != c.lost || out[0].State != c.state {
+		if err != nil || (ev.Unlocated == nil) != c.lost || out[0].State != listing.LookupUnknown || len(out[0].Unread) != min(c.n, maxPendingUnread) {
 			t.Fatalf("%d extents: summary %+v, evidence %+v, %v", c.n, out[0].State, ev, err)
 		}
-		if c.lost && !errors.Is(out[0].Reason, listing.ErrBudgetExceeded) {
+		if !errors.Is(out[0].Reason, listing.ErrAuth) {
 			t.Errorf("%d extents: reason %v", c.n, out[0].Reason)
 		}
 	}

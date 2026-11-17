@@ -5,36 +5,26 @@ package listing
 
 import "time"
 
-// Budget bounds the work of one Walk or Summarize. A call that reaches a
-// bound stops without an error: Evidence.Stop names the bound, and every
-// extent the call did not finish comes back as an Unread of class
-// UnreadBudget: a live call's entries, directories and key intervals, an
-// inventory's key intervals. A negative bound is ErrInvalidRequest.
+// Budget bounds the work of one Walk or Summarize: a live Summarize gives
+// each target the whole of it, an inventory's spends it across the call.
+// A call that reaches a bound stops without an error: Evidence.Stop names
+// the bound, and every extent the call did not finish comes back as an
+// Unread of class UnreadBudget: a live call's entries, directories and key
+// intervals, an inventory's key intervals. A negative bound is
+// ErrInvalidRequest.
 type Budget struct {
 	// MaxEntries bounds the entries read. A walk counts the entries it
-	// hands to emit, the prefix's own entry included, KindPrefix entries
-	// and Unread excluded. Workers stop at the next batch boundary, so a
-	// walk may deliver up to one batch per worker past the bound, and a
-	// total it cuts short stays a lower bound. An inventory's Summarize
-	// counts the rows it reads at and under its targets, each once, the
-	// entries at exact targets' keys included. Zero sets no bound.
+	// hands to emit, the prefix's own entry included. Workers stop at the
+	// next batch boundary, so a walk may deliver up to one batch per worker
+	// past the bound, and a total it cuts short stays a lower bound. An
+	// inventory's Summarize counts the rows it reads at and under its
+	// targets, each once, the entries at exact targets' keys included.
+	// Zero sets no bound.
 	MaxEntries int64
 	// MaxDuration bounds the call's time, including the time emit takes.
 	// Zero sets no bound. Unlike a deadline on ctx, which ends the call
 	// with the context's error, reaching it returns what was read.
 	MaxDuration time.Duration
-	// MaxHeldBytes bounds the memory a live call holds for its own
-	// checks, such as the names of each directory whose enumeration has
-	// not ended. Zero selects the backend's default: the bound is never
-	// lifted, and a directory too wide for it ends as an UnreadListing of
-	// class UnreadBudget.
-	MaxHeldBytes int64
-	// MaxValueBytes bounds the compressed value pages an inventory reads
-	// to decode entries, count and sum (SeekParquet's value budget), in a
-	// Summarize or a page's child totals. Reaching it stops the
-	// call with StopValueBudget. A live source reads no such pages and
-	// ignores it. Zero sets no bound.
-	MaxValueBytes int64
 }
 
 // WalkRequest asks for every entry at or under a prefix.
@@ -44,11 +34,6 @@ type WalkRequest struct {
 	// prefix; on a local source it is empty, for the root, or a
 	// directory's key.
 	Prefix []byte
-	// MaxDepth bounds the levels below Prefix the walk reads: 1 reads
-	// Prefix's own entry and its children. Zero reads every level. A walk
-	// with a depth proves nothing below it. With a depth, an object store's
-	// keys below it come back as KindPrefix entries.
-	MaxDepth int
 	// Workers is how many requests or directory reads run at once; zero
 	// selects the backend's default. One selects the sequential mode: one
 	// serial request chain, never split, the reference a parallel walk is
@@ -80,7 +65,7 @@ type WalkBatch struct {
 
 // WalkSummary is how a walk ended. A walk is complete when it returned no
 // error, Evidence.Stop is StopCompleted, no batch held an Unread, and
-// Evidence.Unlocated is 0: then every entry within its MaxDepth was read.
+// Evidence.Unlocated is 0: then every entry under its prefix was read.
 type WalkSummary struct {
 	// Entries counts the entries handed to emit.
 	Entries int64

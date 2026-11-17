@@ -80,14 +80,18 @@ A page is one delimiter listing of one level, by `/` only: one request, the clie
 request per child. Its entries come in byte order, so a prefix `a/` sorts after an object `a.txt`, and every page
 continues after the last key of the one before. A child prefix is an entry of kind `prefix`; it says nothing about an
 object whose key is exactly that prefix. Such an object comes back once, as the `Self` of the page that reads it,
-never as a child. A prefix is taken literally: `a` holds `a.txt`, `a0` and the prefix `a/`.
+never as a child. A prefix is taken literally: `a` holds `a.txt`, `a0` and the prefix `a/`, so ask for `a/` to list
+the folder `a`. A prefix exists only through the keys that begin with it: one with none pages empty, never
+`listing.ErrNotFound`. `Limit` bounds the children; `Self` comes beside them, though the page that holds it may hold
+one child fewer, since the store's own page size counts it.
 
 A page may be short, or empty, and still carry a token: only an empty `Next` ends the level. The token is opaque and
 bound to the bucket, the endpoint and region it is read through, and the prefix; given with another, it is refused
 before any request. Every page is checked before it is returned: a key outside the prefix, below one of its
 children or out of order, and a continuation token from the store that repeats the one sent, are
 `listing.ErrInvalidPage`. A live page is a traversal, not a snapshot: a key added or removed while a level is paged
-may or may not be in it.
+may or may not be in it. Totals for each child folder (`ChildTotals`) come from an inventory only: a live page that
+asks for them is `listing.ErrUnsupported`, before any request.
 
 ## Lookups
 
@@ -123,12 +127,6 @@ What the walk handed over and those intervals hold every key under the prefix on
 afterwards completes it. A walk whose context ends returns the context's error, even if the function took every
 batch.
 
-A walk with a depth (`MaxDepth`) reads one level of `/` at a time instead, one request at a time whatever
-`Workers` says: the objects within the depth, and each folder at the depth as a `KindPrefix` entry, which counts
-toward no budget and stands for the keys below it. A walk with a depth shows nothing below it. A budget stops it
-between requests; the level it was reading comes back as an `Unread` extent of scope `listing` at the level's
-prefix (the children it handed over are read), and each level it had not begun as a `subtree`.
-
 ```go
 var objects, size int64
 var unread []listing.Unread
@@ -156,21 +154,22 @@ if res.Evidence.Stop != listing.StopCompleted {
 
 A summary answers, for each of several targets, how many objects lie at or under it, their bytes and their newest
 last-modified time, and what is at exactly its key. A target is a subtree (`Subtree`: every key that begins with
-`Key`, which the contract also calls a prefix) or one exact key. The subtrees are walked: one walk for each that lies
-under no other, whose objects count toward it and toward every target nested in it, so nested targets are each
-counted in full and listed once. A subtree target is present when an object has exactly its key, absent when the
-walk read where it would be and found none, and unknown at the root (the empty key), or when its walk dropped
-extents it did not read (below). An exact target is a lookup.
+`Key`, which the contract also calls a prefix) or one exact key. Each target is answered on its own: an exact target
+by a lookup, a subtree by one walk of its key, so nested and repeated targets are each walked and counted in full.
+A subtree target is present when an object has exactly its key, absent when its walk read everything and found
+none, and unknown otherwise, and at the root (the empty key). Without `Kinds` a summary counts objects and regular
+files, never folders or links.
 
-The budget bounds the whole call, every walk taking what is left of it. A target a walk stopped inside counts what
-was read and carries, as its `Unread`, the key intervals inside it that were not: its totals are a lower bound. A
-target the call never reached is unknown, with `listing.ErrBudgetExceeded` as its reason, counts nothing and is
-unread whole. A total with an `Unread` is never a complete one.
+The budget bounds each target's walk or lookup on its own. A target whose walk a bound stopped counts what was read,
+carries as its `Unread` the key intervals it did not read, and names the bound as its `Stop`: its totals are a lower
+bound. A target is complete when its `Stop` is `completed` and it has no `Unread`; `Evidence.Stop` names the first
+bound any target reached. A target the call could not read for another reason, such as an exact key whose lookup was
+refused, is unknown with that reason and an empty `Stop`: never complete.
 
 ```go
 targets := []listing.Target{
 	{Key: []byte("logs/"), Subtree: true},
-	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, in the same walk
+	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
 	{Key: []byte("README")},                    // exact: a lookup
 }
 sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})
@@ -344,8 +343,7 @@ library guarantees:
   and inode and to the prefix. A page reads its whole directory and sorts it to choose its entries:
   `Options.MaxHeldBytes` (64 MiB by default, a name counting its length plus 64 bytes) bounds the names it
   holds, and a directory past it fails the page with `local.ErrTooWide`, which also matches
-  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work,
-  its `MaxScanned` does not yet.
+  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work.
 - **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
   than a directory, a symbolic link included, `listing.ErrNotDirectory`; one with a symbolic link on the way,
   which is not followed, `listing.ErrUnsupported`: not reached, never absent. A refusal is `listing.ErrAuth`, a
@@ -390,5 +388,5 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 ## Not in the library yet
 
 The library answers Page and Lookup on S3, GCS, Azure Blob Storage and a local directory, and Walk and Summarize on
-the three object stores. On a local directory a walk with a depth reads its levels with pages; a walk without one,
-and a summary with a subtree target, are `listing.ErrUnsupported`. A source's request limits hold within one process only.
+the three object stores. On a local directory a walk, and a summary with a subtree target, are
+`listing.ErrUnsupported`. A source's request limits hold within one process only.

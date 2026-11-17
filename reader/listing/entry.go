@@ -33,9 +33,9 @@ const (
 	KindOther
 	// KindUnknown is a local entry whose kind the listing did not
 	// resolve. Nothing is inferred from it: Summarize counts it only when
-	// SummaryOptions.Kinds is empty or names KindUnknown, never as a file,
-	// and it proves nothing absent at or under its key, which may be a
-	// directory that was not read.
+	// SummaryOptions.Kinds names KindUnknown, never as a file, and it
+	// proves nothing absent at or under its key, which may be a directory
+	// that was not read.
 	KindUnknown
 )
 

@@ -31,31 +31,28 @@ type PageRequest struct {
 	// unchanged. Empty starts the level. A token is opaque and versioned:
 	// it carries the backend's resume state, the last key returned, and a
 	// fingerprint of the source (an inventory's manifest digest), of
-	// Prefix and of the options that decide what the level's pages hold:
-	// whether ChildTotals is set, and the kinds it counts. A token that
-	// does not match them is ErrInvalidToken, refused before any request.
-	// Limit and the bounds of work (MaxScanned, MaxDuration, the
-	// ChildTotals Budget) may change from page to page. Tokens are not
-	// signed; a caller that hands them to others signs its own.
+	// Prefix and, on an inventory, of the options that decide what the
+	// level's pages hold: whether ChildTotals is set, and the kinds it
+	// counts. A token that does not match them is ErrInvalidToken, refused
+	// before any request.
+	// Limit and the bounds of work (MaxDuration, the ChildTotals Budget)
+	// may change from page to page. Tokens are not signed; a caller that
+	// hands them to others signs its own.
 	Token string
-	// Limit is the most entries the page returns. It must be positive.
+	// Limit is the most children the page returns. It must be positive.
+	// The page's Self, the entry at exactly Prefix, is not a child and
+	// does not count. A page may hold fewer: a store's own answer may be
+	// short, and on an object store the page that holds Self may hold one
+	// child fewer, since the store's page size counts it.
 	Limit int
-	// MaxScanned bounds the names a page reads to choose its entries, as a
-	// live local page reads its whole directory to choose a sorted page;
-	// Limit bounds only the entries it returns. Reaching it stops the page
-	// with StopScanBudget. A page that reads only what it returns, as an
-	// object store's delimiter listing does, is never stopped by it. Zero
-	// sets no bound, so a caller paging a live local source sets this or
-	// MaxDuration.
-	MaxScanned int64
 	// MaxDuration bounds the time of a page. Reaching it stops the page
-	// with StopTimeBudget. Zero sets no bound. A page either bound stopped
-	// holds its entries in Order, but may lack children that sort among
-	// them: it is what the page read.
+	// with StopTimeBudget: it holds no entry, and its Next is the
+	// request's Token, which asks again. Zero sets no bound.
 	MaxDuration time.Duration
 	// ChildTotals, when not nil, asks for the totals of each child prefix
 	// or directory, counted as it says and within its Budget. An inventory
-	// provides them; a live source returns none.
+	// provides them; a live source refuses the request with ErrUnsupported,
+	// before any request.
 	ChildTotals *SummaryOptions
 }
 
@@ -74,10 +71,10 @@ type Page struct {
 	// child's key comes back inside that child's own level, as its Self.
 	Entries []Entry
 	// Totals has one element per entry when the request asked for child
-	// totals and the backend provides them: a KindPrefix or KindDir
+	// totals, which only an inventory gives: a KindPrefix or KindDir
 	// entry's totals, as Summarize counts a Subtree target at its key, or
 	// nil for any other entry and wherever they are not known within the
-	// budget. Nil when not provided.
+	// budget. Nil when not asked for.
 	Totals []*Totals
 	// Self is the entry whose key is exactly the request's Prefix, such as
 	// an object "a/" in the level of "a/", on the one page of the level

@@ -4,174 +4,309 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"slices"
-	"strings"
+	"fmt"
+	"runtime/debug"
 	"sync"
+	"time"
 
-	"github.com/varveio/swath/internal/bind"
-	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/schema"
-	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Walker is a Store that can also walk: list everything under a prefix,
-// flat and in parallel, through its provider's range engine.
-type Walker interface {
-	// Walk lists every entry under w.Prefix into sink, in no order, each
-	// once: a provider of its own for this call, over the store's
-	// client, credentials and limiter, bound to its row schema and counted
-	// (Count). It returns when every worker has, with an error that
-	// matches a class of package listing, or with ctx's own once ctx has
-	// ended. What the walk did not read reaches sink.Unread.
-	Walk(ctx context.Context, w Walk, sink Sink) error
+const (
+	// maxPendingUnread bounds the extents not read that a walk holds
+	// before it hands them to emit; past it an extent is dropped, and the
+	// walk's Evidence.Unlocated is nil.
+	maxPendingUnread = 1 << 16
+	// unreadBatch is the most extents a batch holds once the workers have
+	// returned.
+	unreadBatch = 1024
+)
+
+var (
+	// errEntryBudget is the cause of a walk stopped at its MaxEntries.
+	errEntryBudget = errors.New("swath: the walk's entry budget is reached")
+	// errStopped refuses a batch once the walk has stopped: it is not
+	// emitted, and its range reports it unread.
+	errStopped = errors.New("swath: the walk has stopped")
+)
+
+// Walk hands emit every entry at or under req.Prefix, the object at
+// exactly the prefix included, each once, in no order, as package listing
+// states. The prefix is any key prefix, taken literally. Workers list key
+// ranges at once and split them at page boundaries while workers are idle,
+// so a prefix that fits in one page is one request; req.Workers 1 lists
+// one continuation chain, never split; zero selects the source's default,
+// 64 for an object store. Each walk has a range engine of its own; concurrent walks
+// share the source's client and request limits only.
+//
+// emit is called from the goroutine that called Walk, one batch at a time.
+// A batch and what it reaches belong to the walk until emit returns, and
+// a worker whose batch emit has not taken waits: that is the backpressure,
+// and it counts toward the time budget. Every entry is checked before it
+// reaches emit: inside the prefix, no NUL in its key, a size on every
+// object, else ErrInvalidPage. An error from emit stops the walk, and
+// Walk returns it unchanged once the workers have returned; nothing is
+// emitted after Walk returns.
+//
+// req.Budget.MaxEntries stops the walk after the batch that reaches it,
+// MaxDuration once that time has passed: Evidence.Stop names the bound,
+// with no error, and every key interval left unread is handed to emit as
+// an UnreadInterval of class UnreadBudget, before Walk returns. A walk
+// that meets more unread extents than it holds at once (65,536) drops the
+// rest and says so with a nil Evidence.Unlocated. When ctx ends,
+// Walk returns its error, even when emit has accepted every batch. A panic
+// in the walk's workers is returned as an error of no class.
+func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
+	if err := s.checkWalk(req, emit); err != nil {
+		return listing.WalkSummary{}, err
+	}
+	walker, ok := s.store.(Walker)
+	if !ok {
+		return listing.WalkSummary{}, fmt.Errorf("%w: this source does not walk", listing.ErrUnsupported)
+	}
+
+	timed, cancel := withBudget(ctx, req.Budget.MaxDuration)
+	defer cancel()
+	op, stop := context.WithCancelCause(timed)
+	defer stop(nil)
+	w := &walk{op: op, stop: stop, prefix: req.Prefix, emit: emit, max: req.Budget.MaxEntries, queue: make(chan handoff)}
+	started := time.Now()
+	err := w.run(walker, Walk{Prefix: req.Prefix, Workers: req.Workers})
+	finished := time.Now()
+
+	switch {
+	case w.emitErr != nil:
+		return listing.WalkSummary{}, w.emitErr
+	case ctx.Err() != nil:
+		return listing.WalkSummary{}, ctx.Err()
+	case w.invalid != nil:
+		return listing.WalkSummary{}, objfile.RedactError(w.invalid) // it quotes the store's keys
+	}
+	reason := listing.StopCompleted
+	switch {
+	case err == nil:
+	case errors.Is(context.Cause(op), errEntryBudget):
+		reason = listing.StopEntryBudget
+	case timeUp(ctx, op):
+		reason = listing.StopTimeBudget
+	default:
+		return listing.WalkSummary{}, failure(ctx, err)
+	}
+
+	if err := emitUnread(ctx, emit, w.takeUnread()); err != nil {
+		return listing.WalkSummary{}, err
+	}
+	ev := evidence(started, finished, reason)
+	if w.lost {
+		ev.Unlocated = nil
+	}
+	return listing.WalkSummary{Entries: w.entries, Evidence: ev}, nil
 }
 
-// Walk is what one walk lists.
-type Walk struct {
-	// Prefix is the scope: the keys that begin with it.
-	Prefix []byte
-	// Workers is how many ranges are listed at once: zero for the store's
-	// default, one for its sequential mode (one request chain, never
-	// split).
-	Workers int
+// checkWalk refuses a request of the wrong form, before any request.
+func (s *Source) checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) error {
+	if err := s.checkName("prefix", req.Prefix); err != nil {
+		return err
+	}
+	b := req.Budget
+	switch {
+	case emit == nil:
+		return invalid("no emit callback")
+	case req.Workers < 0:
+		return invalid("a negative number of workers")
+	case b.MaxEntries < 0 || b.MaxDuration < 0:
+		return invalid("a negative bound")
+	}
+	return nil
 }
 
-// Sink takes a walk's entries and the extents it did not read. Its
-// methods are called concurrently, from the walk's workers.
-type Sink interface {
-	// Entries takes a batch of entries of one range, which belong to the
-	// walk until Entries returns. An error stops the walk: it is the
-	// count's, and the batch counts as not emitted, so its range reports
-	// it unread.
-	Entries(ctx context.Context, entries []listing.Entry) error
-	// Unread takes an extent the walk did not read, and keeps its keys.
-	Unread(u listing.Unread)
+// walk is one Walk: the batches its workers hand over (Entries, Unread,
+// called concurrently: a Sink), and what the goroutine that called
+// Walk has emitted of them.
+type walk struct {
+	op     context.Context
+	stop   context.CancelCauseFunc // ends op, and so the workers, with a cause
+	prefix []byte
+	emit   func(listing.WalkBatch) error
+	queue  chan handoff
+
+	// The emitting goroutine's: the entries handed to emit, which max
+	// bounds (MaxEntries, zero for none), emit's error, and whether the
+	// walk emits no more entries.
+	max     int64
+	entries int64
+	emitErr error
+	halted  bool
+
+	// mu guards the extents not read that wait for a batch, whether one
+	// was dropped (lost), and the first entry that failed its check.
+	mu      sync.Mutex
+	pending []listing.Unread
+	lost    bool
+	invalid error
 }
 
-// Count lists b's scope without ordering it across ranges
-// (bind.Prepared.Count, order.CountWithSink) into sink, with opt as the
-// order stage's options: each range's rows checked as opt says, made
-// entries by entries, and handed to sink.Entries; each extent the
-// provider reports through its emitter, and that of each range the count
-// drops at a stop, handed to sink.Unread. Unless opt.Unordered, the
-// ranges are also checked disjoint before their rows reach sink: each
-// run of a range's rows spans the keys from its first to its last, and
-// no two spans meet, so with each range strictly ascending no key reaches
-// sink twice. A broken order is source.ErrProtocol, which
-// objhttp.ListingClass reads as listing.ErrInvalidPage. A panic in the
-// provider is the count's error.
-func Count[P any](ctx context.Context, b bind.Bound[P], opt order.Options, entries func([]schema.Row[P]) []listing.Entry, sink Sink) error {
-	l, err := b.Prepare(bind.Env{Order: opt})
-	if err != nil {
+// handoff is a worker's batch, and where its emitter answers: nil once
+// emitted, else errStopped.
+type handoff struct {
+	entries []listing.Entry
+	done    chan error
+}
+
+// run lists through walker on a goroutine of its own and emits the
+// batches its workers hand over from this one, until walker returns: its
+// error. A panic of emit's ends the walk, waits for its workers, and goes
+// on.
+func (w *walk) run(walker Walker, lw Walk) error {
+	listed := make(chan error, 1)
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				listed <- fmt.Errorf("swath: the walk panicked: %v\n%s", v, debug.Stack())
+			}
+		}()
+		listed <- walker.Walk(w.op, lw, w)
+	}()
+
+	ended := false
+	defer func() {
+		if ended {
+			return
+		}
+		w.stop(errStopped)
+		for {
+			select {
+			case h := <-w.queue:
+				h.done <- errStopped
+			case <-listed:
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case h := <-w.queue:
+			w.serve(h)
+		case err := <-listed:
+			ended = true
+			return err
+		}
+	}
+}
+
+// serve answers one handoff, refused unless emitted, even when emit
+// panics.
+func (w *walk) serve(h handoff) {
+	err := errStopped
+	defer func() { h.done <- err }()
+	err = w.deliver(h.entries)
+}
+
+// deliver hands entries to emit, with the extents not read waiting so
+// far, and stops the walk at its entry budget or at emit's error. Once the
+// walk has stopped it emits nothing more: errStopped.
+func (w *walk) deliver(entries []listing.Entry) error {
+	if w.halted || w.op.Err() != nil {
+		return errStopped
+	}
+	if err := w.emit(listing.WalkBatch{Entries: entries, Unread: w.takeUnread()}); err != nil {
+		w.emitErr, w.halted = err, true
+		w.stop(err)
+		return errStopped
+	}
+
+	w.entries += int64(len(entries))
+	if w.max > 0 && w.entries >= w.max {
+		w.halted = true
+		w.stop(errEntryBudget)
+	}
+	return nil
+}
+
+// Entries checks a worker's batch and waits for the walk's goroutine to
+// emit it (Sink): nil once emitted; an error otherwise, which stops
+// the batch's range.
+func (w *walk) Entries(ctx context.Context, entries []listing.Entry) error {
+	if err := w.check(entries); err != nil {
+		w.mu.Lock()
+		if w.invalid == nil {
+			w.invalid = err
+		}
+		w.mu.Unlock()
+		w.stop(err)
 		return err
 	}
 
-	r := rows[P]{sink: sink, entries: entries}
-	if !opt.Unordered {
-		r.spans = &spans{}
+	h := handoff{entries: entries, done: make(chan error, 1)}
+	select {
+	case w.queue <- h:
+	case <-ctx.Done():
+		return context.Cause(ctx)
 	}
-	_, err = l.Count(ctx, r)
-	var broken *dataset.InvariantError
-	if errors.As(err, &broken) {
-		return source.Violation(err)
-	}
-	return err
+	return <-h.done
 }
 
-// rows is a count's sink (order.RangeSink, order.UnreadSink,
-// order.Recovering) that hands a walk's rows to its Sink as entries, each
-// run's checked against the others' spans when spans is set.
-type rows[P any] struct {
-	sink    Sink
-	entries func([]schema.Row[P]) []listing.Entry
-	spans   *spans
+// check refuses an entry the walk must not emit (checkEntries).
+func (w *walk) check(entries []listing.Entry) error {
+	return checkEntries(w.prefix, entries)
 }
 
-func (r rows[P]) Run() order.RangeRun[P] { return &run[P]{rows: r} }
-
-// Write takes rows outside any run, unchecked: a count whose sink is a
-// RangeSink sends none.
-func (r rows[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
-	for _, seg := range segs {
-		if err := r.write(ctx, nil, seg); err != nil {
-			return err
+// checkEntries refuses an entry a walk of prefix must not emit: outside
+// the prefix, a key holding a NUL, or an object or file without a size
+// (ErrInvalidPage).
+func checkEntries(prefix []byte, entries []listing.Entry) error {
+	for i := range entries {
+		e := &entries[i]
+		switch {
+		case !bytes.HasPrefix(e.Key, prefix):
+			return badPage("a key outside the prefix: %q", e.Key)
+		case bytes.IndexByte(e.Key, 0) >= 0:
+			return badPage("a key holding a NUL byte: %q", e.Key)
+		case e.Size == nil && (e.Kind == listing.KindObject || e.Kind == listing.KindFile):
+			return badPage("an entry of kind %v without a size: %q", e.Kind, e.Key)
 		}
 	}
 	return nil
 }
 
-func (r rows[P]) Unread(u listing.Unread) { r.sink.Unread(u) }
-
-func (r rows[P]) Recovers() bool { return true }
-
-// write checks seg against the other runs' spans, extending s, its run's
-// (nil for none), and hands it to the sink.
-func (r rows[P]) write(ctx context.Context, s **span, seg []schema.Row[P]) error {
-	if len(seg) == 0 {
-		return nil
+// Unread keeps an extent not read for the next batch (Sink), or
+// drops it once maxPendingUnread wait.
+func (w *walk) Unread(u listing.Unread) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) == maxPendingUnread {
+		w.lost = true
+		return
 	}
-	if r.spans != nil && s != nil {
-		if err := r.spans.extend(s, seg[0].Key, seg[len(seg)-1].Key); err != nil {
+	w.pending = append(w.pending, u)
+}
+
+// takeUnread takes the extents waiting.
+func (w *walk) takeUnread() []listing.Unread {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	u := w.pending
+	w.pending = nil
+	return u
+}
+
+// emitUnread hands emit the extents still waiting once a walk has stopped
+// reading, unreadBatch at a time: emit's error, else ctx's once it has
+// ended, whether before a batch or while emit took it.
+func emitUnread(ctx context.Context, emit func(listing.WalkBatch) error, pending []listing.Unread) error {
+	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		n := min(len(pending), unreadBatch)
+		if err := emit(listing.WalkBatch{Unread: pending[:n:n]}); err != nil {
+			return err
+		}
+		pending = pending[n:]
 	}
-	return r.sink.Entries(ctx, r.entries(seg))
-}
-
-// run is one range's consecutive rows (order.RangeRun), and its span.
-type run[P any] struct {
-	rows[P]
-	span *span
-}
-
-func (r *run[P]) Write(ctx context.Context, seg []schema.Row[P]) error {
-	return r.write(ctx, &r.span, seg)
-}
-
-func (r *run[P]) End() {}
-
-// spans are a walk's runs' spans, by their first key, none meeting
-// another: the keys a walk has handed on, as intervals.
-type spans struct {
-	mu  sync.Mutex
-	all []*span
-}
-
-// span is one run's keys so far: from lo to hi, both included.
-type span struct {
-	lo, hi string
-}
-
-// extend makes *s, nil before its run's first rows, reach rows from lo
-// to hi, the run's next ascending rows: an InvariantError if another run's
-// span meets it. Keys are compared, not quoted: they are the store's.
-func (sp *spans) extend(s **span, lo, hi string) error {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-
-	if *s != nil {
-		lo = (*s).lo
-	}
-	i, _ := slices.BinarySearchFunc(sp.all, lo, func(x *span, k string) int { return strings.Compare(x.lo, k) })
-	j := i
-	if *s != nil {
-		j++ // its own span is at i
-	}
-	switch {
-	case *s == nil && i > 0 && sp.all[i-1].hi >= lo,
-		j < len(sp.all) && sp.all[j].lo <= hi:
-		return &dataset.InvariantError{Reason: "walk: two ranges' keys overlap"}
-	}
-
-	if *s != nil {
-		(*s).hi = strings.Clone(hi)
-		return nil
-	}
-	*s = &span{lo: strings.Clone(lo), hi: strings.Clone(hi)}
-	sp.all = slices.Insert(sp.all, i, *s)
-	return nil
+	return ctx.Err()
 }

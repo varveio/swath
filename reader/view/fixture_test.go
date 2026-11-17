@@ -438,13 +438,17 @@ func kindOf(r rec, isLocal bool) listing.Kind {
 	return listing.KindOther
 }
 
-// totalsOf counts the records of kinds (all for none) selected by keep, as
-// the contract says: nil sums when a counted record lacks the value.
+// totalsOf counts the records of kinds (files and objects for none)
+// selected by keep, as the contract says: nil sums when a counted record
+// lacks the value.
 func totalsOf(rs []rec, isLocal bool, kinds []listing.Kind, keep func(rec) bool) listing.Totals {
+	if len(kinds) == 0 {
+		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
+	}
 	t := listing.Totals{Bytes: new(int64), AllocatedBytes: new(int64)}
 	dated := true
 	for _, r := range rs {
-		if !keep(r) || len(kinds) > 0 && !slices.Contains(kinds, kindOf(r, isLocal)) {
+		if !keep(r) || !slices.Contains(kinds, kindOf(r, isLocal)) {
 			continue
 		}
 		t.Entries++
