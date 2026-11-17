@@ -345,15 +345,15 @@ library guarantees:
   that may still be on it, so its memory follows the request's `Limit`, not the directory's size; its time
   follows the directory's size. The request's `MaxDuration` bounds the reading, its `MaxScanned` does not yet.
 - **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
-  than a directory, a symbolic link included, `listing.ErrNotDirectory`; one with a symbolic link on the way,
-  which is not followed, `listing.ErrUnsupported`: not reached, never absent. A refusal is `listing.ErrAuth`, a
-  name too long for the system `listing.ErrUnsupported`, an I/O error `listing.ErrUnavailable`. A message
-  names where a call failed by its depth below the directory and by the program's own key, never by more of a
-  path.
+  than a directory, a symbolic link included, `listing.ErrNotDirectory`, and so is one with a symbolic link on
+  the way, which is not followed: not reached, never absent. A refusal is `listing.ErrAuth`, a name too long for
+  the system `listing.ErrUnsupported`, an I/O error `listing.ErrUnavailable`. A message names where a call
+  failed by its depth below the directory and by the program's own key, never by more of a path.
 - **A lookup is absent only when shown.** `ENOENT` or `ENOTDIR` at the key, or at a directory on the way that is
   no symbolic link, is absent; a symbolic link at the key is present, as itself; a key naming a directory
   answers with its directory key (`logs` with `logs/`). A symbolic link or another device on the way, a refusal,
-  a name too long and an I/O error leave the key unknown: it was not reached.
+  a name too long and an I/O error leave the key unknown: it was not reached, and its `Reason` has the class a
+  page through the same place fails with (`listing.ErrNotDirectory` past a symbolic link).
 - **Names are bytes, keys UTF-8 for now.** A `Source` refuses a key that is not valid UTF-8, so a page of a
   directory holding such a name fails with `listing.ErrInvalidPage`, and such an entry cannot be looked up.
 

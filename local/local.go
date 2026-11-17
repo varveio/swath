@@ -39,10 +39,11 @@ import (
 // UTF-8, and a page holding such a name is listing.ErrInvalidPage. A
 // prefix that is not there is listing.ErrNotFound; one that names
 // something else than a directory, a symbolic link included,
-// listing.ErrNotDirectory; one on another device listing.ErrOtherDevice;
-// one with a symbolic link on the way, which is never followed,
-// listing.ErrUnsupported. Lookup answers as the contract states for a
-// local source.
+// listing.ErrNotDirectory, and so is one with a symbolic link on the way:
+// a link is never followed, so what lies past it is not reached, never
+// shown absent. A prefix on another device is listing.ErrOtherDevice.
+// Lookup answers as the contract states for a local source; an unknown
+// answer's Reason has the class a page through the same place fails with.
 //
 // A root that is not a directory is listing.ErrNotDirectory. On other
 // systems than Linux and macOS, Open is listing.ErrUnsupported.

@@ -215,7 +215,7 @@ func TestLookup(t *testing.T) {
 		{"f/x", listing.LookupAbsent, ""},
 		{"nope", listing.LookupAbsent, ""},
 		{"nope/x", listing.LookupAbsent, ""},
-		{"lnd/g", listing.LookupUnknown, ""},
+		{"lnd/g", listing.LookupUnknown, listing.ErrNotDirectory.Error()},
 		{long + "/x", listing.LookupUnknown, listing.ErrUnsupported.Error()},
 	}
 	if os.Getuid() != 0 {
@@ -230,7 +230,7 @@ func TestLookup(t *testing.T) {
 		}{"locked/x", listing.LookupUnknown, listing.ErrAuth.Error()})
 	}
 	src := open(t, hold(t, root))
-	classes := []error{listing.ErrAuth, listing.ErrUnsupported, listing.ErrUnavailable, listing.ErrOtherDevice, listing.ErrNotFound}
+	classes := []error{listing.ErrAuth, listing.ErrUnsupported, listing.ErrUnavailable, listing.ErrOtherDevice, listing.ErrNotFound, listing.ErrNotDirectory}
 	for _, c := range cases {
 		r, err := src.Lookup(context.Background(), []byte(c.key))
 		if err != nil || r.State != c.state {
@@ -292,8 +292,9 @@ func TestRootNotResolvedByPath(t *testing.T) {
 }
 
 // TestSymlinkPrefixNotFollowed: a prefix that is a symbolic link, or has
-// one on the way, is not followed: the link itself is no directory, and a
-// prefix through it is not reached, neither listed nor shown absent.
+// one on the way, is not followed: the link is no directory, and a page or
+// a lookup through it is not reached, in that class, neither listed nor
+// shown absent.
 func TestSymlinkPrefixNotFollowed(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "real/sub/x")
@@ -306,11 +307,11 @@ func TestSymlinkPrefixNotFollowed(t *testing.T) {
 		t.Errorf("lnk/: %q %v, want ErrNotDirectory", got, err)
 	}
 	got, err = level(ctx, src, "lnk/sub/", 10)
-	if !errors.Is(err, listing.ErrUnsupported) || errors.Is(err, listing.ErrNotFound) || errors.Is(err, listing.ErrNotDirectory) || len(got) != 0 {
-		t.Errorf("lnk/sub/: %q %v, want ErrUnsupported (not reached)", got, err)
+	if !errors.Is(err, listing.ErrNotDirectory) || errors.Is(err, listing.ErrNotFound) || len(got) != 0 {
+		t.Errorf("lnk/sub/: %q %v, want ErrNotDirectory (not reached)", got, err)
 	}
-	if r, err := src.Lookup(ctx, []byte("lnk/sub/x")); err != nil || r.State != listing.LookupUnknown {
-		t.Errorf("lnk/sub/x: %+v %v, want unknown", r, err)
+	if r, err := src.Lookup(ctx, []byte("lnk/sub/x")); err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrNotDirectory) {
+		t.Errorf("lnk/sub/x: %+v %v, want unknown, ErrNotDirectory", r, err)
 	}
 }
 
@@ -323,7 +324,7 @@ func TestReplacedBetweenPages(t *testing.T) {
 		class            error
 	}{
 		{"d/", "d", listing.ErrNotDirectory},
-		{"p/d/", "p", listing.ErrUnsupported},
+		{"p/d/", "p", listing.ErrNotDirectory},
 	} {
 		base := t.TempDir()
 		root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")

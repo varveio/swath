@@ -323,9 +323,9 @@ func levelEntries(ctx context.Context, fd int, prefix string, kids []child, lvl 
 
 // Lookup says what is at exactly key below the held directory, as
 // Opened.Lookup finds it (live.Store): a present entry with what lstat
-// gives of it, absent, or unknown with the reason. A key of the wrong form
-// is listing.ErrInvalidRequest. One lookup is reported to ctx's
-// objfile.Observer as one metadata request.
+// gives of it, absent, or unknown with the reason in its class (classed).
+// A key of the wrong form is listing.ErrInvalidRequest. One lookup is
+// reported to ctx's objfile.Observer as one metadata request.
 func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	end := observe(ctx, objfile.MetadataRequest, string(key))
 	r, err := l.lookup(ctx, string(key))
@@ -353,26 +353,16 @@ func (l *Live) lookup(ctx context.Context, key string) (listing.LookupResult, er
 	case listing.LookupAbsent:
 		return listing.LookupResult{State: listing.LookupAbsent}, nil
 	}
-	return listing.LookupResult{State: listing.LookupUnknown, Reason: reason(r.Class, r.Err)}, nil
-}
-
-// reason says why a lookup did not reach its key: in the class of the
-// failure, or, for a symbolic link or another device on the way, an error
-// of no class naming it (listing.LookupResult).
-func reason(class listing.UnreadClass, err error) error {
-	switch class {
-	case listing.UnreadSymlinkAncestor, listing.UnreadOtherDevice:
-		return fmt.Errorf("not reached: %w", err)
-	}
-	return classed(class, err)
+	return listing.LookupResult{State: listing.LookupUnknown, Reason: classed(r.Class, r.Err)}, nil
 }
 
 // classed is err in the contract's class of the failure class names: a
 // refusal (EACCES, EPERM) is listing.ErrAuth; another device than the
-// root's listing.ErrOtherDevice; a name the system refuses as too long,
-// and a symbolic link on the way, which is never followed, are
+// root's listing.ErrOtherDevice; a symbolic link on the way, which is
+// never followed, listing.ErrNotDirectory: what lies past it is not
+// reached, never absent; a name the system refuses as too long
 // listing.ErrUnsupported, which asking again does not change; an I/O
-// error, and a tree that changed while it was resolved, are
+// error, and a tree that changed while it was resolved,
 // listing.ErrUnavailable.
 func classed(class listing.UnreadClass, err error) error {
 	c := listing.ErrUnavailable
@@ -381,7 +371,9 @@ func classed(class listing.UnreadClass, err error) error {
 		c = listing.ErrAuth
 	case listing.UnreadOtherDevice:
 		c = listing.ErrOtherDevice
-	case listing.UnreadNameTooLong, listing.UnreadSymlinkAncestor:
+	case listing.UnreadSymlinkAncestor:
+		c = listing.ErrNotDirectory
+	case listing.UnreadNameTooLong:
 		c = listing.ErrUnsupported
 	}
 	return fmt.Errorf("%w: %w", c, err)
