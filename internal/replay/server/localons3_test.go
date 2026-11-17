@@ -17,6 +17,9 @@ import (
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/replay/store"
 	"github.com/varveio/swath/internal/source/localfs"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
 // recordLocal writes files (relative path to body) under a temporary

@@ -18,6 +18,9 @@ import (
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
 // The Go lister's own datasets, written in-test by listing.Run against the

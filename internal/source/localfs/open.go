@@ -4,53 +4,24 @@
 package localfs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 
-	"github.com/spf13/pflag"
-
-	"github.com/varveio/swath/internal/cli"
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/longpath"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/parquetout"
-	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
-	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
-
-// The local filesystem takes roots without a scheme.
-func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info}, Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals, CheckFilter: checkFilter,
-		Title: "Local", Example: "/data", Usage: "a local directory or file", Suggest: suggest})
-}
-
-// suggest is the local path of a file:// URL on this host
-// (registry.Factory.Suggest): file:///data/x is /data/x, and
-// file:///C:/x is C:\x on Windows.
-func suggest(root string) (string, bool) {
-	u, err := url.Parse(root)
-	if err != nil || !strings.EqualFold(u.Scheme, "file") || u.Host != "" && u.Host != "localhost" || u.Path == "" {
-		return "", false
-	}
-	p := u.Path
-	if runtime.GOOS == "windows" && len(p) > 2 && p[0] == '/' && p[2] == ':' {
-		p = p[1:]
-	}
-	return filepath.FromSlash(p), true
-}
 
 // workersPerCPU and maxWorkers bound the default --workers for a local tree:
 // workersPerCPU per processor (GOMAXPROCS, which follows the CPU affinity and
@@ -68,90 +39,52 @@ const (
 	maxWorkers    = 64
 )
 
-// defaultWorkers is the default --workers for a local tree.
-func defaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPROCS(0)) }
+// DefaultWorkers is the default --workers for a local tree.
+func DefaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPROCS(0)) }
 
-// Set, String and Type make Fields a flag value.
-func (f *Fields) Set(s string) error {
-	v, err := ParseFields(s)
-	if err == nil {
-		*f = v
-	}
-	return err
+// LinksRead says a listing at tier f reads each entry's link count, device
+// and inode: a stat tier, where the platform's stat has them (statLinks:
+// not Windows).
+func LinksRead(f Fields) bool { return f != Names && statLinks }
+
+// Opened is a local tree opened by Open: the provider bound to its row
+// schema (Bound), and what a run asks of an opened source besides its
+// rows: the rows listed, the run's own output left out (Exclude), the
+// locator, the report and the capabilities. Begin readies it for its one
+// listing. It chooses no writer; the command joins it with one
+// (internal/cli).
+type Opened struct {
+	bound bind.Bound[Entry]
+	p     *Provider
 }
 
-func (f *Fields) Type() string { return "string" }
-
-func flags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
-	o := &Options{LinkTarget: true}
-	cli.Define(f, cli.Flag{Name: "metadata", Value: &o.Fields, Metavar: "names|stat|statx", Default: o.Fields.String(),
-		Usage: "what is read per entry (statx adds created_at; Linux)"})
-	cli.Define(f, cli.Flag{Name: "no-dirs", Value: cli.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
-	cli.Define(f, cli.Flag{Name: "no-link-target", Value: cli.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
-	cli.Define(f, cli.Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: cli.Switch(&o.OneFilesystem),
-		Usage: "do not walk into a mount point below the root, as du -x"})
-	return o
-}
-
-// checkTotals refuses totals the names tier cannot give
-// (registry.Factory.CheckTotals): the allocated bytes are read from each
-// entry's stat. The hard links are too, so the names tier, and a platform
-// whose stat has no link count (statLinks: Windows), count every name.
-func checkTotals(options any, t *totals.Options) error {
-	o, ok := options.(*Options)
-	if !ok {
-		return nil
-	}
-	if o.Fields == Names && t.Primary == totals.AllocatedBytes {
-		return errors.New("--allocated reads each entry's stat: not with --metadata names")
-	}
-	if o.Fields == Names || !statLinks {
-		t.LinksOnce = false
-	}
-	return nil
-}
-
-// checkFilter refuses filters on what a local tree does not read
-// (registry.Factory.CheckFilter): storage classes ever, sizes and times at
-// the names tier.
-func checkFilter(options any, f *filter.Spec) error {
-	size, mtime, class := f.Reads()
-	switch o, _ := options.(*Options); {
-	case class:
-		return errors.New("--storage-class: a local tree has no storage classes")
-	case (size || mtime) && o != nil && o.Fields == Names:
-		return errors.New("--min-size, --max-size, --modified-since and --modified-until read each entry's stat: not with --metadata names")
-	}
-	return nil
-}
-
-// open validates the root. SWATH_LOCALFS_ENGINE=portable selects the
-// portable engine (comparisons).
-func open(_ context.Context, req registry.Request) (registry.Source, error) {
-	o, ok := req.Options.(*Options)
-	if !ok {
-		return nil, fmt.Errorf("localfs: options are %T, not *localfs.Options", req.Options)
-	}
-	opt := *o
-	if os.Getenv("SWATH_LOCALFS_ENGINE") == "portable" {
-		opt.Portable = true
-	}
-	root, err := filepath.Abs(req.Root)
+// Open validates root, a directory or a file, and opens it with opt (New);
+// warn (nil: no one) is told of a directory left out. A root that cannot
+// be had is refused naming root as given.
+func Open(root string, opt Options, warn func(code, msg string)) (*Opened, error) {
+	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
-	p, err := New(root, opt)
+	p, err := New(abs, opt)
 	var pe *fs.PathError
 	switch {
 	case errors.As(err, &pe):
 		// Named as given: nosuchdir: no such file or directory.
-		return nil, fmt.Errorf("%s: %w", req.Root, pe.Err)
+		return nil, fmt.Errorf("%s: %w", root, pe.Err)
 	case err != nil:
 		return nil, err
 	}
-	p.warn = req.Warn
-	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
+	p.warn = warn
+	b, err := bind.Provider[Range, Entry](p, &Schema)
+	if err != nil {
+		return nil, err
+	}
+	return &Opened{bound: b, p: p}, nil
 }
+
+// Bound is the provider bound to its row schema.
+func (o *Opened) Bound() bind.Bound[Entry] { return o.bound }
 
 // oneFilesystemFilter and noDirsFilter are --one-file-system and --no-dirs
 // in the manifest's coverage.filters: options that take no value.
@@ -159,11 +92,6 @@ var (
 	oneFilesystemFilter = reader.Filter{Filter: "one_file_system"}
 	noDirsFilter        = reader.Filter{Filter: "no_dirs"}
 )
-
-type opened struct {
-	registry.Bound[Entry]
-	p *Provider
-}
 
 // countProcsFactor is how many processors a count runs with, per CPU the
 // process had, at a stat tier and at the names tier. A stat or a directory
@@ -178,50 +106,61 @@ const (
 	namesCountProcsFactor = 2
 )
 
-// Run lists the tree. A count runs with more processors (countProcsFactor
-// per CPU at a stat tier, namesCountProcsFactor at the names tier, at most
-// the workers) and restores the setting when it returns; a count has no
-// encoders, reorder storage or readahead, the other readers of GOMAXPROCS.
-// Every run that writes output keeps the setting as it is. A count's rows
-// are not ordered: neither engine sorts a directory's entries (names in a
-// directory are distinct, and nothing consumes the order).
-func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
-	prune, plan, err := env.Filter.PruneDirectories()
+// Begin readies o for its one listing, before it starts: the directories
+// f prunes and the keys it leaves out by name alone
+// (filter.Spec.PruneDirectories, KeyExcluded; f may be nil), and
+// unreadable (nil: no one), told the key prefix of each directory that
+// cannot be read. A count's rows are not ordered: neither engine sorts a
+// directory's entries for one (names in a directory are distinct, and
+// nothing consumes the order), so Begin sets opt.Unordered. A count runs
+// with more processors (countProcsFactor per CPU at a stat tier,
+// namesCountProcsFactor at the names tier, at most opt.Workers) until end
+// restores the setting; a count has no encoders, reorder storage or
+// readahead, the other readers of GOMAXPROCS. Every listing that writes
+// output keeps the setting as it is.
+func (o *Opened) Begin(f *filter.Spec, unreadable func(prefix string), count bool, opt *order.Options) (end func(), err error) {
+	prune, plan, err := f.PruneDirectories()
 	if err != nil {
-		return order.Stats{}, nil, err
+		return nil, err
 	}
 	o.p.prune = prune
-	if o.p.keyOut, err = env.Filter.KeyExcluded(); err != nil {
-		return order.Stats{}, nil, err
+	if o.p.keyOut, err = f.KeyExcluded(); err != nil {
+		return nil, err
 	}
 	o.p.mu.Lock()
 	o.p.stats.Pruning = &plan
 	o.p.mu.Unlock()
-	o.p.unreadable = env.Unreadable
-	if env.Count {
-		o.p.unsorted = true
-		env.Order.Unordered = true
-		factor := countProcsFactor
-		if o.p.opt.Fields == Names {
-			factor = namesCountProcsFactor
-		}
-		prev := runtime.GOMAXPROCS(0)
-		if procs := min(prev*factor, max(prev, env.Order.Workers)); procs > prev {
-			runtime.GOMAXPROCS(procs)
-			defer runtime.GOMAXPROCS(prev)
-			o.p.mu.Lock()
-			o.p.stats.CountProcs = int64(procs)
-			o.p.mu.Unlock()
-		}
+	o.p.unreadable = unreadable
+	if !count {
+		return func() {}, nil
 	}
-	return o.Bound.Run(ctx, env)
+
+	o.p.unsorted = true
+	opt.Unordered = true
+	factor := countProcsFactor
+	if o.p.opt.Fields == Names {
+		factor = namesCountProcsFactor
+	}
+	prev := runtime.GOMAXPROCS(0)
+	procs := min(prev*factor, max(prev, opt.Workers))
+	if procs <= prev {
+		return func() {}, nil
+	}
+	runtime.GOMAXPROCS(procs)
+	o.p.mu.Lock()
+	o.p.stats.CountProcs = int64(procs)
+	o.p.mu.Unlock()
+	return func() { runtime.GOMAXPROCS(prev) }, nil
 }
 
-func (o *opened) Locator() source.Locator {
+// Locator records the root, the local path it is.
+func (o *Opened) Locator() source.Locator {
 	return source.Locator{Kind: "local", Root: o.p.root, Path: o.p.root}
 }
 
-func (o *opened) Listed() int64 {
+// Listed is the rows emitted so far: every file, and every directory but
+// with NoDirs.
+func (o *Opened) Listed() int64 {
 	o.p.mu.Lock()
 	defer o.p.mu.Unlock()
 	if o.p.opt.NoDirs {
@@ -236,7 +175,7 @@ func (o *opened) Listed() int64 {
 // it, and left out with its subtree; any other path (a text file, its
 // temporary) is left out by its name in its directory, which a commit
 // renames over, existing yet or not.
-func (o *opened) Exclude(path string) error {
+func (o *Opened) Exclude(path string) error {
 	key, err := o.locate(path)
 	if err != nil {
 		return fmt.Errorf("locate output: %w", err)
@@ -252,7 +191,7 @@ func (o *opened) Exclude(path string) error {
 
 // locate is path's key below the root ("a/b/" for a directory, "a/b"
 // otherwise), "" when it is not below it.
-func (o *opened) locate(path string) (string, error) {
+func (o *Opened) locate(path string) (string, error) {
 	if runtime.GOOS == "windows" {
 		// Windows removes "." and ".." from a path by its spelling
 		// (GetFullPathName, which Abs calls) before it follows any link:
@@ -339,7 +278,7 @@ func storedName(dir, name string) string {
 // Report: an entry counts as unreadable when an error kept it (or its
 // subtree) out; a link whose target could not be read is still listed, and
 // an entry that vanished is no longer part of the tree.
-func (o *opened) Report() source.Report {
+func (o *Opened) Report() source.Report {
 	st := o.p.Stats()
 	unreadable := st.Errors() - st.ReadlinkErrors - st.Vanished
 	cov := source.Coverage{Target: o.p.root, Complete: unreadable == 0, StopReason: source.StopEndOfScope, Unreadable: unreadable}
@@ -364,12 +303,12 @@ func (o *opened) Report() source.Report {
 
 // Capabilities: a directory is read whole and sorted; there is no seek and
 // no resume.
-func (o *opened) Capabilities() source.Capabilities {
+func (o *Opened) Capabilities() source.Capabilities {
 	return source.Capabilities{Seek: source.SeekNone, Order: source.OrderNone}
 }
 
 var (
-	_ source.Capable  = (*opened)(nil)
-	_ source.Excluder = (*opened)(nil)
-	_ source.Reporter = (*opened)(nil)
+	_ source.Capable  = (*Opened)(nil)
+	_ source.Excluder = (*Opened)(nil)
+	_ source.Reporter = (*Opened)(nil)
 )

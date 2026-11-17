@@ -122,13 +122,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
   `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them
   (`--no-link-target` off), `link_target` as collected (the manifest's `collected`).
-- **Recursive exclusion pruning.** Before workers start, `opened.Run` derives an immutable directory
-  predicate from `registry.Env.Filter`. The filter package's glob compiler recognizes terminal `/**`
+- **Recursive exclusion pruning.** Before workers start, `Opened.Begin` derives an immutable directory
+  predicate from the run's filters (`registry.Env.Filter`, which the command's local source hands it). The filter package's glob compiler recognizes terminal `/**`
   segments without a second glob language. The shared `emit` path retains the directory row for the
   ordinary row filter but submits no child for a matching directory; this applies to ordered listings,
   counts, native chunks/slabs and the portable engine. Includes, metadata filters, directory-row-only
   exclusions and regexes do not themselves stop descent. The run's own output (`Options.Skip`, set by
-  `opened.Exclude` for each path the pipeline names: a dataset directory, or a text file, its temporary and
+  `Opened.Exclude` for each path the pipeline names: a dataset directory, or a text file, its temporary and
   its scratch directory) is dropped in `emit` before anything else: its row, and for a directory its
   traversal. A directory is located by identity, a file by its name in its directory as the system resolves
   the path, never cleaned first on POSIX (`link/..` is the parent of `link`'s target; Windows removes `..` by

@@ -18,6 +18,9 @@ import (
 	"github.com/varveio/swath/internal/replay/store"
 	sourcegcs "github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
 // TestNativeSchemaRendersTheBucketsMetadata lists a fake bucket with the

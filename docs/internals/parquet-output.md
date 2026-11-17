@@ -380,8 +380,9 @@ columns the totals and the filters need, in parallel scans, once every part's fo
 against the dataset's schema (a dataset that breaks it is refused, exit 1).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
-`registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer
-declaration before the listing creates a journal, dataset or text file. Generic lister consumers—text
+`bind.Provider` resolves these accessors once when the provider opens, and refuses a malformed producer
+declaration (`registry.Bind`, a test provider's, panics on it) before the listing creates a journal, dataset
+or text file. Generic lister consumers—text
 output, version counts and per-prefix totals—share this interpretation. They do not infer roles from names
 such as `is_latest`, `generation` or `deleted_at`. The reader module's typed decoders still bind named
 columns for their specific row contracts. `registry` `TestVersionRolesFollowDeclaration` and `listing`

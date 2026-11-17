@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package cli is what the command line composes providers with: the flag
-// table (Flag, Define, Described and the flag values), the help groups, and
+// table (Flag, Define, Described and the flag values), the help groups,
 // the flag groups the providers share (StoreGroup, EngineGroup), which
-// fill the plain configuration of package source and of the range engine.
-// A provider's registration (its register.go) defines its own flags with
-// it and names the groups it takes in its registry.Factory; the command
-// registers each group once. Nothing a provider is built from imports it
-// (TestProviderImportBoundary).
+// fill the plain configuration of package source and of the range engine,
+// and each provider's registration, one file each (s3.go, gcs.go,
+// azblob.go, localfs.go). A registration defines the provider's own flags
+// with the table, turns them into the provider's typed options, names the
+// groups it takes in its registry.Factory, registered from this package's
+// init, and joins the provider's opened view with the run's writers
+// (registry.From); the command registers each group once. Importing this
+// package registers every provider. No provider, nor anything a provider is
+// built from, imports it (TestProviderImportBoundary).
 package cli
 
 import (

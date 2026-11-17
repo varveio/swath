@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/azblob/client"
@@ -125,7 +124,7 @@ func TestFetchIdentity(t *testing.T) {
 	names := func(opt Options) []string {
 		t.Helper()
 		opt.Client = &routed{pages: &pages{}}
-		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &opt, Workers: 1})
+		src, err := openView("az://acct/c", opt, 1)
 		if err != nil {
 			t.Fatal(err)
 		}

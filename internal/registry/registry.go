@@ -1,13 +1,14 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package registry connects providers to the pipeline. Providers register a
-// Factory by URL scheme from an init function; the command imports them only
-// for that. An opened source is bound (Bind) to the typed pipeline stages
-// with its range and row types, which the pipeline itself never names:
-// listing, order, parquetout, dataset, schema and journal import no
-// provider. The binding itself is package bind's; registry chooses where a
-// run's rows go (Env: the Parquet router, a text stream or nowhere).
+// Package registry connects providers to the pipeline. The command's
+// composition (package cli) registers a Factory per URL scheme; the
+// providers themselves know nothing of it. An opened source is bound to
+// the typed pipeline stages with its row type, which the pipeline itself
+// never names: listing, order, parquetout, dataset, schema and journal
+// import no provider. The binding itself is package bind's (a provider's
+// Opened carries it, From joins it here); registry chooses where a run's
+// rows go (Env: the Parquet router, a text stream or nowhere).
 package registry
 
 import (
@@ -236,6 +237,10 @@ type Bound[P any] struct {
 	b bind.Bound[P]
 }
 
+// From is b, a provider its package bound when it opened (its Opened's
+// Bound), with the rows going where a run's Env sends them.
+func From[P any](b bind.Bound[P]) Bound[P] { return Bound[P]{b} }
+
 // Bind erases p's range type and binds it to its row schema and its
 // version roles (bind.Provider). It panics on roles that do not define the
 // rows (schema.BindVersions), as schema.Bind does: a producer's bug, found
@@ -245,7 +250,7 @@ func Bind[R, P any](p source.Provider[R, P], s *schema.Schema[P]) Bound[P] {
 	if err != nil {
 		panic(err.Error())
 	}
-	return Bound[P]{b}
+	return From(b)
 }
 
 // Schema is the bound schema's description.
