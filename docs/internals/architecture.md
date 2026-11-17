@@ -75,6 +75,9 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
 transitively.
+`internal/order` and `internal/dataset` reach no cloud SDK module either (`internal/order` `TestNoCloudSDK`): a store's
+failure is classed by its `HTTPStatusCode`, which `objfile`'s GCS and Azure writers attach to the errors they report
+(`objfile.WithHTTPStatus`) and the AWS SDK's response errors carry, so `dataset.FailureClass` names no SDK error type.
 
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
 inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: the schema ids and their

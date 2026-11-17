@@ -69,7 +69,9 @@ type WriteOptions struct {
 	ChunkTransferTimeout time.Duration
 	// Retried, if set, is called with each failed attempt the SDK's policy
 	// would retry, and the operation it belongs to (a caller's account of
-	// retries and their classes). It must return quickly.
+	// retries and their classes). A service answer's status is reachable
+	// through the error's HTTPStatusCode (objfile.WithHTTPStatus). It must
+	// return quickly.
 	Retried func(op string, err error)
 }
 
@@ -118,7 +120,7 @@ func (w writer) object(name string, budget func() bool) *storage.ObjectHandle {
 				if rc != nil {
 					op = rc.Operation
 				}
-				retried(op, err)
+				retried(op, objfile.WithHTTPStatus(err, status(err)))
 			}
 			return true
 		}))
