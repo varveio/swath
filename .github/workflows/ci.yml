@@ -215,7 +215,7 @@ jobs:
 
   # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
   # table into this matrix, so the table is the one place a shard is added). A leg's name is its
-  # shard, and its build cache the one the table names (the shards of internal/listing share one);
+  # shard, and its build cache the one the table names (the shards of one package share one);
   # the step prints the exact `go test` command to rerun it locally. fail-fast is off so
   # one red shard still lets the others report. go test's -timeout is per package binary, so it
   # is set to leave the job's limit room for setup, compiling and the packages queued ahead of

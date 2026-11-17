@@ -223,8 +223,9 @@ splitting a package by `-run` is the lever, and `--check` keeps the split comple
 A row may also name another row's build cache. The shards of `internal/listing` build the same
 test binary with the same flags on the same runner, and their tests build nothing else, so they
 share one cache (`go-race-listing-rest`) instead of growing four copies; `--check` refuses a shared
-cache between rows of different packages or runners. The `cmd/swath` shards keep their own: their
-tests build the swath binary, the kill matrices with the `swathtest` tag, so what each uses differs.
+cache between rows of different packages or runners. The two `cmd/swath` shards share one too
+(`go-race-cmd`): both build the race test binary and the swath binary with the `swathtest` tag,
+and `cmd` also builds it without the tag, a few entries it rebuilds when `cmd-kill` saved first.
 
 Each leg runs with `-count=1`, because a restored build cache would otherwise replay earlier
 results as `(cached)` instead of racing them, and with a per-package `-timeout` below the job's
@@ -250,7 +251,7 @@ legs of several long shards each made the slowest leg the critical path of every
 `remote-crash` (about two minutes) rides with `durable`, the shortest of them, and the three `rest*`
 shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
 cache, which the stress Windows runs restore; the other legs use the build cache of their shards
-(the three `internal/listing` legs share one). The nightly `go-xos-windows` runs the main module in
+(the three `internal/listing` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
@@ -318,11 +319,12 @@ to the step summary, so a pull request shows what `main` would save. The cost: a
 did not build is not in the next run's cache, and is built again when a run needs it.
 
 Jobs that build the same packages with the same flags on one runner share a build-cache key
-rather than each saving a copy: the four `internal/listing` race shards on arm64, and the three
-`internal/listing` Windows legs, as the shard table names them. They race to save one key per
-commit; the first save wins and the others log a warning. That is correct only because every one
-of them would save the same trimmed entries, which is why jobs whose tests build different things
-(the `cmd/swath` shards) keep their own key: a shared one would hold only the first saver's.
+rather than each saving a copy: the `internal/listing` race shards and the `cmd/swath` race shards
+on arm64, and likewise their Windows legs, as the shard table names them. They race to save one key
+per commit; the first save wins and the others log a warning. That works because each of them
+would save the same trimmed entries, or nearly (`cmd` also builds the swath binary without the
+`swathtest` tag): a shared cache holds only the first saver's entries, so jobs whose tests build
+different things keep their own key.
 
 Per-commit build keys would grow without bound, so `cache-maintenance.yml` runs
 [`scripts/ci/cache-prune.sh`](../../../scripts/ci/cache-prune.sh) after main CI, on CodeQL

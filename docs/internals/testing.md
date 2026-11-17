@@ -205,7 +205,7 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm | `listing-rest`'s |
 | `remote-crash` | `-run '^TestRemoteCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm | `listing-rest`'s |
 | `listing-rest` | `-skip` the three patterns above, `./internal/listing` | ubuntu-24.04-arm | `go-race-listing-rest` |
-| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm | `go-race-cmd-kill` |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm | `cmd`'s |
 | `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm | `go-race-cmd` |
 | `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest | `go-race-rest-replay` |
 | `rest-source` | `./internal/source/...` | ubuntu-latest | `go-race-rest-source` |
@@ -233,8 +233,8 @@ package (pattern or remainder) selects no test, or a test of a split package is 
 rows are checked for packages, not tests: a row whose packages have no tests (`./internal/faults` alone,
 say) passes and runs nothing.
 It also fails a row that shares the build cache of a row that is unknown, shares another's itself, or runs other
-packages or on another runner: shards share a cache only when they build the same test binary, and the
-`internal/listing` shards' tests build nothing else (the `cmd/swath` ones build the swath binary, differently).
+packages or on another runner: shards share a cache only when they build the same test binary (the
+`cmd/swath` shards' tests also build the swath binary with the `swathtest` tag, and `cmd`'s without it as well).
 `--self-test`, also in `go-lint`, runs these table checks against synthetic package lists, with no Go. A new
 package needs no edit; a new `-run` row needs its package's remainder to stay nonempty.
 
@@ -253,7 +253,7 @@ without `-race`, which needs cgo the runner may lack):
 | `crash` | `crash` | | `go-xos-listing-rest` |
 | `durable-remote` | `durable`, `remote-crash` | | `go-xos-listing-rest` |
 | `listing-rest` | `listing-rest` | | `go-xos-listing-rest` |
-| `cmd-kill` | `cmd-kill` | | `go-xos-cmd-kill` |
+| `cmd-kill` | `cmd-kill` | | `go-xos-cmd` |
 | `cmd` | `cmd` | | `go-xos-cmd` |
 | `rest` | `rest-replay`, `rest-source`, `rest` | `go vet ./...`, the selected nested modules | `go-xos` |
 

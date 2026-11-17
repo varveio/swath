@@ -48,14 +48,15 @@ amd=ubuntu-latest
 # the remainder of a split package), build cache (-: the shard's own; else the shard whose cache
 # it shares). Rows that compile the same packages with the same flags on the same runner can
 # share one cache instead of each growing its own: the `internal/listing` rows build one test
-# binary and their tests build nothing else. The `cmd/swath` rows keep their own: their tests
-# build the swath binary, the kill matrices with the swathtest tag, so their caches differ.
+# binary and their tests build nothing else; the `cmd/swath` rows' tests both build the swath
+# binary with the swathtest tag, and `cmd`'s also without it (a few entries, rebuilt when the
+# kill shard saved the shared cache first).
 table=(
   "crash        $arm ./internal/listing                         ^TestCrashMatrix\$                       listing-rest"
   "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$   listing-rest"
   "remote-crash $arm ./internal/listing                         ^TestRemoteCrashMatrix\$                 listing-rest"
   "listing-rest $arm ./internal/listing                         -                                        -"
-  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$      -"
+  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
   "cmd          $arm ./cmd/swath                                -                                        -"
   "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -                                        -"
   "rest-source  $amd ./internal/source/...                      -                                        -"
