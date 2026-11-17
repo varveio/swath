@@ -4,10 +4,7 @@
 package cli
 
 import (
-	"go/parser"
-	"go/token"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -26,16 +23,9 @@ var composition = []string{
 	mod + "/internal/cli",
 }
 
-// providers are the provider packages under internal/source, each checked
-// whole once it is no longer pending.
+// providers are the provider packages under internal/source. Each is
+// registered here, by this package's init, and imports none of it.
 var providers = []string{"s3", "gcs", "azblob", "localfs"}
-
-// pending are the providers whose register.go still registers the
-// provider and defines its flags, importing the composition: they are
-// checked without that file. Moving it into this package removes the
-// file, and the entry with it (the test fails while an entry outlives its
-// file).
-var pending = []string{"localfs"}
 
 // readerEdge are the packages that may import parquet-go in a provider's
 // closure: SeekParquet's reader, reached through schema → reader, an edge
@@ -110,40 +100,12 @@ func violations(deps []pkg, reader *bool) []string {
 	return v
 }
 
-// importsBut is the imports of the non-test files of package path, other
-// than the file named except.
-func importsBut(t *testing.T, path, except string) []string {
-	t.Helper()
-	f := golist(t, "-f", "{{.Dir}}|{{join .GoFiles \",\"}}", path)
-	dir, files, _ := strings.Cut(f[0], "|")
-	if !slices.Contains(strings.Split(files, ","), except) {
-		t.Fatalf("%s has no %s: drop it from pending", path, except)
-	}
-	var imports []string
-	fset := token.NewFileSet()
-	for _, name := range strings.Split(files, ",") {
-		if name == except {
-			continue
-		}
-		af, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, imp := range af.Imports {
-			if p := strings.Trim(imp.Path.Value, `"`); !slices.Contains(imports, p) {
-				imports = append(imports, p)
-			}
-		}
-	}
-	return imports
-}
-
 // TestProviderImportBoundary: the packages providers are built from (the
 // provider contract, the range engine, the HTTP client plumbing, the token
 // sources) and each provider import none of the command's composition,
 // directly or not, and reach parquet-go only through the reader edge. A
-// provider still pending is checked without its register.go, every other
-// one whole.
+// provider importing none of it cannot register itself either: this
+// package registers it.
 func TestProviderImportBoundary(t *testing.T) {
 	var reader bool
 	for _, p := range []string{"source", "source/keyrange", "source/objhttp", "source/tokensource"} {
@@ -152,15 +114,8 @@ func TestProviderImportBoundary(t *testing.T) {
 		}
 	}
 	for _, p := range providers {
-		path := mod + "/internal/source/" + p
-		name := "internal/source/" + p
-		roots := []string{path}
-		if slices.Contains(pending, p) {
-			name += ", register.go aside,"
-			roots = importsBut(t, path, "register.go")
-		}
-		if v := violations(closure(t, roots), &reader); len(v) > 0 {
-			t.Errorf("%s reaches the composition: %q", name, v)
+		if v := violations(closure(t, []string{mod + "/internal/source/" + p}), &reader); len(v) > 0 {
+			t.Errorf("internal/source/%s reaches the composition: %q", p, v)
 		}
 	}
 	if !reader && len(readerEdge) > 0 {

@@ -186,7 +186,7 @@ func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
 		})
 		ast.Inspect(f, func(n ast.Node) bool {
 			if _, ok := n.(*ast.ImportSpec); ok {
-				return false // the blank imports that register providers
+				return false // import paths name packages, not what the command spells
 			}
 			e, ok := n.(ast.Expr)
 			if !ok {

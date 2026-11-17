@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package source_test
+package cli
 
 import (
 	"bytes"
@@ -41,8 +41,8 @@ type (
 func (routedS3) Route(bucket string) string { return "http://store.example/" + bucket }
 
 // TestRegisteredSources opens each object-store provider as the command
-// does, through registry.Lookup(root).Open, and checks the registered
-// source: every optional interface the pipeline probes for is present
+// does, through registry.Lookup(root).Open, and checks the source this
+// package joins (s3Source, gcsSource, azblobSource): every optional interface the pipeline probes for is present
 // (an absent one silently turns its capability off), the capabilities are
 // the provider's (sequential, capped and supplied-client runs included),
 // and a supplied client that counts nothing reports zero activity.

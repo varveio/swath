@@ -42,10 +42,6 @@ import (
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/objfile"
-
-	// Providers register themselves (scheme and flag group); the command
-	// imports them for nothing else.
-	_ "github.com/varveio/swath/internal/source/localfs"
 )
 
 // shutdownGrace bounds the time a stopped run (a signal, the deadline, a

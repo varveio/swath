@@ -16,8 +16,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 )
 
 type collect struct {
@@ -363,7 +363,7 @@ func (f *failAfter) Write(_ context.Context, segs [][]Row) error {
 }
 
 // TestUnsortedCountEqualsSortedListing: a count does not sort a
-// directory's entries (opened.Run sets unsorted and order's Unordered), yet
+// directory's entries (Opened.Begin sets unsorted and order's Unordered), yet
 // it sees the same keys, sizes and counts as a sorted listing, at every
 // tier and with a chunked directory.
 func TestUnsortedCountEqualsSortedListing(t *testing.T) {
@@ -376,12 +376,12 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 			t.Run(fmt.Sprintf("portable=%v/%s", portable, fields), func(t *testing.T) {
 				opt := Options{Fields: fields, LinkTarget: true, Portable: portable}
 				sorted, want := list(t, root, opt, 4, 7)
-				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: 4})
+				src, err := Open(root, opt, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := src.(*opened).p
-				st, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 4}})
+				p := src.p
+				st, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: 4}}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}

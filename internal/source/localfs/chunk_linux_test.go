@@ -13,8 +13,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 )
 
 // kids collects one Expand's child ranges.
@@ -72,11 +72,11 @@ func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 	prev := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(prev)
 	for _, fields := range []Fields{Stat, Names} {
-		src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Fields: fields}, Workers: 64})
+		src, err := Open(root, Options{Fields: fields}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 64}}); err != nil {
+		if _, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: 64}}, nil); err != nil {
 			t.Fatal(err)
 		}
 		if n := runtime.GOMAXPROCS(0); n != 2 {
@@ -86,7 +86,7 @@ func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 		if fields == Names {
 			want = 2 * namesCountProcsFactor
 		}
-		if got := src.(*opened).p.Stats().CountProcs; got != want {
+		if got := src.p.Stats().CountProcs; got != want {
 			t.Fatalf("%s: count_procs %d, want %d", fields, got, want)
 		}
 	}
@@ -139,15 +139,15 @@ func TestCountSlabs(t *testing.T) {
 				opt := Options{Fields: fields, LinkTarget: true}
 				sorted, want := list(t, root, opt, workers, 7)
 				fds := countFDs(t)
-				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: workers})
+				src, err := Open(root, opt, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				st, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: workers}})
+				st, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: workers}}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				got := src.(*opened).p.Stats()
+				got := src.p.Stats()
 				if st.Rows != int64(len(sorted)) || got.Files != want.Files || got.Dirs != want.Dirs || got.Bytes != want.Bytes {
 					t.Fatalf("count: rows %d files %d dirs %d bytes %d; listing: rows %d files %d dirs %d bytes %d",
 						st.Rows, got.Files, got.Dirs, got.Bytes, len(sorted), want.Files, want.Dirs, want.Bytes)
