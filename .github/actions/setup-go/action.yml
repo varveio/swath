@@ -99,7 +99,7 @@ runs:
     # Restored on every event; saved by save-go-cache, on a push to main only, under the exact key.
     # The key names the commit so that parallel jobs never race for one key: a key once saved is
     # never overwritten, and the first save of a shared key wins, which is why only jobs whose
-    # trimmed caches are the same share one.
+    # trimmed caches are the same, or nearly, share one.
     - name: Restore the Go build cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:

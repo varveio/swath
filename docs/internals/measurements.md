@@ -2566,6 +2566,43 @@ Microsoft Defender was not a cost: on every leg `Get-MpComputerStatus` reported 
 false before any change, and `C:\` and `D:\` were already excluded. A setup step turning it off measured
 nothing and was dropped.
 
+### Windows shard legs, `remote-crash` and trimmed build caches, 2026-11-17
+
+Before, over the main pushes and full-scope pull requests after #608: a full-scope pull request took a
+median 17.1 min from trigger to `ci-gate` (12.7–26.8, n=13) and a `main` push 17.9 (n=5), the slowest
+Windows leg, `matrices-rest`, a median 17.6 (once 26.5 of its 30-minute limit). On an ordinary pull
+request `go-race (listing-rest)` was the critical job at 7.9–8.1 min, its `internal/listing` binary 430 s,
+of which `TestRemoteCrashMatrix` 122 s. The Actions cache held 10.9 GB with one generation kept, and
+56 % of the Go jobs on 8 `main` runs missed the module cache.
+
+After (#619, full scope; [44060041658](https://github.com/varveio/swath/actions/runs/44060041658) with six
+Windows legs, `durable` and `remote-crash` in one, and
+[44062912533](https://github.com/varveio/swath/actions/runs/44062912533) with seven), minutes:
+
+| | 44060041658 | 44062912533 |
+|---|---:|---:|
+| trigger to `ci-gate` | 15.7 | 15.5 |
+| critical job | `go-xos (macos-latest)` 15.1 | `go-xos (macos-latest)` 14.5 |
+| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`listing-rest`) |
+| Windows legs, the others | 5.7–11.8 | 5.5–8.1 |
+| `go-race (listing-rest)` | 6.1 (binary 297–313 s) | 6.1 |
+| `go-race (remote-crash)` | 3.0 (binary 124–127 s) | 3.2 |
+| `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 |
+
+On Windows `TestRemoteCrashMatrix` took 298 and 216 s and `durable` 319 and 264 s, so the two do not
+share a leg. The Windows legs printed the same package results as the three legs of `main` run
+44046353331: the same packages, `internal/listing` run by four `go test` commands instead of three.
+
+The trim, on disk (Actions stores the caches zstd-compressed, at 0.16–0.20 of these sizes as the restored
+caches showed): the arm64 `internal/listing` shards restored 7.4 GB and kept 937 MiB, each of the four the
+same 5,703 entries; `cmd-kill` and `cmd` kept 7,803 and 7,807 entries (1.7 GiB); arm64 `go-xos` 10.4 GB to
+1.4; macOS `go-xos` 4.8 to 1.6; `go-build` 6.6 to 4.6; the Windows legs 1.1–3.0 to 0.86–1.36. Summed over
+the 17 build-cache families a `main` push now saves, the kept sizes are 27.1 GB on disk, about 5.0 GB
+compressed; with the four module caches (1.8 GB), BuildKit (0.4) and CodeQL (0.1), one generation is
+about 7.3 GB of the 10 GB. A pull request saves nothing, so the sizes `main` saves, the second
+generation an overlapping `main` run holds until the prune, and the eviction rate are measured only after
+the merge. Aging took 0.1–5 s per job and the trim 1–10 s, Windows the slowest.
+
 ### Parallel CLI crash tests and Java input filtering, 2026-11-10
 
 PR #410 lets seven isolated CLI crash/recovery tests overlap after their private binary builds,

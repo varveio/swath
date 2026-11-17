@@ -343,7 +343,10 @@ on stdin.
 Newest means creation time, not this run's commit: overlapping main runs must not remove a newer
 run's caches. A fixed-order, deduplicated snapshot limits deletions to observed IDs; new entries
 are left for the next pass. This bounds generations, not bytes: concurrent writes can temporarily
-exceed the quota, and the retained families still need to fit the repository budget.
+exceed the quota, and the retained families still need to fit the repository budget. With the
+trim, one generation is estimated at about 7.3 GB: 17 build-cache families of about 5.0 GB
+compressed, four module caches of 1.8 GB, BuildKit and CodeQL
+([measurements](../../internals/measurements.md#windows-shard-legs-remote-crash-and-trimmed-build-caches-2026-11-17)).
 
 ### Other caches
 
