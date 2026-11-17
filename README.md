@@ -62,9 +62,10 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 
 `du` and `find` answer most questions about a small directory, and a scheduled provider inventory costs less
 when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
-parallel, which matters once a bucket holds tens of millions of keys. In one live run with `--workers 1024`,
-swath 0.4.0 counted 1.09 billion S3 objects in 188 seconds on one 32-vCPU VM
-([how this was measured](docs/internals/measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17);
+parallel, which matters once a bucket holds tens of millions of keys. In one live run with `--workers 2048`,
+swath 0.4.0 wrote a sorted Parquet inventory of 1.09 billion S3 objects in 238 seconds, under four minutes, on
+one 64-vCPU VM; a separate count-only run of the same bucket took 169 seconds
+([how this was measured](docs/internals/measurements.md#the-same-bucket-on-64-vcpus-at-2048-workers-sentinel-cogs-2026-11-17);
 [how many workers to use](https://swath.varve.io/docs/size-a-run.html#workers)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 

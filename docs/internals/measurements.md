@@ -462,6 +462,43 @@ order, not interleaved. The object counts increased from each arm to the next, f
 its run. The datasets were deleted after each arm and not compared with each other. Why the Go tail
 took longer at 2,048 workers than at 1,024 is not established by this run.
 
+### The same bucket on 64 vCPUs at 2,048 workers (sentinel-cogs, 2026-11-17)
+
+Later the same day, one GCP Batch job on one standard n4-highcpu-64 (64 vCPU, 125 GiB) in us-east1-b with a
+1,500 GB hyperdisk-balanced disk, the release archive of swath 0.4.0 (checked against `SHA256SUMS`; it prints
+`swath 0.4.0 (7e75c77f59c9cc31248e6d1326d9140cb8be5567)`), listing `s3://sentinel-cogs` (AWS us-west-2)
+anonymously. Arms one after another on that VM, each capped at 40 minutes, output on the VM's disk and deleted
+after each arm, everything but the worker count at its default:
+
+```bash
+swath list s3://sentinel-cogs -o cogs.tsv.zst --workers 2048 --anonymous --s3-region us-west-2   # text
+swath list s3://sentinel-cogs -o ds           --workers 2048 --anonymous --s3-region us-west-2   # sorted Parquet
+swath du   s3://sentinel-cogs -d 0            --workers 2048 --anonymous --s3-region us-west-2   # count
+```
+
+| Arm | Exit | Wall s | Objects | HTTP attempts | Retries / throttles | Last listing page s | Tail s | Peak RSS | CPU s | Spill peak | Disk peak | Output |
+|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| zstd TSV file | 0 | 621 | 1,091,779,640 | 1,128,531 | 0 / 0 | 143 | 477 | 7.6 GB | 9,439 | 32.5 GB | 37.6 GB | one file, 37.6 GB |
+| **sorted Parquet dataset** | 0 | **238** | 1,091,787,122 | 1,129,194 | 0 / 0 | 157 | 73 | 7.0 GB | 7,844 | 32.5 GB | 65.2 GB | 495 parts, 32.7 GB |
+| count (`du -d 0`) | 0 | **169** | 1,091,789,417 | 1,132,168 | 0 / 0 | – | – | 2.7 GB | 5,470 | – | – | – |
+
+Wall seconds are the process's, start to exit; peak RSS and CPU seconds are from `/usr/bin/time -v` and the run
+report (RSS in 10^9-byte GB); the last listing page and the tail are `timings.provider_finished_at` less
+`timings.started_at` and `diagnostics.resources.drain.tail_ns`. Requests in flight averaged 358 of 2,048 in the
+text arm, 996 in the Parquet arm and 1,532 in the count.
+
+- **The Parquet dataset** took 238 s against 289 s at 1,024 workers on 32 vCPUs that morning: the listing ended
+  at 157 s and the tail took 73 s on 32 segment workers.
+- **The text file** listed as fast (its last page came at 143 s) and then spent 477 s, 77 % of the run, in its
+  tail: one ordered drain of the spill into the file, about 2.3 million rows a second on an average of 15 of 64
+  cores. Text output has no counterpart of the Parquet tail's segment workers
+  ([#633](https://github.com/varveio/swath/issues/633)).
+- **The count** ran at 6.45 million keys a second.
+
+One run per arm, cross-cloud, that VM and that hour; the object counts increased from each arm to the next,
+consistent with a bucket that grows. Two arms of the same job on a ten-billion-object bucket had not finished
+when this was recorded.
+
 ### Workers, one core and the study harness (through the fake)
 
 **Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
