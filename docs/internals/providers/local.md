@@ -90,14 +90,56 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   descriptors stay within the limit plus two per worker. It is not kept: its subdirectories are opened from
   the nearest kept ancestor, one `openat` per name below it, intermediates `O_PATH` on Linux (no read
   permission needed; read-only on macOS) each closed as the next opens, checking for a stop between names; a name replaced by a link on that way is
-  refused as above, its error sample naming the level. The cost is one `openat` per directory, as a path open
-  was, plus, past the limit, one per name between the ancestor and the directory. With `--one-file-system`
+  refused as above, its error sample naming the level. The cost is one `openat` per directory, as a path
+  open was, plus, past the limit, one per name between the ancestor and the directory, which on a deep
+  narrow tree grows with the square of its depth. A walk with a limit on every descriptor
+  (`MaxDescriptors`, below) bounds that: it reserves part of the kept limit for **checkpoints**, a
+  directory reached 8 names (`maxRedescent`) below a kept one, whose subdirectories are then opened from
+  it. A worker's kept directories are ancestors of the one it reads, so a reserve of one checkpoint per 8
+  levels of `MaxDepth` per worker means no directory is opened more than 8 names below a kept one: with one
+  worker on any tree, and with several on any tree whose directories with subdirectories still queued lie
+  on as many branches as there are workers, as on a deep narrow tree. Past that, a redescent is bounded by
+  `MaxDepth`. `TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258
+  directories, `MaxDepth` 128, the least limit accepted (19 descriptors for one worker on Linux, 17 kept:
+  the root and 16 checkpoints, all of them used), the worst order: 1,152 names opened, none more than 8
+  below a kept directory; 16,512 without checkpoints. The command reserves none and keeps no checkpoint. With `--one-file-system`
   each directory opened below the root, and each intermediate on the way from an ancestor, is `fstat`ed
   against the root's device; the first on another device is not walked and that is no error, as at a mount
   point (`other_device_dirs`). The report's `dir_opens` counts `opened`,
   `redescents` (opens from an ancestor), `refused` (directories not kept), `failed` by reason (`not_found`,
   `permission`, `not_directory`, `symlink`, `name_too_long`, `other_device`, `other`), `peak_kept` and
-  `max_kept`.
+  `max_kept`; with `MaxDescriptors` also `checkpoints`, `redescent_names` and `max_redescent` (the names
+  redescents open, in all and at most) and `peak_open`, the most descriptors open at once, kept or not.
+  On macOS `os.File.ReadDir` reads through a directory stream on a duplicate of the descriptor
+  (`fdopendir`), so there, with `MaxDescriptors`, a directory counts two.
+- **A held root** (`OpenDir`, Linux and macOS; no command option uses it). A caller that opened the root
+  itself (`O_DIRECTORY`, not following a link) hands the open file to the provider, which never resolves the
+  root by a path: it lists the directory at a prefix below it (`""`, or a directory key `a/b/`, keys staying
+  relative to the root), opening that directory and every one below it relative to the held descriptor, one
+  name at a time with `O_NOFOLLOW` (the root itself as `.`, so the walk has its own read offset), each checked
+  against the root's device, the prefix's ancestors included (`OneFilesystem` is set; a stat tier is
+  required). The prefix's own entry is not listed (`Lookup` answers it). The caller keeps the file open until
+  every range is expanded or disposed. `Lookup` resolves one key the same way: `ENOENT` or `ENOTDIR` at the
+  key, or at a directory on the way whose name is no symbolic link (`fstatat` tells), is absent; a symbolic link at the key is present as itself; a symbolic link or
+  another device on the way, `EACCES`, `EPERM`, `ENAMETOOLONG` and other errors are unknown, with the class
+  of the contract's `Unread`. Options a library walk sets, all off for the command: `MaxDescriptors` bounds
+  every descriptor (`Opened.Begin` reserves two per worker from it, the most a worker holds beyond the kept
+  ones, and the checkpoints above; it needs `MaxDepth` and refuses a limit too small for both); `MaxDepth` lists a directory deeper than it below the prefix without reading it (`too_deep_dirs`);
+  `NoPaths` keeps no error sample and passes on no warning, so no entry's path stays after the walk;
+  `MaxHeldBytes` makes a count keep each directory's names until its enumeration ends (shared by its slabs
+  and continuations, released when it ends or is disposed), so a name read twice under concurrent renames
+  is listed once (`repeated_names`), and bounds what those sets hold across the walk at 64 bytes plus the
+  name each: a directory too wide for it ends its enumeration there (`held_budget_dirs`; the portable
+  engine then reads 1,024 entries at a time rather than the whole directory). The walk reports each place
+  it did not read as a worker meets it (`Provider.unread`), with the contract's scope and class
+  (`reader/listing`); no option hands the reports to a caller yet, only tests take them: a
+  directory not opened or not entered (`subtree`: permission, a symbolic link in its place, another
+  device, too deep, a name too long, the tree changing under it, I/O), a directory whose enumeration did
+  not end (`listing`: a read error, the held-names bound), an entry whose stat failed (`subtree`), and, when
+  the walk stops, `budget` for each range it did not finish: `listing` for a directory it had opened, a
+  chunk or a continuation, `subtree` for one it never opened, from `Dispose` for the ranges still queued
+  (`TestStoppedWalkReportsUnread`). The order stage's `order.SubtreeSink` tells when a directory's subtree
+  ended; every report under it was made before.
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on
   macOS) is opened as any other, one name below its parent, so a tree of any depth lists; its children are
   statted and their links read relative to it. A single name past the filesystem's limit fails as an open

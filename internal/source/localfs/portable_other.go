@@ -25,6 +25,8 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 
 func disposeChunk(Range) {}
 
+func disposeContinuation(Range) {}
+
 // statPath fills r from an lstat of path, as the portable engine reads an
 // entry.
 func statPath(path string, _ Fields, r *Entry) error {

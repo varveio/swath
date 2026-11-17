@@ -1355,6 +1355,32 @@ within the limit of 1,024 with nothing refused. At 1,024 workers the limit binds
 count refuses 75,417 directories and opens 70,679 from an ancestor, every one of the 99,892 opened, and takes
 +19.7 % [+9.9, +28.6] (15 rounds, the earlier build first in each; 0.406 to 0.467 s).
 
+### Library limits on the local walker (2026-11-17)
+
+**Synthetic, local, shared host** (the box above, load average 2 to 11 from other work, Go 1.27.4, `deep`
+as above). Paired and interleaved, the median of the per-round differences with a 95 % bootstrap interval,
+`2e63740c` against the change as the command runs it (no limit on every descriptor: nothing counted beyond
+the kept directories, no checkpoint reserve, the library options off), `swath diag count`, default workers
+(64):
+
+| | rounds | before | after | change |
+|---|---:|---:|---:|---:|
+| `deep`, wall | 120 | 0.115 s | 0.116 s | +0.4 % [−3.2, +3.8] |
+| `deep`, wall, a second run | 120 | 0.114 s | 0.118 s | +3.2 % [−1.3, +6.3] |
+| `deep`, user + system CPU | 120 | 0.66 s | 0.67 s | +0.0 % [+0.0, +1.5] |
+| `deep`, hard descriptor limit 256, wall | 60 | 0.122 s | 0.126 s | +2.5 % [+0.0, +4.7] |
+| `deep`, hard descriptor limit 256, CPU | 60 | 0.75 s | 0.75 s | +0.0 % [−4.1, +2.7] |
+
+`2e63740c` against itself read +0.0 % [−2.7, +3.5] in the same hour, so the wall-time rows are within this
+box's noise and the CPU rows show no cost. The report's `dir_opens` has the same fields before and after. At
+the limit of 256 (64 kept) both refuse 12,000 to 14,000 of the 16,670 directories, by the workers' order,
+and open about as many from an ancestor. On a deep narrow tree under a library limit
+(`TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258 directories,
+`MaxDepth` 128, the least `MaxDescriptors` accepted for one worker, 19 on Linux, of which 17 kept: the root
+and 16 checkpoints, all used; one worker reaching the deepest spine directory first) no directory is opened
+more than 8 names below a kept one: 1,152 names opened in all, at most 18 descriptors open. With the
+checkpoint case removed the same walk opens 16,512 names.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake

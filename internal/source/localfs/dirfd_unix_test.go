@@ -49,8 +49,9 @@ func (s *swapAt) Expand(ctx context.Context, r Range, e source.Emitter[Range, En
 // descriptor, which still holds the directory moved aside. Opened again
 // from the root (no descriptor kept), it refuses the link, as it refuses
 // a link in place of the directory it opens: unsafe_dirs, unreadable,
-// named in the error samples (with the level refused, from the root), and
-// the directory told to the run (Opened.Begin's unreadable).
+// named in the error samples (with the level refused, from the root), the
+// directory told to the run (Opened.Begin's unreadable) and reported
+// unread, its subtree behind a symbolic link (unread).
 func TestSwappedDirectoryNotFollowed(t *testing.T) {
 	listed := []string{"a/", "a/b/", "a/b/c/"}
 	whole := append(slices.Clone(listed), "a/b/c/d/", "a/b/c/d/e", "a/b/c/in")
@@ -84,6 +85,8 @@ func TestSwappedDirectoryNotFollowed(t *testing.T) {
 				}
 				var unread []string
 				p.unreadable = func(prefix string) { unread = append(unread, prefix) }
+				var u unreads
+				p.unreadTo = u.add
 				s := &swapAt{Provider: p, prefix: "a/b/c/", swap: func() error {
 					at := filepath.Join(root, filepath.FromSlash(c.replaced))
 					if err := os.Rename(at, at+".moved"); err != nil {
@@ -107,10 +110,13 @@ func TestSwappedDirectoryNotFollowed(t *testing.T) {
 				}
 				st := p.Stats()
 				if c.level == 0 {
-					if st.Errors() != 0 || len(unread) != 0 {
-						t.Fatalf("errors %d %q, unreadable %q", st.Errors(), st.Samples, unread)
+					if st.Errors() != 0 || len(unread) != 0 || len(u.got) != 0 {
+						t.Fatalf("errors %d %q, unreadable %q, unread %q", st.Errors(), st.Samples, unread, u.got)
 					}
 					return
+				}
+				if !slices.Equal(u.sorted(), []string{"subtree symlink_ancestor a/b/c/"}) {
+					t.Fatalf("unread %q", u.sorted())
 				}
 				want := "a symbolic link, not followed"
 				if !c.kept { // a descent of several names names the level refused

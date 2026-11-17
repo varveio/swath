@@ -187,14 +187,16 @@ func TestCountSlabs(t *testing.T) {
 
 // TestCountSlabReleasesFD: the chunks and the continuation a count's first
 // slab hands out each hold a share of the directory descriptor, released
-// whether they are expanded on a cancelled context or disposed unexpanded.
+// whether they are expanded on a cancelled context or disposed unexpanded;
+// the continuation holds the directory's name set (Options.MaxHeldBytes),
+// released either way too.
 func TestCountSlabReleasesFD(t *testing.T) {
 	if !nativeEngine {
 		t.Skip("slabs are a getdents-engine feature")
 	}
 	root, _ := slabTree(t)
 	for _, dispose := range []bool{false, true} {
-		p, err := New(root, Options{Fields: Stat})
+		p, err := New(root, Options{Fields: Stat, MaxHeldBytes: 1 << 30})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,6 +229,9 @@ func TestCountSlabReleasesFD(t *testing.T) {
 		}
 		if n := d.refs.Load(); n != 0 {
 			t.Fatalf("dispose=%v: %d references left on the directory descriptor", dispose, n)
+		}
+		if n := p.heldNames.Load(); n != 0 || d.seen != nil {
+			t.Fatalf("dispose=%v: %d bytes of names held", dispose, n)
 		}
 	}
 }
@@ -361,5 +366,39 @@ func TestRefusedDirectoriesListWhole(t *testing.T) {
 				t.Fatalf("%d descriptors open after the walk, %d before", open, before)
 			}
 		})
+	}
+}
+
+// TestAdmitSlabDropsRepeats: a name a directory's enumeration returns
+// again, in the same slab or a later one, is dropped and counted.
+func TestAdmitSlabDropsRepeats(t *testing.T) {
+	p := &Provider{opt: Options{MaxHeldBytes: 1 << 20}, unsorted: true}
+	n := p.newNameSet()
+	slab := func(names ...string) *scratch {
+		sc := &scratch{}
+		for _, name := range names {
+			sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name))})
+			sc.names = append(sc.names, name...)
+		}
+		return sc
+	}
+	got := func(sc *scratch) []string {
+		var s []string
+		for i := range sc.ents {
+			s = append(s, nameOf(sc.names, &sc.ents[i]))
+		}
+		return s
+	}
+	var st Stats
+	first, second := slab("a", "b", "a", "c"), slab("b", "d")
+	if !p.admitSlab(n, Range{}, first, &st) || !p.admitSlab(n, Range{}, second, &st) {
+		t.Fatal("the bound stopped the enumeration")
+	}
+	if !slices.Equal(got(first), []string{"a", "b", "c"}) || !slices.Equal(got(second), []string{"d"}) || st.RepeatedNames != 2 {
+		t.Fatalf("%q %q, repeated_names %d", got(first), got(second), st.RepeatedNames)
+	}
+	n.drop()
+	if p.heldNames.Load() != 0 {
+		t.Fatalf("%d bytes held after the enumeration ended", p.heldNames.Load())
 	}
 }

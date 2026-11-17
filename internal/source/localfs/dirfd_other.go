@@ -10,6 +10,8 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+
+	"github.com/varveio/swath/reader/listing"
 )
 
 // dirFD is a directory the portable engine reads, opened by its path
@@ -29,6 +31,9 @@ func (d *dirFD) child() (*dirFD, int) { return nil, 0 }
 // keepLimit: no directory descriptor is kept for a subdirectory here.
 func keepLimit() int64 { return 0 }
 
+// dirCost: a directory holds one descriptor here.
+func (p *Provider) dirCost() int64 { return 1 }
+
 // openPortable opens r's directory for the portable engine (openChecked).
 func (p *Provider) openPortable(_ context.Context, r Range, st *Stats) (*dirFD, bool, error) {
 	f, ok := p.openChecked(r, st)
@@ -47,6 +52,7 @@ func (p *Provider) openChecked(r Range, st *Stats) (*os.File, bool) {
 	f, err := os.Open(r.path)
 	if err != nil {
 		st.note(&st.OpenErrors, r.path, err)
+		p.unread(r.prefix, listing.UnreadSubtree, unreadClass(err))
 		p.unreadableDir(r)
 		return nil, false
 	}
@@ -58,6 +64,7 @@ func (p *Provider) openChecked(r Range, st *Stats) (*os.File, bool) {
 	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
 		f.Close()
 		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
+		p.unread(r.prefix, listing.UnreadSubtree, listing.UnreadSymlinkAncestor)
 		p.unreadableDir(r)
 		return nil, false
 	}
