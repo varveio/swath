@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/filter"
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
@@ -50,9 +49,9 @@ func TestWithPrefix(t *testing.T) {
 		{"az://acct", "logs/", "az://acct"},
 		{"az:///c", "logs/", "az:///c"},
 	} {
-		got := withPrefix(c.root, c.prefix)
+		got := WithPrefix(c.root, c.prefix)
 		if got != c.want {
-			t.Errorf("withPrefix(%q, %q) = %q, want %q", c.root, c.prefix, got, c.want)
+			t.Errorf("WithPrefix(%q, %q) = %q, want %q", c.root, c.prefix, got, c.want)
 			continue
 		}
 		if got == c.root {
@@ -205,7 +204,7 @@ func keep[P any](t *testing.T, s *filter.Spec, sc *schema.Schema[P], rows []sche
 
 // TestNarrowedListingIsTheFilteredListing is the narrowing's correctness
 // condition, end to end through the command's path (filter.NarrowPrefix,
-// then the factory's WithPrefix, then ParseURL as Open reads the root):
+// then WithPrefix, the factory's, then ParseURL as Open reads the root):
 // listing the narrowed prefix and filtering gives exactly the rows, in the
 // same order, that listing the root's prefix and filtering gives, over
 // blob names equal to the prefix, trailing slashes, names beside '/',
@@ -218,10 +217,6 @@ func keep[P any](t *testing.T, s *filter.Spec, sc *schema.Schema[P], rows []sche
 // request stays at the root's.
 func TestNarrowedListingIsTheFilteredListing(t *testing.T) {
 	keys := narrowKeys()
-	f, err := registry.Lookup("az://acct/c")
-	if err != nil || f.WithPrefix == nil {
-		t.Fatalf("the az factory has no WithPrefix (%v)", err)
-	}
 	for _, c := range narrowCases() {
 		s := c.spec(t)
 		root := "az://acct/c/" + c.scope
@@ -235,7 +230,7 @@ func TestNarrowedListingIsTheFilteredListing(t *testing.T) {
 		}
 		listed := root
 		if why == filter.Narrowed {
-			if listed = f.WithPrefix(root, n); (listed == root) != c.declined {
+			if listed = WithPrefix(root, n); (listed == root) != c.declined {
 				t.Fatalf("%s: WithPrefix(%q, %q) = %q", c.name, root, n, listed)
 			}
 		}
@@ -355,7 +350,7 @@ func (a *admissionAPI) List(context.Context, *client.ListInput) (*client.ListOut
 // errors and warnings word for word.
 func TestNarrowedAdmission(t *testing.T) {
 	const root = "az://acct/c"
-	narrowed := withPrefix(root, "logs/2026-0")
+	narrowed := WithPrefix(root, "logs/2026-0")
 	if narrowed == root {
 		t.Fatal("not narrowed")
 	}
@@ -374,8 +369,7 @@ func TestNarrowedAdmission(t *testing.T) {
 		for _, r := range []string{root, narrowed} {
 			api := &admissionAPI{hns: c.hns, err: c.err}
 			var warned []string
-			_, err := open(context.Background(), registry.Request{Root: r, Options: &Options{Client: api, Flat: c.flat}, Workers: 1,
-				Warn: func(code, msg string) { warned = append(warned, code+": "+msg) }})
+			_, err := openView(r, Options{Client: api, Flat: c.flat, Warn: func(code, msg string) { warned = append(warned, code+": "+msg) }}, 1)
 			if !slices.Equal(api.asked, []string{"c"}) {
 				t.Fatalf("%s, %s: admission asked about %q", c.name, r, api.asked)
 			}
