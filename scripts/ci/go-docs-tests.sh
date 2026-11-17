@@ -10,7 +10,8 @@
 #                      that runs none
 set -euo pipefail
 
-module=$(go list -m)
+# The root module alone: in the workspace (go.work) `go list -m` lists every module of it.
+module=$(GOWORK=off go list -m)
 helper="$module/docs"
 pattern='^TestDocs'
 # Captured first, so a failing go list fails the script instead of selecting fewer packages.
