@@ -35,21 +35,17 @@ func untyped(t *testing.T) {
 	}
 }
 
-// keysOf is the keys of a level: "kind key" for an entry, "key" for a
-// prefix.
+// keysOf is a level's entries, each as "kind key".
 func keysOf(lvl *live.Level) []string {
 	var got []string
 	for _, e := range lvl.Objects {
 		got = append(got, e.Kind.String()+" "+string(e.Key))
 	}
-	for _, p := range lvl.Prefixes {
-		got = append(got, string(p))
-	}
 	return got
 }
 
 // TestLiveUntyped: entries the filesystem leaves untyped are typed by a
-// stat relative to the directory, a child directory still a prefix; in a
+// stat relative to the directory, a child directory still a directory; in a
 // directory that can be read but not searched, where that stat fails,
 // each is an entry of unknown kind and the page does not fail.
 func TestLiveUntyped(t *testing.T) {
@@ -73,7 +69,7 @@ func TestLiveUntyped(t *testing.T) {
 	}
 
 	for prefix, want := range map[string][]string{
-		"e/": {"dir e/", "file e/x", "e/y/"},
+		"e/": {"dir e/", "file e/x", "dir e/y/"},
 		"d/": {"dir d/", "unknown d/a", "unknown d/s"},
 	} {
 		lvl, err := st.List(context.Background(), []byte(prefix), "", 10)
@@ -163,10 +159,10 @@ func TestLivePageBounded(t *testing.T) {
 	}
 	got := append(keysOf(first), keysOf(second)...)
 	want := []string{"dir w/"}
-	for i := range 2*limit - 1 {
+	for i := range 2 * limit {
 		want = append(want, fmt.Sprintf("file w/f%06d", i))
 	}
-	if !slices.Equal(got, want) || !first.Truncated || first.Next != "w/f000098" || !second.Truncated || second.Next != "w/f000198" {
+	if !slices.Equal(got, want) || !first.Truncated || first.Next != "w/f000099" || !second.Truncated || second.Next != "w/f000199" {
 		t.Errorf("pages %q (next %q, %q), want %q", got, first.Next, second.Next, want)
 	}
 }

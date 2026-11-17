@@ -21,7 +21,7 @@ import (
 
 // TestLiveOtherDevice: a directory on another device than the held root,
 // which a test cannot mount, made so by the device check's stat: it is
-// listed as a child prefix of its parent; its own level, and one below
+// listed as a child directory of its parent; its own level, and one below
 // it, fail as on another device; a lookup through it is unknown, in that
 // class; the directory itself is present.
 func TestLiveOtherDevice(t *testing.T) {
@@ -48,7 +48,7 @@ func TestLiveOtherDevice(t *testing.T) {
 	ctx := context.Background()
 
 	lvl, err := st.List(ctx, nil, "", 10)
-	if err != nil || len(lvl.Prefixes) != 1 || string(lvl.Prefixes[0]) != "m/" || len(lvl.Objects) != 1 {
+	if err != nil || len(lvl.Objects) != 2 || string(lvl.Objects[1].Key) != "m/" || lvl.Objects[1].Kind != listing.KindDir {
 		t.Fatalf("the root: %+v %v", lvl, err)
 	}
 	for _, prefix := range []string{"m/", "m/x/"} {
@@ -67,8 +67,8 @@ func TestLiveOtherDevice(t *testing.T) {
 }
 
 // TestLiveLevelSelf: a level's first page of a prefix begins with the
-// directory's own entry, which counts toward the page's entries: a page
-// of one holds it alone and continues after it.
+// directory's own entry, beside its children: a page of one holds it and
+// one child.
 func TestLiveLevelSelf(t *testing.T) {
 	root := t.TempDir()
 	mk(t, root, "d/a", false)
@@ -90,8 +90,8 @@ func TestLiveLevelSelf(t *testing.T) {
 		}
 		token = lvl.Next
 	}
-	if len(levels) != 3 || string(levels[0].Objects[0].Key) != "d/" || levels[0].Objects[0].Kind != listing.KindDir || levels[0].Next != "d/" ||
-		string(levels[1].Objects[0].Key) != "d/a" || string(levels[2].Prefixes[0]) != "d/b/" {
+	if len(levels) != 2 || len(levels[0].Objects) != 2 || string(levels[0].Objects[0].Key) != "d/" || levels[0].Objects[0].Kind != listing.KindDir ||
+		string(levels[0].Objects[1].Key) != "d/a" || levels[0].Next != "d/a" || string(levels[1].Objects[0].Key) != "d/b/" {
 		t.Errorf("levels %+v", levels)
 	}
 	if _, err := st.List(context.Background(), []byte("d/"), "e/a", 1); !errors.Is(err, listing.ErrInvalidToken) {

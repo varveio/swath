@@ -114,9 +114,6 @@ const (
 	// UnreadSymlinkAncestor: a directory on the way to Key was a symbolic
 	// link when the walk opened it, and the walk follows no symlink.
 	UnreadSymlinkAncestor UnreadClass = "symlink_ancestor"
-	// UnreadTooDeep: Key lies deeper than the walk's limit on nested
-	// directories.
-	UnreadTooDeep UnreadClass = "too_deep"
 	// UnreadNameTooLong: the operating system refused a name on the way
 	// to Key as too long (ENAMETOOLONG).
 	UnreadNameTooLong UnreadClass = "name_too_long"

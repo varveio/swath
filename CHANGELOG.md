@@ -50,44 +50,51 @@ Notable changes per release. The human summary of the current release is in the
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
+- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them. A request
+  budget is `MaxEntries` and `MaxDuration`, the bounds every source enforces; a live page gives no child totals
+  (`ErrUnsupported`). A target a call did not read, such as an exact key whose lookup was refused, is never
+  reported as completed.
 - The root package's `Source` also walks and summarizes live on S3, GCS and Azure Blob Storage (a flat namespace
-  only, without a depth). `Walk` hands a callback every object under a
-  prefix once, listed flat and in parallel on the range engine, or one `/` level at a time down to a `MaxDepth`;
-  an entry or time budget stops it, and the key intervals it did not read reach the callback as `Unread` extents.
-  `Summarize` totals the objects, bytes and newest time at or under several targets from those walks; a total
-  with an `Unread` is a lower bound ([library guide](docs/library.md#walks)).
+  only). `Walk` hands a callback every object under a prefix once, listed flat and in parallel on the range
+  engine; an entry or time budget stops it, and the key intervals it did not read reach the callback as `Unread`
+  extents. `Summarize` answers each target on its own, by a lookup or a walk of it, and totals its objects, bytes
+  and newest time; a total with an `Unread` is a lower bound ([library guide](docs/library.md#walks)).
+- `view.OpenDir` opens the inventory in a local dataset directory in one call.
 - `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
   ([library guide](docs/library.md#google-cloud-storage)).
-- `azblob.Open` opens an Azure Blob Storage container (`ACCOUNT/CONTAINER`) as a `Source`. A level that one answer
+- `azblob.Open(ctx, account, container, opts)` opens an Azure Blob Storage container as a `Source`. A level that one answer
   holds is sorted from Azure's UTF-16 order into byte order; a longer level is `ErrUnsupported` from the page
   where it leaves byte order. A hierarchical namespace's directories come back once, as prefixes
   ([library guide](docs/library.md#azure-blob-storage)).
 - `local.Open` opens a directory the program already opened as a `Source` (Linux and macOS). Each page and lookup
   opens what it reads relative to that directory, one name at a time, never following a symbolic link or
-  crossing to another device; a page is one directory level in byte order, its held names bounded by
-  `Options.MaxHeldBytes` ([library guide](docs/library.md#a-local-directory)).
+  crossing to another device; a page is one directory level in byte order, a subdirectory a `dir` entry with its
+  metadata, and its memory follows the page's `Limit`, not the directory's size. Names are bytes: one that is
+  not UTF-8 pages and is looked up. Past a symbolic link a page or lookup is `ErrNotDirectory`
+  ([library guide](docs/library.md#a-local-directory)).
 - `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
-- `command` (experimental) is the swath command line as a function: `Main(ctx, args, stdin, stdout, stderr)` runs
-  one command line and returns its exit code, `Exit` exits with it as the binary does, and `Host` names the program
+- `command` (experimental) is the swath command line as a function: `Main(ctx, host, args, stdout, stderr)` runs
+  one command line and returns its exit code, `Exit` exits with it as the binary does, and `host` names the program
   that embeds it, which `--version` then states. `cmd/swath` is `command.Exit(command.Main(...))`. The process-wide
   policy is set when `Main` is called, never at import, and terminal detection follows the streams it is given
   ([library guide](docs/library.md#run-the-command-line)).
 - In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
   and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
   workspace module), not the host's version and revision.
-- The local provider can walk a directory its caller opened (`OpenDir`, Linux and macOS), bounded in depth,
-  descriptors and held names, the groundwork for a local `Source`. No command option uses it; the command lists
-  as before.
+- The local provider can walk a directory its caller opened (`OpenDir`, Linux and macOS), the groundwork for a
+  local `Walk`. No command option uses it; the command lists as before.
+- GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
+  error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
 
 ### Release
 
-- A release tags its modules in dependency order without committing to `main`: `just release-modules` tags
-  `reader/vX.Y.Z` and `objfile/vX.Y.Z` on `main`, `just release-prep` makes a branch whose one commit points
-  `go.mod` at them, and once its pull request merges, `just release` tags `vX.Y.Z` on the merge commit. The
-  release workflow builds without the workspace (`GOWORK=off`), as an outside project does, and refuses a tagged
-  `go.mod` that carries a `replace` or does not require each nested module at its tag
+- `reader/` and `objfile/` keep their own versions. A release where neither changed is one tag, `just release
+  X.Y.Z`. One where a nested module changed tags it first (`just release-modules`), points `go.mod` at it through
+  a pull request (`just release-prep`), then tags `vX.Y.Z` on the merge commit. The release workflow builds
+  without the workspace (`GOWORK=off`), as an outside project does, and refuses a tagged `go.mod` that carries a
+  `replace` or requires a nested tag that does not hold that module's code at the release commit
   ([RELEASING.md](RELEASING.md#cutting-a-release)).
 
 ## 0.4.0

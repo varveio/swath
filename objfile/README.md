@@ -12,7 +12,7 @@ core package uses only the standard library. Provider packages use their officia
 SDKs; all three SDKs appear in the module graph, but a program links only the
 providers it imports. Importing `objfile/remote` links all three.
 
-From swath 0.4.0 the module is released with swath, at the same version, tagged
+From swath 0.4.0 the module is released with swath, tagged
 `objfile/vX.Y.Z`: `go get github.com/varveio/swath/objfile@v0.4.0`. It is at version 0, with no
 API compatibility promise: a minor release may change its API.
 

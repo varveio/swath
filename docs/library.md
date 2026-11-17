@@ -212,10 +212,10 @@ request and a lookup's HeadObject and HeadBucket as metadata requests.
 
 ## Azure Blob Storage
 
-`azblob.Open` takes the account and the container as `ACCOUNT/CONTAINER`:
+`azblob.Open` takes the account and the container:
 
 ```go
-src, err := azblob.Open(ctx, "exampleaccount/logs", azblob.Options{})
+src, err := azblob.Open(ctx, "exampleaccount", "logs", azblob.Options{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -331,12 +331,12 @@ library guarantees:
   the device of the program's directory. A symbolic link is listed as an entry of kind `symlink`. A call holds
   at most two descriptors at once and none once it returns; a source keeps nothing open between calls and is
   safe for concurrent use.
-- **A page is one directory level, in byte order of keys.** A subdirectory is an entry of kind `prefix`
-  (`logs/2026/`); any other entry has its kind (`file`, `symlink`, `other` for a FIFO, socket or device, or
+- **A page is one directory level, in byte order of keys.** Each entry has its kind (`dir` for a subdirectory,
+  keyed with a final `/` as in `logs/2026/`, `file`, `symlink`, `other` for a FIFO, socket or device, or
   `unknown` when its stat fails) and what `lstat` gives of it: size, space on disk, modification time,
   device, inode and link count. The prefix's own directory comes back as the `Self` of the level's first page,
-  and counts toward its `Limit`. A directory on another device is listed as a prefix like any other, and a page
-  of it fails with `listing.ErrOtherDevice`.
+  beside its children: `Limit` bounds the children only. A directory on another device is listed like any
+  other, and a page of it fails with `listing.ErrOtherDevice`.
 - **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
   between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added
   after the last key read comes in a later page, one removed does not. It is bound to the directory's device
@@ -353,8 +353,8 @@ library guarantees:
   answers with its directory key (`logs` with `logs/`). A symbolic link or another device on the way, a refusal,
   a name too long and an I/O error leave the key unknown: it was not reached, and its `Reason` has the class a
   page through the same place fails with (`listing.ErrNotDirectory` past a symbolic link).
-- **Names are bytes, keys UTF-8 for now.** A `Source` refuses a key that is not valid UTF-8, so a page of a
-  directory holding such a name fails with `listing.ErrInvalidPage`, and such an entry cannot be looked up.
+- **Names are bytes.** A key is any bytes but NUL, so a name that is not valid UTF-8 pages and is looked up
+  like any other.
 
 To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
 and each lookup as one metadata request, named by the program's key.
@@ -362,14 +362,13 @@ and each lookup as one metadata request, named by the program's key.
 ## Run the command line
 
 A program that needs a whole run, with its flags, output, progress files and exit codes, rather than one page or
-lookup, can run the swath command line itself. `command.Main(ctx, args, stdin, stdout, stderr)` runs one command
+lookup, can run the swath command line itself. `command.Main(ctx, host, args, stdout, stderr)` runs one command
 line (`args` without the program name) and returns its exit code; the swath binary is
 `command.Exit(command.Main(...))` and nothing else. This package links the whole command, its providers and its
 Parquet writer, which `Source` does not.
 
 ```go
-command.Host = "example-host"
-command.Exit(command.Main(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+command.Exit(command.Main(context.Background(), "example-host", os.Args[1:], os.Stdout, os.Stderr))
 ```
 
 `Main` is for a process dedicated to the call, such as a child the host starts for one command line. It sets the
@@ -380,7 +379,7 @@ color, the live progress line) follows the `stdout` and `stderr` given to `Main`
 is not a terminal. `command.Exit` ends the process as the binary does: on Unix, a run a signal stopped dies by that
 signal.
 
-`command.Host` names the program this copy is built into, and `--version` then says so. The version that
+`host` names the program this copy is built into (the binary passes `""`), and `--version` then says so. The version that
 `--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
 of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision.
 

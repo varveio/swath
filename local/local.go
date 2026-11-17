@@ -28,16 +28,15 @@ import (
 // it.
 //
 // Page and Lookup answer as package listing states, in byte order of
-// keys. A child directory is a KindPrefix entry; a prefix's own directory
-// comes back as the Self of its level's first page. A page reads its whole
-// directory, again for each page, and holds only the names that may still
-// be on it, so its memory follows the request's Limit, not the
-// directory's size: a request's MaxDuration bounds that work, its
-// MaxScanned does not. A token resumes after the last key a page read, so
-// a directory that changes between pages repeats no key and skips no name
-// that stayed. Names are bytes, but the source refuses a key that is not
-// UTF-8, and a page holding such a name is listing.ErrInvalidPage. A
-// prefix that is not there is listing.ErrNotFound; one that names
+// keys, which are any bytes but NUL. A child directory is a KindDir entry
+// with its metadata, its key ending in "/"; a prefix's own directory comes
+// back as the Self of its level's first page, beside Limit children. A
+// page reads its whole directory, again for each page, and holds only the
+// names that may still be on it, so its memory follows the request's
+// Limit, not the directory's size: a request's MaxDuration bounds that
+// work. A token resumes after the last key a page read, so a directory
+// that changes between pages repeats no key and skips no name that
+// stayed. A prefix that is not there is listing.ErrNotFound; one that names
 // something else than a directory, a symbolic link included,
 // listing.ErrNotDirectory, and so is one with a symbolic link on the way:
 // a link is never followed, so what lies past it is not reached, never

@@ -33,7 +33,10 @@ type Live struct {
 	location string
 }
 
-var _ live.Store = (*Live)(nil)
+var (
+	_ live.Store    = (*Live)(nil)
+	_ live.ByteKeys = (*Live)(nil)
+)
 
 // OpenLive opens root, a directory the caller opened (O_DIRECTORY, not
 // following a symbolic link) and keeps open until the store is closed, as
@@ -63,15 +66,19 @@ func (l *Live) Location() string { return l.location }
 // it (live.Store).
 func (l *Live) Close() error { return nil }
 
+// ByteKeys says the store's keys are a directory's names, any bytes but
+// NUL (live.ByteKeys).
+func (l *Live) ByteKeys() {}
+
 // List is one level of the directory at prefix, "" for the held one or a
 // directory key below it, in byte order of keys, continuing after the key
-// token names ("" starts the level) (live.Store). A child directory is a
-// common prefix; any other child an entry of its kind, with what lstat
-// gives of it. The directory's own entry is the level's first, on its
-// first page, for a prefix below the held directory. Next is the last key
-// the page read, and the next page holds the keys after it, not the names
-// after a count of them, so that a directory that changes between pages
-// repeats no key and skips no name that stayed.
+// token names ("" starts the level) (live.Store). Each child is an entry
+// of its kind, with what lstat gives of it, a directory's key ending in
+// "/". The directory's own entry comes first on the level's first page,
+// for a prefix below the held directory, beside max children. Next is the
+// last key the page read, and the next page holds the keys after it, not
+// the names after a count of them, so that a directory that changes
+// between pages repeats no key and skips no name that stayed.
 //
 // The directory is read whole to choose the page, again for each page,
 // keeping only the names that may still be on it (levelNames): what a page
@@ -105,11 +112,7 @@ func (l *Live) list(ctx context.Context, prefix, token string, limit int) (*live
 	}
 	f := os.NewFile(uintptr(fd), prefix) // it owns fd; its name, the caller's key, is all its errors can name
 	defer f.Close()
-	n := limit
-	if self {
-		n--
-	}
-	kids, more, err := levelNames(ctx, f, fd, after, n)
+	kids, more, err := levelNames(ctx, f, fd, after, limit)
 	if err != nil {
 		return nil, failed(ctx, prefix, err)
 	}
@@ -121,10 +124,7 @@ func (l *Live) list(ctx context.Context, prefix, token string, limit int) (*live
 		lvl.Objects = append(lvl.Objects, entryOf(prefix, &e))
 	}
 	if more {
-		lvl.Truncated, lvl.Next = true, prefix // a page of the directory's own entry alone
-		if n > 0 {
-			lvl.Next = prefix + kids[n-1].key
-		}
+		lvl.Truncated, lvl.Next = true, prefix+kids[len(kids)-1].key
 	}
 	if err := levelEntries(ctx, fd, prefix, kids, lvl); err != nil {
 		return nil, failed(ctx, prefix, err)
@@ -290,32 +290,31 @@ func readError(err error) error {
 	return classed(unreadClass(err), fmt.Errorf("reading the directory: %w", err))
 }
 
-// levelEntries adds kids, children of the directory fd at prefix, to lvl:
-// a directory as a common prefix, anything else as its entry, statted
-// relative to fd without following a link. An entry gone since it was
-// read is left out, and so is one that is a directory now, whose key would
-// sort elsewhere; one whose stat fails is of unknown kind. A stop of ctx
-// before the first stat, or between batches of them, fails the level.
+// levelEntries adds kids, children of the directory fd at prefix, to
+// lvl.Objects: each as its entry, statted relative to fd without following
+// a link. An entry gone since it was read is left out, and so is one whose
+// kind changed between a directory and anything else, whose key would sort
+// elsewhere; one whose stat fails is of unknown kind, a directory's
+// KindDir without metadata. A stop of ctx before the first stat, or
+// between batches of them, fails the level.
 func levelEntries(ctx context.Context, fd int, prefix string, kids []child, lvl *live.Level) error {
 	for i, k := range kids {
 		if i%levelBatch == 0 && ctx.Err() != nil {
 			return ctx.Err()
 		}
-		key := prefix + k.key
-		if k.dir {
-			lvl.Prefixes = append(lvl.Prefixes, []byte(key))
-			continue
-		}
 		var e Entry
-		err := statAt(fd, k.key, Stat, &e)
+		err := statAt(fd, strings.TrimSuffix(k.key, "/"), Stat, &e)
 		switch {
 		case errors.Is(err, unix.ENOENT):
 			continue
+		case err != nil && k.dir:
+			e = Entry{Kind: KindDir}
 		case err != nil:
 			e = Entry{Kind: KindUnknown}
-		case e.Kind == KindDir:
+		case (e.Kind == KindDir) != k.dir:
 			continue
 		}
+		key := prefix + k.key
 		lvl.Objects = append(lvl.Objects, entryOf(key, &e))
 	}
 	return nil

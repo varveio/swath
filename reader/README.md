@@ -12,7 +12,7 @@ schemas to this module's registry (`internal/schema.Bind`), so writers and decod
 share the column names, types, nullability and version roles. The
 [swath dataset profile](../docs/dataset.md) owns the data contract.
 
-From swath 0.4.0 the module is released with swath, at the same version, tagged
+From swath 0.4.0 the module is released with swath, tagged
 `reader/vX.Y.Z`: `go get github.com/varveio/swath/reader@v0.4.0`. It is at version 0, with no
 API compatibility promise: a minor release may change its API.
 

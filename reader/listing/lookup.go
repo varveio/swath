@@ -64,8 +64,8 @@ type LookupResult struct {
 	// denial, which S3 returns for a missing key without list permission,
 	// ErrOutOfScope for a key outside an inventory's scope, or
 	// ErrNotDirectory for a symbolic link on the way to a local key, which
-	// no backend follows; otherwise an error of no class naming the cause,
-	// such as another device on the way to a local key. Nil when Evidence alone
+	// no backend follows, or ErrOtherDevice for another device on the way;
+	// otherwise an error of no class naming the cause. Nil when Evidence alone
 	// explains it (an inventory with unlocated gaps), and on any other
 	// state.
 	Reason error

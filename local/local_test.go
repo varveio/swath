@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -91,9 +92,8 @@ func level(ctx context.Context, src *swath.Source, prefix string, limit int) ([]
 }
 
 // TestPage: a level in byte order of keys with "/" on directories, each
-// child once, at any page size; a child directory is a prefix, any other
-// entry its kind with what lstat gives; the prefix's own directory is the
-// first page's Self.
+// child once, at any page size; each child is an entry of its kind with
+// what lstat gives; the prefix's own directory is the first page's Self.
 func TestPage(t *testing.T) {
 	root := t.TempDir()
 	for _, rel := range []string{"a-b", "a.b", "a/x", "ab", "e/x/y"} {
@@ -106,14 +106,14 @@ func TestPage(t *testing.T) {
 	src := open(t, hold(t, root))
 	ctx := context.Background()
 
-	want := []string{"file a-b", "file a.b", "prefix a/", "file ab", "prefix e/", "symlink ln", "other p"}
+	want := []string{"file a-b", "file a.b", "dir a/", "file ab", "dir e/", "symlink ln", "other p"}
 	for _, limit := range []int{1, 2, 3, 100} {
 		got, err := level(ctx, src, "", limit)
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("limit %d: %q %v, want %q", limit, got, err, want)
 		}
 		got, err = level(ctx, src, "e/", limit)
-		if want := []string{"self dir e/", "prefix e/x/"}; err != nil || !slices.Equal(got, want) {
+		if want := []string{"self dir e/", "dir e/x/"}; err != nil || !slices.Equal(got, want) {
 			t.Fatalf("e/, limit %d: %q %v, want %q", limit, got, err, want)
 		}
 	}
@@ -132,6 +132,49 @@ func TestPage(t *testing.T) {
 	}
 	if page.Order != listing.OrderBytes || page.Evidence.Origin != listing.OriginLive || page.Evidence.Stop != listing.StopCompleted {
 		t.Errorf("a/: order %q, evidence %+v", page.Order, page.Evidence)
+	}
+}
+
+// TestPageByteName: a name that is not UTF-8 pages, as a file and as a
+// directory's prefix, and is looked up.
+func TestPageByteName(t *testing.T) {
+	root := t.TempDir()
+	name := "n\xff"
+	write(t, root, name)
+	write(t, root, name+"d/x")
+	src := open(t, hold(t, root))
+	ctx := context.Background()
+
+	if got, err := level(ctx, src, "", 10); err != nil || !slices.Equal(got, []string{"file " + name, "dir " + name + "d/"}) {
+		t.Errorf("the root: %q %v", got, err)
+	}
+	if got, err := level(ctx, src, name+"d/", 10); err != nil || !slices.Equal(got, []string{"self dir " + name + "d/", "file " + name + "d/x"}) {
+		t.Errorf("%q: %q %v", name+"d/", got, err)
+	}
+	r, err := src.Lookup(ctx, []byte(name))
+	if err != nil || r.State != listing.LookupPresent || string(r.Entry.Key) != name || r.Entry.Kind != listing.KindFile {
+		t.Errorf("lookup %q: %+v %v", name, r, err)
+	}
+}
+
+// TestPageChildDirectory: a child directory is a KindDir entry with what
+// lstat gives of it, its modification time included.
+func TestPageChildDirectory(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "d/x")
+	when := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(root, "d"), when, when); err != nil {
+		t.Fatal(err)
+	}
+	src := open(t, hold(t, root))
+
+	page, err := src.Page(context.Background(), listing.PageRequest{Limit: 10})
+	if err != nil || len(page.Entries) != 1 {
+		t.Fatalf("the root: %+v %v", page, err)
+	}
+	d := page.Entries[0]
+	if string(d.Key) != "d/" || d.Kind != listing.KindDir || d.LastModified == nil || !d.LastModified.Equal(when) || d.Inode == nil {
+		t.Errorf("d/: %+v", d)
 	}
 }
 
@@ -278,7 +321,7 @@ func TestRootNotResolvedByPath(t *testing.T) {
 	src := open(t, f)
 	ctx := context.Background()
 
-	if got, err := level(ctx, src, "", 10); err != nil || !slices.Equal(got, []string{"prefix in/"}) {
+	if got, err := level(ctx, src, "", 10); err != nil || !slices.Equal(got, []string{"dir in/"}) {
 		t.Errorf("the root: %q %v", got, err)
 	}
 	if got, err := level(ctx, src, "in/", 10); err != nil || !slices.Equal(got, []string{"self dir in/", "file in/a"}) {
