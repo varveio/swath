@@ -6,7 +6,8 @@
 // for that. An opened source is bound (Bind) to the typed pipeline stages
 // with its range and row types, which the pipeline itself never names:
 // listing, order, parquetout, dataset, schema and journal import no
-// provider.
+// provider. The binding itself is package bind's; registry chooses where a
+// run's rows go (Env: the Parquet router, a text stream or nowhere).
 package registry
 
 import (
@@ -21,6 +22,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/order"
@@ -222,116 +224,45 @@ type Env struct {
 	Unreadable func(prefix string)
 }
 
-// Sizes is the object bytes a run emitted. Measured says the schema has a
-// size column (Run sets it before listing); Unknown counts the objects
-// whose size was null (the names metadata tier), which leave Bytes short.
-type Sizes struct {
-	Bytes    atomic.Int64
-	Unknown  atomic.Int64
-	Measured atomic.Bool
-}
+// Sizes is the object bytes a run emitted (bind.Sizes).
+type Sizes = bind.Sizes
 
-// Known is the bytes summed, false when the schema has no size column or
-// an object's size was unknown.
-func (s *Sizes) Known() (int64, bool) {
-	return s.Bytes.Load(), s.Measured.Load() && s.Unknown.Load() == 0
-}
+// VersionCounts is the version rows a run handed on (bind.VersionCounts).
+type VersionCounts = bind.VersionCounts
 
-// Bound is a provider bound to its schema; embed it in an opened source.
+// Bound is a provider bound to its schema (bind.Bound) whose rows go where
+// a run's Env sends them; embed it in an opened source.
 type Bound[P any] struct {
-	p source.Provider[any, P]
-	s *schema.Schema[P]
-	// v is s's version roles (schema.BindVersions), nil for none.
-	v *schema.Versions[P]
+	b bind.Bound[P]
 }
 
 // Bind erases p's range type and binds it to its row schema and its
-// version roles. It panics on roles that do not define the rows
-// (schema.BindVersions), as schema.Bind does: a producer's bug, found when
-// the source is opened, before any output exists.
+// version roles (bind.Provider). It panics on roles that do not define the
+// rows (schema.BindVersions), as schema.Bind does: a producer's bug, found
+// when the source is opened, before any output exists.
 func Bind[R, P any](p source.Provider[R, P], s *schema.Schema[P]) Bound[P] {
-	v, err := schema.BindVersions(s)
+	b, err := bind.Provider(p, s)
 	if err != nil {
 		panic(err.Error())
 	}
-	return Bound[P]{source.Erase[R, P](p), s, v}
+	return Bound[P]{b}
 }
 
 // Schema is the bound schema's description.
-func (b Bound[P]) Schema() schema.Info { return b.s.Info }
+func (b Bound[P]) Schema() schema.Info { return b.b.Schema().Info }
 
-// Run implements Source.Run with the provider's row type.
+// Run implements Source.Run with the provider's row type: a count
+// (env.Count) lists unordered into no sink, any other run through the order
+// stage into the sink env names, which is made once env has been checked
+// against the schema.
 func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Encoder, error) {
-	// The grouping policy is the schema's: the order stage, Count and the
-	// router (which reads the schema) all take it from there.
-	env.Order.Groups = b.s.Info.Groups
-	keep, err := filter.Compile(env.Filter, b.s)
-	if err != nil {
-		return order.Stats{}, nil, err
-	}
-	vers := b.v
-	var sink order.Sink[P] = discard[P]{}
 	var enc parquetout.Encoder
-	if env.Router != nil {
-		r, err := parquetout.NewRouter(*env.Router, b.s)
-		if err != nil {
-			return order.Stats{}, nil, err
-		}
-		sink, enc = segSink[P]{r, env.Ordered}, r
-	} else if env.Text != nil {
-		t, err := textout.NewSink(env.Text, b.s)
-		if err != nil {
-			return order.Stats{}, nil, err
-		}
-		sink = t
-	}
-	if _, seg := sink.(segSink[P]); env.Ordered != nil && !seg { // segSink counts its own rows
-		sink = countSink[P]{sink, env.Ordered}
-	}
-	counted := env.Versions != nil && vers != nil
-	observer := versionSink[P]{counts: env.Versions, v: vers}
-	if counted {
-		env.Versions.Enabled, env.Versions.HasDeleteMarkers = true, vers.HasDeleteMarkers()
-		observer.Sink = sink
-		sink = observer
-		if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
-			sink = versionSegmenter[P]{observer, sg}
-		}
-	}
-	p := b.p
-	if env.Empty {
-		p = source.Empty[P]{}
-	} else if keep != nil {
-		p = newFiltered(p, keep, b.s, env.Filtered)
-	}
-	if env.Sizes != nil && !env.Empty {
-		if size := schema.ObjectSize(b.s); size != nil {
-			env.Sizes.Measured.Store(true)
-			p = newSized(p, size, env.Sizes)
-		}
-	}
-	if env.Totals != nil && !env.Count {
-		return order.Stats{}, nil, errors.New("registry: per-prefix totals need a count")
-	}
-	if env.Count {
-		var observe order.Sink[P]
-		if counted {
-			observer.Sink = discard[P]{}
-			observe = observer
-		}
-		if env.Totals != nil {
-			if observe, err = bindTotals(env.Totals, b.s, vers, observe, !env.Order.Unordered); err != nil {
-				return order.Stats{}, nil, err
-			}
-		}
-		st, err := order.CountWithSink(ctx, p, env.Ordered, env.Order, observe)
-		return st, nil, err
-	}
 	opt := env.Order
-	if enc != nil {
+	if env.Router != nil && !env.Count {
 		// Once listing has ended, the encoders the router reserved for
 		// the drain are admitted (parquetout.Options.MaxEncoders), after
-		// the writer's account up to then is recorded.
+		// the writer's account up to then is recorded. enc is the router
+		// by then: the order stage calls this only after the sink is made.
 		prev := opt.ListingDone
 		opt.ListingDone = func() {
 			enc.ListingDone()
@@ -341,8 +272,44 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 			}
 		}
 	}
-	st, err := order.Run(ctx, p, sink, b.s, opt)
+	l, err := b.b.Prepare(bind.Env{Order: opt, Empty: env.Empty, Ordered: env.Ordered, Filter: env.Filter, Filtered: env.Filtered,
+		Sizes: env.Sizes, Versions: env.Versions, Totals: env.Totals})
+	if err != nil {
+		return order.Stats{}, nil, err
+	}
+
+	if env.Count {
+		st, err := l.Count(ctx, nil)
+		return st, nil, err
+	}
+	sink, err := b.sink(env, &enc)
+	if err != nil {
+		return order.Stats{}, nil, err
+	}
+	st, err := l.Run(ctx, sink)
 	return st, enc, err
+}
+
+// sink is where env sends a run's rows: the Parquet router (env.Router),
+// set in *enc, a text stream (env.Text), else nowhere; each counted in
+// env.Ordered when set.
+func (b Bound[P]) sink(env Env, enc *parquetout.Encoder) (order.Sink[P], error) {
+	switch {
+	case env.Router != nil:
+		r, err := parquetout.NewRouter(*env.Router, b.b.Schema())
+		if err != nil {
+			return nil, err
+		}
+		*enc = r
+		return segSink[P]{r, env.Ordered}, nil // segSink counts its own rows
+	case env.Text != nil:
+		t, err := textout.NewSink(env.Text, b.b.Schema())
+		if err != nil {
+			return nil, err
+		}
+		return counted[P](t, env.Ordered), nil
+	}
+	return counted[P](discard[P]{}, env.Ordered), nil
 }
 
 // segSink is the Parquet router as the order stage's sink: rows through
@@ -388,6 +355,15 @@ type segPart[P any] struct {
 func (p segPart[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	p.s.count(segs)
 	return p.Segment.Write(ctx, segs)
+}
+
+// counted is s with the rows written to it counted in n, s itself when n
+// is nil.
+func counted[P any](s order.Sink[P], n *atomic.Int64) order.Sink[P] {
+	if n == nil {
+		return s
+	}
+	return countSink[P]{s, n}
 }
 
 type countSink[P any] struct {

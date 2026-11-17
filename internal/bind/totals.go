@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package registry
+package bind
 
 import (
 	"context"
@@ -36,11 +36,12 @@ type totalsSink[P any] struct {
 	next              order.Sink[P]
 }
 
-// bindTotals binds t to schema s and its version roles (nil for none). A
-// tally with a view (totals.Options.View) takes the rows in runs
+// Totals binds t to schema s and its version roles (nil for none): a sink
+// that sums the rows into t, then hands them to next (nil: none). A tally
+// with a view (totals.Options.View) takes the rows in runs
 // (order.RangeSink): ordered, each run's rows ascend; otherwise they come
 // in any order (order.Options.Unordered).
-func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P], ordered bool) (order.Sink[P], error) {
+func Totals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P], ordered bool) (order.Sink[P], error) {
 	opt := t.Options()
 	k := totalsSink[P]{t: t, box: s.Container, next: next, strict: opt.Primary == totals.AllocatedBytes}
 	if vers != nil {

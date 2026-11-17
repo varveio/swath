@@ -111,7 +111,9 @@ filters on values its options do not read (sizes and times with `--metadata name
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router
 for `P`), its schema `Info`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
-against the rows ordered). Optional interfaces, each found by a type assertion:
+against the rows ordered). The binding is `bind.Bound`, which chooses no sink: `registry.Bound` makes the
+run's (the part router, a text stream, or none for a count) once `bind.Bound.Prepare` has checked the run's
+settings against the schema, and a caller of `bind` lists the provider into its own sink (`Count`, unordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | Object stores | Local filesystem |
 |---|---|---|---|

@@ -61,7 +61,7 @@ across a seam would be a part ending inside its group, and is refused. The one b
 segment 0's first row after the drainer's last (the open part's group, continued), which segment 0's row guard
 checks as `send` does: inside a segment equality is accepted only in group mode, across one group's consecutive
 rows in provider order, never against `Options.After`. Segments count their distinct keys into
-`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
+`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (bind's `versionSegmenter`).
 `order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
 `TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
 `TestVersionsTailSeamsAtKeyChanges` (the serial tail), `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
@@ -882,7 +882,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   declared only at a bound the provider accepts or at K, never below K; the seed and resume wrapper ranges
   and the sequential chain declare nothing. The adapters between provider and order stage (`source.Erase`,
   the filters, the object-size counter) forward both calls, `Fences` and `Replay`
-  (`registry` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
+  (`bind` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
   spill engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
   first fence in it and the latest fence (O(1)), so a wholly filtered page costs nothing and fences never
   accumulate (`TestDurableZeroRowCertificate` allocates nothing per fence). A fence after a child certifies
