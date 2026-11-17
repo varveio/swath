@@ -92,7 +92,8 @@ package `swath` sets when it is initialized. A provider's failures take the cont
 pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 
 `Source.Walk` lists a prefix flat. A store that walks (`live.Walker`) builds a provider of its own for each call,
-over its shared client (S3's `Live.Walk`: the range engine with no seed and no probes), binds it to its schema
+over its shared client (S3's, GCS's and Azure's `Live.Walk`: the range engine with no seed and no probes, Azure's
+after the namespace admission of `New`), binds it to its schema
 and runs the order stage's unordered count into a sink of package `swath` (`live.Count`: `bind`,
 `order.CountWithSink`, each range's keys checked ascending, and each run of a range's keys checked apart from every
 other run's before the sink sees it, so no key reaches it twice). The count's workers hand that sink batches of

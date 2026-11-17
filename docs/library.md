@@ -223,7 +223,7 @@ if err != nil {
 defer src.Close()
 ```
 
-The rest is as on S3: the same `Page`, `Lookup` and `Close`, checks, tokens, evidence and error classes. The
+The rest is as on S3: the same `Page`, `Lookup`, `Walk`, `Summarize` and `Close`, checks, tokens, evidence and error classes. The
 package's [`Example`](../azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
 replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, say), unsigned access to a public container and the same two
 request limits; credentials otherwise come from the environment, as for the command: `AZURE_STORAGE_SAS_TOKEN`, else
@@ -251,11 +251,14 @@ What differs from S3:
   permission to list the container's blobs; a lookup needs permission to read the blob's properties, and to list to show
   a key absent. A request is reported to an `objfile.Observer` as a list request (List Blobs, the probe included) or a
   metadata request (Get Blob Properties, and the namespace's calls, unnamed).
+- **Walks.** A walk without a depth lists a flat namespace only, as the command does: each walk first asks the
+  account's namespace with the same calls, and a hierarchical namespace, or one they cannot read, is
+  `listing.ErrUnsupported` before any listing. Its ranges are listed in byte order whatever order Azure lists in.
 
 ## Google Cloud Storage
 
 `github.com/varveio/swath/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
-tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
+walks, summaries, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
 
 ```go
 src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
@@ -273,7 +276,9 @@ otherwise come from Application Default Credentials, as for the command
   same 404 with reason `notFound`, so after one the lookup reads the bucket's (`buckets.get`), and the key is absent
   only when that succeeds. A 403 to either, a 404 without that reason, a missing bucket (`listing.ErrNotFound`) and
   a probe that fails leave the key unknown.
-- A page needs `storage.objects.list` on the bucket. A lookup needs `storage.objects.get`, and
+- A walk's ranges are `objects.list` bounded by `startOffset` and `endOffset`. The client reads an object listed
+  without a size as size zero, as a page does: a walk cannot refuse it as on S3.
+- A page and a walk need `storage.objects.list` on the bucket. A lookup needs `storage.objects.get`, and
   `storage.buckets.get` to show a key absent: without it a missing key is unknown (`listing.ErrAuth`).
 - A token is bound to the bucket and the endpoint it is read through; the billed project is not part of it.
 - The observer sees a lookup's `objects.get` and `buckets.get` as metadata requests, the bucket's with an empty
@@ -385,5 +390,5 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 ## Not in the library yet
 
 The library answers Page and Lookup on S3, GCS, Azure Blob Storage and a local directory, and Walk and Summarize on
-S3. On another source a walk with a depth reads its levels with pages; a walk without one, and a summary with a subtree
-target, are `listing.ErrUnsupported`. A source's request limits hold within one process only.
+the three object stores. On a local directory a walk with a depth reads its levels with pages; a walk without one,
+and a summary with a subtree target, are `listing.ErrUnsupported`. A source's request limits hold within one process only.

@@ -50,7 +50,8 @@ Notable changes per release. The human summary of the current release is in the
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
-- The root package's `Source` also walks and summarizes live on S3. `Walk` hands a callback every object under a
+- The root package's `Source` also walks and summarizes live on S3, GCS and Azure Blob Storage (a flat namespace
+  only, without a depth). `Walk` hands a callback every object under a
   prefix once, listed flat and in parallel on the range engine, or one `/` level at a time down to a `MaxDepth`;
   an entry or time budget stops it, and the key intervals it did not read reach the callback as `Unread` extents.
   `Summarize` totals the objects, bytes and newest time at or under several targets from those walks; a total

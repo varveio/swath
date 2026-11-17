@@ -92,8 +92,10 @@ otherwise. Both take the billed project and, on Google's endpoint, a fields sele
 (`exchange`: token, admission, retries, classification, the wire snapshot). Every attempt of the client, retries
 included, is reported to the `objfile.Observer` on its context: a page as a list request of its prefix,
 `objects.get` and `buckets.get` as metadata requests (the bucket's with an empty name). The location a page token is bound to is
-the bucket and the canonical endpoint. The library's tests are in `gcs/gcs_test.go`, on `gcstest.Strict`, which
-also answers `objects.get` and `buckets.get`.
+the bucket and the canonical endpoint. `Live.Walk` (`walk.go`) is a library walk: a provider of its own over
+the live client (`New` with it as `Options.Client`, 64 workers unless the walk sets them, `Sequential` at one),
+counted by `live.Count` with each range checked ascending and apart from the others. The library's tests are in
+`gcs/gcs_test.go` and `gcs/walk_test.go`, on `gcstest.Strict`, which also answers `objects.get` and `buckets.get`.
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`

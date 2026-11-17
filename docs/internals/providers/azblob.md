@@ -308,3 +308,9 @@ absent) is absent only once the probe, a List Blobs of the key's prefix for one 
 either request leaves the key unknown with its class (`objhttp.Classed`, Azure's code before its status): a 403 is
 `listing.ErrAuth`, `ContainerNotFound` `listing.ErrNotFound`, and an authentication code that comes with a 404
 `listing.ErrAuth`. `TestLookupUnknown` covers each.
+
+**Walks.** `Live.Walk` (`walk.go`) builds a provider of its own over the live client (`New` with it as
+`Options.Client`, 64 workers unless the walk sets them, `Sequential` at one), so each walk runs admission: a
+hierarchical namespace, or one admission cannot establish as flat, is `listing.ErrUnsupported` before any List
+Blobs (`TestWalkHierarchicalRefused`). The byte-order adapter serves each range ascending, so `live.Count` checks
+each range's keys ascending and apart from the others' (`TestWalkEachEntryOnce`, over `azblobtest.Keys`).

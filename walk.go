@@ -42,7 +42,7 @@ var (
 // ranges at once and split them at page boundaries while workers are idle,
 // so a prefix that fits in one page is one request; req.Workers 1 lists
 // one continuation chain, never split; zero selects the source's default,
-// 64 for S3. Each walk has a range engine of its own; concurrent walks
+// 64 for an object store. Each walk has a range engine of its own; concurrent walks
 // share the source's client and request limits only.
 //
 // emit is called from the goroutine that called Walk, one batch at a time.

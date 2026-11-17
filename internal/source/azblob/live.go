@@ -47,6 +47,7 @@ const sortBound = client.MaxPageSize
 // marked makes the source ask the account's namespace (hierarchical), and
 // only a hierarchical namespace's marked blobs are directories.
 type Live struct {
+	account   string
 	container string
 	client    *client.Client
 	location  string
@@ -82,7 +83,7 @@ func OpenLive(ctx context.Context, opt Options) (*Live, error) {
 	}
 
 	location := strings.Join([]string{"azure", opt.Account, opt.Container, objhttp.CanonicalRoute(p.route)}, "\x00")
-	return &Live{container: opt.Container, client: p.client.(*client.Client), location: location,
+	return &Live{account: opt.Account, container: opt.Container, client: p.client.(*client.Client), location: location,
 		namespace: p.namespaceOf, unsigned: p.unsigned()}, nil
 }
 
