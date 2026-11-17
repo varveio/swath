@@ -41,7 +41,7 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `command` | the command line as a function another Go program can call: `Main` runs one command line and returns its exit code, `Exit` exits with it as the binary does, and `Host` names the program a copy is built into, which `--version` then states. The commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `inventory.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*inventory.ConfigError` for a bad value or combination), with each provider's own flag group; usage generated from the flag set. Terminal detection (`--format auto`, color, the live progress line) follows the stdout and stderr given to `Main`: a writer that is not an `*os.File` is not a terminal. Process-wide policy is set when `Main` is called, never when the package is imported, for a process dedicated to the call (the binary, or a host's child): the Azure SDK's own log turned off, SIGPIPE ignored, `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix `Exit` then kills the process by the signal it got), and a forced exit after the shutdown grace, the one path on which `Main` ends the process instead of returning | listing, registry, cli, journal, dataset; no provider (`cli` registers them) |
 | `internal/inventory` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/cli` | the command line's flag table (`Flag`, `Define`, `Described`, the flag values) and help groups; the flag groups the providers share, `StoreGroup` (filling `source.Store`) and `EngineGroup` (filling `keyrange.Common`); each provider's registration, one file each (`s3.go`, `gcs.go`, `azblob.go`, `localfs.go`): its factory, registered from `init`, its flags and their environment variables and conflicts turned into the provider's options, and the source a run takes (the provider's opened view joined with `registry.From`) | registry, source, keyrange, objhttp, parquetout, pflag, every provider |
-| `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
+| `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; what was not read (`Unreader`, `Dropper[R]`); the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`From`, `Bind[R, P]`, `Run`: a `bind.Bound` whose rows go where the run's `Env` sends them, the part router, a text stream or nowhere); `SchemaInfo`, the producers' schema declarations by id (`Factory.Schemas`), and `DatasetTotals`, the same totals and filters over a committed dataset's rows (`swath du --from-dataset`) | bind, source, schema, order, parquetout, textout, dataset, totals, reader, seekparquet |
 | `internal/bind` | a provider bound to its row schema (`Provider[R, P]`) and listed into a sink its caller supplies: unordered (`Count`, `order.CountWithSink`) or through the order stage (`Run`); the column bindings of the filters, the object bytes, the versions counts and the per-prefix totals between provider and sink. It chooses no sink | source, schema, order, filter, totals |
 | `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; `Open`, its opened view, whose `Begin` readies a listing (pruning, a count's processors) | source, schema, bind, dataset, longpath |
@@ -75,7 +75,7 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 [clients.md](clients.md).
 
 **The library** (experimental, [library.md](../library.md)). The root package `github.com/varveio/swath` holds
-`Source`, an opened live location that answers the listing contract's Page and Lookup (`reader/listing`) with the
+`Source`, an opened live location that answers the listing contract's Page, Lookup, Walk and Summarize (`reader/listing`) with the
 checks and page tokens every object store's pages share; it links no provider and no cloud SDK. A provider's
 public package opens one with typed options and no flags: `github.com/varveio/swath/s3` (`s3.Open`) over
 `internal/source/s3.OpenLive`, whose one-level call is one delimiter ListObjectsV2 and whose lookup is HeadObject,
@@ -83,6 +83,15 @@ then HeadBucket after a 404. `internal/live` joins the two: the `Store` a provid
 package `swath` sets when it is initialized. A provider's failures take the contract's classes through
 `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither package links the command,
 pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
+
+`Source.Walk` lists a prefix flat. A store that walks (`live.Walker`) builds a provider of its own for each call,
+over its shared client (S3's `Live.Walk`: the range engine with no seed and no probes), binds it to its schema
+and runs the order stage's unordered count into a sink of package `swath` (`live.Count`: `bind`,
+`order.CountWithSink`, each range's keys checked ascending). The count's workers hand that sink batches of
+entries, which it checks and hands to the caller's function one at a time from the goroutine that called
+`Walk`, each worker waiting until its batch is taken; the extents not read reach it through the count's
+`order.UnreadSink`. `Source.Summarize` walks each subtree target that lies under no other once and looks up
+each exact target.
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
