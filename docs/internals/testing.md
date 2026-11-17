@@ -281,7 +281,8 @@ are all in the leg runs whole, all its tests in one process:
 `--check` and `--self-test` hold this table to the same rules as the Windows one. The cache keys name the
 runner's OS, so the macOS and Windows `go-xos-listing-rest` caches are separate families. `go-stress.yml` on
 macOS or Windows restores `go-xos-listing-rest` for `./internal/listing` and `go-xos` otherwise.
-`nightly.yml` `go-xos-macos` runs the same legs.
+`nightly.yml` `go-xos-macos` runs the same legs. The two legs print the same 80 package results as the single
+job did; their times are in [measurements](measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17).
 
 The heavy packages race on arm64 only: its weaker memory model makes it the better race target, and the same
 `-race` suite took about 30 % less time there than on amd64 (`internal/listing` 490 s against 700 s). The
@@ -407,7 +408,8 @@ before and after the change when it fixes a flake, as #300 does.
 `main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (one leg per
 [race shard](#race-shards) at the tag, every one on amd64, each shard's `-json` stream the
 `go-race-release-SHARD` artifact, and a `vet-reader` leg: `go vet` of the main and reader modules,
-`go-race-shards.sh --check` and the race tests of `reader`) and `build` (`scripts/ci/release-assets.sh
+`go-race-shards.sh --check` and the race tests of `reader`; its legs' times are in
+[measurements](measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)) and `build` (`scripts/ci/release-assets.sh
 build`: `build.sh` for the five targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
 `--version` exactly the tag's version and commit, and the [license gate](#license-gate); the archives, an SBOM,
 `SHA256SUMS`), then `publish` (both
