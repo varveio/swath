@@ -31,9 +31,10 @@ type PageRequest struct {
 	// unchanged. Empty starts the level. A token is opaque and versioned:
 	// it carries the backend's resume state, the last key returned, and a
 	// fingerprint of the source (an inventory's manifest digest), of
-	// Prefix and of the options that decide what the level's pages hold:
-	// whether ChildTotals is set, and the kinds it counts. A token that
-	// does not match them is ErrInvalidToken, refused before any request.
+	// Prefix and, on an inventory, of the options that decide what the
+	// level's pages hold: whether ChildTotals is set, and the kinds it
+	// counts. A token that does not match them is ErrInvalidToken, refused
+	// before any request.
 	// Limit and the bounds of work (MaxDuration, the ChildTotals Budget)
 	// may change from page to page. Tokens are not signed; a caller that
 	// hands them to others signs its own.
@@ -46,7 +47,8 @@ type PageRequest struct {
 	MaxDuration time.Duration
 	// ChildTotals, when not nil, asks for the totals of each child prefix
 	// or directory, counted as it says and within its Budget. An inventory
-	// provides them; a live source returns none.
+	// provides them; a live source refuses the request with ErrUnsupported,
+	// before any request.
 	ChildTotals *SummaryOptions
 }
 
@@ -65,10 +67,10 @@ type Page struct {
 	// child's key comes back inside that child's own level, as its Self.
 	Entries []Entry
 	// Totals has one element per entry when the request asked for child
-	// totals and the backend provides them: a KindPrefix or KindDir
+	// totals, which only an inventory gives: a KindPrefix or KindDir
 	// entry's totals, as Summarize counts a Subtree target at its key, or
 	// nil for any other entry and wherever they are not known within the
-	// budget. Nil when not provided.
+	// budget. Nil when not asked for.
 	Totals []*Totals
 	// Self is the entry whose key is exactly the request's Prefix, such as
 	// an object "a/" in the level of "a/", on the one page of the level

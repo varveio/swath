@@ -260,9 +260,9 @@ func TestInvalidPages(t *testing.T) {
 }
 
 // TestTokenBinding: a token works only for the level it was issued for:
-// on another prefix, through another endpoint with a bucket of the same
-// name, or with child totals asked for, it is ErrInvalidToken, before any
-// request; so is a token that is not one.
+// on another prefix, or through another endpoint with a bucket of the same
+// name, it is ErrInvalidToken, before any request; so is a token that is
+// not one.
 func TestTokenBinding(t *testing.T) {
 	s3test.NoCredentials(t)
 	keys := []string{"a/1", "a/2", "b/1", "b/2"}
@@ -286,7 +286,6 @@ func TestTokenBinding(t *testing.T) {
 	}{
 		{"another prefix", src, listing.PageRequest{Prefix: []byte("b/"), Limit: 1, Token: page.Next}},
 		{"another endpoint", elsewhere, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: page.Next}},
-		{"child totals", src, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: page.Next, ChildTotals: &listing.SummaryOptions{}}},
 		{"no token", src, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: "live1.x.y.z"}},
 	} {
 		if _, err := c.src.Page(ctx, c.req); !errors.Is(err, listing.ErrInvalidToken) {
@@ -416,15 +415,17 @@ func TestInvalidRequests(t *testing.T) {
 	src := open(t, endpoint, s3test.Name)
 	ctx := context.Background()
 	for name, req := range map[string]listing.PageRequest{
-		"no limit":       {},
-		"a NUL":          {Prefix: []byte("a\x00"), Limit: 1},
-		"not UTF-8":      {Prefix: []byte{0xff}, Limit: 1},
-		"a negative":     {Limit: 1, MaxDuration: -1},
-		"a kind of none": {Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: []listing.Kind{0}}},
+		"no limit":   {},
+		"a NUL":      {Prefix: []byte("a\x00"), Limit: 1},
+		"not UTF-8":  {Prefix: []byte{0xff}, Limit: 1},
+		"a negative": {Limit: 1, MaxDuration: -1},
 	} {
 		if _, err := src.Page(ctx, req); !errors.Is(err, listing.ErrInvalidRequest) {
 			t.Errorf("page, %s: %v", name, err)
 		}
+	}
+	if _, err := src.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}}); !errors.Is(err, listing.ErrUnsupported) {
+		t.Errorf("page with child totals: %v", err)
 	}
 	for _, key := range [][]byte{nil, []byte("a\x00"), {0xff}} {
 		if _, err := src.Lookup(ctx, key); !errors.Is(err, listing.ErrInvalidRequest) {

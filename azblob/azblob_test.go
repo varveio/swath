@@ -383,9 +383,9 @@ func TestInvalidPages(t *testing.T) {
 }
 
 // TestTokenBinding: a token works only for the level it was issued for:
-// on another prefix, through another endpoint with a container of the
-// same name, or with child totals asked for, it is ErrInvalidToken, before
-// any request; so is a token that is not one.
+// on another prefix, or through another endpoint with a container of the
+// same name, it is ErrInvalidToken, before any request; so is a token that
+// is not one.
 func TestTokenBinding(t *testing.T) {
 	noCredentials(t)
 	keys := []string{"a/1", "a/2", "b/1", "b/2"}
@@ -409,7 +409,6 @@ func TestTokenBinding(t *testing.T) {
 	}{
 		{"another prefix", src, listing.PageRequest{Prefix: []byte("b/"), Limit: 1, Token: p.Next}},
 		{"another endpoint", elsewhere, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: p.Next}},
-		{"child totals", src, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: p.Next, ChildTotals: &listing.SummaryOptions{}}},
 		{"no token", src, listing.PageRequest{Prefix: []byte("a/"), Limit: 1, Token: "live1.x.y.z"}},
 	} {
 		if _, err := c.src.Page(ctx, c.req); !errors.Is(err, listing.ErrInvalidToken) {

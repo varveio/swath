@@ -34,18 +34,17 @@ import (
 //
 // A token is opaque and versioned. It carries the store's continuation
 // token and the level's last key, and is bound to the source's location
-// (the bucket and what decides which bucket of that name it is), to the
-// prefix and to whether, and with what kinds, req.ChildTotals is set; one
-// issued for another is ErrInvalidToken, before any request. A live source
-// returns no child totals. When req.MaxDuration ends a page it holds no
-// entry, its Next is req.Token, which asks again, and its Evidence.Stop
-// is StopTimeBudget.
+// (the bucket and what decides which bucket of that name it is) and to
+// the prefix; one issued for another is ErrInvalidToken, before any
+// request. A live source gives no child totals: req.ChildTotals is
+// ErrUnsupported, before any request. When req.MaxDuration ends a page it
+// holds no entry, its Next is req.Token, which asks again, and its
+// Evidence.Stop is StopTimeBudget.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
-	totals, err := checkPage(req)
-	if err != nil {
+	if err := checkPage(req); err != nil {
 		return listing.Page{}, err
 	}
-	bind := binding(s.store.Location(), req.Prefix, totals)
+	bind := binding(s.store.Location(), req.Prefix)
 	cur, err := decodeToken(req.Prefix, bind, req.Token)
 	if err != nil {
 		return listing.Page{}, err
@@ -77,41 +76,22 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 	return page, nil
 }
 
-// checkPage refuses a request of the wrong form, before any request, and
-// returns the binding of its child totals: nil when it asks for none,
-// else a byte for each kind, 1 where they count it, so that one count
-// spelt in two ways binds alike.
-func checkPage(req listing.PageRequest) ([]byte, error) {
+// checkPage refuses a request of the wrong form, or one asking for child
+// totals, before any request.
+func checkPage(req listing.PageRequest) error {
 	switch {
 	case bytes.IndexByte(req.Prefix, 0) >= 0:
-		return nil, invalid("the prefix holds a NUL byte")
+		return invalid("the prefix holds a NUL byte")
 	case !utf8.Valid(req.Prefix):
-		return nil, invalid("the prefix is not UTF-8")
+		return invalid("the prefix is not UTF-8")
 	case req.Limit < 1:
-		return nil, invalid("a page's Limit is positive")
+		return invalid("a page's Limit is positive")
 	case req.MaxDuration < 0:
-		return nil, invalid("a negative bound")
-	case req.ChildTotals == nil:
-		return nil, nil
+		return invalid("a negative bound")
+	case req.ChildTotals != nil:
+		return fmt.Errorf("%w: a live source gives no child totals", listing.ErrUnsupported)
 	}
-
-	b := req.ChildTotals.Budget
-	if b.MaxEntries < 0 || b.MaxDuration < 0 {
-		return nil, invalid("a negative bound")
-	}
-	kinds := req.ChildTotals.Kinds
-	if len(kinds) == 0 {
-		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
-	}
-	counted := make([]byte, listing.KindUnknown+1)
-	for _, k := range kinds {
-		if k == 0 || k > listing.KindUnknown {
-			return nil, invalid("%v is no kind", k)
-		}
-		counted[k] = 1
-	}
-	counted[listing.KindPrefix] = 0 // never counted
-	return counted, nil
+	return nil
 }
 
 // level checks one answer of the store against the level of prefix, after
@@ -200,18 +180,16 @@ type cursor struct {
 	store string
 }
 
-// binding ties a token to one location, one prefix and one count of child
-// totals (checkPage). Limit and the bounds of a page's work may change
-// from page to page. Tokens are not signed: the binding detects a token
-// used with another source, prefix or count, not a forged one.
-func binding(location string, prefix, totals []byte) string {
+// binding ties a token to one location and one prefix. Limit and the
+// bounds of a page's work may change from page to page. Tokens are not
+// signed: the binding detects a token used with another source or prefix,
+// not a forged one.
+func binding(location string, prefix []byte) string {
 	h := sha256.New()
 	h.Write([]byte("swath live page token\x00"))
 	h.Write([]byte(location))
 	h.Write([]byte{0})
 	h.Write(prefix)
-	h.Write([]byte{0})
-	h.Write(totals)
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:16])
 }
 
@@ -233,7 +211,7 @@ func decodeToken(prefix []byte, bind, token string) (cursor, error) {
 		return cursor{}, badToken("not a token of this version")
 	}
 	if parts[1] != bind {
-		return cursor{}, badToken("issued for another source, prefix or count of child totals")
+		return cursor{}, badToken("issued for another source or prefix")
 	}
 	last, lerr := base64.RawURLEncoding.DecodeString(parts[2])
 	store, serr := base64.RawURLEncoding.DecodeString(parts[3])
