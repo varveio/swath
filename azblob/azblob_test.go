@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,11 +77,35 @@ func serve(t *testing.T, h http.Handler) string {
 	return srv.URL
 }
 
-// fake serves s as Azure serves the container and records its requests.
+// fake serves s as Azure serves the container of a flat account and
+// records its requests.
 func fake(t *testing.T, s *azblobtest.Store) (endpoint string, sent *requests) {
 	t.Helper()
+	return fakeIn(t, "false", s)
+}
+
+// fakeIn serves s as fake does, in an account whose Get Account
+// Information says x-ms-is-hns-enabled hns.
+func fakeIn(t *testing.T, hns string, s *azblobtest.Store) (endpoint string, sent *requests) {
+	t.Helper()
 	sent = &requests{}
-	return serve(t, sent.record(azblobtest.Handler(s, account, container))), sent
+	return serve(t, sent.record(namespace(hns, new(atomic.Int32), azblobtest.Handler(s, account, container)))), sent
+}
+
+// namespace answers Get Account Information with x-ms-is-hns-enabled hns
+// ("" for none), counting the calls in asked, and passes every other
+// request to h.
+func namespace(hns string, asked *atomic.Int32, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query(); q.Get("restype") != "account" || q.Get("comp") != "properties" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		asked.Add(1)
+		if hns != "" {
+			w.Header().Set("x-ms-is-hns-enabled", hns)
+		}
+	})
 }
 
 // level is the level of prefix in keys, in byte order: the object at
@@ -201,17 +226,17 @@ func directory(name string) client.Item {
 	return client.Item{Name: name, BlobType: "BlockBlob", Props: client.Props{Metadata: `{"hdi_isfolder":"true"}`}}
 }
 
-// TestHierarchicalDirectories: a directory's blob is the directory's
-// prefix, once, beside the prefix Azure lists for its contents, and an
-// empty directory is a prefix too; a lookup of it is present, as its
-// prefix. A level that holds a directory's blob and is longer than one
+// TestHierarchicalDirectories: in an account Get Account Information
+// says is hierarchical, a directory's blob is the directory's prefix, once,
+// beside the prefix Azure lists for its contents, and an empty directory
+// is a prefix too; a lookup of it is present, as its prefix. A level that holds a directory's blob and is longer than one
 // answer is ErrUnsupported, even where its answers ascend in byte order:
 // a hierarchical namespace's order is not, which a new start in it would
 // meet.
 func TestHierarchicalDirectories(t *testing.T) {
 	noCredentials(t)
 	entries := []client.Item{directory("d"), {Name: "d-x", Size: 1}, {Name: "d.txt", Size: 1}, directory("d/e"), {Name: "d/e/f", Size: 1}, directory("g")}
-	endpoint, _ := fake(t, azblobtest.NewEntryStore(entries))
+	endpoint, _ := fakeIn(t, "true", azblobtest.NewEntryStore(entries))
 	src := open(t, endpoint)
 	for _, limit := range []int{1, 10} {
 		_, children, err := page(t, src, "", limit)
@@ -232,24 +257,85 @@ func TestHierarchicalDirectories(t *testing.T) {
 	// character, is sorted too.
 	hns := &client.ListOutput{Items: []client.Item{directory("a"), {Name: "a/", Prefix: true}, directory("a-b"), {Name: "a-b/", Prefix: true},
 		{Name: "a.txt", Size: 1}}}
-	_, children, err := page(t, open(t, scripted(t, map[string]*client.ListOutput{"": hns})), "", 1)
+	ordered := serve(t, namespace("true", new(atomic.Int32), scriptedHandler(t, map[string]*client.ListOutput{"": hns})))
+	_, children, err := page(t, open(t, ordered), "", 1)
 	if want := []string{"a-b/", "a.txt", "a/"}; err != nil || !slices.Equal(children, want) {
 		t.Errorf("the namespace's order: %q, %v; want %q", children, err, want)
 	}
 
 	s := azblobtest.NewEntryStore([]client.Item{{Name: "a", Size: 1}, directory("d"), {Name: "d/f", Size: 1}, {Name: "z", Size: 1}})
 	s.Short = func(int) int { return 2 }
-	endpoint, _ = fake(t, s)
+	endpoint, _ = fakeIn(t, "true", s)
 	if _, children, err := page(t, open(t, endpoint), "", 10); !errors.Is(err, listing.ErrUnsupported) {
 		t.Errorf("short answers: %q, %v; want ErrUnsupported", children, err)
 	}
 }
 
-// scripted serves a container whose List Blobs answers are pages, by the
-// marker the request sends ("" for none).
+// TestFlatDirectoryMetadata: in an account Get Account Information says is
+// flat, a blob whose user metadata says hdi_isfolder=true is an object,
+// with its size, beside the prefix of the blobs under it, Self of its own
+// name, and present as itself. The namespace is asked once, and the
+// request reaches the observer. In an account whose namespace cannot be
+// read, such a blob makes a page ErrUnsupported and a lookup unknown; a
+// level without one is paged without asking.
+func TestFlatDirectoryMetadata(t *testing.T) {
+	noCredentials(t)
+	marked := directory("report")
+	marked.Size = 7
+	store := func() *azblobtest.Store {
+		return azblobtest.NewEntryStore([]client.Item{marked, {Name: "report/x", Size: 1}, {Name: "z", Size: 1}})
+	}
+
+	var asked atomic.Int32
+	src := open(t, serve(t, namespace("false", &asked, azblobtest.Handler(store(), account, container))))
+	obs := &observed{}
+	ctx := objfile.WithObserver(context.Background(), obs)
+	p, err := src.Page(ctx, listing.PageRequest{Limit: 10})
+	if err != nil || len(p.Entries) != 3 || string(p.Entries[0].Key) != "report" || p.Entries[0].Kind != listing.KindObject ||
+		p.Entries[0].Size == nil || *p.Entries[0].Size != 7 || string(p.Entries[1].Key) != "report/" {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	p, err = src.Page(ctx, listing.PageRequest{Prefix: []byte("report"), Limit: 10})
+	if err != nil || p.Self == nil || string(p.Self.Key) != "report" || len(p.Entries) != 1 || string(p.Entries[0].Key) != "report/" {
+		t.Fatalf("report: %+v, %v", p, err)
+	}
+	r, err := src.Lookup(ctx, []byte("report"))
+	if err != nil || r.State != listing.LookupPresent || r.Entry == nil || string(r.Entry.Key) != "report" ||
+		r.Entry.Kind != listing.KindObject || r.Entry.Size == nil || *r.Entry.Size != 7 {
+		t.Fatalf("lookup: %+v, %v", r, err)
+	}
+	if n := asked.Load(); n != 1 {
+		t.Errorf("the namespace asked %d times, want 1", n)
+	}
+	if !slices.Contains(obs.seen, `metadata "" retry=false failed=false`) {
+		t.Errorf("observed %q, want the namespace's request", obs.seen)
+	}
+
+	src = open(t, serve(t, azblobtest.Handler(store(), account, container)))
+	if _, err := src.Page(context.Background(), listing.PageRequest{Limit: 10}); !errors.Is(err, listing.ErrUnsupported) || listing.Retryable(err) {
+		t.Errorf("an unknown namespace's page: %v, want ErrUnsupported", err)
+	}
+	r, err = src.Lookup(context.Background(), []byte("report"))
+	if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrUnsupported) {
+		t.Errorf("an unknown namespace's lookup: %+v, %v", r, err)
+	}
+	if _, children, err := page(t, src, "report/", 10); err != nil || !slices.Equal(children, []string{"report/x"}) {
+		t.Errorf("a level without a marked blob: %q, %v", children, err)
+	}
+}
+
+// scripted serves scriptedHandler until the test ends and returns its
+// endpoint.
 func scripted(t *testing.T, pages map[string]*client.ListOutput) string {
 	t.Helper()
-	return serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return serve(t, scriptedHandler(t, pages))
+}
+
+// scriptedHandler answers List Blobs with pages, by the marker the request
+// sends ("" for none).
+func scriptedHandler(t *testing.T, pages map[string]*client.ListOutput) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, ok := pages[r.URL.Query().Get("marker")]
 		if !ok {
 			t.Errorf("unexpected request %s", r.URL)
@@ -258,7 +344,7 @@ func scripted(t *testing.T, pages map[string]*client.ListOutput) string {
 		}
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, azblobtest.ListXML(out))
-	}))
+	})
 }
 
 // blobs is an answer of blobs names, continuing at next.
@@ -272,7 +358,8 @@ func blobs(next string, names ...string) *client.ListOutput {
 
 // TestInvalidPages: an answer that breaks the contract is ErrInvalidPage,
 // not retried: a key outside the prefix, a marker that repeats the one
-// sent, a key repeated across answers.
+// sent, a key repeated in a level one answer holds, in a longer level's
+// answer and across its answers.
 func TestInvalidPages(t *testing.T) {
 	noCredentials(t)
 	for _, c := range []struct {
@@ -282,6 +369,9 @@ func TestInvalidPages(t *testing.T) {
 		{"a key outside the prefix", map[string]*client.ListOutput{"": blobs("", "a/1", "b/2")}},
 		{"a repeated marker", map[string]*client.ListOutput{"": blobs("m1", "a/1"), "m1": blobs("m1", "a/2")}},
 		{"a key below a child", map[string]*client.ListOutput{"": blobs("", "a/b/c")}},
+		{"a key repeated in one answer", map[string]*client.ListOutput{"": blobs("", "a/1", "a/1")}},
+		{"a key repeated in a chain's answer", map[string]*client.ListOutput{"": blobs("m1", "a/1", "a/1"), "m1": blobs("", "a/2")}},
+		{"a key repeated across answers", map[string]*client.ListOutput{"": blobs("m1", "a/1"), "m1": blobs("", "a/1")}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, children, err := page(t, open(t, scripted(t, c.pages)), "a/", 10)
@@ -384,42 +474,63 @@ func TestLookup(t *testing.T) {
 	}
 }
 
-// TestLookupUnknown: a 403 to Get Blob Properties is unknown (ErrAuth) and
-// probes nothing; so is a missing key whose container probe is refused.
+// TestLookupUnknown: a failure of Get Blob Properties other than the
+// blob's own 404 is unknown with its class and probes nothing: a 403, a
+// missing container, an authentication code that comes with a 404. A
+// missing blob whose container probe fails is unknown with the probe's
+// class, an authentication code before a 404 there too.
 func TestLookupUnknown(t *testing.T) {
 	noCredentials(t)
 	blob := "/" + account + "/" + container + "/k"
+	head := []string{"HEAD " + blob}
+	probed := []string{"HEAD " + blob, "GET /" + account + "/" + container}
 	for _, c := range []struct {
-		name   string
-		status int // Get Blob Properties'; the probe's is 403
-		want   []string
+		name  string
+		head  answer // Get Blob Properties'
+		probe answer // the container probe's; zero is a listing of nothing
+		want  error
+		sent  []string
 	}{
-		{"a 403", http.StatusForbidden, []string{"HEAD " + blob}},
-		{"a failed probe", http.StatusNotFound, []string{"HEAD " + blob, "GET /" + account + "/" + container}},
+		{"a 403", answer{http.StatusForbidden, "AuthorizationPermissionMismatch"}, answer{}, listing.ErrAuth, head},
+		{"a missing container", answer{http.StatusNotFound, "ContainerNotFound"}, answer{}, listing.ErrNotFound, head},
+		{"an authentication failure as a 404", answer{http.StatusNotFound, "AuthenticationFailed"}, answer{}, listing.ErrAuth, head},
+		{"a refused probe", answer{http.StatusNotFound, "BlobNotFound"}, answer{http.StatusForbidden, "AuthorizationPermissionMismatch"}, listing.ErrAuth, probed},
+		{"a probe of a missing container", answer{http.StatusNotFound, "BlobNotFound"}, answer{http.StatusNotFound, "ContainerNotFound"}, listing.ErrNotFound, probed},
+		{"a probe's authentication failure as a 404", answer{http.StatusNotFound, "BlobNotFound"}, answer{http.StatusNotFound, "AuthenticationFailed"}, listing.ErrAuth, probed},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sent := &requests{}
 			endpoint := serve(t, sent.record(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				a := c.probe
 				if r.URL.Path == blob {
-					w.Header().Set("x-ms-error-code", "BlobNotFound")
-					if c.status == http.StatusForbidden {
-						w.Header().Set("x-ms-error-code", "AuthorizationPermissionMismatch")
-					}
-					w.WriteHeader(c.status)
+					a = c.head
+				}
+				if a.status == 0 {
+					w.Header().Set("Content-Type", "application/xml")
+					fmt.Fprint(w, azblobtest.ListXML(&client.ListOutput{}))
 					return
 				}
-				w.Header().Set("x-ms-error-code", "AuthorizationPermissionMismatch")
-				w.WriteHeader(http.StatusForbidden)
+				w.Header().Set("x-ms-error-code", a.code)
+				w.WriteHeader(a.status)
 			})))
 			r, err := open(t, endpoint).Lookup(context.Background(), []byte("k"))
-			if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrAuth) || r.Entry != nil {
-				t.Errorf("%+v, %v; want unknown, ErrAuth", r, err)
+			if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, c.want) || r.Entry != nil {
+				t.Errorf("%+v, %v; want unknown, %v", r, err, c.want)
 			}
-			if got := sent.list(); !slices.Equal(got, c.want) {
-				t.Errorf("requests %q, want %q", got, c.want)
+			if c.want != listing.ErrNotFound && errors.Is(r.Reason, listing.ErrNotFound) {
+				t.Errorf("%v, also ErrNotFound", r.Reason)
+			}
+			if got := sent.list(); !slices.Equal(got, c.sent) {
+				t.Errorf("requests %q, want %q", got, c.sent)
 			}
 		})
 	}
+}
+
+// answer is a fake's error answer: its status and x-ms-error-code.
+type answer struct {
+	status int
+	code   string
 }
 
 // TestInvalidRequests are refused before any request.

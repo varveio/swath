@@ -12,9 +12,13 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
+
 	"github.com/varveio/swath/internal/live"
+	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/reader/listing"
@@ -37,11 +41,31 @@ const sortBound = client.MaxPageSize
 // longer than one answer is paged in Azure's order, and is refused
 // (listing.ErrUnsupported) once it shows an order that is not byte order
 // or a directory's blob.
+//
+// A blob's metadata alone does not make it a directory: user metadata may
+// say hdi_isfolder=true on a flat namespace's object. The first blob so
+// marked makes the source ask the account's namespace (hierarchical), and
+// only a hierarchical namespace's marked blobs are directories.
 type Live struct {
 	container string
 	client    *client.Client
 	location  string
+
+	// namespace is one round of admission's calls (provider.namespaceOf),
+	// and unsigned says requests go anonymous.
+	namespace func(context.Context) (hns bool, how string, busy bool, err error)
+	unsigned  bool
+	// ns is the namespace once answered: nsUnknown, nsFlat or
+	// nsHierarchical.
+	ns atomic.Int32
 }
+
+// The namespace as Live.ns holds it.
+const (
+	nsUnknown int32 = iota
+	nsFlat
+	nsHierarchical
+)
 
 var _ live.Store = (*Live)(nil)
 
@@ -58,7 +82,55 @@ func OpenLive(ctx context.Context, opt Options) (*Live, error) {
 	}
 
 	location := strings.Join([]string{"azure", opt.Account, opt.Container, objhttp.CanonicalRoute(p.route)}, "\x00")
-	return &Live{container: opt.Container, client: p.client.(*client.Client), location: location}, nil
+	return &Live{container: opt.Container, client: p.client.(*client.Client), location: location,
+		namespace: p.namespaceOf, unsigned: p.unsigned()}, nil
+}
+
+// hierarchical reports whether the account's namespace is hierarchical,
+// asked as admission asks it (Get Account Information, then the Data Lake
+// host's Filesystem Get Properties) until one call answers. Credentials
+// that could not be had or that the service refused, and a service that
+// failed or never answered, keep their class; a namespace the calls cannot
+// tell (a refusal an anonymous caller always meets, a missing header, no
+// Data Lake host) is listing.ErrUnsupported, since a marked blob is then
+// neither an object nor a directory for certain.
+func (l *Live) hierarchical(ctx context.Context) (bool, error) {
+	switch l.ns.Load() {
+	case nsFlat:
+		return false, nil
+	case nsHierarchical:
+		return true, nil
+	}
+
+	hns, _, busy, err := l.namespace(ctx)
+	if err == nil {
+		ns := nsFlat
+		if hns {
+			ns = nsHierarchical
+		}
+		l.ns.Store(ns)
+		return hns, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if errors.As(err, new(*objhttp.CredentialError)) || errors.Is(err, source.ErrUnreachable) || busy || (!l.unsigned && refused(err)) {
+		return false, objhttp.Classed(err)
+	}
+	return false, fmt.Errorf("%w: Azure Blob container %q: a blob's metadata marks it a directory (hdi_isfolder), and the account's namespace cannot be read to tell whether it is one: %w",
+		listing.ErrUnsupported, l.container, err)
+}
+
+// marked reports whether items hold a blob marked as a directory in a
+// hierarchical namespace: it asks the namespace only when they hold a
+// marked blob.
+func (l *Live) marked(ctx context.Context, items []client.Item) (bool, error) {
+	for i := range items {
+		if directory(&items[i]) {
+			return l.hierarchical(ctx)
+		}
+	}
+	return false, nil
 }
 
 // Location identifies the container by its account, its name and the
@@ -143,7 +215,11 @@ func (l *Live) List(ctx context.Context, prefix []byte, token string, max int) (
 	if err != nil {
 		return nil, failure(ctx, err)
 	}
-	entries, dirs, err := children(prefix, out.Items)
+	hns, err := l.marked(ctx, out.Items)
+	if err != nil {
+		return nil, err
+	}
+	entries, dirs, err := children(prefix, out.Items, hns)
 	if err != nil {
 		return nil, err
 	}
@@ -166,25 +242,43 @@ func (l *Live) List(ctx context.Context, prefix []byte, token string, max int) (
 }
 
 // children are a level's items as entries, in the answer's order: a blob
-// as an object, a prefix as a prefix, and a directory's blob as its
-// prefix (dirs says the answer held one). An item outside prefix is
-// listing.ErrInvalidPage.
-func children(prefix []byte, items []client.Item) (entries []listing.Entry, dirs bool, err error) {
+// as an object and a prefix as a prefix. In a hierarchical namespace
+// (hns) a directory's blob is its prefix (dirs says the answer held one),
+// and a directory the answer lists both as that blob and as a prefix is
+// one prefix; any other key listed twice stays twice, for the caller to
+// refuse. An item outside prefix is listing.ErrInvalidPage.
+func children(prefix []byte, items []client.Item, hns bool) (entries []listing.Entry, dirs bool, err error) {
 	entries = make([]listing.Entry, 0, len(items))
+	// listed holds each directory's prefix listed once so far: true when
+	// as its blob, false when as a prefix.
+	listed := map[string]bool{}
 	for i := range items {
 		it := &items[i]
 		if !strings.HasPrefix(it.Name, string(prefix)) {
 			return nil, false, fmt.Errorf("%w: a key outside the prefix: %q", listing.ErrInvalidPage, it.Name)
 		}
+
+		var e listing.Entry
+		blob := false
 		switch {
 		case it.Prefix:
-			entries = append(entries, listing.Entry{Key: []byte(it.Name), Kind: listing.KindPrefix})
-		case directory(it):
-			dirs = true
-			entries = append(entries, listing.Entry{Key: []byte(it.Name + "/"), Kind: listing.KindPrefix})
+			e = listing.Entry{Key: []byte(it.Name), Kind: listing.KindPrefix}
+		case hns && directory(it):
+			dirs, blob = true, true
+			e = listing.Entry{Key: []byte(it.Name + "/"), Kind: listing.KindPrefix}
 		default:
 			entries = append(entries, object([]byte(it.Name), it.Size, it.LastModified, it.AccessTier))
+			continue
 		}
+
+		if hns {
+			if asBlob, ok := listed[string(e.Key)]; ok && asBlob != blob {
+				delete(listed, string(e.Key)) // the directory's other listing
+				continue
+			}
+			listed[string(e.Key)] = blob
+		}
+		entries = append(entries, e)
 	}
 	return entries, dirs, nil
 }
@@ -217,12 +311,12 @@ func object(key []byte, size, micros int64, tier string) listing.Entry {
 	return e
 }
 
-// serveSorted serves a whole level, entries in any order: sorted, a key
-// listed twice (a directory's blob and its prefix) once, then at most max
-// entries after last. A level that goes on carries a sorted cursor.
+// serveSorted serves a whole level, entries in any order: sorted, then at
+// most max entries after last. A key listed twice is served twice, which
+// the source's page check refuses. A level that goes on carries a sorted
+// cursor.
 func serveSorted(entries []listing.Entry, last []byte, max int) *live.Level {
-	slices.SortStableFunc(entries, func(a, b listing.Entry) int { return bytes.Compare(a.Key, b.Key) })
-	entries = slices.CompactFunc(entries, func(a, b listing.Entry) bool { return bytes.Equal(a.Key, b.Key) })
+	slices.SortFunc(entries, func(a, b listing.Entry) int { return bytes.Compare(a.Key, b.Key) })
 	if last != nil {
 		at, found := slices.BinarySearchFunc(entries, last, func(e listing.Entry, k []byte) int { return bytes.Compare(e.Key, k) })
 		if found {
@@ -242,17 +336,19 @@ func serveSorted(entries []listing.Entry, last []byte, max int) *live.Level {
 
 // serveChain serves at most max entries of one answer of a chain in
 // Azure's order, sent as in and continuing at next, after last: they must
-// ascend in byte order, a key equal to the one before (the answer's first,
-// at the chain's startFrom) dropped. An answer that does not ascend shows
-// the level's order is not byte order, too late to sort:
-// listing.ErrUnsupported. The level goes on from the next marker once the
-// answer is served whole, else from a chain begun at the last key served.
+// ascend in byte order. A chain begun at last lists last again first,
+// which is dropped; any other key listed again is served again, which the
+// source's page check refuses. An answer that descends shows the level's
+// order is not byte order, too late to sort: listing.ErrUnsupported. The
+// level goes on from the next marker once the answer is served whole, else
+// from a chain begun at the last key served.
 func serveChain(container string, prefix []byte, in *client.ListInput, next string, entries []listing.Entry, last []byte, max int) (*live.Level, error) {
+	echo := last != nil && in.Marker == "" && in.StartFrom == string(last)
 	kept := entries[:0]
 	prev := last
-	for _, e := range entries {
+	for i, e := range entries {
 		switch c := bytes.Compare(e.Key, prev); {
-		case prev != nil && c == 0:
+		case i == 0 && echo && c == 0:
 			continue
 		case prev != nil && c < 0:
 			return nil, fmt.Errorf("%w: Azure Blob container %q lists the level of %q in an order that is not byte order (%q after %q), "+
@@ -307,19 +403,19 @@ func split(entries []listing.Entry) *live.Level {
 
 // Lookup is Get Blob Properties of key (live.Store): present with what the
 // answer says of the blob, or, for a hierarchical namespace's directory,
-// present as its prefix. A 404 is absent only once the probe, a List Blobs
-// of key's own prefix for one entry, shows the container is there and may
-// be listed; a missing container and a failed probe leave the key unknown.
-// Any other failure leaves it unknown too, with its class: a 403 is
-// ErrAuth.
+// present as its prefix. A 404 that says the blob is not there
+// (blobAbsent) is absent only once the probe, a List Blobs of key's own
+// prefix for one entry, shows the container is there and may be listed.
+// Any other failure of either request leaves the key unknown with its
+// class: a 403 is ErrAuth, a missing container ErrNotFound.
 func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	h, err := l.client.Properties(ctx, l.container, string(key))
 	switch {
 	case err == nil:
-		return present(key, h), nil
+		return l.present(ctx, key, h)
 	case ctx.Err() != nil:
 		return listing.LookupResult{}, ctx.Err()
-	case !notFound(err):
+	case !blobAbsent(err):
 		return unknown(objhttp.Classed(err)), nil
 	}
 
@@ -329,26 +425,38 @@ func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, er
 		return listing.LookupResult{State: listing.LookupAbsent}, nil
 	case ctx.Err() != nil:
 		return listing.LookupResult{}, ctx.Err()
-	case notFound(err):
-		return unknown(fmt.Errorf("%w: container %q: %w", listing.ErrNotFound, l.container, err)), nil
 	}
 	return unknown(objhttp.Classed(err)), nil
 }
 
-// present is the entry a Get Blob Properties answer describes.
-func present(key []byte, h *client.Head) listing.LookupResult {
+// present is the entry a Get Blob Properties answer describes: a blob
+// marked as a directory is the directory's prefix in a hierarchical
+// namespace, an object in a flat one, and unknown while the namespace
+// cannot be read (hierarchical).
+func (l *Live) present(ctx context.Context, key []byte, h *client.Head) (listing.LookupResult, error) {
 	if h.Directory && !bytes.HasSuffix(key, []byte("/")) {
-		dir := append(bytes.Clone(key), '/')
-		return listing.LookupResult{State: listing.LookupPresent, Entry: &listing.Entry{Key: dir, Kind: listing.KindPrefix}}
+		hns, err := l.hierarchical(ctx)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return listing.LookupResult{}, ctx.Err()
+		case err != nil:
+			return unknown(err), nil
+		case hns:
+			dir := append(bytes.Clone(key), '/')
+			return listing.LookupResult{State: listing.LookupPresent, Entry: &listing.Entry{Key: dir, Kind: listing.KindPrefix}}, nil
+		}
 	}
 	e := object(bytes.Clone(key), h.Size, h.LastModified, h.AccessTier)
-	return listing.LookupResult{State: listing.LookupPresent, Entry: &e}
+	return listing.LookupResult{State: listing.LookupPresent, Entry: &e}, nil
 }
 
-// notFound: Azure answered 404, for the blob or its container.
-func notFound(err error) bool {
-	var e *client.Error
-	return errors.As(err, &e) && e.Status == http.StatusNotFound
+// blobAbsent: Get Blob Properties answered 404 with the code BlobNotFound,
+// or with none, which the container probe then tells apart. Another code
+// (ContainerNotFound, or one that classifies before the status) is not
+// the blob's absence.
+func blobAbsent(err error) bool {
+	e, ok := errors.AsType[*client.Error](err)
+	return ok && e.Status == http.StatusNotFound && (e.Code == string(bloberror.BlobNotFound) || e.Code == "")
 }
 
 func unknown(reason error) listing.LookupResult {

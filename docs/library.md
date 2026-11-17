@@ -141,11 +141,16 @@ What differs from S3:
 - **Hierarchical namespaces.** Unlike the command, the library lists them. Azure lists each directory as a prefix and
   as a blob marked `hdi_isfolder=true`; a page has it once, as the prefix, and a lookup of the directory's name answers
   present with the prefix's entry. A level longer than one answer that holds a directory is `listing.ErrUnsupported`.
+  User metadata can mark a flat namespace's blob the same way, so the first marked blob makes the source ask the
+  account's namespace, as the command's admission does (Get Account Information, then the Data Lake host), once:
+  in a flat namespace a marked blob is an object like any other, and where the namespace cannot be read (an
+  anonymous caller on an endpoint other than Azure's own, say) a page holding one is `listing.ErrUnsupported` and a
+  lookup of one unknown.
 - **Lookups.** A key is absent only when Get Blob Properties finds no blob and a listing of the container then
   succeeds; a 403, a missing container (`listing.ErrNotFound`) and a failed listing leave it unknown. A page needs
   permission to list the container's blobs; a lookup needs permission to read the blob's properties, and to list to show
   a key absent. A request is reported to an `objfile.Observer` as a list request (List Blobs, the probe included) or a
-  metadata request (Get Blob Properties).
+  metadata request (Get Blob Properties, and the namespace's calls, unnamed).
 
 ## Run the command line
 

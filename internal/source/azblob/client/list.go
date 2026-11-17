@@ -283,15 +283,21 @@ func (c *Client) CloseIdleConnections() {
 // may call) and reports whether the account has a hierarchical namespace,
 // from the 200's x-ms-is-hns-enabled as sent (hns: exactly "true" or
 // "false"; anything else is ErrHNSUnknown, never flat). A refused call is
-// an error the caller takes for "unknown", never for flat.
+// an error the caller takes for "unknown", never for flat. Each attempt is
+// reported to ctx's objfile.Observer, when it carries one, as a metadata
+// request of no name.
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
+	op := &observed{request: objfile.Request{Kind: objfile.MetadataRequest}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (_ bool, err error) {
 		s := &sent{}
 		actx, cancel, err := c.begin(ctx, s)
 		if err != nil {
 			return false, err
 		}
 		defer cancel()
+		end := op.begin(ctx)
+		defer func() { end(0, err) }()
+
 		done := c.Tally.Attempt()
 		_, err = c.svc[c.pick()].NewContainerClient(container).GetAccountInfo(actx, nil)
 		done()

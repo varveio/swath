@@ -279,10 +279,15 @@ location is the account, the container and the canonical route.
 **Pages.** `List` is one List Blobs with the delimiter `/` and `include=metadata`, its names held to no order
 (`ListInput.AnyOrder`: a hierarchical namespace lists in its own order, `/` below every other character), and it
 serves the level in byte order. A blob whose metadata says `hdi_isfolder=true` (`client.Directory`), as a
-hierarchical namespace's directory's blob does, and whose name does not end in `/`, is the directory's prefix, so a
-directory listed both as that blob and as a prefix is one prefix. The first page of a level asks for 5,000 entries
-(`client.MaxPageSize`). When that answer holds the whole level, the level is sorted and each key listed twice kept once,
-unless it is in byte order already and holds no directory's blob; a sorted level's later pages read it whole again
+hierarchical namespace's directory's blob does, and whose name does not end in `/`, is the directory's prefix in a
+hierarchical namespace only, so a directory listed both as that blob and as its prefix in one answer is one prefix;
+any other key listed twice is served twice, which `swath.Source`'s page check refuses (`listing.ErrInvalidPage`).
+User metadata can mark a flat namespace's blob the same way, so the first answer or Get Blob Properties holding a
+marked blob makes `Live` ask the namespace with admission's calls (`namespaceOf`: Get Account Information, then the
+Data Lake host), once per source. A flat namespace's marked blob is an object. Credentials refused or not had and a
+failing or unreachable service keep their class; a namespace those calls cannot tell is `listing.ErrUnsupported` for
+a page and unknown for a lookup. The first page of a level asks for 5,000 entries (`client.MaxPageSize`). When that
+answer holds the whole level, the level is sorted, unless it is in byte order already and holds no directory's blob; a sorted level's later pages read it whole again
 (the cursor `s`, its last key), and one that no longer fits one answer is `listing.ErrUnsupported`. Otherwise the level
 is paged as a chain in Azure's order (the cursor `c`: its `startFrom`, next marker and last key): from the marker once
 an answer is served whole, else from a new chain whose `startFrom` is the last key served, whose answer lists that key
@@ -294,9 +299,12 @@ the last key misses nothing listed after it. In a hierarchical namespace that me
 (`a/` comes before `a-b` there), so a new chain could skip a key while every answer still ascends: a directory's blob,
 which such a level lists beside every directory, ends the chain.
 `TestPageOrderAtLimitOne`, `TestUnorderedLevel` and `TestHierarchicalDirectories` (package `azblob`) cover the three
-paths over `azblobtest.Handler`, the `azblobtest.Store` served over HTTP.
+paths over `azblobtest.Handler`, the `azblobtest.Store` served over HTTP; `TestFlatDirectoryMetadata` the flat and
+unknown namespaces, and `TestInvalidPages` a key repeated in an answer and across answers.
 
 **Lookups.** `Lookup` is Get Blob Properties of the key: present with its size, last-modified time and access tier, or,
-for a directory's blob, as the directory's prefix. A 404 (blob or container) is absent only once the probe, a List
-Blobs of the key's prefix for one entry, succeeds; a probe answered 404 is unknown (`listing.ErrNotFound`), and any
-other failure of either request leaves the key unknown with its class (`objhttp.Classed`): a 403 is `listing.ErrAuth`.
+for a hierarchical namespace's directory's blob, as the directory's prefix. A 404 whose code is `BlobNotFound` (or
+absent) is absent only once the probe, a List Blobs of the key's prefix for one entry, succeeds. Any other failure of
+either request leaves the key unknown with its class (`objhttp.Classed`, Azure's code before its status): a 403 is
+`listing.ErrAuth`, `ContainerNotFound` `listing.ErrNotFound`, and an authentication code that comes with a 404
+`listing.ErrAuth`. `TestLookupUnknown` covers each.

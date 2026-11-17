@@ -21,6 +21,13 @@
 // listing.ErrUnsupported, since sorting each answer cannot make byte order
 // across answers.
 //
+// User metadata can mark a flat namespace's blob hdi_isfolder=true too, so
+// the first marked blob a source meets makes it ask the account's
+// namespace (Get Account Information, then the account's Data Lake host),
+// once. A flat namespace's marked blob is an object like any other. Where
+// the namespace cannot be read, a page holding a marked blob is
+// listing.ErrUnsupported and a lookup of one is unknown.
+//
 // The API is experimental: it may change in any release.
 package azblob
 
