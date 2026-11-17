@@ -72,8 +72,8 @@ the production fields selector too, with the generated client's own full respons
 HTTP status, the first reason, and a safe cause. A 403 with `rateLimitExceeded` or
 `userRateLimitExceeded` is a throttle; another 403 is a terminal permission refusal. A token endpoint
 outage or timeout remains transient, independently of report labels. Diagnostics retain `auth`,
-`access_denied`, `not_found` (a 404 with reason `notFound`: the client only lists, and objects.list answers it only
-for a missing bucket, a missing prefix listing empty; a 404 without that reason is unlabelled), `throttle`,
+`access_denied`, `not_found` (a 404 with reason `notFound`: objects.list and buckets.get answer it only for a
+missing bucket, a missing prefix listing empty; a 404 without that reason is unlabelled), `throttle`,
 `timeout`, `parse` and `unsupported`
 ([Run report](../../reference/run-report.md)); other errors keep status/reason without a separate label.
 A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
@@ -81,6 +81,19 @@ A 200 outside the objects.list envelope is a retried parse failure, never an emp
 the engine wraps it as a protocol violation (`cause` `protocol`, unresumable). Redirects are never
 followed, including with a supplied HTTP client, so they cannot change the resume source
 (`inventory` `TestGCSRedirectCannotChangeResumeSource`).
+
+**Live store** (`OpenLive`, `live.go`; the library's `gcs.Open`). The bucket's client, built as for a run,
+with no range engine. A page is one `objects.list` with `delimiter=/` and `maxResults` at most 1,000: its
+`items` are the objects, its `prefixes` the common prefixes, and a `nextPageToken`, which may come with neither,
+continues the level. A lookup is one `objects.get` (`Client.Get`: the object's metadata, never its data; the name
+escaped whole into the path), and after a 404, which GCS answers for a missing object and a missing bucket alike,
+one `buckets.get` (`Client.Bucket`): absent only when it succeeds, unknown with its class otherwise. Both take the
+billed project and, on Google's endpoint, a fields selector, and run on `List`'s path (`exchange`: token,
+admission, retries, classification, the wire snapshot). Every attempt of the client, retries included, is
+reported to the `objfile.Observer` on its context: a page as a list request of its prefix, `objects.get` and
+`buckets.get` as metadata requests (the bucket's with an empty name). The location a page token is bound to is
+the bucket and the canonical endpoint. The library's tests are in `gcs/gcs_test.go`, on `gcstest.Strict`, which
+also answers `objects.get` and `buckets.get`.
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`
