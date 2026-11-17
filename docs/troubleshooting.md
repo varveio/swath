@@ -349,8 +349,8 @@ The limits of this build, and what has not been measured:
   bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
   at a very high worker count under a spill cap far below what the listing needs can crawl or time out; the
-  runs that complete are key-identical. It was seen at 2,048 workers under a spill cap of about a tenth of
-  what the listing needed. At 64 workers, stale seeds of 44 to 131 million keys listed through a fake near the
+  runs that complete are key-identical. At 2,048 workers it was seen with spill caps under 6 MiB, while caps
+  of 22 MiB and more completed ([measurements](internals/measurements.md#the-seeded-frontier-window)). At 64 workers, stale seeds of 44 to 131 million keys listed through a fake near the
   64-worker ideal with byte-identical keys under a fixed spill cap
   ([measurements](internals/measurements.md#warm-start-from-the-previous-dataset---seed-from)); with the
   default spill cap, which follows the disk, that is not measured. Give a larger `--spill-budget` or more
