@@ -1357,27 +1357,29 @@ count refuses 75,417 directories and opens 70,679 from an ancestor, every one of
 
 ### Library limits on the local walker (2026-11-17)
 
-**Synthetic, local, shared host** (the box above, load average 1 to 6, Go 1.27.4, `deep` as above). Paired
-and interleaved, the median of the per-round differences with a 95 % bootstrap interval, `2e63740c` against
-the change (every descriptor counted, checkpoints in the last quarter of the kept limit, the library options
-off), `swath diag count`, default workers (64):
+**Synthetic, local, shared host** (the box above, load average 2 to 11 from other work, Go 1.27.4, `deep`
+as above). Paired and interleaved, the median of the per-round differences with a 95 % bootstrap interval,
+`2e63740c` against the change as the command runs it (no limit on every descriptor: nothing counted beyond
+the kept directories, no checkpoint reserve, the library options off), `swath diag count`, default workers
+(64):
 
 | | rounds | before | after | change |
 |---|---:|---:|---:|---:|
-| `deep` | 120 | 0.115 s | 0.113 s | −1.7 % [−4.9, +1.7] |
-| `deep`, `--metadata names` | 120 | 0.073 s | 0.072 s | +0.0 % [−4.2, +2.8] |
-| `deep`, hard descriptor limit 256 | 60 | 0.122 s | 0.124 s | +1.7 % [−0.9, +4.4] |
+| `deep`, wall | 120 | 0.115 s | 0.116 s | +0.4 % [−3.2, +3.8] |
+| `deep`, wall, a second run | 120 | 0.114 s | 0.118 s | +3.2 % [−1.3, +6.3] |
+| `deep`, user + system CPU | 120 | 0.66 s | 0.67 s | +0.0 % [+0.0, +1.5] |
+| `deep`, hard descriptor limit 256, wall | 60 | 0.122 s | 0.126 s | +2.5 % [+0.0, +4.7] |
+| `deep`, hard descriptor limit 256, CPU | 60 | 0.75 s | 0.75 s | +0.0 % [−4.1, +2.7] |
 
-A first 40-round run of the first row read +8.8 % [+1.3, +13.8] and did not repeat (+2.7 % [−4.2, +5.6] just
-after, then the row above) while the box's load rose. On `deep` a count keeps at most 203 descriptors and
-refuses none. At the limit of 256 (64 kept, 48 of them ordinary now) it refuses 13,617 directories and opens
-12,803 from an ancestor, at most 6 names down (the tree is 8 deep: no checkpoint), with at most 111
-descriptors open (`peak_open`, within the 64 plus two per worker). Ordinary directories now stop at 768 of
-the 1,024, so the 512-worker count of `realistic` above (885 kept) would refuse some. On a deep narrow tree
-past the limit (`TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258
-directories, a kept limit of 64, one worker reaching the deepest spine directory first) the checkpoints keep
-every redescent within 8 names: 820 names opened in all, 20 checkpoints, at most 60 descriptors open; with
-the checkpoint case removed the same walk opens 6,900 names.
+`2e63740c` against itself read +0.0 % [−2.7, +3.5] in the same hour, so the wall-time rows are within this
+box's noise and the CPU rows show no cost. The report's `dir_opens` has the same fields before and after. At
+the limit of 256 (64 kept) both refuse 12,000 to 14,000 of the 16,670 directories, by the workers' order,
+and open about as many from an ancestor. On a deep narrow tree under a library limit
+(`TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258 directories,
+`MaxDepth` 128, the least `MaxDescriptors` accepted for one worker, 19 on Linux, of which 17 kept: the root
+and 16 checkpoints, all used; one worker reaching the deepest spine directory first) no directory is opened
+more than 8 names below a kept one: 1,152 names opened in all, at most 18 descriptors open. With the
+checkpoint case removed the same walk opens 16,512 names.
 
 ## Memory behind a held-up frontier
 
