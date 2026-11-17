@@ -425,6 +425,16 @@ are encoded outside the decision mutex and never wait for the file.
 byte-identical to the parallel core's. It is the only mode where `--max-keys` stops early (the dataset is
 then marked incomplete).
 
+**A stop's rest.** An `Expand` that returns early reports the rest of its range it did not emit, `(through, hi]`,
+to an emitter that is a `source.Unreader`: `through` is the last key of the last page the emitter accepted, the
+range's start before any. A range that split has handed `(c, hi]` to its children; when the stop refuses the
+lower child, the upper one, never handed over, is reported in its place. The sequential chain reports
+`(last, ⊤]`. In group mode, where a page may end inside a key's group, a range reports from its last fence and
+the sequential chain from the resume key. `Engine.Dropped` gives a range the count never expanded: its
+interval, or the scope after the resume key for a root (`source.Dropper`). A library walk's unread intervals
+are these ([library](../library.md#walks), `s3` `TestWalkBudgetLeavesUnread`). The seed, a prior's tiling and a
+resume's root report no rest of their own: the library's walk uses none of them.
+
 ## Resume
 
 `func (*Engine[P]) Restart(after string) error` sets the engine's `Options.Resume` and returns `nil`.
