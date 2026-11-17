@@ -87,8 +87,8 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 }
 
 // TestSummarizeUnknownKind: an entry of unknown kind is counted only when
-// every kind or KindUnknown is selected, never as a file or another kind,
-// and nothing at or under it is absent.
+// KindUnknown is selected, never as a file or another kind, and nothing
+// at or under it is absent.
 func TestSummarizeUnknownKind(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
 	targets := []listing.Target{
@@ -98,7 +98,7 @@ func TestSummarizeUnknownKind(t *testing.T) {
 		kinds       []listing.Kind
 		root, entry int64
 	}{
-		{nil, 13, 1},
+		{nil, 5, 0},
 		{[]listing.Kind{listing.KindFile}, 5, 0},
 		{[]listing.Kind{listing.KindOther}, 1, 0},
 		{[]listing.Kind{listing.KindUnknown}, 1, 1},

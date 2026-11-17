@@ -19,9 +19,9 @@ type Target struct {
 
 // SummaryOptions say what to count and how much work to spend.
 type SummaryOptions struct {
-	// Kinds are the kinds counted, such as KindFile alone for a local
-	// source's files. Empty counts every kind. KindPrefix is never
-	// counted.
+	// Kinds are the kinds counted. Empty counts files and objects
+	// (KindFile and KindObject); name the kinds to count others, such as
+	// KindDir for directories' own sizes. KindPrefix is never counted.
 	Kinds []Kind
 	// Budget bounds the call.
 	Budget Budget

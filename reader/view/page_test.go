@@ -161,7 +161,7 @@ func TestPageTokenOptions(t *testing.T) {
 	}
 	for name, totals := range map[string]*listing.SummaryOptions{
 		"no child totals":   nil,
-		"every kind":        {},
+		"the default kinds": {},
 		"directories":       {Kinds: []listing.Kind{listing.KindDir}},
 		"files and objects": {Kinds: []listing.Kind{listing.KindFile, listing.KindObject}},
 	} {
@@ -179,13 +179,13 @@ func TestPageTokenOptions(t *testing.T) {
 		}
 	}
 
-	all := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile, listing.KindDir, listing.KindSymlink, listing.KindOther, listing.KindUnknown}
-	every, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
+	defaults, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inv.Page(ctx, listing.PageRequest{Token: every.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: all}}); err != nil {
-		t.Errorf("every kind, listed: %v", err)
+	listed := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile}
+	if _, err := inv.Page(ctx, listing.PageRequest{Token: defaults.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: listed}}); err != nil {
+		t.Errorf("the default kinds, listed: %v", err)
 	}
 }
 

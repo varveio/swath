@@ -101,17 +101,16 @@ func checkSummary(targets []listing.Target, opts listing.SummaryOptions) ([]bool
 		}
 	}
 
+	kinds := opts.Kinds
+	if len(kinds) == 0 {
+		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
+	}
 	counted := make([]bool, listing.KindUnknown+1)
-	for _, k := range opts.Kinds {
+	for _, k := range kinds {
 		if k == 0 || k > listing.KindUnknown {
 			return nil, invalid("%v is no kind", k)
 		}
 		counted[k] = true
-	}
-	if len(opts.Kinds) == 0 {
-		for k := listing.KindObject; k <= listing.KindUnknown; k++ {
-			counted[k] = true
-		}
 	}
 	counted[listing.KindPrefix] = false // never counted
 	return counted, nil

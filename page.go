@@ -101,17 +101,15 @@ func checkPage(req listing.PageRequest) ([]byte, error) {
 		return nil, invalid("a negative bound")
 	}
 	kinds := req.ChildTotals.Kinds
+	if len(kinds) == 0 {
+		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
+	}
 	counted := make([]byte, listing.KindUnknown+1)
 	for _, k := range kinds {
 		if k == 0 || k > listing.KindUnknown {
 			return nil, invalid("%v is no kind", k)
 		}
 		counted[k] = 1
-	}
-	if len(kinds) == 0 {
-		for k := listing.KindObject; k <= listing.KindUnknown; k++ {
-			counted[k] = 1
-		}
 	}
 	counted[listing.KindPrefix] = 0 // never counted
 	return counted, nil

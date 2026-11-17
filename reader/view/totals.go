@@ -21,14 +21,17 @@ import (
 // lastKind is the greatest Kind.
 const lastKind = listing.KindUnknown
 
-// selection is the kinds a summary counts. KindPrefix is never counted.
+// selection is the kinds a summary counts: files and objects unless the
+// options name others. KindPrefix is never counted.
 type selection struct {
-	all   bool
 	kinds [lastKind + 1]bool
 }
 
 func selectionOf(kinds []listing.Kind) (selection, error) {
-	s := selection{all: len(kinds) == 0}
+	var s selection
+	if len(kinds) == 0 {
+		kinds = []listing.Kind{listing.KindFile, listing.KindObject}
+	}
 	for _, k := range kinds {
 		if k == 0 || k > lastKind {
 			return selection{}, invalid("%v is no kind", k)
@@ -39,7 +42,7 @@ func selectionOf(kinds []listing.Kind) (selection, error) {
 }
 
 func (s selection) counts(k listing.Kind) bool {
-	return k != listing.KindPrefix && (s.all || s.kinds[k])
+	return k != listing.KindPrefix && s.kinds[k]
 }
 
 // countsAny reports whether the selection counts any row of the shape.
