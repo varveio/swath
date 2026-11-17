@@ -48,13 +48,14 @@ prunes when combined with regex filters or includes, because excludes always win
 
 An empty or malformed pattern is refused with exit 2.
 
-Versions 0.3.x read `--include` and `--exclude` as regular expressions. A glob that carries a sign of one is
-refused with exit 2 before anything is listed, and the message names `--include-regex` or `--exclude-regex`,
-so an old command line cannot silently match nothing. The signs are a leading `^`, a final `$`, `\d`, `\D`,
+A glob that carries a sign of a regular expression is refused with exit 2 before anything is listed, and the
+message names `--include-regex` or `--exclude-regex`. Only the common spellings below are caught: another
+regular expression given as a glob may be a valid glob that matches something else (`--include parquet` keeps
+entries named `parquet`, not `file.parquet`). The signs are a leading `^`, a final `$`, `\d`, `\D`,
 `\w`, `\W`, `\s` or `\S`, `.*` together with `\.` (`.*\.parquet`), and a `|` between `(` and `)`: a glob
-matches its whole key, needs no anchors, and quotes with a backslash only what is special. To keep such a
-pattern a glob, escape the character (`\^`, `\$` or `[$]`, `\|`), write the plain character (`d` for `\d`), or
-`*` for `.*` (`*\.parquet`). Everything else stays a glob: `\.` alone (a literal dot, `*\.parquet`), `.*`
+matches a whole name or path (the table above), needs no anchors, and quotes with a backslash only what is
+special. To keep such a pattern a glob, escape the character (`\^`, `\$` or `[$]`, `\|`), write the plain
+character (`d` for `\d`), or `*` for `.*` (`*\.parquet`). Everything else stays a glob: `\.` alone (a literal dot, `*\.parquet`), `.*`
 alone (names that start with a dot), and a `$` or `^` inside a key.
 
 ## Regular expressions

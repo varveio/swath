@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: Save an inventory you can query
-    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
+    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code>.
     link: /docs/dataset
     linkText: The swath dataset
   - title: List and export rows
@@ -39,25 +39,23 @@ features:
 swath is an open-source command-line tool that lists object stores and filesystems in parallel. It reads
 listing metadata only and never changes what it lists.
 
-In one live run, swath wrote a sorted Parquet inventory of 1.09 billion S3 objects in 846 seconds (about 14
-minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which wrote nothing, took 177 seconds.
+In one live run with `--workers 1024`, swath wrote a sorted Parquet inventory of 1.09 billion S3 objects in
+846 seconds (about 14 minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which wrote
+nothing, took 177 seconds. At the default 64 workers, which the commands on this page use, neither finished
+within 40 minutes.
 [How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
 
 ## Download
 
-> [!NOTE]
-> These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, a release
-> candidate, which does not yet have everything described here, such as `swath du --from-dataset`
-> ([what differs](../docs/release-candidate.md)).
-
-Download the archive for your platform from the [releases page](https://github.com/varveio/swath/releases),
-verify it and put `swath` on your `PATH`, or run the container image `ghcr.io/varveio/swath:0.4.0-rc.2`.
-[Install](../docs/install.md) has the steps.
+The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
+Download the archive for your platform, verify it and put `swath` on your `PATH`, or run the container image
+`ghcr.io/varveio/swath:0.4.0`. [Install](../docs/install.md) has the steps.
 
 ## Try a public bucket
 
 A public NOAA prefix of 5,252 objects, with no account: `--anonymous` sends no credentials. Start with a prefix
-like this one: listing the whole bucket, as in the inventory example at the top of this page, takes about 39,000 requests.
+like this one: listing the whole bucket, 37 million objects, as the "Save an inventory, query it with SQL"
+example above does, takes about 39,000 requests.
 
 ```bash
 swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1
@@ -66,7 +64,7 @@ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region 
 
 `-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
 depths of a big bucket, list it once with `-o DIR` and total the saved inventory with
-`swath du --from-dataset DIR -d N` (coming in 0.4.0).
+`swath du --from-dataset DIR -d N`.
 
 ## Try it on a local directory
 

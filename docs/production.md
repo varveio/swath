@@ -26,11 +26,17 @@ What the supervisor does with the exit code:
 | Exit | Do |
 |---|---|
 | 0 | done |
-| 130, 143 (signals) | `swath resume DIR --report NEW-FILE` |
+| 3 (partial) | accept the partial output, or fix the permissions and run again |
+| 129, 130, 143 (signals) | `swath resume DIR --report NEW-FILE` |
 | 75 (stuck) | resume once; a second 75 in a row on the same output needs a person |
 | 74 (disk full) | free space or move the directory to a larger disk, then `swath resume DIR` |
 | 124 (deadline) | resume only within a separate budget of attempts or total time; past it, a person |
-| 1, 2 | a person: a resume will not fix it |
+| 1 (failed) | a person fixes the cause; then `swath resume DIR` when the outcome is `resumable`, else a new run |
+| 2 (usage, refused) | a person fixes the command; with no outcome or report, a crash: resume as after a kill |
+
+The reference table, [what a supervisor does with each code](reference/exit-codes.md#what-a-supervisor-does-with-each-code),
+adds the cases this short form leaves out: 75 with cause `unreachable` or class `unresolved`, and 74 with
+cause `spill_budget`.
 
 The rest of a scheduled run has its own pages:
 

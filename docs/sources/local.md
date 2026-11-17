@@ -62,8 +62,7 @@ repeat.
 
 ## Limits and known differences
 
-- A local listing keeps no journal: an interrupted one is run again, and `swath resume` does not apply. On
-  Windows, local listings work, text output and datasets alike, including a dataset written to a bucket.
+- A local listing keeps no journal: an interrupted one is run again, and `swath resume` does not apply.
 - Names that are not valid UTF-8 are listed with their exact bytes: escaped in TSV and the table, in
   `key_base64` (with `key` null) in JSONL ([Output](../output.md#text-rows)). A dataset's `key` column is binary for the same
   reason.

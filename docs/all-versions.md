@@ -29,7 +29,7 @@ by position.
 
 **Parts never split a key.** A part's size target, `--part-max-rows` and `--part-interval` cut at the
 next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a
-key again. The interval no longer bounds how long a part stays open while one key's rows are still arriving.
+key again. The interval does not bound how long a part stays open while one key's rows are still arriving.
 
 **Parallelism.** Ranges split only between keys, so one key with a very long history is listed by one worker,
 page after page, while the rest of the bucket proceeds (`groups.open_pages`, `split.skipped.group_open` in the

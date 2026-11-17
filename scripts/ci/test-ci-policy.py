@@ -122,7 +122,7 @@ class PolicyTests(unittest.TestCase):
             (['docs/replay-provider-expectations.json'], {'go', 'fixtures'}),
             (['docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
             (['docs/style.md'], set()),
-            (['docs/ops/dev/go-release-copy-checklist.md'], set()),
+            (['docs/ops/dev/RELEASE_NOTES.md'], set()),
             (['docs/ops/dev/CI.md'], set()),
             # The light directories select nothing whatever the file type: docs.Path refuses
             # them and docs/readers_test.go refuses any other read of docs/.

@@ -33,11 +33,6 @@ counts every name.
 [Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
 newest modification time ([Output](output.md#du-rows)).
 
-> [!NOTE]
-> 0.4.0-rc.2 counts a hard-linked file under each of its names: there `archive/` shows 65.5 MiB in 3 files and
-> the total 101 MiB in 7, and `--count-links-once` counts it once
-> ([differences in 0.4.0-rc.2](release-candidate.md)).
-
 ## 2. List every entry
 
 ```bash
@@ -75,7 +70,9 @@ under both its names here), the time, and where the dataset went, then what to r
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 directories;
+manifest, `run.json` (the run report), `cuts.txt` (the cut file, for the next listing's `--seed-from`) and
+`.swath/` (the run's private workspace, which readers ignore)
+([layout](dataset.md#what-a-swath-dataset-is)). Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
 
 A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),
@@ -109,9 +106,6 @@ To read the rows themselves, open the parts with DuckDB, Python or another Parqu
 reader ([Query an inventory](query.md)).
 
 ## 5. Total the saved inventory
-
-> [!NOTE]
-> Coming in 0.4.0: 0.4.0-rc.2 does not have `--from-dataset` and stops with `unknown flag --from-dataset`.
 
 The saved inventory answers step 1 again without walking the tree:
 

@@ -1,132 +1,165 @@
-# swath 0.4.0-rc.3
+# swath 0.4.0
 
 <!-- Links are absolute and pinned to the tag: the release body does not resolve repository-relative links. -->
 
 ## User-facing changes
 
-This is the third release candidate of 0.4.0, the first release of the Go implementation. Go replaces
-the Java tool: v0.3.2 was the last Java release, and no later release ships Java.
+swath lists object stores and filesystems in parallel: it shows where the space went, and saves a sorted
+Parquet inventory you can query without listing again. It reads listing metadata only and never reads, changes
+or deletes what it lists. 0.4.0 is a new tool under the same name: one static binary, a new command line and
+a new dataset format. [Start here](https://github.com/varveio/swath/blob/v0.4.0/docs/start-here.md); the
+documentation is also at [swath.varve.io](https://swath.varve.io/).
 
-- **Sources.** Local and mounted filesystems, Amazon S3 general-purpose buckets, Google Cloud Storage
-  (native `gs://` through the JSON API) and Azure Blob Storage flat namespaces (`az://`). Each source's
-  limits are in the [README](https://github.com/varveio/swath/blob/v0.4.0-rc.2/README.md#supported-sources).
-- **Commands.** `swath list` writes text rows or a sorted Parquet dataset, `swath du` totals a source per
-  directory or prefix, and `swath resume` continues an eligible object-store dataset run. `swath-replay`,
-  a contributor tool for testing listers, serves a recorded listing back through the S3, GCS and Azure
-  listing APIs. The
-  [Go guide](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/getting-started.md) is the starting point.
-- **Sorted output while listing.** Every dataset is globally key-sorted, with no merge pass at the end:
-  rows listed ahead of the output wait in memory and then in spill files under the output directory.
-- **Downloads.** One archive per target (`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
-  `windows-amd64`),
-  each holding static `swath` and `swath-replay` binaries with `LICENSE`, `NOTICE` and
-  `THIRD_PARTY_NOTICES` (the licenses of every module linked into the binaries); an SPDX SBOM;
-  `SHA256SUMS`; a keyless cosign signature for each; and build provenance attestations.
-- **Images.** `ghcr.io/varveio/swath:0.4.0-rc.3` and `ghcr.io/varveio/swath-replay:0.4.0-rc.3` for
-  linux/amd64 and linux/arm64, carrying the archived linux binaries, signed and attested. A release
-  candidate publishes only its own tag: no `latest` and no `0.4`.
-- **Verifying.** The checksum, signature and attestation commands are in
-  [RELEASING.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/RELEASING.md#verifying-a-release); the
-  archive and image contents are in
-  [install.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/install.md).
+- **Sources.** Amazon S3 general-purpose buckets and S3-compatible stores (`s3://`), Google Cloud Storage
+  (`gs://`), Azure Blob Storage flat namespaces (`az://`), and local or mounted filesystems (a path).
+  `--all-versions` lists S3 versions and delete markers, GCS generations, and Azure versions, snapshots and
+  soft-deleted blobs ([Sources](https://github.com/varveio/swath/blob/v0.4.0/docs/sources/README.md)).
+- **Where the space went.** `swath du SOURCE` on a terminal draws the largest prefixes and objects at any
+  depth, each with its size, count, share of the total and newest date. `-d N`, a pipe or `--format` print
+  totals per prefix as a table, TSV or JSONL
+  ([Total a source](https://github.com/varveio/swath/blob/v0.4.0/docs/totals.md)).
+- **An inventory you can query.** `swath list SOURCE -o DIR` writes a key-sorted Parquet dataset whose
+  `manifest.json` commits its parts and records how complete the listing was. Query it with DuckDB, pandas,
+  Spark or any Parquet reader; `swath show DIR` summarizes it, and `swath du --from-dataset DIR` totals it
+  without listing again. `-o` a bucket prefix with `--work-dir DIR` writes the dataset to S3, GCS or Azure
+  Blob. `swath list` also prints rows as a table, TSV or JSONL, or writes them to a `.tsv` or `.jsonl` file
+  (optionally `.gz` or `.zst`)
+  ([Query an inventory](https://github.com/varveio/swath/blob/v0.4.0/docs/query.md),
+  [Output](https://github.com/varveio/swath/blob/v0.4.0/docs/output.md)).
+- **Resume and refresh.** An object-store dataset run that is stopped or interrupted keeps its published
+  parts and its journal, and `swath resume DIR` continues it. `--overwrite` keeps the previous dataset
+  readable until the new one commits, and `--seed-from PREVIOUS` divides a relisting along the previous
+  dataset's keys
+  ([Stop, resume and refresh](https://github.com/varveio/swath/blob/v0.4.0/docs/resume-and-refresh.md)).
+- **The run report.** A run accounts for itself in one JSON document (`--report FILE`, and `run.json` beside
+  a dataset): the build, the command, the outcome and exit code, the timings, the requests made and their
+  estimated cost. `progress.json` holds a running dataset's live counts, and `--log-format json` writes
+  stderr as events ([Run report](https://github.com/varveio/swath/blob/v0.4.0/docs/reference/run-report.md)).
+- **Install.** One archive per target (`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
+  `windows-amd64`) holding static `swath` and `swath-replay` binaries, with `SHA256SUMS`, keyless cosign
+  signatures, an SPDX SBOM and build provenance; images `ghcr.io/varveio/swath:0.4.0` and
+  `ghcr.io/varveio/swath-replay:0.4.0` for linux/amd64 and linux/arm64. `go install` is not supported in
+  0.4.0: build from a checkout ([Install](https://github.com/varveio/swath/blob/v0.4.0/docs/install.md)).
 
-### New since 0.4.0-rc.1
+### Moving from 0.3.2
 
-- **Datasets written straight to a bucket.** `-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or
-  `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`, uploads the parts as they close and creates the
-  manifest only if the prefix holds none; the work directory keeps the lock, the journal and spill, and
-  `swath resume DIR` continues the run. The destination takes its own credentials, region and endpoint
-  (`--output-*`). See
-  [A dataset in a bucket](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/dataset.md#a-dataset-in-a-bucket).
-- **Memory follows the host.** `--row-budget` is renamed `--sort-buffer`. Its default is 1/16 of the least of
-  physical memory, the cgroup limit and `GOMEMLIMIT`, at most 1 GiB (it was a fixed 128 MiB), and the Parquet
-  encoders are admitted against an allowance of their own.
-- **Azure Blob `--all-versions`:** versions, snapshots and soft-deleted blobs, and the blob properties every
-  listing returns.
-- **The run report is version 5:** `invocation.sort_buffer_bytes` (was `row_budget_bytes`), how the sort buffer
-  was chosen, `output.remote` for a dataset in a bucket, and the outcome class `unresolved` (exit 75). An
-  interrupted run of rc.1 cannot be resumed by rc.2 (the writer recipe is `swath/parquet-r4`): finish it with
-  rc.1 or start over.
-- **Less CPU:** a cheaper S3 list scanner and density step, Parquet pages compressed at zstd `SpeedFastest`
-  (parts about 0.3 to 1.1 % larger), and spill read handles reused.
-- **Docs:** the user guide is reorganized by task, with one generated reference page per command.
+- **The command.** The commands are `swath list`, `swath du`, `swath show` and `swath resume`, and options
+  are renamed or removed, without aliases. An option only one provider has carries its prefix
+  (`--s3-region`, `--s3-profile`). Most old options name what replaced them when you give them
+  (`--force-path-style` is `--s3-path-style`)
+  ([Unknown flag](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#unknown-flag)). Seven
+  are refused as a plain unknown flag: `--text-part-size` and `--text-writers` have no replacement (text rows
+  go to one file, `-o NAME.tsv`), nor has `--writeback-size`; `--object-listing-queue-size` is
+  `--sort-buffer`, in bytes; `--engine-toggle` is `swath diag list`'s options; `--metrics-endpoint` and
+  `--no-metrics` are under "Metrics" below.
+- **Sorted output.** A dataset written with `-o DIR` is always sorted Parquet, so 0.3.2's
+  `swath list SOURCE --format parquet --sort -o out/` is `swath list SOURCE -o out/`. `--sort` is now
+  `swath du`'s and takes a value (`name` or `size`): the old spelling reads `-o` as that value and fails with
+  `swath: unexpected argument "out/"` (exit 2). `--format parquet` is refused, naming `-o DIR`.
+- **Filters.** `--include` and `--exclude` take globs; 0.3.2's regular expressions go to `--include-regex`
+  and `--exclude-regex`. Common regular-expression spellings given as a glob (`'\.parquet$'`) are refused
+  with exit 2, naming the regex option; others are valid globs that match something else: `--include parquet`
+  keeps only entries named `parquet`, at any depth, not every key containing `parquet` as in 0.3.2. So move
+  every regular expression to `--include-regex` or `--exclude-regex`
+  ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#globs)). They match the key below
+  SOURCE, where 0.3.2 matched the whole key, so rewrite an anchored pattern relative to SOURCE: for
+  `s3://b/logs/`, 0.3.2's `--exclude '^logs/private/'` is `--exclude-regex '^private/'`. In sizes `KB`, `MB`,
+  `GB` and `TB` are decimal (0.3.2 read them as binary); `K`, `KiB` and the like are binary.
+- **Times.** `--modified-since` and `--modified-until` read a date or a time without `Z` or an offset as
+  local time (`TZ`), where 0.3.2 read it as UTC. To keep 0.3.2's meaning, give the UTC time with seconds and
+  `Z`: `2026-01-01T00:00:00Z` for `2026-01-01`
+  ([Filters](https://github.com/varveio/swath/blob/v0.4.0/docs/filters.md#sizes-times-and-storage-classes)).
+- **Durations** are a number with a unit (`90s`, `1h30m`, `2d`). An ISO-8601 duration (`PT30S`), `none`,
+  `off` and upper-case units are refused with exit 2; `0` turns off `--max-duration`, `--stall-timeout` and
+  `--part-interval`.
+- **Parts.** A sorted dataset's parts were about 1 GiB in 0.3. They are 64 MiB by default now, and a part
+  open for 30 seconds with rows closes although not full, so part boundaries depend on timing. For parts
+  about as large as before, give `--part-size 1GiB --part-interval 0`.
+- **`--report FILE`** no longer creates its directory: a name in a directory that does not exist is refused
+  with exit 2, before anything is listed.
+- **The dataset.** A dataset is a SeekParquet dataset with the swath profile: `manifest.json`, written last,
+  commits it (there is no `_SUCCESS`), `run.json` is its run report, and its columns are named per source
+  under a schema id such as `swath/s3-objects/v1`
+  ([The swath dataset format](https://github.com/varveio/swath/blob/v0.4.0/docs/dataset.md)). 0.4.0 neither
+  reads a 0.3 dataset nor resumes a 0.3 run; `--overwrite` replaces the directory an interrupted 0.3 run
+  left. List again with 0.4.0, and update queries to the new columns. `symlink.txt`, the part list for
+  Athena and Trino, is no longer written: the manifest's `parts` lists the parts
+  ([Query an inventory](https://github.com/varveio/swath/blob/v0.4.0/docs/query.md)).
+- **Metrics.** 0.4.0 exports no OTLP metrics. `--metrics-endpoint` and `--no-metrics` are refused as unknown
+  options, but `SWATH_OTLP_ENDPOINT`, `SWATH_OTLP_INTERVAL`, `OTEL_RESOURCE_ATTRIBUTES` and
+  `OTEL_SERVICE_NAME` are not read, so metrics configured only in the environment stop without an error. A
+  run's counts are in its report, `progress.json` and `--log-format json` events.
+- **S3 client setup.** The region comes from `--s3-region`, `AWS_REGION`, `AWS_DEFAULT_REGION` or the
+  profile, else `us-east-1`, never from EC2 instance metadata: on EC2 without one of them, a bucket in
+  another region fails with exit 1 naming the option to give. An `endpoint_url` in `~/.aws/config` is not
+  read (give `--endpoint-url` or `AWS_ENDPOINT_URL_S3`), and requests to `https://` endpoints, AWS's
+  included, go through `HTTPS_PROXY`, not `HTTP_PROXY`
+  ([S3](https://github.com/varveio/swath/blob/v0.4.0/docs/sources/s3.md#s3-compatible-stores)).
+- **The image** `ghcr.io/varveio/swath` is distroless, without a shell: its entrypoint is `/opt/swath/swath`,
+  it runs as `65532:65532`, and it cannot run `--s3-bearer-token-command` or a profile's
+  `credential_process` ([Container images](https://github.com/varveio/swath/blob/v0.4.0/docs/install.md#container-images)).
 
-### Breaking changes from 0.3.2
-
-- **Launcher.** The Java jar (`java -jar swath.jar`) and its `.zip` and `.tar.gz` distributions are
-  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.3`
-  and the commit.
-- **Command line.** Flags are renamed or removed, without aliases (an unknown flag exits 2). The most
-  common: `--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--region` and `--profile`
-  are `--s3-region` and `--s3-profile`, `--force` is `--overwrite`, `--parquet-part-size` is `--part-size`,
-  `--format parquet --sort -o DIR` is `-o DIR`, and `--format discard` is `swath diag count`. Unsorted
-  Parquet, the SQLite checkpoint, OTLP metrics, partitioned text datasets and `--tune` are gone. Filter
-  regular expressions are Go's RE2, given with `--include-regex` and `--exclude-regex`; `--include` and
-  `--exclude` take globs. Options follow GNU conventions (`-vq`, `-d1`, `--name=value`), and an option one
-  provider has carries its prefix (`--s3-`, `--gcs-`, `--azure-`). Text rows use the dataset's column names
-  (`key`, `size`, `last_modified`) for every source.
-  Exit codes keep their meaning. Every option, with its counterpart and the reason, is in
-  [upgrade.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md) and
-  [cli-inventory.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/cli-inventory.md).
-- **Dataset layout.** A dataset is a swath dataset in the SeekParquet format (`format_version` 0,
-  `draft_revision` 1) instead of the Java format 1: `manifest.json`, installed last, is the commit
-  (`_SUCCESS` and `symlink.txt` are gone), `run.json` replaces `_swath_summary.json`, `swath/canonical`
-  becomes `swath/s3-objects/v1` without the `version_id`, `is_latest`, `is_delete_marker` and `row_type`
-  columns, and the local schema's columns are renamed. A Java reader does not read the new format and
-  `swath resume` does not read a Java run: finish a Java run with Java or start over. The field-by-field
-  mapping is in [upgrade.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md).
-- **Endpoints.** An `--endpoint-url` with a query, a fragment or user information is refused (exit 2);
-  pass credentials through the provider's credential settings.
-- **Images.** The lister image is distroless static instead of a Temurin JRE on Ubuntu: the entrypoint is
-  `/opt/swath/swath` (was `java -jar /opt/swath/swath.jar`), and there is no shell or JVM. The replay
-  image is `scratch`, with the entrypoint `/opt/swath-replay/swath-replay` (was
-  `/opt/swath-replay/bin/swath-replay`). The legal files moved from `/opt/swath/` to `/licenses/`. Both
-  run as `65532:65532` (distroless's `nonroot`) instead of `10001:10001`: a mounted output directory
-  must be writable by the new user, and the lister has a home directory, `/home/nonroot`, so mounted
-  credential directories such as `~/.aws` are found there.
-- **Builds from `main` before 0.4.** The Go port's own pre-release flag renames are listed under
-  [Unreleased builds of `main`](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/upgrade.md#unreleased-builds-of-main).
+The 0.3 documentation stays at the [v0.3.2 tag](https://github.com/varveio/swath/tree/v0.3.2/docs).
 
 ## Evidence
 
-- The tagged commit passed `ci.yml` on its pull request and again on `main`: `go vet`, the race tests in
-  shards on amd64 and arm64, the default tier on macOS (on `main`) and Windows, the nested modules,
-  SeekParquet conformance, the replay fixture tier, and both images built for two architectures and smoked
-  offline
-  ([go/docs/internals/testing.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/testing.md#continuous-integration)).
-- The release workflow then reran `go vet` and the whole race suite unsharded on the tag, built the five
-  targets once with the tag's version and commit checked in each linux/amd64 `--version`, and smoked the
-  pushed image digests before tagging them: an anonymous listing of a public S3 prefix into a dataset,
-  read back with DuckDB from the manifest's part list, resumed as a no-op, and served by the replay image.
-  It verified its own signatures and attestations against the published assets before leaving draft.
-- Every module linked into the binaries passed the license gate that generated `THIRD_PARTY_NOTICES`
-  (permissive licenses plus EPL and CDDL; no GPL, LGPL or AGPL).
-- Dated measurements of the Go tool, each with its configuration and harness, are in
-  [measurements.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/internals/measurements.md). None was
-  taken on this tag.
+The release pipeline publishes a tag only after these gates pass
+([Releasing swath](https://github.com/varveio/swath/blob/v0.4.0/RELEASING.md#what-gates-a-release)); the
+results are in the tag's `ci.yml` and `release.yml` runs.
+
+- `ci.yml` on `main` at that exact commit (`go-full-gate`): `go vet` and the race tests of the three Go
+  modules, the default tier on macOS, Windows and Linux ARM64, cross-builds of the five targets, SeekParquet
+  conformance, the replay fixture tier, and both images built for two architectures and smoked offline
+  ([testing](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/testing.md)).
+- `release.yml` on the tag: `go vet` and the whole race suite of the main module unsharded, the five targets
+  built once with each linux/amd64 binary's `--version` checked, and a smoke of the pushed image digests
+  before they are tagged: an anonymous listing of a public S3 prefix into a dataset, read back with DuckDB
+  from the manifest's part list, resumed as a no-op, and served by the replay image. The release stays a
+  draft until its own signatures and attestations verify against the published assets.
+- The license gate that generates `THIRD_PARTY_NOTICES` fails the build on a linked module whose license is
+  not recognized or not allowed.
+- Measured runs, each with its build, date, machine and command, are in
+  [measurements.md](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/measurements.md). In one
+  live listing with `--workers 1024` swath counted 1.09 billion S3 objects in 177 seconds, and in another,
+  also at 1,024 workers, wrote them as a sorted inventory in 846 seconds, on one 32-vCPU VM; at the default 64
+  workers neither finished within 40 minutes. 35 production listings of public buckets, 50.6 billion objects
+  in all, completed. None was taken on this tag.
+- **What has run against the real services**, all on Linux VMs and recorded in measurements.md: anonymous
+  listings of public S3 buckets, the billion-object runs included; the 35 production listings, of public S3
+  buckets with 0.4.0-rc.2, each writing its dataset to a GCS bucket with default credentials; anonymous
+  listings of a public Azure Blob container; and a private GCS bucket of 5.1 million objects, listed by an
+  earlier build. New in 0.4.0 and tested only against emulators, fakes and CI runners: S3 credential refresh
+  ([#577](https://github.com/varveio/swath/issues/577)); Azure Blob with a SAS, Shared Key or Entra ID
+  ([#346](https://github.com/varveio/swath/issues/346)); GCS with a key file; datasets written to S3 and
+  Azure Blob buckets; and journaled runs and `swath resume` on Windows, which run on CI's Windows runners.
 
 ## Limits and known issues
 
-- This is a release candidate, and it is not promoted. Its binaries report
-  `0.4.0-rc.3`; 0.4.0 will be a separate build.
-- Windows refuses journaled object-store runs and `swath resume` (directory sync is unavailable there).
-  Local scans and text output do not resume on any platform
-  ([known limits](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/running.md#known-limits)).
-- Not listed: Azure hierarchical namespaces; S3 directory buckets; GCS soft-deleted objects. Mounted shares are read through the operating system, not a native
-  NFS or SMB client.
-- Archives are built for the five targets above only; images are linux only.
+- **Not listed:** Azure hierarchical namespaces (Data Lake Storage Gen2), S3 directory buckets, access points
+  and Outposts, and GCS soft-deleted objects.
+- **Resume:** only object-store runs that write a dataset resume. A filesystem listing, text output and
+  `swath du` are run again.
+- **Windows:** dataset runs and `swath resume` work as on Linux and macOS, on an output whose filesystem
+  syncs directories (checked when the run starts). Power loss is safe on local NTFS; on ReFS or an SMB share
+  a crash or kill is recovered, but a power loss may lose the latest part names. An `--overwrite` blocked by
+  a file another program holds open fails naming that cause and is rolled back: the previous dataset stays
+  readable and `swath resume DIR` installs the replacement later. If the rollback is blocked too, the
+  directory holds no dataset until `swath resume DIR` finishes the replacement
+  ([Known limits](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#known-limits)).
+- **S3-compatible stores:** swath trusts a store's empty last page; a store that returns one too early makes
+  a listing miss keys ([#265](https://github.com/varveio/swath/issues/265)). Check a first run against a new
+  store with an independent count
+  ([S3-compatible stores](https://github.com/varveio/swath/blob/v0.4.0/docs/sources/s3.md#s3-compatible-stores)).
 - **macOS Gatekeeper.** The binaries are not signed with an Apple Developer ID or notarized
-  ([#420](https://github.com/varveio/swath/issues/420)). Only browser downloads carry the quarantine
-  attribute that makes Gatekeeper refuse them. After verifying and extracting the archive, clear it
-  with the command below (replace `X.Y.Z` with the release version; use `darwin-amd64` for Intel). See
-  [install.md](https://github.com/varveio/swath/blob/v0.4.0-rc.2/go/docs/install.md) for details.
+  ([#420](https://github.com/varveio/swath/issues/420)). A browser download is refused until you clear its
+  quarantine attribute, after verifying and extracting the archive (`darwin-amd64` on Intel):
 
   ```bash
-  xattr -d com.apple.quarantine swath-X.Y.Z-darwin-arm64/swath swath-X.Y.Z-darwin-arm64/swath-replay
+  xattr -d com.apple.quarantine swath-0.4.0-darwin-arm64/swath swath-0.4.0-darwin-arm64/swath-replay
   ```
 
-- The dataset format is SeekParquet draft revision 1.
-- `swath-replay` reads Java-era fixtures through a transitional reader that will be removed; re-list a
-  Java-era fixture you still need.
-- swath publishes the complete result of the live listing it performed. It is not a point-in-time
-  snapshot of a bucket that changes during the run.
+- Archives are built for the five targets above only; images are linux only.
+- swath publishes the complete result of the live listing it performed. It is not a point-in-time snapshot
+  of a bucket that changes during the run.
+- The rest, and what has not been measured, is in
+  [Known limits](https://github.com/varveio/swath/blob/v0.4.0/docs/troubleshooting.md#known-limits).

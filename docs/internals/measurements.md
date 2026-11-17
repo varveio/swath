@@ -2353,8 +2353,8 @@ dataset; the reader dispatches on the schema id and reads every provider's datas
 
 ## Spill at billion scale, and a spill cap too small (2026-11-13)
 
-Production listings of public buckets with 0.4.0-rc.2, sorted
-Parquet written to a bucket, spill on the work directory's disk. Figures are from the runs' reports and
+Production listings of public S3 buckets with 0.4.0-rc.2, sorted
+Parquet written to a GCS bucket (`-o gs://`, default credentials), spill on the work directory's disk. Figures are from the runs' reports and
 progress logs; they are individual runs, not a benchmark.
 
 - **Ample disk.** 35 buckets, 50.6 billion objects in all, completed. At the peak 96 to 99 % of the rows were

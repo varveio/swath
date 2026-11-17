@@ -17,11 +17,11 @@ filesystems ([what each supports](https://swath.varve.io/docs/sources/)).
 
 ## Install
 
-swath 0.4.0 is in release candidates: download one from the
+Download swath 0.4.0 for Linux, macOS or Windows from the
 [releases page](https://github.com/varveio/swath/releases) and verify it as
-[Install](https://swath.varve.io/docs/install.html) describes. The documentation describes `main`, which has
-more than the newest candidate, such as `swath du --from-dataset`. swath is pre-1.0, so flags and schemas can
-still change. To build `main` with Go 1.26 or later:
+[Install](https://swath.varve.io/docs/install.html) describes, or run the image `ghcr.io/varveio/swath:0.4.0`.
+swath is pre-1.0, so flags and schemas can still change between releases. To build from source with Go 1.26.3
+or later:
 
 ```bash
 git clone https://github.com/varveio/swath.git && cd swath && ./build.sh -o swath
@@ -40,7 +40,7 @@ swath list ~/Downloads -o downloads-inventory      # a sorted Parquet inventory
 swath show downloads-inventory                     # what it holds and how complete it is
 ```
 
-The same totals from the inventory, without listing again (coming in 0.4.0; not in 0.4.0-rc.2):
+The same totals from the inventory, without listing again:
 
 ```bash
 swath du --from-dataset downloads-inventory -d 1
@@ -58,8 +58,9 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 
 `du` and `find` answer most questions about a small directory, and a scheduled provider inventory costs less
 when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
-parallel, which matters once a bucket holds tens of millions of keys. In one live run, swath counted 1.09
-billion S3 objects in 177 seconds on one 32-vCPU VM
+parallel, which matters once a bucket holds tens of millions of keys. In one live run with `--workers 1024`,
+swath counted 1.09 billion S3 objects in 177 seconds on one 32-vCPU VM; at the default 64 workers the same
+count did not finish within 40 minutes
 ([how this was measured](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 
@@ -68,7 +69,7 @@ billion S3 objects in 177 seconds on one 32-vCPU VM
 - Azure Blob Storage: flat namespaces only. An account with a hierarchical namespace (Data Lake Storage Gen2)
   is refused ([Sources](https://swath.varve.io/docs/sources/azure.html)).
 - Only object-store runs that write a dataset resume; a directory listing, text output and `swath du` start
-  over ([Stopping and resuming](https://swath.varve.io/docs/running.html#stopping-and-resuming)).
+  over ([Stop, resume and refresh](https://swath.varve.io/docs/resume-and-refresh.html#stopping-and-resuming)).
 - macOS binaries are not notarized yet, so Gatekeeper blocks a browser download until you clear its
   quarantine attribute ([Install](https://swath.varve.io/docs/install.html#macos)).
 

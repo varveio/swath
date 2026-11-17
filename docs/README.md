@@ -1,14 +1,13 @@
 # swath documentation
 
 swath lists object stores and filesystems in parallel, prints size totals and text rows, and writes sorted
-Parquet inventories. Release candidates for 0.4.0
-are published on the [releases page](https://github.com/varveio/swath/releases) ([Install](install.md)).
+Parquet inventories. Releases are published on the [releases page](https://github.com/varveio/swath/releases)
+([Install](install.md)).
 
 **Start**
 
 - [Start here](start-here.md): pick a job, and when swath fits.
 - [Install](install.md): release binaries and their verification, the container image, a source build.
-- [Differences in 0.4.0-rc.2](release-candidate.md): what the newest download does differently from these pages.
 - [Your first inventory](first-inventory.md): total a local directory, list it, save and inspect an inventory.
 - [Understand your results](results.md): scope, apparent and allocated bytes, hard links, coverage, observation
   time, live and saved results.

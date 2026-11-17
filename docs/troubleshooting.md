@@ -84,8 +84,9 @@ Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gc
 swath: unknown flag --summarize (the total alone is the default: --depth 0)
 ```
 
-A 0.3 option names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
-`--stall-timeout`, `--compression` is the `-o` name).
+Most options of 0.3.2 name what replaced them (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
+`--stall-timeout`, `--compression` is the `-o` name); the release notes'
+[moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0) gives the others.
 
 An option given for another provider's source is refused rather than ignored:
 
@@ -176,6 +177,7 @@ swath: deadline: --max-duration reached (it cannot be resumed: run it again with
 | exit 2, `--NAME is fixed for the run` | the option cannot change on resume | give only the options `swath resume --help` lists |
 | exit 2, identity mismatch | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `swath list --overwrite` |
 | exit 2, `nothing to resume` | no interrupted run in the directory | start a fresh `swath list` |
+| exit 2, `an interrupted run written by swath 0.3` | the directory holds a 0.3.2 run's state (`.swath-state.json` or `.swath/checkpoint.sqlite`) | `swath list ... --overwrite` replaces it |
 | exit 1, another swath process owns this output directory | a process still holds the output lock: the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |
 | exit 1, `cause` `protocol` | the service returned an invalid page; the run cannot be resumed | `swath list --overwrite` |
 | exit 1, journal version | the run was written by another build | finish with that build, or `--overwrite` |
@@ -343,8 +345,16 @@ The limits of this build, and what has not been measured:
 - **Seeded runs** (`--seed-from`): on Azure Blob, a seed whose key pages end at a blob name longer than 1,024
   bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
-  with `--workers 2048` and a spill cap under about 6 MiB can crawl or time out; the runs that complete are
-  key-identical ([#576](https://github.com/varveio/swath/issues/576)).
+  at a very high worker count (`--workers 2048`) under a spill cap far below what the listing needs (a tenth,
+  in the runs that showed it) can crawl or time out; the runs that complete are key-identical. Those
+  measurements were all at 2,048 workers under a spill cap of about a tenth of what the listing needed. At 64
+  workers the recorded measurement of a stale seed is the one of 2026-11-07, by a build from before the default
+  spill cap followed the disk: ten lists of 44 to 131 million keys, through a fake, listed near the 64-worker
+  ideal with byte-identical keys
+  ([measurements](internals/measurements.md#warm-start-from-the-previous-dataset---seed-from)), and #576 also
+  notes its lists finishing at 64 workers; at today's
+  default spill cap it has not been measured. Give a larger `--spill-budget` or more spill disk, fewer
+  workers, or list without `--seed-from` ([#576](https://github.com/varveio/swath/issues/576)).
 - **Durable spill above 593M keys:** a kill and resume with durable spill was measured on lists of up to 593
   million keys ([measurements](internals/measurements.md#durable-spill-slots)); above that, a billion keys
   included, it is not measured ([#513](https://github.com/varveio/swath/issues/513)).
