@@ -10,26 +10,44 @@ import (
 	"testing"
 )
 
-// classes is every error class, the two retryable ones last.
-var classes = append(append([]error{}, lasting...), ErrThrottled, ErrUnavailable)
+// classes names every exported error class, listed here rather than taken
+// from lasting, so that two names for one value fail
+// TestClassesAreDistinct.
+var classes = []struct {
+	name      string
+	err       error
+	retryable bool
+}{
+	{"ErrInvalidRequest", ErrInvalidRequest, false},
+	{"ErrInvalidToken", ErrInvalidToken, false},
+	{"ErrNotFound", ErrNotFound, false},
+	{"ErrNotDirectory", ErrNotDirectory, false},
+	{"ErrOtherDevice", ErrOtherDevice, false},
+	{"ErrAuth", ErrAuth, false},
+	{"ErrUnsupported", ErrUnsupported, false},
+	{"ErrInvalidPage", ErrInvalidPage, false},
+	{"ErrOutOfScope", ErrOutOfScope, false},
+	{"ErrThrottled", ErrThrottled, true},
+	{"ErrUnavailable", ErrUnavailable, true},
+}
 
 // TestClassesAreDistinct: each class matches itself, wrapped or joined
-// with a cause, and no other class.
+// with a cause, and no class at another name.
 func TestClassesAreDistinct(t *testing.T) {
 	cause := errors.New("store said no")
-	for _, class := range classes {
+	for i, class := range classes {
 		for _, err := range []error{
-			class,
-			fmt.Errorf("list s3://bucket/a/: %w", class),
-			fmt.Errorf("%w: %w", class, cause),
-			errors.Join(cause, class),
+			class.err,
+			fmt.Errorf("list s3://bucket/a/: %w", class.err),
+			fmt.Errorf("%w: %w", class.err, cause),
+			errors.Join(cause, class.err),
 		} {
-			if !errors.Is(err, class) {
-				t.Errorf("%q does not match %q", err, class)
+			if !errors.Is(err, class.err) {
+				t.Errorf("%s: %q does not match it", class.name, err)
 			}
-			for _, other := range classes {
-				if other != class && errors.Is(err, other) {
-					t.Errorf("%q matches %q", err, other)
+			for j, other := range classes {
+				if i != j && errors.Is(err, other.err) {
+					t.Errorf("%s: %q matches %s", class.name, err, other.name)
 				}
 			}
 		}
@@ -58,9 +76,12 @@ func TestRetryable(t *testing.T) {
 			t.Errorf("%s: Retryable(%v) = %v, want %v", c.name, c.err, got, c.want)
 		}
 	}
-	for _, class := range lasting {
-		if Retryable(class) || Retryable(fmt.Errorf("page: %w", class)) {
-			t.Errorf("Retryable(%q) = true", class)
+	for _, class := range classes {
+		if got := Retryable(fmt.Errorf("page: %w", class.err)); got != class.retryable {
+			t.Errorf("Retryable(%s) = %v, want %v", class.name, got, class.retryable)
+		}
+		if !class.retryable && Retryable(errors.Join(ErrThrottled, class.err)) {
+			t.Errorf("Retryable(ErrThrottled beside %s) = true", class.name)
 		}
 	}
 }

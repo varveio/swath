@@ -36,9 +36,18 @@ type PageRequest struct {
 	Token string
 	// Limit is the most entries the page returns. It must be positive.
 	Limit int
-	// MaxDuration bounds the time of a page that reads more than it
-	// returns, as a live local page reads its whole directory to choose
-	// a sorted page. Zero sets no bound.
+	// MaxScanned bounds the names a page reads to choose its entries, as a
+	// live local page reads its whole directory to choose a sorted page;
+	// Limit bounds only the entries it returns. Reaching it stops the page
+	// with StopScanBudget. A page that reads only what it returns, as an
+	// object store's delimiter listing does, is never stopped by it. Zero
+	// sets no bound, so a caller paging a live local source sets this or
+	// MaxDuration.
+	MaxScanned int64
+	// MaxDuration bounds the time of a page. Reaching it stops the page
+	// with StopTimeBudget. Zero sets no bound. A page either bound stopped
+	// holds its entries in Order, but may lack children that sort among
+	// them: it is what the page read.
 	MaxDuration time.Duration
 	// ChildTotals, when not nil, asks for the totals of each child prefix
 	// or directory, counted as it says and within its Budget. An inventory

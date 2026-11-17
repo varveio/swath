@@ -32,6 +32,8 @@ const (
 	StopTimeBudget StopReason = "time_budget"
 	// StopHeldBudget: the call reached Budget.MaxHeldBytes.
 	StopHeldBudget StopReason = "held_budget"
+	// StopScanBudget: a page reached PageRequest.MaxScanned.
+	StopScanBudget StopReason = "scan_budget"
 )
 
 // Evidence says where an answer came from and what it can prove. The zero
@@ -56,11 +58,18 @@ type Evidence struct {
 	// whole resource, as on every live answer. A question outside an
 	// inventory's scope is unknown there, never absent (ErrOutOfScope).
 	Scope []byte
-	// Unlocated counts the entries the source did not read and whose keys
-	// it did not record; nil when that count is not known (a listing that
-	// stopped early, a manifest that does not state it). While it is not
-	// zero, no key is proven absent. A live answer locates every gap as an
-	// Unread, and its Unlocated is 0.
+	// Unlocated counts the entries in Scope the source may lack and whose
+	// keys it did not record; nil when that count is not known. While it is
+	// not 0, no key is proven absent and no walk is complete. A live answer
+	// locates every gap as an Unread, and its Unlocated is 0. An
+	// inventory's is a count only when its manifest proves the listing
+	// reached the end of its scope and records no filter and no exclusion:
+	// then it is the manifest's count of unreadable entries. Anything else
+	// makes it nil, never a lower count: a listing that stopped early, a
+	// filter (an include pattern, a size or time bound, a local option that
+	// leaves entries out), an exclusion, or a coverage member the manifest
+	// does not state. A filtered listing can be complete for its filters,
+	// with nothing unreadable, and still lack entries that exist.
 	Unlocated *int64
 	// Stop says whether this call completed or which bound stopped it. It
 	// is the query's completeness, not the source's coverage: a completed

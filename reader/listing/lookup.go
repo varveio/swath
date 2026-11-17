@@ -17,10 +17,17 @@ const (
 	// LookupPresent: an entry is at the key.
 	LookupPresent
 	// LookupAbsent: no entry is at the key, proven. A live source proves
-	// it only from an answer that rules the key out, such as a missing
-	// object in a bucket that exists, or ENOENT or ENOTDIR on the way to a
-	// local key. An inventory proves it only inside its scope, from a
-	// listing with no unlocated gaps, and only as of that listing.
+	// it only from an answer that rules the key out. On an object store
+	// that is a missing object in a bucket or container that exists. A
+	// local lookup opens each component by descriptor from the root,
+	// following no symbolic link: ENOENT or ENOTDIR, at the key or at a
+	// directory on the way, proves it once the component that failed is
+	// known not to be a symbolic link, since a no-follow open refuses a
+	// link as ENOTDIR or ELOOP. A symbolic link or another device on the
+	// way, EACCES, EPERM, ENAMETOOLONG and I/O errors leave the key
+	// unknown: it was not reached. An inventory proves it only inside its
+	// scope, from a listing whose Evidence.Unlocated is 0, and only as of
+	// that listing.
 	LookupAbsent
 )
 
@@ -50,9 +57,11 @@ type LookupResult struct {
 	// present, as a KindSymlink.
 	Entry *Entry
 	// Reason says why State is LookupUnknown: an error matching one of
-	// the error classes, such as ErrAuth for an access denial, which S3
-	// returns for a missing key without list permission, or ErrOutOfScope
-	// for a key outside an inventory's scope. Nil when Evidence alone
+	// the error classes where one applies, such as ErrAuth for an access
+	// denial, which S3 returns for a missing key without list permission,
+	// or ErrOutOfScope for a key outside an inventory's scope; otherwise
+	// an error of no class naming the cause, such as a symbolic link or
+	// another device on the way to a local key. Nil when Evidence alone
 	// explains it (an inventory with unlocated gaps), and on any other
 	// state.
 	Reason error
