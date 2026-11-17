@@ -189,7 +189,9 @@ jobs:
           set -euo pipefail
           leg_args=$(./scripts/ci/go-race-shards.sh --macos "$LEG")
           if [ "$SCOPE" = full ]; then go vet ./...; fi
-          mapfile -t commands <<<"$leg_args"
+          # A loop, not mapfile: macOS runs bash 3.2.
+          commands=()
+          while IFS= read -r command; do commands+=("$command"); done <<<"$leg_args"
           status=0
           for command in "${commands[@]}"; do
             read -ra args <<<"$command"
