@@ -419,8 +419,8 @@ under `extensions`, by namespace, and swath writes `extensions.swath` only. A Se
 registered schema id or without a valid `extensions.swath` is not a swath dataset; any SeekParquet reader can
 still open it, and generic SeekParquet reads ignore `extensions.swath` entirely. A partial dataset (`coverage.complete`
 false: it left out entries it could not read, or stopped before the end of its scope) is still a swath dataset, and
-opens and reads like any other. A dataset with filters is not partial: one that reached the end of its scope is
-complete for its filters, which `coverage.filters` records.
+opens and reads like any other. Filters alone do not make a dataset partial: a listing that finishes with no
+unreadable entries is complete for the filters `coverage.filters` records.
 
 A reader makes two checks, and judges nothing beyond them:
 

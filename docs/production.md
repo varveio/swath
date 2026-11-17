@@ -2,8 +2,7 @@
 
 A short guide for whoever schedules and supervises swath: the nightly command, what to do with each exit code,
 and writing the dataset to a bucket from a machine that may not last. Listing a bucket once, start to finish, is
-in [Run large listings](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
-observations on the stated runs ([Measurements (internals)](internals/measurements.md)), not limits or promises.
+in [Run large listings](running.md); every option is in the [command reference](commands/swath.md).
 
 ## The nightly command
 
@@ -67,7 +66,7 @@ swath list s3://bucket/prefix/ -o gs://inventory/2026-11-08 --work-dir /data/wor
 ```
 
 `-o s3://BUCKET/PREFIX` writes to S3 and `-o az://ACCOUNT/CONTAINER/PREFIX` to Azure Blob Storage the same way.
-The parts are uploaded as they close and nothing large stays on the runner. The closing line names the prefix,
+The parts are uploaded as they close, and no Parquet part is stored locally. The closing line names the prefix,
 and `swath show DIR`, given the work directory, prints the dataset's summary.
 
 ### What it needs
@@ -82,7 +81,7 @@ and `swath show DIR`, given the work directory, prints the dataset's summary.
 
   | Store | Credentials (default) | Permissions | Unfinished uploads |
   |---|---|---|---|
-  | [Amazon S3](sources/s3.md#writing-a-dataset-to-s3) | `--output-s3-profile NAME` (the AWS SDK's default chain) | list the bucket; put, get and delete objects; abort multipart uploads | kept until a lifecycle rule aborts them: the rule is required |
+  | [Amazon S3](sources/s3.md#writing-a-dataset-to-s3) | `--output-s3-profile NAME` (the AWS SDK's default chain) | list the bucket; put, get and delete objects (and their versions in a versioned bucket); abort a multipart upload and list its parts | kept until a lifecycle rule aborts them: the rule is required |
   | [Google Cloud Storage](sources/gcs.md#writing-a-dataset-to-gcs) | `--output-gcs-credentials-file FILE` (Application Default Credentials) | create, get and delete objects | expire on their own |
   | [Azure Blob Storage](sources/azure.md#writing-a-dataset-to-azure-blob-storage) | `--output-azure-sas-token TOKEN`, never recorded (Entra ID) | read, write and delete blobs | expire on their own |
 
@@ -114,8 +113,9 @@ and `swath show DIR`, given the work directory, prints the dataset's summary.
 
 As for a local dataset, `swath resume DIR` (the work directory) continues the run until exit 0; the exit codes
 mean what [the table above](#the-nightly-command) says. Before it lists, the resume downloads every part the
-run uploaded and checks its version, size and SHA-256, so everything published so far is read once, at the
-bucket's read rate and price.
+journal records, which the resumed dataset keeps, and checks its version, size and SHA-256, so everything
+published so far is read once, at the bucket's read rate and price. Uploads the journal does not record are not
+read; they are orphans, cleaned up after the commit ([what is left behind](#what-is-left-behind)).
 
 - **An unresolved commit** (exit 75, class `unresolved`: the manifest's creation failed in a way that does not
   say whether it happened) keeps every part: resume the work directory, which creates the very same manifest
@@ -140,15 +140,18 @@ machine:
   `--gcs-credentials-file`, `--output-gcs-credentials-file` and a `--ca-bundle` (unless the command also has
   `--no-verify-ssl`, which skips it) must exist there, or be given again to `swath resume`; a `--seed-from`
   that is missing only warns, and the resume lists without it.
-- **The spill cap** is the run's `--spill-budget`, or one given to the resume; without either it is the new
-  disk's free space after the reserve, the spill files the resume keeps counted as free. Spill files that do
+- **The spill cap** is a positive `--spill-budget`, the run's or one given to the resume. Absent or 0, it is
+  derived from the new disk: its free space after the reserve, the spill files the resume keeps counted as
+  free, and it follows the space available from there. Spill files that do
   not fit under it are listed again ([how a resume reuses them](internals/ordering.md#durable-spill)).
 
 ### What is left behind
 
 - **A committed run cleans up after itself:** after the commit it deletes the parts its earlier attempts
   uploaded that the manifest does not name. A part whose upload it could not confirm is left, and counted in
-  the report's `output.remote.orphans_unproven`.
+  the report's `output.remote.orphans_unproven`. A part it could not delete is counted in `orphans_left`, and
+  the run warns that its cleanup is unfinished (`aftermath_unfinished`): the dataset is committed all the
+  same, and `swath resume DIR` retries the cleanup and the bucket's `run.json`.
 - **An abandoned run** (never resumed to its commit) leaves its uploaded parts under `PREFIX/data/RUN/` with
   no manifest; `DIR/.swath/remote/allocated` names them. Delete them, or set a lifecycle rule on that prefix. A
   run whose work directory was lost is abandoned the same way, without that list. A new run at the same prefix
