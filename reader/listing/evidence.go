@@ -44,14 +44,18 @@ const (
 type Evidence struct {
 	// Origin is the backend that answered.
 	Origin Origin
-	// Manifest is the inventory's manifest digest; empty on a live answer.
+	// Manifest is the inventory's manifest digest, its algorithm first:
+	// "sha256:" and the lowercase hex of the SHA-256 of the manifest's
+	// bytes. Empty on a live answer.
 	Manifest string
 	// Started and Finished bound the interval over which the entries were
 	// acquired: the call's own on a live answer, the listing's, across its
 	// resumes, on an inventory's. A listing is not a point-in-time snapshot,
 	// and neither time claims one: an entry that changed within the
 	// interval may be in the answer as it was at any moment of it, or not
-	// at all. Nil when an inventory's manifest does not record them.
+	// at all. Each is nil when the source does not know it, independently
+	// of the other: an inventory's manifest may record when its listing
+	// finished and not when it started, or neither.
 	Started  *time.Time
 	Finished *time.Time
 	// Published is the inventory's publication time; nil on a live answer.

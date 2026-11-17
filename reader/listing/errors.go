@@ -21,8 +21,9 @@ var (
 	// does not read. It is refused before any request.
 	ErrInvalidToken = errors.New("listing: invalid page token")
 	// ErrNotFound is a location the call needs that does not exist: the
-	// bucket or container, a local root, or a local directory to page or
-	// walk. A missing key is LookupAbsent, never this error.
+	// bucket or container (on S3, one the service says is in another
+	// region than the source's), a local root, or a local directory to
+	// page or walk. A missing key is LookupAbsent, never this error.
 	ErrNotFound = errors.New("listing: not found")
 	// ErrNotDirectory is a local prefix that names an entry other than a
 	// directory.
@@ -34,7 +35,9 @@ var (
 	// refuses, or an access denial.
 	ErrAuth = errors.New("listing: not authorized")
 	// ErrUnsupported is a question the backend cannot answer for this
-	// source, such as a page of an inventory of versions.
+	// source, such as a page of an inventory of versions; a source it
+	// refuses to open, such as an S3 directory bucket; or a request the
+	// store refuses with an answer of no other class, such as an HTTP 400.
 	ErrUnsupported = errors.New("listing: unsupported")
 	// ErrInvalidPage is a page from the store that breaks the contract a
 	// Page states, or a continuation token from the store that repeats

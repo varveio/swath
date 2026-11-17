@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/varveio/swath/internal/source/objhttp"
 )
@@ -31,6 +32,16 @@ type Object struct {
 	OwnerDisplayName  string
 	ChecksumAlgorithm string // the first listed
 	ChecksumType      string
+}
+
+// Head is one HeadObject response: what it says of the object. A field
+// the answer did not carry is nil or empty.
+type Head struct {
+	Size         *int64     // Content-Length
+	LastModified *time.Time // Last-Modified, to the second
+	// StorageClass is x-amz-storage-class, which S3 sends for every class
+	// but STANDARD.
+	StorageClass string
 }
 
 // Page is one ListObjectsV2 response.

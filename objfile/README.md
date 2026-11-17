@@ -222,6 +222,8 @@ the store's object name (a `Root` prefix included), the range, whether it retrie
 earlier work, the bytes consumed and the error. Each batch reports its plan
 (ranges in, requests out, gap bytes read and discarded) and a byte cache the bytes
 it served. Without an Observer this costs a context lookup and nothing else.
+swath's live source reports its requests to the same Observer: a listing page as a
+`ListRequest`, a lookup's HEAD requests as metadata ([the Go library](../docs/library.md)).
 
 `IOReporter` says whether the observation is complete. A `remote.Store` reports
 true: its clients send through a transport that reports every HTTP attempt, the

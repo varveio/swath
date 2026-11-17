@@ -58,7 +58,7 @@ func Open(d *reader.Dataset) (*Inventory, error) {
 	sum := sha256.Sum256(m.Manifest.Manifest)
 	inv.base = listing.Evidence{
 		Origin:    listing.OriginInventory,
-		Manifest:  hex.EncodeToString(sum[:]),
+		Manifest:  "sha256:" + hex.EncodeToString(sum[:]),
 		Published: m.PublishedAt,
 		Scope:     scope,
 		Unlocated: unlocated(m.Coverage),

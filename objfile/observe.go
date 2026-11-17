@@ -10,12 +10,16 @@ type RequestKind uint8
 
 const (
 	// MetadataRequest asks for an object's size and version: S3
-	// HeadObject, GCS attributes, Azure blob properties.
+	// HeadObject, GCS attributes, Azure blob properties. With an empty
+	// Name it asks whether the bucket is there: S3 HeadBucket.
 	MetadataRequest RequestKind = iota + 1
 	// RangeRequest asks for one byte range of an object.
 	RangeRequest
 	// WholeRequest asks for a whole object, with no range (ReadObject).
 	WholeRequest
+	// ListRequest asks for one page of a listing (S3 ListObjectsV2), its
+	// Name the prefix listed.
+	ListRequest
 )
 
 func (k RequestKind) String() string {
@@ -26,6 +30,8 @@ func (k RequestKind) String() string {
 		return "range"
 	case WholeRequest:
 		return "whole"
+	case ListRequest:
+		return "list"
 	}
 	return "unknown"
 }

@@ -161,7 +161,7 @@ targets' rows in one `AggregateRows` call, checking their key order, both within
 budget. An object store's prefix may be any key prefix; a local one is empty or a directory key, and a local
 inventory has no row for its root.
 
-Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes, the
+Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes (`sha256:` and its hex), the
 listing's interval and publication time, its scope, and its count of unreadable entries as `Unlocated` only when
 the listing reached the end of its scope with no filter and no exclusion. A key is absent only inside the scope
 and when `Unlocated` is 0, never at or under a local entry of unknown kind (`listing.KindUnknown`, which may be a
