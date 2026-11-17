@@ -1,23 +1,29 @@
-# Running swath in production
+# Run on a schedule
 
 A short guide for whoever schedules and supervises swath: the nightly command, what to do with each exit code,
-and writing the dataset to a bucket from a machine that may not last. One run's command, outcome and limits are
-in [Running swath](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
-observations on the stated runs ([Measurements (internals)](internals/measurements.md)), not limits or promises.
+and writing the dataset to a bucket from a machine that may not last. Listing a bucket once, start to finish, is
+in [Run large listings](running.md); every option is in the [command reference](commands/swath.md).
 
 ## The nightly command
 
 ```bash
 swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
   --seed-from /data/inv/2026-11-07 \
-  --report /var/log/swath/inv-2026-11-08.attempt-1.json \
   --max-duration 6h
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
   point readers at it once its `manifest.json` exists ([Overwrite and refresh](resume-and-refresh.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). Leave it out on the first night.
-- `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
+- The exit code and the outcome in `DIR` are the outcome of record: `DIR/run.json` beside a committed dataset
+  (its `outcome`), else `DIR/error.json`, each with `class`, `exit_code` and `resumable`. An `error.json` whose
+  `attempt.started_at` is before the attempt began is an earlier attempt's: one that was killed, or could not
+  write it, left it ([the outcome of record](reference/exit-codes.md#the-outcome-of-record)). After exit 0 or 3
+  the dataset is committed even if neither file is there: the commit removes `error.json`, and `run.json` is
+  written after the commit, so a failed write leaves it out with the warning `run_report_unwritten` on stderr,
+  without changing the exit code; `manifest.json` then records the coverage. To keep each
+  attempt's full report, a resume's included, add `--report FILE` at a fresh path for each attempt, outside the
+  output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
   kill deadline above `--max-duration` plus 20 s.
 
@@ -26,11 +32,17 @@ What the supervisor does with the exit code:
 | Exit | Do |
 |---|---|
 | 0 | done |
-| 130, 143 (signals) | `swath resume DIR --report NEW-FILE` |
+| 3 (partial) | accept the partial output, or fix the permissions and run again |
+| 129, 130, 143 (signals) | `swath resume DIR` |
 | 75 (stuck) | resume once; a second 75 in a row on the same output needs a person |
 | 74 (disk full) | free space or move the directory to a larger disk, then `swath resume DIR` |
 | 124 (deadline) | resume only within a separate budget of attempts or total time; past it, a person |
-| 1, 2 | a person: a resume will not fix it |
+| 1 (failed) | a person fixes the cause; then `swath resume DIR` when the outcome is `resumable`, else a new run |
+| 2 (usage, refused) | a person fixes the command; with no outcome or report, a crash: resume as after a kill |
+
+The reference table, [what a supervisor does with each code](reference/exit-codes.md#what-a-supervisor-does-with-each-code),
+adds the cases this short form leaves out: 75 with cause `unreachable` or class `unresolved`, and 74 with
+cause `spill_budget`.
 
 The rest of a scheduled run has its own pages:
 
@@ -45,62 +57,77 @@ The rest of a scheduled run has its own pages:
 
 ## Writing to a bucket
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`, or
-`-o az://ACCOUNT/CONTAINER/PREFIX`) puts the dataset in GCS (or S3, or Azure Blob Storage) and keeps nothing
-large on the runner: the parts go up as they close, and `DIR` holds only spill and the
-run's metadata.
+To keep the dataset in a bucket instead of on the runner, give `-o` a bucket prefix and `--work-dir` a local
+directory:
 
-- **The destination's own options:** credentials (GCS: `--output-gcs-credentials-file`, else Application
-  Default Credentials; S3: `--output-s3-profile`, else the AWS SDK's chain, always signed; Azure:
-  `--output-azure-sas-token`, never recorded, else Entra ID), region (`--output-s3-region`) and endpoint
-  (`--output-endpoint-url`: path-style for S3; for Azure the account is its first path segment).
-- **Per store:** credentials, permissions, region and endpoint, and what each store needs for uploads that
-  did not finish, are on the store's page: [Amazon S3](sources/s3.md#writing-a-dataset-to-s3) (a lifecycle rule
-  that aborts incomplete multipart uploads is required), [Google Cloud Storage](sources/gcs.md#writing-a-dataset-to-gcs),
-  [Azure Blob Storage](sources/azure.md#writing-a-dataset-to-azure-blob-storage).
-- **One prefix and one work directory per run:** a prefix that holds a `manifest.json` is refused; datasets in
-  a bucket are not replaced. Write each run to a dated prefix and let readers find the newest by its manifest.
-  A work directory belongs to its run (`--overwrite` is refused with a bucket): a new run takes a new or empty
-  one.
-- **Supervision:** as for a local dataset, `swath resume DIR` until exit 0. Give every attempt the same work
-  directory; if it is lost the resume is lost with it ([below](#on-a-preemptible-or-spot-machine)). Two
-  runners sharing one work directory are refused by its lock; two work directories writing one prefix race
-  at the commit, and exactly one wins (the other exits with a lost race and deletes its parts).
-- **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
-  dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
-  only under the prefixes of runs you have abandoned; a rule that aborts incomplete uploads is safe, and on S3
-  required ([Amazon S3](sources/s3.md#writing-a-dataset-to-s3)).
-- **Debug logging:** the destination's credentials and clients are built with a logger that discards
-  everything, as the GCS source's client is, so `GOOGLE_SDK_GO_LOGGING_LEVEL=debug` never logs a token, a signed
-  assertion or a session URL. The storage SDK (v1.70.0) does not hand that logger to the JSON API client it
-  builds inside, so with the variable set that client may still log request lines: the method, the object name
-  and a URL without credentials. An S3 destination's AWS SDK logs nothing: its logger discards everything and
-  its request logging is off, whatever the AWS configuration says. The Azure SDK's log is off in swath
-  (`AZURE_SDK_GO_LOGGING=all` prints nothing), for the destination as for the source.
-- **Leftovers:** a run that is abandoned (never resumed to its commit) leaves its uploaded parts under
-  `PREFIX/data/RUN/` with no manifest, named in `DIR/.swath/remote/allocated`; delete them, or set a lifecycle
-  rule on the bucket. A run whose work directory was lost is abandoned the same way, without that list. A new
-  run at the same prefix does not clean them: it is not refused (only a `manifest.json` is), its manifest
-  names its own parts only, and the parts the abandoned run uploaded stay under its own `PREFIX/data/RUN/`
-  beside them, so start it at a new prefix. Unfinished resumable upload sessions expire on their own (GCS keeps them a week), as do
-  Azure's uncommitted blocks (a week); S3's incomplete multipart uploads do not ([the rule](sources/s3.md#writing-a-dataset-to-s3)).
-- **An unresolved commit** (`commit: unresolved`: the manifest's creation failed in a way that does not say
-  whether it happened, and no manifest is there yet) keeps every part: resume the work directory, which
-  creates the very same manifest again. A run without a journal (a local tree) cannot resume: check the prefix
-  for a manifest before deleting anything under it.
-- **Report:** `output.remote` in the report ([run report](reference/run-report.md)): the commit's outcome, the
-  uploads, retries by class, `upload_wait_ns` (the encoders' time waiting on uploads), the orphans deleted and,
-  for S3, `aborts_unconfirmed` (multipart uploads the lifecycle rule must remove).
-  Uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
+```bash
+swath list s3://bucket/prefix/ -o gs://inventory/2026-11-08 --work-dir /data/work/2026-11-08 \
+  --max-duration 6h
+```
+
+`-o s3://BUCKET/PREFIX` writes to S3 and `-o az://ACCOUNT/CONTAINER/PREFIX` to Azure Blob Storage the same way.
+The parts are uploaded as they close, and no Parquet part is stored locally. The closing line names the prefix,
+and `swath show DIR`, given the work directory, prints the dataset's summary.
+
+### What it needs
+
+- **A work directory** (`--work-dir DIR`), local, new or empty, one per run. It holds the run's lock, journal
+  and spill, never a part, so it needs room for spill and the run's metadata, not for the dataset
+  ([disk sizing](size-a-run.md#disk-sizing)). Without `--work-dir` the command is refused (exit 2). Every
+  resume of the run uses the same directory; if the machine may not last, put it on a disk that outlives it
+  ([below](#on-a-preemptible-or-spot-machine)).
+- **Credentials and permissions on the destination**, its own, never the source's (a source's `--anonymous`
+  does not reach it):
+
+  | Store | Credentials (default) | Permissions | Unfinished uploads |
+  |---|---|---|---|
+  | [Amazon S3](sources/s3.md#writing-a-dataset-to-s3) | `--output-s3-profile NAME` (the AWS SDK's default chain) | list the bucket; put, get and delete objects (and their versions in a versioned bucket); abort a multipart upload and list its parts | kept until a lifecycle rule aborts them: the rule is required |
+  | [Google Cloud Storage](sources/gcs.md#writing-a-dataset-to-gcs) | `--output-gcs-credentials-file FILE` (Application Default Credentials) | create, get and delete objects | expire on their own |
+  | [Azure Blob Storage](sources/azure.md#writing-a-dataset-to-azure-blob-storage) | `--output-azure-sas-token TOKEN`, never recorded (Entra ID) | read, write and delete blobs | expire on their own |
+
+  The exact permission and role names, and each store's region and endpoint rules, are on the store's page.
+  `--output-s3-region` and `--output-endpoint-url` (an emulator, or an S3-compatible store) are fixed for the
+  run; the credentials are resolved again on every resume.
+- **Logging:** swath turns the storage SDKs' own logging off, so no SDK setting logs a token, a signed
+  assertion or a session URL; with `GOOGLE_SDK_GO_LOGGING_LEVEL=debug`, a GCS destination may still log
+  request lines: the method, the object name and a URL without credentials.
+
+### What appears in the bucket, and when
+
+- **During the run**, parts appear under `PREFIX/data/RUN/ATTEMPT/` as they close. There is no
+  `PREFIX/manifest.json` yet, so the prefix holds no dataset: a reader that finds no manifest must not read
+  the parts.
+- **At the end**, the run creates `PREFIX/manifest.json`, only if it is absent: that creation is the commit,
+  and the dataset exists from then on. `run.json` and, for an object-store source, `cuts.txt` follow beside
+  it. The uploads happen inside the run, so the bucket's bandwidth is part of its wall time.
+- **Readers** take the parts from the manifest, never from a listing of `data/`
+  ([a dataset in a bucket](dataset.md#a-dataset-in-a-bucket)).
+- **One prefix per run.** A prefix that already holds a `manifest.json` is refused before the run starts
+  (exit 2), as are `--overwrite` and a prefix that overlaps the listed source: a dataset in a bucket is never
+  replaced. Write each run to a dated prefix and let readers find the newest by its manifest.
+- **Two runs, one prefix.** Two runners sharing one work directory are refused by its lock. Two work
+  directories writing one prefix race at the commit and exactly one wins; the other exits 1 (`lost_race`) and
+  deletes its parts.
+
+### Interrupted, then resumed
+
+As for a local dataset, `swath resume DIR` (the work directory) continues the run until exit 0; the exit codes
+mean what [the table above](#the-nightly-command) says. Before it lists, the resume downloads every part the
+journal records, which the resumed dataset keeps, and checks its version, size and SHA-256, so everything
+published so far is read once, at the bucket's read rate and price. Uploads the journal does not record are not
+read; they are orphans, cleaned up after the commit ([what is left behind](#what-is-left-behind)).
+
+- **An unresolved commit** (exit 75, class `unresolved`: the manifest's creation failed in a way that does not
+  say whether it happened) keeps every part: resume the work directory, which creates the very same manifest
+  again. A local tree written to a bucket keeps no journal and cannot resume: check the prefix for a manifest
+  before deleting anything under it.
+- **An Azure destination's SAS** is never recorded: give `--output-azure-sas-token` to every resume (no
+  variable stands in for it), or the resume is refused. The source's secrets are given again too
+  ([resume it](resume-and-refresh.md#resume-it)).
+- **A lost work directory** cannot be resumed, and the parts the run uploaded are not reused: start again at a
+  new prefix, and clean up the old one ([what is left behind](#what-is-left-behind)).
 
 ### On a preemptible or Spot machine
-
-A bucket run resumes from its work directory only. `DIR/.swath/` holds the journal (the recorded command and
-one record per published part: its object, version, size and SHA-256), the durable spill and its ledger
-(`spill/durable/`), and the claim receipts, the allocation log and the candidate manifest (`remote/`). The
-parts are not kept there: they stream to the bucket, which holds nothing else of the run until its commit. A
-lost work directory cannot be resumed, and the parts the run published are not reused
-([leftovers](#writing-to-a-bucket), above).
 
 To survive a preempted VM, put `--work-dir` on a disk that outlives the VM (one not deleted with the
 instance), attach it to the replacement machine and run `swath resume DIR` at its mount point there. The
@@ -110,19 +137,40 @@ Nothing binds the work directory to a machine or a path: the lock is a `flock`, 
 machine:
 
 - **Paths the command recorded** are replayed as written, a relative one against the new working directory.
-  `--gcs-credentials-file`, `--output-gcs-credentials-file`, the directory of `--report` and a `--ca-bundle`
-  (unless the command also has `--no-verify-ssl`, which skips it) must exist there, or be given again to
-  `swath resume` (each may change on resume); a `--seed-from` that is missing only warns, and the resume lists
-  without it.
-- **Secrets** are never recorded (`--azure-sas-token`, `--output-azure-sas-token`,
-  `--s3-bearer-token-command`): give them again, or the resume is refused. The source's `--azure-sas-token`
-  may come from `AZURE_STORAGE_SAS_TOKEN` instead; `--output-azure-sas-token` has no such variable.
-- **The spill cap** is a positive `--spill-budget` the run recorded or the resume gives; without one (or with
-  0) it is the default, the free space on the new disk after the reserve when the resume starts, the certified
-  spill files the resume keeps counted as free (on the same disk the cap is then the stopped run's, less what
-  the work directory took meanwhile), and it follows the disk from there. Certified spill files that do not
-  fit under the cap the resume starts with are listed again (`rejected.budget` in
-  `diagnostics.resources.spill.durable.resume`).
-- **Verification:** before listing continues, the resume reads every part the journal records back from the
-  bucket, one after another, whole, and checks its version, size and SHA-256 (`output.remote.objects_verified`):
-  everything published so far is downloaded once, at the bucket's read rate and price.
+  `--gcs-credentials-file`, `--output-gcs-credentials-file` and a `--ca-bundle` (unless the command also has
+  `--no-verify-ssl`, which skips it) must exist there, or be given again to `swath resume`; a `--seed-from`
+  that is missing only warns, and the resume lists without it.
+- **The spill cap** is a positive `--spill-budget`, the run's or one given to the resume. Absent or 0, it is
+  derived from the new disk: its free space after the reserve, the spill files the resume keeps counted as
+  free, and it follows the space available from there. Spill files that do
+  not fit under it are listed again ([how a resume reuses them](internals/ordering.md#durable-spill)).
+
+### What is left behind
+
+- **A committed run cleans up after itself:** after the commit it deletes the parts its earlier attempts
+  uploaded that the manifest does not name. A part whose upload it could not confirm is left, and counted in
+  the report's `output.remote.orphans_unproven`. A part it could not delete is counted in `orphans_left`, and
+  the run warns that its cleanup is unfinished (`aftermath_unfinished`): the dataset is committed all the
+  same, and `swath resume DIR` retries the cleanup and the bucket's `run.json`.
+- **An abandoned run** (never resumed to its commit) leaves its uploaded parts under `PREFIX/data/RUN/` with
+  no manifest; `DIR/.swath/remote/allocated` names them. Delete them, or set a lifecycle rule on that prefix. A
+  run whose work directory was lost is abandoned the same way, without that list. A new run at the same prefix
+  does not clean them: it is not refused (only a `manifest.json` is), and its manifest names only its own
+  parts, so start it at a new prefix.
+- **Lifecycle rules:** never let a lifecycle rule or a cleanup job delete or replace objects under a committed
+  dataset's prefix: the manifest would name parts that are gone, and swath does not notice. Expire objects
+  only under the prefixes of runs you have abandoned. A rule that aborts incomplete uploads is safe, and on S3
+  required ([the rule](sources/s3.md#writing-a-dataset-to-s3)).
+
+### Limits
+
+- `swath show DIR` takes the work directory, not the bucket URL. `swath du --from-dataset` refuses a dataset
+  in a bucket and its work directory (exit 2). `--seed-from` reads a local path: to seed the next run, copy
+  the dataset's `cuts.txt` ([the cut file](dataset.md#the-cut-file)).
+- Datasets written to GCS have run against the real service
+  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
+  writing to S3 and to Azure Blob Storage is tested against emulators and in-process fakes only.
+- Each store's own limits are on its page.
+
+The report's `output.remote` holds the commit's outcome, the uploads and their retries, the parts a resume
+verified and the orphans deleted or left ([run report](reference/run-report.md)).

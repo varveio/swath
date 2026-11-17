@@ -58,6 +58,7 @@ const (
 const (
 	HeadingOnDisk = "on disk" // allocated_bytes
 	headingFiles  = "files"
+	headingNewest = "newest" // max_last_modified, the zone named after it in the table
 	headingPath   = "path"
 	headingTotal  = "(total)" // the total row's prefix in the table
 	// partialMark marks a figure in the table that leaves out objects
@@ -118,7 +119,7 @@ func (l *TotalsLayout) primary() string {
 // prefix. The table is for reading: one figure, the primary, in binary
 // units (TableFigure), the counts grouped (the figure and the counts "-"
 // for a directory that could not be read), the newest time as the list
-// table's ("-" when unknown), and the prefix (a local tree's path) last,
+// table writes a time, under newest and the zone ("-" when unknown), and the prefix (a local tree's path) last,
 // indented by its depth, the total's named by the source (Total); the
 // command states the other figure's total beside it.
 func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefix) error {
@@ -276,7 +277,8 @@ func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
 	if !l.Local {
 		w.objects = len(FieldObjects)
 	}
-	w.loc, w.timeHeading = tableClock(l.Loc)
+	loc, zone := tableZone(l.Loc)
+	w.loc, w.timeHeading = loc, headingNewest+" ("+zone+")"
 	w.time = max(len(w.timeHeading), len(tableTime))
 	var num [32]byte
 	for i := range rows {

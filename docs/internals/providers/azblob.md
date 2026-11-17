@@ -9,7 +9,13 @@ an account reported as hierarchical.
 [Shared object-store controls](../../sources/README.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
-Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
+An anchored literal `--include` narrows the listing prefix (`withPrefix`). An `az://` root is not an
+escaped URL (`%` and `+` are a name's own bytes; a `?` is the prefix's unless the query names a SAS
+parameter), so the narrowed root keeps the SAS byte for byte and is taken only if `ParseURL` gives back the
+same account, container, SAS and the prefix asked for; otherwise the root is kept
+(`provider_declined_prefix`), and an include's text is never read as a credential. Namespace admission
+still asks about the container (`TestNarrowedAdmission`); the oracle that the narrowed listing filtered
+equals the root's listing filtered is `TestNarrowedListingIsTheFilteredListing`.
 There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
 `Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
 It applies the shared [endpoint validation](../clients.md#endpoint-validation) to `--endpoint-url`; supply SAS

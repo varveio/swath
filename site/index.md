@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: Save an inventory you can query
-    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code> (coming in 0.4.0).
+    details: <code>swath list -o DIR</code> writes a sorted Parquet dataset with a manifest that records how complete it is. Query it with DuckDB, Python or any Parquet reader, or total it without listing again with <code>swath du --from-dataset DIR</code>.
     link: /docs/dataset
     linkText: The swath dataset
   - title: List and export rows
@@ -29,7 +29,7 @@ features:
     link: /docs/output
     linkText: Output
   - title: Find where the space went
-    details: <code>swath du</code> totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
+    details: <code>swath du</code> shows the largest directories, prefixes and files at any depth, or totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
     link: /docs/first-inventory
     linkText: Your first inventory
 ---
@@ -39,41 +39,40 @@ features:
 swath is an open-source command-line tool that lists object stores and filesystems in parallel. It reads
 listing metadata only and never changes what it lists.
 
-In one live run, swath wrote a sorted Parquet inventory of 1.09 billion S3 objects in 846 seconds (about 14
-minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which wrote nothing, took 177 seconds.
-[How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
+In one live run with `--workers 2048`, swath 0.4.0 wrote a sorted Parquet inventory of 1.09 billion S3
+objects in 238 seconds (under 4 minutes) on one 64-vCPU VM; a separate count-only run of the same bucket on
+the same VM, which wrote nothing, took 169 seconds ([how many workers to use](../docs/size-a-run.md#workers)).
+[How this was measured](../docs/internals/measurements.md#the-same-bucket-on-64-vcpus-at-2048-workers-sentinel-cogs-2026-11-17)
 
 ## Download
 
-> [!NOTE]
-> These pages describe the upcoming 0.4.0. The newest published build is swath 0.4.0-rc.2, a release
-> candidate, which does not yet have everything described here, such as `swath du --from-dataset`
-> ([what differs](../docs/release-candidate.md)).
-
-Download the archive for your platform from the [releases page](https://github.com/varveio/swath/releases),
-verify it and put `swath` on your `PATH`, or run the container image `ghcr.io/varveio/swath:0.4.0-rc.2`.
-[Install](../docs/install.md) has the steps.
+The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
+Download the archive for your platform and put `swath` on your `PATH`, or run the container image
+`ghcr.io/varveio/swath:0.4.0`. [Install](../docs/install.md) has the steps.
 
 ## Try a public bucket
 
 A public NOAA prefix of 5,252 objects, with no account: `--anonymous` sends no credentials. Start with a prefix
-like this one: listing the whole bucket, as in the inventory example at the top of this page, takes about 39,000 requests.
+like this one: the recorded listing of the whole bucket, the "Save an inventory, query it with SQL" example
+above, covered 37,064,981 objects in 39,016 requests.
 
 ```bash
-swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1
+swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 | head
 ```
 
-`-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
-depths of a big bucket, list it once with `-o DIR` and total the saved inventory with
-`swath du --from-dataset DIR -d N` (coming in 0.4.0).
+On a terminal, bare `swath du` draws the view at the top of this page: the largest prefixes and objects at any
+depth, each under its parent with its share of the total. In a pipe it prints the total row only. `-d N`
+prints the totals of every prefix down to N levels instead, a table or TSV for scripts. Each `swath du` lists
+the whole prefix again: to look at a big bucket several ways, list it once with `-o DIR` and total the saved
+inventory with `swath du --from-dataset DIR`.
 
 ## Try it on a local directory
 
 No account or credentials needed. Replace `~/Downloads` with any directory:
 
 ```bash
-swath du -d 1 ~/Downloads                       # totals per directory, one level down
+swath du ~/Downloads                            # where the bytes are, at any depth
 swath list ~/Downloads -o ~/downloads-inventory  # a sorted Parquet inventory
 swath show ~/downloads-inventory                # what it holds and how complete it is
 ```
@@ -84,7 +83,7 @@ swath show ~/downloads-inventory                # what it holds and how complete
 ## List your own buckets
 
 ```bash
-swath du s3://bucket/prefix/ -d 1                # totals per prefix
+swath du s3://bucket/prefix/                     # where the bytes are, at any depth
 swath list gs://bucket/prefix/ -o inventory      # a sorted Parquet inventory
 ```
 
@@ -99,6 +98,6 @@ filesystems. [What each supports](../docs/sources/README.md)
 
 - [Start here](../docs/start-here.md): pick a job, and when swath fits.
 - [Sources](../docs/sources/README.md): URLs, credentials and what each source supports.
-- [Run large listings](../docs/running.md): size, watch, stop and resume a long run.
+- [Run large listings](../docs/running.md): list a bucket of your own start to finish.
 - [Commands](../docs/commands/swath.md): every command and option.
 - [Troubleshooting](../docs/troubleshooting.md): by symptom and exit code.

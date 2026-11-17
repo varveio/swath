@@ -452,6 +452,19 @@ may already be recorded (its rename failed), and only `swath resume`'s reconcili
 `swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `ok`, the
 report saying `complete`; idempotent, as Java's), partial coverage (a key limit, unreadable entries) exits 3 (`incomplete`); on a directory without a journal (an empty
 workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `--overwrite`.
+`swath resume` judges DIR by what is on disk, not by its name: a directory named `rows.tsv/` that holds an
+interrupted dataset run resumes, and a text file `rows.tsv` is refused as text output.
+
+**The workspace.** `DIR/.swath/` holds `lock` (one process per output, above), `journal`
+(`swath show --journal` dumps it), `parts/` (encoded parts not yet published), `spill/` (disposable spill,
+removed by the next run, and `spill/durable/`: the certified spill files and their `ledger`, kept for the
+resume and removed when the dataset commits, [ordering.md](ordering.md#durable-spill)), `suspect/` (a part a
+resume must reproduce, [the journal](#the-journal)) and `progress.json`. A SIGKILL, an OOM kill or a power loss
+leaves the published parts, the journal, encoded parts not yet published, the disposable spill and the durable
+spill: certified files with their ledger records, and files whose record never reached the ledger. The resume
+validates every recorded spill file (size, checksums, every frame, its certificate) and unlinks every other; a
+missing or damaged one is relisted, never an error. Removing `spill/durable/` before a resume costs only the
+relisting it would have saved: the resume lists everything above K, as the source is then.
 
 ## The outcome of an attempt
 

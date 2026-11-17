@@ -436,6 +436,33 @@ across ranges protects against a provider that breaks its tiling and runs on eve
 keeping each finished range's first and last key until its neighbors finish, the tree `Count` exists to
 avoid.
 
+### Drawing the view
+
+What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `cmd/swath`
+`duview.go`, `textout.WriteView`); the user's account is [the view](../totals.md#the-view). The view takes the
+terminal's height less the lines printed after it (the line of totals, the unreadable and lowered-depth lines,
+the closing line, the `hint:` lines and the prompt, each counted as it wraps at the terminal's width:
+`closingRows`), so its heading and total stay on screen. Line by line, what is not broken down yet (a fold, or
+a node shown whole) gives its largest child, a node a fold for the rest too: the one whose child is the
+largest, so the largest nodes come first and the largest prefixes open. No line goes to a node under a floor,
+the larger of 0.5 % of the total and a quarter of one line's share (`viewFloor`): a long tail of small prefixes
+stays in its fold, and the view ends when nothing above the floor is left. A fold of no bytes is left out
+unless it holds an unreadable directory. A prefix with one child shares its line with it.
+
+The columns fit the terminal's width and a line never wraps: from 100 columns the bar has 20 cells (the rest
+goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
+then the date. The size, the count and the path always stay; a path is written as the other terminal lines
+write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
+width. Past `--max-prefixes` (the local directories being listed and the prefixes kept for a hard link) the
+view keeps fewer levels rather than fail (`View.MaxDepth`) and says so on stderr; the run report's
+`diagnostics.totals_view` counts what was kept, dropped and merged ([run report](../reference/run-report.md)).
+
+The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
+[pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
+behavior. It differs in what it leaves out: dust shows the largest entries of the whole tree whatever their
+parents, and pdu hides entries below 1 % of the total; swath folds each parent's smaller children into a
+counted line.
+
 ## Cancellation
 
 A stop (sink error, provider error, or context cancellation) sets an atomic flag and broadcasts to every
@@ -461,7 +488,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore does not block on the row budget while the disk budget
   and reserve admit its frames (the waits above); this is what the slow-frontier shape needs.
-- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, `swath-ATTEMPT-RANDOM/spill/spill-*/` in the temp directory; a dry run never spills). The scratch directory is created exclusively and named for the file and the attempt (`listing.textScratch`), so two attempts writing sibling files, the same file, or streams never share or remove each other's (`TestTextScratchPerAttempt`); a killed attempt leaves its own, with the file's `.NAME.*.tmp`, for the user to delete.
   Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
   uncompressed (`--no-spill-compress`), `Z` and `R` plain rows, compressed and not
@@ -693,13 +720,20 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   `--sort-buffer` larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders
   and cores allow. Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
-  cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
-- **What bounds the tail.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
+  cores), on the build that introduced segments (#281, 2026-11-08), 31 workers bought 10 s of a 140 s tail
+  over 8 and cost 3 GB of RSS. On the 0.4.0 release, 1,024 workers, the same bucket's tail took 87 s with 16
+  segment workers (`workers_by` `processors`;
+  [measurements](measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
+- **What bounds the tail.** On sentinel-cogs with 31 workers on that build the segments' time split 1,724 s writing
   (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
-  the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
-  machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming
-  nearer the publish frontier), not more workers. Before listing is done nothing changes either: the drainer walks the tree as
-  always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
+  the 140 s tail. On that build the tail was CPU-bound on Parquet encoding and spill read-back, and was
+  judged near its floor on that machine, with cheaper encoding per row or overlapping the drain with listing
+  (claiming nearer the publish frontier) as the next levers, not more workers. The 0.4.0 release measured the
+  same bucket on a 32-vCPU machine with a tail of 87 s (16 segment workers, 32 encoders, at 1,024 listing
+  workers; [measurements](measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)),
+  so 140 s was not the floor on 32 cores; which change shortened it was not measured. Before listing is done
+  nothing changes either: the drainer walks the tree as always, and it asks again each time it has handed rows
+  on while the rule cannot be stated yet.
 - **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
   (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
   listed. The cut follows the router's rule exactly: a part closes after the row whose logical bytes bring it

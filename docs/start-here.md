@@ -10,7 +10,7 @@ A source is a local or mounted directory, `s3://bucket/prefix`, `gs://bucket/pre
 
 | You want to | Run | Read |
 |---|---|---|
-| Find where the space went | `swath du -d 1 SOURCE` | [Your first inventory](first-inventory.md) |
+| Find where the space went | `swath du SOURCE`, or `-d N` for totals to a fixed depth | [Your first inventory](first-inventory.md) |
 | List every entry, or export rows for a script | `swath list SOURCE`, or `-o rows.tsv.zst` | [Output](output.md) |
 | Save a sorted Parquet inventory to query later | `swath list SOURCE -o DIR` | [Query an inventory](query.md) |
 

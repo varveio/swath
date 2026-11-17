@@ -76,14 +76,9 @@ snapshot semantics.
   sorted-key format, whoever wrote it. Use it when the format itself matters:
   interoperability, generic readers, conformance and diagnostics.
 - **swath dataset profile** is swath's contract on top of the format: its schema ids, the
-  `extensions.swath` metadata and what it records. The Go port's
+  `extensions.swath` metadata and what it records.
   [`docs/dataset.md`](dataset.md) owns it.
 - **Parquet part** is one Parquet file the manifest lists.
-- **Legacy Java dataset** is the Java tool's format 1, with its own commit rules
-  (`_SUCCESS`, the run summary). Use the term in migration documents and legacy
-  diagnostics. The Java tool's own pages call it a **managed Parquet dataset**: a
-  directory of Parquet parts plus swath's manifest, completion marker, run report, and
-  temporary resume state.
 
 ### Supported and experimental
 
@@ -98,10 +93,8 @@ Use these labels consistently:
 - **Planned:** not implemented. Planned controls must not be presented as selectable
   current behavior.
 
-Name the implementation and release when the support differs. The Java v0.3.2 release
-supports S3 general-purpose buckets; its GCS XML access is experimental. Unreleased Go
-also has native GCS, local/mounted filesystem and Azure Blob flat-namespace providers.
-Use the Go CLI and provider docs for their exact limits.
+Name the release when the support differs between releases, and leave each source's exact
+limits to its page under `docs/sources/`.
 
 ## Evidence and performance claims
 
@@ -135,7 +128,7 @@ sentences and link to that owner.
 | Fact | Owner |
 | --- | --- |
 | Product promise, fit and release status | root `README.md` |
-| First successful workflow | `docs/first-inventory.md`; what a result means: `docs/results.md` |
+| First successful workflow | `docs/first-inventory.md`; result scope, coverage and observation time: `docs/results.md` |
 | Go commands and options | `docs/commands/` (options generated from the flag table) and installed Go CLI help |
 | Go output formats and filters | `docs/output.md`, `docs/filters.md` |
 | Go sources, credentials and endpoints | `docs/sources/` (one page per source) |

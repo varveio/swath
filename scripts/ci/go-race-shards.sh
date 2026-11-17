@@ -8,6 +8,8 @@
 #   go-race-shards.sh --arm64-extra packages not already raced on arm64 (run at the root)
 #   go-race-shards.sh --windows-matrix the Windows legs of ci.yml `go-xos`, as JSON (needs no Go)
 #   go-race-shards.sh --windows LEG the `go test` arguments of each shard of LEG, one shard per line
+#   go-race-shards.sh --macos-matrix the macOS legs of ci.yml `go-xos`, as JSON (needs no Go)
+#   go-race-shards.sh --macos LEG   the `go test` arguments of macOS leg LEG, one command per line
 #   go-race-shards.sh --self-test   the table checks against synthetic package lists (needs no Go)
 #
 # A row names its packages and a -run pattern. A row with a pattern splits one package: the
@@ -28,6 +30,12 @@
 # shards build them, so a package or test file under `//go:build race` is not invisible to the
 # check. Patterns are anchored and use only the syntax Go's RE2 and grep -E agree on.
 #
+# A row may share another row's build cache (the fifth field) only when both run the same packages
+# on the same runner and the other row keeps its own; --check and --self-test enforce it. Both
+# matrices name each leg's cache key (`cache`): `go-race-SHARD` for the shard that owns it, and for
+# a Windows or macOS leg `go-xos` (the full leg), `go-xos-SHARD` when all its shards use SHARD's
+# cache, else `go-xos-LEG`.
+#
 # The heavy shards race on the arm64 runner only: its weaker memory model makes it the better
 # race target, and the same -race suite took ~30 % less time there than on amd64
 # (internal/listing 490 s against 700 s). The nightly full, unsharded race run on amd64 covers
@@ -39,27 +47,54 @@ set -euo pipefail
 arm=ubuntu-24.04-arm
 amd=ubuntu-latest
 # name, runner, packages (-: every package no row names), -run pattern (-: whole packages, or
-# the remainder of a split package)
+# the remainder of a split package), build cache (-: the shard's own; else the shard whose cache
+# it shares). Rows that compile the same packages with the same flags on the same runner can
+# share one cache instead of each growing its own: the `internal/listing` rows build one test
+# binary and their tests build nothing else; the `cmd/swath` rows' tests both build the swath
+# binary with the swathtest tag, and `cmd`'s also without it (a few entries, rebuilt when the
+# kill shard saved the shared cache first).
 table=(
-  "crash        $arm ./internal/listing                         ^TestCrashMatrix\$"
-  "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$"
-  "listing-rest $arm ./internal/listing                         -"
-  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$"
-  "cmd          $arm ./cmd/swath                                -"
-  "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -"
-  "rest-source  $amd ./internal/source/...                      -"
-  "rest         $amd -                                         -"
+  "crash        $arm ./internal/listing                         ^TestCrashMatrix\$                       listing-rest"
+  "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$   listing-rest"
+  "remote-crash $arm ./internal/listing                         ^TestRemoteCrashMatrix\$                 listing-rest"
+  "listing-rest $arm ./internal/listing                         -                                        -"
+  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
+  "cmd          $arm ./cmd/swath                                -                                        -"
+  "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -                                        -"
+  "rest-source  $amd ./internal/source/...                      -                                        -"
+  "rest         $amd -                                         -                                        -"
 )
 
-# The Windows legs of ci.yml `go-xos` on a full platform run. Windows runs the suite without -race
-# about three times slower than macOS (internal/listing 17 min alone, 28 min beside the other
-# packages, 2026-11-16), so its run is split along the shards above: a leg names shards,
-# comma-separated, and runs one `go test` per shard in order. Every shard is in exactly one leg. The
-# leg holding `rest` is the full one: it also vets the module and tests the nested modules.
+# The Windows legs of ci.yml `go-xos` on a full platform run, one race shard per leg where the
+# shards are long. Windows runs the suite without -race about three times slower than macOS
+# (internal/listing 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
+# several long shards one after another came within minutes of its limit, so its run is split
+# along the shards above: a leg names shards, comma-separated, and runs one `go test` per shard in
+# order. Every shard is in exactly one leg. Each `internal/listing` and `cmd/swath` shard is a leg
+# (each takes 5 to 9 min there, `remote-crash` 5 of them, 2026-11-17), and the `rest*` shards
+# share one. The leg holding `rest` is the full one: it also vets the module and tests the nested
+# modules.
 windows=(
-  "listing-rest   listing-rest"
-  "cmd            cmd-kill,cmd"
-  "matrices-rest  crash,durable,rest-replay,rest-source,rest"
+  "crash           crash"
+  "durable         durable"
+  "remote-crash    remote-crash"
+  "listing-rest    listing-rest"
+  "cmd-kill        cmd-kill"
+  "cmd             cmd"
+  "rest            rest-replay,rest-source,rest"
+)
+
+# The macOS legs of ci.yml `go-xos` on a full platform run, in the same form. One macOS job ran
+# `internal/listing` and `cmd/swath` side by side on three vCPUs and was the critical job of a full
+# run (14.5 to 15.7 min, 2026-11-17); alone, without -race, `internal/listing` takes about 5.4 min
+# of test time there and `cmd/swath` 9.2. So `internal/listing` is a leg and everything else the
+# full one. Unlike a Windows leg, a macOS leg runs its packages in one `go test`, side by side as
+# the single job did: a split package whose rows are all in the leg runs whole (one process, all
+# its tests), and a row of a split package whose other rows are elsewhere runs in a `go test` of
+# its own after it.
+macos=(
+  "listing         crash,durable,remote-crash,listing-rest"
+  "rest            cmd-kill,cmd,rest-replay,rest-source,rest"
 )
 
 # Every package of the module, one ./relative path per line: set by load_packages (go list) or by
@@ -71,6 +106,52 @@ field() {
   local f
   f=$(awk -v n="$2" '{print $n}' <<<"$1")
   if [ "$f" != - ]; then printf '%s' "$f"; fi
+}
+
+# The shard whose build cache shard $1 uses: its fifth field, or itself.
+cache_of() {
+  local row owner
+  for row in "${table[@]}"; do
+    [ "$(field "$row" 1)" = "$1" ] || continue
+    owner=$(field "$row" 5)
+    printf '%s' "${owner:-$1}"
+    return 0
+  done
+  echo "unknown shard: $1" >&2
+  return 2
+}
+
+# The leg table of platform $1 (windows or macos), one row per line.
+legs_of() {
+  case "$1" in
+    windows) printf '%s\n' "${windows[@]}" ;;
+    macos) printf '%s\n' "${macos[@]}" ;;
+    *) echo "unknown platform: $1" >&2; return 2 ;;
+  esac
+}
+
+# The shards of leg $2 of platform $1, one per line.
+leg_shards() {
+  local row
+  while read -r row; do
+    [ "$(field "$row" 1)" = "$2" ] || continue
+    field "$row" 2 | tr , '\n'
+    echo
+    return 0
+  done < <(legs_of "$1")
+  echo "unknown $1 leg: $2" >&2
+  return 2
+}
+
+# The build-cache key name of leg $2 of platform $1: go-xos for the full leg, go-xos-SHARD when
+# every shard of the leg uses SHARD's cache, else go-xos-LEG. The key's OS part keeps the platforms
+# apart.
+leg_cache() {
+  local shards shard owners
+  if [ "$2" = "$(full_leg "$1")" ]; then printf 'go-xos'; return 0; fi
+  shards=$(leg_shards "$1" "$2") || return
+  owners=$(for shard in $shards; do cache_of "$shard"; echo; done | sort -u)
+  if [ "$(wc -l <<<"$owners")" = 1 ]; then printf 'go-xos-%s' "$owners"; else printf 'go-xos-%s' "$2"; fi
 }
 
 # $1 is -race, or empty for the packages of a build without it (the Windows legs, whose runner may
@@ -187,59 +268,96 @@ shard_args() {
 # The `go test` arguments of each shard of Windows leg $1, one shard per line, space-separated
 # (no argument holds a space).
 windows_args() {
-  local row shard args
-  local -a shards
-  for row in "${windows[@]}"; do
-    [ "$(field "$row" 1)" = "$1" ] || continue
-    IFS=, read -ra shards <<<"$(field "$row" 2)"
-    for shard in "${shards[@]}"; do
-      args=$(shard_args "$shard") || return
-      paste -sd' ' - <<<"$args"
-    done
-    return 0
+  local shards shard args
+  shards=$(leg_shards windows "$1") || return
+  for shard in $shards; do
+    args=$(shard_args "$shard") || return
+    paste -sd' ' - <<<"$args"
   done
-  echo "unknown Windows leg: $1" >&2
-  return 2
 }
 
-# The Windows legs against the shard table: leg names unique, every leg naming known shards, every
-# shard in exactly one leg, and exactly one leg holding `rest` (the row naming no package). Prints
-# every failure, then returns 1.
-validate_windows() {
-  local row name shard named= legs= dup fail=0
-  local -a shards
-  for row in "${windows[@]}"; do
-    legs+="$(field "$row" 1)"$'\n'
-    IFS=, read -ra shards <<<"$(field "$row" 2)"
-    for shard in "${shards[@]}"; do named+="$shard"$'\n'; done
+# The `go test` arguments of macOS leg $1, one command per line, space-separated: first every
+# whole package of the leg, a split package whose rows are all in the leg among them, then each row
+# of a split package whose other rows are in another leg.
+macos_args() {
+  local shards shard row sel split args whole= alone=
+  shards=$(leg_shards macos "$1") || return
+  split=$(split_packages)
+  for shard in $shards; do
+    row=$(printf '%s\n' "${table[@]}" | awk -v s="$shard" '$1 == s')
+    sel=$(field "$row" 3)
+    if [ -n "$sel" ] && grep -qxF -- "$sel" <<<"$split"; then
+      if [ -z "$(comm -23 <(split_rows "$sel") <(sort <<<"$shards"))" ]; then
+        whole+="$sel"$'\n'
+      else
+        alone+="$(shard_args "$shard" | paste -sd' ' -)"$'\n'
+      fi
+    else
+      args=$(shard_args "$shard") || return
+      whole+="$args"$'\n'
+    fi
   done
+  whole=$(sed '/^$/d' <<<"$whole" | awk '!seen[$0]++' | paste -sd' ' -)
+  if [ -n "$whole" ]; then printf '%s\n' "$whole"; fi
+  printf '%s' "$alone"
+}
+
+# The rows that split package $1 (its -run rows and its remainder), sorted.
+split_rows() {
+  printf '%s\n' "${table[@]}" | awk -v p="$1" '$3 == p {print $1}' | sort
+}
+
+# The legs of platform $1 against the shard table: leg names unique, every leg naming known shards,
+# every shard in exactly one leg, and exactly one leg holding `rest` (the row naming no package).
+# Prints every failure, then returns 1.
+validate_legs() {
+  local row name shard named= legs= dup fail=0
+  while read -r row; do
+    legs+="$(field "$row" 1)"$'\n'
+    named+="$(field "$row" 2 | tr , '\n')"$'\n'
+  done < <(legs_of "$1")
   if dup=$(sed '/^$/d' <<<"$legs" | sort | uniq -d) && [ -n "$dup" ]; then
-    echo "::error::Windows legs named twice: $dup"; fail=1
+    echo "::error::$1 legs named twice: $dup"; fail=1
   fi
   for row in "${table[@]}"; do
     name=$(field "$row" 1)
     if [ "$(grep -cxF -- "$name" <<<"$named")" != 1 ]; then
-      echo "::error::shard $name is in $(grep -cxF -- "$name" <<<"$named") Windows legs, not 1"; fail=1
+      echo "::error::shard $name is in $(grep -cxF -- "$name" <<<"$named") $1 legs, not 1"; fail=1
     fi
   done
   for shard in $(sed '/^$/d' <<<"$named"); do
     if ! printf '%s\n' "${table[@]}" | awk -v s="$shard" '$1 == s {f=1} END {exit !f}'; then
-      echo "::error::Windows legs name an unknown shard: $shard"; fail=1
+      echo "::error::$1 legs name an unknown shard: $shard"; fail=1
     fi
   done
-  if [ "$fail" = 0 ] && [ -z "$(full_leg)" ]; then
-    echo "::error::no Windows leg holds the shard naming no package"; fail=1
+  if [ "$fail" = 0 ] && [ -z "$(full_leg "$1")" ]; then
+    echo "::error::no $1 leg holds the shard naming no package"; fail=1
   fi
   return "$fail"
 }
 
-# The Windows leg holding the shard that names no package (`rest`).
+# The leg of platform $1 holding the shard that names no package (`rest`).
 full_leg() {
   local row rest
   rest=$(printf '%s\n' "${table[@]}" | awk '$3 == "-" {print $1}')
-  for row in "${windows[@]}"; do
+  while read -r row; do
     if tr , '\n' <<<"$(field "$row" 2)" | grep -qxF -- "$rest"; then field "$row" 1; echo; fi
-  done
+  done < <(legs_of "$1")
+}
+
+# The legs of platform $1 as the JSON matrix of ci.yml `go-xos` on runner $2.
+legs_matrix() {
+  local row leg full scope sep=
+  full=$(full_leg "$1")
+  printf '['
+  while read -r row; do
+    leg=$(field "$row" 1)
+    scope=leg
+    if [ "$leg" = "$full" ]; then scope=full; fi
+    printf '%s{"os":"%s","runner":"%s","scope":"%s","leg":"%s","cache":"%s"}' "$sep" "$2" "$2" "$scope" "$leg" "$(leg_cache "$1" "$leg")"
+    sep=,
+  done < <(legs_of "$1")
+  printf ']\n'
 }
 
 # The checks of the table that need only the package list ($ALL). Prints every failure, then
@@ -275,6 +393,22 @@ validate() {
   if dup=$(sed '/^$/d' <<<"$names" | sort | uniq -d) && [ -n "$dup" ]; then
     echo "::error::shard names used twice: $dup"; fail=1
   fi
+  # A shared build cache: the owner exists, keeps its own, and runs the same packages on the same
+  # runner, so the entries one shard saves are the ones the others use.
+  local owner other
+  for row in "${table[@]}"; do
+    name=$(field "$row" 1)
+    owner=$(field "$row" 5)
+    [ -n "$owner" ] || continue
+    other=$(printf '%s\n' "${table[@]}" | awk -v s="$owner" '$1 == s')
+    if [ -z "$other" ]; then
+      echo "::error::shard $name shares the build cache of an unknown shard: $owner"; fail=1
+    elif [ "$(field "$other" 5)" != "" ]; then
+      echo "::error::shard $name shares the build cache of $owner, which shares another's"; fail=1
+    elif [ "$(field "$other" 2)" != "$(field "$row" 2)" ] || [ "$(field "$other" 3)" != "$(field "$row" 3)" ]; then
+      echo "::error::shard $name shares the build cache of $owner, which runs other packages or on another runner"; fail=1
+    fi
+  done
   if [ "$globals" != 1 ]; then
     echo "::error::$globals rows name no package, not 1"; fail=1
   fi
@@ -301,7 +435,8 @@ validate() {
 check() {
   local row pkg run tests n rest_n fail=0
   validate || fail=1
-  validate_windows || fail=1
+  validate_legs windows || fail=1
+  validate_legs macos || fail=1
   # Tests of each split package: every row selects something, no test twice.
   for pkg in $(split_packages); do
     tests=$(go test -race -list . "$pkg" | grep -E '^(Test|Fuzz|Example)' || true)
@@ -336,10 +471,13 @@ check() {
   done
   [ "$fail" = 0 ] || return 1
   for row in "${table[@]}"; do
-    echo "shard $(field "$row" 1) ($(field "$row" 2)): $(shard_args "$(field "$row" 1)" | paste -sd' ' -)"
+    echo "shard $(field "$row" 1) ($(field "$row" 2), cache go-race-$(cache_of "$(field "$row" 1)")): $(shard_args "$(field "$row" 1)" | paste -sd' ' -)"
   done
   for row in "${windows[@]}"; do
-    echo "Windows leg $(field "$row" 1): $(field "$row" 2)"
+    echo "Windows leg $(field "$row" 1) (cache $(leg_cache windows "$(field "$row" 1)")): $(field "$row" 2)"
+  done
+  for row in "${macos[@]}"; do
+    echo "macOS leg $(field "$row" 1) (cache $(leg_cache macos "$(field "$row" 1)")): $(macos_args "$(field "$row" 1)" | sed 's/^/go test /' | paste -sd';' -)"
   done
 }
 
@@ -347,7 +485,8 @@ check() {
 # validate must accept it.
 self_test() {
   local fail=0 got
-  if ! validate_windows; then echo "self-test: the Windows legs do not cover the shard table"; fail=1; fi
+  if ! validate_legs windows; then echo "self-test: the Windows legs do not cover the shard table"; fail=1; fi
+  if ! validate_legs macos; then echo "self-test: the macOS legs do not cover the shard table"; fail=1; fi
   ALL=$(printf '%s\n' ./a ./a/b ./ab ./c ./d)
   expect() {  # expect ok|fail DESCRIPTION ROW...
     local want=$1 what=$2 verdict=ok
@@ -368,6 +507,11 @@ self_test() {
   expect fail "prefix covering a split"     "s r ./a ^TestX\$" "s-rest r ./a -" "w r ./a/... -" "rest r - -"
   expect fail "split with no remainder"     "s r ./a ^TestX\$" "rest r - -"
   expect fail "-run row with a prefix"      "s r ./a/... ^TestX\$" "s-rest r ./a -" "rest r - -"
+  expect ok   "shared build cache"          "s r ./a ^TestX\$ s-rest" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of an unknown shard"   "s r ./a ^TestX\$ nope" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of a sharing shard"    "s r ./a ^TestX\$ t" "t r ./a ^TestY\$ s-rest" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of other packages"     "s r ./a ^TestX\$ c" "s-rest r ./a - -" "c r ./c - -" "rest r - -"
+  expect fail "cache on another runner"     "s r ./a ^TestX\$ s-rest" "s-rest q ./a - -" "rest r - -"
   table=("x r ./a/...,./c -" "rest r - -")
   got=$(shard_args x | paste -sd' ' -)
   if [ "$got" != "./a ./a/b ./c" ]; then echo "self-test: x expands to '$got', want './a ./a/b ./c'"; fail=1; fi
@@ -390,7 +534,7 @@ self_test() {
     local want=$1 what=$2 verdict=ok
     shift 2
     windows=("$@")
-    validate_windows >/dev/null 2>&1 || verdict=fail
+    validate_legs windows >/dev/null 2>&1 || verdict=fail
     if [ "$verdict" != "$want" ]; then echo "self-test: $what: validate_windows says $verdict, want $want"; fail=1; fi
   }
   expect_windows ok   "every shard once"        "x a,b" "y rest"
@@ -399,13 +543,32 @@ self_test() {
   expect_windows fail "unknown shard"           "x a,b,c" "y rest"
   expect_windows fail "leg named twice"         "x a,b" "x rest"
   windows=("x a,b" "y rest")
-  got=$(full_leg)
+  got=$(full_leg windows)
   if [ "$got" != y ]; then echo "self-test: the full Windows leg is '$got', want y"; fail=1; fi
+  table=("a r ./a ^TestX\$ b" "b r ./a - -" "c r ./c - -" "rest r - -")
+  windows=("x a,b" "z c" "w a,c" "y rest")
+  got=$(for leg in x z w y; do leg_cache windows "$leg"; echo; done | paste -sd' ' -)
+  if [ "$got" != "go-xos-b go-xos-c go-xos-w go-xos" ]; then echo "self-test: Windows leg caches are '$got'"; fail=1; fi
+  table=("a r ./a -" "b r ./b -" "rest r - -")
+  windows=("x a,b" "y rest")
   ALL=$(printf '%s\n' ./a ./b ./c ./d)
   got=$(windows_args x)
   if [ "$got" != $'./a\n./b' ]; then echo "self-test: Windows leg x runs '$got'"; fail=1; fi
   got=$(windows_args y)
   if [ "$got" != "./c ./d" ]; then echo "self-test: Windows leg y runs '$got'"; fail=1; fi
+  # A macOS leg runs its whole packages in one go test, a split package whose rows are all in the
+  # leg among them, and the rows of a split package whose other rows are elsewhere one by one.
+  table=("s r ./a ^TestX\$" "t r ./a ^TestY\$" "s-rest r ./a -" "b r ./b -" "rest r - -")
+  macos=("x s,s-rest,b" "y t,rest")
+  got=$(macos_args x)
+  if [ "$got" != $'./b\n-run ^TestX$ ./a\n-skip ^TestX$|^TestY$ ./a' ]; then echo "self-test: macOS leg x runs '$got'"; fail=1; fi
+  macos=("x s,t,s-rest,b" "y rest")
+  got=$(macos_args x)
+  if [ "$got" != "./a ./b" ]; then echo "self-test: macOS leg x runs '$got', want './a ./b'"; fail=1; fi
+  got=$(macos_args y)
+  if [ "$got" != "./c ./d" ]; then echo "self-test: macOS leg y runs '$got', want './c ./d'"; fail=1; fi
+  got=$(legs_matrix macos m | jq -c '[.[] | [.leg, .scope, .cache]]')
+  if [ "$got" != '[["x","leg","go-xos-x"],["y","full","go-xos"]]' ]; then echo "self-test: macOS matrix is '$got'"; fail=1; fi
   if [ "$fail" = 0 ]; then echo "self-test: ok"; fi
   return "$fail"
 }
@@ -415,28 +578,18 @@ case "${1:-}" in
     sep=
     printf '['
     for row in "${table[@]}"; do
-      printf '%s{"shard":"%s","runner":"%s"}' "$sep" "$(field "$row" 1)" "$(field "$row" 2)"
+      printf '%s{"shard":"%s","runner":"%s","cache":"go-race-%s"}' "$sep" "$(field "$row" 1)" "$(field "$row" 2)" "$(cache_of "$(field "$row" 1)")"
       sep=,
     done
     printf ']\n'
     ;;
-  --windows-matrix)
-    full=$(full_leg)
-    sep=
-    printf '['
-    for row in "${windows[@]}"; do
-      leg=$(field "$row" 1)
-      scope=leg
-      if [ "$leg" = "$full" ]; then scope=full; fi
-      printf '%s{"os":"windows-latest","runner":"windows-latest","scope":"%s","leg":"%s"}' "$sep" "$scope" "$leg"
-      sep=,
-    done
-    printf ']\n'
-    ;;
+  --windows-matrix) legs_matrix windows windows-latest ;;
+  --macos-matrix) legs_matrix macos macos-latest ;;
   --windows) [ -n "${2:-}" ] || { echo "--windows needs a leg" >&2; exit 2; }; load_packages; windows_args "$2" ;;
+  --macos) [ -n "${2:-}" ] || { echo "--macos needs a leg" >&2; exit 2; }; load_packages; macos_args "$2" ;;
   --self-test) self_test ;;
   --arm64-extra) load_packages -race; arm64_extra ;;
   --check) load_packages -race; check ;;
-  ''|-*) sed -n '2,11s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
+  ''|-*) sed -n '2,13s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
   *) load_packages -race; shard_args "$1" ;;
 esac

@@ -15,16 +15,16 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 |---|---|---|---|---|
 | Headers, links, format, vet, shard check | every `.go` file's license header, `go test ./docs` (every Markdown file's relative links and anchors; every test that reads `docs/` does so through `docs.Path`), `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | headers and links: always; PR: format if any module selected, main vet/shards if main selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-lint` |
 | Docs tier (`TestDocs*`) | the tests that read pages under `docs/`: the generated option, synopsis, log-event, run report and counter blocks, and the messages `docs/troubleshooting.md` quotes ([docs tier](#docs-tier)) | PR: pages under `docs/` changed and no main-module input; main, dispatch: always | ubuntu-latest | `ci.yml` `go-docs` |
-| Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
+| Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(remote-crash)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
-| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
+| Release gate | on the tag SHA: the race shards of the main module, every one on amd64, and `go vet`, the shard check and the race tests of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests (SHARD)`, `go-tests (vet-reader)`, `build` |
 | Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
 | Cross-OS tier, linux/arm64 | PR: packages not already raced on arm64; full validation: every selected module without `-race`; [platform skips](#cross-os) | PR: main selected or platform escalation; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-xos (ubuntu-24.04-arm)` |
-| Cross-OS default tier, macOS | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
+| Cross-OS default tier, macOS | every selected module without `-race`, in two legs ([macOS legs](#macos-legs)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest, listing)`, `(macos-latest, rest)`; `nightly.yml` `go-xos-macos (LEG)` |
 | Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest, LEG)` ([Windows legs](#windows-legs)); `nightly.yml` `go-xos-windows (LEG)` |
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
@@ -159,18 +159,25 @@ modules (the root, `objfile`, `reader`).
 | Cache | Path | Key | Restores from |
 |---|---|---|---|
 | module | `GOMODCACHE` | `go-mod-OS-ARCH-DEPS`, one per runner OS and architecture, shared by every job | the exact key, else the newest `go-mod-OS-ARCH-` |
-| build | `GOCACHE` | `go-build-OS-ARCH-JOB-DEPS-SHA`, JOB the job (and race shard) | the exact key, else the job's newest with the same DEPS, else the job's newest |
+| build | `GOCACHE` | `go-build-OS-ARCH-JOB-DEPS-SHA`, JOB the job, or the cache the [shard table](#race-shards) names for a race shard or Windows leg | the exact key, else the job's newest with the same DEPS, else the job's newest |
 
-Only a push to `main` saves, each cache when the job ends; a pull request, the nightly jobs and stress
-dispatches restore without saving. A saved key is never overwritten, so concurrent saves of the shared
-module key keep the first and the rest only log a warning. A job on `main` that finds no exact module key
+Only a push to `main` saves: the module cache when the job ends, the build cache in the job's last step,
+[`.github/actions/save-go-cache`](../../.github/actions/save-go-cache/action.yml); a pull request, the nightly
+jobs and stress dispatches restore without saving. The build cache is saved trimmed to the entries the job
+used: `setup-go` sets every restored entry's modification time a day back and `save-go-cache` deletes the
+index entries the go command did not refresh by looking them up or writing them, then the outputs no
+remaining index entry names ([`scripts/ci/go-build-cache.sh`](../../scripts/ci/go-build-cache.sh); the reasoning
+is in [CI architecture](../ops/dev/CI.md#go-caches)). The trim runs on every event and writes the entries and
+MiB it kept to the step summary; the script's `--self-test` runs in the `changes` job. A saved key is never overwritten, so concurrent saves of a shared key (the
+module key, or a build key the race shards of one package share) keep the first and the rest only log a warning. A job on `main` that finds no exact module key
 runs `go mod download all` in all three modules before it can save one: the jobs build different module
 graphs (the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed,
 which an exact hit never repairs. `all`, not the build list alone: `go mod tidy -diff` in `go-lint` also loads
 the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). The download runs
 on a copy of the three modules' `go.mod` and `go.sum` in the repository layout (the root module replaces the
 reader with `./reader`, resolved relative to it), since it adds the hashes it fetches to `go.sum` and the
-checkout must stay as committed for `go mod tidy -diff`. A job that fails saves nothing.
+checkout must stay as committed for `go mod tidy -diff`. It is tried three times, 20 s apart. A job that fails
+saves nothing.
 
 Retention: `cache-maintenance.yml` runs [`scripts/ci/cache-prune.sh`](../../scripts/ci/cache-prune.sh)
 after main CI (passed or not), on CodeQL completion events, hourly, and on manual dispatch. The
@@ -192,16 +199,17 @@ amd64 nightly. Their additional non-race platform runs are full-validation work,
 The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
 `changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
 
-| shard | `go test -race` arguments | runner |
-|---|---|---|
-| `crash` | `-run '^TestCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm |
-| `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm |
-| `listing-rest` | `-skip` the two patterns above, `./internal/listing` | ubuntu-24.04-arm |
-| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm |
-| `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm |
-| `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest |
-| `rest-source` | `./internal/source/...` | ubuntu-latest |
-| `rest` | every package no row names (a new package lands here) | ubuntu-latest |
+| shard | `go test -race` arguments | runner | build cache |
+|---|---|---|---|
+| `crash` | `-run '^TestCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm | `listing-rest`'s |
+| `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm | `listing-rest`'s |
+| `remote-crash` | `-run '^TestRemoteCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm | `listing-rest`'s |
+| `listing-rest` | `-skip` the three patterns above, `./internal/listing` | ubuntu-24.04-arm | `go-race-listing-rest` |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm | `cmd`'s |
+| `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm | `go-race-cmd` |
+| `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest | `go-race-rest-replay` |
+| `rest-source` | `./internal/source/...` | ubuntu-latest | `go-race-rest-source` |
+| `rest` | every package no row names (a new package lands here) | ubuntu-latest | `go-race-rest` |
 
 The four `TestSIGKILL*` matrices and the three long subprocess-only forced-exit tests call
 `t.Parallel` after building their private binaries. Each owns its fake services, child-process
@@ -224,6 +232,9 @@ whole-package row selects a split package, a split package has no remainder row 
 package (pattern or remainder) selects no test, or a test of a split package is selected twice. Whole-package
 rows are checked for packages, not tests: a row whose packages have no tests (`./internal/faults` alone,
 say) passes and runs nothing.
+It also fails a row that shares the build cache of a row that is unknown, shares another's itself, or runs other
+packages or on another runner: shards share a cache only when they build the same test binary (the
+`cmd/swath` shards' tests also build the swath binary with the `swathtest` tag, and `cmd`'s without it as well).
 `--self-test`, also in `go-lint`, runs these table checks against synthetic package lists, with no Go. A new
 package needs no edit; a new `-run` row needs its package's remainder to stay nonempty.
 
@@ -231,20 +242,47 @@ package needs no edit; a new `-run` row needs its package's remainder to stay no
 
 Windows runs the suite without `-race` about three times slower than macOS. `internal/listing` took 17
 minutes alone there and 28 beside the other packages, `cmd/swath` about 10 (2026-11-16), so the full
-Windows run is split into legs along the race shards. The second table in `go-race-shards.sh` names each
+Windows run is split into legs along the race shards, one long shard per leg: with several long shards to a
+leg, the slowest leg took a median 17.6 minutes and was the critical path of every `main` push. The second table in `go-race-shards.sh` names each
 leg's shards; `changes` expands it into the Windows rows of the `go-xos` matrix (`--windows-matrix`), and a
 leg runs one `go test` per shard, in order, with the arguments `--windows LEG` prints (the packages listed
 without `-race`, which needs cgo the runner may lack):
 
-| leg | race shards | also |
-|---|---|---|
-| `listing-rest` | `listing-rest` | |
-| `cmd` | `cmd-kill`, `cmd` | |
-| `matrices-rest` | `crash`, `durable`, `rest-replay`, `rest-source`, `rest` | `go vet ./...`, the selected nested modules |
+| leg | race shards | also | build cache |
+|---|---|---|---|
+| `crash` | `crash` | | `go-xos-listing-rest` |
+| `durable` | `durable` | | `go-xos-listing-rest` |
+| `remote-crash` | `remote-crash` | | `go-xos-listing-rest` |
+| `listing-rest` | `listing-rest` | | `go-xos-listing-rest` |
+| `cmd-kill` | `cmd-kill` | | `go-xos-cmd` |
+| `cmd` | `cmd` | | `go-xos-cmd` |
+| `rest` | `rest-replay`, `rest-source`, `rest` | `go vet ./...`, the selected nested modules | `go-xos` |
 
 `--check` and `--self-test` fail unless every shard is in exactly one leg and one leg holds `rest`. That
-leg keeps the `go-xos` build cache, which Windows `go-stress.yml` runs restore; the others' are `go-xos-LEG`.
-`nightly.yml` `go-xos-windows` runs the same legs, each restoring its leg's cache.
+leg keeps the `go-xos` build cache, which Windows `go-stress.yml` runs restore; another leg uses
+`go-xos-SHARD` when all its shards use SHARD's cache in the table above, else `go-xos-LEG`
+(`--windows-matrix` names it). `nightly.yml` `go-xos-windows` runs the same legs, each restoring its leg's cache.
+
+#### macOS legs
+
+macOS ran its full suite in one job, `internal/listing` and `cmd/swath` side by side on three vCPUs, and
+after the Windows legs above it was the critical job of a full run (14.5 to 15.7 minutes, 2026-11-17); alone,
+without `-race`, `internal/listing` takes about 5.4 minutes of test time there and `cmd/swath` 9.2. A third
+table in `go-race-shards.sh` splits it in two legs, `changes` expands it into the macOS rows of the `go-xos`
+matrix (`--macos-matrix`), and a leg runs the commands `--macos LEG` prints. Unlike a Windows leg, a macOS
+leg runs its packages in one `go test`, side by side as the single job did, and a split package whose rows
+are all in the leg runs whole, all its tests in one process:
+
+| leg | race shards | runs | also | build cache |
+|---|---|---|---|---|
+| `listing` | `crash`, `durable`, `remote-crash`, `listing-rest` | `go test ./internal/listing` | | `go-xos-listing-rest` |
+| `rest` | `cmd-kill`, `cmd`, `rest-replay`, `rest-source`, `rest` | `go test` of every other package | `go vet ./...`, the selected nested modules | `go-xos` |
+
+`--check` and `--self-test` hold this table to the same rules as the Windows one. The cache keys name the
+runner's OS, so the macOS and Windows `go-xos-listing-rest` caches are separate families. `go-stress.yml` on
+macOS or Windows restores `go-xos-listing-rest` for `./internal/listing` and `go-xos` otherwise.
+`nightly.yml` `go-xos-macos` runs the same legs. The two legs print the same 80 package results as the single
+job did; their times are in [measurements](measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17).
 
 The heavy packages race on arm64 only: its weaker memory model makes it the better race target, and the same
 `-race` suite took about 30 % less time there than on amd64 (`internal/listing` 490 s against 700 s). The
@@ -259,7 +297,8 @@ packages already raced on arm64 (`internal/listing` and `cmd/swath`) are exclude
 packages, including the architecture-sensitive Parquet encoder tests, retain arm64 runtime coverage.
 The list comes from the shard table rather than a second list of package names.
 
-Escalated PRs run selected modules in full on Linux arm64, macOS and Windows. Main and dispatch
+Escalated PRs run selected modules in full on Linux arm64, macOS and Windows, macOS and Windows in
+the legs above. Main and dispatch
 run all three modules on all three runners. Nightly also repeats the main module on macOS and
 Windows. The platform rules and manual `ci:full` override are described under
 [change detection](#change-detection). Cross-compilation remains on every selected module's PR.
@@ -303,14 +342,14 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | Job | Runs | On dispatch |
 |---|---|---|
 | `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | `all`, `go-race-nightly` |
-| `go-xos-macos` | on macos-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, main module only; `ci.yml` full validation also includes nested modules | `all`, `go-xos-macos` |
+| `go-xos-macos` | on macos-latest, the main module in `ci.yml`'s [macOS legs](#macos-legs) (`go-xos-macos (LEG)`): `go test -count=1 -timeout 25m` with the arguments of each leg, and `go vet ./...` on the leg holding `rest`; `ci.yml` full validation also includes nested modules | `all`, `go-xos-macos` |
 | `go-xos-windows` | on windows-latest, the main module in `ci.yml`'s [Windows legs](#windows-legs) (`go-xos-windows (LEG)`): `go test -count=1 -timeout 25m` once per race shard of the leg, and `go vet ./...` on the leg holding `rest`; `ci.yml` full validation also includes nested modules | `all`, `go-xos-windows` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `osv-scan` | builds both `Dockerfile` images for the runner's architecture (no push) and runs `scripts/ci/osv-scan.sh` on them; the raw reports are the `osv-image-reports` artifact | `all`, `osv-scan` |
 
 The four Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
 cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on the matching platform
-(`go-xos-macos`; `go-xos-windows`, the cache of its leg) or `go-nonrace` (`go-shapes`).
+(`go-xos-macos` and `go-xos-windows`, the cache of their leg) or `go-nonrace` (`go-shapes`).
 
 `osv-scan` is the Go dependency scan: osv-scanner reads the Go version and module list embedded in each image's
 binary (the archives carry the same binaries), so it covers the standard library and every linked module, and
@@ -366,15 +405,17 @@ before and after the change when it fixes a flake, as #300 does.
 ### Release
 
 `release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
-`main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (`go vet ./...`
-and `go test -race -count=1 -timeout 40m ./...` unsharded on amd64, then `go vet` and the race tests of
-`reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
+`main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (one leg per
+[race shard](#race-shards) at the tag, every one on amd64, each shard's `-json` stream the
+`go-race-release-SHARD` artifact, and a `vet-reader` leg: `go vet` of the main and reader modules,
+`go-race-shards.sh --check` and the race tests of `reader`; its legs' times are in
+[measurements](measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)) and `build` (`scripts/ci/release-assets.sh
 build`: `build.sh` for the five targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
 `--version` exactly the tag's version and commit, and the [license gate](#license-gate); the archives, an SBOM,
 `SHA256SUMS`), then `publish` (both
 `Dockerfile` images from the archived binaries, smoked by digest, assets and images signed, attested and
 verified), which runs only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`.
-It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: `source` requires a
+It does not rerun `ci.yml`'s cross-OS legs, the `objfile` module or the fixture tier: `source` requires a
 successful `go-full-gate` from that exact SHA's main push run ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
 Dependabot raises the Go modules and the `Dockerfile`'s pinned images weekly; [CI.md](../ops/dev/CI.md) says what it leaves to hand.
@@ -407,7 +448,7 @@ explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the s
 | Method | Where | What it does | When it runs |
 |---|---|---|---|
 | `TestCrashMatrix` | `internal/listing` | an injected crash at selected occurrences of each `faults.Points` point (S3: 1st, 4th, 12th; GCS and Azure Blob: 1st, 3rd, 7th), then resume: byte-identical to an uninterrupted run, row-identical in the arms with time cuts on | `go-race (crash)`; `go-race-nightly`; `go-xos` on macOS and Windows |
-| `TestRemoteCrashMatrix` | `internal/listing` | a dataset written to the GCS fake (`objfile/gcs/gcsfake`) to the S3 fake (`objfile/s3/s3fake`, 4 KiB parts, so each part is a multipart upload) and to the Azure fake (`objfile/azblob/azfake`, 4 KiB blocks, so each part is blocks staged and a block list), killed at the 1st and 3rd occurrence of each point of a remote run (the listing's, `allocated`, `upload-chunk`, `upload-completed`, the claim's and the record's, `candidate-saved`, `manifest-put`, `manifest-created`, `manifest`), spill off and on, then resumed: the local run's parts byte for byte, no orphan left; the other remote tests ([durability.md](durability.md#a-dataset-in-a-bucket)) beside it | `go-race (listing-rest)`; `go-race-nightly`; `go-xos` on Windows |
+| `TestRemoteCrashMatrix` | `internal/listing` | a dataset written to the GCS fake (`objfile/gcs/gcsfake`) to the S3 fake (`objfile/s3/s3fake`, 4 KiB parts, so each part is a multipart upload) and to the Azure fake (`objfile/azblob/azfake`, 4 KiB blocks, so each part is blocks staged and a block list), killed at the 1st and 3rd occurrence of each point of a remote run (the listing's, `allocated`, `upload-chunk`, `upload-completed`, the claim's and the record's, `candidate-saved`, `manifest-put`, `manifest-created`, `manifest`), spill off and on, then resumed: the local run's parts byte for byte, no orphan left; the other remote tests ([durability.md](durability.md#a-dataset-in-a-bucket)) beside it | `go-race (remote-crash)`, the other remote tests `(listing-rest)`; `go-race-nightly`; `go-xos` on Windows |
 | `TestRemoteResumeMovedWorkDir` | `internal/listing` | per destination fake, a run with durable spill killed at its first retirement (parts recorded, certificates sealed), its work directory copied to another path (`os.CopyFS`) and the original removed; the resume from the copy commits the local run's parts byte for byte, leaves no object but those the crashed attempt allocated and never recorded creating (an upload in flight at the kill; at most the report's `orphans_unproven`), verifies every retained part, replays certificates (a kill that leaves none to replay is tried again, at most six times), and creates nothing at the original path | `go-race (listing-rest)`; `go-race-nightly`; `go-xos` on Windows |
 | `TestDurable*`, `TestDiskFaultMatrix` | `internal/listing` | the durable spill's kill matrix (torn writes, lost unsynced state), repeated recovery, ledger damage, ENOSPC and EIO at each write and fsync, the run report's after the commit included | `go-race (durable)`; nightly; macOS; Windows |
 | `TestVersionsDurableSpill`, `TestDurableVersions`, `TestVersionsSegmentsReadDurableFiles` | `internal/listing` | the durable spill with `--all-versions`: kills at a seal, a ledger append, an unlink, a part claim, mid recovery; the segment tail reading durable files | `go-race (listing-rest)` and `(durable)`; nightly; macOS |

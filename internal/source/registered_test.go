@@ -308,22 +308,23 @@ func TestRegisteredLocators(t *testing.T) {
 			if got, err := f.KeyPrefix(c.root); err != nil || got != prefix {
 				t.Errorf("prefix=%q err=%v", got, err)
 			}
-			if f.WithPrefix != nil {
-				const replacement = "new/%2F+?q#f&=value"
-				root := f.WithPrefix(c.root, replacement)
-				if want := strings.TrimSuffix(c.root, prefix) + replacement; root != want {
-					t.Errorf("root=%q want=%q", root, want)
+			if f.WithPrefix == nil {
+				t.Fatal("no WithPrefix: an --include cannot narrow the listing")
+			}
+			const replacement = "new/%2F+?q#f&=value"
+			root := f.WithPrefix(c.root, replacement)
+			if want := strings.TrimSuffix(c.root, prefix) + replacement; root != want {
+				t.Errorf("root=%q want=%q", root, want)
+			}
+			if got, err := f.KeyPrefix(root); err != nil || got != replacement {
+				t.Errorf("new prefix=%q err=%v", got, err)
+			}
+			for _, invalid := range []string{"invalid", strings.Split(c.root, "://")[0] + ":///prefix"} {
+				if got := f.WithPrefix(invalid, replacement); got != invalid {
+					t.Errorf("invalid root=%q changed to %q", invalid, got)
 				}
-				if got, err := f.KeyPrefix(root); err != nil || got != replacement {
-					t.Errorf("new prefix=%q err=%v", got, err)
-				}
-				for _, invalid := range []string{"invalid", strings.Split(c.root, "://")[0] + ":///prefix"} {
-					if got := f.WithPrefix(invalid, replacement); got != invalid {
-						t.Errorf("invalid root=%q changed to %q", invalid, got)
-					}
-					if _, err := f.KeyPrefix(invalid); err == nil {
-						t.Errorf("invalid root=%q accepted", invalid)
-					}
+				if _, err := f.KeyPrefix(invalid); err == nil {
+					t.Errorf("invalid root=%q accepted", invalid)
 				}
 			}
 		})

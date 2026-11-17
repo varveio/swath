@@ -122,7 +122,7 @@ class PolicyTests(unittest.TestCase):
             (['docs/replay-provider-expectations.json'], {'go', 'fixtures'}),
             (['docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),
             (['docs/style.md'], set()),
-            (['docs/ops/dev/go-release-copy-checklist.md'], set()),
+            (['docs/ops/dev/RELEASE_NOTES.md'], set()),
             (['docs/ops/dev/CI.md'], set()),
             # The light directories select nothing whatever the file type: docs.Path refuses
             # them and docs/readers_test.go refuses any other read of docs/.
@@ -310,12 +310,16 @@ exit 2
     def test_actual_xos_matrix(self):
         windows = json.loads(subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--windows-matrix'], text=True))
-        # One Windows leg is the full one (vet, nested modules); the others run shards only.
-        self.assertEqual(sorted(row['scope'] for row in windows),
-                         ['full'] + ['leg'] * (len(windows) - 1))
+        macos = json.loads(subprocess.check_output(
+            [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--macos-matrix'], text=True))
+        # One leg per platform is the full one (vet, nested modules); the others run shards only.
+        for legs in [windows, macos]:
+            self.assertEqual(sorted(row['scope'] for row in legs),
+                             ['full'] + ['leg'] * (len(legs) - 1))
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'output'
-            full = ['macos-latest'] + ['windows-latest'] * len(windows) + ['ubuntu-24.04-arm']
+            full = (['macos-latest'] * len(macos) + ['windows-latest'] * len(windows)
+                    + ['ubuntu-24.04-arm'])
             for main, any_module, platforms, expected, scopes in [
                 ('true', 'true', 'false', ['ubuntu-24.04-arm'], {'extra'}),
                 ('true', 'true', 'true', full, {'full', 'leg'}),
@@ -333,6 +337,8 @@ exit 2
                 self.assertEqual({row['scope'] for row in matrix}, scopes)
                 self.assertEqual([row for row in matrix if row['os'] == 'windows-latest'],
                                  windows if platforms == 'true' else [])
+                self.assertEqual([row for row in matrix if row['os'] == 'macos-latest'],
+                                 macos if platforms == 'true' else [])
 
     def test_full_gate_refuses_partial_or_failed_validation(self):
         flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs')
@@ -341,8 +347,10 @@ exit 2
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
         windows = json.loads(subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--windows-matrix'], text=True))
-        xos = [dict(os=os_name, runner=os_name, scope='full')
-               for os_name in ('macos-latest', 'ubuntu-24.04-arm')] + windows
+        macos = json.loads(subprocess.check_output(
+            [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--macos-matrix'], text=True))
+        arm = dict(os='ubuntu-24.04-arm', runner='ubuntu-24.04-arm', scope='full')
+        xos = macos + [arm] + windows
         selection['go_xos'] = json.dumps(xos)
 
         def check(selected, result='success'):
@@ -355,8 +363,10 @@ exit 2
             self.assertNotEqual(check(selection, result), 0)
         for omitted in flags:
             self.assertNotEqual(check(dict(selection, **{omitted: 'false'})), 0, omitted)
-        unsplit = xos[:2] + [dict(os='windows-latest', runner='windows-latest', scope='full')]
-        for bad_matrix in [xos[:2], xos[:-1], unsplit, [dict(row, scope='extra') for row in xos],
+        unsplit_windows = macos + [arm, dict(os='windows-latest', runner='windows-latest', scope='full')]
+        unsplit_macos = [dict(os='macos-latest', runner='macos-latest', scope='full'), arm] + windows
+        for bad_matrix in [macos + [arm], xos[:-1], xos[1:], unsplit_windows, unsplit_macos,
+                           [dict(row, scope='extra') for row in xos],
                            [dict(row, runner='ubuntu-latest') for row in xos]]:
             self.assertNotEqual(check(dict(selection, go_xos=json.dumps(bad_matrix))), 0)
         self.assertNotEqual(check(dict(selection, go_shards='[]')), 0)
@@ -367,6 +377,15 @@ exit 2
             section = WORKFLOW.split('  ' + gate + ':\n', 1)[1]
             needs = set(re.search(r'needs: \[(.*?)\]', section)[1].split(', '))
             self.assertTrue(go_jobs <= needs, (gate, go_jobs - needs))
+
+        # Every job that sets up Go ends by trimming its build cache and saving it on main: a job
+        # without that step would never save one, and its runs on main would build cold.
+        jobs = re.split(r'^  (?=[a-z0-9_-]+:\n)', WORKFLOW.split('\njobs:\n', 1)[1], flags=re.M)
+        go_setup = [job for job in jobs if 'uses: ./.github/actions/setup-go' in job]
+        self.assertTrue(go_setup)
+        for job in go_setup:
+            last = job.rstrip().rsplit('\n      - ', 1)[1]
+            self.assertIn('uses: ./.github/actions/save-go-cache', last, job.split(':', 1)[0])
 
         with tempfile.NamedTemporaryFile() as summary:
             for result in ['success', 'skipped', 'failure', 'cancelled']:

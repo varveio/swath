@@ -129,33 +129,16 @@ provider's caveats in the [schema registry](dataset.md#schema-registry) before c
 
 ## Verify a dataset
 
-`swath verify` is planned ([#391](https://github.com/varveio/swath/issues/391)); meanwhile, use
-[SeekParquet's validator](https://github.com/varveio/seekparquet) on a local copy (see the “Validating”
-section of its `go/README.md`). From the root of a SeekParquet checkout that includes `cmd/seekparquet`
-and supports this dataset's format (format version 0, draft revision 1), run the following. swath pins
-`github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the release that fixed draft revision 1; use that
-release (tag `go/v0.2.0`) or a later one with a matching format.
+`swath show DIR` says what a dataset holds and how completely it covers its source. To check that a copied or
+moved dataset's parts are the bytes its manifest committed, run this in the directory that holds
+`manifest.json`, with `jq` and `sha256sum`:
 
 ```bash
-go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
-go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
+jq -r '.parts[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum -c
 ```
 
-`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
-swath declares one for every part. `full` separately checks the format, key order and decoded pages
-(including the structural and profile levels); it does not check digests or swath's extension and
-schema semantics. Neither proves that the listing covers the source you intended.
-
-The validator exits 0 when all requested levels complete, 1 when any level fails, and 2 when validation
-is incomplete, cannot run, or the arguments are invalid. With `go run`, a nonzero validator status is
-printed as `exit status N`; the `go` command itself exits 1.
-
-For a dataset produced with local output, the repository also has
-[`verify.py`](../verify.py): `python3 verify.py /path/to/dataset` from the repository root, with
-DuckDB installed. It checks S3, GCS, Azure Blob and local datasets independently of the Go reader: swath
-metadata, schema-specific rules, row counts, key order and the manifest's part bounds, footer stamps and part
-SHA-256 digests; for Azure also the `azure` source kind and every part's column types and nullability,
-including UTC microsecond timestamps. It expects the producer's flat
-`data/part-NNNNN.parquet` layout and `run.json`, so it is not a general validator for a bucket dataset
-copied locally with its nested run/attempt part paths. See the [verifier guide](internals/testing.md#verifypy)
-for its checks and optional reference comparison.
+Each part prints `OK`, and the command exits 0, when every part matches; a part that differs prints `FAILED`
+and the command exits 1. A dataset with no parts (an empty listing) has nothing to check: `sha256sum` says
+`no properly formatted checksum lines found` and exits 1. Checking the format, the key order and the pages as
+well takes the contributor tools in [Validating a dataset](internals/parquet-output.md#validating-a-dataset);
+a `swath verify` command is tracked in [#391](https://github.com/varveio/swath/issues/391).

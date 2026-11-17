@@ -8,11 +8,39 @@ first.
 ## 1. Find where the space went
 
 ```bash
+swath du media
+```
+
+```text
+    size  files  share                        newest          path
+ 100 MiB      6   100%  ████████████████████  2026-11-02 CET  media
+64.8 MiB      2  64.5%  ████████████▉         2026-11-02        archive/
+64.0 MiB      1  63.7%  ████████████▋         2026-11-02          disk.img
+ 781 KiB      1   0.8%  ▏                     2026-11-02          (2 more)
+29.6 MiB      1  29.4%  █████▉                2026-11-02        videos/trip.mp4
+6.10 MiB      3   6.1%  █▏                    2026-11-02        photos/
+4.77 MiB      2   4.7%  ▉                     2026-11-02          2025/
+2.86 MiB      1   2.8%  ▌                     2026-11-02            beach.jpg
+1.91 MiB      1   1.9%  ▍                     2026-11-02            dunes.jpg
+1.34 MiB      1   1.3%  ▎                     2026-11-02          2026/snow.jpg
+  100 MiB in 6 files · 36.4 MiB on disk
+```
+
+On a terminal, bare `swath du` shows where the bytes are: the largest directories and files at any depth,
+largest first, each under its parent with its share of the total and the date of the newest file below it. A
+`(N more)` line counts the rest of a directory's entries, so the lines under a directory add up to it
+([the view](totals.md#the-view)). In a pipe it prints the total row only. This output comes from a terminal 100
+columns wide and 30 lines high.
+
+For the totals of every directory down to a fixed depth, a table on a terminal and TSV in a pipe for
+scripts, give `-d N`:
+
+```bash
 swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
@@ -22,21 +50,11 @@ swath du -d 1 media
 
 Each row totals everything below it, as `du` does: its files, its directories and their bytes. `-d 1` limits
 the breakdown to one level. It does not limit the walk: swath still reads the whole tree, and every row and
-the total include everything below them. Without `-d` you get the total alone. `--sort size` puts the largest
-first.
+the total include everything below them. `--sort size` puts the largest first.
 
-The sizes are apparent bytes, the length of each file as `ls -l` shows it; the last line adds the space the
-filesystem reports for the whole tree, on disk, close to what `du` prints. Here `archive/` holds a sparse
-64 MiB disk image that takes almost no disk space, and two names for one hard-linked file, counted once, as
-`du` counts it. `--allocated` shows the on-disk figure instead and sorts by it, and `-l` (`--count-links`)
-counts every name.
-[Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
-newest modification time ([Output](output.md#du-rows)).
-
-> [!NOTE]
-> 0.4.0-rc.2 counts a hard-linked file under each of its names: there `archive/` shows 65.5 MiB in 3 files and
-> the total 101 MiB in 7, and `--count-links-once` counts it once
-> ([differences in 0.4.0-rc.2](release-candidate.md)).
+The sizes are the files' lengths, and the last line adds the space on disk: here `archive/` holds a sparse disk
+image and one hard-linked file with two names, counted once ([How sizes are
+counted](totals.md#how-sizes-are-counted)). In a pipe the same totals are TSV ([Output](output.md#du-rows)).
 
 ## 2. List every entry
 
@@ -75,7 +93,9 @@ under both its names here), the time, and where the dataset went, then what to r
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest and `run.json`, the run report. Its 12 rows are 7 file names and 5 directories;
+manifest, `run.json` (the run report) and
+`.swath/` (the run's private workspace, which readers ignore)
+([layout](dataset.md#what-a-swath-dataset-is)). Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
 
 A complete run exits 0, as this one did. If swath cannot read some entries (a directory without permission),
@@ -97,7 +117,7 @@ media-inventory: complete
   listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
   contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
   coverage  nothing unreadable; no filters; no exclusions
-  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
+  storage   1 part, 4.05 KiB of Parquet (schema swath/local-entries/v1)
 ```
 
 `swath show` reads the manifest, not the rows. The first line is the verdict; then what was listed, when, what
@@ -110,13 +130,10 @@ reader ([Query an inventory](query.md)).
 
 ## 5. Total the saved inventory
 
-> [!NOTE]
-> Coming in 0.4.0: 0.4.0-rc.2 does not have `--from-dataset` and stops with `unknown flag --from-dataset`.
-
 The saved inventory answers step 1 again without walking the tree:
 
 ```bash
-swath du --from-dataset media-inventory -d 1
+swath du --from-dataset media-inventory
 ```
 
 It prints the totals of step 1 as they were when the tree was listed, and says on stderr when that was and
@@ -127,4 +144,4 @@ whether the listing was complete ([swath du](totals.md#totals-from-a-saved-datas
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
 - [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
 - [Query an inventory](query.md): read the saved inventory with DuckDB, pandas or Spark.
-- [Run large listings](running.md): size, watch, stop and resume a long run.
+- [Run large listings](running.md): list a bucket of your own start to finish.

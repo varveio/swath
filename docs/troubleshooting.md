@@ -5,16 +5,16 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 
 | Exit | Start with |
 |---|---|
-| 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
+| 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket or container does not exist](#the-bucket-or-container-does-not-exist), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
-| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](results.md#coverage-and-unreadable-entries) says which |
+| 3 | [entries could not be read](#entries-could-not-be-read); the dataset's [coverage](results.md#coverage-and-unreadable-entries) counts them |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
-| 124, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
+| 124, 129, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
 
-The first lines of the messages quoted under [Unknown flag](#unknown-flag), [The output directory is refused](#the-output-directory-is-refused)
-and [`-o` names a format](#-o-names-a-format-swath-does-not-write) are checked against the binary, with their
-exit code 2, by `TestDocsTroubleshootingMessages` in `go test ./cmd/swath`; the others are not.
+<!-- The first lines of the messages quoted under Unknown flag, The output directory is refused and
+-o names a format are checked against the binary, with their exit code 2, by TestDocsTroubleshootingMessages
+in go test ./cmd/swath; the others are not. -->
 
 ## Credentials could not be loaded
 
@@ -84,8 +84,9 @@ Exit 2. An option only one provider has carries its prefix (`--s3-region`, `--gc
 swath: unknown flag --summarize (the total alone is the default: --depth 0)
 ```
 
-A 0.3 option names what replaced it (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
-`--stall-timeout`, `--compression` is the `-o` name).
+Most options of 0.3.2 name what replaced them (`--force-path-style` is `--s3-path-style`, `--idle-timeout` is
+`--stall-timeout`, `--compression` is the `-o` name); the release notes'
+[moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0) gives the others.
 
 An option given for another provider's source is refused rather than ignored:
 
@@ -158,7 +159,7 @@ Write `.tsv` and convert it, or read the TSV directly ([Output](output.md#readin
 
 ## The run was interrupted
 
-A dataset run of an object store stopped by a signal (130, 143), `--max-duration` (124), `--stall-timeout`
+A dataset run of an object store stopped by a signal (129, 130, 143), `--max-duration` (124), `--stall-timeout`
 (75), a full disk or `--spill-wait-timeout` (74) keeps its published parts and journal. `swath show DIR` prints where it stopped,
 `swath resume DIR` continues it. A local tree, text output and `swath du` keep no journal: run them again.
 A text file (`-o FILE.tsv`) is written only when the listing finishes; a stopped run discards it, and its
@@ -175,7 +176,9 @@ swath: deadline: --max-duration reached (it cannot be resumed: run it again with
 |---|---|---|
 | exit 2, `--NAME is fixed for the run` | the option cannot change on resume | give only the options `swath resume --help` lists |
 | exit 2, identity mismatch | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `swath list --overwrite` |
+| exit 2, `this swath narrows the listing to the --include's literal prefix` | an Azure Blob run with a narrowing `--include` was started by 0.4.0, which listed the whole source | finish it with 0.4.0, or start over with `swath list --overwrite` |
 | exit 2, `nothing to resume` | no interrupted run in the directory | start a fresh `swath list` |
+| exit 2, `an interrupted run written by swath 0.3` | the directory holds a 0.3.2 run's state (`.swath-state.json` or `.swath/checkpoint.sqlite`) | `swath list ... --overwrite` replaces it |
 | exit 1, another swath process owns this output directory | a process still holds the output lock: the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |
 | exit 1, `cause` `protocol` | the service returned an invalid page; the run cannot be resumed | `swath list --overwrite` |
 | exit 1, journal version | the run was written by another build | finish with that build, or `--overwrite` |
@@ -192,7 +195,7 @@ never recorded.
 | exit 2, `-o gs://...` (or `s3://...`, `az://...`): `a dataset in a bucket needs --work-dir DIR` | the run has nowhere to keep its lock, journal and spill | give `--work-dir DIR`, a local directory of its own |
 | exit 2, `a credentials file ... is for a GCS destination`, `a profile and a region ... are for an S3 destination`, `a shared access signature ... is for an Azure destination` | a destination option of another provider | drop it, or give the one for the destination's provider |
 | exit 2, `the run in DIR was started with --output-azure-sas-token, which is never recorded` | the Azure destination's SAS is not in the journal | give `--output-azure-sas-token` to `swath resume DIR` again (a rotated one is fine) |
-| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([Running swath in production](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
+| an Azure destination's `AuthorizationPermissionMismatch` or `AuthorizationFailure` (403) | the SAS lacks a permission, or the Entra ID identity a data role ([writing to a bucket](production.md#writing-to-a-bucket)) | grant it, then `swath resume DIR` |
 | `authorized requests are not permitted for non-TLS protected (https) endpoints` | Entra ID (no `--output-azure-sas-token`) on an `http://` endpoint, such as an emulator's | give the emulator a SAS |
 | `destination: remote: destination configuration: ...` | the S3 destination's AWS configuration does not load: a missing `--output-s3-profile`, an unreadable CA bundle | fix the profile or the shared config files |
 | exit 2, `the destination already holds a dataset` | the prefix has a `manifest.json`; datasets in a bucket are not replaced | write to another prefix |
@@ -204,7 +207,7 @@ never recorded.
 | exit 1, `cause` `candidate_mismatch` | the work directory's saved manifest names other parts than the resume recovered (its journal lost the final record) and may still be created | read the prefix's manifest once no request can still be pending: if there is none, start over at a new prefix |
 | exit 1, `cause` `unsafe_layout` | something in the work directory's `.swath/remote/` is a link or not what swath made | inspect the work directory; start over with a new one |
 | a warning that the commit's aftermath is not finished | the dataset is committed, but deleting this run's leftover parts or writing `run.json` failed | `swath resume DIR` finishes it and exits 0 |
-| `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([Running swath in production](production.md#writing-to-a-bucket)) |
+| `output.remote.aborts_unconfirmed` above 0 (S3) | an aborted multipart upload's abort failed or could not be confirmed: its parts stay stored, unlisted and billed | nothing in the run: the bucket's lifecycle rule for incomplete multipart uploads removes them ([writing to a bucket](production.md#writing-to-a-bucket)) |
 
 Errors never quote a resumable upload's session URL (its query is a credential for the upload), an S3
 multipart upload's id, an Azure destination's SAS or its block ids: a URL in an error shows its scheme, host and
@@ -276,7 +279,7 @@ swath: spill cap too small: listing has waited on the output for 2m0s: the spill
 With a `--spill-budget` the remedy reads `stop the run and resume it with more disk or a larger --spill-budget (swath resume inventory --spill-budget SIZE)`.
 
 `progress.json` has `order.spill_pressure_since` meanwhile, and the report `diagnostics.resources.spill.refused` above 0
-([the first bad pattern](watch-a-run.md#three-bad-patterns)). With the default cap, grow the spill filesystem
+([short of disk](watch-a-run.md#disk)). With the default cap, grow the spill filesystem
 under the running process: the cap follows the disk, and listing continues once the next frame finds the room
 (`diagnostics.resources.spill.cap_raises`). With a `--spill-budget`, stop it and resume with a larger one on a disk that has
 the room (a plain resume keeps the recorded cap; with the default cap it derives one from the free space it
@@ -298,7 +301,7 @@ With `--metadata names` a local walk reads no sizes or blocks: `size` and `alloc
 table shows `-`, and `size_missing` and `allocated_bytes_missing` count the files without them. Windows reads
 no blocks, and a bucket has none: `allocated_bytes` is null there, and the line under a local table says
 `on disk unknown`. A figure shown as `>= 12.0 KiB` leaves out
-the files that had no value for it ([Output](output.md#du-rows)).
+the files that had no value for it ([Apparent and allocated bytes](totals.md#apparent-and-allocated-bytes)).
 
 ## Entries could not be read
 
@@ -318,7 +321,7 @@ its row, a file removed during the walk is no longer part of the tree, and an en
 rules leave out by its name is not selected: none of them counts. A directory removed after the walk found it
 and before it read it does count, so the run reports incomplete and exits 3. A root directory that
 cannot be opened stops the run instead (exit 1). `outcome.unreadable` in the report and the dataset's
-`coverage.unreadable` hold the count; `source.stats` in the report breaks the errors down.
+`coverage.unreadable` hold the count; `diagnostics.source.stats` in the report breaks the errors down.
 
 ## Known limits
 
@@ -327,10 +330,12 @@ The limits of this build, and what has not been measured:
 - **Windows:** journaled runs and resume work as on Linux and macOS, on an output whose filesystem
   syncs directories (swath checks when the run starts:
   [the output directory is refused](#the-output-directory-is-refused)). The test suite, its crash and kill
-  matrices included, runs there in CI; nothing is measured there.
+  matrices included, runs there in CI; performance is not measured there.
 - **Windows power loss:** a power loss keeps the latest part names on local NTFS only; on another filesystem
   (ReFS, an SMB share) a crash or kill is still recovered, but a power loss may lose the latest part names.
-- **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
+- **macOS:** the test suite runs there in CI. Performance has one recorded observation, a local tree on a
+  Mac ([measurements](internals/measurements.md#spill-read-handles-on-local-trees-2026-11-11)), and no
+  systematic benchmark. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
@@ -343,30 +348,40 @@ The limits of this build, and what has not been measured:
 - **Seeded runs** (`--seed-from`): on Azure Blob, a seed whose key pages end at a blob name longer than 1,024
   bytes (Azure allows 3,072) is refused and fails the run, and a resume of that run fails at the same name;
   list without `--seed-from`. A run seeded from a stale dataset (a part of the keyspace grown many times since)
-  with `--workers 2048` and a spill cap under about 6 MiB can crawl or time out; the runs that complete are
-  key-identical ([#576](https://github.com/varveio/swath/issues/576)).
+  at a very high worker count under a spill cap far below what the listing needs can crawl or time out; the
+  runs that complete are key-identical. At 2,048 workers it was seen with spill caps under 6 MiB, while caps
+  of 22 MiB and more completed ([measurements](internals/measurements.md#the-seeded-frontier-window)). At 64 workers, stale seeds of 44 to 131 million keys listed through a fake near the
+  64-worker ideal with byte-identical keys under a fixed spill cap
+  ([measurements](internals/measurements.md#warm-start-from-the-previous-dataset---seed-from)); with the
+  default spill cap, which follows the disk, that is not measured. Give a larger `--spill-budget` or more
+  spill disk, fewer workers, or list without `--seed-from`. Tracked in
+  [#576](https://github.com/varveio/swath/issues/576).
 - **Durable spill above 593M keys:** a kill and resume with durable spill was measured on lists of up to 593
   million keys ([measurements](internals/measurements.md#durable-spill-slots)); above that, a billion keys
-  included, it is not measured ([#513](https://github.com/varveio/swath/issues/513)).
-- **S3 credentials that expire:** their refresh ahead of expiry was tested against fakes only, not real AWS,
+  included, it is not measured. Tracked in [#513](https://github.com/varveio/swath/issues/513).
+- **S3 credentials that expire:** their refresh ahead of expiry is tested against fakes only, not against AWS,
   and an upload to an S3 bucket destination that is answered as expired (clock skew, an early revocation)
-  fails instead of retrying with fresh credentials ([#577](https://github.com/varveio/swath/issues/577)).
+  fails instead of retrying with fresh credentials. Tracked in
+  [#577](https://github.com/varveio/swath/issues/577).
 - **Memory:** `--sort-buffer` bounds rows in flight, not resident memory ([Size a run](size-a-run.md#memory)).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
-  of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of
+  of 1.09 billion objects at 256 and 1,024 workers on a build before the release and at 1,024 and 2,048 on
+  0.4.0. Production listings of public buckets of billions of
   objects (35 completed, 50.6 billion objects in all) are individual runs, not a benchmark
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
   other gaps are in [measurements](internals/measurements.md#known-gaps).
 
 ## Reporting a problem
 
-Report a bug or a confusing message as a [GitHub issue](https://github.com/varveio/swath/issues/new). Attach
-the output of `swath --version` and the run report: rerun with `--report run.json`, or take `DIR/run.json`
-beside a dataset, or `DIR/error.json` when the run did not complete.
+Report a bug or a confusing message as a [GitHub issue](https://github.com/varveio/swath/issues/new), with:
 
-Include `swath --version`, the command line, the provider and region, and the `--report` file (redact bucket
-names and keys). For a stall or a forced exit, add `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`
-(or the temporary file the warning named), and `DIR/error.json`. `-vv` on stderr shows each failed request and retry with its cause.
+- the output of `swath --version`, the command line, the provider and region;
+- the run report: `DIR/run.json` beside a dataset, `DIR/error.json` when the run did not complete, or the
+  file of a rerun with `--report run.json` (redact bucket names and keys);
+- for a stall or a forced exit, `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (or the temporary
+  file the warning named).
+
+`-vv` on stderr shows each failed request and retry with its cause.
 
 The internals of these records, `error.json`'s rules, the watchdog and the forced exit, are in
 [Run lifecycle (internals)](internals/run-lifecycle.md); the workspace under `.swath/` in

@@ -124,14 +124,11 @@ the file lands in the site and what the page references) and run
 
 ## Releasing a new version
 
-When 0.4.0 is released, set `DEV_DOCS_NOTICE` in `.vitepress/config.mts` to `false` to remove the
-development-docs notice above the navigation, and retire `docs/release-candidate.md`.
-
-`static/data/channel.json` names the version the site offers: `{"channel": "main", "version": "X.Y.Z-rc.N"}`
-while the documentation describes `main` ahead of a release, `{"channel": "release", "version": "X.Y.Z"}`
-once it describes a release. Update it together with the "The newest published build is swath X, ..."
-sentence on the home page and in `docs/install.md` (with its note that the pages describe the upcoming
-release, which goes once the release is out) and the image tags in `docs/install.md`. The channel check
-requires that sentence on both pages and fails while any of them disagree, and
-on the release channel it also fails unless the version is the newest released version in
-[`CHANGELOG.md`](../CHANGELOG.md).
+`static/data/channel.json` names the version the site offers: `{"channel": "release", "version": "X.Y.Z"}`
+while the documentation describes a release, `{"channel": "main", "version": "X.Y.Z-rc.N"}` while it describes
+`main` ahead of one. Update it together with the "The newest published build is swath X, ..." sentence on the
+home page and in `docs/install.md`, the image tags in `docs/install.md` and the release's heading in
+[`CHANGELOG.md`](../CHANGELOG.md). The channel check requires that sentence on both pages and fails while any
+of them disagree, and on the release channel it also fails unless the version is the newest released version
+in the changelog. On the main channel every page must carry the development-docs notice: set
+`DEV_DOCS_NOTICE` in `.vitepress/config.mts` to its text then, and back to `false` once the release is out.

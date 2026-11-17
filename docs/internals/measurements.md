@@ -335,6 +335,9 @@ lists):
 | `--spill-max` 2 × the row budget | **8 of 64** | 275 | 62 % | 13 % | 8 | 15,442 | 1.02 | 8 |
 | kill at 40 % then `swath resume` | 64 of 64 | 71 | 95 % | 67 % | 0 | 0 | 1.02 | 64 |
 
+The longest stretch in which the order stage handed nothing on (`max_frontier_stuck_ns`) was a median 0.28 s and
+at most 1 s over these runs (run `c4big`), the resumed and spill-capped arms included.
+
 Under today's ordered emission a healthy sorted run of a large list holds most of its rows ahead of the
 publish frontier and spills nearly all of them once: work stealing finishes ranges in roughly key-uniform
 order, so the leftmost unfinished range holds the drain until listing is nearly over (an earlier sweep of
@@ -367,7 +370,7 @@ tool: an observation on that VM and that hour, not a rate.
 Runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07. sentinel-cogs in AWS
 us-west-2 (about 1.09 billion objects), listed anonymously from one n4-highcpu-32 in GCP us-east1 with a 400 GB
 disk, arms one after another, each capped at 40 minutes; the delta+zstd build `bf5e6d52` unless named. Java's
-rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
+row is the scale study's release row on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
 
 | Arm | Result |
 |---|---|
@@ -378,12 +381,123 @@ rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted P
 | **sorted Parquet, 256 workers** | **1,088,794,418 rows in 1,115 s**, 1,094,847 requests (1.01 per 1k), spill 32 GB (about 30 B per row), RSS 1.2 GB, 488 parts, mean active 141 of 256, no retries |
 | sorted Parquet, 1,024 workers | 846 s, 1,115,517 requests (1.02 per 1k), in flight avg 210 of 1,024, 480 parts, spill 32.5 GB, RSS 2.2 GB, 5 encoders, `encoder_wait` 318 s, `budget_wait` 0 |
 | the same, `--row-budget 1GiB` (32 encoders admitted) | 941 s, RSS 4.5 GB |
-| Java, sorted Parquet, 1,024 / 2,048 concurrency | 654 s / 253 s |
+| Java, sorted Parquet, 1,024 concurrency | 654 s (2,048 concurrency: [2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)) |
 
+*Corrected 2026-11-17.* The Java row read "1,024 / 2,048 concurrency | 654 s / 253 s". The scale study's 253 s
+is its Java 0.3.2 sorted row at concurrency 2,048 for another bucket (523M objects); its only Java 0.3.2 sorted
+row for sentinel-cogs is 654 s at 1,024. Java 0.3.2 at 2,048 took 655 s on this bucket on 2026-11-17.
+
+*Superseded 2026-11-17.* The paragraph below describes the build measured that day, before the rows left after
+listing were written to several parts at once
+([segments](ordering.md#segments-parts-written-in-parallel-after-listing)). On the 0.4.0 release the sorted run
+at 1,024 workers took 289 s, and Java 0.3.2's 666 s, on the same machine type, one run each
+([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)). As first
+written:
 At 1,024 workers the sorted run is bound by its output: after listing ends, the rows drain through one open
 Parquet part at a time, and neither a larger row budget nor more encoders moved the wall. Java's sorted run at
 the same concurrency was faster on this bucket. One run per arm, cross-cloud: an observation on that VM and
 that day.
+
+### A billion live objects on the 0.4.0 release, against 0.3.2 (sentinel-cogs, 2026-11-17)
+
+sentinel-cogs in AWS us-west-2 (about 1.09 billion objects), listed anonymously on 2026-11-17 from one
+n4-highcpu-32 in GCP us-east1 (32 vCPU, Intel Xeon Platinum 8581C, 62 GiB, not Spot) with a 400 GB disk, the
+machine type of the runs above. Five arms one after another on that VM, 09:54 to 10:31 UTC, each capped at 40
+minutes, output on the VM's disk and deleted after each arm. Both tools ran in the `ghcr.io/varveio/swath:0.3.2`
+image as root under `/usr/bin/time -v`, with the disk's usage sampled every 5 s.
+
+- **Go:** the 0.4.0 release's static linux/amd64 binary, which prints
+  `swath 0.4.0 (7e75c77f59c9cc31248e6d1326d9140cb8be5567)`, at its defaults otherwise:
+
+  ```bash
+  swath list s3://sentinel-cogs -o OUT --workers 1024 --report R.json --anonymous --s3-region us-west-2 \
+    --max-duration 2400s --stats -v --progress-interval 30s
+  ```
+
+  The second sorted arm is the same with `--workers 2048`. The count is
+  `swath du s3://sentinel-cogs -d 0 --workers 1024` followed by the same options from `--report` on.
+- **Java:** the image's own Java 0.3.2, which prints `swath 0.3.2` with `Commit: acf0d509f238` and
+  `Runtime: 25.0.4+7-LTS`, with `JAVA_TOOL_OPTIONS=-Xmx16g`:
+
+  ```bash
+  java -jar /opt/swath/swath.jar list s3://sentinel-cogs --concurrency 1024 --format parquet --sort -o OUT \
+    --report R.json --region us-west-2 --no-sign-request --max-duration 2400s --stats
+  ```
+
+  and the same with `--concurrency 2048`: the scale study's command for its release rows, without its
+  `sort.merge-parallelism=8` (the default on 32 cores; the reports show 8) and `sort.ignore-disk-check` settings.
+
+| Arm | Exit | Wall s | Objects | Requests (per 1k) | Retries / throttles | Peak RSS | CPU s (user + sys) | Disk peak | Parts | Dataset |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| **Go 0.4.0, sorted Parquet, 1,024 workers** | 0 | **289** | 1,091,734,257 | 1,117,576 (1.02) | 0 / 0 | 5.8 GB | 6,586 | 64.6 GB | 494 | 32.6 GB |
+| Java 0.3.2, sorted Parquet, concurrency 1,024 | 0 | 666 | 1,091,735,778 | 1,110,537 (1.02) | – | 8.4 GB | 8,888 | 67.6 GB | 68 | 31.6 GB |
+| Go 0.4.0, sorted Parquet, 2,048 workers | 0 | 338 | 1,091,738,583 | 1,130,199 (1.04) | 0 / 0 | 7.3 GB | 7,135 | 64.4 GB | 496 | 32.6 GB |
+| Java 0.3.2, sorted Parquet, concurrency 2,048 | 0 | 655 | 1,091,739,523 | 1,125,940 (1.03) | – | 17.1 GB | 9,983 | 67.6 GB | 68 | 31.6 GB |
+| Go 0.4.0, count (`du -d 0`), 1,024 workers | 0 | 188 | 1,091,741,237 | 1,118,054 (1.02) | 0 / 0 | 1.3 GB | 3,982 | – | – | – |
+
+Wall, peak RSS and CPU are `/usr/bin/time -v`'s (GB here are 10^9 bytes); objects, requests, retries and
+throttles are each tool's report's. Java's JSON report has no total retry counter: in each Java arm its stderr
+printed `throttled 0 · retried 1 · errors 0`, and its report recorded one attempt timeout and no slowdown, 5xx
+or network throttle event. Disk peak is the most the work filesystem held above
+its level before the arm, in the 5 s samples; the dataset is the published output.
+
+- **Go, 1,024 workers.** The last listing page came at 196 s (`timings.provider_finished_at`); the tail after
+  it took 87 s (`drain.tail_ns`) and publication 6 s. Mean active 685 of 1,024, split depth 55. 32 encoders,
+  16 segment workers (`workers_by` `processors`), `encoder_wait` 219 s, `budget_wait` 0. Spill peaked at
+  32.3 GB (about 30 B per row). CPU averaged 22.8 of 32 cores.
+- **Go, 2,048 workers.** The last listing page came at 194 s; the tail took 136 s and publication 8 s. Mean
+  active 1,122 of 2,048 (peak 2,035 in flight), split depth 55, 32 encoders, 16 segment workers,
+  `encoder_wait` 57 s, `budget_wait` 0, spill peak 32.5 GB. CPU averaged 21.1 cores. The 49 s it lost to the
+  1,024-worker arm are the tail's (136 s against 87 s).
+- **Java, 1,024 / 2,048.** Listing 305.9 / 302.7 s, then the merge 335.7 / 327.3 s (`sort.merge_ms`): little
+  change between the two runs, one run each. In flight average 342 / 625, peak 1,024 / 2,048; CPU averaged
+  13.3 / 15.2 cores; peak RSS 8.4 / 17.1 GB.
+- **Count.** Mean active 997 of 1,024, split depth 55; 5.8M keys/s over the wall.
+- **Against the earlier records.** Java 0.3.2 at 1,024: 666 s here, 654 s in the scale study. Go at 1,024 on
+  `bf5e6d52` (2026-11-07, table above): sorted 846 s with a peak RSS of 2.2 GB and 5 encoders; count 177 s.
+
+One run per arm, cross-cloud: an observation on that VM and that hour, not a rate. The arms ran in a fixed
+order, not interleaved. The object counts increased from each arm to the next, from 1,091,734,257 in the first to
+1,091,741,237 in the last (6,980 apart), consistent with a bucket that grows; each is the tool's own count for
+its run. The datasets were deleted after each arm and not compared with each other. Why the Go tail
+took longer at 2,048 workers than at 1,024 is not established by this run.
+
+### The same bucket on 64 vCPUs at 2,048 workers (sentinel-cogs, 2026-11-17)
+
+Later the same day, one GCP Batch job on one standard n4-highcpu-64 (64 vCPU, 125 GiB) in us-east1-b with a
+1,500 GB hyperdisk-balanced disk, the release archive of swath 0.4.0 (checked against `SHA256SUMS`; it prints
+`swath 0.4.0 (7e75c77f59c9cc31248e6d1326d9140cb8be5567)`), listing `s3://sentinel-cogs` (AWS us-west-2)
+anonymously. Arms one after another on that VM, each capped at 40 minutes, output on the VM's disk and deleted
+after each arm, everything but the worker count at its default:
+
+```bash
+swath list s3://sentinel-cogs -o cogs.tsv.zst --workers 2048 --anonymous --s3-region us-west-2   # text
+swath list s3://sentinel-cogs -o ds           --workers 2048 --anonymous --s3-region us-west-2   # sorted Parquet
+swath du   s3://sentinel-cogs -d 0            --workers 2048 --anonymous --s3-region us-west-2   # count
+```
+
+| Arm | Exit | Wall s | Objects | HTTP attempts | Retries / throttles | Last listing page s | Tail s | Peak RSS | CPU s | Spill peak | Disk peak | Output |
+|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| zstd TSV file | 0 | 621 | 1,091,779,640 | 1,128,531 | 0 / 0 | 143 | 477 | 7.6 GB | 9,439 | 32.5 GB | 37.6 GB | one file, 37.6 GB |
+| **sorted Parquet dataset** | 0 | **238** | 1,091,787,122 | 1,129,194 | 0 / 0 | 157 | 73 | 7.0 GB | 7,844 | 32.5 GB | 65.2 GB | 495 parts, 32.7 GB |
+| count (`du -d 0`) | 0 | **169** | 1,091,789,417 | 1,132,168 | 0 / 0 | – | – | 2.7 GB | 5,470 | – | – | – |
+
+Wall seconds are the process's, start to exit; peak RSS and CPU seconds are from `/usr/bin/time -v` and the run
+report (RSS in 10^9-byte GB); the last listing page and the tail are `timings.provider_finished_at` less
+`timings.started_at` and `diagnostics.resources.drain.tail_ns`. Requests in flight averaged 358 of 2,048 in the
+text arm, 996 in the Parquet arm and 1,532 in the count.
+
+- **The Parquet dataset** took 238 s against 289 s at 1,024 workers on 32 vCPUs that morning: the listing ended
+  at 157 s and the tail took 73 s on 32 segment workers.
+- **The text file** listed as fast (its last page came at 143 s) and then spent 477 s, 77 % of the run, in its
+  tail: one ordered drain of the spill into the file, about 2.3 million rows a second on an average of 15 of 64
+  cores. Text output has no counterpart of the Parquet tail's segment workers
+  ([#633](https://github.com/varveio/swath/issues/633)).
+- **The count** ran at 6.45 million keys a second.
+
+One run per arm, cross-cloud, that VM and that hour; the object counts increased from each arm to the next,
+consistent with a bucket that grows. Two arms of the same job on a ten-billion-object bucket had not finished
+when this was recorded.
 
 ### Workers, one core and the study harness (through the fake)
 
@@ -1734,9 +1848,14 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - **Platforms.** Windows refuses journaled runs (no directory sync,
   [durability.md](durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
   loss is untested.
-- **Scale.** Runs of hours and listings past a billion keys are unmeasured. The largest runs are key lists of
-  up to 593M keys through the fake and one live bucket of 1.09 billion objects at 256 and 1,024 workers
-  ([a billion live objects](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
+- **Scale.** The largest benchmarked runs are key lists of
+  up to 593M keys through the fake and one live bucket of 1.09 billion objects, at 256 and 1,024 workers on a
+  build of 2026-11-07 ([a billion live objects](#a-billion-live-objects-sentinel-cogs-2026-11-07)) and at 1,024
+  and 2,048 on the 0.4.0 release
+  ([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)). Production
+  listings of up to 29.6 billion objects (that one, and two of 10.3 and 8.4 billion, cancelled after four hours on
+  a spill cap too small) are individual runs,
+  not a benchmark ([2026-11-13](#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ## Skipped or not measured
@@ -2353,8 +2472,8 @@ dataset; the reader dispatches on the schema id and reads every provider's datas
 
 ## Spill at billion scale, and a spill cap too small (2026-11-13)
 
-Production listings of public buckets with 0.4.0-rc.2, sorted
-Parquet written to a bucket, spill on the work directory's disk. Figures are from the runs' reports and
+Production listings of public S3 buckets with 0.4.0-rc.2, sorted
+Parquet written to a GCS bucket (`-o gs://`, default credentials), spill on the work directory's disk. Figures are from the runs' reports and
 progress logs; they are individual runs, not a benchmark.
 
 - **Ample disk.** 35 buckets, 50.6 billion objects in all, completed. At the peak 96 to 99 % of the rows were
@@ -2565,6 +2684,106 @@ cache's restore, took 1.3–1.6 min per leg.
 Microsoft Defender was not a cost: on every leg `Get-MpComputerStatus` reported `RealTimeProtectionEnabled`
 false before any change, and `C:\` and `D:\` were already excluded. A setup step turning it off measured
 nothing and was dropped.
+
+### Windows shard legs, `remote-crash` and trimmed build caches, 2026-11-17
+
+Before, over the main pushes and full-scope pull requests after #608: a full-scope pull request took a
+median 17.1 min from trigger to `ci-gate` (12.7–26.8, n=13) and a `main` push 17.9 (n=5), the slowest
+Windows leg, `matrices-rest`, a median 17.6 (once 26.5 of its 30-minute limit). On an ordinary pull
+request `go-race (listing-rest)` was the critical job at 7.9–8.1 min, its `internal/listing` binary 430 s,
+of which `TestRemoteCrashMatrix` 122 s. The Actions cache held 10.9 GB with one generation kept, and
+56 % of the Go jobs on 8 `main` runs missed the module cache.
+
+After (#619, full scope; [44060041658](https://github.com/varveio/swath/actions/runs/44060041658) with six
+Windows legs, `durable` and `remote-crash` in one, then
+[44062912533](https://github.com/varveio/swath/actions/runs/44062912533) and
+[44067561509](https://github.com/varveio/swath/actions/runs/44067561509) with seven), minutes, first attempts:
+
+| | 44060041658 | 44062912533 | 44067561509 |
+|---|---:|---:|---:|
+| trigger to `ci-gate` | 15.7 | 15.5, red | 15.3 |
+| critical job | `go-xos (macos-latest)` 15.1 | `go-xos (macos-latest)` 14.5 | `go-xos (macos-latest)` 14.8 |
+| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`listing-rest`) | 11.0 (`listing-rest`) |
+| Windows legs, the others | 5.7–11.8 | 5.5–8.1 | 3.9–6.5 |
+| `go-race (listing-rest)` | 6.1 (binary 297–313 s) | 6.1 | 6.0 |
+| `go-race (remote-crash)` | 3.0 (binary 124–127 s) | 3.2 | 3.1 |
+| `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 | 6.5 |
+
+The first attempt of 44062912533 ended with a red `ci-gate`: `TestColumns` (`cmd/swath`) failed on macOS,
+a test the change does not touch; the macOS job passed on its rerun, 29.2 min after the trigger. The test
+counted a request an earlier listing had abandoned; #626 fixed it.
+
+On Windows `TestRemoteCrashMatrix` took 298 and 216 s and `durable` 319 and 264 s, so the two do not
+share a leg. The Windows legs printed the same package results as the three legs of `main` run
+44046353331: the same packages, `internal/listing` run by four `go test` commands instead of three.
+
+The trim, on disk in MiB (Actions stores the caches zstd-compressed, at 0.16–0.20 of the on-disk size as
+the restored caches showed): the arm64 `internal/listing` shards restored 7,416 and kept 937, each of the
+four the same 5,703 entries; `cmd-kill` and `cmd` kept 7,803 and 7,807 entries (1,705 and 1,711 MiB); arm64
+`go-xos` 10,394 to 1,397; macOS `go-xos` 4,832 to 1,591; `go-build` 6,562 to 4,615; the Windows legs
+1,089–2,976 to 855–1,364. Summed over the 17 build-cache families a `main` push now saves, the kept sizes
+are 27,137 MiB on disk (28.5 GB), about 5.2 GB compressed (4.6–5.7 at that ratio). With the four module
+caches (about 0.47 GB each, 1.9 GB), BuildKit (0.4 GB) and CodeQL's main caches (the dependency cache the
+prune keeps, about 0.38 GB, and the overlay databases, about 0.11 GB), one generation is about 8.0 GB
+(7.4–8.5) of the 10 GB. A pull request saves nothing, so the sizes `main` saves, the second generation an
+overlapping `main` run holds until the prune, and the eviction rate are measured only after the merge.
+Aging took 0.1–6 s per job and the trim 1–10 s, Windows the slowest.
+
+### macOS legs and the release's race shards, 2026-11-17
+
+**macOS in two legs.** Before, the single `go-xos (macos-latest)` job of
+[44078925548](https://github.com/varveio/swath/actions/runs/44078925548), a full-scope pull-request run of
+the #619 branch (not a `main` push), took 15 min 40 s, and the run 16 min 21 s from trigger to `ci-gate`.
+After, in [44084267779](https://github.com/varveio/swath/actions/runs/44084267779) (full scope, the macOS
+legs' pull request), first attempt:
+
+| | minutes |
+|---|---:|
+| trigger to `ci-gate` | 11.8 (11 min 50 s) |
+| `go-xos (macos-latest, listing)`, the critical job | 10.8 (10 min 45 s), its build cache cold |
+| `go-xos (macos-latest, rest)` | 10.5 (10 min 32 s), restoring `main`'s `go-xos` |
+| Windows legs, slowest | 9.2 (`cmd-kill`) |
+| `go-race`, slowest shard | 6.1 (`crash`) |
+
+The `listing` leg had no cache of its own to restore: its family, `go-xos-listing-rest` on macOS, is new,
+and a pull request saves nothing, so its warm time is measured only after the merge. The two legs printed
+the same 80 package results as the single job, compared as a multiset of status and package: `listing` 1
+(`internal/listing`), `rest` 79 (66 of the main module, 1 of `reader`, 12 of `objfile`), none missing, added
+or duplicated.
+
+On disk `listing` kept 974 MiB of build cache (5,688 entries) and `rest` 1,591 MiB, as the single job did
+(1,592). The new family adds those 974 MiB, about 0.16–0.20 GB compressed at the ratio above: 18 build-cache
+families of 28,111 MiB on disk (29.5 GB), about 5.3 GB compressed (4.7–5.9), and one generation about 8.2 GB
+(7.6–8.7) of the 10 GB.
+
+**The release's race shards.** `release.yml` `go-tests` ran one unsharded `go test -race ./...` on amd64,
+19.5 to 25.5 of the 21.6 to 30.4 minutes from a tag push to the approval prompt over the last three
+releases. Its matrix replacement ran as
+[44082399323](https://github.com/varveio/swath/actions/runs/44082399323): a byte-for-byte copy of the new
+`go-tests` job and of `source`'s shard step, in a workflow that triggered on a push to a throwaway branch
+(since deleted) and built, signed and published nothing. Each leg cold, on `ubuntu-latest`:
+
+| leg | duration | test time |
+|---|---:|---:|
+| `crash` | 5:55 | 254 s |
+| `durable` | 5:24 | 181 s |
+| `remote-crash` | 3:14 | 94 s |
+| `listing-rest` | 5:42 | 246 s |
+| `cmd-kill` | 6:34 | 273 s |
+| `cmd` | 9:46 | 444 s |
+| `rest-replay` | 4:36 | 144 s, its slowest package |
+| `rest-source` | 5:39 | 207 s, its slowest package |
+| `rest` | 5:25 | 167 s, its slowest package |
+| `vet-reader` | 5:00 | |
+
+The slowest leg, `cmd` (the `cmd/swath` remainder), sets the wait: with `source` (about 12 s) and beside
+`build` (6.5 to 8.2 min over the same three releases), a tag should reach the approval prompt in about
+10 minutes. `--check` in `vet-reader` counted 194 `internal/listing` tests over four shards and 258
+`cmd/swath` tests over two, and the shard legs printed 67 distinct packages.
+
+What the rehearsal does not prove: the tag-triggered path itself (the `source` job's qualification, the
+matrix expanded from its output, `build`, the environment approval and `publish`), and that a failed or
+cancelled leg blocks `publish`, which was reviewed by reading the workflow, not by a run.
 
 ### Parallel CLI crash tests and Java input filtering, 2026-11-10
 

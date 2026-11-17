@@ -36,7 +36,7 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 
 `swath du` also takes `--allocated` (allocated bytes instead of apparent sizes) and `-l`, `--count-links`
 (count a hard-linked file under each of its names; by default it counts once), and `--max-inodes`, the most
-hard-linked files it remembers ([Understand your results](../results.md)).
+hard-linked files it remembers ([How sizes are counted](../totals.md#how-sizes-are-counted)).
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole directory (`coverage.filters` holds
 `no_dirs` or `one_file_system`). `--one-file-system` and `--allocated` need each entry's stat: they are refused
@@ -62,8 +62,7 @@ repeat.
 
 ## Limits and known differences
 
-- A local listing keeps no journal: an interrupted one is run again, and `swath resume` does not apply. On
-  Windows, local listings work, text output and datasets alike, including a dataset written to a bucket.
+- A local listing keeps no journal: an interrupted one is run again, and `swath resume` does not apply.
 - Names that are not valid UTF-8 are listed with their exact bytes: escaped in TSV and the table, in
   `key_base64` (with `key` null) in JSONL ([Output](../output.md#text-rows)). A dataset's `key` column is binary for the same
   reason.

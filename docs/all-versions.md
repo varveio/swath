@@ -29,11 +29,10 @@ by position.
 
 **Parts never split a key.** A part's size target, `--part-max-rows` and `--part-interval` cut at the
 next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a
-key again. The interval no longer bounds how long a part stays open while one key's rows are still arriving.
+key again. The interval does not bound how long a part stays open while one key's rows are still arriving.
 
 **Parallelism.** Ranges split only between keys, so one key with a very long history is listed by one worker,
-page after page, while the rest of the bucket proceeds (`groups.open_pages`, `split.skipped.group_open` in the
-report). S3's versions call is slower than ListObjectsV2: about 1.85 times the time per request at the median of
+page after page, while the rest of the bucket proceeds. S3's versions call is slower than ListObjectsV2: about 1.85 times the time per request at the median of
 our measurements, and pages of old versions are slow to first byte; history multiplies the pages besides. GCS
 lists generations at the cost of live objects. Azure Blob lists every entry with the same call and the same
 format (Arrow where the account has it): each request costs a listing operation, as always, and the entries
@@ -49,10 +48,9 @@ ID (empty for an Azure snapshot), `latest` and, on S3, `delete_marker`. `--min-s
 continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
 no versions and stay refused.
 
-The run report's version counts describe this attempt after filtering: S3 `versions` and
+The run report's version counts (under `output`) describe this attempt after filtering: S3 `versions` and
 `delete_markers` sum to emitted rows; GCS and Azure Blob `versions` include the `noncurrent` rows (on Azure every
 row that is not a name's latest: previous versions, snapshots, soft-deleted blobs).
 `distinct_keys` counts surviving names, and `live_objects` counts live versions among those rows.
-Retained rows from an earlier attempt are excluded. `groups.overfetch_rows` counts rows above a
-range end fetched to finish its last group. Table output includes the version ID and latest state,
+Table output includes the version ID and latest state,
 and for S3 the delete-marker state, in wire order.

@@ -30,7 +30,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include-regex` (Go RE2, found anywhere in the key below SOURCE, as a glob, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added; a glob with a regex sign (leading `^`, final `$`, `\.`, `(a|b)`) is refused naming `--include-regex` | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
+| `--include REGEX` | `--include-regex` (Go RE2, found anywhere in the key below SOURCE, as a glob, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3, GCS and Azure Blob; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added; a glob with a regex sign (leading `^`, final `$`, `\.`, `(a|b)`) is refused naming `--include-regex` | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
 | `--exclude REGEX` | `--exclude-regex` (Go RE2, repeatable); `--exclude GLOB` is a glob | renamed; globs added | 2026-11-10 (owner: as `--include`) |
 | `--min-size SIZE` | `--min-size` (`KB`, `MB` decimal, unlike Java; `K`, `KiB` binary) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |

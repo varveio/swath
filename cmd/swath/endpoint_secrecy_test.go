@@ -209,6 +209,9 @@ func TestEndpointQuerySecrecy(t *testing.T) {
 	}
 }
 
+// TestShowEndpointSecrecy: no credential an endpoint carries reaches swath
+// show (the command, -v's identity, --journal), and the stored identity and
+// arguments are unchanged.
 func TestShowEndpointSecrecy(t *testing.T) {
 	for _, ep := range []string{"https://host/?sig=SECRET", "https://host/#SECRET", "https://user:SECRET@host", "https://clean:9000/path"} {
 		dir := t.TempDir()
@@ -223,7 +226,7 @@ func TestShowEndpointSecrecy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, args := range [][]string{{dir}, {"--journal", dir}} {
+		for _, args := range [][]string{{dir}, {"-v", dir}, {"--journal", dir}} {
 			var out bytes.Buffer
 			if err := show(args, &out); err != nil {
 				t.Fatal(err)

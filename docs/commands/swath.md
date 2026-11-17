@@ -69,10 +69,10 @@ See 'swath list --help'.
 
 An option that belongs to one provider carries its prefix (`--s3-region`, `--gcs-credentials-file`,
 `--azure-sas-token`) and is refused, with exit 2, for another provider's source. Options every object store
-shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`, `-x`) are bare. An older
-spelling (`--endpoint`, `--profile`, `--region`, 0.3's `--force-path-style` or `--idle-timeout`) gets the
-same suggestion of the current name, and a 0.3 option nothing replaces (`--compression`, `--output-type`)
-says what does its work. A value error names the option and the value as typed, then what is wanted:
+shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`, `-x`) are bare. A familiar
+spelling (`--endpoint`, `--profile`, `--region`, `--force-path-style`, `--idle-timeout`) gets the same
+suggestion of the current name, and an option swath does not have (`--compression`, `--output-type`) says
+what does its work. A value error names the option and the value as typed, then what is wanted:
 `swath: --min-size "1e3": want a size such as 1K, ...`. Every usage error ends with the help to read.
 
 A value that can carry a secret is never shown or recorded as typed: `--azure-sas-token`,
@@ -180,25 +180,6 @@ are described above.
 
   json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or closing lines.
 
-<details>
-<summary>Plain text, in the <code>--help</code> layout</summary>
-
-```text
-  -v, --verbose               a start line, progress records; -vv, -vvv: the request log
-                                -vv adds each failed request and retry with its cause, -vvv every
-                                request (credentials and tokens redacted).
-  -q, --quiet                 no warnings, no automatic progress or closing lines (-qq: no errors)
-                                With -qq the exit code and the reports stand alone.
-      --color auto|always|never
-                              color progress, closing lines, the help and du's view (default auto)
-                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
-                                forces it.
-      --log-format text|json  stderr as text, or json: one JSON object per line (default text)
-                                json: warnings, the start line, progress records, the request log
-                                and the outcome as events, no redrawn line or closing lines.
-```
-
-</details>
 <!-- flags:end -->
 
 ## Examples
@@ -232,12 +213,13 @@ swath du -h
 | Code | Meaning |
 |---|---|
 | 0 | completed (also a reader that closed the pipe early, as `head` does) |
-| 1 | failed, and a resume will not fix it |
+| 1 | failed: a person fixes the cause; a run whose outcome says `resumable` then resumes |
 | 2 | a usage error, or a refusal that is the caller's to fix |
-| 3 | finished, but the output is incomplete: entries could not be read, or `--max-keys` stopped the listing |
+| 3 | finished, but the output is incomplete; in a listing, entries could not be read |
 | 74 | the output's filesystem is full |
-| 75 | stuck: no progress for `--stall-timeout` |
+| 75 | stuck: no progress for `--stall-timeout`, an endpoint that never answered, or a bucket commit whose outcome is unknown |
 | 124 | `--max-duration` reached |
+| 129 | hung up (SIGHUP: a closed terminal or SSH session) |
 | 130 | interrupted (SIGINT) |
 | 143 | terminated (SIGTERM) |
 

@@ -1,4 +1,4 @@
-# Filters
+# Filter rows
 
 ```bash
 swath list s3://bucket --include 'logs/2026/**' --exclude '*.tmp'
@@ -24,7 +24,7 @@ an exclude always wins, whatever the order of the options. The other filters mus
 
 ## Globs
 
-A glob, as a regular expression, matches the key below SOURCE: for `s3://bucket/logs/` the part after `logs/`;
+A glob, like a regular expression, is matched against the key below SOURCE: for `s3://bucket/logs/` the part after `logs/`;
 for a local tree the path below its root. The rows still show the full key.
 
 | Pattern | Matches |
@@ -48,14 +48,11 @@ prunes when combined with regex filters or includes, because excludes always win
 
 An empty or malformed pattern is refused with exit 2.
 
-Versions 0.3.x read `--include` and `--exclude` as regular expressions. A glob that carries a sign of one is
-refused with exit 2 before anything is listed, and the message names `--include-regex` or `--exclude-regex`,
-so an old command line cannot silently match nothing. The signs are a leading `^`, a final `$`, `\d`, `\D`,
-`\w`, `\W`, `\s` or `\S`, `.*` together with `\.` (`.*\.parquet`), and a `|` between `(` and `)`: a glob
-matches its whole key, needs no anchors, and quotes with a backslash only what is special. To keep such a
-pattern a glob, escape the character (`\^`, `\$` or `[$]`, `\|`), write the plain character (`d` for `\d`), or
-`*` for `.*` (`*\.parquet`). Everything else stays a glob: `\.` alone (a literal dot, `*\.parquet`), `.*`
-alone (names that start with a dot), and a `$` or `^` inside a key.
+A glob that looks like a regular expression (a leading `^`, a trailing `$`, `\d`, `.*\.parquet`, an
+alternation `(a|b)`) is refused with exit 2 before anything is listed; the message names `--include-regex` or
+`--exclude-regex` and how to write the pattern as a glob. Only such common spellings are caught: another
+regular expression given as a glob may be a valid glob that matches something else (`--include parquet` keeps
+entries named `parquet`, not `file.parquet`).
 
 ## Regular expressions
 
@@ -95,21 +92,28 @@ swath: --storage-class: a local tree has no storage classes
 
 ## What narrows the listing
 
-On S3 and GCS, when every include has a literal prefix (an anchored glob's text up to its first wildcard, a regex's `^literal`), swath lists only
+On S3, GCS and Azure Blob, when every include has a literal prefix (an anchored glob's text up to its first wildcard, a regex's `^literal`), swath lists only
 the longest prefix common to them. `--include 'logs/2026/0*/**'` on `s3://bucket` lists `logs/2026/0` and
 nothing else: the same rows, fewer requests. A glob without a `/`, or a regex without `^literal`, turns it
-off; excludes never change it. Azure Blob lists the whole source and filters the rows. Object-store
-exclusions do not change listing requests.
+off; excludes never change it. On Azure Blob the narrowed prefix goes into the source URL beside its SAS,
+and a prefix the URL cannot carry is not narrowed: a `?` in the prefix when the URL holds a SAS, or text
+after a `?` that would read as a SAS (`--include 'a\?sig=1/**'`). swath then lists the source as given and
+filters the rows, and the report says why. Object-store exclusions do not change listing requests.
+
+Narrowing changes the listed scope, which a dataset given to `--seed-from` must match: a dataset of
+`az://acct/ctr --include 'logs/**'` (scope `logs/`) seeds the same command, not `az://acct/ctr` without the
+include, and the reverse is refused too ([the cut file](dataset.md#the-cut-file)).
 
 Local and mounted trees also avoid traversing subtrees covered by recursive exclude globs, as described
 above. Their run report records the rule classification in `diagnostics.source.stats.pruning` and the directories
-not entered in `diagnostics.source.stats.pruned_dirs`. Reading the parent and the excluded directory's metadata can
-still occur; errors below it are no longer encountered. No count or byte total is inferred for unvisited
+not entered in `diagnostics.source.stats.pruned_dirs`. swath may still read the excluded directory's own
+metadata, but it does not enter the directory, so errors below it are not reported. No count or byte total is inferred for unvisited
 descendants.
 
 The run report says what happened in `invocation.narrowing`: `narrowed` (and `invocation.source` names the
-narrowed prefix), `include_without_prefix`, `no_longer_prefix` (the common prefix does not extend SOURCE's)
-or `provider_lists_root`. `output.rows_filtered` counts observed rows the filters dropped; descendants
+narrowed prefix), `include_without_prefix`, `no_longer_prefix` (the common prefix does not extend SOURCE's),
+`provider_lists_root` (a provider that only lists its root) or `provider_declined_prefix` (the source URL
+cannot carry the prefix, above). `output.rows_filtered` counts observed rows the filters dropped; descendants
 that were never visited are not counted in either `rows_fetched` or `rows_filtered`.
 
 ## Filtered datasets

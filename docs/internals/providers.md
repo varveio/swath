@@ -100,8 +100,10 @@ The command imports providers only for that registration and passes the options 
 touching the output. An object store's factory also gives `KeyPrefix(root)`, the key prefix the root names
 (each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
-are relative to the root. `WithPrefix(root, prefix)` (S3 and GCS) names another prefix of the same bucket, through
-which includes sharing a literal prefix narrow the listed prefix; Azure has none, and lists its root as given.
+are relative to the root. `WithPrefix(root, prefix)` (S3, GCS and Azure Blob) names another prefix of the same bucket, through
+which includes sharing a literal prefix narrow the listed prefix. It returns the root unchanged to decline
+(Azure: a prefix its URL cannot carry beside the SAS), and the root is listed as given with
+`invocation.narrowing` `provider_declined_prefix`; without the hook it is `provider_lists_root`.
 `CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` with `--metadata names`; it turns off counting hard links once there, the names tier reading no
 link counts) before the source opens, and `CheckFilter` (the local provider)
 filters on values its options do not read (sizes and times with `--metadata names`, storage classes).

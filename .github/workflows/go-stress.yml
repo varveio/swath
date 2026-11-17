@@ -57,11 +57,12 @@ jobs:
 
       # The ci.yml setup, restored and never saved: the shared module cache, which every runner
       # has, and the build cache of the ci.yml job on the same runner (go-race (rest) on amd64,
-      # go-race (listing-rest) on arm64, go-xos on macOS and Windows; go-xos builds without -race).
+      # go-race (listing-rest) on arm64; on macOS and Windows the go-xos legs', which build without
+      # -race: go-xos-listing-rest for ./internal/listing, else the full leg's go-xos).
       - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
-          key: ${{ inputs.os == 'ubuntu-latest' && 'go-race-rest' || inputs.os == 'ubuntu-24.04-arm' && 'go-race-listing-rest' || 'go-xos' }}
+          key: ${{ inputs.os == 'ubuntu-latest' && 'go-race-rest' || inputs.os == 'ubuntu-24.04-arm' && 'go-race-listing-rest' || inputs.package == './internal/listing' && 'go-xos-listing-rest' || 'go-xos' }}
 
       - name: go test (repeated)
         env:

@@ -148,7 +148,10 @@ in the interval it closes, and the scope they were taken under. Two sources fill
 Identity, checked before listing pages (exit 2, class `refused`, `ErrPrior`; Azure namespace
 admission requests can precede this check): a dataset's manifest must name the
 run's source kind and container (the bucket), and its scope must be the run's prefix exactly: a dataset of
-`s3://b/logs/` does not seed `s3://b` nor `s3://b/logs/2026/` (a prefix mismatch is refused, not clipped). The
+`s3://b/logs/` does not seed `s3://b` nor `s3://b/logs/2026/` (a prefix mismatch is refused, not clipped).
+The run's prefix is the one an `--include` narrowed it to ([what narrows the listing](../filters.md#what-narrows-the-listing)):
+a dataset of `s3://b --include 'logs/**'` has scope `logs/`, and a cut file taken without the include
+seeds it only if every cut carries `logs/`. The
 manifest records no endpoint or region, so those are not checked: a dataset of another store's bucket of the same
 name is accepted, which can make the run slower, never wrong. Azure's account URI is not compared
 either: verify that the prior belongs to the same account yourself. A cut file records no scope: every cut must carry the

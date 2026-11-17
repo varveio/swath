@@ -1,199 +1,250 @@
 # Stop, resume and refresh
 
-How a dataset run stops, how `swath resume` continues it, and how to keep an inventory fresh: replace it in place,
-or write each listing to a new directory seeded from the previous one.
+A dataset run of an object store that stops before it finishes can be resumed: `swath resume DIR` keeps what
+the run saved and lists the rest. To list the same bucket again later, write a new dataset and pass the previous
+one with `--seed-from`.
 
-## Stopping and resuming
+<a id="stopping-and-resuming"></a>
 
-A dataset run of an object store that stops with exit 74, 75, 124, 129, 130 or 143 can be resumed, and so can
-one that stopped with exit 1 when its outcome says `resumable` (a fixed credential or permission); what a
-supervisor does with each code is in [Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
+## Resume an interrupted run
 
-"Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
-again with `--overwrite`, which replaces the interrupted output, or in a new or empty directory.
+### A run that can be resumed
 
-**Signals.** SIGINT, SIGTERM and SIGHUP (a closed terminal or SSH session; not under `nohup`) stop the run
-gracefully: published parts and the journal stay, and `error.json` and the report are written. Only the first
-signal counts; the forced exit follows 15 s later. SIGKILL, a panic, SIGQUIT or an OOM kill loses nothing
-durable: the journal is crash-safe and the resume reconciles.
-
-**The workspace.** `DIR/.swath/` holds `lock` (one process per output), `journal` (`swath show --journal`),
-`parts/` (encoded parts not yet published), `spill/` (disposable spill, removed by the next run, and
-`spill/durable/`: the certified spill files and their `ledger`, kept for the resume and removed when the
-dataset commits), `suspect/` (a part a resume must reproduce) and `progress.json`. Do not edit the journal or
-its parts by hand; removing `spill/durable/` only costs a resume the relisting it would have saved.
-
-A SIGKILL (or an OOM kill, a power loss) leaves the published parts, the journal, encoded parts not yet
-published, the disposable spill and the durable spill: certified files with their ledger records, and files
-whose record never reached the ledger. The resume validates every recorded file (size, checksums, every frame,
-its certificate) and unlinks every other file; a missing or damaged one is relisted, never an error.
-
-**`swath resume DIR`** replays the command recorded in the journal. Only the resource, request, credential
-and reporting options that `swath resume --help` lists may be given again, the last value winning
-([swath-resume](commands/swath-resume.md)); `--max-duration` and the other runtime values are replayed from the
-first attempt unless given again. Pass a fresh `--report` path each time.
-
-The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
-retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm on a 4-vCPU VM
-([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take
-roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
-Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
-a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
-as listed), and the resume replays each certificate it can validate instead of listing it, then lists only
-the gaps between them: the ranges still listing at the stop, and those not certified
-([Ordering (internals)](internals/ordering.md#durable-spill)). Once the gaps are listed, the parallel tail
-writes the rest, certified rows included, as on a fresh run. The certificates must fit the resume's spill cap:
-a recorded or given `--spill-budget`, else the default derived from the free space the resume finds, the certified
-files it kept counted as free (on the same disk the stopped run's cap, less what was written there since, or half
-of it when the output is there too); those
-that do not fit are listed again (`rejected.budget`). The report says what it reused: `diagnostics.resources.spill.durable.resume` (`accepted`,
-`replayed_rows`, `gaps`, `requests_saved_est`, `rejected` by reason).
-
-A range is certified when it finishes; the number of certificates scales with the spill cap (one per 64 KiB of it,
-at most 262,144, reached at 16 GiB), so a listing with fewer ranges than that certifies every finished range unless
-its spill turns over more than about twice (`no_slot`, `history_exhausted` and `metadata_exhausted` in
-`diagnostics.resources.spill.durable` count the ranges that were not). Certified files stay in the work directory,
-so resume on the same disk, or on a persistent disk moved to another machine
-([Running swath in production](production.md#on-a-preemptible-or-spot-machine)).
-
-Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in `AZURE_STORAGE_SAS_TOKEN`) or
-`--s3-bearer-token-command` must be given it again.
-
-A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
-exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys` sample) is a finalized
-partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
+A run that stops early says so in its closing lines and names the command that continues it. Here a deadline
+stops a listing of a public NOAA prefix into a new directory, `noaa` (`--request-rate 2` slows this small
+listing so that the deadline stops it partway, and `--part-interval 1s` saves parts as it goes):
 
 ```text
-swath: sample is a finalized sample, partial: --max-keys reached: it cannot be resumed
+$ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 \
+    -o noaa --request-rate 2 --part-interval 1s --max-duration 11s
+  stopped: --max-duration reached; 2,033 saved, 2,033 listed in 11.0s · 185 keys/s → noaa (2 parts, 50.7 KiB)
+  next: swath resume noaa
+swath: deadline: --max-duration reached (swath resume noaa --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
 ```
 
-A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
-the count (`outcome.unreadable`).
+Ctrl-C ends the same way, with `interrupted:` and `swath: stopped by interrupt`. `saved` counts the rows in
+the parts written so far; the rest of what was listed is listed again.
 
-Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
-judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
-resumes, and a text file `rows.tsv` is refused as text output.
+`DIR/error.json` holds the outcome, and `"resumable": true` there means `swath resume DIR` continues the run.
+The exit status says the same: 124 (`--max-duration`), 130 (Ctrl-C), 143 (SIGTERM) and 129 (SIGHUP: the
+terminal or SSH session closed, unless the run is under `nohup`) can be resumed, and so can 75 (stuck), 74
+(disk full) and 1 (once its cause is fixed) when `error.json` says so
+([Exit codes](reference/exit-codes.md#what-a-supervisor-does-with-each-code)).
 
-**Retained observation.** A replayed certificate serves its rows as the interrupted attempt listed them: a key
-deleted from the bucket since stays in the dataset, one added inside a certified interval is missed, and
-metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
-during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
-that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
-`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs spill on, `--spill-budget`
-of at least 16 MiB, and a parallel range-engine provider that declares coverage fences (S3, GCS and Azure Blob;
-not `--sequential`).
+Press Ctrl-C once: only the first signal counts, and swath exits on its own at most 20 s after it. A kill
+(SIGKILL, an out-of-memory kill) or a crash loses nothing the run saved, and `swath resume DIR` continues it the
+same way; its `error.json` is missing then, or an earlier attempt's.
 
-**Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
-billed project), `--s3-fetch-owner`, the schema and the part size are frozen. A resume whose environment or
-`--s3-profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
-was. Restore the original environment, or start over.
+Only a dataset run of an object store (S3, GCS or Azure Blob with `-o DIR`) can be resumed: it keeps a journal
+of what it saved in `DIR/.swath/`. Leave that directory in place and do not edit its files: without it there
+is nothing to resume. A run of a local or mounted filesystem, a text output (`-o rows.tsv`) and `swath du` keep no
+journal and are run again: a filesystem dataset with `--overwrite`, or into a new directory.
 
-**Refused resumes** and what they mean:
+### Resume it
 
-| Message or class | Meaning | Action |
+`swath show DIR` says where a stopped run is, and `swath resume DIR` continues it:
+
+```text
+$ swath show noaa
+noaa: interrupted run
+  started   2026-11-17 12:04:05 UTC
+  command   swath list --anonymous --s3-region=us-east-1 --output=noaa --request-rate=2 --part-interval=1s --max-duration=11s s3://noaa-gestofs-pds/stofs_2d_glo.20230113/
+  saved     2 parts, 2,033 rows; swath resume lists after "stofs_2d_glo.20230113/stofs_2d_glo.t06z.guam.f126.grib2"
+$ swath resume noaa --max-duration 0
+  complete: 5,252 objects (2,033 from earlier attempts), 383 GiB in 4.0s · 795 keys/s → noaa (4 parts, 128 KiB)
+  next: swath show noaa · swath du --from-dataset noaa
+```
+
+The resume runs the command the journal recorded, the one `swath show` prints, with every option as recorded.
+The options `swath resume --help` lists (workers, credentials, time limits, the spill cap, reporting) may be
+given again, and the last value wins: here `--max-duration 0` lifts the recorded 11-second deadline
+([swath resume](commands/swath-resume.md)). Every other option is fixed for the run, and changing it is
+refused:
+
+```text
+$ swath resume noaa --all-versions
+swath: --all-versions is fixed for the run and cannot change on resume
+See 'swath resume --help'.
+```
+
+Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in `AZURE_STORAGE_SAS_TOKEN`) or
+`--s3-bearer-token-command` needs it again. `swath resume` writes a report only when given `--report`; give
+each attempt a new path to keep each attempt's report.
+
+A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
+exit 0:
+
+```text
+$ swath resume noaa
+noaa is already complete: nothing to resume
+```
+
+### What a resume keeps and lists again
+
+- **It keeps every saved part**, and checks each against the journal (its size and SHA-256) before it lists
+  anything. That reads every saved part in full once, so budget for it on a very large dataset: from the read
+  rates measured on a 4-vCPU VM, 10,000 parts of 64 MiB would take roughly 30 to 45 minutes, an estimate
+  ([measurements](internals/measurements.md#recovery-and-part-count)). Meanwhile the progress line reads
+  `verifying`, with the bytes verified so far.
+- **It lists after the last saved key**, the one `swath show` prints. What the stopped run listed and had not
+  saved is listed again, except the ranges it had kept whole in its spill files on disk: the resume reads
+  those back instead of listing them. Only spill files that are intact and fit the resume's spill cap are
+  read back; the rest is listed again. They stay in `DIR/.swath/`, so resume from the same directory: on the
+  same disk, or on a persistent disk moved to another machine
+  ([on a preemptible or spot machine](production.md#on-a-preemptible-or-spot-machine)). How the spill files are
+  checked and reused is in [Ordering (internals)](internals/ordering.md#durable-spill).
+- **The closing line counts what it kept:** `(2,033 from earlier attempts)`.
+
+What was saved or kept on disk before the stop stays as it was listed then: a key deleted from the bucket since
+stays in the dataset, and one added among those keys is missed. Everything else is listed as the bucket is
+during the resume. On a bucket that did not change, the rows are the same as an uninterrupted run's. To list
+the whole bucket as it is now, start over with `--overwrite`, or list into a new directory. Removing
+`DIR/.swath/spill/durable/` before resuming does less: the saved parts stay as they are, and only the keys after
+the last saved part are listed again, none read back from spill.
+
+### When a resume is refused
+
+A resume refused for a changed option or setting (the first two rows) keeps the saved parts and the journal,
+and the run can still be resumed with the original settings; a refused environment is recorded in `error.json`
+(`"class": "refused"`).
+
+| What swath says | Why | What to do |
 |---|---|---|
-| exit 2, identity mismatch | the resume would list another route | fix the environment, or `swath list --overwrite` |
-| exit 2, nothing to resume | no journal in the directory | start a fresh `swath list` |
-| exit 1, another swath process owns this output directory | a process still holds the output lock: the killed run has not exited yet, or a wrapper was killed and swath under it lives on. The resume is refused, not queued, and changes nothing | wait for that process to exit (stop a wrapper's whole process group, not the wrapper alone), then resume |
-| exit 1, `cause` `protocol` | the service returned an invalid page; the journal is marked unresumable | `swath list --overwrite` |
-| exit 1, journal version | written by another build | finish with that build, or `--overwrite` |
-| exit 1, part altered or journal corrupt | a retained part or the journal changed on disk | `--overwrite` |
-| exit 1, ambiguous tail | the part set aside in `.swath/suspect/` cannot be reproduced: the source changed in that part's range | `--overwrite` to start over, or remove `.swath/suspect/` to accept the source as it is now |
+| exit 2, `--NAME is fixed for the run and cannot change on resume` | the option is not one a resume may change | give only the options `swath resume --help` lists, or start over with `--overwrite` |
+| exit 2, `cannot resume: region was us-east-1, now eu-west-1 (start over with swath list --overwrite, or resume with the original settings)` | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `--overwrite` |
+| exit 2, `nothing to resume: no interrupted run in the output directory`, or `text output ... is not resumable` | no journal: a filesystem run, a text output, or another directory | run `swath list` again with `--overwrite`, or into a new directory |
+| exit 1, `journal version N is not supported`; exit 2, `an interrupted run written by swath 0.3`; exit 2, `this swath narrows the listing to the --include's literal prefix` (Azure Blob) | another swath version started the run | finish it with that version, or start over with `--overwrite` |
+| exit 1, `another swath process owns this output directory` | the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |
+| `"resumable": false` in `error.json` | the run cannot be continued as recorded: the bucket does not exist, it is in another region, or the service returned an invalid page (`cause` `protocol`) | fix the command, and start over with `--overwrite` |
+| exit 3, `DIR is partial: ... it cannot be resumed` | a committed dataset that left out entries it could not read is final | fix the permissions and list again with `--overwrite`, or into a new directory |
+
+The rarer refusals (a saved part or the journal changed on disk, a part that cannot be listed the same way
+again) are in [The resume is refused](troubleshooting.md#the-resume-is-refused).
 
 ### A dataset in a bucket
 
-A run that writes to a bucket (`-o gs://BUCKET/PREFIX`, `-o s3://BUCKET/PREFIX` or `-o az://ACCOUNT/CONTAINER/PREFIX`, with `--work-dir DIR`) is resumed by its work directory:
-`swath resume DIR` replays the recorded command with that work directory (it may have moved; the bucket and
-prefix stay as recorded). Each retained part's object is read whole and checked against its record (its
-version: the GCS generation, the S3 version id or ETag, the Azure ETag; its size and SHA-256), and a resume of a run that reached
-its commit first reads the bucket's manifest back: the run's own means the run is complete, and the resume first
-finishes what the commit left (this run's leftover parts deleted, `run.json` beside the manifest). A commit that
-ended unresolved (exit 75) is resumed the same way: the resume creates the very manifest the run saved. The
-destination's credentials may be given again (`--output-gcs-credentials-file`, `--output-s3-profile`), and an
-Azure SAS must be (`--output-azure-sas-token`, never recorded); its bucket (Azure: account and container),
-prefix, endpoint and S3 region are fixed. A lost work directory loses the
-resume: the parts already uploaded are not reused. A new run at the same prefix is not refused (only a prefix
-holding a `manifest.json` is), but nothing removes the lost run's parts, so start it at a new prefix
-([Running swath in production](production.md#on-a-preemptible-or-spot-machine)).
+A run that writes its dataset to a bucket is resumed by its work directory: `swath resume DIR`, with `DIR` the
+`--work-dir` it was given. What the resume downloads, what it needs on another machine and what a lost work
+directory leaves are in [Interrupted, then resumed](production.md#interrupted-then-resumed).
 
-## Overwrite and refresh
+<a id="overwrite-and-refresh"></a>
 
-`--overwrite` keeps the previous dataset readable until the new one commits: the new run lists into the
-output's private workspace (`.swath/next/`), and its commit installs the new dataset in place of the old one,
-whose parts are removed after. A run that fails or is stopped before its commit leaves the previous dataset as
-it was; a stopped object-store run waits there for `swath resume DIR`, which `swath show DIR` names, and a new
-`--overwrite` starts it over. The installation moves the previous dataset aside, then the new one in. One
-refused while it moves the previous dataset aside (on Windows,
-[another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) puts it back:
-the previous dataset is readable again, and `swath resume DIR` installs the replacement later. One that stops
-part way (a crash), fails once the previous dataset is aside, or cannot put it all back after a refusal leaves
-the directory with no dataset, never a manifest naming missing parts, until `swath resume DIR` or a new
-`--overwrite` finishes the installation. The installation reuses the part paths (`data/part-NNNNN.parquet`),
-so a reader that is reading the dataset while it runs can find parts missing or replaced by the new dataset's. Do not query a dataset while `--overwrite` replaces it.
+## Start over with `--overwrite`
 
-Where readers must always find a dataset, even then (a periodic refresh read around the clock), write each run
-to a new directory and never overwrite it. Switch readers through a pointer outside the datasets (a generation
-file, a database row, a symlink swapped by rename) once the new directory's `manifest.json` exists, and delete
-an old generation only when no reader uses it.
+A directory that already holds a dataset is refused as an output (exit 2):
 
-### Seeding a refresh from the previous dataset
-
-A scheduled relisting of the same bucket should pass the previous generation as `--seed-from` (S3, GCS and Azure Blob):
-
-```bash
-swath list s3://bucket/logs/ -o /data/logs-2026-11-08 --seed-from /data/logs-2026-11-07
+```text
+$ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 -o noaa
+swath: noaa: output directory is not empty (use --overwrite to replace a previous dataset)
 ```
 
-The previous dataset's cut file (`cuts.txt`, [the cut file](dataset.md#the-cut-file)) or, without one, its parts'
-key page index divide the scope into ranges of about equal expected keys, so the run skips the delimiter seed
-and most early splits. For a dataset in a bucket, copy its `cuts.txt` and pass that file. With the default page policy, its requests approach one
-per 1,000 keys on S3/GCS and one per 5,000 keys on Azure Blob with a counted prior. The prior
-must be the same source and scope: the manifest's source kind, bucket/container and prefix are compared
-with the run's (exit 2 on a mismatch; a dataset of `logs/` does not seed `logs/2026/`). The account URI
-is not compared for Azure; verify that the prior belongs to the same Azure account yourself. Endpoint
-and region are not checked either. A bad prior is refused before listing pages, but Azure namespace
-admission requests can already have run. It cannot be the output directory, and `--overwrite` of the prior's
-own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
-changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
-`seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
-them), and `seed.from.expected_keys` against the source counter `objects` is the growth.
+One that holds an interrupted run is refused too, and the message says so: `it holds an interrupted run
+(swath resume DIR continues it; --overwrite starts over)`. To replace the dataset, or to discard the
+interrupted run, run the command again with `--overwrite`:
 
-A cut file seeds from anything else that knows the keys (an S3 Inventory, a prefix list, a dataset's
-`cuts.txt`), but carries no identity; prefer the dataset. A cut file holds one key per line, ascending bytewise without repeats, each
-inside the scope, optionally followed by a tab and the keys expected since the previous cut (on every line or
-none), at most 262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it
-replaces). An unsorted or repeated cut, a cut outside the scope, a cut file past those bounds, `--seed-from`
-on a local tree, and a prior that is the output directory are refused (exit 2).
+```text
+$ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 -o noaa --overwrite
+  complete: 5,252 objects, 383 GiB in 0.9s → noaa (1 part, 121 KiB)
+  next: swath show noaa · swath du --from-dataset noaa
+```
 
-The prior divides the work into ranges of about equal expected keys
-([warm start](internals/range-engine.md)); the splits stay adaptive and the rows are the same. A counted prior
-(a dataset, or a cut file with counts) also sets the order of a sorted run: it lists the prior's tiles front to
-back inside a frontier window at the output, so rows listed ahead of the output, and the spill they take, stay
-near the window instead of growing with the bucket ([warm start](#warm-start-for-repeat-listings)). `swath resume` reads `--seed-from`
-again and may change or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without
-it. The report's `invocation.prior` names what was used.
+The previous dataset stays readable until the new one commits: the new run lists into `.swath/next/` inside
+the output, and its commit puts the new dataset in place of the old one, whose parts are removed after. A run
+that fails or is stopped before its commit leaves the previous dataset as it was; a stopped run of an object
+store can then be resumed (`swath show DIR` says so), and a new `--overwrite` starts it over. Do not query the
+dataset while the new one is put in place: it reuses the part names (`data/part-NNNNN.parquet`), so a reader
+can find parts missing or replaced. An interrupted installation (a crash, or on Windows
+[another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) leaves the
+previous dataset or none, never a manifest naming missing parts, until `swath resume DIR` or a new
+`--overwrite` finishes it. A dataset in a bucket is never replaced: write each run to a new prefix
+([writing to a bucket](production.md#writing-to-a-bucket)).
 
-### Warm start for repeat listings
+Where readers must always find a dataset, even while a new one is written (a refresh read around the clock),
+write each run to a new directory and never overwrite it. Switch readers through a pointer outside the datasets
+(a generation file, a database row, a symlink swapped by rename) once the new directory's `manifest.json`
+exists, and delete an old generation only when no reader uses it.
 
-`--seed-from PREVIOUS-DATASET` divides the bucket into ranges from the previous dataset's key distribution.
-The run then sends no delimiter requests and makes far fewer early splits. On 251 production key lists
-served through a fake at 50 ms, a seeded run took a median 0.76x the cold run's wall time and sent 1.02 requests
-per 1,000 keys (`warm1`, 2026-11-07). A prior that is 45 % out of date still listed at 1.11 to 1.15x the
-64-worker ideal (`stale4`, 2026-11-07). The prior must be the same bucket and prefix, or the run is refused
-(exit 2). The output is the same with or without a prior.
+<a id="seeding-a-refresh-from-the-previous-dataset"></a><a id="warm-start-for-repeat-listings"></a>
 
-A prior with counts (a previous dataset, or a cut file whose every line carries a count) also changes what is
-listed ahead of the output: a sorted run lists front to back, taking the prior's tiles in key order only while the rows listed and not
-yet written stay within a window of 8 million rows, smaller when `--spill-budget` and `--sort-buffer` hold less
-([the frontier window](internals/ordering.md#the-frontier-window)). On a prior that is current, spill then stays
-near half the spill budget instead of growing with the bucket, and a small `--spill-budget` is expected to refuse
-no frame. Expected, not guaranteed: the window admits tiles, it does not stop the listing inside a tile, so a
-range far ahead inside an admitted tile (its neighbour stalled), a region that grew since the prior, keys added
-after its last key, and certified durable files waiting to be retired can still take spill past it, so keep the disk sized for
-the bucket's growth, and read `diagnostics.resources.window` and `diagnostics.resources.spill.peak_bytes` in the report. With thousands
-of workers and a cap of a few hundred MB or less, the window holds fewer tiles: it admits none while the spill
-ahead of the output is past half the cap (`diagnostics.resources.window.spill_rows` is the mean rows held at its
-refusals), and it evicts the durable certificates behind the output to keep room, so a crash relists those keys.
-Rows still leave through one part writer while listing, so such a run can be bound by that writer rather than by
-listing. A cut file without counts keeps the cold run's spill ([disk sizing](size-a-run.md#disk-sizing)). The previous dataset also gives
-the size to plan for: its row count is in its manifest (`swath show PREVIOUS-DATASET`).
+## Refresh from the previous dataset
+
+To list a bucket again, write a new dataset and pass the previous one as `--seed-from`:
+
+```text
+$ swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 \
+    -o noaa-2 --seed-from noaa --report noaa-2.json
+  complete: 5,252 objects, 383 GiB in 0.5s → noaa-2 (1 part, 121 KiB)
+  next: swath show noaa-2 · swath du --from-dataset noaa-2
+```
+
+The previous dataset says where the bucket's keys fall, so the run divides the work into ranges of about equal
+numbers of keys from the start instead of discovering the key space as it goes. This run sent 7 requests
+(the report's `requests.http_attempts`) where the same listing without `--seed-from` sent 32. With a dataset (or
+a cut file with counts, below) a run's requests approach one per 1,000 keys on S3 and GCS and one per 5,000 on
+Azure Blob. The report's `invocation.prior` names what was used (swath calls the previous dataset the prior):
+
+```json
+{
+  "path": "noaa",
+  "source": "dataset",
+  "cuts": 6,
+  "counted": true,
+  "cuts_file": "read"
+}
+```
+
+Here the previous dataset's cut file (`cuts_file` `read`, [the cut file](dataset.md#the-cut-file)) gave 6 cut
+points with the number of keys between them (`counted`).
+
+**It does not skip unchanged objects.** A seeded run lists every key again and copies nothing from the previous
+dataset: the new dataset has the same rows as a listing without `--seed-from`. What it saves is the work of
+finding how the keys are spread: requests and time at the start, not the listing itself.
+
+**The source and scope must match.** The previous dataset's source kind, bucket (on Azure, container) and
+prefix are compared with the run's (the prefix an `--include` narrows the listing to, if any), and a mismatch
+is refused before listing (exit 2): a dataset of `logs/` does not seed `logs/2026/`.
+
+```text
+swath: --seed-from noaa: unusable prior: the prior was taken under the prefix "stofs_2d_glo.20230113/", the run lists "stofs_2d_glo.20230113/00/"
+```
+
+The endpoint and the region are not recorded in the dataset, so they are not compared. On Azure the dataset
+records its account, but the account is not compared: make sure the previous dataset is of the same
+account. The previous dataset cannot be the output directory, so `--overwrite`
+of the directory it is in is refused: write each refresh to a new directory, as above.
+
+**When it helps.** Use it for repeat listings of a bucket whose keys are spread much as they were last time: the
+run saves the requests that find the key space, and it still lists correctly when the bucket has changed since
+([measurements](internals/measurements.md#warm-start-from-the-previous-dataset---seed-from)).
+Seeded from a dataset or a cut file with counts, a sorted run also lists the bucket front to back, so the rows
+held ahead of the output, and the spill disk they take, stay bounded instead of growing with the bucket. That
+is expected, not guaranteed: a region that grew since the previous dataset can still take more, so keep the
+spill disk sized for the bucket's growth ([disk sizing](size-a-run.md#disk-sizing);
+[how](internals/ordering.md#the-frontier-window)). The previous dataset also gives the size to plan for:
+`swath show PREVIOUS` prints its object count.
+
+**Its limits:**
+
+- Local and mounted filesystems take no `--seed-from`: `unusable prior: ... the local source does not list in
+  key ranges` (exit 2).
+- A previous dataset far out of date (a part of the keyspace grown many times since) can make a run with a very
+  high worker count and a small spill cap crawl or time out, when the grown region needs more spill than the
+  cap holds. Give a larger `--spill-budget` or more spill disk, fewer workers, or list without `--seed-from`.
+- On Azure Blob, a previous dataset whose key pages end at a blob name longer than 1,024 bytes fails the run,
+  and its resume fails at the same name: list without `--seed-from`.
+
+These are also in [Known limits](troubleshooting.md#known-limits).
+
+**A dataset in a bucket.** `--seed-from` reads a local path: copy the dataset's `PREFIX/cuts.txt` and pass that
+file ([the cut file](dataset.md#the-cut-file)).
+
+**A cut file from elsewhere.** Anything else that knows the keys (an S3 Inventory, a list of prefixes) can seed
+a run as a cut file, but a cut file records no source, so only its keys are checked: prefer the dataset. A cut
+file holds one key per line, ascending bytewise without repeats, each inside the scope, optionally followed by a
+tab and the number of keys expected since the previous line (on every line or none); at most 262,144 lines and
+16 MiB (thin a larger one: every nth line, its count the sum of the lines it replaces). An unsorted or repeated
+key, a key outside the scope or a file past those bounds is refused (exit 2). A cut file without counts divides
+the work but does not bound the spill.
+
+**Resuming a seeded run.** `swath resume` reads `--seed-from` again and may change or drop it
+(`--seed-from=`); a resume whose previous dataset cannot be read warns and lists without it.

@@ -1,6 +1,6 @@
 ---
 title: Sources (moved)
-description: Each source now has its own page; this address forwards to Choose a source.
+description: Each source has its own page; this address forwards to Choose a source.
 search: false
 editLink: false
 prev: false
@@ -16,4 +16,4 @@ head:
 
 # Sources have moved
 
-Each source now has its own page: start from [Choose a source](../../docs/sources/README.md).
+Each source has its own page: start from [Choose a source](../../docs/sources/README.md).

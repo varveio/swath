@@ -1,65 +1,139 @@
-# Running swath
+# Run large listings
 
-How to run one large listing: the command, the output directory it needs, the outcome it leaves and the limits
-that stop it. Running it unattended, on a schedule and under a supervisor, is
-[Running swath in production](production.md); what each exit code means is [Exit codes](reference/exit-codes.md).
+This page lists a bucket of your own into a saved inventory, start to finish: the command, what it prints while
+it runs and when it ends, how to stop it, and where the result is. It assumes you have followed
+[Your first inventory](first-inventory.md) and can reach your store: its URL, credentials and permissions are on
+its [source page](sources/README.md).
+
+## The command
 
 ```bash
-swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
-  --seed-from /data/inv-2026-11-09 \
-  --report /var/log/swath/inv-2026-11-10.attempt-1.json \
-  --max-duration 6h
+swath list s3://bucket/prefix/ -o inventory --max-duration 6h
 ```
 
-Each question a long run raises has its own page:
+- `s3://bucket/prefix/` is what to list: a bucket, or a prefix in it. `gs://bucket/prefix/` and
+  `az://account/container/prefix/` work the same way.
+- `-o inventory` writes a swath dataset, sorted Parquet parts and a `manifest.json` that commits them, to the
+  directory `inventory`. It must be new or empty: a non-empty one is refused (exit 2) unless you give
+  `--overwrite`, which replaces only a previous swath dataset. Put it on a disk with room for the dataset and for
+  its spill, the temporary sorting data a sorted run writes there on its way
+  ([disk sizing](size-a-run.md#disk-sizing)). When you list a mounted filesystem, keep the directory outside the
+  tree you list.
+- `--max-duration 6h` stops the run if it is still going after six hours (exit 124); `swath resume` can
+  continue it. There is no limit by default. Give one to every run you will not watch: it is the one stop for a
+  service that keeps returning rows without the listing ever finishing.
+
+The workers (64 by default), memory and disk need no flag for a first run. For a bucket of hundreds of
+millions of objects, read [Size a run](size-a-run.md) first.
+
+## While it runs
+
+On a terminal, swath draws one progress line on stderr, redrawn every second:
+
+```text
+  listing · 1,441,002 objects · 51.6 TiB · 2.0s elapsed · 969,817 keys/s (avg 720,501) · 0 parts · 63 in flight · 1,510 API calls
+```
+
+It shows the objects listed and their bytes, the time and the rate, the Parquet parts written, then the
+requests in flight and the requests sent, and last an estimate of their cost when swath knows the store's price
+(left out here). There is no percentage: a listing does not know its total in advance. On a large bucket
+`parts` can stay at 0 for a long time: swath lists the whole key space at once, holds the rows that are not yet
+next in key order (on disk once its memory budget is full), and writes them out in order, much of it near the end of
+the run.
+
+When stderr is not a terminal (a log, a scheduler), add `--progress` to get the same line every 30 seconds.
+What each number means, the file `inventory/.swath/progress.json` and the signs of trouble are in
+[Watch and tune a run](watch-a-run.md).
+
+## When it ends
+
+The run ends with two closing lines on stderr. On a public prefix of 5,252 objects:
+
+```text
+  complete: 5,252 objects, 383 GiB in 0.9s → inventory (1 part, 121 KiB)
+  next: swath show inventory · swath du --from-dataset inventory
+```
+
+`complete` and exit code 0 mean the dataset is committed and covers the whole prefix. The directory now holds
+`data/` (the Parquet parts), `manifest.json`, `run.json` (the run report), `cuts.txt` (for the next listing,
+[below](#list-it-again)) and `.swath/` (the run's workspace, which readers ignore). `swath show inventory`
+prints the verdict, what was listed and when, and the coverage; [Query an inventory](query.md) reads the rows.
+
+A run that stops early says why on its first closing line, and on the second what to run next:
+
+| Closing line | Exit | What to do |
+|---|---|---|
+| `interrupted` | 129, 130, 143 | `swath resume inventory` ([below](#stop-it-and-continue)) |
+| `stopped: --max-duration reached` | 124 | `swath resume inventory`, which keeps the recorded deadline; `swath resume inventory --max-duration 0` lifts it |
+| `partial: N unreadable entries` (a mounted filesystem) | 3 | the dataset is committed without the entries that could not be read; fix their permissions and list again ([coverage](results.md#coverage-and-unreadable-entries)) |
+
+A run that fails before listing starts, on a bucket that does not exist or access that is denied, prints one
+`swath:` line with the cause (exit 1). A run that fails later prints a `failed:` closing line first, then the
+`swath:` line; here the output directory's `data/` could not be written:
+
+```text
+  failed: 5,252 objects, 383 GiB in 6.0s · 869 keys/s
+swath: encode: publish part 0: renameat .swath/parts/part-00000.parquet.claimed data/part-00000.parquet: permission denied
+```
+
+[Troubleshooting](troubleshooting.md) has each message and its fix, and [Exit codes](reference/exit-codes.md)
+every code, the stuck run (75) and the full disk (74) among them.
+
+<a id="limits-and-the-outcome-of-record"></a>For a script, the exit code and a file in the directory are the
+outcome: `inventory/run.json` beside a committed dataset, else `inventory/error.json`, each with `class`,
+`exit_code` and `resumable`. `--report FILE` keeps a copy of each attempt's full report: give each attempt a
+new path outside the output directory ([Run report](reference/run-report.md)).
+
+## Stop it and continue
+
+Ctrl-C (SIGINT), SIGTERM, and closing the terminal (SIGHUP, unless the run is under `nohup`) stop the run
+cleanly: the parts already written stay, and `error.json` records the stop.
+
+```text
+  interrupted: 0 saved, 2,233,277 listed in 3.0s · 746,666 keys/s → inventory
+  next: swath resume inventory
+```
+
+`saved` counts the rows in written parts; rows listed but not yet saved may be listed again. To continue:
+
+```bash
+swath resume inventory
+```
+
+The resume replays the recorded command, keeps the saved parts and continues after them. `swath show inventory`
+says where a stopped run is. To start over instead, run the command again with `--overwrite`, or into a new
+directory. A run of a mounted filesystem keeps no journal and cannot be resumed: run it again with
+`--overwrite`. What a resume keeps and when it is refused: [Stop, resume and refresh](resume-and-refresh.md).
+
+## List it again
+
+To refresh the inventory later, list into a new directory and pass the previous dataset as `--seed-from`:
+
+```bash
+swath list s3://bucket/prefix/ -o inventory-2 --seed-from inventory --max-duration 6h
+```
+
+The previous dataset must be of the same bucket and prefix (S3, GCS and Azure Blob; a mounted filesystem
+takes none). It tells swath how the keys are spread, so the run divides the work up front instead
+of finding it as it goes; the rows are the same
+([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). Keep the old directory until readers
+have moved to the new one. `--overwrite` replaces a dataset in place instead
+([overwrite and refresh](resume-and-refresh.md#overwrite-and-refresh)), and a nightly run under a supervisor is
+in [Run on a schedule](production.md).
+
+## More
 
 - <a id="sizing-a-run"></a><a id="disk"></a><a id="memory"></a><a id="cost"></a>[Size a run](size-a-run.md):
-  disk, memory and the cost of requests.
-- <a id="watching-a-run"></a><a id="throttling"></a>[Watch and tune a run](watch-a-run.md): the progress line,
-  the progress file, the signals to read, throttling and the flags to change.
+  workers, disk, memory and the cost of requests.
+- <a id="watching-a-run"></a><a id="throttling"></a>[Watch and tune a run](watch-a-run.md): the progress line
+  and file, the closing lines, throttling, memory and disk, a stuck run.
 - <a id="stopping-and-resuming"></a><a id="overwrite-and-refresh"></a><a id="seeding-a-refresh-from-the-previous-dataset"></a>[Stop, resume and refresh](resume-and-refresh.md):
-  signals, `swath resume`, replacing an inventory and seeding a refresh from the previous one.
+  signals, `swath resume`, replacing an inventory and seeding a refresh.
+- [Run on a schedule](production.md): a nightly run under a supervisor, a dataset written to a bucket,
+  preemptible machines.
 - <a id="listing-every-version"></a>[List every version](all-versions.md): S3 versions and delete markers, GCS
   generations, Azure Blob versions, snapshots and soft-deleted blobs.
 - <a id="reading-the-output"></a><a id="verify-a-dataset"></a>[Query an inventory](query.md): reading and
   verifying the dataset a run writes.
 - <a id="known-limits"></a>[Known limits](troubleshooting.md#known-limits): platforms, power loss, live scans
   and the scale measured so far.
-
-## Limits and the outcome of record
-
-- **Output directory.** `-o DIR` must be empty or absent. A non-empty directory is refused (exit 2) unless
-  `--overwrite`, which replaces only a previous dataset of this tool. For a local source the output may not be
-  the listed root or contain it; a new or empty directory inside the root is accepted (the listing skips it),
-  but `--overwrite` of an output inside the root is refused, and a non-empty one is refused saying so: write
-  to a new directory outside the root.
-- **The outcome of record** is the exit code plus the report written to `--report FILE` when the attempt ends,
-  on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
-  The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
-  the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  Its schema: [Run report and progress file](reference/run-report.md).
-- **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
-  The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
-  that keeps returning rows or pages forever. Give every unattended attempt one.
-- **Process deadline.** A stop is graceful; if the run has not stopped 15 s later the process writes its
-  outcome and exits, at most 20 s after the stop. A supervisor's own kill deadline belongs above
-  `--max-duration` plus 20 s. An attempt killed that way may have no report: treat it as unavailable, never as
-  the outcome in an older `error.json`.
-- **`--part-interval`** (default 30 s; 0: size only) closes an open part that holds rows once it is that old.
-  It bounds how long rows wait in an open part, not the age of the durable recovery point (what a resume
-  keeps): a closed part is still encoded, synced and published in order, and when no rows reach the output
-  (a stalled frontier) nothing is open to close. `part_age_ms` in the progress file is the time since a part was
-  last published; it says nothing about how old the rows in the newest part are, nor how much listed work
-  a resume would repeat. With 0, part boundaries do not depend on timing.
-  Once listing is done and the rest of a sorted run is written as parallel segments
-  (`diagnostics.resources.drain.segments.reason` `engaged`), the interval closes no part: the tail is cut by size and row
-  count only ([ordering](internals/ordering.md#segments-parts-written-in-parallel-after-listing)). The tail's
-  workers are at most one per two processors (at least 8); with them the tail is CPU-bound on Parquet encoding
-  and spill read-back (`diagnostics.resources.drain.segments.write_ns`, `read_ns`, `decode_ns`).
-- **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
-  service for that long (exit 75). A warning is printed at half.
-- **`--spill-wait-timeout`** (default 0: wait) stops a sorted run whose listing has waited that long on a
-  full spill cap (exit 74, `cause` `spill_budget`). A dataset run of an object store (one with a journal)
-  resumes with more disk or a larger `--spill-budget`; text output and a local tree run again.
-  Without it the run goes on at the output's pace, and says so on stderr after 2 minutes
-  ([three bad patterns](watch-a-run.md#three-bad-patterns)).

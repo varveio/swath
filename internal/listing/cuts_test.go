@@ -263,6 +263,40 @@ func TestCutsFile(t *testing.T) {
 	sameDataset(t, "unwritten", ref, out)
 }
 
+// TestCutsFileSeededSourcesOnly: the cut file is for the next listing's
+// --seed-from, which a local tree refuses (seedFrom). An object store's
+// dataset carries one; a local tree's has none, and an --overwrite of a
+// local dataset that holds one (an earlier build wrote it) leaves none.
+func TestCutsFileSeededSourcesOnly(t *testing.T) {
+	bucket := filepath.Join(t.TempDir(), "bucket")
+	if _, err := Run(context.Background(), crashConfig(crashBucket(t), bucket, false)); err != nil {
+		t.Fatal(err)
+	}
+	requireCuts(t, "object store", bucket)
+	src := t.TempDir()
+	mk(t, src, "a/1", "a/2", "b", "z/y/x")
+	out := filepath.Join(t.TempDir(), "tree")
+	noCuts := func(name string) {
+		t.Helper()
+		checkContract(t, out)
+		if _, err := os.Stat(filepath.Join(out, dataset.CutsName)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s: a local dataset holds a cut file: %v", name, err)
+		}
+	}
+	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}}); err != nil {
+		t.Fatal(err)
+	}
+	noCuts("listed")
+	if err := os.WriteFile(filepath.Join(out, dataset.CutsName), []byte("a/1\t2\nz/y/x\t5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Replace: true}})
+	if err != nil || !sum.Output.Replaced {
+		t.Fatalf("overwrite: %v, replaced %v", err, sum.Output.Replaced)
+	}
+	noCuts("overwritten")
+}
+
 // TestCutsFileKeyBytes: keys holding tabs, carriage returns, digits after
 // a tab and multibyte characters are cuts as any other; a key holding a
 // line feed (two in five here) is not written (its rows count toward the next line), so the

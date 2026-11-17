@@ -237,7 +237,18 @@ held (`retainedCuts`), and the run's cuts joined after theirs, so a resumed data
 run's. The reads stop when the run is stopped; a bucket's also when their own bound runs out (the aftermath's
 length, `FinalizeTimeout`, after the orphan cleanup and `run.json`), and the run commits without the file,
 warning once. A local file is replaced durably beside the manifest; a bucket's is created only if absent. The
-manifest and the parts do not depend on it.
+manifest and the parts do not depend on it. A source that takes no prior (not `source.Seeded`: a local tree) gets
+no cut file (`writeCuts` returns at once); an `--overwrite` retires the replaced dataset's with its other entries.
+
+What the file holds follows from that. A cut falls only where a 1,024-row key page the writer filled ends,
+never where the next page continues a key's versions. With R rows a cut, it is the first such page end where the
+dataset's rows reach each multiple of R; R is the least power of two (1: every page end) that keeps the file
+within its bounds, 262,144 lines and 16 MiB. With keys of about 60 bytes that is every page end up to about 250
+million rows, then one cut about every 8,192 rows at 2 billion and every 131,072 at 30 billion, about 16 MB at
+most; longer keys double R sooner. A key holding a line feed cannot be a line: its rows count toward the next
+line, and a dataset whose last key holds one has no cut file. When `--seed-from DIR` takes the file as its prior,
+and when it reads the parts' key page index instead, is the range engine's warm start
+([range-engine.md](range-engine.md), "Warm start").
 
 ```text
 out/
@@ -245,7 +256,7 @@ out/
                                 order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 SeekParquet: version, schema id, key, ordered parts with exact bounds; swath's
                                 source, scope and coverage under extensions.swath; each part's sha256 (the commit)
-  cuts.txt                      the cut file, for the next --seed-from (advisory, written last)
+  cuts.txt                      the cut file, for the next --seed-from (advisory, written last; not for a local tree)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json
@@ -297,6 +308,39 @@ before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 
+## Validating a dataset
+
+The user pages check a copied dataset's parts against the manifest's SHA-256 digests and read its coverage
+with `swath show` ([query.md](../query.md#verify-a-dataset)). The format, key order and pages take one of two
+validators, run by hand on a local copy.
+
+**SeekParquet's validator** ([the "Validating" section of its `go/README.md`](https://github.com/varveio/seekparquet)).
+From the root of a SeekParquet checkout that includes `cmd/seekparquet` and supports this dataset's format
+(format version 0, draft revision 1): swath pins `github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the
+release that fixed draft revision 1; use that release (tag `go/v0.2.0`) or a later one with a matching format.
+
+```bash
+go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
+go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
+```
+
+`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
+swath declares one for every part. `full` separately checks the format, key order and decoded pages
+(including the structural and profile levels); it does not check digests or swath's extension and
+schema semantics. Neither proves that the listing covers the source intended. The validator exits 0 when all
+requested levels complete, 1 when any level fails, and 2 when validation is incomplete, cannot run, or the
+arguments are invalid. With `go run`, a nonzero validator status is printed as `exit status N`; the `go`
+command itself exits 1. CI runs the same validator levels ([testing.md](testing.md#seekparquet-conformance)).
+
+**`verify.py`**, from the repository root with DuckDB installed: `python3 verify.py /path/to/dataset`. It checks
+S3, GCS, Azure Blob and local datasets independently of the Go reader: swath metadata, schema-specific rules,
+row counts, key order and the manifest's part bounds, footer stamps and part SHA-256 digests; for Azure also
+the `azure` source kind and every part's column types and nullability, including UTC microsecond timestamps.
+It expects the producer's flat `data/part-NNNNN.parquet` layout and `run.json`, so it is not a general
+validator for a bucket dataset copied locally with its nested run/attempt part paths. A dataset with no parts
+(an empty source) fails it: DuckDB finds no file to read in `data/`, and the script stops with that error,
+exit 1. Its checks and optional reference comparison: [testing.md](testing.md#verifypy).
+
 ## Schemas
 
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
@@ -331,7 +375,9 @@ carry no link identity: `swath du --from-dataset` counts such a dataset's hard-l
 the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
 declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
-the dataset's columns (`registry.DatasetTotals`).
+the dataset's columns (`registry.DatasetTotals`). It seeks to SOURCE's prefix and reads the key and only the
+columns the totals and the filters need, in parallel scans, once every part's footer and columns are checked
+against the dataset's schema (a dataset that breaks it is refused, exit 1).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer
