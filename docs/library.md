@@ -11,6 +11,7 @@ The library is **experimental**: it is implemented and tested, but its API may c
 |---|---|
 | `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup` and `Close` |
 | `github.com/varveio/swath/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
+| `github.com/varveio/swath/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
@@ -110,6 +111,42 @@ To count or trace the requests a call sends, put an `objfile.Observer` on its co
 for dataset reads: every attempt, retries included, is reported to it, a page's as a list request and a lookup's
 HeadObject and HeadBucket as metadata requests.
 
+## Azure Blob Storage
+
+`azblob.Open` takes the account and the container as `ACCOUNT/CONTAINER`:
+
+```go
+src, err := azblob.Open(ctx, "exampleaccount/logs", azblob.Options{})
+if err != nil {
+	log.Fatal(err)
+}
+defer src.Close()
+```
+
+The rest is as on S3: the same `Page`, `Lookup` and `Close`, checks, tokens, evidence and error classes. The
+package's [`Example`](../azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
+replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, say), unsigned access to a public container and the same two
+request limits; credentials otherwise come from the environment, as for the command: `AZURE_STORAGE_SAS_TOKEN`, else
+`AZURE_STORAGE_KEY`, else Entra ID ([Authentication and permissions](sources/azure.md#authentication-and-permissions)).
+`Open` sends nothing.
+
+What differs from S3:
+
+- **Order.** Azure lists a level in UTF-16 order, not byte order: names at U+10000 and above (emoji, say) come before
+  those in U+E000..U+FFFF (fullwidth forms). An account with a hierarchical namespace lists in that namespace's own
+  order, which puts `a/` before `a-b`. A level that one answer of Azure holds (up to 5,000 entries) is sorted into
+  byte order, and while a level is sorted each of its pages reads it whole again. A longer level is paged in Azure's
+  order and checked, and is `listing.ErrUnsupported` from the page where it shows a key out of byte order: sorting each
+  page cannot make byte order across pages.
+- **Hierarchical namespaces.** Unlike the command, the library lists them. Azure lists each directory as a prefix and
+  as a blob marked `hdi_isfolder=true`; a page has it once, as the prefix, and a lookup of the directory's name answers
+  present with the prefix's entry. A level longer than one answer that holds a directory is `listing.ErrUnsupported`.
+- **Lookups.** A key is absent only when Get Blob Properties finds no blob and a listing of the container then
+  succeeds; a 403, a missing container (`listing.ErrNotFound`) and a failed listing leave it unknown. A page needs
+  permission to list the container's blobs; a lookup needs permission to read the blob's properties, and to list to show
+  a key absent. A request is reported to an `objfile.Observer` as a list request (List Blobs, the probe included) or a
+  metadata request (Get Blob Properties).
+
 ## Run the command line
 
 A program that needs a whole run, with its flags, output, progress files and exit codes, rather than one page or
@@ -137,5 +174,5 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 
 ## Not in the library yet
 
-The library answers Page and Lookup on S3. Walk and Summarize, which list a whole prefix, and the GCS, Azure and
-local sources are not in it yet. A source's request limits hold within one process only.
+The library answers Page and Lookup on S3 and Azure Blob Storage. Walk and Summarize, which list a whole prefix, and the
+GCS and local sources are not in it yet. A source's request limits hold within one process only.
