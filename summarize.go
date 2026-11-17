@@ -83,7 +83,7 @@ func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts l
 // request, and returns the kinds counted: counted[k] for each.
 func checkSummary(targets []listing.Target, opts listing.SummaryOptions) ([]bool, error) {
 	b := opts.Budget
-	if b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0 {
+	if b.MaxEntries < 0 || b.MaxDuration < 0 {
 		return nil, invalid("a negative bound")
 	}
 	for _, t := range targets {
@@ -140,7 +140,7 @@ type summary struct {
 // left is the budget what the call has spent leaves: StopCompleted while
 // it holds, else the bound reached.
 func (s *summary) left() (listing.Budget, listing.StopReason) {
-	b := listing.Budget{MaxHeldBytes: s.budget.MaxHeldBytes}
+	var b listing.Budget
 	if s.budget.MaxEntries > 0 {
 		if b.MaxEntries = s.budget.MaxEntries - s.used; b.MaxEntries <= 0 {
 			return b, listing.StopEntryBudget

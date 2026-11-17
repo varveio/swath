@@ -222,7 +222,7 @@ func TestRequestChecks(t *testing.T) {
 		"local walk no slash":     second(files.Walk(ctx, listing.WalkRequest{Prefix: []byte("d")}, emit)),
 		"negative workers":        second(objects.Walk(ctx, listing.WalkRequest{Workers: -1}, emit)),
 		"no emit":                 second(objects.Walk(ctx, listing.WalkRequest{}, nil)),
-		"negative budget":         second(objects.Walk(ctx, listing.WalkRequest{Budget: listing.Budget{MaxValueBytes: -1}}, emit)),
+		"negative budget":         second(objects.Walk(ctx, listing.WalkRequest{Budget: listing.Budget{MaxEntries: -1}}, emit)),
 		"no kind":                 third(objects.Summarize(ctx, nil, listing.SummaryOptions{Kinds: []listing.Kind{0}})),
 		"empty exact target":      third(objects.Summarize(ctx, []listing.Target{{}}, listing.SummaryOptions{})),
 		"local subtree no slash":  third(files.Summarize(ctx, []listing.Target{{Key: []byte("d"), Subtree: true}}, listing.SummaryOptions{})),

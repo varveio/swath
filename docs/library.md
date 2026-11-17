@@ -338,8 +338,7 @@ library guarantees:
   and inode and to the prefix. A page reads its whole directory and sorts it to choose its entries:
   `Options.MaxHeldBytes` (64 MiB by default, a name counting its length plus 64 bytes) bounds the names it
   holds, and a directory past it fails the page with `local.ErrTooWide`, which also matches
-  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work,
-  its `MaxScanned` does not yet.
+  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work.
 - **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
   than a directory, a symbolic link included, `listing.ErrNotDirectory`; one with a symbolic link on the way,
   which is not followed, `listing.ErrUnsupported`: not reached, never absent. A refusal is `listing.ErrAuth`, a

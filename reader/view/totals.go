@@ -80,15 +80,14 @@ const (
 	reduceUnallocated
 )
 
-// errUnknownTotal reports a reduction SeekParquet left unknown with no
-// budget in force, which reads every value it needs.
-var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown without a budget")
+// errUnknownTotal reports a reduction SeekParquet left unknown, which with
+// no value budget it reads every value to give.
+var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown")
 
 // aggregate counts and sums the rows of the selection's kinds in each
-// span, in one aggregation: an element is nil where the value budget
-// (SeekParquet's: -1 for none) did not reach the span. checkKeys checks
-// the order of every key it counts.
-func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection, budget int64, checkKeys bool) ([]*listing.Totals, error) {
+// span, in one aggregation that reads every value it needs. checkKeys
+// checks the order of every key it counts.
+func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection, checkKeys bool) ([]*listing.Totals, error) {
 	out := make([]*listing.Totals, len(spans))
 	if len(spans) == 0 {
 		return out, nil
@@ -104,33 +103,25 @@ func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan
 	if inv.rows.local {
 		reductions = localReductions
 	}
-	opt := seekparquet.AggregateOptions{ValueBudgetBytes: budget, Workers: runtime.GOMAXPROCS(0), CheckKeys: checkKeys, Filter: inv.filter(sel)}
+	opt := seekparquet.AggregateOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: checkKeys, Filter: inv.filter(sel)}
 	results, err := inv.sp.AggregateRows(ctx, spans, reductions, opt, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, r := range results {
-		if out[i], err = inv.totals(r, budget >= 0); err != nil {
+		if out[i], err = inv.totals(r); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-// totals reads one span's reductions: nil when a value budget did not
-// reach them. A sum that overflows, or that a counted row cannot supply,
-// is nil.
-func (inv *Inventory) totals(r []seekparquet.AggregateResult, bounded bool) (*listing.Totals, error) {
+// totals reads one span's reductions. A sum that overflows, or that a
+// counted row cannot supply, is nil.
+func (inv *Inventory) totals(r []seekparquet.AggregateResult) (*listing.Totals, error) {
 	for _, x := range r {
-		switch x.Status {
-		case seekparquet.AggregateExact, seekparquet.AggregateOverflow:
-		case seekparquet.AggregateBudgetExceeded, seekparquet.AggregateUnpriced:
-			return nil, nil
-		default:
-			if bounded {
-				return nil, nil
-			}
+		if x.Status != seekparquet.AggregateExact && x.Status != seekparquet.AggregateOverflow {
 			return nil, errUnknownTotal
 		}
 	}

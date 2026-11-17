@@ -21,9 +21,9 @@ const tokenVersion = "inv1"
 
 // binding is the part of a token that ties it to one inventory, by its
 // manifest digest, to one prefix, and to what the request's child totals
-// count: none, or the kinds totals selects. Limit, MaxScanned, MaxDuration
-// and the child totals' Budget bound one page's work, not what the level
-// holds, and may change from page to page. Tokens are not signed: the
+// count: none, or the kinds totals selects. Limit, MaxDuration and the
+// child totals' Budget bound one page's work, not what the level holds,
+// and may change from page to page. Tokens are not signed: the
 // binding detects a token used with another inventory, prefix or count,
 // not a forged one.
 func (inv *Inventory) binding(prefix []byte, totals *selection) string {

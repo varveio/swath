@@ -207,19 +207,10 @@ func (inv *Inventory) checkKey(key []byte) error {
 
 // checkBudget refuses a negative bound.
 func checkBudget(b listing.Budget) error {
-	if b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0 {
+	if b.MaxEntries < 0 || b.MaxDuration < 0 {
 		return invalid("a negative bound")
 	}
 	return nil
-}
-
-// valueBudget is SeekParquet's value budget for MaxValueBytes: -1, no
-// bound, for zero.
-func valueBudget(b listing.Budget) int64 {
-	if b.MaxValueBytes == 0 {
-		return -1
-	}
-	return b.MaxValueBytes
 }
 
 // errTimeBudget is the cause of a call's context ending at its

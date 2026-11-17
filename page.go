@@ -37,10 +37,9 @@ import (
 // (the bucket and what decides which bucket of that name it is), to the
 // prefix and to whether, and with what kinds, req.ChildTotals is set; one
 // issued for another is ErrInvalidToken, before any request. A live source
-// returns no child totals. req.MaxScanned never stops a page: it reads
-// what it returns. When req.MaxDuration ends a page it holds no entry,
-// its Next is req.Token, which asks again, and its Evidence.Stop is
-// StopTimeBudget.
+// returns no child totals. When req.MaxDuration ends a page it holds no
+// entry, its Next is req.Token, which asks again, and its Evidence.Stop
+// is StopTimeBudget.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	totals, err := checkPage(req)
 	if err != nil {
@@ -90,14 +89,14 @@ func checkPage(req listing.PageRequest) ([]byte, error) {
 		return nil, invalid("the prefix is not UTF-8")
 	case req.Limit < 1:
 		return nil, invalid("a page's Limit is positive")
-	case req.MaxScanned < 0 || req.MaxDuration < 0:
+	case req.MaxDuration < 0:
 		return nil, invalid("a negative bound")
 	case req.ChildTotals == nil:
 		return nil, nil
 	}
 
 	b := req.ChildTotals.Budget
-	if b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0 {
+	if b.MaxEntries < 0 || b.MaxDuration < 0 {
 		return nil, invalid("a negative bound")
 	}
 	kinds := req.ChildTotals.Kinds

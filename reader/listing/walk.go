@@ -12,28 +12,17 @@ import "time"
 // inventory's key intervals. A negative bound is ErrInvalidRequest.
 type Budget struct {
 	// MaxEntries bounds the entries read. A walk counts the entries it
-	// hands to emit, the prefix's own entry included. Workers stop at the next batch boundary, so a
-	// walk may deliver up to one batch per worker past the bound, and a
-	// total it cuts short stays a lower bound. An inventory's Summarize
-	// counts the rows it reads at and under its targets, each once, the
-	// entries at exact targets' keys included. Zero sets no bound.
+	// hands to emit, the prefix's own entry included. Workers stop at the
+	// next batch boundary, so a walk may deliver up to one batch per worker
+	// past the bound, and a total it cuts short stays a lower bound. An
+	// inventory's Summarize counts the rows it reads at and under its
+	// targets, each once, the entries at exact targets' keys included.
+	// Zero sets no bound.
 	MaxEntries int64
 	// MaxDuration bounds the call's time, including the time emit takes.
 	// Zero sets no bound. Unlike a deadline on ctx, which ends the call
 	// with the context's error, reaching it returns what was read.
 	MaxDuration time.Duration
-	// MaxHeldBytes bounds the memory a live call holds for its own
-	// checks, such as the names of each directory whose enumeration has
-	// not ended. Zero selects the backend's default: the bound is never
-	// lifted, and a directory too wide for it ends as an UnreadListing of
-	// class UnreadBudget.
-	MaxHeldBytes int64
-	// MaxValueBytes bounds the compressed value pages an inventory reads
-	// to decode entries, count and sum (SeekParquet's value budget), in a
-	// Summarize or a page's child totals. Reaching it stops the
-	// call with StopValueBudget. A live source reads no such pages and
-	// ignores it. Zero sets no bound.
-	MaxValueBytes int64
 }
 
 // WalkRequest asks for every entry at or under a prefix.

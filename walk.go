@@ -59,8 +59,7 @@ var (
 // with no error, and every key interval left unread is handed to emit as
 // an UnreadInterval of class UnreadBudget, before Walk returns. A walk
 // that meets more unread extents than it holds at once (65,536) drops the
-// rest and says so with a nil Evidence.Unlocated. MaxHeldBytes and
-// MaxValueBytes do not bound a walk of an object store. When ctx ends,
+// rest and says so with a nil Evidence.Unlocated. When ctx ends,
 // Walk returns its error, even when emit has accepted every batch. A panic
 // in the walk's workers is returned as an error of no class.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
@@ -122,7 +121,7 @@ func checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) erro
 		return invalid("the prefix is not UTF-8")
 	case req.Workers < 0:
 		return invalid("a negative number of workers")
-	case b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0:
+	case b.MaxEntries < 0 || b.MaxDuration < 0:
 		return invalid("a negative bound")
 	}
 	return nil

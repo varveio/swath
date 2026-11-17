@@ -24,7 +24,6 @@ import (
 // where it stops is one key: it hands emit a last batch holding the
 // interval after the last key it handed, of class UnreadBudget, and
 // Evidence.Stop names the bound. It stops exactly at MaxEntries.
-// MaxValueBytes and MaxHeldBytes do not bound it.
 //
 // A local prefix the inventory has as another kind, or below a symbolic
 // link, is ErrNotDirectory; one it lacks, ErrNotFound when it proves the

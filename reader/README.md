@@ -156,9 +156,8 @@ dataset. `view.Open(d)` reads nothing; it refuses a dataset of versions, whose k
 records no scope, with `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque
 tokens bound to the manifest digest, the prefix and the kinds the child totals count, and optional child totals
 within a budget; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards when unbudgeted;
-`Summarize` reads the entries at its targets' keys, then aggregates its subtree
-targets' rows in one `AggregateRows` call, checking their key order, both within one entry, value-byte and time
-budget. An object store's prefix may be any key prefix; a local one is empty or a directory key, and a local
+`Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one `AggregateRows`
+call, checking their key order, both within one entry and time budget. An object store's prefix may be any key prefix; a local one is empty or a directory key, and a local
 inventory has no row for its root.
 
 Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes (`sha256:` and its hex), the

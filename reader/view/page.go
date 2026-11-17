@@ -24,9 +24,9 @@ import (
 // A prefix outside the inventory's scope is ErrOutOfScope. A local
 // directory the inventory has as another kind, or below a symbolic link,
 // is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
-// absence, and an empty page otherwise. req.MaxScanned never stops it: it reads the children it
-// returns. When req.MaxDuration ends the page it holds no entry, and its
-// Next is req.Token, which starts the page again.
+// absence, and an empty page otherwise. When req.MaxDuration ends the
+// page it holds no entry, and its Next is req.Token, which starts the
+// page again.
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
@@ -135,7 +135,7 @@ func (inv *Inventory) checkPage(req listing.PageRequest) (*selection, error) {
 	switch {
 	case req.Limit < 1 || req.Limit >= math.MaxInt-1:
 		return nil, invalid("a page's Limit is positive")
-	case req.MaxScanned < 0 || req.MaxDuration < 0:
+	case req.MaxDuration < 0:
 		return nil, invalid("a negative bound")
 	case req.ChildTotals == nil:
 		return nil, nil
@@ -235,7 +235,7 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 
 	totalsCtx, cancel := withBudget(op, budget.MaxDuration)
 	defer cancel()
-	totals, err := inv.aggregate(totalsCtx, spans, sel, valueBudget(budget), false)
+	totals, err := inv.aggregate(totalsCtx, spans, sel, false)
 	if err != nil {
 		if ctx.Err() == nil && totalsCtx.Err() != nil {
 			return out, nil

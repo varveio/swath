@@ -228,19 +228,14 @@ func TestPageChildTotals(t *testing.T) {
 
 	ctx := context.Background()
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	for name, b := range map[string]listing.Budget{
-		"value bytes": {MaxValueBytes: 1},
-		"entries":     {MaxEntries: 3},
-	} {
-		p, err := inv.Page(ctx, listing.PageRequest{Limit: 100, ChildTotals: &listing.SummaryOptions{Budget: b}})
-		if err != nil || p.Evidence.Stop != listing.StopCompleted || len(p.Entries) != 7 {
-			t.Fatalf("%s: page %+v, %v", name, p, err)
-		}
-		for i, e := range p.Entries {
-			small := string(e.Key) == "ab/" || string(e.Key) == "deep/" || string(e.Key) == "nulls/"
-			if p.Totals[i] != nil && (name == "value bytes" || !small) {
-				t.Errorf("%s: %q has totals %s past the budget", name, e.Key, showTotals(*p.Totals[i]))
-			}
+	p, err := inv.Page(ctx, listing.PageRequest{Limit: 100, ChildTotals: &listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 3}}})
+	if err != nil || p.Evidence.Stop != listing.StopCompleted || len(p.Entries) != 7 {
+		t.Fatalf("page %+v, %v", p, err)
+	}
+	for i, e := range p.Entries {
+		small := string(e.Key) == "ab/" || string(e.Key) == "deep/" || string(e.Key) == "nulls/"
+		if p.Totals[i] != nil && !small {
+			t.Errorf("%q has totals %s past the budget", e.Key, showTotals(*p.Totals[i]))
 		}
 	}
 }
