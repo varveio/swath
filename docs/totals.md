@@ -54,8 +54,9 @@ Each line is a prefix or an object, with:
 
 A prefix with a single child shares its line with it (`18/rerun/`; in a directory, `videos/trip.mp4`). Under
 each parent the view lists its largest children, then one `(N more)` line for the rest: how many they are, what
-they hold together and their newest date. Nothing is left out without being counted there, so the lines under a
-parent always add up to it. A `!` after the size marks a line whose sums leave out a directory that could not be
+they hold together and their newest date, so the bytes of the lines under a parent always add up to its bytes.
+Only a `(N more)` line of 0 bytes is left out (unless it holds a directory that could not be read), so the
+counts shown under a parent need not add up: empty files and directories may not appear. A `!` after the size marks a line whose sums leave out a directory that could not be
 read ([Entries that could not be read](#entries-that-could-not-be-read)).
 
 The view fills the terminal's height from the largest down, opening the largest prefixes first, and keeps its
@@ -183,8 +184,8 @@ $ swath du -d 1 media -l
 which way it counted.
 
 To count a file once, swath remembers each file with more than one link, about 100 bytes each, up to
-`--max-inodes` (1,000,000 by default). Past it the run fails rather than count some names twice: exit 1, cause
-`inode_limit`, no totals, and its last line says what to do:
+`--max-inodes` (1,000,000 by default). Past it the run fails rather than count some names twice: exit 1, no
+totals, and its last line says what to do:
 
 ```text
 swath: the tree has more than 1,000,000 files with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)
@@ -192,10 +193,15 @@ swath: the tree has more than 1,000,000 files with several hard links, which swa
 
 ### Entries that could not be read
 
-An entry swath cannot read, such as a directory without read permission, is left out of the totals with
-everything below it. swath prints the totals of the rest, names the entry on stderr (relative to SOURCE) and
-exits 3 ([exit codes](reference/exit-codes.md)). In the table, a directory it could not read shows `-` for its
-size and counts, where an empty directory shows 0; in TSV and JSONL its counts and both figures are null:
+What swath cannot read, such as the contents of a directory without read permission, adds nothing to the
+totals: no files, no bytes, no subdirectories. The directory itself was seen in its parent, so it still counts
+in its parent's and the total's `dirs`. swath prints the totals of the rest, names the directory on stderr
+(relative to SOURCE) and exits 3 ([exit codes](reference/exit-codes.md)). In the table, a directory it could not
+read shows `-` for its size and counts, where an empty directory shows 0; in TSV and JSONL its counts and both
+figures are null.
+
+Here `media` has gained a directory `private/` that the user running swath cannot read (`chmod 000`); the total
+counts it among 6 directories, and its files are missing:
 
 ```text
 $ swath du -d 1 media
@@ -230,10 +236,11 @@ incomplete ([Troubleshooting](troubleshooting.md#entries-could-not-be-read)).
 ## Totals from a saved dataset
 
 Each `swath du SOURCE` lists SOURCE again. To total a large source at several depths, or with other filters,
-list it once into a dataset and total that instead:
+list it once into a dataset and total that instead. [Your first inventory](first-inventory.md) saved `media`
+as `media-inventory`; without one, save it first with `swath list media -o media-inventory` (an existing
+dataset directory is refused unless you add `--overwrite`). Then:
 
 ```bash
-swath list media -o media-inventory
 swath du --from-dataset media-inventory -d 1 --sort size
 ```
 
@@ -261,8 +268,8 @@ DIR holds a dataset a `hint:` line gives the `--from-dataset` command.
 The line on stderr says the totals are saved rows: the dataset, its source, when it was listed and whether the
 listing was complete (`complete`, or `partial:` and what is missing), then its filters and exclusions. `-q`
 silences it, and in JSONL each row carries the same facts in a `dataset` member ([Output](output.md#du-rows)).
-A dataset that missed entries it could not read prints its totals and exits 3, its last line saying why. It
-counts those entries but does not record which directories they were, so it cannot mark them: such a
+A partial dataset prints its totals and exits 3, its last line saying why. A dataset that missed entries it
+could not read counts them but does not record which directories they were, so it cannot mark them: such a
 directory's row shows 0 where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
 holds no lengths, blocks or links, so its rows are those of a live `--metadata names` run.
 
