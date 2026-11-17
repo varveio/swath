@@ -83,7 +83,7 @@ suites for changed modules and their dependants, not a guessed subset of individ
 |---|---|
 | `reader/**` | reader and main (main builds the local reader through `go.work`) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
-| `cmd/**`, `internal/**`, the library packages (the root package's `*.go`, `s3/**`, `gcs/**`, `azblob/**`, `local/**`), `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
+| `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
 | Pages under `docs/` (`docs/**/*.md`) but the light ones below and the provider evidence | the [docs tier](#docs-tier) (`go-docs`) alone; with a main-module input, main instead, whose race shards run the same tests |
 | Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
@@ -97,7 +97,7 @@ keys do not create dependency edges. Changing an independent module's dependenci
 unrelated modules. Module dependency changes do request all platform tests for the selected modules;
 main/reader dependency changes also request image builds.
 
-Platform filenames/assembly, edits to files with build constraints (at either revision), and the journal, local-filesystem (`internal/source/localfs`, `local`), Parquet
+Platform filenames/assembly, edits to files with build constraints (at either revision), and the journal, local-filesystem, Parquet
 and ordering packages request the full platform suite for selected modules. Packaging inputs request
 image builds and platform tests. A maintainer can add **`ci:full`** to run every Go tier before merge;
 all label events reevaluate selection, so an unrelated label change also replaces the current PR run. These heuristics cannot prove a change is platform-independent.

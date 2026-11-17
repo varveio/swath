@@ -52,7 +52,7 @@ jobs:
       - name: Verify the module tags, go.mod's requirements and origin/main ancestry
         run: |
           set -euo pipefail
-          tags="$GITHUB_REF_NAME $(./scripts/ci/verify-release-source.sh required-tags "$GITHUB_SHA")"
+          tags=$(./scripts/ci/verify-release-source.sh tags "$GITHUB_REF_NAME")
           tags=${tags//$'\n'/ }
           refspecs=(+refs/heads/main:refs/remotes/origin/main)
           for tag in $tags; do
@@ -64,7 +64,7 @@ jobs:
           }
           ./scripts/ci/verify-release-source.sh "$GITHUB_SHA" refs/remotes/origin/main \
             refs/remotes/release/ "$GITHUB_REF_NAME" || {
-            echo "::error::$GITHUB_REF_NAME must name $GITHUB_SHA, whose go.mod requires the nested modules at tags with the same code: $tags"
+            echo "::error::$GITHUB_REF_NAME must name $GITHUB_SHA, whose go.mod requires the nested modules at their tags among $tags"
             exit 1
           }
 

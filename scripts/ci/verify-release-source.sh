@@ -6,7 +6,8 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --self-test | required-tags <commit> | changed <commit> <ref-prefix>" >&2
+  echo "usage: $0 --self-test | tags <vX.Y.Z> | required-tags <commit>" >&2
+  echo "       $0 changed <commit> <ref-prefix>" >&2
   echo "       $0 modules <commit> <ref-prefix>" >&2
   echo "       $0 <expected-sha> <main-ref> <ref-prefix> <vX.Y.Z>" >&2
   exit 2
@@ -38,6 +39,13 @@ required_tags() {
     }
     echo "$dir/$version"
   done
+}
+
+# Every tag of the release $1 checked out at HEAD: $1 for the root module, then the nested modules'
+# tags its go.mod requires.
+tags() {
+  echo "$1"
+  required_tags HEAD
 }
 
 # The tag $2 (under ref prefix $1) as a commit, or a message that it is missing.
@@ -164,6 +172,7 @@ self_test() {
   release=$(git -C "$scratch" rev-parse HEAD)
   git -C "$scratch" tag -a v1.2.3 -m v1.2.3
   prints "$scratch" "required_tags HEAD" "lib/v1.2.3 "
+  prints "$scratch" "tags v1.2.3" "v1.2.3 lib/v1.2.3 "
   prints "$scratch" "changed HEAD refs/tags/" ""
   git -C "$scratch" commit -q --allow-empty -m snapshot
   git -C "$scratch" checkout -q --detach "$release"
@@ -213,6 +222,10 @@ case ${1:-} in
   --self-test)
     [[ $# -eq 1 ]] || usage
     self_test
+    ;;
+  tags)
+    [[ $# -eq 2 ]] || usage
+    tags "$2"
     ;;
   required-tags)
     [[ $# -eq 2 ]] || usage
