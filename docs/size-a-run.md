@@ -1,19 +1,99 @@
 # Size a run
 
-How much disk and memory a large listing needs, and what its requests cost. What a running listing shows, and
-the flags to change when its report says so, are in [Watch and tune a run](watch-a-run.md).
+Before you list a large bucket, pick the machine: disk for the dataset and its spill, memory, cores, and the
+`--workers` to give it. Start from the measured runs below, size the disk with the rule after them, then list
+a representative prefix and read its report. What a running listing shows, and the flags to change when it
+says so, are in [Watch and tune a run](watch-a-run.md).
 
-## Resources and their flags
+## What a bucket needs
 
-| Resource | Flag | Default | What to know |
-|---|---|---|---|
-| Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling ([how many](#workers)). A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
-| Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found; at least 128 KiB (less is refused, exit 2) | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `diagnostics.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `diagnostics.resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
-| Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by an encoder allowance of 1/16 of memory (at most 1 GiB, whatever `--sort-buffer` says), each encoder priced at the schema's calculated working set plus, writing to a bucket, its upload buffer (a GCS chunk, an S3 part or an Azure block), and by the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
-| Spill disk | `--spill-budget` | 0: the spill filesystem's free space after the reserve for a dataset in a bucket, half of it otherwise (the output, or a stream's other programs in `$TMPDIR`, share it), following the disk | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's in `$TMPDIR/swath-ATTEMPT-RANDOM/spill/`, as a stream has no directory; a listed tree holding either leaves it out; `swath du` never spills); past the cap, or at the reserve, listing waits instead of failing. The default cap is re-derived from the free space when it would refuse a frame, and every 2 s while it holds the run back, so a filesystem grown under the running process is used (report: `diagnostics.resources.spill.max_by`, `start_max_bytes`, `max_bytes`, `cap_raises`); a `--spill-budget` is fixed. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `diagnostics.resources.spill.reserve_bytes`) |
-| Part size | `--part-size`, `--part-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
+Four measured runs, each run once, on the stated machine and day: observations, not rates.
+
+| Objects | Output | Dataset | Spill at its peak | Peak memory | Machine | `--workers` | Time |
+|---|---|---:|---:|---:|---|---:|---:|
+| 37 million | sorted dataset | 825 MiB, 11 parts | 618 MB | 1.51 GiB | 4 vCPU, 7.7 GiB | 64 (the default) | 61 s |
+| 37 million | count (`swath du`) | none | none | 109 MiB | 4 vCPU, 7.7 GiB | 64 | 53 s |
+| 1.09 billion | sorted dataset | 32.6 GB, 494 parts | 32.3 GB | 5.8 GB | 32 vCPU, 62 GiB | 1,024 | 289 s |
+| 1.09 billion | count (`swath du`) | none | none | 1.3 GB | 32 vCPU, 62 GiB | 1,024 | 188 s |
+
+- **37 million objects:** the public bucket `s3://noaa-gestofs-pds` (AWS us-east-1), listed anonymously on
+  2026-11-15 from a cloud VM shared with other work; on average 52 of the 64 requests were in flight
+  ([measurements](internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)).
+- **1.09 billion objects:** the public bucket `s3://sentinel-cogs` (AWS us-west-2), listed anonymously on
+  2026-11-17 with the 0.4.0 release from a VM in another cloud with a 400 GB disk. At its peak the sorted run
+  held 64.6 GB on that disk, and it kept 22.8 of the 32 cores busy on average
+  ([measurements](internals/measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
+- **Other sizes:** not measured. Size the disk with the rule below, and take memory and time from a
+  representative prefix of your own bucket.
+
+A count (`swath du`) writes nothing to disk and holds no rows, only the pages in flight and the ranges waiting
+for a worker. A sorted run's memory depends on the machine (the default `--sort-buffer` is a share of its
+memory), on `--workers` and on the encoders: read the peak (`peak RSS` in the `--stats` lines,
+`process.peak_rss_bytes` in the report) on a representative run, and size the host from that.
+
+On cores, the measurements give no rule beyond these runs: a sorted run on one core completes, bound by the
+core and the disk, and how cores and workers go together is under [Workers](#workers).
+
+## Disk sizing
+
+A sorted run needs room for the dataset and for its spill: the rows it has listed ahead of the output, kept on
+disk until the output reaches them. A first listing of a large bucket spills most of its rows once. On the
+measured S3 buckets:
+
+- **The dataset:** 23 to 30 bytes an object at the default part size: 865,491,977 bytes for 37,064,981
+  objects, and 32.6 GB for 1.09 billion. Keys and columns of another shape give another figure: measure your
+  own from a representative prefix, the report's `output.output_bytes` over `output.rows_committed`.
+- **Spill per row:** 18 to 30 bytes: 18 to 22 on 35 buckets of a billion objects and more
+  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)), 30 on
+  the 1.09-billion-object bucket above. A benchmark of keys that end in random identifiers, with real ETags,
+  reached 53 bytes ([measurements](internals/measurements.md#delta-coded-spill-frames)).
+- **Rows in spill at once:** on buckets of a billion objects and more, 96 to 99 % of the rows at the peak. On
+  lists of 20 to 150 million keys through a test service (builds of 2026-11-07), a median 71 % at 64 workers
+  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms))
+  and 94 % at 256 ([measurements](internals/measurements.md#workers-one-core-and-the-study-harness-through-the-fake)).
+
+Peak spill is the rows, times that share, times the spill bytes per row. By default spill may use half the
+free space left after a reserve, as the dataset needs the rest; the reserve is 1 GiB, or one part (64 MiB by
+default) per encoder when more than 16 start. So a dataset on the local disk needs free space of about the
+dataset, plus twice the peak spill, plus the reserve.
+
+### Example: 200 million objects
+
+- The dataset: 200 million × 30 bytes = 6 GB.
+- Peak spill: 0.7 × 200 million × 30 bytes = 4.2 GB, if the run holds the median share at the live buckets'
+  bytes per row; 200 million × 53 bytes = 10.6 GB if it holds every row at the benchmark's.
+- Free space: 6 + 2 × 4.2 + 1.1 (the reserve) ≈ 15 GB, up to 6 + 2 × 10.6 + 1.1 ≈ 28 GB.
+
+Both inputs are assumptions until a representative prefix measures them. With less disk, listing slows to the
+output's pace: a run a little short of disk still completes, and a run far short of it may not finish in any
+useful time. It says so after 2 minutes, and `--spill-wait-timeout` stops it
+([disk](watch-a-run.md#disk)). Set `--spill-budget` when you know the room ([Disk](#disk)).
+
+### Other cases
+
+- **A repeat listing seeded from the previous dataset** (`--seed-from` with the dataset, or a cut file with
+  counts) holds at most about 8 million rows ahead of the output instead of the whole bucket, so it spills a
+  small fraction of a first listing ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). That
+  is not a bound on disk: a part of the bucket that grew since the previous dataset, keys added after its last
+  key, and the spill files a run keeps for a resume until their rows are published still spill. Size the disk
+  for the dataset and that growth, and take the spill a seeded run needs from its report's
+  `diagnostics.resources.spill.peak_bytes`. A cut file without counts spills as a first listing does.
+- **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing is
+  the one that can outgrow its disk. Give it room to spare or a disk that can be grown while it runs (the
+  default spill cap follows it), bound it with `--max-duration`, and size later runs from its manifest's row
+  count.
+- **A dataset in a bucket** (`-o` a bucket prefix, with `--work-dir`): the work directory holds no part. It
+  needs room for the spill, a 1 GiB reserve, and the run's records, which grow with the parts: a claim receipt
+  of under 1 KiB and a journal record per part, and a manifest of about 1 KiB a part (at most about 1.1 GiB at
+  the 100,000-part limit with keys of 4 KiB). Spill may use all its free space after the reserve: on a disk
+  that can be grown while the run goes on, start modest and grow it if spill fills it. On the example above,
+  that is 4.2 to 10.6 GB of spill plus the reserve and the records.
 
 ## Workers
+
+**Default:** 64 for an object store, whatever the CPU count; 4 per CPU for a local directory, at most 64. An
+object-store listing waits on the service, not the CPU. A local walk waits on the disk: more workers past a
+few per CPU only add memory and contention (raise it for a network filesystem).
 
 Start at the default, 64. When a listing at 64 takes longer than you want, the store does not throttle and the
 machine has cores and memory to spare, try 256. What more workers buy depends on the machine, the store and
@@ -43,120 +123,84 @@ The rule rests on these runs, each an observation on the stated machine and day,
   145 million keys were bound by the core and the disk
   ([measurements](internals/measurements.md#workers-one-core-and-the-study-harness-through-the-fake)).
 
-## Disk
-
-The worst case is the dataset itself plus the spill cap plus the reserve, all on the output's
-filesystem (spill lives under the output directory, or beside a text file). A sorted first listing of a large
-bucket spills most of its rows once; a relist seeded from the previous dataset spills a fraction of that
-([disk sizing](#disk-sizing)). The spill cap includes the
-durable spill a journaled run keeps for a resume (`DIR/.swath/spill/durable/`): a certified file stays on
-disk, charged to the cap, until the published dataset covers its keys, and when the cap is reached the
-oldest file already consumed is evicted (its keys are then relisted after a crash); the report's
-`diagnostics.resources.spill.durable.retained_bytes` and `peak_retained_bytes` show it. A text file's scratch directory,
-and a stdout stream's under `$TMPDIR`, is its attempt's own (created exclusively, named for the file and the
-attempt), so two runs writing sibling files, the same one, or streams never share or remove each other's; the attempt removes it when it ends, after
-success or failure. Only a killed run leaves one behind, with its `.NAME.*.tmp`: delete both. Estimate the dataset from a representative prefix: the
-report's `output.output_bytes` over `output.rows_committed`; `diagnostics.resources.free_disk_min_bytes` is the least free space the run saw. If the dataset outgrows the disk the run stops with exit
-74 and resumes once there is space. Spill backs off rather than fail when a frame does not fit (the run
-waits), but not always: a range's closing trailer that does not fit, or any other spill I/O error, stops the
-run (resumable; [ordering](internals/ordering.md#spill)).
-
-### Disk sizing
-
-- **The dataset:** about 30 bytes per row at the default part size, measured on a live listing of 1.09
-  billion objects (488 parts, 32 GB;
-  [measurements](internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)). Measure your own from a representative
-  prefix: `output.output_bytes` over `output.rows_committed`.
-- **Spill per row:** frames are prefix-coded and compressed (zstd) by default: 25 to 53 bytes per row on production
-  keys with real ETags in a [benchmark](internals/measurements.md#delta-coded-spill-frames), and about 30 bytes
-  per row on the live listing above (32 GB for 1.08 billion spilled rows). At the peak, a median 71 % of the
-  rows were listed ahead of the output on lists of 20M keys or more
-  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)),
-  so live spill can come close to the
-  dataset's own size. On listings of a billion objects and more it reaches it: 96 to 99 % of the rows were
-  ahead of the output at the peak, at 18 to 22 bytes per row
-  ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
-- **Peak spill** of a first listing (no prior, or a cut file without counts) ≈ 0.7 × rows × spill bytes per
-  row; above a billion objects plan for every row, rows × spill bytes per row. The default spill budget of a
-  dataset on disk is half of (free space − the reserve), so the free space needed is about the dataset plus
-  twice the peak spill plus the reserve (`diagnostics.resources.spill.reserve_bytes`: one part per encoder, at least 1
-  GiB). The default follows the disk: a filesystem that turns out small can be grown under the running process
-  instead of restarting it.
-- **A relist seeded from the previous dataset** (or a counted cut file) keeps the rows ahead of the output near
-  its frontier window of at most 8 million rows instead of the bucket ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)),
-  so its spill is a small fraction of a first listing's. The window is not a storage bound: a region that grew
-  since the prior, keys added past its last key and certified files awaiting retirement still spill. Size the
-  disk for the dataset and that growth, and take the spill a seeded run needs from its report's
-  `diagnostics.resources.spill.peak_bytes`.
-- **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing of
-  a bucket is the one that can outgrow its disk. Give it room to spare or a disk that can be grown online (the
-  default spill cap follows it), bound it with `--max-duration`, and size later runs from its manifest's row
-  count.
-- **A dataset in a bucket:** the work directory needs no room for the dataset. The default spill budget is its
-  free space after the 1 GiB reserve, and follows the disk: on a disk that can be grown online, start modest
-  and grow it if spill fills it (`diagnostics.resources.spill.cap_raises` counts the rises). Set `--spill-budget` when the
-  disk is shared, and size it as the budget plus the reserve plus the metadata, which grows with the parts (a claim receipt of
-  under 1 KiB and a journal record each; the candidate manifest about 1 KiB a part, at most about 1.1 GiB at
-  the 100,000-part limit). Memory grows instead by one upload buffer (an 8 MiB GCS chunk, S3 part or Azure block) per
-  encoder, admitted with its writer. A smaller spill budget trades disk for listing that waits on the output; measure a representative
-  run's `diagnostics.resources.spill.peak_bytes` before shrinking the disk.
-- **Example, 200 million objects:** a 6 GB dataset; peak spill 4.2 GB at 30 B per row or 7.4 GB at 53 B per row;
-  so 15 to 22 GB free. Both inputs are assumptions until a representative prefix measures them. With less
-  disk frames are refused and listing slows to the output's pace ([the first bad
-  pattern](watch-a-run.md#three-bad-patterns)): a run a little short of disk still completes, and a run far short of it may not finish in
-  any useful time; it says so after 2 minutes (`spill_pressure`), and `--spill-wait-timeout` stops it
-  (resumable for a run with a journal; text output and a local tree run again). Set `--spill-budget` explicitly when you know the room.
-
 ## Memory
 
-swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output only; how many
-writers run is admitted against an allowance of their own, 1/16 of the memory found (at most 1 GiB) whatever
-`--sort-buffer` says ([encoder admission](internals/ordering.md#the-budget)), and `--encoders N` sets fewer.
-`GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on RSS; an OS or container limit can stop the
-process when memory cannot be reclaimed. A run holds:
+**Default `--sort-buffer`:** 1/16 of the memory found, at most 1 GiB. The memory found is the least of the
+physical memory, the container's (cgroup's) limit and `GOMEMLIMIT`; the report's `diagnostics.sort_buffer`
+says which it was. When none is found, 128 MiB. Less than 128 KiB is refused (exit 2).
 
-- **Rows in flight, bounded by `--sort-buffer`:** rows listed ahead of the publish frontier and the
-  encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
-  not charged, and no range keeps the page it was cut from alive, see
-  [ordering](internals/ordering.md#what-a-waiting-range-retains)). When listing ends the tree holds about
-  one budget (spill keeps it there), and the segment tail's queues and frames may take one more beside it:
-  about two sort buffers in all (`diagnostics.resources.drain.segments.tree_bytes` beside `max_held_bytes`).
-- **Pages in flight, outside it:** accepted success bodies are limited to 16 MiB for S3/GCS and
-  64 MiB for Azure. These byte limits do not bound the backing buffer capacity or decoded rows and
-  strings. With the default page policy, Azure Blob asks for 5,000 entries a page with a counted
-  `--seed-from` prior, against 1,000 otherwise: about five times the memory per page in flight, beside
-  the same sort buffer. Worker requests,
-  seed listings and probes can overlap. Include those allocations, the
-  encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
-  See [body handling](internals/clients.md#what-swath-keeps) and
-  [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
-- **A local listing's largest directory, outside it:** a listing reads each directory whole to sort it,
-  for each directory read at once; the names and keys grow with their lengths (1M files in one directory,
-  names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`) does not
-  sort, and on Linux reads large directories a slab at a time; the portable engine (macOS, Windows) reads
-  each directory whole for a count too.
-- **A `.zst` text file's compressor, outside it:** as many parallel jobs as `--encoders`, about 5 to 13 MiB
-  each; lower `--encoders` to lower it. Gzip is one stream. The report's `diagnostics.text.compressor` names the
-  jobs and why (`jobs_reason`: `cores`, `encoder_allowance`, `encoders` when asked, `gzip`); the rows being
-  formatted for the file are rows in flight, charged to `--sort-buffer`
-  ([how](internals/run-lifecycle.md#encoder-sizing)).
-- **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
-  common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
-  report names the filesystem (`diagnostics.resources.spill.fs_type`), and a run that spills there warns once, at its first
-  spill (one that never spills, most runs, says nothing).
+| Memory found | 2 GiB | 4 GiB | 8 GiB | 16 GiB or more | none |
+|---|---:|---:|---:|---:|---:|
+| Default `--sort-buffer` | 128 MiB | 256 MiB | 512 MiB | 1 GiB | 128 MiB |
 
-A count (`swath du`) holds only pages in flight and the ranges queued for a worker: it counts rows as they
-arrive and never orders, buffers or spills them (`diagnostics.resources.features.order` false, `peak_buffered_bytes` 0, no `spill`).
-`swath du` also holds one entry per distinct prefix (about 150 bytes each), capped by `--max-prefixes`.
+The sort buffer holds the rows a sorted run has listed ahead of its output; past it they spill to disk. It is
+not a limit on the process, and swath sets none: the requests in flight, the Parquet writers (admitted against
+an allowance of their own, also 1/16 of memory: [Encoders](#encoders)), compression and the Go runtime come on
+top, and after listing ends the run can hold about one more sort buffer while it writes the last parts.
+`GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on the resident set; an operating system or
+container limit can stop the process when memory cannot be reclaimed.
 
-Read the actual figure from the report's `process.peak_rss_bytes` on a representative run, and size the
-host from that, not from `--sort-buffer`. Beside it, `diagnostics.resources.peak_heap_live_bytes` (the peak live heap,
-sampled every 100 ms) against `invocation.sort_buffer_bytes` shows how much memory the budget does not see;
-`peak_ahead_rows` is the most rows listed and not yet handed on at once (in memory or spilled), and
-`max_frontier_stuck_ns` the longest stretch in which nothing was handed on (a held-up frontier).
-Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it with the CPU times; on another
-platform `diagnostics.resources.rusage_available` is false and `process.peak_rss_bytes`, `timings.user_cpu_ms` and
-`timings.sys_cpu_ms` are left out (the summary line prints `-`), never reported as zero.
+**When to change it.** Raise it when many rows spill and memory is free. When the peak comes near the
+machine's memory, lower it together with `--workers` and `--encoders`: a smaller sort buffer alone spills more
+rows without always lowering the peak. **If it is wrong**, the system stops a run that outgrows the machine or
+the container: [memory](watch-a-run.md#memory).
+
+Outside the sort buffer, besides the above:
+
+- **A local listing's largest directory:** a listing reads each directory whole to sort it, so a directory of
+  millions of files holds all its names in memory at once ([how much](internals/providers/local.md)). A count
+  reads large directories a part at a time on Linux; on macOS and Windows it reads each one whole too.
+- **Azure Blob with a counted `--seed-from`** (a previous dataset, or a cut file with counts): pages of 5,000
+  entries instead of 1,000, about five times the memory per request in flight.
+- **A `.zst` text file:** as many compression jobs as `--encoders`, a few MiB each
+  ([how much](internals/run-lifecycle.md#encoder-sizing)); lower `--encoders` to lower it. Gzip is one stream.
+- **`swath du` by prefix:** one entry per prefix, capped by `--max-prefixes` ([totals](totals.md)).
+- **Spill on tmpfs** (a common `/tmp`) is memory, outside the process's peak; swath warns when it spills there
+  ([memory](watch-a-run.md#memory)). Put the output on a disk.
+
+## Disk
+
+**Default spill cap:** half the free space on the spill's filesystem after the reserve, as the output shares
+it; all of it for a dataset in a bucket. The default follows the disk: a filesystem grown under the running
+process is used without a restart. `--spill-budget SIZE` sets a fixed cap instead.
+
+Spill goes:
+
+- for a dataset, under `DIR/.swath/spill/` (for a dataset in a bucket, `DIR` is the `--work-dir`);
+- for a text file, in a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/`, which the run removes when
+  it ends;
+- for rows on stdout, under `$TMPDIR`;
+- for `swath du`, nowhere: a count never spills.
+
+A dataset run of an object store also keeps some spill files for a resume, counted against the same cap. A killed text run leaves
+its scratch directory and its `.NAME.*.tmp` behind: delete both.
+
+**When to change it.** Set `--spill-budget` when the filesystem is shared with other work. A smaller cap trades
+disk for a listing that waits on the output: measure a representative run's
+`diagnostics.resources.spill.peak_bytes` before shrinking the disk.
+
+**If it is wrong.** Past the cap, or at the reserve, listing waits instead of failing and slows to the output's
+pace; after 2 minutes swath says so, and `--spill-wait-timeout` stops it (exit 74; a dataset run of an object
+store resumes). A dataset that outgrows the disk stops the run with exit 74, resumable once there is space.
+What you see and what to do: [disk](watch-a-run.md#disk).
+
+## Encoders
+
+**Default:** one Parquet writer per CPU, fewer when they do not fit an allowance of 1/16 of the memory found
+(at most 1 GiB, whatever `--sort-buffer` says) or the open-file limit; more may start once listing ends.
+Writing to a bucket, each also holds one upload buffer (8 MiB by default). For a `.zst` text file,
+`--encoders` is the number of compression jobs.
+
+**When to change it.** Lower it to leave cores and memory to other work. An explicit `--encoders N` is kept as
+given, never raised, with a warning when the machine cannot carry it. How many start on a given machine:
+[encoder admission](internals/ordering.md#the-budget).
+
+## Part size
+
+**Default:** `--part-size 64MiB`, no row cap. Smaller parts suit readers that load whole parts; larger ones mean
+fewer files. `--part-max-rows N` also closes a part at N rows. A dataset holds at most 100,000 parts, about
+200 billion objects at the defaults: a small part size on a very large listing can reach that (exit 1, `cause`
+`part_limit`; start over with a larger `--part-size`).
 
 ## Cost
 
@@ -168,5 +212,5 @@ report counts every HTTP attempt in `requests.http_attempts`, and on AWS S3 and 
 their cost in `cost.cost_usd` at the provider's reference list rate (0.005 USD per 1,000 requests); a custom endpoint and
 Azure Blob have no estimate. The progress line shows the same estimate as the run goes. Pricing varies by
 provider, region and time: check the provider's current price for a budget. A resume lists again what was
-not yet published, except what it replays from certified spill, so an interrupted run costs more than an
-uninterrupted one.
+not yet published, except the rows it replays from the spill files it kept, so an interrupted run costs more
+than an uninterrupted one.
