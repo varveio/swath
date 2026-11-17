@@ -24,8 +24,12 @@ import (
 // to a directory is walked through, so its target is measured. A root
 // that no longer names what New found (a link retargeted, a directory
 // replaced) is not measured: the path may now lead to another filesystem.
+// Nor is a held root (OpenDir), which has no path the listing resolves.
 func (p *Provider) filesystemSpace() *source.FilesystemSpace {
 	p.spaceOnce.Do(func() {
+		if p.held != nil {
+			return
+		}
 		if now, err := os.Stat(p.root); err != nil || !os.SameFile(p.rootInfo, now) {
 			return
 		}

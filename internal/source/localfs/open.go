@@ -118,7 +118,19 @@ const (
 // restores the setting; a count has no encoders, reorder storage or
 // readahead, the other readers of GOMAXPROCS. Every listing that writes
 // output keeps the setting as it is.
+//
+// With Options.MaxDescriptors, Begin reserves two descriptors per worker
+// (opt.Workers) from it, the most a worker holds beyond the kept ones (one
+// it reads, or two while it descends), and keeps the rest for kept
+// directories; a limit that leaves fewer than two is refused.
 func (o *Opened) Begin(f *filter.Spec, unreadable func(prefix string), count bool, opt *order.Options) (end func(), err error) {
+	if n := o.p.opt.MaxDescriptors; n > 0 {
+		kept := int64(n) - 2*int64(max(opt.Workers, 1))
+		if kept < 2 {
+			return nil, fmt.Errorf("localfs: a limit of %d descriptors leaves fewer than 2 to keep beyond the 2 each of %d workers holds", n, opt.Workers)
+		}
+		o.p.keep.limit = kept
+	}
 	prune, plan, err := f.PruneDirectories()
 	if err != nil {
 		return nil, err
@@ -174,8 +186,12 @@ func (o *Opened) Listed() int64 {
 // a text file's scratch) is located by identity, where the run writes into
 // it, and left out with its subtree; any other path (a text file, its
 // temporary) is left out by its name in its directory, which a commit
-// renames over, existing yet or not.
+// renames over, existing yet or not. A held root (OpenDir), which has no
+// path, refuses it.
 func (o *Opened) Exclude(path string) error {
+	if o.p.held != nil {
+		return errors.New("localfs: a held root has no path to locate an output in")
+	}
 	key, err := o.locate(path)
 	if err != nil {
 		return fmt.Errorf("locate output: %w", err)

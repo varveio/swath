@@ -10,6 +10,8 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+
+	"github.com/varveio/swath/reader/listing"
 )
 
 // dirFD is a directory the portable engine reads, opened by its path
@@ -47,6 +49,7 @@ func (p *Provider) openChecked(r Range, st *Stats) (*os.File, bool) {
 	f, err := os.Open(r.path)
 	if err != nil {
 		st.note(&st.OpenErrors, r.path, err)
+		p.unread(r.prefix, listing.UnreadSubtree, unreadClass(err))
 		p.unreadableDir(r)
 		return nil, false
 	}
@@ -58,6 +61,7 @@ func (p *Provider) openChecked(r Range, st *Stats) (*os.File, bool) {
 	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
 		f.Close()
 		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
+		p.unread(r.prefix, listing.UnreadSubtree, listing.UnreadSymlinkAncestor)
 		p.unreadableDir(r)
 		return nil, false
 	}

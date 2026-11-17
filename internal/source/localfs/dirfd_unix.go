@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"runtime"
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/varveio/swath/internal/longpath"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // dirFD is an open directory shared by reference: the range that reads
@@ -23,26 +25,34 @@ import (
 // opened relative to it. Each holder releases its reference; the last
 // closes the descriptor.
 //
-// A directory is kept (keep set) when the walk's limit on kept
+// A directory is kept (pooled set) when the walk's limit on kept
 // descriptors allows it, the root always (keptFDs). One the limit refuses
 // is still read through its descriptor, but only by the Expand that opened
 // it: it is not shared among chunks or a continuation, and its
 // subdirectories are opened from from, the kept directory it was itself
 // opened from, below+1 names down (child); it holds a reference on from
 // until it closes. So only kept descriptors outlive an Expand.
+//
+// The directory a caller holds open (OpenDir) is one with no counts (fds
+// nil): it is opened from, never closed or released here.
 type dirFD struct {
-	fd    int
-	f     *os.File // the portable engine's handle on fd, which closes it
-	refs  atomic.Int32
-	keep  *keptFDs
-	from  *dirFD
-	below int
+	fd     int
+	f      *os.File // the portable engine's handle on fd, which closes it
+	refs   atomic.Int32
+	fds    *keptFDs // the walk's counts; nil for the caller's directory
+	cost   int64    // the descriptors it holds (streamFDs)
+	pooled bool     // kept: counted in fds.open
+	from   *dirFD
+	below  int
+	// seen is the directory's name set while a count enumerates it
+	// (countSlab), handed on with its continuation.
+	seen *nameSet
 }
 
 // release drops one reference to d; the last closes it and releases what
-// it holds. A nil d holds nothing.
+// it holds. A nil d, and the caller's directory, hold nothing.
 func (d *dirFD) release() {
-	if d == nil || d.refs.Add(-1) > 0 {
+	if d == nil || d.fds == nil || d.refs.Add(-1) > 0 {
 		return
 	}
 	if d.f != nil {
@@ -50,14 +60,15 @@ func (d *dirFD) release() {
 	} else {
 		unix.Close(d.fd)
 	}
-	if d.keep != nil {
-		d.keep.open.Add(-1)
+	d.fds.closed(d.cost)
+	if d.pooled {
+		d.fds.open.Add(-d.cost)
 	}
 	d.from.release()
 }
 
 // kept reports whether the limit keeps d, so queued work may hold it.
-func (d *dirFD) kept() bool { return d.keep != nil }
+func (d *dirFD) kept() bool { return d.pooled }
 
 // child is where a subdirectory of d is opened from, with a reference its
 // range holds, and how many names down: d itself, one name down, or, when
@@ -75,6 +86,10 @@ func (d *dirFD) child() (*dirFD, int) {
 // maxKept caps the directory descriptors a walk keeps (keepLimit).
 const maxKept = 1024
 
+// maxRedescent is the most names a directory is opened below a kept one
+// while the limit's checkpoint share lasts (adopt).
+const maxRedescent = 8
+
 // keepLimit is how many directory descriptors a walk keeps (keptFDs): a
 // quarter of the process's soft descriptor limit, at most maxKept, so the
 // rest stays the output's (encoders, spill readers) and the process's.
@@ -87,21 +102,22 @@ func keepLimit() int64 {
 }
 
 // openRange opens r's directory to read it and returns it holding one
-// reference, the caller's. The root is opened by its path, as the run
-// resolved it (a symbolic link followed; longpath past PATH_MAX). Every
-// directory below it is opened relative to r.at, through the last r.below
-// names of its key prefix, each with O_NOFOLLOW: never by its path, so a
-// directory replaced by a symbolic link since its parent was listed is
-// not followed, and the walk does not leave the root. With OneFilesystem
-// each directory opened below the root, intermediates included, is
-// checked against the root's device.
+// reference, the caller's. A root opened by its path (New) is opened by
+// it, as the run resolved it (a symbolic link followed; longpath past
+// PATH_MAX). Every other directory, a held root's own (OpenDir) included,
+// is opened relative to r.at, through the last r.below names of its key
+// prefix, each with O_NOFOLLOW: never by its path, so a directory replaced
+// by a symbolic link since its parent was listed is not followed, and the
+// walk does not leave the root. With OneFilesystem each directory opened
+// relative to another, intermediates included, is checked against the
+// root's device.
 //
-// A directory it does not open is accounted for and ok is false: a
-// symbolic link in its place as unsafe_dirs, a directory on another device
-// as other_device_dirs (no error, as at a mount point), any other failure
-// as open_errors; each by reason in dir_opens, and in long_paths when its
-// path passes PATH_MAX. err is the context's error when the run stopped
-// during a descent.
+// A directory it does not open is accounted for, told to Options.Unread,
+// and ok is false: a symbolic link in its place as unsafe_dirs, a
+// directory on another device as other_device_dirs (no error, as at a
+// mount point), any other failure as open_errors; each by reason in
+// dir_opens, and in long_paths when its path passes PATH_MAX. err is the
+// context's error when the run stopped during a descent.
 func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD, ok bool, err error) {
 	long := len(r.path) >= unix.PathMax
 	if long {
@@ -110,9 +126,14 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	var fd int
 	if r.at == nil {
 		fd, err = longpath.OpenFD(p.root, unix.O_RDONLY|unix.O_DIRECTORY)
+		if err == nil {
+			p.keep.opened(1)
+		}
 	} else {
-		if r.below > 1 {
+		if r.below > 1 && r.at != p.held {
 			st.DirOpens.Redescents++
+			st.DirOpens.RedescentNames += int64(r.below)
+			st.DirOpens.MaxRedescent = max(st.DirOpens.MaxRedescent, int64(r.below))
 		}
 		fd, err = p.descend(ctx, r)
 	}
@@ -130,9 +151,10 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	if long {
 		st.LongPaths.fail(reason)
 	}
-	if r.at != nil {
+	if r.at != p.held {
 		st.DirOpens.fail(reason)
 	}
+	p.unread(r.prefix, listing.UnreadSubtree, unreadClass(err))
 	switch {
 	case errors.Is(err, errOtherDevice):
 		st.OtherDevice++
@@ -159,21 +181,26 @@ func (p *Provider) descend(ctx context.Context, r Range) (int, error) {
 	dir := at
 	for i := len(names) - r.below; i < len(names); i++ {
 		if err := ctx.Err(); err != nil {
-			if dir != at {
-				unix.Close(dir)
-			}
+			p.closeTemporary(dir, at)
 			return -1, err
 		}
 		fd, err := p.openAt(dir, names[i], i == len(names)-1)
-		if dir != at {
-			unix.Close(dir)
-		}
+		p.closeTemporary(dir, at)
 		if err != nil {
 			return -1, fmt.Errorf("level %d below the root: %w", i+1, err)
 		}
 		dir = fd
 	}
 	return dir, nil
+}
+
+// closeTemporary closes dir, an intermediate of a descent, unless it is
+// at, the directory the descent started from.
+func (p *Provider) closeTemporary(dir, at int) {
+	if dir != at {
+		unix.Close(dir)
+		p.keep.closed(1)
+	}
 }
 
 // openAt opens the directory name in dir, never following a symbolic
@@ -189,12 +216,14 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 	if err != nil {
 		return -1, classifyOpen(dir, name, err)
 	}
+	p.keep.opened(1)
 	if !p.opt.OneFilesystem {
 		return fd, nil
 	}
 	var s unix.Stat_t
 	if err := unix.Fstat(fd, &s); err != nil || int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
 		unix.Close(fd)
+		p.keep.closed(1)
 		if err == nil {
 			err = errOtherDevice
 		}
@@ -204,16 +233,30 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 }
 
 // adopt holds the directory fd opened for r, with the caller's reference:
-// kept if the limit allows, the root always. One the limit refuses takes
-// a reference on r.at for its subdirectories (child).
+// the root always kept; another kept within the ordinary share of the
+// limit or, at maxRedescent names or more below r.at, as a checkpoint
+// within the whole limit, so that while the limit lasts no directory is
+// opened more than maxRedescent names below a kept one. One the limit
+// refuses takes a reference on r.at for its subdirectories (child).
 func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
-	d := &dirFD{fd: fd}
+	d := &dirFD{fd: fd, fds: &p.keep, cost: 1}
+	if !p.native {
+		d.cost = streamFDs
+	}
 	d.refs.Store(1)
-	if r.at != nil {
+	if r.at != p.held {
 		st.DirOpens.Opened++
 	}
-	if p.keep.take(r.at == nil) {
-		d.keep = &p.keep
+	switch {
+	case r.at == p.held:
+		d.pooled = p.keep.take(keepRoot, d.cost)
+	case p.keep.take(keepOrdinary, d.cost):
+		d.pooled = true
+	case r.below >= maxRedescent && p.keep.take(keepCheckpoint, d.cost):
+		d.pooled = true
+		st.DirOpens.Checkpoints++
+	}
+	if d.pooled {
 		return d
 	}
 	st.DirOpens.Refused++
@@ -222,23 +265,28 @@ func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
 	return d
 }
 
+// streamFDs is how many descriptors a directory the portable engine reads
+// holds (dirFD.cost): on macOS os.File.ReadDir reads through a directory
+// stream on a duplicate of the descriptor (fdopendir), open until the file
+// closes.
+var streamFDs = func() int64 {
+	if runtime.GOOS == "darwin" {
+		return 2
+	}
+	return 1
+}()
+
 // openPortable opens r's directory for the portable engine (openRange),
-// with an os.File that reads its entries.
+// with an os.File that reads its entries, counting the descriptor its
+// reading may add (streamFDs).
 func (p *Provider) openPortable(ctx context.Context, r Range, st *Stats) (*dirFD, bool, error) {
 	d, ok, err := p.openRange(ctx, r, st)
 	if ok {
 		d.f = os.NewFile(uintptr(d.fd), r.path)
+		p.keep.opened(d.cost - 1)
 	}
 	return d, ok, err
 }
-
-// errOtherDevice: a directory opened below the root is on another device
-// than the root's (OneFilesystem).
-var errOtherDevice = errors.New("on another device than the root")
-
-// errSymlink: a name opened as a directory is a symbolic link, which the
-// walk never follows.
-var errSymlink = errors.New("a symbolic link, not followed")
 
 // classifyOpen tells a symbolic link apart from another non-directory when
 // a no-follow directory open of name fails: O_NOFOLLOW refuses a link as

@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 const nativeEngine = true
@@ -104,6 +105,15 @@ func disposeChunk(r Range) {
 	}
 }
 
+// disposeContinuation ends the enumeration of a count's directory whose
+// continuation will never be expanded: its name set is released.
+func disposeContinuation(r Range) {
+	if c := r.chunk; c != nil && c.next {
+		c.dir.seen.drop()
+		c.dir.seen = nil
+	}
+}
+
 // expandNative lists a range with raw getdents64 and fd-relative stat.
 // Per directory it allocates one key arena, one row slab sized from the
 // entry count and one range per subdirectory; entries are sorted by key
@@ -131,11 +141,12 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	if err := readNames(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st); err != nil {
+	if err := p.readNames(ctx, d.fd, r, sc, st); err != nil {
 		return err
 	}
 	if !fitsOffsets(len(r.prefix), sc) {
 		st.note(&st.ReadErrors, r.path, errTooLarge)
+		p.unread(r.prefix, listing.UnreadListing, listing.UnreadBudget)
 		p.warnf(source.WarnDirectoryTooLarge, "%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.path, errTooLarge)
 		return nil
 	}
@@ -175,16 +186,34 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 // A directory the limit did not keep (dirFD.kept) is read to its end here,
 // slab by slab, each statted by this worker: chunks and a continuation
 // would hold its descriptor open past this Expand, outside the limit.
+//
+// With Options.MaxHeldBytes the directory's names are kept from its first
+// slab until its enumeration ends (d.seen, handed on with its
+// continuation): a name read again is dropped, and the enumeration ends
+// where the listing's bound on held names stops it (admitSlab).
 func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Emitter[Range, Entry], st *Stats) error {
+	if r.chunk == nil {
+		d.seen = p.newNameSet()
+	}
+	handed := false // a continuation holds the name set
+	defer func() {
+		if !handed {
+			d.seen.drop()
+			d.seen = nil
+		}
+	}()
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
 	for first := r.chunk == nil; ; first = false {
-		more, err := readSlab(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st)
+		more, err := p.readSlab(ctx, d.fd, r, sc, st)
 		if err != nil {
 			return err
 		}
 		if len(sc.ents) == 0 && !first { // a continuation at the end: the last slab filled exactly
 			return nil
+		}
+		if !p.admitSlab(d.seen, r, sc, st) {
+			more = false
 		}
 		st.Slabs++
 		p.resolveUnknown(d.fd, sc)
@@ -209,9 +238,38 @@ func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Em
 		}
 		if d.kept() {
 			d.refs.Add(1)
-			return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
+			handed = true // the continuation's now, disposed with it if Child fails (disposeContinuation)
+			return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}, depth: r.depth})
 		}
 	}
+}
+
+// admitSlab keeps in sc the entries whose names the directory's
+// enumeration had not returned (n; nil keeps every one), counting the
+// repeats dropped. It reports false when the listing's bound on held
+// names stopped it: sc keeps the entries before that name, and the
+// enumeration ends there.
+func (p *Provider) admitSlab(n *nameSet, r Range, sc *scratch, st *Stats) bool {
+	if n == nil {
+		return true
+	}
+	k := 0
+	for i := range sc.ents {
+		fresh, over := n.admit(nameOf(sc.names, &sc.ents[i]))
+		if over {
+			sc.ents = sc.ents[:k]
+			p.heldFull(r, st)
+			return false
+		}
+		if !fresh {
+			st.RepeatedNames++
+			continue
+		}
+		sc.ents[k] = sc.ents[i]
+		k++
+	}
+	sc.ents = sc.ents[:k]
+	return true
 }
 
 // slabChunks hands a count's slab to other workers as chunks of
@@ -223,7 +281,7 @@ func (p *Provider) slabChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[R
 	for i := 0; i < len(ents); i += chunkEntries {
 		d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
 		st.Chunks++
-		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
+		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}, depth: r.depth}); err != nil {
 			return err
 		}
 	}
@@ -232,9 +290,10 @@ func (p *Provider) slabChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[R
 
 // readSlab reads fd's next entries into sc, whole getdents batches until
 // slabEntries are in or the directory ends; more reports that it may go on.
-// A read error is counted and ends the directory. With stat, a full batch is
-// hinted for NFS as readNames does.
-func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, st *Stats) (more bool, err error) {
+// A read error is counted and ends the directory (readFailed). At a stat
+// tier, a full batch is hinted for NFS as readNames does.
+func (p *Provider) readSlab(ctx context.Context, fd int, r Range, sc *scratch, st *Stats) (more bool, err error) {
+	stat := p.opt.Fields != Names
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(_ uint64, typ uint8, name []byte) {
 		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
@@ -249,7 +308,7 @@ func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, 
 			continue
 		}
 		if err != nil {
-			st.note(&st.ReadErrors, path, err)
+			p.readFailed(r, st, err)
 			return false, nil
 		}
 		if n <= 0 {
@@ -257,7 +316,7 @@ func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, 
 		}
 		first := len(sc.ents)
 		if err := parseDirents(sc.buf[:n], add); err != nil {
-			st.note(&st.ReadErrors, path, err)
+			p.readFailed(r, st, err)
 			return false, nil
 		}
 		if stat && n > len(sc.buf)-direntHintSlack {
@@ -268,10 +327,11 @@ func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, 
 	return true, nil
 }
 
-// readNames parses all entries of fd into sc (names and entries).
+// readNames parses all entries of fd, r's directory, into sc (names and
+// entries). A read error is counted and ends the directory (readFailed).
 //
-// With stat, a batch that fills most of the buffer (the directory goes on)
-// has a few of its entries statted before the next read. The Linux NFS
+// At a stat tier, a batch that fills most of the buffer (the directory goes
+// on) has a few of its entries statted before the next read. The Linux NFS
 // client asks the server for attributes with the names (READDIRPLUS) on a
 // directory's first read, and on a later read only if more than 8 of its
 // entries were looked up since the one before (nfs_use_readdirplus); a
@@ -282,7 +342,8 @@ func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, 
 // The client's first reads of a directory can be short (19, then 5 entries
 // on Linux 7.0) and are not hinted; hinting after them too was measured
 // worse there (3,277 LOOKUPs on a 200,000-entry directory against none).
-func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool, st *Stats) error {
+func (p *Provider) readNames(ctx context.Context, fd int, r Range, sc *scratch, st *Stats) error {
+	stat := p.opt.Fields != Names
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(_ uint64, typ uint8, name []byte) {
 		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
@@ -298,7 +359,7 @@ func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool,
 			continue
 		}
 		if err != nil {
-			st.note(&st.ReadErrors, path, err)
+			p.readFailed(r, st, err)
 			return nil
 		}
 		if n <= 0 {
@@ -306,7 +367,7 @@ func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool,
 		}
 		first := len(sc.ents)
 		if err := parseDirents(sc.buf[:n], add); err != nil {
-			st.note(&st.ReadErrors, path, err)
+			p.readFailed(r, st, err)
 			return nil
 		}
 		if stat && n > len(sc.buf)-direntHintSlack {
@@ -496,7 +557,7 @@ func (p *Provider) emitChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[R
 	st.Chunks += int64(n)
 	for i := 0; i < len(ents); i += chunkEntries {
 		c := &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}
-		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c}); err != nil {
+		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c, depth: r.depth}); err != nil {
 			// The emitter owns chunk i now (the order stage disposes it);
 			// release the references of the chunks never emitted.
 			for j := i + chunkEntries; j < len(ents); j += chunkEntries {
@@ -538,17 +599,13 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names, key
 				*r = Row{}
 				continue
 			}
-			full := path + string(os.PathSeparator) + name
-			if errors.Is(err, unix.ENOENT) {
-				st.note(&st.Vanished, full, err)
-			} else {
-				st.note(&st.StatErrors, full, err)
-			}
+			p.statFailed(r.Key, path+string(os.PathSeparator)+name, st, err)
 			*r = Row{}
 			continue
 		}
 		if (r.Data.Kind == KindDir) != (e.typ == unix.DT_DIR) {
 			st.note(&st.Changed, path+string(os.PathSeparator)+name, errors.New("type changed during listing"))
+			p.unread(r.Key, listing.UnreadSubtree, listing.UnreadUnstable)
 			*r = Row{}
 			continue
 		}
