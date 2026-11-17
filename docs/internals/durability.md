@@ -67,8 +67,8 @@ request continuing after the bucket's first page (1,000 keys) is held, its retri
 finds eight seal records or more. Killed there, every certificate lies above K. In the second snapshot the ledger
 is frozen at that sync and the hold released; the run is killed at the first recorded part whose K covers a kept
 certificate, lies inside another and leaves three or more uncovered, so recovery retires a covered certificate
-beside the missing one and replays one from inside. That part always comes: the test asserts that each kept
-certificate is one page of 1,000 keys, and every part holds fewer rows, so a part ends inside each. The lost retirement append and the mid-replay pair run from both snapshots. In the real process the same seal gating is
+beside the missing one and replays one from inside. If K passes every point where that holds, the
+test fails at once, saying so; it does not sample again. The lost retirement append and the mid-replay pair run from both snapshots. In the real process the same seal gating is
 `SWATH_TEST_SERIAL_SEALS`, a test hook beside `SWATH_TEST_KILL_AT`: each seal waits until the earlier seals'
 records were appended by ledger cycles of their own, so `TestSIGKILLDurableSpill` reaches its fourth-cycle
 arms by construction. Its recovery arms seed their damaged ledger from a run whose first part's close is held

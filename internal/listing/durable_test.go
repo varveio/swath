@@ -452,7 +452,8 @@ func recordedK(out string) (*string, error) {
 // killed at its directory sync, before it writes a record) and the
 // frontier released; the run is killed at the first recorded part whose K
 // covers a certificate damagedSnapshot keeps and lies inside another, with
-// three kept certificates or more not covered. A covered certificate then
+// three kept certificates or more not covered (a K past every such point
+// fails the test at once, saying so). A covered certificate then
 // has no retirement record: recovery retires it as covered, in one batch
 // with the missing one.
 func heldSnapshot(t *testing.T, url string, advance bool) string {
@@ -493,22 +494,10 @@ func heldSnapshot(t *testing.T, url string, advance bool) string {
 			// damagedSnapshot removes the first one's file and loses the
 			// last two records.
 			kept = s[1 : len(s)-2]
-			// The kill below is reached because each kept certificate is
-			// one listed page of 1,000 keys, more than any part's rows: a
-			// part ends strictly inside each.
-			for _, c := range kept {
-				lo, _ := slices.BinarySearch(keys, c.cs+"\x00") // the first key above cs
-				hi, found := slices.BinarySearch(keys, c.ce)
-				if c.open || !found || hi+1-lo != 1000 {
-					why.Store(fmt.Sprintf("kept certificate (%q, %q] (open %v) is not one page of 1,000 keys", c.cs, c.ce, c.open))
-					killed.Store(true)
-					return faults.ErrCrash
-				}
-			}
 			lifted.Store(true)
 			release()
 		case p == "spill-ledger-dirsync" && lifted.Load():
-			<-dead // the kill is certain (above); a hang is the test binary's timeout
+			<-dead // the run is killed at a recorded part, below
 			return faults.ErrCrash
 		case p == "recorded" && lifted.Load() && !killed.Load():
 			k, err := recordedK(out)
@@ -522,11 +511,17 @@ func heldSnapshot(t *testing.T, url string, advance bool) string {
 			for _, c := range kept {
 				n[c.against(k)]++
 			}
-			if n["covered"] >= 1 && n["straddled"] >= 1 && n["straddled"]+n["above"] >= 3 {
-				killed.Store(true)
-				kill()
-				return faults.ErrCrash
+			switch {
+			case n["covered"] >= 1 && n["straddled"] >= 1 && n["straddled"]+n["above"] >= 3:
+			case n["straddled"]+n["above"] < 3:
+				// K only rises: the state can no longer be reached.
+				why.Store(fmt.Sprintf("K %q left the kept certificates %v, never covering one and lying inside another with three left uncovered", *k, n))
+			default:
+				return nil
 			}
+			killed.Store(true)
+			kill()
+			return faults.ErrCrash
 		}
 		return nil
 	})
