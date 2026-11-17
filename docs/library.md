@@ -154,21 +154,21 @@ if res.Evidence.Stop != listing.StopCompleted {
 
 A summary answers, for each of several targets, how many objects lie at or under it, their bytes and their newest
 last-modified time, and what is at exactly its key. A target is a subtree (`Subtree`: every key that begins with
-`Key`, which the contract also calls a prefix) or one exact key. The subtrees are walked: one walk for each that lies
-under no other, whose objects count toward it and toward every target nested in it, so nested targets are each
-counted in full and listed once. A subtree target is present when an object has exactly its key, absent when the
-walk read where it would be and found none, and unknown at the root (the empty key), or when its walk dropped
-extents it did not read (below). An exact target is a lookup.
+`Key`, which the contract also calls a prefix) or one exact key. Each target is answered on its own: an exact target
+by a lookup, a subtree by one walk of its key, so nested and repeated targets are each walked and counted in full.
+A subtree target is present when an object has exactly its key, absent when its walk read everything and found
+none, and unknown otherwise, and at the root (the empty key). Without `Kinds` a summary counts objects and regular
+files, never folders or links.
 
-The budget bounds the whole call, every walk taking what is left of it. A target a walk stopped inside counts what
-was read and carries, as its `Unread`, the key intervals inside it that were not: its totals are a lower bound. A
-target the call never reached is unknown, with `listing.ErrBudgetExceeded` as its reason, counts nothing and is
-unread whole. A total with an `Unread` is never a complete one.
+The budget bounds each target's walk or lookup on its own. A target whose walk a bound stopped counts what was read,
+carries as its `Unread` the key intervals it did not read, and names the bound as its `Stop`: its totals are a lower
+bound. A target is complete when its `Stop` is `completed` and it has no `Unread`; `Evidence.Stop` names the first
+bound any target reached.
 
 ```go
 targets := []listing.Target{
 	{Key: []byte("logs/"), Subtree: true},
-	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, in the same walk
+	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
 	{Key: []byte("README")},                    // exact: a lookup
 }
 sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})

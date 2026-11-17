@@ -38,8 +38,8 @@
 //
 // Summarize counts the entries at or under each of several targets and sums
 // their sizes, space on disk and newest change, one TargetSummary per target,
-// in the order of targets. A live source walks the union of the targets once;
-// an inventory aggregates key ranges.
+// in the order of targets. A live source looks up or walks each target on
+// its own; an inventory aggregates key ranges.
 //
 // # Keys
 //

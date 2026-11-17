@@ -63,4 +63,9 @@ type TargetSummary struct {
 	Totals
 	// Unread are the extents inside the target that were not read.
 	Unread []Unread
+	// Stop says whether the call finished this target (StopCompleted) or
+	// which bound of the request stopped it. The target is complete when
+	// Stop is StopCompleted, it has no Unread, and the Evidence's
+	// Unlocated is 0.
+	Stop StopReason
 }

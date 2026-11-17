@@ -34,12 +34,13 @@ var errUnreached = wrap(listing.ErrBudgetExceeded, "a bound of the request kept 
 // of its own entry. Then the subtrees' rows, in one aggregation through
 // SeekParquet, every counted key's order checked. MaxEntries bounds the rows
 // of both phases together, each counted once however many targets hold it;
-// MaxDuration the whole call. A target whose own entry the budget does not reach is unknown,
-// with listing.ErrBudgetExceeded as its Reason, and counts nothing; a
-// subtree whose rows it does not reach counts nothing. Either has one
-// Unread, the whole target's key interval, of class UnreadBudget, and
-// Evidence.Stop names the bound. A counted entry without a size or a time,
-// and a sum that overflows, make that total nil.
+// MaxDuration the whole call. A target whose own entry the budget does not
+// reach is unknown, with listing.ErrBudgetExceeded as its Reason, and
+// counts nothing; a subtree whose rows it does not reach counts nothing.
+// Either has one Unread, the whole target's key interval, of class
+// UnreadBudget, and its Stop and Evidence.Stop name the bound. A counted
+// entry without a size or a time, and a sum that overflows, make that
+// total nil.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
@@ -107,7 +108,7 @@ type summary struct {
 
 func newSummary(inv *Inventory, sel selection, targets []listing.Target, budget listing.Budget) *summary {
 	n := len(targets)
-	return &summary{
+	s := &summary{
 		inv:     inv,
 		sel:     sel,
 		targets: targets,
@@ -120,6 +121,10 @@ func newSummary(inv *Inventory, sel selection, targets []listing.Target, budget 
 		done:    make([]bool, n),
 		stop:    listing.StopCompleted,
 	}
+	for i := range s.out {
+		s.out[i].Stop = listing.StopCompleted
+	}
+	return s
 }
 
 // outside answers what needs no read: the targets outside the scope, and
@@ -292,7 +297,7 @@ func (s *summary) unreached(i int, stop listing.StopReason) {
 // unread ends target i unread, by the bound stop, which becomes the
 // call's unless a bound applied before it stopped the call too.
 func (s *summary) unread(i int, stop listing.StopReason) {
-	s.out[i].Totals, s.done[i] = *zeroTotals(), true
+	s.out[i].Totals, s.done[i], s.out[i].Stop = *zeroTotals(), true, stop
 	s.out[i].Unread = []listing.Unread{{Scope: listing.UnreadInterval, Class: listing.UnreadBudget}}
 	if stopRank(stop) > stopRank(s.stop) {
 		s.stop = stop

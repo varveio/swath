@@ -86,22 +86,21 @@ List Blobs after a 404; `github.com/varveio/swath/gcs` (`gcs.Open`) over `intern
 one-level call is one delimiter objects.list and whose lookup is objects.get, then buckets.get after a 404 with reason
 `notFound`; and `github.com/varveio/swath/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
 the caller holds, whose one-level call reads one directory relative to it and whose lookup resolves a key one name
-at a time. `internal/live` joins the two: the `Store` a provider implements, and the constructor
-package `swath` sets when it is initialized. A provider's failures take the contract's classes through
-`objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither package links the command,
-pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
+at a time. `internal/live` joins the two: the `Store` a provider implements, and the `Source` over one
+(`live.NewSource`), which package `swath` exposes as the alias `swath.Source`. A provider's failures take the
+contract's classes through `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither
+package links the command, pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 
 `Source.Walk` lists a prefix flat. A store that walks (`live.Walker`) builds a provider of its own for each call,
 over its shared client (S3's, GCS's and Azure's `Live.Walk`: the range engine with no seed and no probes, Azure's
 after the namespace admission of `New`), binds it to its schema
-and runs the order stage's unordered count into a sink of package `swath` (`live.Count`: `bind`,
+and runs the order stage's unordered count into the walk's sink (`live.Count`: `bind`,
 `order.CountWithSink`, each range's keys checked ascending, and each run of a range's keys checked apart from every
 other run's before the sink sees it, so no key reaches it twice). The count's workers hand that sink batches of
 entries, which it checks and hands to the caller's function one at a time from the goroutine that called
 `Walk`, each worker waiting until its batch is taken; the extents not read reach it through the count's
-`order.UnreadSink`. A walk with a depth uses no engine: it reads the levels by the store's delimiter listing
-(`live.Store.List`, as `Source.Page` does), one request at a time from the calling goroutine. `Source.Summarize`
-walks each subtree target that lies under no other once and looks up each exact target.
+`order.UnreadSink`. `Source.Summarize` walks each subtree target and looks up each exact target, one at a time,
+each within the whole budget.
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and

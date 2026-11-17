@@ -5,11 +5,13 @@ package listing
 
 import "time"
 
-// Budget bounds the work of one Walk or Summarize. A call that reaches a
-// bound stops without an error: Evidence.Stop names the bound, and every
-// extent the call did not finish comes back as an Unread of class
-// UnreadBudget: a live call's entries, directories and key intervals, an
-// inventory's key intervals. A negative bound is ErrInvalidRequest.
+// Budget bounds the work of one Walk or Summarize: a live Summarize gives
+// each target the whole of it, an inventory's spends it across the call.
+// A call that reaches a bound stops without an error: Evidence.Stop names
+// the bound, and every extent the call did not finish comes back as an
+// Unread of class UnreadBudget: a live call's entries, directories and key
+// intervals, an inventory's key intervals. A negative bound is
+// ErrInvalidRequest.
 type Budget struct {
 	// MaxEntries bounds the entries read. A walk counts the entries it
 	// hands to emit, the prefix's own entry included. Workers stop at the

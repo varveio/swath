@@ -348,9 +348,9 @@ func truth(keys []string, t listing.Target) (n, size int64) {
 	return n, size
 }
 
-// TestSummarize: nested and disjoint subtree targets are each counted in
-// full, by one walk of the outer ones; each says what is at its own key;
-// an exact target is its own entry (gofakes3's HEAD answer names no
+// TestSummarize: nested, repeated and disjoint subtree targets are each
+// counted in full, each by a walk of its own; each says what is at its own
+// key; an exact target is its own entry (gofakes3's HEAD answer names no
 // time), or absent.
 func TestSummarize(t *testing.T) {
 	s3test.NoCredentials(t)
@@ -394,11 +394,11 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
-// TestSummarizeBudget: a Summarize stopped by its entry budget returns no
-// error and says so; a target the walk stopped inside counts what it read
-// and holds the intervals it did not read, which with those counts make
-// its whole; a target the call never reached is unknown, counts nothing
-// and is unread whole. Nothing incomplete passes as complete.
+// TestSummarizeBudget: each target is walked within the whole budget. A
+// target its walk's entry budget stopped counts what it read, holds the
+// intervals it did not read, which with those counts make its whole, is
+// unknown and says which bound stopped it; one that fits is complete.
+// Nothing incomplete passes as complete.
 func TestSummarizeBudget(t *testing.T) {
 	s3test.NoCredentials(t)
 	keys := walkKeys()
@@ -425,8 +425,14 @@ func TestSummarizeBudget(t *testing.T) {
 			t.Errorf("%q: %d entries and %d in its unread %v, of %d", targets[i].Key, ts.Entries, missing, ts.Unread, n)
 		}
 	}
-	if last := out[2]; last.State != listing.LookupUnknown || !errors.Is(last.Reason, listing.ErrBudgetExceeded) || last.Entries != 0 || len(last.Unread) != 1 {
-		t.Errorf("the target not reached: %+v", last)
+	for _, i := range []int{0, 2} {
+		if ts := out[i]; ts.State != listing.LookupUnknown || !errors.Is(ts.Reason, listing.ErrBudgetExceeded) || ts.Entries < 2000 ||
+			len(ts.Unread) == 0 || ts.Stop != listing.StopEntryBudget {
+			t.Errorf("%q, stopped: %+v", targets[i].Key, ts)
+		}
+	}
+	if ts := out[1]; ts.State != listing.LookupAbsent || ts.Entries != 500 || len(ts.Unread) != 0 || ts.Stop != listing.StopCompleted {
+		t.Errorf("%q, whole: %+v", targets[1].Key, ts)
 	}
 }
 

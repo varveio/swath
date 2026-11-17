@@ -78,7 +78,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 				if target.Subtree {
 					keep = func(r rec) bool { return strings.HasPrefix(r.key, key) }
 				}
-				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || len(s.Unread) != 0 {
+				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || len(s.Unread) != 0 || s.Stop != listing.StopCompleted {
 					t.Fatalf("%s %v: %q subtree %t = %s, unread %v; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, showTotals(want))
 				}
 			}
@@ -193,7 +193,7 @@ func TestSummarizeBudgets(t *testing.T) {
 	targets := []listing.Target{{Subtree: true}, {Key: []byte("a/"), Subtree: true}, {Key: []byte("a/c/"), Subtree: true}, {Key: []byte("z")}}
 	unread := func(s listing.TargetSummary) bool {
 		return len(s.Unread) == 1 && s.Unread[0].Key == nil && s.Unread[0].Hi == nil && s.Unread[0].Scope == listing.UnreadInterval &&
-			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0
+			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0 && s.Stop != listing.StopCompleted
 	}
 	unreached := func(s listing.TargetSummary) bool {
 		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, listing.ErrBudgetExceeded) &&
