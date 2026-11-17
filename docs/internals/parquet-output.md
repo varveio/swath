@@ -374,7 +374,9 @@ carry no link identity: `swath du --from-dataset` counts such a dataset's hard-l
 the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
 declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
-the dataset's columns (`registry.DatasetTotals`).
+the dataset's columns (`registry.DatasetTotals`). It seeks to SOURCE's prefix and reads the key and only the
+columns the totals and the filters need, in parallel scans, once every part's footer and columns are checked
+against the dataset's schema (a dataset that breaks it is refused, exit 1).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer

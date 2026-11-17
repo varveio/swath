@@ -301,7 +301,7 @@ With `--metadata names` a local walk reads no sizes or blocks: `size` and `alloc
 table shows `-`, and `size_missing` and `allocated_bytes_missing` count the files without them. Windows reads
 no blocks, and a bucket has none: `allocated_bytes` is null there, and the line under a local table says
 `on disk unknown`. A figure shown as `>= 12.0 KiB` leaves out
-the files that had no value for it ([Output](output.md#du-rows)).
+the files that had no value for it ([Apparent and allocated bytes](totals.md#apparent-and-allocated-bytes)).
 
 ## Entries could not be read
 
