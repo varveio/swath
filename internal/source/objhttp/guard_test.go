@@ -227,6 +227,32 @@ func TestGuardNoContentGoesToValidate(t *testing.T) {
 	}
 }
 
+// TestGuardHeadKeepsContentLength: a HEAD answer's Content-Length is the
+// object's size, not the length of a body it does not have, and goes up
+// unchanged; a GET's is the length of the body the Guard read.
+func TestGuardHeadKeepsContentLength(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "12345")
+			return
+		}
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer srv.Close()
+	resp, err := (&http.Client{Transport: &Guard{}}).Head(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.ContentLength != 12345 || resp.Header.Get("Content-Length") != "12345" {
+		t.Errorf("HEAD: ContentLength %d, header %q, want 12345", resp.ContentLength, resp.Header.Get("Content-Length"))
+	}
+	resp, body, err := get(t, &Guard{}, srv.URL)
+	if err != nil || resp.ContentLength != 3 || resp.Header.Get("Content-Length") != "3" || string(body) != "abc" {
+		t.Errorf("GET: err %v, ContentLength %d, header %q, body %q", err, resp.ContentLength, resp.Header.Get("Content-Length"), body)
+	}
+}
+
 func mustReq(t *testing.T, u string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, u, nil)
