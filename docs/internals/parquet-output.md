@@ -237,7 +237,8 @@ held (`retainedCuts`), and the run's cuts joined after theirs, so a resumed data
 run's. The reads stop when the run is stopped; a bucket's also when their own bound runs out (the aftermath's
 length, `FinalizeTimeout`, after the orphan cleanup and `run.json`), and the run commits without the file,
 warning once. A local file is replaced durably beside the manifest; a bucket's is created only if absent. The
-manifest and the parts do not depend on it.
+manifest and the parts do not depend on it. A source that takes no prior (not `source.Seeded`: a local tree) gets
+no cut file (`writeCuts` returns at once); an `--overwrite` retires the replaced dataset's with its other entries.
 
 ```text
 out/
@@ -245,7 +246,7 @@ out/
                                 order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 SeekParquet: version, schema id, key, ordered parts with exact bounds; swath's
                                 source, scope and coverage under extensions.swath; each part's sha256 (the commit)
-  cuts.txt                      the cut file, for the next --seed-from (advisory, written last)
+  cuts.txt                      the cut file, for the next --seed-from (advisory, written last; not for a local tree)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json

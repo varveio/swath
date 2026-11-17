@@ -91,7 +91,7 @@ its children:
 
 ```text
 $ swath du -d 1 /data/photos --format table
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
  459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
@@ -117,8 +117,9 @@ bytes](results.md#apparent-and-allocated-bytes)). A bucket has no allocated byte
 null and its table has no on-disk line. A local tree's directories are counted in `dirs`, never as objects,
 and their own size and blocks are in no total, so a tree's allocated bytes are below `du -sB1`'s by them. With
 `--all-versions` every version is an object; an S3 delete marker adds its prefixes but no object, bytes or
-time. `max_last_modified` is the newest time among the objects counted; the table shows it in local time to
-the second, under a heading that names the zone, as `swath list`'s table does, and `-` when no object had one.
+time. `max_last_modified` is the newest time among the objects counted; the table shows it under `newest`, as
+the view does, in local time to the second with the zone named in the heading, as `swath list`'s table does, and
+`-` when no object had one.
 
 The table shows the size by default (`--apparent-size`). On a local tree, `--allocated` shows the allocated
 bytes instead and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
@@ -163,7 +164,7 @@ directory and total that.
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
 swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12 11:00:03 CET (3 hours ago); complete
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
  459 KiB      5     3  2026-11-02 10:30:00  photos-inventory (total)

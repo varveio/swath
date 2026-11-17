@@ -216,22 +216,22 @@ Read the totals with care:
   or a bill. `allocated_bytes` is closer to `du`'s figure, with limits of its own
   ([Apparent and allocated bytes](results.md#apparent-and-allocated-bytes)). A local directory's own size and
   blocks are in no total.
-- **`max_last_modified` is not a directory's time.** It is the newest of the objects' own `last_modified`, the
-  column `swath list` prints for each row.
+- **`max_last_modified` (the table's `newest`) is not a directory's time.** It is the newest of the objects' own
+  `last_modified`, the column `swath list` prints for each row.
 - **Filters apply first**, to every row, directories included ([Filters](filters.md)).
 
 The table shows one figure: `size`, or with `--allocated` the allocated bytes, headed `on disk`. It rounds it
 to three significant digits in binary units and groups the counts' digits (`60,004`). A local tree's table
 calls its objects `files` and its prefixes `path`, and indents each path two blanks a level below the first.
-It shows `max_last_modified` as the [list table](#the-table) shows times: local, to the second, under a heading
-that names the zone, `-` when no object had one. An unknown figure is `-`, and a partial one is a lower bound,
+It shows `max_last_modified` under `newest`, as the [list table](#the-table) shows times: local, to the second,
+the heading naming the zone (`newest (CET)`), `-` when no object had one. An unknown figure is `-`, and a partial one is a lower bound,
 `>= 12.0 KiB`. A directory that could not be read shows `-` for its figure and its counts, and the warning
 on stderr names it. The total row, last, names the SOURCE as typed (`/data/photos (total)`). For a source with allocated bytes, a line on stderr under the table gives the total of both
 figures, the shown one first, so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
 
 ```text
 $ swath du -d 2 /data/photos
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
  117 KiB      1     0  2026-03-01 11:00:00    2025/raw/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
@@ -244,7 +244,7 @@ were read, `on disk unknown`. A bucket's table has no such line:
 
 ```text
 $ swath du -d 1 s3://bucket
-   size  objects  last_modified (CET)  prefix
+   size  objects  newest (CET)         prefix
 357 MiB   60,000  2026-11-15 06:59:58  logs/
    18 B        3  2026-01-01 01:00:00  weird/
 357 MiB   60,004  2026-11-15 06:59:58  s3://bucket (total)

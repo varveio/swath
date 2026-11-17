@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -70,7 +71,8 @@ func TestRun(t *testing.T) {
 // TestShowDataset: swath show prints a committed dataset's verdict first,
 // then labelled lines in reading order (source, listed, contents with
 // counts grouped, coverage, storage last), and clips a long key range to
-// the width given.
+// the width given. The storage line names the schema; -v adds the
+// SeekParquet format id before it and changes nothing else.
 func TestShowDataset(t *testing.T) {
 	src := t.TempDir()
 	long := strings.Repeat("k", 200)
@@ -99,7 +101,7 @@ func TestShowDataset(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "(whole tree)") || !strings.Contains(lines[3], "2 entries, 10 B; keys \"a\" .. \""+long+"\"") ||
 		lines[4] != "  coverage  nothing unreadable; no filters; no exclusions" ||
-		!strings.Contains(lines[5], "1 part, ") || !strings.Contains(lines[5], "schema swath/local-entries/v1") {
+		!strings.Contains(lines[5], "1 part, ") || !strings.HasSuffix(lines[5], " of Parquet (schema swath/local-entries/v1)") {
 		t.Fatalf("show:\n%s", shown.String())
 	}
 	var m dataset.Manifest
@@ -107,15 +109,62 @@ func TestShowDataset(t *testing.T) {
 	if err != nil || json.Unmarshal(b, &m) != nil {
 		t.Fatal(err)
 	}
+	var verbose bytes.Buffer
+	if err := show([]string{out, "-v"}, &verbose); err != nil {
+		t.Fatal(err)
+	}
+	want := slices.Clone(lines)
+	want[5] = strings.Replace(want[5], "(schema ", fmt.Sprintf("(SeekParquet format %d draft %d, schema ", m.FormatVersion, m.DraftRevision), 1)
+	if got := strings.Split(strings.TrimSuffix(verbose.String(), "\n"), "\n"); m.DraftRevision == 0 || !slices.Equal(got, want) {
+		t.Fatalf("show -v:\n%s\nwant\n%s", verbose.String(), strings.Join(want, "\n"))
+	}
 	// Clipped to a narrow terminal; left out where even clipped keys
 	// would pass its width.
 	for width, keys := range map[int]bool{80: true, 50: true, 45: false} {
 		shown.Reset()
-		writeSummary(&shown, "ds", &m, width)
+		writeSummary(&shown, "ds", &m, width, false)
 		for _, l := range strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n") {
 			if strings.Contains(l, "contents") && (len(l) > width || strings.Contains(l, "...\"") != keys || strings.Contains(l, "keys") != keys) {
 				t.Fatalf("width %d: %q", width, l)
 			}
+		}
+	}
+}
+
+// TestShowInterruptedRun: swath show prints an interrupted run's start,
+// its command and how far it got; -v adds the journal version and the
+// run's frozen identity, a setting without a value (an AWS run's
+// endpoint) left out.
+func TestShowInterruptedRun(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	id := journal.Identity{Tool: "swath", SchemaID: "swath/s3-objects/v1", Writer: "swath/parquet-r5", PartSize: 64 << 20, Provider: "s3",
+		Source: []journal.Field{{Name: "source", Value: "s3://b/logs/"}, {Name: "endpoint", Value: ""}, {Name: "region", Value: "us-east-1"}, {Name: "fips", Value: "false"}}}
+	j, err := journal.Create(dir, id, []string{"list", "--output=" + dir, "s3://b/logs/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	st, err := journal.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := "  started   " + localTime(st.Header.Created.Time)
+	command := "  command   swath list " + shellQuote("--output="+dir) + " s3://b/logs/"
+	saved := "  saved     no part; swath resume lists from the start"
+	for _, c := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{dir}, []string{dir + ": interrupted run", started, command, saved}},
+		{[]string{dir, "-v"}, []string{dir + ": interrupted run", started + " (journal version " + strconv.Itoa(st.Header.Version) + ")", command,
+			"  identity  provider s3, schema swath/s3-objects/v1, writer swath/parquet-r5, part size 64.0 MiB, source s3://b/logs/, region us-east-1, fips false", saved}},
+	} {
+		var shown bytes.Buffer
+		if err := show(c.args, &shown); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n"); !slices.Equal(got, c.want) {
+			t.Fatalf("show %q:\n%s\nwant\n%s", c.args, shown.String(), strings.Join(c.want, "\n"))
 		}
 	}
 }

@@ -77,7 +77,8 @@ The manifest is the authority for which parts belong to the dataset and for its 
 own is inspectable Parquet, not evidence that a dataset exists, is complete, or was published.
 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
-lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`), `run.json`
+lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`; an object
+store's dataset only), `run.json`
 (the run report: operational, written after the commit and never part of the dataset), and `.swath/` (the run's
 private workspace, which readers ignore). A directory whose run did not commit holds `error.json` instead of a
 manifest: that run's outcome ([exit codes](reference/exit-codes.md#the-outcome-of-record)); a committed
@@ -90,7 +91,7 @@ DIR/
   data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
-  cuts.txt                  the cut file, for the next listing's --seed-from (after run.json)
+  cuts.txt                  the cut file, for the next listing's --seed-from (after run.json; not for a local tree)
   error.json                the outcome of an attempt that did not complete
   .swath/                   private workspace: lock, journal, parts/, spill/, suspect/, progress.json, stack dumps
 ```
@@ -98,8 +99,9 @@ DIR/
 ### The cut file
 
 `cuts.txt` is the dataset's key distribution for the next listing of the same source and scope: `--seed-from`
-reads it to seed the next listing of a bucket (a local tree is not seeded), and for a dataset in a bucket you
-copy `PREFIX/cuts.txt` and pass that file. It is advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
+reads it to seed the next listing of a bucket, and for a dataset in a bucket you copy `PREFIX/cuts.txt` and pass
+that file. A local tree is not seeded, so the dataset of a local tree has none (`--overwrite` removes one that an
+earlier version wrote). It is advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
 without it is whole. A committed run writes it last, after the manifest and `run.json` (in a bucket, after the
 orphan cleanup too, within a time bound of its own); one it cannot write, or not in time, is a warning, and the
 dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the

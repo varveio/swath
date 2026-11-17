@@ -441,7 +441,7 @@ A dataset directory holds:
 DIR/data/part-NNNNN.parquet   the parts, in key order
 DIR/manifest.json             the commit: written last; a reader starts only once it exists
 DIR/run.json                  the run report, after the commit
-DIR/cuts.txt                  the cut file, for the next listing's --seed-from, after run.json
+DIR/cuts.txt                  the cut file, for the next listing's --seed-from, after run.json (not for a local tree)
 DIR/error.json                the outcome of an attempt that did not complete
 DIR/.swath/                   swath's workspace: the lock, the journal, spill, progress.json
 ```
