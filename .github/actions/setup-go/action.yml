@@ -2,13 +2,18 @@ name: Set up Go with a shared module cache and a per-job build cache
 description: >
   Go at the version go.mod names, with two caches. The module cache (GOMODCACHE) is one entry
   per runner OS and architecture and dependency set, shared by every job. The build cache
-  (GOCACHE) is per job (the `key` input) and per commit, restored from the job's newest. A push
-  to main saves both when the job ends; any other event restores only. setup-go's own cache is
-  off.
+  (GOCACHE) is per job (the `key` input) and per commit, restored from the job's newest, with
+  every restored entry aged so that the job's use of it shows. A push to main saves the module
+  cache when the job ends; the job's last step, ./.github/actions/save-go-cache, trims the build
+  cache to the entries the job used and, on a push to main, saves it. Any other event restores
+  only. setup-go's own cache is off.
 
 inputs:
   key:
-    description: The job's build-cache name (its job id, and its matrix value where it has one)
+    description: >
+      The job's build-cache name: its job id, and its matrix value where it has one. Jobs that
+      compile the same packages with the same flags on one runner may share a name (the race
+      shards of one package, go-race-shards.sh).
     required: true
 
 runs:
@@ -30,6 +35,7 @@ runs:
         echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
         echo "deps=${{ hashFiles('go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "build=go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}" >> "$GITHUB_OUTPUT"
 
     # The module cache's key names no job and no commit, and a key once saved is never
     # overwritten. Several main-push jobs may save it at once: the first upload wins and the
@@ -64,7 +70,9 @@ runs:
     # cache is global, the checkout stays as committed. The copy keeps the repository layout
     # (the root, objfile/, reader/) because go.mod replaces the reader module with ./reader,
     # which `go mod download` resolves by reading reader/go.mod relative to the module. The
-    # directories are absolute because the callers' working directories differ.
+    # directories are absolute because the callers' working directories differ. A failed download
+    # (the module proxy resets a stream now and then) is tried again, three times in all, 20 s
+    # apart; a retry fetches only what the module cache still lacks.
     - name: Download every Go module's dependencies (new module-cache key on main)
       if: steps.modcache-main.outcome == 'success' && steps.modcache-main.outputs.cache-hit != 'true'
       shell: bash
@@ -76,27 +84,44 @@ runs:
           cp "$GITHUB_WORKSPACE/$dir/go.mod" "$GITHUB_WORKSPACE/$dir/go.sum" "$copy/$dir/"
         done
         for dir in . objfile reader; do
-          (cd "$copy/$dir" && go mod download all)
+          for attempt in 1 2 3; do
+            if (cd "$copy/$dir" && go mod download all); then break; fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::go mod download all in $dir failed three times"
+              exit 1
+            fi
+            echo "::warning::go mod download all in $dir failed (attempt $attempt of 3); trying again in 20 s"
+            sleep 20
+          done
         done
         rm -r "$copy"
 
-    - name: Restore the Go build cache (saved at the end of the job)
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      id: buildcache-main
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-      with:
-        path: ${{ steps.paths.outputs.gocache }}
-        key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
-        restore-keys: |
-          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-
-          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
-
+    # Restored on every event; saved by save-go-cache, on a push to main only, under the exact key.
+    # The key names the commit so that parallel jobs never race for one key: a key once saved is
+    # never overwritten, and the first save of a shared key wins, which is why only jobs whose
+    # trimmed caches are the same, or nearly, share one.
     - name: Restore the Go build cache
-      if: github.event_name != 'push' || github.ref != 'refs/heads/main'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.paths.outputs.gocache }}
-        key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
+        key: ${{ steps.paths.outputs.build }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
         restore-keys: |
-          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-
-          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+          ${{ steps.paths.outputs.build }}-${{ steps.paths.outputs.deps }}-
+          ${{ steps.paths.outputs.build }}-
+
+    # Every restored entry a day old (scripts/ci/go-build-cache.sh): the go command then marks each
+    # entry it uses, so that save-go-cache keeps only those. The environment hands the cache, the
+    # key and the aging reference to save-go-cache.
+    - name: Age the restored Go build cache
+      shell: bash
+      env:
+        GOCACHE_DIR: ${{ steps.paths.outputs.gocache }}
+        KEY: ${{ steps.paths.outputs.build }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_WORKSPACE/scripts/ci/go-build-cache.sh" age "$GOCACHE_DIR" "$RUNNER_TEMP/go-build-cache-aged"
+        {
+          echo "GO_BUILD_CACHE_DIR=$GOCACHE_DIR"
+          echo "GO_BUILD_CACHE_KEY=$KEY"
+          echo "GO_BUILD_CACHE_AGED=$RUNNER_TEMP/go-build-cache-aged"
+        } >> "$GITHUB_ENV"

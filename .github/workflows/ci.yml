@@ -55,6 +55,7 @@ jobs:
           python3 scripts/ci/test-ci-policy.py
           python3 scripts/ci/test-release-go-ci.py
           ./scripts/ci/go-race-shards.sh --self-test
+          ./scripts/ci/go-build-cache.sh --self-test
 
       # Always computed: go-race expands it before its steps can skip. When go=false it is one
       # step-skipped leg on ubuntu-latest, not every shard's (arm64) runner.
@@ -184,6 +185,9 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: ./scripts/ci/go-race-shards.sh --check
 
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
+
   # The docs tier: on a pull request that changes pages under docs/ and no main-module input, the
   # tests that read pages (the generated CLI, log-event, report and counter blocks, the quoted
   # messages), which the race shards run on every main-module selection. They are the TestDocs*
@@ -206,9 +210,13 @@ jobs:
         if: needs.changes.outputs.docs == 'true'
         run: ./scripts/ci/go-docs-tests.sh
 
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
+
   # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
   # table into this matrix, so the table is the one place a shard is added). A leg's name is its
-  # shard; the step prints the exact `go test` command to rerun it locally. fail-fast is off so
+  # shard, and its build cache the one the table names (the shards of one package share one);
+  # the step prints the exact `go test` command to rerun it locally. fail-fast is off so
   # one red shard still lets the others report. go test's -timeout is per package binary, so it
   # is set to leave the job's limit room for setup, compiling and the packages queued ahead of
   # the last one (the unsplit `rest` shard took ~6 min): a hang ends in go test's goroutine dump,
@@ -231,7 +239,7 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         uses: ./.github/actions/setup-go
         with:
-          key: go-race-${{ matrix.shard }}
+          key: ${{ matrix.cache }}
 
       - name: go test -race (shard ${{ matrix.shard }})
         if: needs.changes.outputs.go == 'true'
@@ -269,6 +277,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
+
   # The tests that measure the process and so must not run under -race, which distorts heap and
   # time: each opted in by its own gate, one step per tier.
   go-nonrace:
@@ -305,6 +316,9 @@ jobs:
       - name: SeekParquet conformance
         if: needs.changes.outputs.go == 'true'
         run: ./scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
+
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
 
   # Static cross-builds stay on every main-module PR. Packaged images run on
   # main/dispatch and packaging/dependency/escalated PRs; the license gate stays on all.
@@ -448,6 +462,9 @@ jobs:
             tee "$smoke/capture-smoke.log"
           grep -q "sorting it with the image's sort-fixture" "$smoke/capture-smoke.log"
 
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
+
   # objfile, a nested module (its own go.mod, so the jobs above, which run at the root, never
   # see it): vet, tidiness, race tests and the static cross-builds. go-lint's gofmt covers it.
   go-objfile:
@@ -476,6 +493,9 @@ jobs:
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
+
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
 
   # The reader module (reader/), a nested module of its own: vet, tidiness, the race tests
   # (the dependency-graph check among them) and the static cross-builds. go-lint's gofmt
@@ -507,12 +527,16 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
+
   # Ordinary PRs keep arm64 coverage of the packages raced on amd64, without
   # repeating the CLI/engine matrices already raced on arm64. The shard table owns
   # that complement. Escalated PRs/main/dispatch run every selected module in full.
   # Windows runs the suite about three times slower than macOS, so its full run is legs along
-  # the race shards (`leg`, go-race-shards.sh --windows-matrix); the leg of scope `full` also
-  # vets the module and tests the nested modules, and keeps the go-xos build cache.
+  # the race shards (`leg`, go-race-shards.sh --windows-matrix), most of them one shard each; the
+  # leg of scope `full` also vets the module and tests the nested modules, and keeps the go-xos
+  # build cache. A leg's build cache is the one the table names (`cache`).
   go-xos:
     needs: changes
     name: go-xos (${{ matrix.os }}${{ matrix.leg && format(', {0}', matrix.leg) || '' }})
@@ -532,7 +556,7 @@ jobs:
         if: matrix.scope != 'off'
         uses: ./.github/actions/setup-go
         with:
-          key: go-xos${{ matrix.scope == 'leg' && format('-{0}', matrix.leg) || '' }}
+          key: ${{ matrix.cache || 'go-xos' }}
 
       # A Windows leg runs one `go test` per race shard it names, each printed first, and goes on
       # after a failed one so that every shard reports.
@@ -572,6 +596,9 @@ jobs:
         if: matrix.scope == 'full' && needs.changes.outputs.objfile == 'true'
         working-directory: objfile
         run: go vet ./... && go test -count=1 -timeout 15m ./...
+
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
 
   # The replay fixture tier: bench/replay/fixtures writes the synthetic and evidence
   # fixtures, and the gated replay tests run on them. The shared policy selects it with main
@@ -632,6 +659,9 @@ jobs:
             echo "::error::fixture-tier tests that did not run: $(comm -23 <(echo "$want") <(echo "$ran") | paste -sd' ' -)"
             exit 1
           fi
+
+      - name: Trim the Go build cache and save it on main
+        uses: ./.github/actions/save-go-cache
 
   # The single required status check on `main`, and the only job here that exists for the
   # branch rule rather than for what it runs.
