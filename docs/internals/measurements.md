@@ -2673,7 +2673,8 @@ Windows legs, `durable` and `remote-crash` in one, then
 | `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 | 6.5 |
 
 The first attempt of 44062912533 ended with a red `ci-gate`: `TestColumns` (`cmd/swath`) failed on macOS,
-a test the change does not touch; the macOS job passed on its rerun, 29.2 min after the trigger.
+a test the change does not touch; the macOS job passed on its rerun, 29.2 min after the trigger. The test
+counted a request an earlier listing had abandoned; #626 fixed it.
 
 On Windows `TestRemoteCrashMatrix` took 298 and 216 s and `durable` 319 and 264 s, so the two do not
 share a leg. The Windows legs printed the same package results as the three legs of `main` run
