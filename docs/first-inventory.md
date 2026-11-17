@@ -52,13 +52,9 @@ Each row totals everything below it, as `du` does: its files, its directories an
 the breakdown to one level. It does not limit the walk: swath still reads the whole tree, and every row and
 the total include everything below them. `--sort size` puts the largest first.
 
-The sizes are apparent bytes, the length of each file as `ls -l` shows it; the last line adds the space the
-filesystem reports for the whole tree, on disk, close to what `du` prints. Here `archive/` holds a sparse
-64 MiB disk image that takes almost no disk space, and two names for one hard-linked file, counted once, as
-`du` counts it. `--allocated` shows the on-disk figure instead and sorts by it, and `-l` (`--count-links`)
-counts every name.
-[Understand your results](results.md) explains both. In a pipe the same totals are TSV, with each row's
-newest modification time ([Output](output.md#du-rows)).
+The sizes are the files' lengths, and the last line adds the space on disk: here `archive/` holds a sparse disk
+image and one hard-linked file with two names, counted once ([How sizes are
+counted](totals.md#how-sizes-are-counted)). In a pipe the same totals are TSV ([Output](output.md#du-rows)).
 
 ## 2. List every entry
 

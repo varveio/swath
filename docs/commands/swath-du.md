@@ -25,8 +25,8 @@ largest first, each under its parent, with its size, count, share of the total, 
 it shows, what it folds into `(N more)` lines and how it fits the terminal are in
 [Total a source](../totals.md#the-view).
 
-How depth counts, the two byte figures, hard links, filters, memory and unreadable entries are in
-[Total a source](../totals.md#totals-per-prefix).
+How depth counts, filters and memory are in [Total a source](../totals.md#totals-per-prefix); the two byte
+figures, hard links and unreadable entries in [How sizes are counted](../totals.md#how-sizes-are-counted).
 
 ### Totals from a saved dataset
 

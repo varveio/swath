@@ -1,214 +1,285 @@
 # Total a source
 
-`swath du SOURCE` shows where the bytes are: on a terminal it draws the view, the largest prefixes and objects
-(a local tree's directories and files) at any depth; in a pipe it prints the total row only. With `-d N` it
-totals the objects, their bytes and their newest time per prefix down to N levels, a table or rows for
-scripts. It can also read the same totals back from a saved dataset. The rows' fields and the care their totals
-need are in [Output](output.md#du-rows); every option is in [swath du](commands/swath-du.md).
+`swath du` answers where the bytes are in a directory or a bucket: how much each part of it holds, in how many
+files or objects, and how recently it changed. Give it a source:
+
+```bash
+swath du media
+```
+
+On a terminal it draws [the view](#the-view), the largest prefixes and objects at any depth. With `-d N` it
+prints the totals of every prefix down to N levels, as a table or as rows for scripts
+([Totals per prefix](#totals-per-prefix)). To total the same source several ways without listing it each
+time, save it once and total the saved dataset ([Totals from a saved dataset](#totals-from-a-saved-dataset)).
+Every option is in [swath du](commands/swath-du.md).
 
 ## The view
 
-Bare `swath du SOURCE` on a terminal answers "where are the bytes": a tree of the largest prefixes and objects,
-largest first, each under its parent. Each line gives the size, the count of objects below it (`files` on a
-local tree, three significant digits: `12.0k`), its share of the total, a bar of that share, the date of the
-newest modification below it (`max_last_modified`, local, the zone named on the total's line) and the path,
-indented two blanks a level under its parent's, under one dim heading:
+Bare `swath du SOURCE` on a terminal shows a tree of the largest prefixes and objects, largest first, each under
+its parent. This one is a public NOAA prefix, on a terminal 100 columns wide and 24 lines high:
 
 ```text
-$ swath du s3://demo-lake
+$ TZ=UTC swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1
     size  objects  share                        newest          path
- 384 GiB     130k   100%  ████████████████████  2025-11-15 UTC  s3://demo-lake
- 164 GiB        6  42.7%  ████████▌             2025-11-15        backups/
-39.0 GiB        1  10.2%  ██                    2025-11-15          db-2025-05-01.dump
-37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-02-01.dump
-37.0 GiB        1   9.6%  █▉                    2025-11-15          db-2025-04-01.dump
-27.0 GiB        1   7.0%  █▍                    2025-11-15          db-2025-03-01.dump
-24.0 GiB        1   6.3%  █▎                    2025-11-15          db-2025-01-01.dump
-2.00 KiB        1   0.0%                        2025-11-15          (1 more)
- 164 GiB    2.18k  42.6%  ████████▌             2025-11-15        warehouse/
- 159 GiB    1.85k  41.5%  ████████▎             2025-11-15          events/year=2025/
-14.4 GiB      159   3.8%  ▊                     2025-11-15            month=12/
-14.1 GiB      167   3.7%  ▋                     2025-11-15            month=03/
-13.9 GiB      162   3.6%  ▋                     2025-11-15            month=09/
-13.7 GiB      156   3.6%  ▋                     2025-11-15            month=02/
- 103 GiB    1.20k  26.9%  █████▍                2025-11-15            (8 more)
-4.16 GiB      336   1.1%  ▏                     2025-11-15          (1 more)
-27.7 GiB    8.06k   7.2%  █▍                    2025-11-15        logs/api/2025/
-24.0 GiB     120k   6.3%  █▎                    2025-11-15        images/
-4.54 GiB      201   1.2%  ▏                     2025-11-15        (2 more)
-  384 GiB in 130,453 objects
+ 383 GiB    5.25k   100%  ████████████████████  2023-01-14 UTC  s3://noaa-gestofs…s_2d_glo.20230113/
+33.5 GiB       11   8.8%  █▊                    2023-01-14        18/rerun/
+12.4 GiB        1   3.2%  ▋                     2023-01-14          stofs_2d_glo_fcst.64.nc
+21.1 GiB       10   5.5%  █                     2023-01-14          (10 more)
+33.5 GiB       11   8.8%  █▊                    2023-01-13        12/rerun/
+12.4 GiB        1   3.2%  ▋                     2023-01-13          stofs_2d_glo_fcst.64.nc
+21.1 GiB       10   5.5%  █                     2023-01-13          (10 more)
+33.5 GiB       11   8.7%  █▋                    2023-01-13        06/rerun/
+12.4 GiB        1   3.2%  ▋                     2023-01-13          stofs_2d_glo_fcst.64.nc
+21.0 GiB       10   5.5%  █                     2023-01-13          (10 more)
+33.4 GiB       11   8.7%  █▋                    2023-01-13        00/rerun/
+12.4 GiB        1   3.2%  ▋                     2023-01-13          stofs_2d_glo_fcst.64.nc
+21.0 GiB       10   5.5%  █                     2023-01-13          (10 more)
+23.8 GiB        1   6.2%  █▏                    2023-01-13        stofs_2d_glo.t12…fields.cwl.vel.nc
+23.8 GiB        1   6.2%  █▏                    2023-01-14        stofs_2d_glo.t18…fields.cwl.vel.nc
+23.8 GiB        1   6.2%  █▏                    2023-01-13        stofs_2d_glo.t06…fields.cwl.vel.nc
+23.8 GiB        1   6.2%  █▏                    2023-01-13        stofs_2d_glo.t00…fields.cwl.vel.nc
+11.2 GiB        1   2.9%  ▌                     2023-01-13        stofs_2d_glo.t12z.fields.cwl.nc
+ 142 GiB    5.20k  37.2%  ███████▍              2023-01-14        (5,203 more)
+  383 GiB in 5,252 objects
 ```
 
-Each parent that lists children lists its largest, then one `(N more)` line for the rest: how many there are,
-what they hold together (size, count, share) and their newest date, so the lines under a parent always add up
-to it. Nothing is hidden without being counted; only a `(N more)` line of 0 bytes is left out. A prefix with a
-single child shares its line with it (`logs/api/2025/`). The view takes the terminal's height, less a few
-lines, from the largest down: line by line, a fold or a prefix shown whole gives its largest child (a prefix a
-fold for the rest too), the one whose child is the largest, so the largest prefixes open first. No line goes to
-an entry under a floor, 0.5 % of the total (a quarter of one line's share on a short terminal): a long tail of
-small prefixes stays in its fold, and when nothing above the floor is left the view ends, shorter than the
-terminal. What is not shown is in the `(N more)` lines.
+Each line is a prefix or an object, with:
 
-The columns fit the terminal's width, and a line never wraps: from 100 columns the bar has 20 cells (the rest
-goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
-then the date. The size, the count and the path always stay; a path is written as the other terminal lines
-write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass
-the width.
+- **size**: the bytes under it ([How sizes are counted](#how-sizes-are-counted));
+- **objects** (`files` for a directory): how many are under it, to three significant digits (`5.25k`);
+- **share** and the bar: its part of the total;
+- **newest**: the date of the newest modification under it, in local time, the zone named on the first line
+  (`TZ` sets it);
+- **path**: SOURCE on the first line, and below it each prefix or object indented two blanks under its parent.
 
-The view leaves room for every line printed after it (the line of totals, the unreadable line, the closing
-line, the prompt), wrapped lines counted as they wrap, so its heading and total stay on screen.
+A prefix with a single child shares its line with it (`18/rerun/`; in a directory, `videos/trip.mp4`). Under
+each parent the view lists its largest children, then one `(N more)` line for the rest: how many they are, what
+they hold together and their newest date. Nothing is left out without being counted there, so the lines under a
+parent always add up to it. A `!` after the size marks a line whose sums leave out a directory that could not be
+read ([Entries that could not be read](#entries-that-could-not-be-read)).
 
-One figure drives the whole view, its order, shares and bars: the size, or the allocated bytes with
-`--allocated`. A line on stderr under it gives the total once, exactly, with the other figure where the source
-has it (`127 MiB in 309 files · 64.2 MiB on disk`); `-q` leaves it out. Color follows `--color` and
-`NO_COLOR`.
+The view fills the terminal's height from the largest down, opening the largest prefixes first, and keeps its
+heading and the line of totals on screen. An entry smaller than 0.5 % of the total (more on a short terminal)
+gets no line of its own: a long tail of small prefixes stays in its `(N more)` line, and the view can end before
+the terminal is full. On a narrow terminal the bar shrinks, then the share and the date go; a long path is cut in
+the middle, keeping its end, and a line never wraps. Every figure is exact, whatever the size of the source.
 
-Every figure in the view is exact, and the memory does not grow with the listing. A prefix is complete when
-one range of the listing held it whole, or, on a local tree, when its directory's listing has ended with its
-subdirectories'. Of the complete prefixes and objects, the 100 largest of each depth are kept, far more than
-a terminal shows; one dropped for 100 larger ones of its depth is counted in its parent's bytes, and which are
-kept does not depend on the order the listing completes them in. A prefix cut by the edge of a range is summed
-across ranges and completes once the ranges on both sides of that edge have been listed, so only the ranges
-still listing hold such prefixes. The local directories
-being listed, and the prefixes kept to the end because they hold a hard-linked file, are bounded by
-`--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
-report's `diagnostics.totals_view` counts what was kept, dropped and merged.
+The line under the view gives the total once, exactly, with the on-disk figure where the source has one
+(`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. Color follows `--color` and `NO_COLOR`.
 
-The view is for reading. In a pipe `swath du` prints TSV rows, and an explicit `-d N`
-(`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows.
-`--from-dataset` draws the same view from a saved dataset, line for line.
-
-The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and
-[pdu](https://github.com/KSXGitHub/parallel-disk-usage) (both Apache-2.0), implemented from their documented
-behavior. It differs in what it leaves out: dust shows the largest entries of the whole tree whatever their
-parents, and pdu hides entries below 1 % of the total; swath folds each parent's smaller children into a
-counted line.
+The view is for reading. In a pipe, bare `swath du` prints the total row only, as TSV, and `-d N` (`-d 0`
+included), `--sort` or `--format` prints the table or the rows of [Totals per prefix](#totals-per-prefix)
+instead. `--from-dataset` draws the same view from a saved dataset.
 
 ## Totals per prefix
 
-With `-d N`, `swath du` prints the total of each prefix down to N levels below SOURCE, a parent including
-its children:
+With `-d N`, `swath du` prints the total of each prefix down to N levels below SOURCE, a parent including its
+children. On the `media` directory of [Your first inventory](first-inventory.md):
 
 ```text
-$ swath du -d 1 /data/photos --format table
+$ swath du -d 1 media
     size  files  dirs  newest (CET)         path
- 410 KiB      2     1  2026-03-01 11:00:00  2025/
-48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
-  459 KiB in 5 files · 472 KiB on disk
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+ 100 MiB      6     5  2026-11-02 10:30:00  media (total)
+  100 MiB in 6 files · 36.4 MiB on disk
 ```
+
+`-d` limits the rows, not the listing: every row and the total include everything below them. Add up rows of
+one depth only, never across depths; even then they leave out the objects directly under SOURCE. `--sort size`
+puts the largest first under each parent, and the total stays last. A directory's rows count its
+subdirectories in `dirs`, and the table indents each level two blanks under the one above. The table rounds
+sizes to three significant digits in binary units and groups the counts' digits (`5,252`); a bucket's table
+heads its columns `objects` and `prefix`, a directory's `files` and `path`.
 
 A prefix ends at a `/`. Depth counts from SOURCE's prefix up to its last `/`: `s3://b/logs/2026/` counts from
 `logs/2026/`, `s3://b/logs` from the top of the bucket. A key with fewer than N slashes counts only in the
-prefixes it has. Each row includes everything below it, so add up rows of one depth only, never across depths.
-The table's total row names SOURCE as typed (`s3://b/logs/2026/0 (total)`); in TSV and JSONL the total's
-`prefix` is the key prefix SOURCE names (`logs/2026/0`), which every key it counts starts with.
+prefixes it has. The table's total row names SOURCE as typed (`media (total)`). `newest` is the newest
+modification among the objects counted, to the second, `-` when none had a time. With `--all-versions` every
+version is an object, and an S3 delete marker adds its prefixes but no object, bytes or time.
 
-With `-d N` (or `--format table`) on a terminal the rows are a table with the total last; in a pipe they are TSV
-(`--no-header` leaves out its header line), and `--format jsonl` gives JSONL; both put the total first, its
-`row_type` `total`. The fields,
-and the care their totals need, are in [Output](output.md#du-rows).
+On a terminal the rows are a table with the total last. In a pipe they are TSV with the total first
+(`--no-header` leaves out the header line), and `--format jsonl` gives JSONL. A script selects rows by their
+`row_type`:
 
-TSV and JSONL rows have two byte figures: `size`, the objects' lengths as listed, and `allocated_bytes`, a local
-file's allocated blocks (`st_blocks` × 512; a sparse file counts its blocks, not its length), `on disk`. The
-table shows one of them, and on a local tree a line on stderr under it gives the totals of both.
-Neither is the storage consumed, replicas or a bill ([Apparent and allocated
-bytes](results.md#apparent-and-allocated-bytes)). A bucket has no allocated bytes: its rows carry them as
-null and its table has no on-disk line. A local tree's directories are counted in `dirs`, never as objects,
-and their own size and blocks are in no total, so a tree's allocated bytes are below `du -sB1`'s by them. With
-`--all-versions` every version is an object; an S3 delete marker adds its prefixes but no object, bytes or
-time. `max_last_modified` is the newest time among the objects counted; the table shows it under `newest`, as
-the view does, in local time to the second with the zone named in the heading, as `swath list`'s table does, and
-`-` when no object had one.
+```text
+$ swath du -d 1 s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 --format jsonl \
+    | jq -r 'select(.row_type == "prefix") | [.size, .prefix] | @tsv'
+35893517301	stofs_2d_glo.20230113/00/
+35926372104	stofs_2d_glo.20230113/06/
+35963721793	stofs_2d_glo.20230113/12/
+36012993488	stofs_2d_glo.20230113/18/
+```
 
-The table shows the size by default (`--apparent-size`). On a local tree, `--allocated` shows the allocated
-bytes instead and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
-`--metadata names` refuses it, and a file whose filesystem reports no blocks fails the count.
+The rows' fields, their types and when they are null are in [Output](output.md#du-rows).
 
-A local file with several hard links counts once, as `du` counts it: its object and bytes go to the prefixes of
-its first name in byte order, so the totals do not depend on which name the walk reached first. swath remembers
-each such inode (only files with more than one link; about 100 MB a million), up to `--max-inodes` (1,000,000 by
-default). Past it the run fails rather than count some names twice: exit 1, cause `inode_limit`, no totals, and
-its last line says what to do:
+The [filters](filters.md) apply before counting, to every row: in a directory to its subdirectories too, so
+`--min-size 1M` keeps the large files and drops the directories, whose own size is small.
+
+The totals take memory for each distinct prefix, never for each object: about 150 bytes a prefix. A run that
+would hold more than `--max-prefixes` (1,000,000 by default) fails rather than print partial totals; raise it
+for a deep `-d` over a wide tree. The view does not fail there: it keeps fewer levels and says so on stderr
+(`levels below depth N are left out: more prefixes than --max-prefixes 1,000,000`).
+
+## How sizes are counted
+
+### Apparent and allocated bytes
+
+Every row has two byte figures. `size` is the apparent size: the length of each file as `ls -l` shows it, or an
+object's length as the listing reports it. `allocated_bytes` is the space the filesystem reports for each file,
+its blocks × 512 (`st_blocks`), shown as `on disk`. The table and the view show one of them, the size by
+default; for a directory the line under them gives the total of both, so a sparse file or a tree of small files
+shows at a glance. `--allocated` shows the allocated bytes instead, and `--sort size` then orders by them:
+
+```text
+$ swath du -d 1 media --allocated
+ on disk  files  dirs  newest (CET)         path
+ 784 KiB      2     0  2026-11-02 10:30:00  archive/
+6.11 MiB      3     2  2026-11-02 10:30:00  photos/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+36.4 MiB      6     5  2026-11-02 10:30:00  media (total)
+  36.4 MiB on disk in 6 files · 100 MiB of data
+```
+
+Here `archive/` holds a sparse 64 MiB disk image that takes no blocks. The allocated bytes are what the
+filesystem says, close to what `du` prints, but not the space a deletion would free:
+
+- A directory's own size and blocks are in no total, the source directory's included, so a tree's figure is
+  below `du -sB1`'s by them. Directories are counted in `dirs`, never as files.
+- A symbolic link counts as a file of its own length; swath does not follow it.
+- Sparse files, compression, data stored inline in the metadata and cloud placeholder files can report less
+  allocation than their length, down to zero; block rounding and preallocation can report more.
+- Shared extents (deduplicated files, APFS clones, Btrfs and XFS reflinks) are counted for each file that
+  shares them, so a total can exceed the filesystem's capacity.
+- Network filesystems may report a synthetic allocation.
+- An unknown figure is not zero. Windows and `--metadata names` read no blocks: the figure is null (`-` in the
+  table, `on disk unknown` under it), and `--metadata names` reads no lengths either. A figure that only some
+  files had is a lower bound, shown as `>= 12.0 KiB`. `--allocated` needs each entry's stat, so it is refused
+  with `--metadata names`, and a file whose filesystem reports no blocks fails the count.
+
+An object store has no allocated bytes: its rows carry them as null, and its table has no line under it. Its
+`size` is not the stored or billed size either: storage classes, minimum storage durations, versions and
+replication are outside it.
+
+### Hard links
+
+A file with several hard links has several names; `swath list` writes each name as a row. `swath du` counts the
+file once, as `du` does, under the first of its names in byte order, so the totals do not depend on which name
+the walk reached first. In `media`, `notes.tar` and `notes-latest.tar` are one file of 800,000 bytes.
+`-l` (`--count-links`) counts every name, as `du -l`:
+
+```text
+$ swath du -d 1 media -l
+    size  files  dirs  newest (CET)         path
+65.5 MiB      3     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+ 101 MiB      7     5  2026-11-02 10:30:00  media (total)
+  101 MiB in 7 files · 37.2 MiB on disk
+```
+
+`--metadata names`, and Windows, read no link counts, so every name counts there. Each row's `links_once` says
+which way it counted.
+
+To count a file once, swath remembers each file with more than one link, about 100 bytes each, up to
+`--max-inodes` (1,000,000 by default). Past it the run fails rather than count some names twice: exit 1, cause
+`inode_limit`, no totals, and its last line says what to do:
 
 ```text
 swath: the tree has more than 1,000,000 files with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)
 ```
 
-`-l`, `--count-links` counts every name, as `du -l`. `--metadata names`, and Windows, read no link
-counts, so every name counts there.
+### Entries that could not be read
 
-The [filters](filters.md) apply before counting, to every row: on a local tree directories too, so
-`--min-size 1M` keeps the large files and drops the directories, whose own size is small.
+An entry swath cannot read, such as a directory without read permission, is left out of the totals with
+everything below it. swath prints the totals of the rest, names the entry on stderr (relative to SOURCE) and
+exits 3 ([exit codes](reference/exit-codes.md)). In the table, a directory it could not read shows `-` for its
+size and counts, where an empty directory shows 0; in TSV and JSONL its counts and both figures are null:
 
-Memory grows with the number of distinct prefixes, not objects. A run that would hold more than
-`--max-prefixes` (1,000,000 by default, about 150 bytes each) fails rather than print partial totals.
+```text
+$ swath du -d 1 media
+    size  files  dirs  newest (CET)         path
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+       -      -     -  -                    private/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+ 100 MiB      6     6  2026-11-02 10:30:00  media (total)
+  100 MiB in 6 files · 36.4 MiB on disk
+swath: warning: unreadable entries:
+  private: permission denied
+  partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
+```
 
-Entries of a local tree that could not be read (permissions) are not in the totals: the run prints the totals of
-the rest, names the entries on stderr (relative to SOURCE) and exits 3 ([exit codes](reference/exit-codes.md)).
-In the table, a directory that could not be read shows `-` for its size and counts, and in TSV and JSONL null
-for its counts and both figures, where an empty directory shows 0. The view marks with `!` after
-the size every line whose sums leave out such a directory, at or below it (a `(N more)` line too when one of the
-children it holds does), and says so in one line under it instead of naming them:
-`! 5 directories could not be read (marked ! above); -v lists them`.
+The view marks with `!` after the size every line whose sums leave out such a directory, at or below it, and
+says so in one line under it instead of naming them; `-v` names them:
+
+```text
+ 100 MiB !      6   100%  ████████████████████  2026-11-02 CET  media
+...
+     0 B !      0   0.0%                                          (1 more)
+  100 MiB in 6 files · 36.4 MiB on disk
+! 1 directory could not be read (marked ! above); -v lists them
+  partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
+```
+
+Under `-q` the last line says it instead: `swath: 1 entry could not be read and is missing from the output`.
+A symbolic link whose target cannot be read, and a file removed during the walk, do not make the totals
+incomplete ([Troubleshooting](troubleshooting.md#entries-could-not-be-read)).
 
 ## Totals from a saved dataset
 
-Each `swath du SOURCE` lists SOURCE again. To look at a large source at several depths, or with other filters,
-list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead (a live `swath du` that listed
-a million entries or more says so on a terminal: its closing lines end with `hint:` lines giving both commands
-for its SOURCE). `--from-dataset` reads a local dataset directory only: a dataset in a bucket is refused
-(exit 2), so copy its `manifest.json` and the parts the manifest names, at the same paths, to a local
-directory and total that.
+Each `swath du SOURCE` lists SOURCE again. To total a large source at several depths, or with other filters,
+list it once into a dataset and total that instead:
 
-```text
-$ swath du --from-dataset photos-inventory -d 1 --sort size
-swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12 11:00:03 CET (3 hours ago); complete
-    size  files  dirs  newest (CET)         path
- 410 KiB      2     1  2026-03-01 11:00:00  2025/
-48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      5     3  2026-11-02 10:30:00  photos-inventory (total)
-  459 KiB in 5 files · 472 KiB on disk
+```bash
+swath list media -o media-inventory
+swath du --from-dataset media-inventory -d 1 --sort size
 ```
 
-The rows are the ones `swath du` of the dataset's source printed when it was listed, with the same depth, order,
-formats and filters. They are read from the dataset's Parquet parts: the key and only the columns the totals
-and filters need, in one parallel pass, once every part's columns are checked against the dataset's schema (a
-dataset that breaks it is refused, exit 1). Depth counts from the dataset's scope, as it would from the source.
-Without `--from-dataset`, `swath du DIR` totals the files in DIR, never the rows of the dataset they hold; when
-DIR holds a dataset, a `hint:` line on stderr gives the `--from-dataset` command.
+`--from-dataset` reads a dataset in a local directory only. A dataset in a bucket is refused (exit 2): copy its
+`manifest.json` and the parts the manifest names, at the same paths, to a local directory and total that, or
+query it in place with DuckDB ([Query an inventory](query.md)).
 
-An optional SOURCE after the directory takes the form a live `swath du` takes: the dataset's source as it was
-listed (the `source` stderr names), which totals the whole dataset as no SOURCE does, or a path or URL below it,
-which restricts the totals to the keys below it and prints what a live `swath du` of it prints. A local path
-is made absolute, as a live `swath du` resolves it, and taken as a directory below the listed tree:
-`/data/photos/2025` totals the keys under `2025/`, labelled and filtered relative to it, with depth counted
-from it. A path that names a file in the tree totals that file's row alone, as a live `swath du` of the file
-does; a symbolic link is refused (exit 2), since a live `swath du` follows one to a directory whose keys the
-dataset holds under the target's path. A URL names the same bucket or container and a prefix that starts with the listed one
-(`s3://bucket/logs/2026/` of a dataset listed from `s3://bucket/logs/`); its rows keep whole keys, as a live
-run's do, and depth counts from its prefix up to the last `/`. The read seeks to the prefix rather than
-scanning the dataset. A SOURCE below the listed one that holds no key prints zeros
-and warns, exit 0, as a live listing of an empty prefix. Any other SOURCE is refused (exit 2), naming the
-dataset's: `"photos": photos-inventory was listed from /data/photos; give a path below it, or no argument`.
+```text
+$ swath du --from-dataset media-inventory -d 1 --sort size
+swath: totals of the dataset media-inventory, not a live listing: /home/me/media as listed 2026-11-17 12:59:25 CET (3 hours ago); complete
+    size  files  dirs  newest (CET)         path
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+29.6 MiB      1     0  2026-11-02 10:30:00  videos/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+ 100 MiB      6     5  2026-11-02 10:30:00  media-inventory (total)
+  100 MiB in 6 files · 36.4 MiB on disk
+```
 
-The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
-and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, or `--max-keys
-reached` for a diagnostic `swath diag list` sample), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
-the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset that left out entries it could not read (`coverage.unreadable`), or is
-otherwise partial, prints its totals and
-exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. The dataset counts the
-unreadable entries but does not record which directories they were, so it cannot mark their rows: such a
-directory's row shows 0 (in every format) where the live `swath du` shows `-` or null. A file with several hard links
-counts once where the dataset records links (a local tree's, listed with stat), as a live `swath du` counts it;
-`-l` counts every name. A dataset listed with `--metadata names` holds no lengths, blocks or links, so its rows
-are those of a live `--metadata names` run: both figures null under a prefix with files counted, and
-`links_once` false. With nothing counted (an empty tree, or every file filtered out) both figures are 0, and
-`links_once` is still false, as live, since the manifest records the tier.
+The rows, the view and every format are the ones `swath du` of the dataset's source printed when it was
+listed, with the same depth, order and filters; hard links count once where the dataset records them, and `-l`
+counts every name. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
+giving both commands for its SOURCE. `swath du DIR` without `--from-dataset` totals the files in DIR, and when
+DIR holds a dataset a `hint:` line gives the `--from-dataset` command.
 
-`--from-dataset` reads a committed local dataset directory. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
-handle it. The options that shape a listing are refused by name: provider, credential, performance, limit and
-report options, and `--all-versions`, since the dataset's schema decides that. So are `--allocated`,
-`--count-links` and `--storage-class` when the dataset's schema has no column for them. The filters, the
-totals options, `--format`, `--no-header` and the terminal options `-v`, `-q`, `--color`, `--log-format`, `--no-progress`
-and `--no-stats` apply. A duration in `--modified-since` counts back from now, not from the listing.
+The line on stderr says the totals are saved rows: the dataset, its source, when it was listed and whether the
+listing was complete (`complete`, or `partial:` and what is missing), then its filters and exclusions. `-q`
+silences it, and in JSONL each row carries the same facts in a `dataset` member ([Output](output.md#du-rows)).
+A dataset that missed entries it could not read prints its totals and exits 3, its last line saying why. It
+counts those entries but does not record which directories they were, so it cannot mark them: such a
+directory's row shows 0 where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
+holds no lengths, blocks or links, so its rows are those of a live `--metadata names` run.
+
+A SOURCE after the directory restricts the totals to part of the dataset: the dataset's source as it was
+listed, or a path or URL below it (`swath du --from-dataset media-inventory media/photos -d 1`). It prints what a
+live `swath du` of that SOURCE prints, labels and depth included, without reading the rest of the dataset. A
+local path is resolved as a live `swath du` resolves it; one that names a file totals that file alone, and a
+symbolic link is refused (exit 2), since a live `swath du` would follow it. A URL names the same bucket or
+container and a prefix below the listed one. A SOURCE below the listed one that holds nothing prints zeros and
+warns (exit 0); any other SOURCE is refused (exit 2), naming the dataset's source:
+`"photos": media-inventory was listed from /home/me/media; give a path below it, or no argument`.
+
+A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that handle
+it, and a dataset whose parts do not match its schema is refused with exit 1.
+
+The filters, the totals options, `--format`, `--no-header` and the terminal options (`-v`, `-q`, `--color`,
+`--log-format`, `--no-progress`, `--no-stats`) apply. The options that shape a listing are refused by name,
+since the dataset is already listed: provider, credential, performance, limit and report options and
+`--all-versions`, and `--allocated`, `--count-links` or `--storage-class` when the dataset has no column for
+them. A duration in `--modified-since` counts back from now, not from the listing.
